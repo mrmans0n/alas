@@ -3361,6 +3361,7 @@ final class AppState {
             GGStackSummaryStore.shared.summaries[path] = nil
         }
         invalidateGGStackCacheAndRebumpGeneration(projectId: projectId)
+        rightPaneStore.refreshActiveGGPresentationForProjectRevision(projectId: projectId)
     }
 
     private func handleProjectRevisionChange(projectId: String) {

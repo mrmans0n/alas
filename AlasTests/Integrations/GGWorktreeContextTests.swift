@@ -487,4 +487,88 @@ struct AppStateGGACPWorktreeContextTests {
         ))
         #expect(snapshot.loadState == .loaded)
     }
+
+    @Test func quiescentDetachedHeadRevisionInvalidatesRecoveredStackForACP() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-gg-acp-detached-revision-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent(".git/gg"),
+            withIntermediateDirectories: true
+        )
+        try Data(#"{"defaults":{"branch_username":"nacho"}}"#.utf8).write(
+            to: root.appendingPathComponent(".git/gg/config.json")
+        )
+
+        let project = ProjectConfig(
+            id: "project",
+            name: "Alas",
+            path: root.path,
+            color: "teal",
+            addedAt: .now,
+            ggMode: .off
+        )
+        let state = AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [project])))
+        let path = root.appendingPathComponent("linked")
+        let worktree = Worktree(
+            id: Worktree.makeId(path: path),
+            projectId: project.id,
+            name: "(detached)",
+            branch: "(detached)",
+            path: path,
+            status: .clean,
+            lastActivity: .now
+        )
+        state.projectsManager.insertOptimisticWorktree(worktree)
+        state.projectsManager.setGGWorktreeMode(
+            projectId: project.id,
+            worktreeId: worktree.id,
+            mode: .on
+        )
+        let pane = state.rightPaneStore.state(
+            for: worktree,
+            baseBranch: "main",
+            comparisonMode: .manual
+        )
+        state.rightPaneStore.deactivate()
+        pane.currentBranch = ""
+        pane.ggContext = .active(stackName: "detached-a")
+        pane.ggStack = try GGStackSnapshot.decode(
+            fromJSON: Data(GGStackModelsTests.fixture.utf8)
+        ).stack
+        pane.ggStackLoadState = .loaded
+        pane.ggStackCommitsKey = pane.currentGGStackCommitsKey
+
+        let beforeRevision = try #require(state.ggACPWorktreeIntegration(
+            worktreePath: path.path,
+            ggInstalled: true
+        ))
+        #expect(beforeRevision.context == .active(stackName: "detached-a"))
+        let beforeSnapshot = try #require(state.rightPaneStore.ggStackSnapshotForWorktreePath(
+            path.path,
+            effectiveContext: beforeRevision.context,
+            liveBranch: "(detached)"
+        ))
+        #expect(beforeSnapshot.loadState == .loaded)
+
+        // A second detached SHA is indistinguishable in topology because the
+        // watcher reports the same label for every detached HEAD.
+        state.handleProjectHeadUpdates(
+            projectId: project.id,
+            branchByWorktreePath: [path: "(detached)"]
+        )
+        #expect(state.revisionChangeGeneration(worktreeID: worktree.id) == 1)
+
+        let afterRevision = try #require(state.ggACPWorktreeIntegration(
+            worktreePath: path.path,
+            ggInstalled: true
+        ))
+        #expect(afterRevision.context == .inactive(reason: .branchPrefixMismatch(expectedPrefix: "nacho/")))
+        let afterSnapshot = try #require(state.rightPaneStore.ggStackSnapshotForWorktreePath(
+            path.path,
+            effectiveContext: afterRevision.context,
+            liveBranch: "(detached)"
+        ))
+        #expect(afterSnapshot.loadState == .inactive)
+    }
 }
