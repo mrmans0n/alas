@@ -2,9 +2,9 @@ import Foundation
 import Observation
 
 typealias MissionSourceRefresh = @MainActor (
-    _ source: MissionSourceSnapshot,
+    _ source: IssueSnapshot,
     _ projectId: String
-) async throws -> MissionSourceSnapshot
+) async throws -> IssueSnapshot
 
 typealias MissionStartupReviewSnapshot = @MainActor (
     _ worktree: Worktree,
@@ -57,9 +57,9 @@ enum MissionSourceRefreshResult: Equatable, Sendable {
 
 struct MissionSourceRefreshProposal: Equatable, Sendable {
     let missionID: MissionID
-    let expectedIdentity: MissionSourceIdentity
+    let expectedIdentity: IssueIdentity
     let expectedCapturedAt: Date
-    let snapshot: MissionSourceSnapshot
+    let snapshot: IssueSnapshot
 }
 
 enum MissionLoadState: Equatable {
@@ -499,7 +499,7 @@ final class MissionController {
                   let leg = loaded.primaryLeg
             else { return .unavailable }
             guard loaded.source.isRefreshable else { return .unavailable }
-            let refreshed: MissionSourceSnapshot
+            let refreshed: IssueSnapshot
             do {
                 refreshed = try await sourceRefresh(loaded.source, leg.projectId)
             } catch {
@@ -1221,7 +1221,7 @@ final class MissionController {
         }
     }
 
-    private static func sourceRefreshedMessage(_ source: MissionSourceSnapshot) -> String {
+    private static func sourceRefreshedMessage(_ source: IssueSnapshot) -> String {
         if let displayReference = source.displayReference, !displayReference.isEmpty {
             return "Source \(displayReference) refreshed."
         }
@@ -1324,7 +1324,7 @@ final class MissionController {
 
     private static func preparedRetryPrompt(
         for leg: MissionLeg,
-        source: MissionSourceSnapshot
+        source: IssueSnapshot
     ) -> String? {
         let prepared = leg.preparedInitialPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         if !prepared.isEmpty { return leg.preparedInitialPrompt }
@@ -1332,7 +1332,7 @@ final class MissionController {
         // its prompt before v5 added immutable prepared prompts, reconstruct
         // the same issue-scoped input instead of starting recovery empty.
         guard leg.ordinal == 0 else { return nil }
-        return MissionPromptBuilder.build(source: source)
+        return IssuePromptBuilder.build(source: source)
     }
 
     private func remove(id: MissionID) {

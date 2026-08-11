@@ -44,8 +44,8 @@ final class NewMissionDialogModel {
     }
 
     var phase: Phase = .entry
-    var resolved: ResolvedMissionSource?
-    var pendingManualFallback: ResolvedMissionSource?
+    var resolved: ResolvedIssue?
+    var pendingManualFallback: ResolvedIssue?
     var sourceTitle = "" {
         didSet { refreshManualSourceDraft(updateBranch: true) }
     }
@@ -67,7 +67,7 @@ final class NewMissionDialogModel {
     private var localBranchNames: Set<String> = []
 
     struct Environment {
-        let resolveSource: (String) async throws -> ResolvedMissionSource
+        let resolveSource: (String) async throws -> ResolvedIssue
         let branches: (String) async throws -> BranchInventory
         let configuredBase: (String) -> String
         let configuredBranchPrefix: (String) -> String
@@ -103,10 +103,10 @@ final class NewMissionDialogModel {
     }
 
     var validationMessage: String? {
-        guard let resolved else { return "Resolve a work item before creating a Mission." }
+        guard let resolved else { return "Resolve an issue before creating a Mission." }
         if resolved.source.contentOrigin == .manual {
             guard !sourceTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                return "Enter a work-item title."
+                return "Enter an issue title."
             }
         }
         guard candidateProjectIds.contains(projectId) else {
@@ -149,7 +149,7 @@ final class NewMissionDialogModel {
         guard phase == .entry else { return }
         let input = reference.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !input.isEmpty else {
-            errorMessage = "Enter a work-item link."
+            errorMessage = "Enter an issue link."
             return
         }
 
@@ -165,10 +165,10 @@ final class NewMissionDialogModel {
         candidateProjectIds = []
         projectId = ""
 
-        let resolution: ResolvedMissionSource
+        let resolution: ResolvedIssue
         do {
             resolution = try await environment.resolveSource(input)
-        } catch let failure as MissionSourceResolutionFailure {
+        } catch let failure as IssueResolutionFailure {
             guard acceptsResolution(generation: generation, input: input) else { return }
             pendingManualFallback = failure.fallback
             phase = .entry
@@ -195,7 +195,7 @@ final class NewMissionDialogModel {
     }
 
     private func adoptResolution(
-        _ resolution: ResolvedMissionSource,
+        _ resolution: ResolvedIssue,
         generation: Int,
         input: String?
     ) async {
@@ -248,7 +248,7 @@ final class NewMissionDialogModel {
         branchIsUserOwned = false
         sourceTitle = resolution.source.title
         sourceBody = resolution.source.body
-        prompt = MissionPromptBuilder.build(source: resolution.source)
+        prompt = IssuePromptBuilder.build(source: resolution.source)
         promptIsUserOwned = false
         agentId = agentOptions.first?.id ?? ""
         phase = .confirmation
@@ -319,7 +319,7 @@ final class NewMissionDialogModel {
 
     func create(allowDuplicate: Bool) async -> MissionID? {
         guard let source = resolvedSourceForCreation() else {
-            errorMessage = "Resolve a work item before creating a Mission."
+            errorMessage = "Resolve an issue before creating a Mission."
             return nil
         }
         let normalizedBase = base.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -453,8 +453,8 @@ final class NewMissionDialogModel {
         duplicateBranch = nil
     }
 
-    private func generatedBranch(projectID: String, source: MissionSourceSnapshot) -> String {
-        MissionBranchName.make(
+    private func generatedBranch(projectID: String, source: IssueSnapshot) -> String {
+        IssueBranchName.make(
             displayReference: source.displayReference,
             title: source.title,
             prefix: environment.configuredBranchPrefix(projectID)
@@ -466,7 +466,7 @@ final class NewMissionDialogModel {
         promptIsUserOwned = true
     }
 
-    private func preferredProjectID(for resolution: ResolvedMissionSource) -> String? {
+    private func preferredProjectID(for resolution: ResolvedIssue) -> String? {
         if let selected = resolution.selectedProjectID,
            resolution.candidateProjectIDs.contains(selected) {
             return selected
@@ -474,7 +474,7 @@ final class NewMissionDialogModel {
         return resolution.candidateProjectIDs.first
     }
 
-    private func resolvedSourceForCreation() -> MissionSourceSnapshot? {
+    private func resolvedSourceForCreation() -> IssueSnapshot? {
         guard let source = resolved?.source else { return nil }
         guard source.contentOrigin == .manual else { return source }
         let title = sourceTitle.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -499,16 +499,16 @@ final class NewMissionDialogModel {
             )
         }
         if !promptIsUserOwned, !title.isEmpty {
-            prompt = MissionPromptBuilder.build(source: nextSource)
+            prompt = IssuePromptBuilder.build(source: nextSource)
         }
     }
 
     private func manualSource(
-        from source: MissionSourceSnapshot,
+        from source: IssueSnapshot,
         title: String,
         body: String
-    ) -> MissionSourceSnapshot {
-        MissionSourceSnapshot(
+    ) -> IssueSnapshot {
+        IssueSnapshot(
             identity: source.identity,
             canonicalURL: source.canonicalURL,
             providerLabel: source.providerLabel,
@@ -624,12 +624,12 @@ struct NewMissionDialog: View {
     private var entrySheet: some View {
         DialogContainer(
             title: "New Mission",
-            subtitle: "Start from any work-item link.",
+            subtitle: "Start from any issue link.",
             content: {
-                DialogField(label: "Work item link") {
+                DialogField(label: "Issue link") {
                     AlasField(
                         text: $model.reference,
-                        placeholder: "Work-item URL or #123",
+                        placeholder: "Issue URL or #123",
                         focusOnAppear: true,
                         onSubmit: continueFromEntry
                     )
@@ -676,11 +676,11 @@ struct NewMissionDialog: View {
                 if let source = model.resolved?.source {
                     NewMissionSourceCard(source: source)
                     if source.contentOrigin == .manual {
-                        DialogField(label: "Work-item title") {
+                        DialogField(label: "Issue title") {
                             AlasField(text: $model.sourceTitle)
                                 .disabled(model.phase == .creating)
                         }
-                        DialogField(label: "Work-item context") {
+                        DialogField(label: "Issue context") {
                             PairedTextEditor(
                                 text: $model.sourceBody,
                                 font: .systemFont(ofSize: 12),
@@ -760,7 +760,7 @@ struct NewMissionDialog: View {
         )
         .interactiveDismissDisabled(model.phase == .creating)
         .confirmationDialog(
-            "A Mission already exists for this work item.",
+            "A Mission already exists for this issue.",
             isPresented: duplicateChoicePresented,
             titleVisibility: .visible
         ) {
@@ -854,7 +854,7 @@ struct NewMissionDialog: View {
 }
 
 private struct NewMissionSourceCard: View {
-    let source: MissionSourceSnapshot
+    let source: IssueSnapshot
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -870,7 +870,7 @@ private struct NewMissionSourceCard: View {
             }
             .font(.system(size: 11, weight: .medium))
             .foregroundStyle(theme.color("fg-dim"))
-            Text(source.title.isEmpty ? "Manual work item" : source.title)
+            Text(source.title.isEmpty ? "Manual issue" : source.title)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(theme.color("fg"))
                 .textSelection(.enabled)
@@ -899,7 +899,7 @@ extension NewMissionDialogModel.Environment {
                 guard let state else {
                     throw CodeHostProviderError.malformedOutput("Alas is no longer available.")
                 }
-                let resolver = MissionSourceResolver(environment: .init(
+                let resolver = IssueResolver(environment: .init(
                     projects: { state.projects },
                     selectedProjectID: {
                         state.selectedWorktreeId.flatMap { state.worktree(withId: $0)?.projectId }
@@ -909,10 +909,10 @@ extension NewMissionDialogModel.Environment {
                             worktreePath: URL(fileURLWithPath: project.path)
                         )
                     },
-                    providers: MissionSourceProviderRegistry([
-                        CodeHostMissionSourceProvider(kind: .github, providers: .live()),
-                        CodeHostMissionSourceProvider(kind: .gitlab, providers: .live()),
-                        ManualMissionSourceProvider(metadataFetcher: .live)
+                    providers: IssueProviderRegistry([
+                        CodeHostIssueSourceProvider(kind: .github, providers: .live()),
+                        CodeHostIssueSourceProvider(kind: .gitlab, providers: .live()),
+                        ManualIssueProvider(metadataFetcher: .live)
                     ])
                 ))
                 return try await resolver.resolve(reference)

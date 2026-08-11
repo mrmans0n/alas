@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import Alas
 
@@ -246,5 +247,26 @@ struct ACPMCPPromptPreambleTests {
         #expect(ACPMCPPromptPreamble.text(
             builtInInjected: false, isDelegated: false, userServerNames: [], mode: .mcp
         ) == nil)
+    }
+
+    @Test func issueContextRendersInMCPAndCLIPreambles() throws {
+        let issue = IssuePreambleContext(
+            title: "Prevent parser crash",
+            url: URL(string: "https://github.com/acme/app/issues/42")!,
+            providerLabel: "GitHub",
+            displayReference: "#42"
+        )
+
+        let mcp = try #require(ACPMCPPromptPreamble.text(
+            builtInInjected: false, isDelegated: false, userServerNames: [], issue: issue
+        ))
+        let cli = try #require(ACPMCPPromptPreamble.text(
+            builtInInjected: false, isDelegated: false, userServerNames: [],
+            mode: .cli(serverAvailability: .noServers), issue: issue
+        ))
+
+        let expected = "This worktree is attached to GitHub issue #42, \"Prevent parser crash\": https://github.com/acme/app/issues/42"
+        #expect(mcp.contains(expected))
+        #expect(cli.contains(expected))
     }
 }

@@ -5,7 +5,7 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct AppStatePersistenceTests {
-    private static let githubSourceLocator = MissionRepositoryLocator(
+    private static let githubSourceLocator = IssueRepositoryLocator(
         provider: .github,
         host: "github.com",
         repositorySlug: "acme/alas"
@@ -55,6 +55,62 @@ struct AppStatePersistenceTests {
         func readIfExists<T: Decodable>(_ type: T.Type, from _: URL) throws -> T? {
             type == ProjectsFile.self ? initialProjectsFile as? T : nil
         }
+    }
+
+    @Test func issueAttachmentsAreScopedAndPersisted() {
+        let project = ProjectConfig(
+            id: "project", name: "App", path: "/tmp/app", color: "#5fb7c4", addedAt: .distantPast
+        )
+        let store = RecordingStore(initialProjectsFile: .init(projects: [project]))
+        let state = AppState(store: store)
+        let attachment = IssueAttachment(
+            canonicalURL: URL(string: "https://github.com/acme/app/issues/42")!,
+            providerLabel: "GitHub",
+            displayReference: "#42",
+            title: "Prevent parser crash"
+        )
+
+        state.projectsManager.setIssueAttachment(
+            projectId: project.id,
+            worktreeId: "worktree-a",
+            attachment: attachment
+        )
+        state.saveProjects()
+
+        #expect(state.projectsManager.issueAttachment(projectId: project.id, worktreeId: "worktree-a") == attachment)
+        #expect(state.projectsManager.issueAttachment(projectId: project.id, worktreeId: "worktree-b") == nil)
+        #expect(store.writtenProjectsFile?.projects[0].issueAttachments == ["worktree-a": attachment])
+
+        state.projectsManager.removeIssueAttachment(projectId: project.id, worktreeId: "worktree-a")
+
+        #expect(state.projectsManager.issueAttachment(projectId: project.id, worktreeId: "worktree-a") == nil)
+    }
+
+    @Test func worktreeRefreshRetainsLiveIssueAttachmentsAndPrunesMissingOnes() async throws {
+        let repo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-issue-attachments-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: repo) }
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: repo)
+
+        let liveID = Worktree.makeId(path: repo)
+        let attachment = IssueAttachment(
+            canonicalURL: URL(string: "https://github.com/acme/app/issues/42")!,
+            providerLabel: "GitHub",
+            displayReference: "#42",
+            title: "Prevent parser crash"
+        )
+        let project = ProjectConfig(
+            id: "project", name: "App", path: repo.path, color: "#5fb7c4", addedAt: .distantPast,
+            issueAttachments: [liveID: attachment, "missing-worktree": attachment]
+        )
+        let state = AppState(store: RecordingStore(initialProjectsFile: .init(projects: [project])))
+
+        let changed = try await state.projectsManager.refreshWorktrees(projectId: project.id)
+
+        #expect(changed)
+        #expect(state.projectsManager.projects[0].issueAttachments == [liveID: attachment])
     }
 
     @Test func setDefaultWorktreeOrderingPersistsAndPreservesManualOverrides() {
@@ -173,7 +229,7 @@ struct AppStatePersistenceTests {
     }
 
     @Test func missionReviewRemoteUsesPersistedProviderForEnterpriseHost() throws {
-        let locator = MissionRepositoryLocator(
+        let locator = IssueRepositoryLocator(
             provider: .github,
             host: "github.example.com",
             repositorySlug: "acme/alas"
@@ -204,7 +260,7 @@ struct AppStatePersistenceTests {
     }
 
     @Test func missionReviewRemoteRejectsForkWhenConfiguredBaseRemoteExists() {
-        let locator = MissionRepositoryLocator(
+        let locator = IssueRepositoryLocator(
             provider: .github,
             host: "github.com",
             repositorySlug: "nacho/alas"
@@ -289,7 +345,7 @@ struct AppStatePersistenceTests {
             matching: .github
         ))
 
-        let query = CodeHostMissionSourceProvider.queryRemote(locator: Self.githubSourceLocator, candidates: [current])
+        let query = CodeHostIssueSourceProvider.queryRemote(locator: Self.githubSourceLocator, candidates: [current])
 
         #expect(query.repositorySlug == "acme/alas")
         #expect(query.host == "github.com")
@@ -302,13 +358,13 @@ struct AppStatePersistenceTests {
             from: [GitRemote(name: "upstream", url: "git@gitlab.example.com:platform/mobile/alas.git")],
             matching: .gitlab
         ))
-        let locator = MissionRepositoryLocator(
+        let locator = IssueRepositoryLocator(
             provider: .gitlab,
             host: "gitlab.example.com",
             repositorySlug: "platform/mobile/alas"
         )
 
-        let query = CodeHostMissionSourceProvider.queryRemote(locator: locator, candidates: [current])
+        let query = CodeHostIssueSourceProvider.queryRemote(locator: locator, candidates: [current])
 
         #expect(query == current)
     }
@@ -679,7 +735,7 @@ struct AppStatePersistenceTests {
     }
 
     @Test func missionPaneBaseRefRequalifiesAStaleRemoteAlias() {
-        let locator = MissionRepositoryLocator(
+        let locator = IssueRepositoryLocator(
             provider: .github,
             host: "github.com",
             repositorySlug: "acme/alas"
@@ -707,7 +763,7 @@ struct AppStatePersistenceTests {
     }
 
     @Test func missionPaneBaseRefPreservesAnUnqualifiedSlashBranch() {
-        let locator = MissionRepositoryLocator(
+        let locator = IssueRepositoryLocator(
             provider: .github,
             host: "github.com",
             repositorySlug: "acme/alas"
@@ -999,7 +1055,7 @@ struct AppStatePersistenceTests {
         let aggregate = try await Self.waitForMissionState(.needsAttention, persistence: persistence)
 
         #expect(aggregate.mission.attentionReason == "The Mission project is no longer available.")
-        #expect(aggregate.source.identity == MissionSourceSnapshot(issue: MissionFixtures.issue()).identity)
+        #expect(aggregate.source.identity == IssueSnapshot(codeHostIssue: MissionFixtures.issue()).identity)
         #expect(aggregate.primaryLeg?.projectId == project.id)
     }
 

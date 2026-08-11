@@ -6,7 +6,7 @@ import Testing
 @Suite("Mission coordinator", .serialized)
 struct MissionCoordinatorTests {
     private static let primaryDraft = MissionDraft(
-        source: MissionSourceSnapshot(issue: MissionFixtures.issue()),
+        source: IssueSnapshot(codeHostIssue: MissionFixtures.issue()),
         projectId: "project-1",
         baseRef: "origin/main",
         baseRemoteName: "origin",

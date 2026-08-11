@@ -1,11 +1,11 @@
 import Foundation
 
-enum MissionIssueInput: Equatable, Sendable {
+enum CodeHostIssueInput: Equatable, Sendable {
     case short(number: Int)
     case url(kind: CodeHostKind, host: String, repositorySlug: String, number: Int)
 
     static func parse(_ rawReference: String) throws -> Self {
-        switch try MissionSourceReference.parse(rawReference) {
+        switch try IssueReference.parse(rawReference) {
         case .short(let number):
             return .short(number: number)
         case .url(let url):
@@ -32,7 +32,7 @@ enum MissionIssueInput: Equatable, Sendable {
 }
 
 struct ResolvedCodeHostIssue: Equatable, Sendable {
-    let snapshot: MissionIssueSnapshot
+    let snapshot: CodeHostIssueSnapshot
     let remote: CodeHostRemote
     let candidateProjectIds: [String]
     let selectedProjectId: String
@@ -49,7 +49,7 @@ struct CodeHostIssueResolver {
     let environment: Environment
 
     func resolve(_ rawReference: String) async throws -> ResolvedCodeHostIssue {
-        switch try MissionIssueInput.parse(rawReference) {
+        switch try CodeHostIssueInput.parse(rawReference) {
         case .short(let number):
             guard let selectedID = environment.selectedProjectId(),
                   let project = environment.projects().first(where: { $0.id == selectedID })

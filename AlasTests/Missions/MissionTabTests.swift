@@ -946,7 +946,7 @@ struct MissionTabTests {
         )
         let id = try await controller.create(
             MissionDraft(
-                source: MissionSourceSnapshot(issue: MissionFixtures.issue()),
+                source: IssueSnapshot(codeHostIssue: MissionFixtures.issue()),
                 projectId: "project-1",
                 baseRef: "origin/main",
                 branch: "fix/parser-crash",

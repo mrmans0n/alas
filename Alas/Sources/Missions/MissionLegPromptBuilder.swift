@@ -2,7 +2,7 @@ import Foundation
 
 enum MissionLegPromptBuilder {
     static func build(
-        source: MissionSourceSnapshot,
+        source: IssueSnapshot,
         existingLegs: [MissionLeg],
         existingProjectNames: [String: String] = [:],
         projectName: String,
@@ -11,9 +11,9 @@ enum MissionLegPromptBuilder {
     ) -> String {
         var lines = [
             repositoryOpeningLine(for: source),
-            "Work in \(projectName) on branch \(branch). Inspect the shared work item context, keep the change focused, add regression coverage, and verify the result.",
+            "Work in \(projectName) on branch \(branch). Inspect the shared issue context, keep the change focused, add regression coverage, and verify the result.",
             "",
-            "## Work item context",
+            "## Issue context",
             "**Source:** \(source.providerLabel)",
         ]
         if let repositoryLocator = source.repositoryLocator {
@@ -44,7 +44,7 @@ enum MissionLegPromptBuilder {
     }
 
     static func build(
-        issue: MissionIssueSnapshot,
+        issue: CodeHostIssueSnapshot,
         existingLegs: [MissionLeg],
         existingProjectNames: [String: String] = [:],
         projectName: String,
@@ -52,7 +52,7 @@ enum MissionLegPromptBuilder {
         instructions: String
     ) -> String {
         build(
-            source: .init(issue: issue),
+            source: .init(codeHostIssue: issue),
             existingLegs: existingLegs,
             existingProjectNames: existingProjectNames,
             projectName: projectName,
@@ -89,14 +89,14 @@ enum MissionLegPromptBuilder {
         lines.append(instructions.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
-    private static func repositoryOpeningLine(for source: MissionSourceSnapshot) -> String {
+    private static func repositoryOpeningLine(for source: IssueSnapshot) -> String {
         guard source.contentOrigin == .provider,
               let displayReference = source.displayReference,
               !displayReference.isEmpty
         else {
-            return "Implement the repository-specific portion of the linked work item."
+            return "Implement the repository-specific portion of the linked issue."
         }
-        return "Implement the repository-specific portion of \(source.providerLabel) work item \(displayReference)."
+        return "Implement the repository-specific portion of \(source.providerLabel) issue \(displayReference)."
     }
 
     private static func displayName(for state: MissionLegState) -> String {

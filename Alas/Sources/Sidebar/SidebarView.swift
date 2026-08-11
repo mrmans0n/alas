@@ -113,6 +113,13 @@ struct SidebarView: View {
                                         _ = try? await state.openTerminalTabPreparingRemoteZmxIfNeeded(for: wt)
                                     }
                                 },
+                                onOpenIssue: { wt in
+                                    guard let attachment = state.projectsManager.issueAttachment(
+                                        projectId: project.id,
+                                        worktreeId: wt.id
+                                    ) else { return nil }
+                                    return { NSWorkspace.shared.open(attachment.canonicalURL) }
+                                },
                                 onCopyPath: { wt in
                                     let pb = NSPasteboard.general
                                     pb.clearContents()

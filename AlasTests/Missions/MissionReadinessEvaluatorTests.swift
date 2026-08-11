@@ -120,7 +120,7 @@ struct MissionReadinessEvaluatorTests {
         await fake.controller.recordMissingWorktree(Self.missionID)
         let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
 
-        #expect(aggregate.primaryLeg?.pendingInitialPrompt == MissionPromptBuilder.build(source: aggregate.source))
+        #expect(aggregate.primaryLeg?.pendingInitialPrompt == IssuePromptBuilder.build(source: aggregate.source))
     }
 
     @Test func retryAndCompletionAreSerialized() async throws {
@@ -714,7 +714,7 @@ struct MissionReadinessEvaluatorTests {
     @Test func sourceIssueStateDoesNotChangeMissionReadiness() async throws {
         let refreshed = MissionFixtures.issue(title: "Fresh issue title", capturedAt: 250)
         var closed = refreshed
-        closed = MissionIssueSnapshot(
+        closed = CodeHostIssueSnapshot(
             identity: closed.identity,
             canonicalURL: closed.canonicalURL,
             title: closed.title,
@@ -726,20 +726,20 @@ struct MissionReadinessEvaluatorTests {
             capturedAt: closed.capturedAt,
             refreshError: nil
         )
-        let fake = try MissionLifecycleFake(sourceRefresh: { _, _ in MissionSourceSnapshot(issue: closed) })
+        let fake = try MissionLifecycleFake(sourceRefresh: { _, _ in IssueSnapshot(codeHostIssue: closed) })
         await fake.controller.load()
 
         await fake.controller.refreshSource(Self.missionID)
         let aggregate = try #require(try await fake.persistence.aggregate(id: Self.missionID))
 
-        #expect(aggregate.source == MissionSourceSnapshot(issue: closed))
+        #expect(aggregate.source == IssueSnapshot(codeHostIssue: closed))
         #expect(aggregate.mission.state == .running)
         #expect(fake.notifications.last?.source.title == "Fresh issue title")
     }
 
     @Test func providerRefreshWithManualContentRequiresConfirmation() async throws {
         let fake = try MissionLifecycleFake(sourceRefresh: { source, _ in
-            try ManualMissionSourceProvider.snapshot(
+            try ManualIssueProvider.snapshot(
                 for: source.canonicalURL,
                 identity: source.identity,
                 repositoryLocator: source.repositoryLocator,
@@ -768,7 +768,7 @@ struct MissionReadinessEvaluatorTests {
     @Test func providerRefreshForManuallyEnteredCodeHostSourceRequiresConfirmation() async throws {
         var aggregate = Self.runningAggregate()
         let original = aggregate.source
-        aggregate.source = MissionSourceSnapshot(
+        aggregate.source = IssueSnapshot(
             identity: original.identity,
             canonicalURL: original.canonicalURL,
             providerLabel: original.providerLabel,
@@ -786,7 +786,7 @@ struct MissionReadinessEvaluatorTests {
             isEditable: true,
             isRefreshable: true
         )
-        let refreshed = MissionSourceSnapshot(issue: MissionFixtures.issue(
+        let refreshed = IssueSnapshot(codeHostIssue: MissionFixtures.issue(
             title: "Provider title",
             capturedAt: 250
         ))
@@ -811,7 +811,7 @@ struct MissionReadinessEvaluatorTests {
     @Test func manualSourceEditRejectsPendingRefreshProposal() async throws {
         var aggregate = Self.runningAggregate()
         let original = aggregate.source
-        aggregate.source = MissionSourceSnapshot(
+        aggregate.source = IssueSnapshot(
             identity: original.identity,
             canonicalURL: original.canonicalURL,
             providerLabel: original.providerLabel,
@@ -829,7 +829,7 @@ struct MissionReadinessEvaluatorTests {
             isEditable: true,
             isRefreshable: true
         )
-        let refreshed = MissionSourceSnapshot(issue: MissionFixtures.issue(
+        let refreshed = IssueSnapshot(codeHostIssue: MissionFixtures.issue(
             title: "Provider title",
             capturedAt: 250
         ))
@@ -870,8 +870,8 @@ struct MissionReadinessEvaluatorTests {
         second.legs[0].worktreeId = "worktree-2"
         second.legs[0].worktreeLineageID = "lineage-2"
         second.legs[0].pendingInitialPrompt = nil
-        let firstIssue = try #require(MissionIssueSnapshot(source: first.source))
-        let renamed = MissionIssueSnapshot(
+        let firstIssue = try #require(CodeHostIssueSnapshot(source: first.source))
+        let renamed = CodeHostIssueSnapshot(
             identity: .init(
                 provider: firstIssue.identity.provider,
                 host: firstIssue.identity.host,
@@ -891,15 +891,15 @@ struct MissionReadinessEvaluatorTests {
         let fake = try MissionLifecycleFake(
             aggregate: first,
             additionalAggregates: [second],
-            sourceRefresh: { _, _ in MissionSourceSnapshot(issue: renamed) }
+            sourceRefresh: { _, _ in IssueSnapshot(codeHostIssue: renamed) }
         )
         await fake.controller.load()
 
         await fake.controller.refreshSource(first.mission.id)
 
-        #expect(fake.controller.aggregate(id: first.mission.id)?.source.identity == MissionSourceSnapshot(issue: renamed).identity)
-        #expect(fake.controller.aggregate(id: second.mission.id)?.source.identity == MissionSourceSnapshot(issue: renamed).identity)
-        #expect(fake.notifications.contains { $0.mission.id == second.mission.id && $0.source.identity == MissionSourceSnapshot(issue: renamed).identity })
+        #expect(fake.controller.aggregate(id: first.mission.id)?.source.identity == IssueSnapshot(codeHostIssue: renamed).identity)
+        #expect(fake.controller.aggregate(id: second.mission.id)?.source.identity == IssueSnapshot(codeHostIssue: renamed).identity)
+        #expect(fake.notifications.contains { $0.mission.id == second.mission.id && $0.source.identity == IssueSnapshot(codeHostIssue: renamed).identity })
     }
 
     @Test func providerRefreshFailureRetainsSnapshotAndPersistsError() async throws {
@@ -934,7 +934,7 @@ struct MissionReadinessEvaluatorTests {
             capturedAt: 500
         ))
         let fake = try MissionLifecycleFake(sourceRefresh: { _, _ in
-            MissionSourceSnapshot(issue: try await race.refresh())
+            IssueSnapshot(codeHostIssue: try await race.refresh())
         })
         await fake.controller.load()
 
@@ -2073,7 +2073,7 @@ struct MissionReadinessEvaluatorTests {
 }
 
 private struct IssueRefreshCall: Equatable {
-    let identity: MissionSourceIdentity
+    let identity: IssueIdentity
     let projectID: String
 }
 
@@ -2211,17 +2211,17 @@ private final class MissionLifecycleRecorder {
 
 @MainActor
 private final class RefreshIssueRace {
-    private let success: MissionIssueSnapshot
+    private let success: CodeHostIssueSnapshot
     private var invocationCount = 0
     private var slowFailureStarted = false
     private var slowFailureStartWaiters: [CheckedContinuation<Void, Never>] = []
     private var slowFailureRelease: CheckedContinuation<Void, Never>?
 
-    init(success: MissionIssueSnapshot) {
+    init(success: CodeHostIssueSnapshot) {
         self.success = success
     }
 
-    func refresh() async throws -> MissionIssueSnapshot {
+    func refresh() async throws -> CodeHostIssueSnapshot {
         invocationCount += 1
         guard invocationCount == 1 else { return success }
 

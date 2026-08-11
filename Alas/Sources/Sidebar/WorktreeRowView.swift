@@ -99,6 +99,7 @@ struct WorktreeRowView: View {
     let ggMenuModel: GGWorktreeMenuModel
     let onTap: () -> Void
     let onOpenTerminal: () -> Void
+    var onOpenIssue: (() -> Void)? = nil
     let onCopyPath: () -> Void
     let onCopyBranch: () -> Void
     let onRevealInFinder: () -> Void
@@ -279,6 +280,10 @@ struct WorktreeRowView: View {
                 Button("Copy Branch Name", action: onCopyBranch)
             } else if !isPending {
                 Button("Open in Terminal", action: onOpenTerminal)
+                if let onOpenIssue {
+                    Button("Open Issue", action: onOpenIssue)
+                    Divider()
+                }
                 Button("Copy Path", action: onCopyPath)
                 Button("Copy Branch Name", action: onCopyBranch)
                 if !worktree.path.isRemoteAlasPath {

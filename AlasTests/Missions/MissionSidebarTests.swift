@@ -329,7 +329,7 @@ struct MissionSidebarTests {
                 updatedAt: Date(timeIntervalSince1970: 120),
                 completedAt: missionState == .completed ? Date(timeIntervalSince1970: 120) : nil
             ),
-            source: MissionSourceSnapshot(issue: MissionFixtures.issue()),
+            source: IssueSnapshot(codeHostIssue: MissionFixtures.issue()),
             legs: [
                 primary,
                 Self.leg(

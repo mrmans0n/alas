@@ -285,7 +285,7 @@ struct AddMissionLegDialog: View {
         }
     }
 
-    private func sourceSummary(_ source: MissionSourceSnapshot) -> String {
+    private func sourceSummary(_ source: IssueSnapshot) -> String {
         let repository = source.repositoryLocator?.repositorySlug
         let reference = source.displayReference
         return [source.providerLabel.uppercased(), repository, reference]

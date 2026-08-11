@@ -23,6 +23,13 @@ struct GGPreambleStackContext: Equatable {
     let ggMCPAttached: Bool
 }
 
+struct IssuePreambleContext: Equatable {
+    let title: String
+    let url: URL
+    let providerLabel: String
+    let displayReference: String?
+}
+
 /// What the session's worktree looks like to gg at session-creation time.
 enum GGPreambleSignal: Equatable {
     case none
@@ -53,23 +60,26 @@ enum ACPMCPPromptPreamble {
         isDelegated: Bool,
         userServerNames: [String],
         mode: ACPMCPPreambleMode = .mcp,
-        ggStack: GGPreambleStackContext? = nil
+        ggStack: GGPreambleStackContext? = nil,
+        issue: IssuePreambleContext? = nil
     ) -> String? {
-        guard builtInInjected || !userServerNames.isEmpty || ggStack != nil else { return nil }
+        guard builtInInjected || !userServerNames.isEmpty || ggStack != nil || issue != nil else { return nil }
         switch mode {
         case .mcp:
             return mcpText(
                 builtInInjected: builtInInjected,
                 isDelegated: isDelegated,
                 userServerNames: userServerNames,
-                ggStack: ggStack)
+                ggStack: ggStack,
+                issue: issue)
         case .cli(let serverAvailability):
             return cliText(
                 builtInInjected: builtInInjected,
                 isDelegated: isDelegated,
                 userServerNames: userServerNames,
                 serverAvailability: serverAvailability,
-                ggStack: ggStack)
+                ggStack: ggStack,
+                issue: issue)
         }
     }
 
@@ -77,7 +87,8 @@ enum ACPMCPPromptPreamble {
         builtInInjected: Bool,
         isDelegated: Bool,
         userServerNames: [String],
-        ggStack: GGPreambleStackContext?
+        ggStack: GGPreambleStackContext?,
+        issue: IssuePreambleContext?
     ) -> String {
         var lines: [String] = []
         lines.append("<alas-workspace-context>")
@@ -122,6 +133,9 @@ enum ACPMCPPromptPreamble {
         if let ggStack {
             lines.append(ggStackLine(ggStack, cliMode: false))
         }
+        if let issue {
+            lines.append(issueLine(issue))
+        }
         lines.append("</alas-workspace-context>")
         return lines.joined(separator: "\n")
     }
@@ -131,7 +145,8 @@ enum ACPMCPPromptPreamble {
         isDelegated: Bool,
         userServerNames: [String],
         serverAvailability: ACPMCPExternalStatus.AdapterServerAvailability,
-        ggStack: GGPreambleStackContext?
+        ggStack: GGPreambleStackContext?,
+        issue: IssuePreambleContext?
     ) -> String {
         var lines: [String] = []
         lines.append("<alas-workspace-context>")
@@ -185,6 +200,9 @@ enum ACPMCPPromptPreamble {
         if let ggStack {
             lines.append(ggStackLine(ggStack, cliMode: true))
         }
+        if let issue {
+            lines.append(issueLine(issue))
+        }
         lines.append("</alas-workspace-context>")
         return lines.joined(separator: "\n")
     }
@@ -208,5 +226,10 @@ enum ACPMCPPromptPreamble {
                 + "(list/log/sync/land); prefer them over parsing CLI output."
         }
         return line
+    }
+
+    private static func issueLine(_ issue: IssuePreambleContext) -> String {
+        let reference = issue.displayReference.map { " \($0)" } ?? ""
+        return "This worktree is attached to \(issue.providerLabel) issue\(reference), \"\(issue.title)\": \(issue.url.absoluteString)"
     }
 }

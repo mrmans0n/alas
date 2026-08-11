@@ -6,7 +6,7 @@ enum MissionFixtures {
         url: String = "https://linear.app/acme/issue/ALA-42/fix-parser-crash",
         title: String = "Fix parser crash",
         body: String = "The parser crashes for malformed input."
-    ) -> MissionSourceSnapshot {
+    ) -> IssueSnapshot {
         .init(
             identity: .init(providerID: .manual, stableID: url),
             canonicalURL: URL(string: url)!,
@@ -32,7 +32,7 @@ enum MissionFixtures {
         title: String = "Fix parser crash",
         labels: [String] = ["bug", "parser"],
         capturedAt: TimeInterval = 100
-    ) -> MissionIssueSnapshot {
+    ) -> CodeHostIssueSnapshot {
         .init(
             identity: .init(
                 provider: .github,
@@ -54,7 +54,7 @@ enum MissionFixtures {
 
     static func creatingMission(
         id: String = "mission-1",
-        issue: MissionIssueSnapshot = issue(),
+        issue: CodeHostIssueSnapshot = issue(),
         createdAt: TimeInterval = 100,
         baseRef: String = "origin/main",
         baseRemoteName: String? = "origin"
@@ -71,7 +71,7 @@ enum MissionFixtures {
                 updatedAt: Date(timeIntervalSince1970: createdAt),
                 completedAt: nil
             ),
-            source: MissionSourceSnapshot(issue: issue),
+            source: IssueSnapshot(codeHostIssue: issue),
             legs: [leg(
                 id: legID,
                 missionID: missionID,
@@ -84,7 +84,7 @@ enum MissionFixtures {
 
     static func creatingMission(
         id: String = "mission-1",
-        source: MissionSourceSnapshot,
+        source: IssueSnapshot,
         createdAt: TimeInterval = 100,
         baseRef: String = "origin/main",
         baseRemoteName: String? = "origin"
@@ -204,7 +204,7 @@ extension MissionFixtures {
                 updatedAt: createdAt,
                 completedAt: nil
             ),
-            source: MissionSourceSnapshot(issue: issue()),
+            source: IssueSnapshot(codeHostIssue: issue()),
             legs: [app, sdk],
             events: []
         )

@@ -39,7 +39,7 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         }
     }
 
-    func issue(remote: CodeHostRemote, number: Int, cwd: URL) async throws -> MissionIssueSnapshot {
+    func issue(remote: CodeHostRemote, number: Int, cwd: URL) async throws -> CodeHostIssueSnapshot {
         let result = try await runner.run(
             executable,
             args: [
@@ -1679,7 +1679,7 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         throw CodeHostProviderError.malformedOutput("Unable to parse GitLab date")
     }
 
-    static func parseIssue(_ json: String, remote: CodeHostRemote, requestedNumber: Int) throws -> MissionIssueSnapshot {
+    static func parseIssue(_ json: String, remote: CodeHostRemote, requestedNumber: Int) throws -> CodeHostIssueSnapshot {
         let response: GitLabIssueResponse
         do {
             response = try JSONDecoder().decode(GitLabIssueResponse.self, from: Data(json.utf8))
@@ -1692,15 +1692,15 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         else {
             throw CodeHostProviderError.malformedOutput("GitLab issue output is missing required fields.")
         }
-        guard case .url(let kind, let host, let repositorySlug, let number) = try MissionIssueInput.parse(url.absoluteString),
+        guard case .url(let kind, let host, let repositorySlug, let number) = try CodeHostIssueInput.parse(url.absoluteString),
               kind == .gitlab,
               host.caseInsensitiveCompare(remote.host) == .orderedSame,
               number == response.iid
         else {
             throw CodeHostProviderError.malformedOutput("GitLab issue output has an unexpected canonical URL.")
         }
-        return MissionIssueSnapshot(
-            identity: MissionIssueIdentity(
+        return CodeHostIssueSnapshot(
+            identity: CodeHostIssueIdentity(
                 provider: kind,
                 host: host,
                 repositorySlug: repositorySlug.lowercased(),
@@ -1724,7 +1724,7 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         return formatter.date(from: value)
     }
 
-    private static func issueState(_ rawValue: String) -> MissionIssueState {
+    private static func issueState(_ rawValue: String) -> CodeHostIssueState {
         switch rawValue.lowercased() {
         case "open", "opened": .open
         case "closed": .closed

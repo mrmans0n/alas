@@ -12,7 +12,7 @@ final class EditMissionSourceDialogModel {
     private let save: @MainActor (String, String) async -> Bool
 
     init(
-        source: MissionSourceSnapshot,
+        source: IssueSnapshot,
         save: @escaping @MainActor (String, String) async -> Bool
     ) {
         title = source.title

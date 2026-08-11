@@ -192,6 +192,20 @@ final class ProjectsManager {
         projects[idx].ggWorktreeModes.removeValue(forKey: worktreeId)
     }
 
+    func issueAttachment(projectId: String, worktreeId: String) -> IssueAttachment? {
+        projects.first(where: { $0.id == projectId })?.issueAttachments[worktreeId]
+    }
+
+    func setIssueAttachment(projectId: String, worktreeId: String, attachment: IssueAttachment) {
+        guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        projects[idx].issueAttachments[worktreeId] = attachment
+    }
+
+    func removeIssueAttachment(projectId: String, worktreeId: String) {
+        guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        projects[idx].issueAttachments.removeValue(forKey: worktreeId)
+    }
+
     func reorderProject(fromIndex: Int, toIndex: Int) {
         guard projects.indices.contains(fromIndex),
               projects.indices.contains(toIndex),
@@ -443,6 +457,7 @@ final class ProjectsManager {
         projects[idx].hiddenWorktreePaths.removeAll { !live.contains($0) }
         let reconciledIds = Set(reconciled.map(\.id))
         let previousGGWorktreeModes = projects[idx].ggWorktreeModes
+        let previousIssueAttachments = projects[idx].issueAttachments
         for (id, mode) in resolvedCreateModes {
             if mode == .inherit {
                 projects[idx].ggWorktreeModes.removeValue(forKey: id)
@@ -453,10 +468,14 @@ final class ProjectsManager {
         projects[idx].ggWorktreeModes = projects[idx].ggWorktreeModes.filter {
             reconciledIds.contains($0.key)
         }
+        projects[idx].issueAttachments = projects[idx].issueAttachments.filter {
+            reconciledIds.contains($0.key)
+        }
         return anchorChanged
             || orderChanged
             || projects[idx].hiddenWorktreePaths.count != before
             || projects[idx].ggWorktreeModes != previousGGWorktreeModes
+            || projects[idx].issueAttachments != previousIssueAttachments
     }
 
     func reconcileRemoteHostRegistrations(project: ProjectConfig, previous: [Worktree], reconciled: [Worktree]) {

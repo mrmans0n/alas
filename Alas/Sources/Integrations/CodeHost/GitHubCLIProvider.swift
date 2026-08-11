@@ -274,7 +274,7 @@ struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         }
     }
 
-    func issue(remote: CodeHostRemote, number: Int, cwd: URL) async throws -> MissionIssueSnapshot {
+    func issue(remote: CodeHostRemote, number: Int, cwd: URL) async throws -> CodeHostIssueSnapshot {
         let result = try await runner.run(
             executable,
             args: ["api", "--hostname", remote.host, "repos/\(remote.repositorySlug)/issues/\(number)"],
@@ -1870,7 +1870,7 @@ struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         throw CodeHostProviderError.malformedOutput("Unable to parse GitHub date")
     }
 
-    static func parseIssue(_ json: String, remote: CodeHostRemote, requestedNumber: Int) throws -> MissionIssueSnapshot {
+    static func parseIssue(_ json: String, remote: CodeHostRemote, requestedNumber: Int) throws -> CodeHostIssueSnapshot {
         let response: GitHubIssueResponse
         do {
             response = try JSONDecoder().decode(GitHubIssueResponse.self, from: Data(json.utf8))
@@ -1886,15 +1886,15 @@ struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         guard response.pullRequest == nil else {
             throw CodeHostProviderError.malformedOutput("GitHub issue output describes a pull request, not an issue.")
         }
-        guard case .url(let kind, let host, let repositorySlug, let number) = try MissionIssueInput.parse(url.absoluteString),
+        guard case .url(let kind, let host, let repositorySlug, let number) = try CodeHostIssueInput.parse(url.absoluteString),
               kind == .github,
               host.caseInsensitiveCompare(remote.host) == .orderedSame,
               number == response.number
         else {
             throw CodeHostProviderError.malformedOutput("GitHub issue output has an unexpected canonical URL.")
         }
-        return MissionIssueSnapshot(
-            identity: MissionIssueIdentity(
+        return CodeHostIssueSnapshot(
+            identity: CodeHostIssueIdentity(
                 provider: kind,
                 host: host,
                 repositorySlug: repositorySlug.lowercased(),
@@ -1903,7 +1903,7 @@ struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding {
             canonicalURL: url,
             title: response.title,
             body: response.body ?? "",
-            state: MissionIssueState(rawValue: response.state.lowercased()) ?? .unknown,
+            state: CodeHostIssueState(rawValue: response.state.lowercased()) ?? .unknown,
             labels: response.labels.compactMap { normalizedOptionalString($0.name) },
             assignees: response.assignees.compactMap { normalizedOptionalString($0.login) },
             providerUpdatedAt: try parseOptionalDate(response.updatedAt),

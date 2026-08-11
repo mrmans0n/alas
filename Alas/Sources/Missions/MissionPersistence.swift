@@ -32,7 +32,7 @@ actor MissionPersistence {
     }
     func list(includeCompleted: Bool) throws -> [MissionAggregate] { try openedStore().list(includeCompleted: includeCompleted) }
     func list(states: Set<MissionState>) throws -> [MissionAggregate] { try openedStore().list(states: states) }
-    func activeMission(sourceIdentity: MissionSourceIdentity) throws -> MissionAggregate? {
+    func activeMission(sourceIdentity: IssueIdentity) throws -> MissionAggregate? {
         try openedStore().activeMission(sourceIdentity: sourceIdentity)
     }
 
@@ -85,7 +85,7 @@ actor MissionPersistence {
     @discardableResult
     func replaceSourceSnapshot(
         missionID: MissionID,
-        snapshot: MissionSourceSnapshot,
+        snapshot: IssueSnapshot,
         event: MissionEvent
     ) throws -> [MissionID] {
         try openedStore().replaceSourceSnapshot(missionID: missionID, snapshot: snapshot, event: event)
