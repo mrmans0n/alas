@@ -45,7 +45,9 @@ enum WorktreeOperationState: Equatable {
         projectId: String,
         message: String,
         base: String,
-        ggWorktreeMode: GGWorktreeMode
+        ggWorktreeMode: GGWorktreeMode,
+        launchSurface: WorktreeLaunchSurface,
+        issueAttachment: IssueAttachment?
     )
     case deleteFailed(message: String)
 }
@@ -241,6 +243,10 @@ final class ProjectsManager {
         worktreeOperationStates[worktreeId]
     }
 
+    func operationStatesSnapshot() -> [String: WorktreeOperationState] {
+        worktreeOperationStates
+    }
+
     func setOperationState(id: String, state: WorktreeOperationState?) {
         if let state {
             worktreeOperationStates[id] = state
@@ -422,7 +428,7 @@ final class ProjectsManager {
                 if !liveIds.contains(id) {
                     clearOperationIds.append(id)
                 }
-            case .createFailed(let originProjectId, _, _, let ggWorktreeMode):
+            case .createFailed(let originProjectId, _, _, let ggWorktreeMode, _, _):
                 guard originProjectId == projectId else { continue }
                 if liveIds.contains(id) {
                     // Worktree exists in git — transient failure is resolved; clear state.

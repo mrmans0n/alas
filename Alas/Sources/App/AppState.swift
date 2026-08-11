@@ -140,6 +140,8 @@ final class AppState {
 
     @ObservationIgnored
     private var pendingACPDetachTasks: [String: [ACPSession.ID: PendingACPDetach]] = [:]
+    @ObservationIgnored
+    private var reconciledCreateFailureCompletionClaims: Set<String> = []
 #if DEBUG
     var pendingACPDetachCountForTesting: Int {
         pendingACPDetachTasks.values.reduce(0) { $0 + $1.count }
@@ -1310,6 +1312,22 @@ final class AppState {
         )
     }
 
+    func makeIssueResolver(selectedProjectID: String?) -> IssueResolver {
+        let issueProviders = CodeHostIssueProviderRegistry.live()
+        return IssueResolver(environment: .init(
+            projects: { [weak self] in self?.projects ?? [] },
+            selectedProjectID: { selectedProjectID },
+            remotes: { project in
+                try await GitService().remotes(worktreePath: URL(fileURLWithPath: project.path))
+            },
+            providers: IssueProviderRegistry([
+                CodeHostIssueSourceProvider(kind: .github, providers: issueProviders),
+                CodeHostIssueSourceProvider(kind: .gitlab, providers: issueProviders),
+                ManualIssueProvider(metadataFetcher: .live),
+            ])
+        ))
+    }
+
     private func refreshMissionSource(
         _ source: IssueSnapshot,
         projectID: String
@@ -2341,7 +2359,8 @@ final class AppState {
         destination: URL,
         runStartup: Bool,
         launchSurface: WorktreeLaunchSurface,
-        ggWorktreeMode: GGWorktreeMode = .inherit
+        ggWorktreeMode: GGWorktreeMode = .inherit,
+        issueAttachment: IssueAttachment? = nil
     ) async -> String {
         guard let project = projects.first(where: { $0.id == projectId }) else {
             // Should not happen if the dialog validated the project; fail silently.
@@ -2379,6 +2398,7 @@ final class AppState {
                 return ""
             }
         }
+        reconciledCreateFailureCompletionClaims.remove(optimisticId)
         rightPaneStore.invalidateSnapshot(worktreeId: optimisticId)
         let optimistic = Worktree(
             id: optimisticId,
@@ -2471,6 +2491,14 @@ final class AppState {
                     if wasHidden {
                         saveProjects()
                     }
+                    if let issueAttachment {
+                        projectsManager.setIssueAttachment(
+                            projectId: project.id,
+                            worktreeId: newWorktree.id,
+                            attachment: issueAttachment
+                        )
+                        saveProjects()
+                    }
 
                     if launchSurface != .delegated {
                         selectWorktree(id: newWorktree.id)
@@ -2490,8 +2518,16 @@ final class AppState {
                             for: newWorktree,
                             startupScriptSuffix: suffix
                         )
-                    case .acp(let agentId):
-                        openNewACPSession(agentID: agentId)
+                    case .acp(let agentId, let preparedPrompt):
+                        if let preparedPrompt {
+                            await openPreparedWorktreeACPSession(
+                                worktree: newWorktree,
+                                agentID: agentId,
+                                preparedPrompt: preparedPrompt
+                            )
+                        } else {
+                            openNewACPSession(agentID: agentId)
+                        }
                     case .delegated:
                         break
                     }
@@ -2507,7 +2543,9 @@ final class AppState {
                             projectId: projectId,
                             message: error.localizedDescription,
                             base: base,
-                            ggWorktreeMode: ggWorktreeMode
+                            ggWorktreeMode: ggWorktreeMode,
+                            launchSurface: launchSurface,
+                            issueAttachment: issueAttachment
                         )
                     )
                 }
@@ -2524,7 +2562,9 @@ final class AppState {
                         projectId: projectId,
                         message: msg,
                         base: base,
-                        ggWorktreeMode: ggWorktreeMode
+                        ggWorktreeMode: ggWorktreeMode,
+                        launchSurface: launchSurface,
+                        issueAttachment: issueAttachment
                     )
                 )
             }
@@ -3867,7 +3907,12 @@ final class AppState {
         let previousBranches = Dictionary(uniqueKeysWithValues: projectsManager
             .worktrees(projectId: projectId)
             .map { (Self.canonicalWorktreePath($0.path.path), (path: $0.path.path, branch: $0.branch)) })
+        let previousOperationStates = projectsManager.operationStatesSnapshot()
         let changed = try await projectsManager.refreshWorktrees(projectId: projectId)
+        let completedCreateFailure = await completeReconciledCreateFailures(
+            projectId: projectId,
+            previousOperationStates: previousOperationStates
+        )
         for worktree in projectsManager.worktrees(projectId: projectId) {
             let canonicalPath = Self.canonicalWorktreePath(worktree.path.path)
             guard let previous = previousBranches[canonicalPath], previous.branch != worktree.branch else {
@@ -3876,13 +3921,89 @@ final class AppState {
             GGStackSummaryStore.shared.summaries[previous.path] = nil
             GGStackSummaryStore.shared.summaries[worktree.path.path] = nil
         }
-        if changed {
+        if changed || completedCreateFailure {
             saveProjects()
             rightPaneStore.reevaluateGGGates()
         }
         restartProjectGitWatchers(previousPaths: previousPaths)
+        return changed || completedCreateFailure
+    }
+
+    private func completeReconciledCreateFailures(
+        projectId: String,
+        previousOperationStates: [String: WorktreeOperationState]
+    ) async -> Bool {
+        guard let project = projects.first(where: { $0.id == projectId }) else { return false }
+        var changed = false
+        for (worktreeId, state) in previousOperationStates {
+            guard case .createFailed(
+                let failedProjectId,
+                _,
+                _,
+                _,
+                let launchSurface,
+                let issueAttachment
+            ) = state,
+                failedProjectId == projectId,
+                projectsManager.operationState(for: worktreeId) == nil,
+                let worktree = projectsManager.worktrees(projectId: projectId).first(where: { $0.id == worktreeId })
+            else { continue }
+            guard reconciledCreateFailureCompletionClaims.insert(worktreeId).inserted else { continue }
+
+            if let issueAttachment,
+               projectsManager.issueAttachment(projectId: projectId, worktreeId: worktreeId) != issueAttachment {
+                projectsManager.setIssueAttachment(
+                    projectId: projectId,
+                    worktreeId: worktreeId,
+                    attachment: issueAttachment
+                )
+                changed = true
+            }
+
+            if launchSurface != .delegated {
+                selectWorktree(id: worktree.id)
+            }
+
+            switch launchSurface {
+            case .none, .delegated:
+                break
+            case .terminal(let agentId):
+                let suffix: String? = {
+                    guard let id = agentId,
+                          let agent = self.agentRegistry.enabled().first(where: { $0.id == id })
+                    else { return nil }
+                    return self.agentStartupCommand(for: agent, project: project)
+                }()
+                _ = try? await openTerminalTabPreparingRemoteZmxIfNeeded(
+                    for: worktree,
+                    startupScriptSuffix: suffix
+                )
+            case .acp(let agentId, let preparedPrompt):
+                if let preparedPrompt {
+                    await openPreparedWorktreeACPSession(
+                        worktree: worktree,
+                        agentID: agentId,
+                        preparedPrompt: preparedPrompt
+                    )
+                } else {
+                    openNewACPSession(agentID: agentId)
+                }
+            }
+        }
         return changed
     }
+
+#if DEBUG
+    func completeReconciledCreateFailuresForTesting(
+        projectId: String,
+        previousOperationStates: [String: WorktreeOperationState]
+    ) async -> Bool {
+        await completeReconciledCreateFailures(
+            projectId: projectId,
+            previousOperationStates: previousOperationStates
+        )
+    }
+#endif
 
     func refreshProjectTopology(projectId: String) async {
         let beforeIds = allWorktreeIds()
@@ -3902,13 +4023,21 @@ final class AppState {
         isRefreshingProjectTopologies = true
         defer { isRefreshingProjectTopologies = false }
         let previousPaths = Dictionary(uniqueKeysWithValues: projectsManager.projects.map { ($0.id, $0.path) })
+        let previousOperationStates = projectsManager.operationStatesSnapshot()
         let changed = await projectsManager.refreshAll()
-        if changed {
+        var completedCreateFailure = false
+        for projectId in previousPaths.keys {
+            completedCreateFailure = await completeReconciledCreateFailures(
+                projectId: projectId,
+                previousOperationStates: previousOperationStates
+            ) || completedCreateFailure
+        }
+        if changed || completedCreateFailure {
             saveProjects()
             rightPaneStore.reevaluateGGGates()
         }
         restartProjectGitWatchers(previousPaths: previousPaths)
-        return changed
+        return changed || completedCreateFailure
     }
 
     private func restartProjectGitWatchers(previousPaths: [String: String]) {
@@ -7621,6 +7750,39 @@ final class AppState {
             promptID: promptID,
             prompt: prompt
         ))
+    }
+
+    private func openPreparedWorktreeACPSession(
+        worktree: Worktree,
+        agentID: String,
+        preparedPrompt: PreparedWorktreeACPPrompt
+    ) async {
+        guard let manager = acpManager(for: worktree) else { return }
+        let session = manager.createSession(
+            id: preparedPrompt.sessionID,
+            agentId: agentID,
+            autoRunDefault: config.harness.acpAutoRunByDefault
+        )
+        let tab = tabs.append(
+            acpSession: ACPSessionTabState(
+                sessionId: preparedPrompt.sessionID,
+                title: session.title
+            ),
+            to: worktree.id
+        )
+        activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
+        do {
+            _ = try await startACPSession(
+                worktree: worktree,
+                sessionID: preparedPrompt.sessionID,
+                agentID: agentID,
+                promptID: preparedPrompt.promptID,
+                prompt: preparedPrompt.text
+            )
+        } catch {
+            manager.liveSession(for: preparedPrompt.sessionID)?.lastError = error.localizedDescription
+        }
+        await manager.flushPersistence()
     }
 
     private static func acpBootstrapReadyState(for session: ACPSession?) -> ACPBootstrapReadyState {

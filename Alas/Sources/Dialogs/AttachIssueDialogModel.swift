@@ -54,8 +54,23 @@ final class AttachIssueDialogModel {
 
     private let environment: Environment
 
-    init(environment: Environment) {
+    init(environment: Environment, initialDraft: AttachedIssueDraft? = nil) {
         self.environment = environment
+        if let initialDraft {
+            reference = initialDraft.source.canonicalURL.absoluteString
+            resolved = .init(
+                source: initialDraft.source,
+                repositoryLocator: initialDraft.source.repositoryLocator,
+                candidateProjectIDs: initialDraft.projectID.map { [$0] } ?? [],
+                selectedProjectID: initialDraft.projectID
+            )
+            projectID = initialDraft.projectID
+            title = initialDraft.source.title
+            context = initialDraft.source.body
+            prompt = initialDraft.prompt
+            promptIsUserOwned = initialDraft.prompt != IssuePromptBuilder.build(source: initialDraft.source)
+            phase = .confirmation
+        }
     }
 
     var branchSeed: String {

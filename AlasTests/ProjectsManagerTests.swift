@@ -574,7 +574,9 @@ extension ProjectsManagerTests {
                 projectId: project.id,
                 message: "disk full",
                 base: "main",
-                ggWorktreeMode: .inherit
+                ggWorktreeMode: .inherit,
+                launchSurface: .none,
+                issueAttachment: nil
             )
         )
 
@@ -585,7 +587,9 @@ extension ProjectsManagerTests {
             projectId: project.id,
             message: "disk full",
             base: "main",
-            ggWorktreeMode: .inherit
+            ggWorktreeMode: .inherit,
+            launchSurface: .none,
+            issueAttachment: nil
         ))
     }
 
@@ -622,7 +626,9 @@ extension ProjectsManagerTests {
                 projectId: project.id,
                 message: "transient",
                 base: "main",
-                ggWorktreeMode: mode
+                ggWorktreeMode: mode,
+                launchSurface: .none,
+                issueAttachment: nil
             )
         )
         let changed = try await mgr.refreshWorktrees(projectId: project.id)
@@ -664,7 +670,9 @@ extension ProjectsManagerTests {
                 projectId: origin.id,
                 message: "transient",
                 base: "main",
-                ggWorktreeMode: .on
+                ggWorktreeMode: .on,
+                launchSurface: .none,
+                issueAttachment: nil
             )
         )
 

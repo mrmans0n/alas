@@ -113,7 +113,9 @@ struct AppStateCleanupTests {
                 projectId: project.id,
                 message: "transient",
                 base: "main",
-                ggWorktreeMode: .off
+                ggWorktreeMode: .off,
+                launchSurface: .none,
+                issueAttachment: nil
             )
         )
 
@@ -527,7 +529,7 @@ struct AppStateCleanupTests {
         }
 
         #expect(state.projectsManager.worktrees(projectId: project.id).contains { $0.id == id })
-        if case .createFailed(_, let message, _, _) = state.projectsManager.operationState(for: id) {
+        if case .createFailed(_, let message, _, _, _, _) = state.projectsManager.operationState(for: id) {
             #expect(!message.isEmpty)
         } else {
             Issue.record("Expected createFailed state")
@@ -568,7 +570,7 @@ struct AppStateCleanupTests {
         )
         #expect(state.ggWorktreeMenuModel(project: project, worktree: failedWorktree).selectedMode == .inherit)
 
-        guard case .createFailed(_, _, let failedBase, let failedMode) =
+        guard case .createFailed(_, _, let failedBase, let failedMode, _, _) =
             state.projectsManager.operationState(for: failedId)
         else {
             Issue.record("Expected createFailed state")
@@ -602,6 +604,221 @@ struct AppStateCleanupTests {
         #expect(state.projectsManager.worktrees(projectId: project.id).contains { $0.id == retryId })
         #expect(state.projectsManager.ggWorktreeMode(projectId: project.id, worktreeId: retryId) == mode)
         #expect(state.projects.first(where: { $0.id == project.id })?.ggWorktreeModes[retryId] == mode)
+    }
+
+    @Test func createWorktreeRetryPreservesIssueLaunchMetadata() async throws {
+        let repo = try await makeRepo(name: "create-retry-issue")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let store = RecordingStore()
+        let state = AppState(store: store)
+        let project = try await state.projectsManager.addProject(
+            path: repo,
+            displayName: "create-retry-issue",
+            color: "#5fb7c4"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+
+        let attachment = IssueAttachment(
+            canonicalURL: URL(string: "https://github.com/acme/alas/issues/42")!,
+            providerLabel: "GitHub",
+            displayReference: "#42",
+            title: "Fix retry"
+        )
+        let preparedPrompt = PreparedWorktreeACPPrompt(
+            sessionID: "retry-issue-session",
+            promptID: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
+            text: "Fix issue #42."
+        )
+        let branch = "retry-issue"
+        let retryBase = "retry-issue-base"
+        let destination = repo.appendingPathComponent("wt-retry-issue")
+        let failedId = await state.createWorktree(
+            projectId: project.id,
+            base: retryBase,
+            branch: branch,
+            destination: destination,
+            runStartup: false,
+            launchSurface: .acp(agentId: "missing-acp-agent", preparedPrompt: preparedPrompt),
+            issueAttachment: attachment
+        )
+        try await waitForOperationStateMatching(state.projectsManager, id: failedId) { state in
+            if case .createFailed = state { return true }
+            return false
+        }
+
+        let retryParameters = SidebarView.retryCreateParameters(
+            operationState: state.projectsManager.operationState(for: failedId),
+            defaultBase: state.config.worktrees.baseBranch
+        )
+        #expect(retryParameters.launchSurface == .acp(agentId: "missing-acp-agent", preparedPrompt: preparedPrompt))
+        #expect(retryParameters.issueAttachment == attachment)
+
+        _ = try await Process.git(["branch", retryBase, "main"], cwd: repo)
+        let retryId = await state.createWorktree(
+            projectId: project.id,
+            base: retryParameters.base,
+            branch: branch,
+            destination: destination,
+            runStartup: false,
+            launchSurface: retryParameters.launchSurface,
+            ggWorktreeMode: retryParameters.ggWorktreeMode,
+            issueAttachment: retryParameters.issueAttachment
+        )
+
+        #expect(retryId == failedId)
+        try await waitForOperationState(state.projectsManager, id: retryId, equals: nil)
+        #expect(state.projectsManager.issueAttachment(projectId: project.id, worktreeId: retryId) == attachment)
+        let acpTabs = state.tabs.tabs(forWorktree: retryId).compactMap { tab -> ACPSessionTabState? in
+            if case .acpSession(let session) = tab { return session }
+            return nil
+        }
+        #expect(acpTabs.map(\.sessionId) == [preparedPrompt.sessionID])
+    }
+
+    @Test func reconciledCreateFailureCompletesIssueLaunchMetadata() async throws {
+        let repo = try await makeRepo(name: "create-reconcile-issue")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let state = AppState(store: RecordingStore())
+        let project = try await state.projectsManager.addProject(
+            path: repo,
+            displayName: "create-reconcile-issue",
+            color: "#5fb7c4"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+
+        let destination = repo.appendingPathComponent("wt-reconciled-issue")
+        _ = try await Process.git(["worktree", "add", destination.path, "-b", "reconciled-issue", "main"], cwd: repo)
+        let worktreeID = Worktree.makeId(path: destination)
+        let attachment = IssueAttachment(
+            canonicalURL: URL(string: "https://github.com/acme/alas/issues/43")!,
+            providerLabel: "GitHub",
+            displayReference: "#43",
+            title: "Fix reconciled retry"
+        )
+        let preparedPrompt = PreparedWorktreeACPPrompt(
+            sessionID: "reconciled-issue-session",
+            promptID: UUID(uuidString: "33333333-3333-3333-3333-333333333333")!,
+            text: "Fix issue #43."
+        )
+        state.projectsManager.setOperationState(
+            id: worktreeID,
+            state: .createFailed(
+                projectId: project.id,
+                message: "refresh failed",
+                base: "main",
+                ggWorktreeMode: .inherit,
+                launchSurface: .acp(agentId: "missing-acp-agent", preparedPrompt: preparedPrompt),
+                issueAttachment: attachment
+            )
+        )
+
+        await state.refreshProjectTopology(projectId: project.id)
+
+        #expect(state.projectsManager.operationState(for: worktreeID) == nil)
+        #expect(state.projectsManager.issueAttachment(projectId: project.id, worktreeId: worktreeID) == attachment)
+        let acpTabs = state.tabs.tabs(forWorktree: worktreeID).compactMap { tab -> ACPSessionTabState? in
+            if case .acpSession(let session) = tab { return session }
+            return nil
+        }
+        #expect(acpTabs.map(\.sessionId) == [preparedPrompt.sessionID])
+    }
+
+    @Test func refreshAllCompletesReconciledCreateFailureIssueLaunchMetadata() async throws {
+        let repo = try await makeRepo(name: "create-reconcile-all-issue")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let state = AppState(store: RecordingStore())
+        let project = try await state.projectsManager.addProject(
+            path: repo,
+            displayName: "create-reconcile-all-issue",
+            color: "#5fb7c4"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+
+        let destination = repo.appendingPathComponent("wt-reconciled-all-issue")
+        _ = try await Process.git(["worktree", "add", destination.path, "-b", "reconciled-all-issue", "main"], cwd: repo)
+        let worktreeID = Worktree.makeId(path: destination)
+        let attachment = IssueAttachment(
+            canonicalURL: URL(string: "https://github.com/acme/alas/issues/44")!,
+            providerLabel: "GitHub",
+            displayReference: "#44",
+            title: "Fix refresh-all reconcile"
+        )
+        let preparedPrompt = PreparedWorktreeACPPrompt(
+            sessionID: "reconciled-all-issue-session",
+            promptID: UUID(uuidString: "44444444-4444-4444-4444-444444444444")!,
+            text: "Fix issue #44."
+        )
+        state.projectsManager.setOperationState(
+            id: worktreeID,
+            state: .createFailed(
+                projectId: project.id,
+                message: "refresh all failed",
+                base: "main",
+                ggWorktreeMode: .inherit,
+                launchSurface: .acp(agentId: "missing-acp-agent", preparedPrompt: preparedPrompt),
+                issueAttachment: attachment
+            )
+        )
+
+        await state.refreshAllProjectTopologies()
+
+        #expect(state.projectsManager.operationState(for: worktreeID) == nil)
+        #expect(state.projectsManager.issueAttachment(projectId: project.id, worktreeId: worktreeID) == attachment)
+        let acpTabs = state.tabs.tabs(forWorktree: worktreeID).compactMap { tab -> ACPSessionTabState? in
+            if case .acpSession(let session) = tab { return session }
+            return nil
+        }
+        #expect(acpTabs.map(\.sessionId) == [preparedPrompt.sessionID])
+    }
+
+    @Test func reconciledCreateFailureLaunchReplayIsIdempotentForSameSnapshot() async throws {
+        let repo = try await makeRepo(name: "create-reconcile-idempotent")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        var openedWorktreeIds: [String] = []
+        let state = AppState(
+            store: RecordingStore(),
+            terminalSessionOpener: { worktree, _, _, _, _, _, _, _, _ in
+                openedWorktreeIds.append(worktree.id)
+                return AppState.OpenedTerminalSession(
+                    id: "reconciled-terminal-\(openedWorktreeIds.count)",
+                    foregroundPid: { nil }
+                )
+            }
+        )
+        let project = try await state.projectsManager.addProject(
+            path: repo,
+            displayName: "create-reconcile-idempotent",
+            color: "#5fb7c4"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+
+        let destination = repo.appendingPathComponent("wt-reconciled-idempotent")
+        _ = try await Process.git(["worktree", "add", destination.path, "-b", "reconciled-idempotent", "main"], cwd: repo)
+        let worktreeID = Worktree.makeId(path: destination)
+        state.projectsManager.setOperationState(
+            id: worktreeID,
+            state: .createFailed(
+                projectId: project.id,
+                message: "refresh failed",
+                base: "main",
+                ggWorktreeMode: .inherit,
+                launchSurface: .terminal(agentId: nil),
+                issueAttachment: nil
+            )
+        )
+        let previousOperationStates = state.projectsManager.operationStatesSnapshot()
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+
+        _ = await state.completeReconciledCreateFailuresForTesting(
+            projectId: project.id,
+            previousOperationStates: previousOperationStates
+        )
+        _ = await state.completeReconciledCreateFailuresForTesting(
+            projectId: project.id,
+            previousOperationStates: previousOperationStates
+        )
+
+        #expect(openedWorktreeIds == [worktreeID])
     }
 
     @Test func successfulInheritCreationKeepsGGWorktreeModesSparse() async throws {

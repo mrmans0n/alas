@@ -269,6 +269,112 @@ struct NewWorktreeDialogTests {
         ))
     }
 
+    @Test func issueAttachmentUsesOnlyAnExactCurrentProjectMatch() {
+        #expect(NewWorktreeDialog.projectIDAfterIssueAttach(
+            preferredProjectID: "repo-b",
+            currentProjectID: "repo-a",
+            availableProjectIDs: ["repo-a", "repo-b"]
+        ) == "repo-b")
+        #expect(NewWorktreeDialog.projectIDAfterIssueAttach(
+            preferredProjectID: "stale",
+            currentProjectID: "repo-a",
+            availableProjectIDs: ["repo-a", "repo-b"]
+        ) == "repo-a")
+        #expect(NewWorktreeDialog.projectIDAfterIssueAttach(
+            preferredProjectID: nil,
+            currentProjectID: "repo-a",
+            availableProjectIDs: ["repo-a", "repo-b"]
+        ) == "repo-a")
+    }
+
+    @Test func issueAttachmentSeedsOnlyTheActiveBranchOrStackInput() {
+        #expect(NewWorktreeDialog.namesAfterIssueAttach(
+            branchSeed: "feature/42-fix-sync",
+            createsGGStack: false,
+            branch: "manual-branch",
+            stackName: "manual-stack"
+        ) == (branch: "feature/42-fix-sync", stackName: "manual-stack"))
+        #expect(NewWorktreeDialog.namesAfterIssueAttach(
+            branchSeed: "feature/42-fix-sync",
+            createsGGStack: true,
+            branch: "manual-branch",
+            stackName: "manual-stack"
+        ) == (branch: "manual-branch", stackName: "feature/42-fix-sync"))
+    }
+
+    @Test func issueAttachmentSelectsTheFirstEnabledACPCapableAgent() {
+        let agents = [
+            Self.agent(id: "amp", displayName: "Amp"),
+            Self.agent(id: "codex", displayName: "Codex"),
+            Self.agent(id: "claude", displayName: "Claude"),
+        ]
+
+        #expect(NewWorktreeDialog.issueLaunchAgent(from: agents) == "codex")
+    }
+
+    @Test func issuePromptIsAvailableOnlyForChatLaunchWhileAttachmentRemains() {
+        let draft = AttachedIssueDraft(
+            source: IssueSnapshot(
+                identity: .init(providerID: .manual, stableID: "issue-42"),
+                canonicalURL: URL(string: "https://example.com/issues/42")!,
+                providerLabel: "example.com",
+                displayReference: "#42",
+                repositoryLocator: nil,
+                title: "Fix sync",
+                body: "Issue context",
+                state: .unknown,
+                labels: [],
+                assignees: [],
+                providerUpdatedAt: nil,
+                capturedAt: .distantPast,
+                refreshError: nil,
+                contentOrigin: .manual,
+                isEditable: true,
+                isRefreshable: false
+            ),
+            projectID: nil,
+            branchSeed: "feature/42-fix-sync",
+            prompt: "Fix the issue."
+        )
+
+        #expect(NewWorktreeDialog.issuePromptForLaunch(
+            draft: draft,
+            openAfterCreate: true,
+            launchMode: .acp
+        ) == "Fix the issue.")
+        #expect(NewWorktreeDialog.issuePromptForLaunch(
+            draft: draft,
+            openAfterCreate: true,
+            launchMode: .terminal
+        ) == nil)
+        #expect(NewWorktreeDialog.issuePromptForLaunch(
+            draft: draft,
+            openAfterCreate: false,
+            launchMode: .acp
+        ) == nil)
+        #expect(draft.attachment.displayTitle == "#42 · Fix sync")
+    }
+
+    @Test func editingAttachedIssueDoesNotReapplyParentFieldEffects() {
+        #expect(NewWorktreeDialog.appliesParentFieldsAfterIssueAttach(existingDraft: nil))
+        #expect(!NewWorktreeDialog.appliesParentFieldsAfterIssueAttach(existingDraft: Self.issueDraft()))
+    }
+
+    @Test func issueDrivenProjectChangeDoesNotReapplyLaunchDefaults() {
+        #expect(!NewWorktreeDialog.appliesLaunchDefaultsAfterProjectChange(
+            projectID: "repo-b",
+            issueDrivenProjectID: "repo-b"
+        ))
+        #expect(NewWorktreeDialog.appliesLaunchDefaultsAfterProjectChange(
+            projectID: "repo-c",
+            issueDrivenProjectID: "repo-b"
+        ))
+        #expect(NewWorktreeDialog.appliesLaunchDefaultsAfterProjectChange(
+            projectID: "repo-b",
+            issueDrivenProjectID: nil
+        ))
+    }
+
     private static func project(
         id: String,
         ggMode: GGProjectMode = .auto
@@ -280,6 +386,32 @@ struct NewWorktreeDialogTests {
             color: "#5fb7c4",
             addedAt: Date(timeIntervalSince1970: 0),
             ggMode: ggMode
+        )
+    }
+
+    private static func issueDraft() -> AttachedIssueDraft {
+        AttachedIssueDraft(
+            source: IssueSnapshot(
+                identity: .init(providerID: .manual, stableID: "issue-42"),
+                canonicalURL: URL(string: "https://example.com/issues/42")!,
+                providerLabel: "example.com",
+                displayReference: "#42",
+                repositoryLocator: nil,
+                title: "Fix sync",
+                body: "Issue context",
+                state: .unknown,
+                labels: [],
+                assignees: [],
+                providerUpdatedAt: nil,
+                capturedAt: .distantPast,
+                refreshError: nil,
+                contentOrigin: .manual,
+                isEditable: true,
+                isRefreshable: false
+            ),
+            projectID: nil,
+            branchSeed: "feature/42-fix-sync",
+            prompt: "Fix the issue."
         )
     }
 
