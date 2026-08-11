@@ -3353,14 +3353,23 @@ final class AppState {
 
     func handleProjectHeadUpdates(projectId: String, branchByWorktreePath: [URL: String]) {
         bumpRevisionGenerationForProject(projectId: projectId)
-        let changedPaths = projectsManager.applyHeadUpdates(
+        let reportedPaths = Set(branchByWorktreePath.keys.map {
+            Self.canonicalWorktreePath($0.path)
+        })
+        projectsManager.applyHeadUpdates(
             projectId: projectId,
             branchByWorktreePath: branchByWorktreePath
         )
-        for path in changedPaths {
-            GGStackSummaryStore.shared.summaries[path] = nil
+        for worktree in projectsManager.worktrees(projectId: projectId)
+            where reportedPaths.contains(Self.canonicalWorktreePath(worktree.path.path))
+        {
+            GGStackSummaryStore.shared.summaries[worktree.path.path] = nil
         }
         invalidateGGStackCacheAndRebumpGeneration(projectId: projectId)
+        rightPaneStore.refreshActiveGGPresentationForHeadUpdates(
+            projectId: projectId,
+            worktreePaths: Array(branchByWorktreePath.keys)
+        )
     }
 
     private func handleProjectRevisionChange(projectId: String) {
@@ -7492,7 +7501,10 @@ final class AppState {
                     context: integration.context,
                     snapshot: self.rightPaneStore.ggStackSnapshotForWorktreePath(
                         integration.worktree.path.path,
-                        effectiveContext: integration.context
+                        effectiveContext: integration.context,
+                        liveBranch: self.rightPaneStore.currentBranchForWorktreePath(
+                            integration.worktree.path.path
+                        ) ?? integration.worktree.branch
                     )
                 )
             },
@@ -8337,14 +8349,19 @@ final class AppState {
             }) else { continue }
             let branch = rightPaneStore.currentBranchForWorktreePath(worktree.path.path)
                 ?? worktree.branch
+            let branchContext = ggWorktreeContext(
+                project: project,
+                worktree: worktree,
+                branch: branch,
+                ggInstalled: ggInstalled
+            )
             return (
                 project,
                 worktree,
-                ggWorktreeContext(
-                    project: project,
-                    worktree: worktree,
-                    branch: branch,
-                    ggInstalled: ggInstalled
+                rightPaneStore.effectiveGGContextForWorktreePath(
+                    worktree.path.path,
+                    branchContext: branchContext,
+                    liveBranch: branch
                 )
             )
         }

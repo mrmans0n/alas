@@ -60,6 +60,23 @@ private final class CountingFakeGGRunner: GGCommandRunning, @unchecked Sendable 
     }
 }
 
+private final class SequencedFakeGGRunner: GGCommandRunning, @unchecked Sendable {
+    private(set) var callCount = 0
+    private var results: [ProcessResult]
+
+    init(results: [ProcessResult]) {
+        self.results = results
+    }
+
+    func run(args: [String], cwd: URL?) async throws -> ProcessResult {
+        callCount += 1
+        guard args == ["ls", "--json"], !results.isEmpty else {
+            return ProcessResult(exitCode: 1, stdout: "", stderr: "unexpected args: \(args)")
+        }
+        return results.removeFirst()
+    }
+}
+
 enum GGStackClassificationFixture: CaseIterable, Sendable {
     case nilStack
     case zeroTotalWithEntry
@@ -1114,6 +1131,152 @@ struct RightPaneGGStackTests {
         #expect(state.ggStackLoadState == .loaded)
     }
 
+    @Test func detachedRefreshRecoversCurrentStackAndDedupesThePromotedContext() async {
+        let runner = CountingFakeGGRunner(
+            result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
+        )
+        let state = makeState()
+        var branchContext = GGWorktreeContext.active(stackName: "agent-inbox")
+        state.ggService = GGService(runner: runner)
+        state.ggContextProvider = { _ in branchContext }
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "d", count: 40), stackShaped: true)]
+
+        state.seedGGContext(branch: "nacho/agent-inbox")
+        await state.refreshGGStack()
+
+        branchContext = .inactive(reason: .branchPrefixMismatch(expectedPrefix: "nacho/"))
+        state.seedGGContext(branch: "")
+        await state.refreshGGStack()
+
+        #expect(runner.callCount == 2)
+        #expect(state.ggContext == .active(stackName: "agent-inbox"))
+        #expect(state.ggStackLoadState == .loaded)
+        #expect(state.ggStackDisplayCommits.map(\.shortSha) == ["ccccccc", "bbbbbbb", "aaaaaaa"])
+
+        await state.refreshGGStack()
+
+        #expect(runner.callCount == 2)
+    }
+
+    @Test func coldDetachedRefreshPublishesStackToStoreSnapshotConsumers() async throws {
+        let store = RightPaneStore()
+        let worktree = makeWorktree()
+        let state = store.state(for: worktree, baseBranch: "main", comparisonMode: .manual)
+        store.deactivate()
+        let runner = CountingFakeGGRunner(
+            result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
+        )
+        state.ggService = GGService(runner: runner)
+        state.ggContextProvider = { _ in .inactive(reason: .branchPrefixMismatch(expectedPrefix: "nacho/")) }
+        state.ggStackCommitLoader = { _, entries in
+            Dictionary(uniqueKeysWithValues: entries.map { sha in
+                (sha, commit(sha: sha, stackShaped: true))
+            })
+        }
+        state.seedGGContext(branch: "")
+
+        await state.refreshGGStack()
+
+        let snapshot = try #require(store.ggStackSnapshotForWorktreePath(
+            worktree.path.path,
+            effectiveContext: .inactive(reason: .branchPrefixMismatch(expectedPrefix: "nacho/")),
+            liveBranch: ""
+        ))
+        #expect(snapshot.stack?.name == "agent-inbox")
+        #expect(snapshot.loadState == .loaded)
+        #expect(state.ggStackDisplayCommits.map(\.shortSha) == ["ccccccc", "bbbbbbb", "aaaaaaa"])
+
+        await state.refreshGGStack()
+
+        #expect(runner.callCount == 1)
+    }
+
+    @Test func quiescentActiveStackDoesNotPublishAsDetachedRecovery() throws {
+        let store = RightPaneStore()
+        let worktree = makeWorktree()
+        let state = store.state(for: worktree, baseBranch: "main", comparisonMode: .manual)
+        store.deactivate()
+        state.currentBranch = "nacho/old-stack"
+        state.ggContext = .active(stackName: "old-stack")
+        state.ggStack = try GGStackSnapshot.decode(
+            fromJSON: Data(GGStackModelsTests.fixture.utf8)
+        ).stack
+        state.ggStackLoadState = .loaded
+        state.ggStackCommitsKey = state.currentGGStackCommitsKey
+
+        let detachedContext = GGWorktreeContext.inactive(
+            reason: .branchPrefixMismatch(expectedPrefix: "nacho/")
+        )
+        #expect(store.effectiveGGContextForWorktreePath(
+            worktree.path.path,
+            branchContext: detachedContext,
+            liveBranch: ""
+        ) == detachedContext)
+        let snapshot = try #require(store.ggStackSnapshotForWorktreePath(
+            worktree.path.path,
+            effectiveContext: detachedContext,
+            liveBranch: ""
+        ))
+        #expect(snapshot.loadState == .inactive)
+    }
+
+    @Test func detachedRefreshWithNoCurrentStackClearsPriorPresentation() async {
+        let runner = SequencedFakeGGRunner(results: [
+            ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: #"{"version":1,"stack":null}"#, stderr: ""),
+        ])
+        let state = makeState()
+        var branchContext = GGWorktreeContext.active(stackName: "agent-inbox")
+        state.ggService = GGService(runner: runner)
+        state.ggContextProvider = { _ in branchContext }
+        state.commits = [commit(sha: String(repeating: "p", count: 40), stackShaped: true)]
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "d", count: 40), stackShaped: true)]
+
+        state.seedGGContext(branch: "nacho/agent-inbox")
+        await state.refreshGGStack()
+        branchContext = .inactive(reason: .branchPrefixMismatch(expectedPrefix: "nacho/"))
+        state.seedGGContext(branch: "")
+        await state.refreshGGStack()
+
+        #expect(runner.callCount == 2)
+        #expect(state.ggContext == .inactive(reason: .branchPrefixMismatch(expectedPrefix: "nacho/")))
+        #expect(state.ggStack == nil)
+        #expect(state.ggStackDisplayCommits.isEmpty)
+        #expect(state.commitsForDisplay == state.commits)
+    }
+
+    @Test func policyDeniedDetachedRefreshDoesNotQueryGG() async {
+        let runner = CountingFakeGGRunner(
+            result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
+        )
+        let state = makeState()
+        state.ggService = GGService(runner: runner)
+        state.ggContextProvider = { _ in .inactive(reason: .policyOff) }
+        state.seedGGContext(branch: "")
+
+        await state.refreshGGStack()
+
+        #expect(runner.callCount == 0)
+        #expect(state.ggContext == .inactive(reason: .policyOff))
+        #expect(state.ggStackLoadState == .inactive)
+    }
+
+    @Test func missingBranchUsernameDetachedRefreshDoesNotQueryGG() async {
+        let runner = CountingFakeGGRunner(
+            result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
+        )
+        let state = makeState()
+        state.ggService = GGService(runner: runner)
+        state.ggContextProvider = { _ in .inactive(reason: .branchUsernameMissing) }
+        state.seedGGContext(branch: "")
+
+        await state.refreshGGStack()
+
+        #expect(runner.callCount == 0)
+        #expect(state.ggContext == .inactive(reason: .branchUsernameMissing))
+        #expect(state.ggStackLoadState == .inactive)
+    }
+
     @Test(arguments: GGStackClassificationFixture.allCases)
     func stackClassificationKeepsEmptyUIConsistent(_ fixture: GGStackClassificationFixture) async {
         let worktree = makeWorktree()
@@ -1451,7 +1614,8 @@ struct RightPaneGGStackTests {
         #expect(inactive.ggStackCommitsKey == nil)
         #expect(store.ggStackSnapshotForWorktreePath(
             inactiveWorktree.path.path,
-            effectiveContext: .active(stackName: "agent-inbox")
+            effectiveContext: .active(stackName: "agent-inbox"),
+            liveBranch: inactive.currentBranch
         )?.loadState == .loading)
         #expect(active.ggStackLoadState == .loaded)
     }
@@ -1706,6 +1870,101 @@ struct RightPaneGGStackTests {
 
         #expect(state.ggContext == .active(stackName: "stack-b"))
         #expect(runner.callCount == 2)
+    }
+
+    @Test func headInvalidationPreventsInFlightRefreshFromRepublishingQuiescentStack() async {
+        let worktree = makeWorktree()
+        defer { GGStackSummaryStore.shared.summaries[worktree.path.path] = nil }
+        let runner = ControlledStackGGRunner(
+            stackResults: [
+                ("agent-inbox", ProcessResult(
+                    exitCode: 0,
+                    stdout: GGStackModelsTests.fixture,
+                    stderr: ""
+                )),
+            ],
+            suspendedCalls: [1]
+        )
+        let store = RightPaneStore()
+        let state = store.state(for: worktree, baseBranch: "main", comparisonMode: .manual)
+        state.stop()
+        installFakeGGStackLoader(on: state)
+        state.ggService = GGService(runner: runner)
+        state.ggContextProvider = { _ in
+            .inactive(reason: .branchPrefixMismatch(expectedPrefix: "nacho/"))
+        }
+        state.seedGGContext(branch: "")
+
+        let inFlightRefresh = Task { @MainActor in
+            await state.refreshGGStack()
+        }
+        await runner.waitUntilCall(1)
+        #expect(state.ggStackLoadState == .loading)
+
+        store.deactivate()
+        store.refreshActiveGGPresentationForHeadUpdates(
+            projectId: worktree.projectId,
+            worktreePaths: [worktree.path]
+        )
+        await runner.complete(call: 1)
+        await inFlightRefresh.value
+
+        #expect(state.ggStack == nil)
+        #expect(state.ggStackDisplayCommits.isEmpty)
+        #expect(state.ggStackCommitsKey == nil)
+        #expect(state.ggStackLoadState != .loaded)
+        #expect(GGStackSummaryStore.shared.summaries[worktree.path.path] == nil)
+    }
+
+    @Test func activeHeadInvalidationReplacesInFlightColdDetachedRecovery() async throws {
+        let worktree = makeWorktree()
+        defer { GGStackSummaryStore.shared.summaries[worktree.path.path] = nil }
+        let staleSnapshot = GGStackModelsTests.fixture.replacingOccurrences(
+            of: "agent-inbox",
+            with: "stale-stack"
+        )
+        let runner = ControlledStackGGRunner(
+            stackResults: [
+                ("stale-stack", ProcessResult(exitCode: 0, stdout: staleSnapshot, stderr: "")),
+                ("agent-inbox", ProcessResult(
+                    exitCode: 0,
+                    stdout: GGStackModelsTests.fixture,
+                    stderr: ""
+                )),
+            ],
+            suspendedCalls: [1]
+        )
+        let store = RightPaneStore()
+        let state = store.state(for: worktree, baseBranch: "main", comparisonMode: .manual)
+        state.stop()
+        installFakeGGStackLoader(on: state)
+        state.ggService = GGService(runner: runner)
+        state.ggContextProvider = { _ in
+            .inactive(reason: .branchPrefixMismatch(expectedPrefix: "nacho/"))
+        }
+        state.seedGGContext(branch: "")
+
+        let initialRefresh = state.reevaluateGGGate()
+        await runner.waitUntilCall(1)
+        #expect(state.ggStackLoadState == .loading)
+
+        let replacementRefresh = store.refreshActiveGGPresentationForHeadUpdates(
+            projectId: worktree.projectId,
+            worktreePaths: [worktree.path]
+        )
+        await runner.complete(call: 1)
+        await initialRefresh.value
+        for _ in 0..<500 where await runner.lsCallCount < 2 {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        await replacementRefresh?.value
+
+        #expect(await runner.lsCallCount == 2)
+        #expect(state.ggContext == .active(stackName: "agent-inbox"))
+        #expect(state.ggStack?.name == "agent-inbox")
+        #expect(state.ggStackLoadState == .loaded)
+        #expect(state.ggStackDisplayCommits.map(\.shortSha) == ["ccccccc", "bbbbbbb", "aaaaaaa"])
+        #expect(state.ggStackCommitsKey != nil)
     }
 
     @Test func cancelledSameKeyReloadRestoresPreviousStableStack() async throws {
@@ -1963,7 +2222,8 @@ struct RightPaneGGStackTests {
         state.ggStackSourceCommits = [commit(sha: String(repeating: "p", count: 40), stackShaped: true)]
         let snapshot = try #require(store.ggStackSnapshotForWorktreePath(
             worktree.path.path,
-            effectiveContext: .active(stackName: "stack")
+            effectiveContext: .active(stackName: "stack"),
+            liveBranch: state.currentBranch
         ))
 
         #expect(snapshot.stack != nil)
@@ -1984,7 +2244,8 @@ struct RightPaneGGStackTests {
 
         let snapshot = try #require(store.ggStackSnapshotForWorktreePath(
             worktree.path.path,
-            effectiveContext: .active(stackName: "new-stack")
+            effectiveContext: .active(stackName: "new-stack"),
+            liveBranch: state.currentBranch
         ))
 
         #expect(snapshot.stack != nil)
@@ -2110,7 +2371,8 @@ struct RightPaneGGStackTests {
 
         await state.refreshGGStack()
 
-        #expect(state.ggStackLoadState == .inactive)
+        #expect(state.ggContext == .active(stackName: "agent-inbox"))
+        #expect(state.ggStackLoadState == .loaded)
         #expect(state.ggActionState.pausedOperation == GGPausedOperation(pausedBy: .sync))
 
         state.onGGStackAction(.continueOp, appState: AppState(store: MemoryStore()))

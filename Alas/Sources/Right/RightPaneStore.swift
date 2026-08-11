@@ -342,17 +342,41 @@ final class RightPaneStore {
         projectId: String
     ) -> Task<Void, Never>? {
         let projectStates = states.values.filter { $0.worktree.projectId == projectId }
-        for state in projectStates {
-            state.ggStackCommitsKey = nil
+        return refreshActiveGGPresentation(invalidating: projectStates)
+    }
+
+    /// HEAD notifications identify the concrete worktrees whose checked-out
+    /// commits changed. Invalidate those panes even when the detached branch
+    /// label stayed the same, while preserving cached panes for other
+    /// worktrees in the project.
+    @discardableResult
+    func refreshActiveGGPresentationForHeadUpdates(
+        projectId: String,
+        worktreePaths: [URL]
+    ) -> Task<Void, Never>? {
+        let affectedPaths = Set(worktreePaths.map(Self.canonicalWorktreePath))
+        let affectedStates = states.values.filter {
+            $0.worktree.projectId == projectId
+                && affectedPaths.contains(Self.canonicalWorktreePath($0.worktree.path))
         }
-        guard let activeId,
-              let state = states[activeId],
-              state.worktree.projectId == projectId,
-              state.ggContext.isActive
-        else { return nil }
-        return Task { @MainActor in
-            await state.refreshGGStack()
+        return refreshActiveGGPresentation(invalidating: affectedStates)
+    }
+
+    private func refreshActiveGGPresentation(
+        invalidating affectedStates: [RightPaneState]
+    ) -> Task<Void, Never>? {
+        var activeRefresh: Task<Void, Never>?
+        for state in affectedStates {
+            let shouldRefresh = state.worktree.id == activeId
+            if let task = state.invalidateGGPresentation(startingRefresh: shouldRefresh) {
+                activeRefresh = task
+            }
         }
+        return activeRefresh
+    }
+
+    private static func canonicalWorktreePath(_ url: URL) -> String {
+        url.standardizedFileURL.resolvingSymlinksInPath().path
     }
 
     /// Re-evaluate the gg gate for one cached worktree after its override
@@ -422,15 +446,23 @@ final class RightPaneStore {
     /// exposed as loading so non-UI consumers cannot treat it as current.
     func ggStackSnapshotForWorktreePath(
         _ path: String,
-        effectiveContext: GGWorktreeContext
+        effectiveContext: GGWorktreeContext,
+        liveBranch: String
     ) -> RightPaneGGStackSnapshot? {
         guard let state = states.values.first(where: { $0.worktree.path.path == path }) else {
             return nil
         }
         let loadState: GGStackLoadState
-        if state.ggStackLoadState == .loaded,
+        let recoveredDetachedContext = Self.canUseRecoveredDetachedContext(
+            state: state,
+            branchContext: effectiveContext,
+            liveBranch: liveBranch
+        )
+        if !effectiveContext.isActive && !recoveredDetachedContext {
+            loadState = .inactive
+        } else if state.ggStackLoadState == .loaded,
            (state.ggStackCommitsKey != state.currentGGStackCommitsKey
-            || state.ggContext != effectiveContext)
+            || (state.ggContext != effectiveContext && !recoveredDetachedContext))
         {
             loadState = effectiveContext.isActive ? .loading : .inactive
         } else {
@@ -440,6 +472,43 @@ final class RightPaneStore {
             stack: state.ggStack,
             loadState: loadState
         )
+    }
+
+    /// A detached branch cannot name its stack, but a loaded GG snapshot can.
+    /// Keep policy-denied contexts closed; only branch-derived uncertainty is
+    /// eligible to inherit the recovered context.
+    func effectiveGGContextForWorktreePath(
+        _ path: String,
+        branchContext: GGWorktreeContext,
+        liveBranch: String
+    ) -> GGWorktreeContext {
+        guard let state = states.values.first(where: { $0.worktree.path.path == path }),
+              Self.canUseRecoveredDetachedContext(
+                  state: state,
+                  branchContext: branchContext,
+                  liveBranch: liveBranch
+              ),
+              state.ggStackCommitsKey == state.currentGGStackCommitsKey
+        else { return branchContext }
+        return state.ggContext
+    }
+
+    private static func canUseRecoveredDetachedContext(
+        state: RightPaneState,
+        branchContext: GGWorktreeContext,
+        liveBranch: String
+    ) -> Bool {
+        let liveBranchIdentity = normalizedGGBranchIdentity(liveBranch)
+        return !branchContext.isActive
+            && branchContext.permitsCurrentStackQuery
+            && liveBranchIdentity.isEmpty
+            && normalizedGGBranchIdentity(state.currentBranch) == liveBranchIdentity
+            && state.ggContext.isActive
+            && state.ggStackLoadState == .loaded
+    }
+
+    private static func normalizedGGBranchIdentity(_ branch: String) -> String {
+        branch == "(detached)" ? "" : branch
     }
 
     /// Latest branch observed by the active pane state. Quiescent cached panes

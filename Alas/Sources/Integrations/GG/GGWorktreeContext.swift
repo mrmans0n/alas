@@ -23,6 +23,24 @@ enum GGWorktreeContext: Equatable {
         if case .active = self { return true }
         return false
     }
+
+    /// Branch naming determines the immediate stack identity, but a detached
+    /// HEAD can still belong to a GG stack. Policy failures must stay closed;
+    /// a branch-prefix mismatch may ask `gg ls --json` for the authoritative
+    /// current stack instead. Missing GG naming configuration remains closed.
+    var permitsCurrentStackQuery: Bool {
+        switch self {
+        case .active:
+            return true
+        case .inactive(let reason):
+            switch reason {
+            case .branchPrefixMismatch:
+                return true
+            case .masterDisabled, .cliMissing, .remoteProject, .policyOff, .branchUsernameMissing:
+                return false
+            }
+        }
+    }
 }
 
 enum GGWorktreeContextResolver {

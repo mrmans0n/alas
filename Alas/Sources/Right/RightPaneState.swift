@@ -953,12 +953,14 @@ final class RightPaneState: GGSplitCommitServicing {
             currentBranch = branch
             ggStackCommitsKey = nil
         }
-        let context = ggContextProvider?(branch) ?? .inactive(reason: .policyOff)
-        if ggContext != context { ggContext = context }
+        let branchContext = ggContextProvider?(branch) ?? .inactive(reason: .policyOff)
+        if branchContext.isActive || !branchContext.permitsCurrentStackQuery || !ggContext.isActive {
+            if ggContext != branchContext { ggContext = branchContext }
+        }
         if ggStackLoadState == .loaded {
             invalidateOlderHistoryForDisplaySourceChange()
         }
-        ggStackLoadState = context.isActive ? .loading : .inactive
+        ggStackLoadState = branchContext.permitsCurrentStackQuery ? .loading : .inactive
     }
 
     @MainActor
@@ -966,10 +968,12 @@ final class RightPaneState: GGSplitCommitServicing {
         let snapshotGeneration = snapshotInvalidationGeneration
         ggStackRefreshGeneration &+= 1
         let refreshGeneration = ggStackRefreshGeneration
-        let context = ggContextProvider?(currentBranch) ?? .inactive(reason: .policyOff)
-        if ggContext != context { ggContext = context }
+        let branchContext = ggContextProvider?(currentBranch) ?? .inactive(reason: .policyOff)
+        if branchContext.isActive || !branchContext.permitsCurrentStackQuery || !ggContext.isActive {
+            if ggContext != branchContext { ggContext = branchContext }
+        }
         reconcilePausedOperation()
-        guard context.isActive else {
+        guard branchContext.permitsCurrentStackQuery else {
             if ggStackLoadState == .loaded {
                 invalidateOlderHistoryForDisplaySourceChange()
             }
@@ -1058,7 +1062,16 @@ final class RightPaneState: GGSplitCommitServicing {
             guard snapshotGeneration == snapshotInvalidationGeneration,
                   refreshGeneration == ggStackRefreshGeneration
             else { return }
-            ggStackCommitsKey = key
+            let resolvedContext: GGWorktreeContext
+            if branchContext.isActive {
+                resolvedContext = branchContext
+            } else if let stack {
+                resolvedContext = .active(stackName: stack.name)
+            } else {
+                resolvedContext = branchContext
+            }
+            if ggContext != resolvedContext { ggContext = resolvedContext }
+            ggStackCommitsKey = currentGGStackCommitsKey
             if ggStack != stack { ggStack = stack }
             ggStackDisplayCommits = displayCommits
             let stackIsEmpty = stack.map { $0.totalCommits == 0 || $0.entries.isEmpty } ?? true
@@ -1092,6 +1105,7 @@ final class RightPaneState: GGSplitCommitServicing {
             guard snapshotGeneration == snapshotInvalidationGeneration,
                   refreshGeneration == ggStackRefreshGeneration
             else { return }
+            if ggContext != branchContext { ggContext = branchContext }
             ggStackCommitsKey = nil
             if ggStack != nil { ggStack = nil }
             if !ggStackDisplayCommits.isEmpty { ggStackDisplayCommits = [] }
@@ -1124,6 +1138,37 @@ final class RightPaneState: GGSplitCommitServicing {
         await coordinator.restoreUndoCandidate(currentStackName: ggStack?.name)
     }
 
+    /// Supersedes every prior stack refresh and clears its published
+    /// presentation. Active callers may atomically install a replacement
+    /// refresh; quiescent callers leave the state invalidated for activation.
+    @MainActor
+    @discardableResult
+    func invalidateGGPresentation(
+        startingRefresh shouldRefresh: Bool
+    ) -> Task<Void, Never>? {
+        // Advance ownership before cancellation: a direct/untracked caller may
+        // ignore cancellation, but its generation guard must still reject the
+        // response after this presentation is invalidated.
+        ggStackRefreshGeneration &+= 1
+        ggStackRefreshTask?.cancel()
+        ggStackRefreshTask = nil
+        invalidateOlderHistoryForDisplaySourceChange()
+        ggStackCommitsKey = nil
+        if ggStack != nil { ggStack = nil }
+        if !ggStackDisplayCommits.isEmpty { ggStackDisplayCommits = [] }
+        ggStackLoadState = ggContext.isActive ? .loading : .inactive
+        if GGStackSummaryStore.shared.summaries[worktree.path.path] != nil {
+            GGStackSummaryStore.shared.summaries[worktree.path.path] = nil
+        }
+        guard shouldRefresh else { return nil }
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.refreshGGStack()
+        }
+        ggStackRefreshTask = task
+        return task
+    }
+
     /// Re-run the gg gate immediately (e.g. after a Settings toggle) rather
     /// than waiting for the next watcher-driven refresh. Resets the
     /// commits-key so the gate is fully re-evaluated even when commits are
@@ -1133,8 +1178,7 @@ final class RightPaneState: GGSplitCommitServicing {
     @MainActor
     @discardableResult
     func reevaluateGGGate() -> Task<Void, Never> {
-        ggStackCommitsKey = nil
-        ggStackRefreshTask?.cancel()
+        invalidateGGPresentation(startingRefresh: false)
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
             await self.refreshGGStack()
@@ -1670,20 +1714,12 @@ final class RightPaneState: GGSplitCommitServicing {
         indexFingerprint = ""
         fileTree = []
         commits = []
-        invalidateOlderHistoryForDisplaySourceChange()
         // gg stack state is derived from commits above — reset it here too,
         // and cancel any in-flight load, so a delayed or failed refresh
         // after this invalidation can't leave a stale "Stack · …"
         // header/sidebar badge rendered against the now-empty commit list.
-        ggStackRefreshTask?.cancel()
         ggStackSourceCommits = []
-        ggStackCommitsKey = nil
-        if ggStack != nil { ggStack = nil }
-        if !ggStackDisplayCommits.isEmpty { ggStackDisplayCommits = [] }
-        ggStackLoadState = ggContext.isActive ? .loading : .inactive
-        if GGStackSummaryStore.shared.summaries[worktree.path.path] != nil {
-            GGStackSummaryStore.shared.summaries[worktree.path.path] = nil
-        }
+        invalidateGGPresentation(startingRefresh: false)
         comparisonRef = nil
         commitRemote = nil
         primaryCommitRemote = nil
