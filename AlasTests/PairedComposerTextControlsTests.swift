@@ -11,7 +11,9 @@ struct PairedComposerTextControlsTests {
         let textView = makePairedTextView(text: "value")
         textView.setSelectedRange(NSRange(location: 0, length: 5))
 
-        textView.insertText("`", replacementRange: NSRange(location: NSNotFound, length: 0))
+        textView.performKeyboardTextInsertion {
+            textView.insertText("`", replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
 
         #expect(textView.string == "`value`")
         #expect(textView.selectedRange() == NSRange(location: 1, length: 5))
@@ -25,7 +27,9 @@ struct PairedComposerTextControlsTests {
         let textView = makePairedTextView(storage: storage)
         textView.setSelectedRange(NSRange(location: 0, length: 5))
 
-        textView.insertText("`", replacementRange: NSRange(location: NSNotFound, length: 0))
+        textView.performKeyboardTextInsertion {
+            textView.insertText("`", replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
 
         #expect(textView.string == "`value`")
         #expect(textView.textStorage?.attribute(.toolTip, at: 1, effectiveRange: nil) as? String == "keep-me")
@@ -35,12 +39,16 @@ struct PairedComposerTextControlsTests {
     @Test func insertsEmptyPairAndStepsOverCloser() {
         let textView = makePairedTextView()
 
-        textView.insertText("(", replacementRange: NSRange(location: NSNotFound, length: 0))
+        textView.performKeyboardTextInsertion {
+            textView.insertText("(", replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
 
         #expect(textView.string == "()")
         #expect(textView.selectedRange() == NSRange(location: 1, length: 0))
 
-        textView.insertText(")", replacementRange: NSRange(location: NSNotFound, length: 0))
+        textView.performKeyboardTextInsertion {
+            textView.insertText(")", replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
 
         #expect(textView.string == "()")
         #expect(textView.selectedRange() == NSRange(location: 2, length: 0))
@@ -49,7 +57,9 @@ struct PairedComposerTextControlsTests {
     @Test func multiCharacterAndMarkedTextUseNativeInsertion() {
         let pastedTextView = makePairedTextView()
 
-        pastedTextView.insertText("paste", replacementRange: NSRange(location: NSNotFound, length: 0))
+        pastedTextView.performKeyboardTextInsertion {
+            pastedTextView.insertText("paste", replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
 
         #expect(pastedTextView.string == "paste")
 
@@ -61,9 +71,20 @@ struct PairedComposerTextControlsTests {
         )
         #expect(markedTextView.hasMarkedText())
 
-        markedTextView.insertText("(", replacementRange: NSRange(location: NSNotFound, length: 0))
+        markedTextView.performKeyboardTextInsertion {
+            markedTextView.insertText("(", replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
 
         #expect(markedTextView.string == "(")
+    }
+
+    @Test func directSingleDelimiterInsertionBypassesPairing() {
+        let dictationInsertion = makePairedTextView()
+
+        dictationInsertion.insertText("(", replacementRange: NSRange(location: NSNotFound, length: 0))
+
+        #expect(dictationInsertion.string == "(")
+        #expect(dictationInsertion.selectedRange() == NSRange(location: 1, length: 0))
     }
 
     @Test func nativeTextInsertionBypassesSingleDelimiterPairing() {
@@ -104,7 +125,9 @@ struct PairedComposerTextControlsTests {
         textView.allowsUndo = true
         textView.setSelectedRange(NSRange(location: 0, length: 5))
 
-        textView.insertText("`", replacementRange: NSRange(location: NSNotFound, length: 0))
+        textView.performKeyboardTextInsertion {
+            textView.insertText("`", replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
 
         #expect(textView.string == "`value`")
         #expect(textView.undoManager?.canUndo == true)
@@ -127,12 +150,14 @@ struct PairedComposerTextControlsTests {
         #expect(window.firstResponder === editor)
         editor.setSelectedRange(NSRange(location: 0, length: 5))
 
-        let shouldUseNativeInsertion = coordinator.control(
-            field,
-            textView: editor,
-            shouldChangeCharactersIn: NSRange(location: 0, length: 5),
-            replacementString: "`"
-        )
+        let shouldUseNativeInsertion = coordinator.performKeyboardTextInsertion {
+            coordinator.control(
+                field,
+                textView: editor,
+                shouldChangeCharactersIn: NSRange(location: 0, length: 5),
+                replacementString: "`"
+            )
+        }
 
         #expect(shouldUseNativeInsertion == false)
         #expect(field.stringValue == "`value`")
@@ -190,6 +215,33 @@ struct PairedComposerTextControlsTests {
         await dismantle(model: model, controller: controller, window: window)
     }
 
+    @Test func textFieldDirectSingleDelimiterInsertionBypassesPairing() async throws {
+        let model = ComposerControlModel(text: "", isFocused: true)
+        let controller = NSHostingController(rootView: PairedTextFieldHarness(model: model, onSubmit: {}))
+        let window = attach(controller, size: NSSize(width: 360, height: 120))
+        await drain(controller.view)
+
+        let field = try #require(firstSubview(of: NSTextField.self, in: controller.view))
+        let editor = try #require(window.fieldEditor(false, for: field) as? NSTextView)
+        let coordinator = try #require(field.delegate as? PairedTextField.Coordinator)
+
+        #expect(coordinator.control(
+            field,
+            textView: editor,
+            shouldChangeCharactersIn: NSRange(location: 0, length: 0),
+            replacementString: "("
+        ))
+
+        editor.insertText("(", replacementRange: NSRange(location: NSNotFound, length: 0))
+        await drain(controller.view)
+
+        #expect(field.stringValue == "(")
+        #expect(model.text == "(")
+        #expect(editor.selectedRange() == NSRange(location: 1, length: 0))
+
+        await dismantle(model: model, controller: controller, window: window)
+    }
+
     @Test func textFieldPasteAndMatchStyleBypassesSingleDelimiterPairing() async throws {
         let model = ComposerControlModel(text: "", isFocused: true)
         let controller = NSHostingController(rootView: PairedTextFieldHarness(model: model, onSubmit: {}))
@@ -228,7 +280,9 @@ struct PairedComposerTextControlsTests {
         #expect(textView.frame.height >= scrollView.contentView.bounds.height)
 
         textView.setSelectedRange(NSRange(location: 5, length: 0))
-        textView.insertText("{", replacementRange: NSRange(location: NSNotFound, length: 0))
+        textView.performKeyboardTextInsertion {
+            textView.insertText("{", replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
 
         #expect(model.text == "start{}")
         #expect(textView.textContainerInset == NSSize(width: 7, height: 9))

@@ -15,7 +15,9 @@ struct ACPComposerPairedDelimiterTests {
         ))
         textView.setSelectedRange(NSRange(location: 0, length: 5))
 
-        textView.insertText("`", replacementRange: NSRange(location: NSNotFound, length: 0))
+        textView.performKeyboardTextInsertion {
+            textView.insertText("`", replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
 
         #expect(textView.string == "`value`")
         let storage = try #require(textView.textStorage)
@@ -32,7 +34,9 @@ struct ACPComposerPairedDelimiterTests {
         textView.textStorage?.setAttributedString(attachment)
         textView.setSelectedRange(NSRange(location: 0, length: 1))
 
-        textView.insertText("`", replacementRange: NSRange(location: NSNotFound, length: 0))
+        textView.performKeyboardTextInsertion {
+            textView.insertText("`", replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
 
         #expect(textView.string == "`\u{fffc}`")
         let storage = try #require(textView.textStorage)
@@ -44,7 +48,9 @@ struct ACPComposerPairedDelimiterTests {
     func openingDelimiterInsertsEmptyPair() {
         let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 120))
 
-        textView.insertText("(", replacementRange: NSRange(location: NSNotFound, length: 0))
+        textView.performKeyboardTextInsertion {
+            textView.insertText("(", replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
 
         #expect(textView.string == "()")
         #expect(textView.selectedRange() == NSRange(location: 1, length: 0))
@@ -56,7 +62,9 @@ struct ACPComposerPairedDelimiterTests {
         textView.string = "()"
         textView.setSelectedRange(NSRange(location: 1, length: 0))
 
-        textView.insertText(")", replacementRange: NSRange(location: NSNotFound, length: 0))
+        textView.performKeyboardTextInsertion {
+            textView.insertText(")", replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
 
         #expect(textView.string == "()")
         #expect(textView.selectedRange() == NSRange(location: 2, length: 0))

@@ -91,17 +91,21 @@ struct CommitMessageEditorViewTests {
         let subjectEditor = try #require(window.fieldEditor(false, for: subject) as? NSTextView)
         let coordinator = try #require(subject.delegate as? PairedTextField.Coordinator)
         subjectEditor.setSelectedRange(NSRange(location: 0, length: 7))
-        #expect(!coordinator.control(
-            subject,
-            textView: subjectEditor,
-            shouldChangeCharactersIn: NSRange(location: 0, length: 7),
-            replacementString: "`")
-        )
+        #expect(!coordinator.performKeyboardTextInsertion {
+            coordinator.control(
+                subject,
+                textView: subjectEditor,
+                shouldChangeCharactersIn: NSRange(location: 0, length: 7),
+                replacementString: "`"
+            )
+        })
         #expect(model.subject == "`subject`")
 
         let body = try #require(firstSubview(of: PairedDelimiterTextView.self, in: controller.view))
         body.setSelectedRange(NSRange(location: 0, length: 4))
-        body.insertText("`", replacementRange: NSRange(location: NSNotFound, length: 0))
+        body.performKeyboardTextInsertion {
+            body.insertText("`", replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
         #expect(model.body == "`body`")
 
         window.orderOut(nil)

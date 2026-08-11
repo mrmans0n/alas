@@ -14,9 +14,11 @@ struct PairedReviewComposerSurfaceTests {
         let window = attach(controller)
         await drain(controller.view)
 
-        let composer = try #require(textView(containing: model.text, in: controller.view))
+        let composer = try #require(textView(containing: model.text, in: controller.view) as? PairedDelimiterTextView)
         composer.setSelectedRange(NSRange(location: 0, length: model.text.utf16.count))
-        composer.insertText("`", replacementRange: NSRange(location: NSNotFound, length: 0))
+        composer.performKeyboardTextInsertion {
+            composer.insertText("`", replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
         #expect(model.text == "`review body`")
 
         composer.keyDown(with: try keyEvent(characters: "\r", modifiers: .command))
@@ -170,7 +172,13 @@ struct PairedReviewComposerSurfaceTests {
 
     private func wrapSelection(in textView: NSTextView) {
         textView.setSelectedRange(NSRange(location: 0, length: textView.string.utf16.count))
-        textView.insertText("`", replacementRange: NSRange(location: NSNotFound, length: 0))
+        if let pairedTextView = textView as? PairedDelimiterTextView {
+            pairedTextView.performKeyboardTextInsertion {
+                pairedTextView.insertText("`", replacementRange: NSRange(location: NSNotFound, length: 0))
+            }
+        } else {
+            textView.insertText("`", replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
     }
 
     private func waitForTextView(containing text: String, in view: NSView) async throws -> NSTextView {

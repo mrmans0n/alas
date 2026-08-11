@@ -17,17 +17,21 @@ struct PairedPrimaryComposerSurfaceTests {
         let titleEditor = try #require(window.fieldEditor(false, for: title) as? NSTextView)
         let coordinator = try #require(title.delegate as? PairedTextField.Coordinator)
         titleEditor.setSelectedRange(NSRange(location: 0, length: model.title.utf16.count))
-        #expect(!coordinator.control(
-            title,
-            textView: titleEditor,
-            shouldChangeCharactersIn: NSRange(location: 0, length: model.title.utf16.count),
-            replacementString: "`")
-        )
+        #expect(!coordinator.performKeyboardTextInsertion {
+            coordinator.control(
+                title,
+                textView: titleEditor,
+                shouldChangeCharactersIn: NSRange(location: 0, length: model.title.utf16.count),
+                replacementString: "`"
+            )
+        })
         #expect(model.title == "`Review title`")
 
         let body = try #require(firstSubview(of: PairedDelimiterTextView.self, in: controller.view))
         body.setSelectedRange(NSRange(location: 0, length: model.body.utf16.count))
-        body.insertText("`", replacementRange: NSRange(location: NSNotFound, length: 0))
+        body.performKeyboardTextInsertion {
+            body.insertText("`", replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
         #expect(model.body == "`Review body`")
 
         window.orderOut(nil)
@@ -67,12 +71,14 @@ struct PairedPrimaryComposerSurfaceTests {
         let editor = try #require(window.fieldEditor(false, for: field) as? NSTextView)
         let coordinator = try #require(field.delegate as? PairedTextField.Coordinator)
         editor.setSelectedRange(NSRange(location: 0, length: 12))
-        #expect(!coordinator.control(
-            field,
-            textView: editor,
-            shouldChangeCharactersIn: NSRange(location: 0, length: 12),
-            replacementString: "`")
-        )
+        #expect(!coordinator.performKeyboardTextInsertion {
+            coordinator.control(
+                field,
+                textView: editor,
+                shouldChangeCharactersIn: NSRange(location: 0, length: 12),
+                replacementString: "`"
+            )
+        })
         await drain(controller.view)
 
         #expect(model.firstMessage == "`First commit`")

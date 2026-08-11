@@ -115,7 +115,13 @@ struct PairedAuthoredContentSurfaceTests {
 
     private func wrapSelection(in textView: NSTextView) {
         textView.setSelectedRange(NSRange(location: 0, length: textView.string.utf16.count))
-        textView.insertText("`", replacementRange: NSRange(location: NSNotFound, length: 0))
+        if let pairedTextView = textView as? PairedDelimiterTextView {
+            pairedTextView.performKeyboardTextInsertion {
+                pairedTextView.insertText("`", replacementRange: NSRange(location: NSNotFound, length: 0))
+            }
+        } else {
+            textView.insertText("`", replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
     }
 }
 

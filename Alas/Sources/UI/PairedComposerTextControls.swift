@@ -3,9 +3,11 @@ import SwiftUI
 
 class PairedDelimiterTextView: NSTextView {
     private var bypassesPairedDelimiterResolution = false
+    private var appliesPairedDelimiterResolutionForKeyboardInput = false
 
     override func insertText(_ insertString: Any, replacementRange: NSRange) {
         guard !bypassesPairedDelimiterResolution,
+              appliesPairedDelimiterResolutionForKeyboardInput,
               !hasMarkedText(),
               let insertedText = Self.plainText(from: insertString)
         else {
@@ -49,6 +51,12 @@ class PairedDelimiterTextView: NSTextView {
         }
     }
 
+    override func keyDown(with event: NSEvent) {
+        performKeyboardTextInsertion {
+            super.keyDown(with: event)
+        }
+    }
+
     override func paste(_ sender: Any?) {
         performNativeTextInsertion {
             super.paste(sender)
@@ -65,6 +73,12 @@ class PairedDelimiterTextView: NSTextView {
         performNativeTextInsertion {
             super.pasteAsRichText(sender)
         }
+    }
+
+    func performKeyboardTextInsertion(_ insert: () -> Void) {
+        appliesPairedDelimiterResolutionForKeyboardInput = true
+        defer { appliesPairedDelimiterResolutionForKeyboardInput = false }
+        insert()
     }
 
     func performNativeTextInsertion(_ insert: () -> Void) {
@@ -214,6 +228,7 @@ struct PairedTextField: NSViewRepresentable {
         var parent: PairedTextField
         private var isApplyingPairedEdit = false
         private var isApplyingNativePaste = false
+        private var isApplyingKeyboardTextInput = false
         private weak var observedUndoManager: UndoManager?
         private var undoObservers: [NSObjectProtocol] = []
 
@@ -249,12 +264,9 @@ struct PairedTextField: NSViewRepresentable {
                   !isApplyingNativePaste,
                   parent.isEnabled,
                   !textView.hasMarkedText(),
-                  let replacementString
+                  let replacementString,
+                  shouldApplyPairedDelimiterResolution(for: replacementString)
             else { return true }
-
-            if shouldUseNativePaste(for: replacementString) {
-                return true
-            }
 
             switch PairedDelimiterEditing.resolve(
                 insertedText: replacementString,
@@ -313,19 +325,23 @@ struct PairedTextField: NSViewRepresentable {
             return true
         }
 
-        private func shouldUseNativePaste(for replacementString: String) -> Bool {
-            guard replacementString.count == 1,
-                  NSPasteboard.general.string(forType: .string) == replacementString
-            else { return false }
+        func performKeyboardTextInsertion(_ insert: () -> Bool) -> Bool {
+            isApplyingKeyboardTextInput = true
+            defer { isApplyingKeyboardTextInput = false }
+            return insert()
+        }
 
-            guard let event = NSApp.currentEvent, event.type == .keyDown else {
+        private func shouldApplyPairedDelimiterResolution(for replacementString: String) -> Bool {
+            if isApplyingKeyboardTextInput {
                 return true
+            }
+            guard let event = NSApp.currentEvent, event.type == .keyDown else {
+                return false
             }
 
             let textInputModifiers: NSEvent.ModifierFlags = [.command, .control, .option]
-            let isPlainMatchingKeyDown = event.modifierFlags.intersection(textInputModifiers).isEmpty
+            return event.modifierFlags.intersection(textInputModifiers).isEmpty
                 && (event.charactersIgnoringModifiers ?? event.characters) == replacementString
-            return !isPlainMatchingKeyDown
         }
 
         private static let nativePasteSelectors: Set<Selector> = [
