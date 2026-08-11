@@ -28,6 +28,14 @@ final class CodeTextView: NSTextView, FontSizeResponder {
 
     var autoPairDisabled: Bool = false
 
+    /// Text that the in-flight marked composition swallowed, kept so a dead-key
+    /// delimiter can still wrap the selection the user had before pressing it.
+    private var selectionReplacedByMarkedText: String?
+    /// `NSTextView.unmarkText()` finalizes a composition by re-inserting the
+    /// marked characters through `insertText`, so pairing has to stay suppressed
+    /// while we replace them or the placeholder pairs with itself.
+    private var isCommittingMarkedText = false
+
     /// Set by `CodeEditorCoordinator.attach`. Each closure mutates the shared
     /// `code.fontSize` config in response to the matching menu command.
     var increaseFontSizeHandler: (() -> Void)?
@@ -265,10 +273,37 @@ final class CodeTextView: NSTextView, FontSizeResponder {
         return shouldChange
     }
 
+    override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        if !hasMarkedText() {
+            let replaced = replacementRange.location == NSNotFound ? self.selectedRange() : replacementRange
+            let nsString = self.string as NSString
+            selectionReplacedByMarkedText = replaced.length > 0 && NSMaxRange(replaced) <= nsString.length
+                ? nsString.substring(with: replaced)
+                : nil
+        }
+        super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
+    }
+
+    override func unmarkText() {
+        selectionReplacedByMarkedText = nil
+        super.unmarkText()
+    }
+
     override func insertText(_ insertString: Any, replacementRange: NSRange) {
         guard isEditable else { return }
+        guard !isCommittingMarkedText else {
+            insertTextAfterTextEdit(insertString, replacementRange: replacementRange)
+            return
+        }
+        let replacedSelection = selectionReplacedByMarkedText
+        selectionReplacedByMarkedText = nil
         guard let text = Self.string(from: insertString) else {
             insertTextAfterTextEdit(insertString, replacementRange: replacementRange)
+            return
+        }
+
+        if !autoPairDisabled, !hasMultipleSelections, hasMarkedText(),
+           insertPairedDelimiterCommittingMarkedText(text, replacedSelection: replacedSelection) {
             return
         }
 
@@ -878,6 +913,59 @@ final class CodeTextView: NSTextView, FontSizeResponder {
         } else {
             setSelectedRangeAfterTextEdit(NSRange(location: range.location + 1, length: 0))
         }
+    }
+
+    /// Pairs a delimiter that arrived as a dead-key composition — layouts such as
+    /// "U.S. International – PC" install `"`, `'` and `` ` `` as marked text and
+    /// only commit the literal character on the next keystroke. Returns `false`
+    /// for accented results and IME candidates so they insert natively.
+    private func insertPairedDelimiterCommittingMarkedText(
+        _ text: String,
+        replacedSelection: String?
+    ) -> Bool {
+        let marked = markedRange()
+        let nsString = string as NSString
+        guard text.count == 1,
+              marked.location != NSNotFound,
+              marked.length > 0,
+              NSMaxRange(marked) <= nsString.length,
+              nsString.substring(with: marked) == text,
+              let context = PairedDelimiterEditing.preCompositionContext(
+                  text: string,
+                  markedRange: marked,
+                  replacedSelection: replacedSelection ?? ""
+              )
+        else { return false }
+
+        switch PairedDelimiterEditing.resolve(
+            insertedText: text,
+            in: context.text,
+            selectedRange: context.selectedRange
+        ) {
+        case let .wrap(opening, closing), let .insertPair(opening, closing):
+            let wrapped = (context.text as NSString).substring(with: context.selectedRange)
+            replaceMarkedText(with: "\(opening)\(wrapped)\(closing)", markedRange: marked)
+            setSelectedRangeAfterTextEdit(NSRange(
+                location: marked.location + 1,
+                length: context.selectedRange.length
+            ))
+            return true
+
+        case .stepOver:
+            replaceMarkedText(with: "", markedRange: marked)
+            setSelectedRangeAfterTextEdit(NSRange(location: marked.location + 1, length: 0))
+            return true
+
+        case .native:
+            return false
+        }
+    }
+
+    private func replaceMarkedText(with replacement: String, markedRange: NSRange) {
+        isCommittingMarkedText = true
+        defer { isCommittingMarkedText = false }
+        unmarkText()
+        insertTextAfterTextEdit(replacement, replacementRange: markedRange)
     }
 
     private func previousCharacter(before location: Int) -> Character? {
