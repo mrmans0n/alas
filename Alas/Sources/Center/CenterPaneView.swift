@@ -14,13 +14,25 @@ struct CenterTabComposition {
         globalTabs: [GlobalTab],
         worktreeTabs: [Tab],
         activeGlobalMissionTab: MissionTabState?,
-        activeWorktreeTabId: TabID?
+        activeWorktreeTabId: TabID?,
+        missionsEnabled: Bool = true
     ) {
-        tabs = globalTabs.compactMap { tab -> Tab? in
+        let missionTabs = missionsEnabled ? globalTabs.compactMap { tab -> Tab? in
             guard case .mission(let mission) = tab else { return nil }
             return .mission(mission)
-        } + worktreeTabs
-        activeId = activeGlobalMissionTab?.id ?? activeWorktreeTabId
+        } : []
+        let visibleWorktreeTabs = missionsEnabled ? worktreeTabs : worktreeTabs.filter { tab in
+            if case .mission = tab { return false }
+            return true
+        }
+        tabs = missionTabs + visibleWorktreeTabs
+        if missionsEnabled {
+            activeId = activeGlobalMissionTab?.id ?? activeWorktreeTabId
+        } else if visibleWorktreeTabs.contains(where: { $0.id == activeWorktreeTabId }) {
+            activeId = activeWorktreeTabId
+        } else {
+            activeId = visibleWorktreeTabs.first?.id
+        }
     }
 
     func adjacentTabID(in direction: CenterTabNavigationDirection) -> TabID? {
@@ -63,6 +75,7 @@ struct CenterPaneView: View {
     @Bindable var state: AppState
     let worktree: Worktree
     var activeGlobalMissionTab: MissionTabState? = nil
+    var missionsEnabled = true
     var allowsPaneFocus: Bool = true
     @Environment(\.theme) var theme
 
@@ -73,7 +86,8 @@ struct CenterPaneView: View {
                 globalTabs: state.globalTabs.tabs,
                 worktreeTabs: worktreeTabs,
                 activeGlobalMissionTab: activeGlobalMissionTab,
-                activeWorktreeTabId: state.tabs.activeTabId(forWorktree: worktree.id)
+                activeWorktreeTabId: state.tabs.activeTabId(forWorktree: worktree.id),
+                missionsEnabled: missionsEnabled
             )
             let tabs = composition.tabs
             let closurePlan = CenterTabClosurePlan(orderedTabIDs: tabs.map(\.id))
@@ -298,6 +312,20 @@ struct CenterPaneView: View {
                         ?? AgentBuiltins.entry(id: session.agentId)
                 }
             )
+            .onAppear {
+                state.synchronizeVisibleWorktreeCenterTabIfNeeded(
+                    worktreeId: worktree.id,
+                    activeTabId: composition.activeId,
+                    missionsEnabled: missionsEnabled
+                )
+            }
+            .onChange(of: composition.activeId) { _, activeId in
+                state.synchronizeVisibleWorktreeCenterTabIfNeeded(
+                    worktreeId: worktree.id,
+                    activeTabId: activeId,
+                    missionsEnabled: missionsEnabled
+                )
+            }
             Group {
                 if tabs.isEmpty, !state.tabs.hasLoaded {
                     Spinner()

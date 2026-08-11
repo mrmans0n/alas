@@ -834,7 +834,8 @@ struct AppStatePersistenceTests {
         let persistence = try Self.makeMissionPersistence()
         let state = AppState(
             store: RecordingStore(initialProjectsFile: .init(projects: [project])),
-            missionPersistence: persistence
+            missionPersistence: persistence,
+            missionsEnabled: true
         )
         let worktree = Self.worktree
         state.projectsManager.insertOptimisticWorktree(worktree)
@@ -853,7 +854,8 @@ struct AppStatePersistenceTests {
         let persistence = try Self.makeMissionPersistence()
         let state = AppState(
             store: RecordingStore(initialProjectsFile: .init(projects: [project])),
-            missionPersistence: persistence
+            missionPersistence: persistence,
+            missionsEnabled: true
         )
         let worktree = Self.worktree
         state.projectsManager.insertOptimisticWorktree(worktree)
@@ -876,7 +878,8 @@ struct AppStatePersistenceTests {
         let state = AppState(
             store: RecordingStore(initialProjectsFile: .init(projects: [project])),
             missionPersistence: persistence,
-            missionArchiveRecorder: { _ in await recorder.waitForRelease() }
+            missionArchiveRecorder: { _ in await recorder.waitForRelease() },
+            missionsEnabled: true
         )
         let worktree = Self.worktree
         let other = Self.otherWorktree
@@ -903,7 +906,8 @@ struct AppStatePersistenceTests {
         let state = AppState(
             store: RecordingStore(initialProjectsFile: .init(projects: [project])),
             missionPersistence: persistence,
-            missionArchiveRecorder: { _ in await recorder.waitForRelease() }
+            missionArchiveRecorder: { _ in await recorder.waitForRelease() },
+            missionsEnabled: true
         )
         let worktree = Self.worktree
         state.projectsManager.insertOptimisticWorktree(worktree)
@@ -965,7 +969,8 @@ struct AppStatePersistenceTests {
                 #expect(projectID == project.id)
                 #expect(branch == worktree.branch)
                 return "abc123"
-            }
+            },
+            missionsEnabled: true
         )
         state.projectsManager.insertOptimisticWorktree(worktree)
 
@@ -985,7 +990,8 @@ struct AppStatePersistenceTests {
         let persistence = try Self.makeMissionPersistence()
         let state = AppState(
             store: RecordingStore(initialProjectsFile: .init(projects: [project])),
-            missionPersistence: persistence
+            missionPersistence: persistence,
+            missionsEnabled: true
         )
         await state.missions.load()
 
@@ -1170,6 +1176,7 @@ private struct MissionGlobalNavigationFixture {
         let appState = AppState(
             store: NavigationStore(projectsFile: ProjectsFile(projects: [project])),
             missionPersistence: MissionPersistence(path: databaseURL.path),
+            missionsEnabled: true,
             globalTabs: GlobalTabsManager(
                 fileURL: FileManager.default.temporaryDirectory
                     .appendingPathComponent("mission-global-navigation-\(UUID().uuidString).json")
@@ -1311,6 +1318,7 @@ private struct MissionCrossSpaceNavigationFixture {
         let state = AppState(
             store: Store(projectsFile: projectsFile, spacesFile: spacesFile),
             missionPersistence: MissionPersistence(path: missionDatabaseURL.path),
+            missionsEnabled: true,
             globalTabs: globalTabs
         )
         state.projectsManager.insertOptimisticWorktree(appWorktree)

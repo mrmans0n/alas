@@ -1,5 +1,6 @@
-import Foundation
 import AppKit
+import Combine
+import Foundation
 import Observation
 import os
 
@@ -89,6 +90,7 @@ final class AppState {
     private var unpersistedGGWorktreeModes: [String: [String: GGWorktreeMode]] = [:]
     var spacesManager: SpacesManager
     var selectedWorktreeId: String?
+    private(set) var missionsEnabled: Bool
     private(set) var isRefreshingProjectTopologies = false
     private(set) var missingMissionTab: MissionTabState?
     private var missingMissionRecoveryTarget: MissingMissionRecoveryTarget?
@@ -597,7 +599,18 @@ final class AppState {
     @ObservationIgnored
     private let missionArchiveRecorder: MissionArchiveRecorder?
     @ObservationIgnored
-    private(set) lazy var missions = makeMissionController()
+    private var missionController: MissionController?
+    var missions: MissionController {
+        if let missionController { return missionController }
+        let controller = makeMissionController()
+        if !missionsEnabled { controller.suspend() }
+        missionController = controller
+        return controller
+    }
+    @ObservationIgnored
+    private var missionFeatureTransition: Task<Void, Never>?
+    @ObservationIgnored
+    private var missionsFeatureFlagSubscription: AnyCancellable?
     @ObservationIgnored
     private let persistenceErrorHandler: (String, String) -> Void
     @ObservationIgnored
@@ -633,11 +646,15 @@ final class AppState {
         missionStartupReviewSnapshot: MissionStartupReviewSnapshot? = nil,
         missionBranchTipOverride: MissionBranchTip? = nil,
         missionArchiveRecorder: MissionArchiveRecorder? = nil,
-        globalTabs: GlobalTabsManager = GlobalTabsManager()
+        missionsEnabled: Bool = MissionsFeatureFlag.isEnabled,
+        missionsFeatureUpdates: AnyPublisher<Bool, Never> = MissionsFeatureFlag.updates(),
+        globalTabs: GlobalTabsManager = GlobalTabsManager(),
+        tabsManager: TabsManager? = nil
     ) {
         self.store = store
         self.missionPersistence = missionPersistence
         self.globalTabs = globalTabs
+        _tabs = tabsManager
         self.persistenceErrorHandler = persistenceErrorHandler ?? { title, message in
             AppState.showWarningAlert(title: title, message: message)
         }
@@ -652,6 +669,7 @@ final class AppState {
         self.missionStartupReviewSnapshot = missionStartupReviewSnapshot
         self.missionBranchTipOverride = missionBranchTipOverride
         self.missionArchiveRecorder = missionArchiveRecorder
+        self.missionsEnabled = missionsEnabled
         let config = (try? store.readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? AppConfig.defaults
         let projectsFile = (try? store.readIfExists(ProjectsFile.self, from: Paths.projectsFile)) ?? ProjectsFile(projects: [])
         let spacesFile = try? store.readIfExists(SpacesFile.self, from: Paths.spacesFile)
@@ -699,7 +717,7 @@ final class AppState {
         rightPaneStore.appState = self
         rightPaneStore.reviewSnapshotDidChange = { [weak self] worktreeID, baseRef, snapshot in
             Task { @MainActor [weak self] in
-                guard let self else { return }
+                guard let self, missionsEnabled else { return }
                 let missionBaseRef = Self.missionCallbackBaseRef(
                     worktreeID: worktreeID,
                     paneBaseRef: baseRef,
@@ -739,6 +757,68 @@ final class AppState {
             await GGAvailability.shared.probe()
             self?.rightPaneStore.reevaluateGGGates()
         }
+
+        missionsFeatureFlagSubscription = missionsFeatureUpdates
+            .removeDuplicates()
+            .sink { enabled in
+                Task { @MainActor [weak self] in
+                    self?.setMissionsEnabled(enabled)
+                }
+            }
+    }
+
+    func setMissionsEnabled(_ enabled: Bool) {
+        guard missionsEnabled != enabled else { return }
+        missionsEnabled = enabled
+        MissionsFeatureFlag.setEnabled(enabled)
+        missionFeatureTransition?.cancel()
+
+        if enabled {
+            missions.resume()
+            let selection = selectedWorktreeId
+            missionFeatureTransition = Task { @MainActor [weak self] in
+                guard let self else { return }
+                do {
+                    try globalTabs.loadAndMigrate(
+                        worktreeTabs: tabs,
+                        selectedWorktreeID: selection ?? resolvedSelectionForActiveSpaceForStartup()
+                    )
+                } catch {
+                    persistenceErrorHandler("Mission Tabs Save Failed", error.localizedDescription)
+                }
+                await missions.load()
+                guard !Task.isCancelled, missionsEnabled else { return }
+                let selectionBeforeReconcile = selectedWorktreeId
+                await reconcileLoadedMissionsForStartup()
+                guard !Task.isCancelled, missionsEnabled else { return }
+                if selectedWorktreeId != selectionBeforeReconcile {
+                    selectWorktree(id: selectionBeforeReconcile)
+                }
+            }
+        } else {
+            missionController?.suspend()
+            globalTabs.clearActiveTab()
+            missingMissionTab = nil
+            missingMissionRecoveryTarget = nil
+            let currentVisibleInActiveSpace = selectedWorktreeId.flatMap { selectedId in
+                activeSpaceProjects.contains { project in
+                    projectsManager.visibleWorktrees(projectId: project.id).contains { $0.id == selectedId }
+                } ? selectedId : nil
+            }
+            selectWorktree(id: currentVisibleInActiveSpace ?? resolvedSelectionForActiveSpaceForStartup())
+        }
+    }
+
+    func loadMissionsIfEnabledForStartup() async {
+        guard missionsEnabled else { return }
+        restoreGlobalTabsForStartup()
+        await missions.load()
+        guard missionsEnabled, !Task.isCancelled else { return }
+        await reconcileLoadedMissionsForStartup()
+    }
+
+    func waitForMissionFeatureTransitionForTesting() async {
+        await missionFeatureTransition?.value
     }
 
     private func makeMissionController() -> MissionController {
@@ -747,7 +827,7 @@ final class AppState {
             now: { Date() },
             makeID: { UUID().uuidString },
             plannedWorktreeID: { [weak self] leg in
-                guard let self,
+                guard let self, missionsEnabled,
                       let project = self.projects.first(where: { $0.id == leg.projectId })
                 else {
                     return .failure(.init(message: "The Mission project is no longer available."))
@@ -766,7 +846,7 @@ final class AppState {
                 self?.missionWorktreeAtDestination(projectID: projectID, destinationPath: destinationPath)
             },
             createWorktree: { [weak self] leg in
-                guard let self else {
+                guard let self, missionsEnabled else {
                     return .failure(.init(message: "Alas is no longer available."))
                 }
                 return await self.createWorktreeAndWait(
@@ -778,7 +858,7 @@ final class AppState {
                 )
             },
             startACP: { [weak self] leg, worktree in
-                guard let self else {
+                guard let self, missionsEnabled else {
                     return .failure(.init(message: "Alas is no longer available."))
                 }
                 guard let sessionID = leg.acpSessionId else {
@@ -804,7 +884,7 @@ final class AppState {
                 }
             },
             notifyChanged: { [weak self] aggregate in
-                guard let self else { return }
+                guard let self, missionsEnabled else { return }
                 globalTabs.updateMissionTitle(
                     missionID: aggregate.mission.id,
                     title: aggregate.mission.title
@@ -814,12 +894,12 @@ final class AppState {
                 }
             }
         ), sourceRefresh: { [weak self] source, projectID in
-            guard let self else {
+            guard let self, missionsEnabled else {
                 throw CodeHostProviderError.malformedOutput("Alas is no longer available.")
             }
             return try await self.refreshMissionSource(source, projectID: projectID)
         }, reviewRepositoryMatches: { [weak self] projectID, baseRef, baseRemoteName, request in
-            guard let self,
+            guard let self, missionsEnabled,
                   let project = self.projectsManager.projects.first(where: { $0.id == projectID }),
                   let remotes = try? await GitService().remotes(
                       worktreePath: URL(fileURLWithPath: project.path)
@@ -837,15 +917,17 @@ final class AppState {
                 remotes: remotes
             ) != nil
         }, linkedReviewRequest: { [weak self] identity, projectID, baseRef in
-            await self?.refreshMissionReview(identity: identity, projectID: projectID, baseRef: baseRef)
+            guard self?.missionsEnabled == true else { return nil }
+            return await self?.refreshMissionReview(identity: identity, projectID: projectID, baseRef: baseRef)
         }, branchTip: { [weak self] projectID, branch in
-            guard let self else { return nil }
+            guard let self, missionsEnabled else { return nil }
             if let missionBranchTipOverride = self.missionBranchTipOverride {
                 return await missionBranchTipOverride(projectID, branch)
             }
             return await self.missionBranchTip(projectID: projectID, branch: branch)
         }, branchOwner: { [weak self] projectID, branch, baseRef in
-            await self?.missionBranchOwner(
+            guard self?.missionsEnabled == true else { return nil }
+            return await self?.missionBranchOwner(
                 projectID: projectID,
                 branch: branch,
                 baseRef: baseRef
@@ -862,7 +944,7 @@ final class AppState {
         }, reviewSnapshot: { [weak self] worktreeID, baseRef in
             self?.rightPaneStore.reviewSnapshot(worktreeId: worktreeID, baseBranch: baseRef)
         }, startupReviewSnapshot: { [weak self] worktree, baseRef in
-            guard let self else { return nil }
+            guard let self, missionsEnabled else { return nil }
             let paneBaseRef: String
             if let match = missions.aggregates.lazy.compactMap({ aggregate -> (MissionAggregate, MissionLeg)? in
                 guard aggregate.mission.state != .completed,
@@ -887,7 +969,8 @@ final class AppState {
                 comparisonMode: self.config.changes.comparisonMode
             )
         }, discoverReviewRequest: { [weak self] projectID, branch, baseRef, headSHA, headOwner in
-            await self?.discoverMissionReview(
+            guard self?.missionsEnabled == true else { return nil }
+            return await self?.discoverMissionReview(
                 projectID: projectID,
                 branch: branch,
                 baseRef: baseRef,
@@ -895,11 +978,13 @@ final class AppState {
                 headOwner: headOwner
             )
         }, openMission: { [weak self] missionID in
+            guard self?.missionsEnabled == true else { return }
             _ = self?.openMission(id: missionID)
         })
     }
 
     func restoreGlobalTabsForStartup() {
+        guard missionsEnabled else { return }
         do {
             try globalTabs.loadPersistedTabs()
         } catch {
@@ -908,11 +993,13 @@ final class AppState {
     }
 
     func reconcileMissionsForStartup() async {
+        guard missionsEnabled else { return }
         await missions.load()
         await reconcileLoadedMissionsForStartup()
     }
 
     func reconcileLoadedMissionsForStartup() async {
+        guard missionsEnabled else { return }
         await refreshRenamedMissionRepositories()
         await missions.resolveLegacyBaseRemoteNames { [weak self] projectID, baseRef in
             await self?.resolveLegacyMissionBaseRemoteName(projectID: projectID, baseRef: baseRef)
@@ -922,6 +1009,7 @@ final class AppState {
     }
 
     private func refreshRenamedMissionRepositories() async {
+        guard missionsEnabled else { return }
         for aggregate in missions.aggregates where aggregate.mission.state != .completed {
             guard let leg = aggregate.primaryLeg,
                   let locator = aggregate.source.repositoryLocator,
@@ -964,6 +1052,7 @@ final class AppState {
 
     @discardableResult
     func openMission(id: MissionID) -> Result<Tab, MissionOpenError> {
+        guard missionsEnabled else { return .failure(.missionUnavailable(id)) }
         guard let aggregate = missions.aggregate(id: id),
               let leg = aggregate.primaryLeg
         else {
@@ -1007,6 +1096,7 @@ final class AppState {
         missionID: MissionID,
         legID: MissionLegID
     ) async {
+        guard missionsEnabled else { return }
         guard let aggregate = missions.aggregate(id: missionID),
               let leg = aggregate.legs.first(where: { $0.id == legID }),
               missionWorktree(worktree, for: leg, aggregate: aggregate)?.id == worktree.id
@@ -1056,6 +1146,7 @@ final class AppState {
 
     @discardableResult
     func refreshMission(_ id: MissionID) async -> MissionSourceRefreshResult {
+        guard missionsEnabled else { return .unavailable }
         guard missions.aggregate(id: id) != nil else { return .unavailable }
 
         let sourceResult = await missions.refreshSource(id)
@@ -1127,6 +1218,7 @@ final class AppState {
     }
 
     func activateMissionRightPane(worktree: Worktree, aggregate: MissionAggregate) async {
+        guard missionsEnabled else { return }
         let paneBaseRef = await missionPaneBaseRef(for: aggregate, worktree: worktree)
         _ = missionRightPaneState(for: worktree, baseRef: paneBaseRef)
     }
@@ -1521,6 +1613,7 @@ final class AppState {
     }
 
     func reconcileDeletedMissionWorktree(_ worktreeID: String) async {
+        guard missionsEnabled else { return }
         let missionLegs = missions.aggregates.flatMap { aggregate in
             aggregate.legs.compactMap { leg in
                 leg.worktreeId == worktreeID ? (aggregate.mission.id, leg.id) : nil
@@ -1732,6 +1825,10 @@ final class AppState {
     func cleanupMissingWorktrees(beforeIds: Set<String>) async {
         let afterIds = allWorktreeIds()
         let disappeared = beforeIds.subtracting(afterIds)
+        guard missionsEnabled else {
+            cleanupMissingWorktreeState(beforeIds: beforeIds, afterIds: afterIds)
+            return
+        }
         let missingMissionLegs = missions.aggregates.flatMap { aggregate in
             aggregate.legs.compactMap { leg -> (MissionID, MissionLegID)? in
                 guard leg.setupCheckpoint != .creatingWorktree,
@@ -1832,6 +1929,7 @@ final class AppState {
     }
 
     private func presentMissingMissionRecoveryIfNeeded() {
+        guard missionsEnabled else { return }
         let activeProjectIDs = Set(activeSpaceProjects.map(\.id))
         guard missingMissionTab == nil,
               globalTabs.activeMissionTab() == nil,
@@ -1857,11 +1955,13 @@ final class AppState {
             projectsManager.worktrees(projectId: $0.id).map(\.id)
         }
         tabs.loadAll(worktreeIds: allWorktreeIds)
-        do {
-            let migrationWorktreeID = selectedWorktreeId ?? resolvedSelectionForActiveSpaceForStartup()
-            try globalTabs.migrateLegacyMissionTabs(worktreeTabs: tabs, selectedWorktreeID: migrationWorktreeID)
-        } catch {
-            persistenceErrorHandler("Mission Tabs Save Failed", error.localizedDescription)
+        if missionsEnabled {
+            do {
+                let migrationWorktreeID = selectedWorktreeId ?? resolvedSelectionForActiveSpaceForStartup()
+                try globalTabs.loadAndMigrate(worktreeTabs: tabs, selectedWorktreeID: migrationWorktreeID)
+            } catch {
+                persistenceErrorHandler("Mission Tabs Save Failed", error.localizedDescription)
+            }
         }
         // When cross-quit persistence is disabled, drop every persisted
         // terminal tab right after load — across all worktrees, before
@@ -2099,6 +2199,22 @@ final class AppState {
     func activateWorktreeCenterTab(worktreeId: String, tabId: TabID) {
         activateWorktreeTabPresentation()
         tabs.activate(worktreeId: worktreeId, tabId: tabId)
+    }
+
+    func synchronizeVisibleWorktreeCenterTabIfNeeded(
+        worktreeId: String,
+        activeTabId: TabID?,
+        missionsEnabled: Bool
+    ) {
+        guard !missionsEnabled else { return }
+        if let activeTabId {
+            guard tabs.activeTabId(forWorktree: worktreeId) != activeTabId,
+                  tabs.tabs(forWorktree: worktreeId).contains(where: { $0.id == activeTabId })
+            else { return }
+            activateWorktreeCenterTab(worktreeId: worktreeId, tabId: activeTabId)
+        } else {
+            tabs.clearActiveTab(worktreeId: worktreeId)
+        }
     }
 
     private func activateWorktreeTabPresentation() {
@@ -2781,6 +2897,7 @@ final class AppState {
     }
 
     func preparedMissionDraft(_ draft: MissionDraft) async throws -> MissionDraft {
+        guard missionsEnabled else { throw CancellationError() }
         guard let project = projects.first(where: { $0.id == draft.projectId }) else {
             throw CodeHostProviderError.malformedOutput("The selected repository is no longer available.")
         }
@@ -2807,6 +2924,7 @@ final class AppState {
     }
 
     func preparedMissionLegDraft(_ draft: MissionLegDraft) async throws -> MissionLegDraft {
+        guard missionsEnabled else { throw CancellationError() }
         guard let project = projects.first(where: { $0.id == draft.projectId }) else {
             throw CodeHostProviderError.malformedOutput("The selected repository is no longer available.")
         }
@@ -3082,7 +3200,8 @@ final class AppState {
         let removedIds = beforeIds.subtracting(afterIds)
         cleanupMissingWorktreeState(beforeIds: beforeIds, afterIds: afterIds)
         Task { @MainActor [weak self] in
-            await self?.missions.recordMissingWorktree(projectId: id, projectRemoved: true)
+            guard let self, missionsEnabled else { return }
+            await missions.recordMissingWorktree(projectId: id, projectRemoved: true)
         }
         for root in remoteRootsToUnregister {
             RemoteHostRegistry.shared.unregister(root: root)
@@ -3887,10 +4006,11 @@ final class AppState {
             hidden: true
         )
         saveProjects()
-        if projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path),
+        if missionsEnabled,
+           projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path),
            missions.hasActiveMission(worktreeId: worktree.id) {
             Task { @MainActor [weak self] in
-                guard let self else { return }
+                guard let self, missionsEnabled else { return }
                 if let missionArchiveRecorder = self.missionArchiveRecorder {
                     await missionArchiveRecorder(worktree.id)
                 }
@@ -4845,12 +4965,14 @@ final class AppState {
     }
 
     func deleteMission(id: MissionID) async {
+        guard missionsEnabled else { return }
         await missions.delete(id)
         guard missions.aggregate(id: id) == nil else { return }
         discardMissionUI(id: id)
     }
 
     func deleteCompletedMissions(ids: [MissionID]) async {
+        guard missionsEnabled else { return }
         for id in await missions.deleteCompleted(ids: ids) {
             discardMissionUI(id: id)
         }
@@ -4873,6 +4995,7 @@ final class AppState {
     }
 
     func requestCloseGlobalTab(tabID: TabID) {
+        guard missionsEnabled else { return }
         guard let tab = globalTabs.tabs.first(where: { $0.id == tabID }) else { return }
         closedTabHistory.record(ClosedTabEntry(
             snapshot: .global(tab),
@@ -4889,7 +5012,8 @@ final class AppState {
             globalTabs: globalTabs.tabs,
             worktreeTabs: worktreeTabs,
             activeGlobalMissionTab: globalTabs.activeMissionTab(),
-            activeWorktreeTabId: worktreeId.flatMap { tabs.activeTabId(forWorktree: $0) }
+            activeWorktreeTabId: worktreeId.flatMap { tabs.activeTabId(forWorktree: $0) },
+            missionsEnabled: missionsEnabled
         )
         let index = number - 1
         guard composition.tabs.indices.contains(index) else { return nil }
@@ -4906,7 +5030,8 @@ final class AppState {
             globalTabs: globalTabs.tabs,
             worktreeTabs: worktreeTabs,
             activeGlobalMissionTab: globalTabs.activeMissionTab(),
-            activeWorktreeTabId: worktreeId.flatMap { tabs.activeTabId(forWorktree: $0) }
+            activeWorktreeTabId: worktreeId.flatMap { tabs.activeTabId(forWorktree: $0) },
+            missionsEnabled: missionsEnabled
         )
         guard let tabID = composition.adjacentTabID(in: direction) else { return nil }
         return activateCenterTab(tabID, worktreeId: worktreeId)
@@ -5616,6 +5741,10 @@ final class AppState {
         while let entry = closedTabHistory.last {
             switch entry.snapshot {
             case .global(let tab):
+                guard missionsEnabled else {
+                    closedTabHistory.remove(id: entry.id)
+                    continue
+                }
                 _ = globalTabs.restore(tab: tab, placement: entry.placement)
                 closedTabHistory.remove(id: entry.id)
                 return
@@ -6683,7 +6812,12 @@ final class AppState {
         force: Bool,
         removedIndex: Int
     ) async {
-        let missionAllowsBranchDeletion = await missions.refreshReviewBeforeWorktreeRemoval(worktree.id)
+        let missionAllowsBranchDeletion: Bool
+        if missionsEnabled {
+            missionAllowsBranchDeletion = await missions.refreshReviewBeforeWorktreeRemoval(worktree.id)
+        } else {
+            missionAllowsBranchDeletion = true
+        }
         do {
             try await Self.performRemoveWorktree(
                 repoPath: repoPath,

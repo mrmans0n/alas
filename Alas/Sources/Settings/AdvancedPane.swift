@@ -22,6 +22,15 @@ struct AdvancedPane: View {
 
                 SettingsGroup(title: "Experiments") {
                     SettingsRow(
+                        name: "Missions",
+                        desc: "Shows the experimental Missions interface and resumes its background coordination."
+                    ) {
+                        AlasToggle(on: Binding(
+                            get: { state.missionsEnabled },
+                            set: { state.setMissionsEnabled($0) }
+                        ))
+                    }
+                    SettingsRow(
                         name: "AppKit diff scrollers",
                         desc: "Replaces vertical scrolling in diff and review panes with an AppKit-backed scroller. Toggling this re-creates open diff views, so their scroll positions are lost."
                     ) {

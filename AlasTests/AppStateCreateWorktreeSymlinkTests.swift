@@ -102,7 +102,7 @@ struct AppStateCreateWorktreeSymlinkTests {
 
         let state = AppState(missionPersistence: MissionPersistence(
             path: persistenceDirectory.appendingPathComponent("missions.sqlite").path
-        ))
+        ), missionsEnabled: true)
         let project = try await state.projectsManager.addProject(
             path: realRepo,
             displayName: "mission-symlink-repo",

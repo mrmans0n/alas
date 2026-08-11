@@ -890,6 +890,7 @@ struct MissionTabTests {
                 spacesFile: SpacesFile(activeSpaceId: "default", spaces: [])
             ),
             missionPersistence: MissionPersistence(path: "/dev/null/missions.sqlite"),
+            missionsEnabled: true,
             globalTabs: GlobalTabsManager(
                 fileURL: FileManager.default.temporaryDirectory
                     .appendingPathComponent("mission-failed-load-tabs-\(UUID().uuidString).json")
@@ -1235,6 +1236,7 @@ private struct MissionNavigationFixture {
                 spacesFile: spaces
             ),
             missionPersistence: persistence,
+            missionsEnabled: true,
             globalTabs: GlobalTabsManager(
                 fileURL: FileManager.default.temporaryDirectory
                     .appendingPathComponent("mission-global-tabs-\(UUID().uuidString).json")

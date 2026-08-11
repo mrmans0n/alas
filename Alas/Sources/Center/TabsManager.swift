@@ -1408,6 +1408,15 @@ final class TabsManager {
         persist(worktreeId)
     }
 
+    func clearActiveTab(worktreeId: String) {
+        guard var file = byWorktree[worktreeId],
+              file.activeTabId != nil
+        else { return }
+        file.activeTabId = nil
+        byWorktree[worktreeId] = file
+        persist(worktreeId)
+    }
+
     @discardableResult
     func restore(tab: Tab, worktreeID: String, placement: ClosedTabPlacement) -> TabID {
         var file = byWorktree[worktreeID] ?? TabsFile(tabs: [], activeTabId: nil)

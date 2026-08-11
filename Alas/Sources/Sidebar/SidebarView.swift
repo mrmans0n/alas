@@ -35,20 +35,22 @@ struct SidebarView: View {
                 )
                 ScrollView(.vertical, showsIndicators: true) {
                     VStack(alignment: .leading, spacing: 8) {
-                        MissionSidebarSection(
-                            model: missionSidebarModel,
-                            selectedMissionID: selectedMissionID,
-                            onOpenMission: { missionID in
-                                _ = state.openMission(id: missionID)
-                            },
-                            onNewMission: onNewMission,
-                            onDeleteMission: { missionID in
-                                Task { await state.deleteMission(id: missionID) }
-                            },
-                            onDeleteCompleted: { missionIDs in
-                                Task { await state.deleteCompletedMissions(ids: missionIDs) }
-                            }
-                        )
+                        if state.missionsEnabled {
+                            MissionSidebarSection(
+                                model: missionSidebarModel,
+                                selectedMissionID: selectedMissionID,
+                                onOpenMission: { missionID in
+                                    _ = state.openMission(id: missionID)
+                                },
+                                onNewMission: onNewMission,
+                                onDeleteMission: { missionID in
+                                    Task { await state.deleteMission(id: missionID) }
+                                },
+                                onDeleteCompleted: { missionIDs in
+                                    Task { await state.deleteCompletedMissions(ids: missionIDs) }
+                                }
+                            )
+                        }
                         ForEach(state.activeSpaceProjects) { project in
                             RepoGroupView(
                                 project: project,
@@ -62,7 +64,9 @@ struct SidebarView: View {
                                 ),
                                 selectedWorktreeId: Self.effectiveSelectedWorktreeId(
                                     selectedWorktreeId: state.selectedWorktreeId,
-                                    activeMissionTab: state.globalTabs.activeMissionTab()
+                                    activeMissionTab: state.missionsEnabled
+                                        ? state.globalTabs.activeMissionTab()
+                                        : nil
                                 ),
                                 isMain: { wt in state.projectsManager.isMain(wt, in: project) },
                                 operationState: { wt in
@@ -287,7 +291,15 @@ struct SidebarView: View {
     }
 
     private var missionSidebarModel: MissionSidebarModel {
-        state.missions.sidebarModel(
+        guard state.missionsEnabled else {
+            return MissionSidebarModel.make(
+                aggregates: [],
+                activeProjectIds: [],
+                existingProjectIds: [],
+                knownWorktreeIds: []
+            )
+        }
+        return state.missions.sidebarModel(
             activeProjectIds: state.spacesManager.activeSpace?.projectIds ?? state.projects.map(\.id),
             existingProjectIds: state.projects.map(\.id),
             knownWorktreeIds: state.allWorktreeIds()
@@ -295,6 +307,7 @@ struct SidebarView: View {
     }
 
     private var selectedMissionID: MissionID? {
+        guard state.missionsEnabled else { return nil }
         if let tabState = state.globalTabs.activeMissionTab() {
             return tabState.missionID
         }

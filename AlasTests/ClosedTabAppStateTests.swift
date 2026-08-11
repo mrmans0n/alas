@@ -50,7 +50,9 @@ struct ClosedTabAppStateTests {
         let second: Worktree
     }
 
-    private func makeFixture(state: AppState = AppState(store: MemoryStore())) -> Fixture {
+    private func makeFixture(
+        state: AppState = AppState(store: MemoryStore(), missionsEnabled: true)
+    ) -> Fixture {
         let project = ProjectConfig(
             id: "closed-tabs-project",
             name: "Closed Tabs",
@@ -125,6 +127,28 @@ struct ClosedTabAppStateTests {
 
         #expect(fixture.state.globalTabs.activeTabId == tab.id)
         #expect(fixture.state.globalTabs.tabs.count == 1)
+    }
+
+    @Test func disabledMissionsSkipClosedGlobalTabsWhenReopeningEarlierWorktreeTab() async {
+        let fixture = makeFixture()
+        let local = fixture.state.tabs.appendEditor(
+            worktreeId: fixture.second.id,
+            title: "README.md",
+            relativePath: "README.md"
+        )
+        fixture.state.requestCloseTab(worktreeId: fixture.second.id, tabId: local.id)
+        let mission = fixture.state.globalTabs.openOrFocusMission(
+            missionID: MissionID(rawValue: "closed-tabs-disabled-mission"),
+            title: "Mission"
+        )
+        fixture.state.requestCloseGlobalTab(tabID: mission.id)
+        fixture.state.setMissionsEnabled(false)
+
+        await fixture.state.reopenLastClosedTab()
+
+        #expect(fixture.state.selectedWorktreeId == fixture.second.id)
+        #expect(fixture.state.tabs.activeTabId(forWorktree: fixture.second.id) == local.id)
+        #expect(fixture.state.closedTabHistory.entries.isEmpty)
     }
 
     @Test func reopenFocusesManuallyRestoredGlobalTabWithoutDuplication() async {
@@ -524,7 +548,7 @@ struct ClosedTabAppStateTests {
         let completedID = MissionID(rawValue: "closed-tabs-completed-mission")
         let runningID = MissionID(rawValue: "closed-tabs-running-mission")
         let persistence = try Self.makeMixedMissionPersistence(completedID: completedID, runningID: runningID)
-        let state = AppState(store: MemoryStore(), missionPersistence: persistence)
+        let state = AppState(store: MemoryStore(), missionPersistence: persistence, missionsEnabled: true)
         let fixture = makeFixture(state: state)
         await fixture.state.missions.load()
 
