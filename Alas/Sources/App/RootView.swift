@@ -508,167 +508,226 @@ private struct RootPresentationHandlers: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-        .sheet(isPresented: $showNewProject) {
-            NewProjectDialog(state: state, presented: $showNewProject)
-        }
-        .sheet(item: $editingProject) { project in
-            EditProjectDialog(
+            .modifier(RootProjectPresentationHandlers(
                 state: state,
-                presented: Binding(
-                    get: { editingProject != nil },
-                    set: { if !$0 { editingProject = nil } }
-                ),
-                project: project
-            )
-        }
-        .sheet(item: $newWorktreePresentation) { presentation in
-            NewWorktreeDialog(
+                showNewProject: $showNewProject,
+                editingProject: $editingProject,
+                removingProject: $removingProject
+            ))
+            .modifier(RootWorktreeMissionPresentationHandlers(
                 state: state,
-                presented: Binding(
-                    get: { newWorktreePresentation != nil },
-                    set: { if !$0 { newWorktreePresentation = nil } }
+                newWorktreePresentation: $newWorktreePresentation,
+                newMissionPresentation: $newMissionPresentation
+            ))
+            .modifier(RootRunScriptPresentationHandlers(state: state))
+            .modifier(RootReviewMergePresentationHandlers(state: state))
+            .modifier(RootGGPresentationHandlers(state: state))
+            .modifier(RootUpdatePresentationHandlers(state: state))
+    }
+}
+
+private struct RootProjectPresentationHandlers: ViewModifier {
+    @Bindable var state: AppState
+    @Binding var showNewProject: Bool
+    @Binding var editingProject: ProjectConfig?
+    @Binding var removingProject: ProjectConfig?
+
+    func body(content: Content) -> some View {
+        content
+            .sheet(isPresented: $showNewProject) {
+                NewProjectDialog(state: state, presented: $showNewProject)
+            }
+            .sheet(item: $editingProject) { project in
+                EditProjectDialog(
+                    state: state,
+                    presented: Binding(
+                        get: { editingProject != nil },
+                        set: { if !$0 { editingProject = nil } }
+                    ),
+                    project: project
+                )
+            }
+            .alert(
+                "Remove \u{201C}\(removingProject?.name ?? "")\u{201D}?",
+                isPresented: Binding(
+                    get: { removingProject != nil },
+                    set: { if !$0 { removingProject = nil } }
                 ),
-                presetProjectId: presentation.projectId
+                presenting: removingProject,
+                actions: { project in
+                    Button("Remove", role: .destructive) {
+                        state.removeProject(id: project.id)
+                        removingProject = nil
+                    }
+                    Button("Cancel", role: .cancel) {
+                        removingProject = nil
+                    }
+                },
+                message: { _ in
+                    Text("Alas will stop tracking this project and its worktrees. No files will be deleted from disk. If any editor tabs have unsaved changes, you'll be asked to save or discard them.")
+                }
             )
-        }
-        .sheet(item: Binding(
-            get: { state.missionsEnabled ? newMissionPresentation : nil },
-            set: { newMissionPresentation = $0 }
-        )) { _ in
-            NewMissionDialog(
-                presented: Binding(
-                    get: { newMissionPresentation != nil },
-                    set: { if !$0 { newMissionPresentation = nil } }
+    }
+}
+
+private struct RootWorktreeMissionPresentationHandlers: ViewModifier {
+    @Bindable var state: AppState
+    @Binding var newWorktreePresentation: NewWorktreePresentation?
+    @Binding var newMissionPresentation: NewMissionPresentation?
+
+    func body(content: Content) -> some View {
+        content
+            .sheet(item: $newWorktreePresentation) { presentation in
+                NewWorktreeDialog(
+                    state: state,
+                    presented: Binding(
+                        get: { newWorktreePresentation != nil },
+                        set: { if !$0 { newWorktreePresentation = nil } }
+                    ),
+                    presetProjectId: presentation.projectId
+                )
+            }
+            .sheet(item: Binding(
+                get: { state.missionsEnabled ? newMissionPresentation : nil },
+                set: { newMissionPresentation = $0 }
+            )) { _ in
+                NewMissionDialog(
+                    presented: Binding(
+                        get: { newMissionPresentation != nil },
+                        set: { if !$0 { newMissionPresentation = nil } }
+                    ),
+                    projects: state.projects,
+                    environment: .live(state: state)
+                )
+            }
+            .onChange(of: state.missionsEnabled) { _, enabled in
+                if !enabled { newMissionPresentation = nil }
+            }
+    }
+}
+
+private struct RootRunScriptPresentationHandlers: ViewModifier {
+    @Bindable var state: AppState
+
+    func body(content: Content) -> some View {
+        content
+            .sheet(item: $state.pendingRunScriptCreation) { presentation in
+                NewRunScriptDialog(
+                    state: state,
+                    presentation: presentation
+                )
+            }
+            .alert(
+                "'\(state.pendingForceDeleteWorktree?.branch ?? "")' \(state.pendingForceDeleteWorktree?.reason.alertTitleSuffix ?? "requires force delete.")",
+                isPresented: Binding(
+                    get: { state.pendingForceDeleteWorktree != nil },
+                    set: { if !$0 { state.cancelForceDeletePendingWorktree() } }
                 ),
-                projects: state.projects,
-                environment: .live(state: state)
+                actions: {
+                    Button("Force Delete", role: .destructive) {
+                        state.confirmForceDeletePendingWorktree()
+                    }
+                    Button("Cancel", role: .cancel) {
+                        state.cancelForceDeletePendingWorktree()
+                    }
+                },
+                message: {
+                    Text(state.pendingForceDeleteWorktree?.reason.alertMessage ?? "Force delete?")
+                }
             )
-        }
-        .onChange(of: state.missionsEnabled) { _, enabled in
-            if !enabled { newMissionPresentation = nil }
-        }
-        .sheet(item: $state.pendingRunScriptCreation) { presentation in
-            NewRunScriptDialog(
-                state: state,
-                presentation: presentation
-            )
-        }
-        .alert(
-            "'\(state.pendingForceDeleteWorktree?.branch ?? "")' \(state.pendingForceDeleteWorktree?.reason.alertTitleSuffix ?? "requires force delete.")",
-            isPresented: Binding(
-                get: { state.pendingForceDeleteWorktree != nil },
-                set: { if !$0 { state.cancelForceDeletePendingWorktree() } }
-            ),
-            actions: {
-                Button("Force Delete", role: .destructive) {
-                    state.confirmForceDeletePendingWorktree()
+    }
+}
+
+private struct RootReviewMergePresentationHandlers: ViewModifier {
+    @Bindable var state: AppState
+
+    func body(content: Content) -> some View {
+        content
+            .confirmationDialog(
+                "Merge review request?",
+                isPresented: Binding(
+                    get: { state.rightPaneStore.stateWithPendingMerge() != nil },
+                    set: { if !$0 { state.rightPaneStore.stateWithPendingMerge()?.cancelMerge() } }
+                ),
+                titleVisibility: .visible,
+                presenting: state.rightPaneStore.stateWithPendingMerge()?.pendingMerge
+            ) { snapshot in
+                Button("Merge", role: .destructive) {
+                    state.rightPaneStore.stateWithPendingMerge()?.performMerge()
                 }
                 Button("Cancel", role: .cancel) {
-                    state.cancelForceDeletePendingWorktree()
+                    state.rightPaneStore.stateWithPendingMerge()?.cancelMerge()
                 }
-            },
-            message: {
-                Text(state.pendingForceDeleteWorktree?.reason.alertMessage ?? "Force delete?")
+            } message: { snapshot in
+                Text(RightPaneState.mergeConfirmationMessage(for: snapshot.reviewRequest))
             }
-        )
-        .alert(
-            "Remove \u{201C}\(removingProject?.name ?? "")\u{201D}?",
-            isPresented: Binding(
-                get: { removingProject != nil },
-                set: { if !$0 { removingProject = nil } }
-            ),
-            presenting: removingProject,
-            actions: { project in
-                Button("Remove", role: .destructive) {
-                    state.removeProject(id: project.id)
-                    removingProject = nil
+            .alert(
+                "Merge failed",
+                isPresented: Binding(
+                    get: { state.rightPaneStore.stateReportingMergeError() != nil },
+                    set: { if !$0 { state.rightPaneStore.stateReportingMergeError()?.clearMergeError() } }
+                ),
+                presenting: state.rightPaneStore.stateReportingMergeError()?.mergeError
+            ) { _ in
+                Button("OK", role: .cancel) {
+                    state.rightPaneStore.stateReportingMergeError()?.clearMergeError()
                 }
-                Button("Cancel", role: .cancel) {
-                    removingProject = nil
+            } message: { message in
+                Text(message)
+            }
+            .alert(
+                "Added to merge queue",
+                isPresented: Binding(
+                    get: { state.rightPaneStore.stateReportingMergeQueuedMessage() != nil },
+                    set: { if !$0 { state.rightPaneStore.stateReportingMergeQueuedMessage()?.clearMergeQueuedMessage() } }
+                ),
+                presenting: state.rightPaneStore.stateReportingMergeQueuedMessage()?.mergeQueuedMessage
+            ) { _ in
+                Button("OK", role: .cancel) {
+                    state.rightPaneStore.stateReportingMergeQueuedMessage()?.clearMergeQueuedMessage()
                 }
-            },
-            message: { _ in
-                Text("Alas will stop tracking this project and its worktrees. No files will be deleted from disk. If any editor tabs have unsaved changes, you'll be asked to save or discard them.")
+            } message: { message in
+                Text(message)
             }
-        )
-        .confirmationDialog(
-            "Merge review request?",
-            isPresented: Binding(
-                get: { state.rightPaneStore.stateWithPendingMerge() != nil },
-                set: { if !$0 { state.rightPaneStore.stateWithPendingMerge()?.cancelMerge() } }
-            ),
-            titleVisibility: .visible,
-            presenting: state.rightPaneStore.stateWithPendingMerge()?.pendingMerge
-        ) { snapshot in
-            Button("Merge", role: .destructive) {
-                state.rightPaneStore.stateWithPendingMerge()?.performMerge()
+    }
+}
+
+private struct RootUpdatePresentationHandlers: ViewModifier {
+    @Bindable var state: AppState
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear {
+                state.updates.checkOnLaunch()
             }
-            Button("Cancel", role: .cancel) {
-                state.rightPaneStore.stateWithPendingMerge()?.cancelMerge()
-            }
-        } message: { snapshot in
-            Text(RightPaneState.mergeConfirmationMessage(for: snapshot.reviewRequest))
-        }
-        .modifier(RootGGPresentationHandlers(state: state))
-        .alert(
-            "Merge failed",
-            isPresented: Binding(
-                get: { state.rightPaneStore.stateReportingMergeError() != nil },
-                set: { if !$0 { state.rightPaneStore.stateReportingMergeError()?.clearMergeError() } }
-            ),
-            presenting: state.rightPaneStore.stateReportingMergeError()?.mergeError
-        ) { _ in
-            Button("OK", role: .cancel) {
-                state.rightPaneStore.stateReportingMergeError()?.clearMergeError()
-            }
-        } message: { message in
-            Text(message)
-        }
-        .alert(
-            "Added to merge queue",
-            isPresented: Binding(
-                get: { state.rightPaneStore.stateReportingMergeQueuedMessage() != nil },
-                set: { if !$0 { state.rightPaneStore.stateReportingMergeQueuedMessage()?.clearMergeQueuedMessage() } }
-            ),
-            presenting: state.rightPaneStore.stateReportingMergeQueuedMessage()?.mergeQueuedMessage
-        ) { _ in
-            Button("OK", role: .cancel) {
-                state.rightPaneStore.stateReportingMergeQueuedMessage()?.clearMergeQueuedMessage()
-            }
-        } message: { message in
-            Text(message)
-        }
-        .onAppear {
-            state.updates.checkOnLaunch()
-        }
-        .sheet(item: Binding(
-            get: { state.updates.presentedUpdate },
-            set: { state.updates.presentedUpdate = $0 }
-        ), onDismiss: {
-            guard state.pendingSelfUpdate else { return }
-            state.pendingSelfUpdate = false
-            state.presentUpdateProgress = true
-            Task {
-                try? await state.selfUpdater.start(command: .homebrew)
-            }
-        }) { info in
-            UpdateAvailableSheet(
-                info: info,
-                source: state.updates.track == .nightly ? .direct : state.updates.source,
-                onDismiss: { state.updates.presentedUpdate = nil },
-                onRunUpdate: {
-                    state.pendingSelfUpdate = true
-                    state.updates.presentedUpdate = nil
+            .sheet(item: Binding(
+                get: { state.updates.presentedUpdate },
+                set: { state.updates.presentedUpdate = $0 }
+            ), onDismiss: {
+                guard state.pendingSelfUpdate else { return }
+                state.pendingSelfUpdate = false
+                state.presentUpdateProgress = true
+                Task {
+                    try? await state.selfUpdater.start(command: .homebrew)
                 }
-            )
-            .environment(\.theme, state.themeStore.current)
-        }
-        .sheet(isPresented: $state.presentUpdateProgress) {
-            UpdateProgressSheet(updater: state.selfUpdater) {
-                state.presentUpdateProgress = false
+            }) { info in
+                UpdateAvailableSheet(
+                    info: info,
+                    source: state.updates.track == .nightly ? .direct : state.updates.source,
+                    onDismiss: { state.updates.presentedUpdate = nil },
+                    onRunUpdate: {
+                        state.pendingSelfUpdate = true
+                        state.updates.presentedUpdate = nil
+                    }
+                )
+                .environment(\.theme, state.themeStore.current)
             }
-            .environment(\.theme, state.themeStore.current)
-        }
+            .sheet(isPresented: $state.presentUpdateProgress) {
+                UpdateProgressSheet(updater: state.selfUpdater) {
+                    state.presentUpdateProgress = false
+                }
+                .environment(\.theme, state.themeStore.current)
+            }
     }
 }
 

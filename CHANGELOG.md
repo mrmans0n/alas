@@ -6,6 +6,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.8] - 2026-08-11
+
+### ✨ Features
+
+- Attach issues when creating new worktrees (#1013).
+- Gate the hidden Missions runtime (#1011).
+
+### 🐛 Fixes
+
+- Recover `gg` stacks while detached (#1015).
+- Pair dead-key delimiters and keep reachable field pairing (#1010).
+
+### 🏗️ Internal
+
+- Extract the reusable issue flow (#1012).
+- Remove the `.superpowers` directory (#1009).
+- Split root presentation handlers to keep release builds type-checkable.
+
 ## [0.14.7] - 2026-08-11
 
 ### ✨ Features
