@@ -48,6 +48,32 @@ enum PairedDelimiterEditing {
         return .native
     }
 
+    /// Rebuilds the document as it was before a dead-key composition started.
+    ///
+    /// Layouts like "U.S. International – PC" turn `"`, `'` and `` ` `` into dead
+    /// keys: the first keystroke installs marked text — consuming any selection —
+    /// and the commit keystroke inserts the literal delimiter while that marked
+    /// text is still in the storage. Removing the marked range and restoring the
+    /// selection it swallowed gives `resolve` the context it would have seen had
+    /// the delimiter arrived as a plain keystroke.
+    static func preCompositionContext(
+        text: String,
+        markedRange: NSRange,
+        replacedSelection: String
+    ) -> (text: String, selectedRange: NSRange)? {
+        let nsString = text as NSString
+        guard isValid(markedRange, in: nsString), markedRange.length > 0 else { return nil }
+
+        let restored = nsString.replacingCharacters(in: markedRange, with: replacedSelection)
+        return (
+            text: restored,
+            selectedRange: NSRange(
+                location: markedRange.location,
+                length: (replacedSelection as NSString).length
+            )
+        )
+    }
+
     private static func isValid(_ range: NSRange, in string: NSString) -> Bool {
         range.location != NSNotFound
             && range.location >= 0

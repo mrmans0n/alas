@@ -4,14 +4,41 @@ import SwiftUI
 class PairedDelimiterTextView: NSTextView {
     private var bypassesPairedDelimiterResolution = false
     private var appliesPairedDelimiterResolutionForKeyboardInput = false
+    /// Text that the in-flight marked composition swallowed, kept so a dead-key
+    /// delimiter can still wrap the selection the user had before pressing it.
+    private var selectionReplacedByMarkedText: NSAttributedString?
+
+    override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        if !hasMarkedText() {
+            let replaced = replacementRange.location == NSNotFound ? self.selectedRange() : replacementRange
+            selectionReplacedByMarkedText = textStorage.flatMap { storage in
+                replaced.length > 0 && Self.isValid(replaced, in: storage)
+                    ? storage.attributedSubstring(from: replaced)
+                    : nil
+            }
+        }
+        super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
+    }
 
     override func insertText(_ insertString: Any, replacementRange: NSRange) {
+        let replacedSelection = selectionReplacedByMarkedText
+        selectionReplacedByMarkedText = nil
+
         guard !bypassesPairedDelimiterResolution,
               appliesPairedDelimiterResolutionForKeyboardInput,
-              !hasMarkedText(),
               let insertedText = Self.plainText(from: insertString)
         else {
             super.insertText(insertString, replacementRange: replacementRange)
+            return
+        }
+
+        if hasMarkedText() {
+            commitMarkedText(
+                insertString,
+                insertedText: insertedText,
+                replacementRange: replacementRange,
+                replacedSelection: replacedSelection
+            )
             return
         }
 
@@ -48,6 +75,92 @@ class PairedDelimiterTextView: NSTextView {
 
         case .native:
             super.insertText(insertString, replacementRange: replacementRange)
+        }
+    }
+
+    override func unmarkText() {
+        selectionReplacedByMarkedText = nil
+        super.unmarkText()
+    }
+
+    /// Handles the keystroke that commits a marked composition. Only a
+    /// single-character commit that matches the marked text itself is treated as
+    /// a dead-key delimiter — an accented result (`"` then `o` → `ö`) or a
+    /// multi-character IME candidate falls through to native insertion.
+    private func commitMarkedText(
+        _ insertString: Any,
+        insertedText: String,
+        replacementRange: NSRange,
+        replacedSelection: NSAttributedString?
+    ) {
+        let marked = markedRange()
+        let nsString = string as NSString
+        guard insertedText.count == 1,
+              Self.isValid(marked, in: nsString),
+              marked.length > 0,
+              nsString.substring(with: marked) == insertedText,
+              let context = PairedDelimiterEditing.preCompositionContext(
+                  text: string,
+                  markedRange: marked,
+                  replacedSelection: replacedSelection?.string ?? ""
+              )
+        else {
+            super.insertText(insertString, replacementRange: replacementRange)
+            return
+        }
+
+        switch PairedDelimiterEditing.resolve(
+            insertedText: insertedText,
+            in: context.text,
+            selectedRange: context.selectedRange
+        ) {
+        case let .wrap(opening, closing):
+            let replacement = NSMutableAttributedString(
+                string: String(opening),
+                attributes: typingAttributes
+            )
+            if let replacedSelection {
+                replacement.append(replacedSelection)
+            }
+            replacement.append(NSAttributedString(
+                string: String(closing),
+                attributes: typingAttributes
+            ))
+            replaceMarkedText(with: replacement, markedRange: marked)
+            setSelectedRange(NSRange(
+                location: marked.location + 1,
+                length: context.selectedRange.length
+            ))
+
+        case let .insertPair(opening, closing):
+            replaceMarkedText(
+                with: NSAttributedString(
+                    string: String(opening) + String(closing),
+                    attributes: typingAttributes
+                ),
+                markedRange: marked
+            )
+            setSelectedRange(NSRange(location: marked.location + 1, length: 0))
+
+        case .stepOver:
+            replaceMarkedText(
+                with: NSAttributedString(string: "", attributes: typingAttributes),
+                markedRange: marked
+            )
+            setSelectedRange(NSRange(location: marked.location + 1, length: 0))
+
+        case .native:
+            super.insertText(insertString, replacementRange: replacementRange)
+        }
+    }
+
+    /// `NSTextView.unmarkText()` finalizes the composition by re-inserting the
+    /// marked characters through `insertText`, so the whole replacement has to
+    /// run with pairing suppressed or the placeholder pairs with itself.
+    private func replaceMarkedText(with replacement: NSAttributedString, markedRange: NSRange) {
+        performNativeTextInsertion {
+            unmarkText()
+            super.insertText(replacement, replacementRange: markedRange)
         }
     }
 
@@ -98,11 +211,19 @@ class PairedDelimiterTextView: NSTextView {
     }
 
     private static func isValid(_ range: NSRange, in storage: NSTextStorage) -> Bool {
+        isValid(range, length: storage.length)
+    }
+
+    private static func isValid(_ range: NSRange, in string: NSString) -> Bool {
+        isValid(range, length: string.length)
+    }
+
+    private static func isValid(_ range: NSRange, length: Int) -> Bool {
         range.location != NSNotFound
             && range.location >= 0
             && range.length >= 0
-            && range.location <= storage.length
-            && range.length <= storage.length - range.location
+            && range.location <= length
+            && range.length <= length - range.location
     }
 }
 
@@ -177,7 +298,6 @@ struct PairedTextField: NSViewRepresentable {
     static func dismantleNSView(_ field: PairedTextFieldBackingView, coordinator: Coordinator) {
         let window = field.window
         let editor = field.currentEditor()
-        coordinator.stopObservingUndoManager()
         field.onWindowChanged = nil
         field.delegate = nil
         field.target = nil
@@ -226,11 +346,6 @@ struct PairedTextField: NSViewRepresentable {
     @MainActor
     final class Coordinator: NSObject, NSTextFieldDelegate {
         var parent: PairedTextField
-        private var isApplyingPairedEdit = false
-        private var isApplyingNativePaste = false
-        private var isApplyingKeyboardTextInput = false
-        private weak var observedUndoManager: UndoManager?
-        private var undoObservers: [NSObjectProtocol] = []
 
         init(_ parent: PairedTextField) {
             self.parent = parent
@@ -254,102 +369,6 @@ struct PairedTextField: NSViewRepresentable {
             updateFocus(false)
         }
 
-        func control(
-            _ control: NSControl,
-            textView: NSTextView,
-            shouldChangeCharactersIn affectedCharRange: NSRange,
-            replacementString: String?
-        ) -> Bool {
-            guard !isApplyingPairedEdit,
-                  !isApplyingNativePaste,
-                  parent.isEnabled,
-                  !textView.hasMarkedText(),
-                  let replacementString,
-                  shouldApplyPairedDelimiterResolution(for: replacementString, event: NSApp.currentEvent)
-            else { return true }
-
-            switch PairedDelimiterEditing.resolve(
-                insertedText: replacementString,
-                in: textView.string,
-                selectedRange: affectedCharRange
-            ) {
-            case let .wrap(opening, closing):
-                guard let textStorage = textView.textStorage,
-                      Self.isValid(affectedCharRange, in: textStorage)
-                else { return true }
-
-                let replacement = NSMutableAttributedString(
-                    string: String(opening),
-                    attributes: textView.typingAttributes
-                )
-                replacement.append(textStorage.attributedSubstring(from: affectedCharRange))
-                replacement.append(NSAttributedString(
-                    string: String(closing),
-                    attributes: textView.typingAttributes
-                ))
-                observeUndoChanges(for: control as? NSTextField, textView: textView)
-                apply(replacement, to: textView, range: affectedCharRange)
-                textView.setSelectedRange(NSRange(
-                    location: affectedCharRange.location + 1,
-                    length: affectedCharRange.length
-                ))
-                return false
-
-            case let .insertPair(opening, closing):
-                let replacement = NSAttributedString(
-                    string: String(opening) + String(closing),
-                    attributes: textView.typingAttributes
-                )
-                observeUndoChanges(for: control as? NSTextField, textView: textView)
-                apply(replacement, to: textView, range: affectedCharRange)
-                textView.setSelectedRange(NSRange(location: affectedCharRange.location + 1, length: 0))
-                return false
-
-            case .stepOver:
-                textView.setSelectedRange(NSRange(location: affectedCharRange.location + 1, length: 0))
-                return false
-
-            case .native:
-                return true
-            }
-        }
-
-        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-            guard Self.nativePasteSelectors.contains(commandSelector) else { return false }
-            isApplyingNativePaste = true
-            defer {
-                isApplyingNativePaste = false
-                updateText(textView.string)
-            }
-            textView.paste(nil)
-            return true
-        }
-
-        func performKeyboardTextInsertion(_ insert: () -> Bool) -> Bool {
-            isApplyingKeyboardTextInput = true
-            defer { isApplyingKeyboardTextInput = false }
-            return insert()
-        }
-
-        func shouldApplyPairedDelimiterResolution(for replacementString: String, event: NSEvent?) -> Bool {
-            if isApplyingKeyboardTextInput {
-                return true
-            }
-            guard let event, event.type == .keyDown else {
-                return false
-            }
-
-            let commandModifiers: NSEvent.ModifierFlags = [.command, .control]
-            return event.modifierFlags.intersection(commandModifiers).isEmpty
-                && event.characters == replacementString
-        }
-
-        private static let nativePasteSelectors: Set<Selector> = [
-            #selector(NSText.paste(_:)),
-            #selector(NSTextView.pasteAsPlainText(_:)),
-            #selector(NSTextView.pasteAsRichText(_:)),
-        ]
-
         func synchronizeFocus(for field: NSTextField) {
             guard let binding = parent.isFocused, let window = field.window else { return }
             let editor = fieldEditor(for: field)
@@ -367,42 +386,6 @@ struct PairedTextField: NSViewRepresentable {
             field.currentEditor() as? NSTextView
         }
 
-        func stopObservingUndoManager() {
-            for observer in undoObservers {
-                NotificationCenter.default.removeObserver(observer)
-            }
-            undoObservers.removeAll()
-            observedUndoManager = nil
-        }
-
-        private func observeUndoChanges(for field: NSTextField?, textView: NSTextView) {
-            guard let field, let undoManager = textView.undoManager,
-                  observedUndoManager !== undoManager
-            else { return }
-
-            stopObservingUndoManager()
-            observedUndoManager = undoManager
-            for name in [Notification.Name.NSUndoManagerDidUndoChange, .NSUndoManagerDidRedoChange] {
-                undoObservers.append(NotificationCenter.default.addObserver(
-                    forName: name,
-                    object: undoManager,
-                    queue: .main
-                ) { [weak self, weak field] _ in
-                    MainActor.assumeIsolated {
-                        guard let self, let field else { return }
-                        let value = (field.currentEditor() as? NSTextView)?.string ?? field.stringValue
-                        self.updateText(value)
-                    }
-                })
-            }
-        }
-
-        private func apply(_ replacement: NSAttributedString, to textView: NSTextView, range: NSRange) {
-            isApplyingPairedEdit = true
-            defer { isApplyingPairedEdit = false }
-            textView.insertText(replacement, replacementRange: range)
-        }
-
         private func updateText(_ value: String) {
             if parent.text != value {
                 parent.text = value
@@ -413,14 +396,6 @@ struct PairedTextField: NSViewRepresentable {
             if let binding = parent.isFocused, binding.wrappedValue != value {
                 binding.wrappedValue = value
             }
-        }
-
-        private static func isValid(_ range: NSRange, in storage: NSTextStorage) -> Bool {
-            range.location != NSNotFound
-                && range.location >= 0
-                && range.length >= 0
-                && range.location <= storage.length
-                && range.length <= storage.length - range.location
         }
     }
 }
@@ -609,9 +584,28 @@ struct PairedTextEditor: NSViewRepresentable {
 final class PairedTextFieldBackingView: NSTextField {
     var onWindowChanged: (() -> Void)?
 
+    /// AppKit never routes a should-change-text callback to an `NSTextField`
+    /// delegate, so delimiter pairing has to live in the field editor itself.
+    override class var cellClass: AnyClass? {
+        get { PairedTextFieldCell.self }
+        set { super.cellClass = newValue }
+    }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         onWindowChanged?()
+    }
+}
+
+final class PairedTextFieldCell: NSTextFieldCell {
+    private lazy var pairedFieldEditor: PairedDelimiterTextView = {
+        let editor = PairedDelimiterTextView()
+        editor.isFieldEditor = true
+        return editor
+    }()
+
+    override func fieldEditor(for controlView: NSView) -> NSTextView? {
+        pairedFieldEditor
     }
 }
 

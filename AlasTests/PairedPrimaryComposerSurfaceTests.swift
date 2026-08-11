@@ -14,17 +14,12 @@ struct PairedPrimaryComposerSurfaceTests {
 
         let title = try #require(firstSubview(of: PairedTextFieldBackingView.self, in: controller.view))
         #expect(window.makeFirstResponder(title))
-        let titleEditor = try #require(window.fieldEditor(false, for: title) as? NSTextView)
-        let coordinator = try #require(title.delegate as? PairedTextField.Coordinator)
+        let titleEditor = try #require(title.currentEditor() as? PairedDelimiterTextView)
         titleEditor.setSelectedRange(NSRange(location: 0, length: model.title.utf16.count))
-        #expect(!coordinator.performKeyboardTextInsertion {
-            coordinator.control(
-                title,
-                textView: titleEditor,
-                shouldChangeCharactersIn: NSRange(location: 0, length: model.title.utf16.count),
-                replacementString: "`"
-            )
-        })
+        titleEditor.performKeyboardTextInsertion {
+            titleEditor.insertText("`", replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
+        await drain(controller.view)
         #expect(model.title == "`Review title`")
 
         let body = try #require(firstSubview(of: PairedDelimiterTextView.self, in: controller.view))
@@ -68,17 +63,11 @@ struct PairedPrimaryComposerSurfaceTests {
         let field = try #require(firstSubview(of: PairedTextFieldBackingView.self, in: controller.view))
         #expect(field.focusRingType == .default)
         #expect(window.makeFirstResponder(field))
-        let editor = try #require(window.fieldEditor(false, for: field) as? NSTextView)
-        let coordinator = try #require(field.delegate as? PairedTextField.Coordinator)
+        let editor = try #require(field.currentEditor() as? PairedDelimiterTextView)
         editor.setSelectedRange(NSRange(location: 0, length: 12))
-        #expect(!coordinator.performKeyboardTextInsertion {
-            coordinator.control(
-                field,
-                textView: editor,
-                shouldChangeCharactersIn: NSRange(location: 0, length: 12),
-                replacementString: "`"
-            )
-        })
+        editor.performKeyboardTextInsertion {
+            editor.insertText("`", replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
         await drain(controller.view)
 
         #expect(model.firstMessage == "`First commit`")

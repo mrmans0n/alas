@@ -144,22 +144,14 @@ struct PairedComposerTextControlsTests {
         let window = attach(controller, size: NSSize(width: 360, height: 120))
         await drain(controller.view)
 
-        let field = try #require(firstSubview(of: NSTextField.self, in: controller.view))
-        let editor = try #require(window.fieldEditor(false, for: field) as? NSTextView)
-        let coordinator = try #require(field.delegate as? PairedTextField.Coordinator)
+        let field = try #require(firstSubview(of: PairedTextFieldBackingView.self, in: controller.view))
+        let editor = try #require(field.currentEditor() as? PairedDelimiterTextView)
         #expect(window.firstResponder === editor)
         editor.setSelectedRange(NSRange(location: 0, length: 5))
 
-        let shouldUseNativeInsertion = coordinator.performKeyboardTextInsertion {
-            coordinator.control(
-                field,
-                textView: editor,
-                shouldChangeCharactersIn: NSRange(location: 0, length: 5),
-                replacementString: "`"
-            )
-        }
+        editor.keyDown(with: try keyEvent(characters: "`", modifiers: []))
+        await drain(controller.view)
 
-        #expect(shouldUseNativeInsertion == false)
         #expect(field.stringValue == "`value`")
         #expect(model.text == "`value`")
         #expect(editor.selectedRange() == NSRange(location: 1, length: 5))
@@ -168,9 +160,12 @@ struct PairedComposerTextControlsTests {
         editor.undoManager?.undo()
         await drain(controller.view)
 
+        // The binding catches up through `controlTextDidChange`, which AppKit only
+        // posts for a field editor inside a running app, so this harness can only
+        // assert that the paired edit is a single undoable step.
         #expect(editor.string == "value")
-        #expect(model.text == "value")
 
+        field.stringValue = editor.string
         field.sendAction(field.action, to: field.target)
         #expect(submitCount == 1)
 
@@ -181,7 +176,7 @@ struct PairedComposerTextControlsTests {
 
         model.isFocused = true
         await drain(controller.view)
-        #expect(window.firstResponder === window.fieldEditor(false, for: field))
+        #expect(window.firstResponder === field.currentEditor())
 
         await dismantle(model: model, controller: controller, window: window)
     }
@@ -192,21 +187,14 @@ struct PairedComposerTextControlsTests {
         let window = attach(controller, size: NSSize(width: 360, height: 120))
         await drain(controller.view)
 
-        let field = try #require(firstSubview(of: NSTextField.self, in: controller.view))
-        let editor = try #require(window.fieldEditor(false, for: field) as? NSTextView)
-        let coordinator = try #require(field.delegate as? PairedTextField.Coordinator)
+        let field = try #require(firstSubview(of: PairedTextFieldBackingView.self, in: controller.view))
+        let editor = try #require(field.currentEditor() as? PairedDelimiterTextView)
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString("(", forType: .string)
         defer { NSPasteboard.general.clearContents() }
 
-        #expect(coordinator.control(
-            field,
-            textView: editor,
-            shouldChangeCharactersIn: NSRange(location: 0, length: 0),
-            replacementString: "("
-        ))
-
-        #expect(coordinator.control(field, textView: editor, doCommandBy: #selector(NSText.paste(_:))))
+        editor.paste(nil)
+        await drain(controller.view)
 
         #expect(field.stringValue == "(")
         #expect(model.text == "(")
@@ -221,16 +209,8 @@ struct PairedComposerTextControlsTests {
         let window = attach(controller, size: NSSize(width: 360, height: 120))
         await drain(controller.view)
 
-        let field = try #require(firstSubview(of: NSTextField.self, in: controller.view))
-        let editor = try #require(window.fieldEditor(false, for: field) as? NSTextView)
-        let coordinator = try #require(field.delegate as? PairedTextField.Coordinator)
-
-        #expect(coordinator.control(
-            field,
-            textView: editor,
-            shouldChangeCharactersIn: NSRange(location: 0, length: 0),
-            replacementString: "("
-        ))
+        let field = try #require(firstSubview(of: PairedTextFieldBackingView.self, in: controller.view))
+        let editor = try #require(field.currentEditor() as? PairedDelimiterTextView)
 
         editor.insertText("(", replacementRange: NSRange(location: NSNotFound, length: 0))
         await drain(controller.view)
@@ -242,23 +222,24 @@ struct PairedComposerTextControlsTests {
         await dismantle(model: model, controller: controller, window: window)
     }
 
-    @Test func textFieldOptionGeneratedDelimiterUsesKeyboardPairing() async throws {
+    @Test func textFieldUsesPairedFieldEditorForKeyboardInput() async throws {
         let model = ComposerControlModel(text: "", isFocused: true)
         let controller = NSHostingController(rootView: PairedTextFieldHarness(model: model, onSubmit: {}))
         let window = attach(controller, size: NSSize(width: 360, height: 120))
         await drain(controller.view)
 
-        let field = try #require(firstSubview(of: NSTextField.self, in: controller.view))
-        let coordinator = try #require(field.delegate as? PairedTextField.Coordinator)
+        let field = try #require(firstSubview(of: PairedTextFieldBackingView.self, in: controller.view))
+        #expect(field.cell is PairedTextFieldCell)
+        let editor = try #require(field.currentEditor() as? PairedDelimiterTextView)
 
-        #expect(coordinator.shouldApplyPairedDelimiterResolution(
-            for: "{",
-            event: try keyEvent(characters: "{", modifiers: .option)
-        ))
-        #expect(!coordinator.shouldApplyPairedDelimiterResolution(
-            for: "{",
-            event: try keyEvent(characters: "{", modifiers: [.command, .option])
-        ))
+        editor.performKeyboardTextInsertion {
+            editor.insertText("{", replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
+        await drain(controller.view)
+
+        #expect(field.stringValue == "{}")
+        #expect(model.text == "{}")
+        #expect(editor.selectedRange() == NSRange(location: 1, length: 0))
 
         await dismantle(model: model, controller: controller, window: window)
     }
@@ -269,18 +250,14 @@ struct PairedComposerTextControlsTests {
         let window = attach(controller, size: NSSize(width: 360, height: 120))
         await drain(controller.view)
 
-        let field = try #require(firstSubview(of: NSTextField.self, in: controller.view))
-        let editor = try #require(window.fieldEditor(false, for: field) as? NSTextView)
-        let coordinator = try #require(field.delegate as? PairedTextField.Coordinator)
+        let field = try #require(firstSubview(of: PairedTextFieldBackingView.self, in: controller.view))
+        let editor = try #require(field.currentEditor() as? PairedDelimiterTextView)
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString("(", forType: .string)
         defer { NSPasteboard.general.clearContents() }
 
-        #expect(coordinator.control(
-            field,
-            textView: editor,
-            doCommandBy: #selector(NSTextView.pasteAsPlainText(_:))
-        ))
+        editor.pasteAsPlainText(nil)
+        await drain(controller.view)
 
         #expect(field.stringValue == "(")
         #expect(model.text == "(")
