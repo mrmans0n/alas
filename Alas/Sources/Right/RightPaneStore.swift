@@ -367,7 +367,7 @@ final class RightPaneStore {
     ) -> Task<Void, Never>? {
         var activeRefresh: Task<Void, Never>?
         for state in affectedStates {
-            let shouldRefresh = state.worktree.id == activeId && state.ggContext.isActive
+            let shouldRefresh = state.worktree.id == activeId
             if let task = state.invalidateGGPresentation(startingRefresh: shouldRefresh) {
                 activeRefresh = task
             }

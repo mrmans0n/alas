@@ -1916,6 +1916,57 @@ struct RightPaneGGStackTests {
         #expect(GGStackSummaryStore.shared.summaries[worktree.path.path] == nil)
     }
 
+    @Test func activeHeadInvalidationReplacesInFlightColdDetachedRecovery() async throws {
+        let worktree = makeWorktree()
+        defer { GGStackSummaryStore.shared.summaries[worktree.path.path] = nil }
+        let staleSnapshot = GGStackModelsTests.fixture.replacingOccurrences(
+            of: "agent-inbox",
+            with: "stale-stack"
+        )
+        let runner = ControlledStackGGRunner(
+            stackResults: [
+                ("stale-stack", ProcessResult(exitCode: 0, stdout: staleSnapshot, stderr: "")),
+                ("agent-inbox", ProcessResult(
+                    exitCode: 0,
+                    stdout: GGStackModelsTests.fixture,
+                    stderr: ""
+                )),
+            ],
+            suspendedCalls: [1]
+        )
+        let store = RightPaneStore()
+        let state = store.state(for: worktree, baseBranch: "main", comparisonMode: .manual)
+        state.stop()
+        installFakeGGStackLoader(on: state)
+        state.ggService = GGService(runner: runner)
+        state.ggContextProvider = { _ in
+            .inactive(reason: .branchPrefixMismatch(expectedPrefix: "nacho/"))
+        }
+        state.seedGGContext(branch: "")
+
+        let initialRefresh = state.reevaluateGGGate()
+        await runner.waitUntilCall(1)
+        #expect(state.ggStackLoadState == .loading)
+
+        let replacementRefresh = store.refreshActiveGGPresentationForHeadUpdates(
+            projectId: worktree.projectId,
+            worktreePaths: [worktree.path]
+        )
+        await runner.complete(call: 1)
+        await initialRefresh.value
+        for _ in 0..<500 where await runner.lsCallCount < 2 {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        await replacementRefresh?.value
+
+        #expect(await runner.lsCallCount == 2)
+        #expect(state.ggContext == .active(stackName: "agent-inbox"))
+        #expect(state.ggStack?.name == "agent-inbox")
+        #expect(state.ggStackLoadState == .loaded)
+        #expect(state.ggStackDisplayCommits.map(\.shortSha) == ["ccccccc", "bbbbbbb", "aaaaaaa"])
+        #expect(state.ggStackCommitsKey != nil)
+    }
+
     @Test func cancelledSameKeyReloadRestoresPreviousStableStack() async throws {
         let worktree = makeWorktree()
         defer { GGStackSummaryStore.shared.summaries[worktree.path.path] = nil }
