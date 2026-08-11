@@ -108,7 +108,9 @@ struct ProjectsManagerHeadUpdatesTests {
                 projectId: project.id,
                 message: "x",
                 base: "main",
-                ggWorktreeMode: .inherit
+                ggWorktreeMode: .inherit,
+                launchSurface: .none,
+                issueAttachment: nil
             )
         )
 

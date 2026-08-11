@@ -328,7 +328,9 @@ struct CenterSelectionStateResolverTests {
                 projectId: project.id,
                 message: "disk full",
                 base: "main",
-                ggWorktreeMode: .inherit
+                ggWorktreeMode: .inherit,
+                launchSurface: .none,
+                issueAttachment: nil
             )
         )
         let resolver = CenterSelectionStateResolver(

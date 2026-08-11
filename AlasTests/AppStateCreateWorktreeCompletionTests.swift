@@ -37,7 +37,14 @@ struct AppStateCreateWorktreeCompletionTests {
             id: "pending",
             maxPolls: 1,
             operationState: {
-                .createFailed(projectId: "project", message: "branch exists", base: "main", ggWorktreeMode: .inherit)
+                .createFailed(
+                    projectId: "project",
+                    message: "branch exists",
+                    base: "main",
+                    ggWorktreeMode: .inherit,
+                    launchSurface: .none,
+                    issueAttachment: nil
+                )
             },
             worktree: { nil },
             sleep: {}
@@ -52,7 +59,9 @@ struct AppStateCreateWorktreeCompletionTests {
             projectId: "project",
             message: "connection lost",
             base: "main",
-            ggWorktreeMode: .inherit
+            ggWorktreeMode: .inherit,
+            launchSurface: .none,
+            issueAttachment: nil
         )
         var reconciled: Worktree?
 

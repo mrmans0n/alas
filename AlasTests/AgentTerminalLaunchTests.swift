@@ -231,8 +231,8 @@ struct AgentTerminalLaunchTests {
 
         #expect(capturedSuffix == [
             "A='two words' TOKEN='abc'\\''123' '/Applications/Auth CLI/bin/node' '/opt/claude agent/acp' --cli",
-            "status=$?",
-            "exit \"$status\"",
+            "exit_code=$?",
+            "exit \"$exit_code\"",
         ].joined(separator: "\n"))
         #expect(capturedIncludeUserStartupScript == false)
         #expect(capturedInheritParentEnv == true)

@@ -3600,6 +3600,17 @@ struct DiffReviewSurfaceTests {
     }
 
     @Test func surfacePassesFeedbackToMatchingFileOnly() {
+        let originalOverride = AppKitDiffScrollerFlag.readOverride(from: .standard)
+        defer {
+            if let originalOverride {
+                AppKitDiffScrollerFlag.setOverride(originalOverride)
+            } else {
+                UserDefaults.standard.removeObject(forKey: AppKitDiffScrollerFlag.defaultsKey)
+                NotificationCenter.default.post(name: AppKitDiffScrollerFlag.overrideDidChangeNotification, object: nil)
+            }
+        }
+        AppKitDiffScrollerFlag.setOverride(false)
+
         let first = summary(path: "Sources/App.swift")
         let second = summary(path: "Sources/Other.swift")
         let session = loadedSession(summaries: [first, second])

@@ -673,7 +673,9 @@ struct MissionCoordinatorTests {
                 projectId: project.id,
                 message: "branch exists",
                 base: Self.draft.baseRef,
-                ggWorktreeMode: .off
+                ggWorktreeMode: .off,
+                launchSurface: .none,
+                issueAttachment: nil
             )
         )
 

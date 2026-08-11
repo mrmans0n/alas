@@ -169,8 +169,9 @@ struct SidebarView: View {
                                             branch: wt.branch,
                                             destination: wt.path,
                                             runStartup: false,
-                                            launchSurface: .none,
-                                            ggWorktreeMode: retry.ggWorktreeMode
+                                            launchSurface: retry.launchSurface,
+                                            ggWorktreeMode: retry.ggWorktreeMode,
+                                            issueAttachment: retry.issueAttachment
                                         )
                                     }
                                 },
@@ -269,11 +270,16 @@ struct SidebarView: View {
     nonisolated static func retryCreateParameters(
         operationState: WorktreeOperationState?,
         defaultBase: String
-    ) -> (base: String, ggWorktreeMode: GGWorktreeMode) {
-        guard case .createFailed(_, _, let base, let ggWorktreeMode) = operationState else {
-            return (defaultBase, .inherit)
+    ) -> (
+        base: String,
+        ggWorktreeMode: GGWorktreeMode,
+        launchSurface: WorktreeLaunchSurface,
+        issueAttachment: IssueAttachment?
+    ) {
+        guard case .createFailed(_, _, let base, let ggWorktreeMode, let launchSurface, let issueAttachment) = operationState else {
+            return (defaultBase, .inherit, .none, nil)
         }
-        return (base, ggWorktreeMode)
+        return (base, ggWorktreeMode, launchSurface, issueAttachment)
     }
 
     nonisolated static func effectiveSelectedWorktreeId(

@@ -38,6 +38,9 @@ struct NewWorktreeDialog: View {
     @State private var isLoadingBranches = false
     @State private var branchLoadError: String?
     @State private var createErrorMessage: String?
+    @State private var issueState = NewWorktreeIssueState()
+    @State private var issueSheetPresentation: AttachIssuePresentation?
+    @State private var issueDrivenProjectChangeID: String?
 
     @Environment(\.theme) var theme
 
@@ -126,6 +129,7 @@ struct NewWorktreeDialog: View {
                 if let validationMessage = branchValidationMessage, activeName != state.config.worktrees.branchPrefix {
                     Text(validationMessage).font(.system(size: 11)).foregroundColor(.red)
                 }
+                issueAttachmentSection
                 DialogField(label: "Open after create") {
                     HStack(spacing: 8) {
                         launchSurfaceSegmented
@@ -172,9 +176,16 @@ struct NewWorktreeDialog: View {
             applyLaunchDefaults(for: projectId)
             loadBranchesForSelectedProject()
         }
-        .onChange(of: projectId) { _, _ in
+        .onChange(of: projectId) { _, newProjectId in
+            let shouldApplyLaunchDefaults = Self.appliesLaunchDefaultsAfterProjectChange(
+                projectID: newProjectId,
+                issueDrivenProjectID: issueDrivenProjectChangeID
+            )
+            issueDrivenProjectChangeID = nil
             applyGGModeDefault(for: projectId)
-            applyLaunchDefaults(for: projectId)
+            if shouldApplyLaunchDefaults {
+                applyLaunchDefaults(for: projectId)
+            }
             // Seed the base for the new project synchronously so the picker
             // never shows the previous project's value; the async branch load
             // refines it (guarded: it skips pinned bases and user edits).
@@ -200,6 +211,14 @@ struct NewWorktreeDialog: View {
                 branch: branch,
                 branchPrefix: state.config.worktrees.branchPrefix,
                 currentStackName: stackName
+            )
+        }
+        .sheet(item: $issueSheetPresentation) { presentation in
+            AttachIssueDialog(
+                environment: attachIssueEnvironment(),
+                initialDraft: presentation.draft,
+                onCancel: { issueSheetPresentation = nil },
+                onAttach: attachIssue
             )
         }
     }
@@ -323,6 +342,15 @@ struct NewWorktreeDialog: View {
         return resolved.flatMap { state.agent(id: $0.agentId) }
     }
 
+    private var currentLaunchPreference: NewWorktreeLaunchPreference {
+        .init(
+            openAfterCreate: openAfterCreate,
+            launchMode: launchMode,
+            persistableLaunchMode: persistableLaunchMode,
+            launchAgentID: launchAgentId
+        )
+    }
+
     private var renderedPath: String {
         guard let project = state.projects.first(where: { $0.id == projectId }) else { return "" }
         return WorktreePathTemplateRenderer.render(
@@ -390,6 +418,63 @@ struct NewWorktreeDialog: View {
         )
     }
 
+    private func attachIssueEnvironment() -> AttachIssueDialogModel.Environment {
+        .init(
+            resolve: { reference in
+                try await state.makeIssueResolver(selectedProjectID: projectId).resolve(reference)
+            },
+            projects: { state.projects },
+            configuredBranchPrefix: { _ in state.config.worktrees.branchPrefix }
+        )
+    }
+
+    private func attachIssue(_ draft: AttachedIssueDraft) {
+        let shouldApplyParentFields = Self.appliesParentFieldsAfterIssueAttach(existingDraft: issueState.draft)
+        let effects = issueState.attach(draft, currentLaunch: currentLaunchPreference)
+        guard shouldApplyParentFields else {
+            issueSheetPresentation = nil
+            createErrorMessage = nil
+            return
+        }
+        let resolvedProjectID = Self.projectIDAfterIssueAttach(
+            preferredProjectID: effects.preferredProjectID,
+            currentProjectID: projectId,
+            availableProjectIDs: state.projects.map(\.id)
+        )
+        if projectId != resolvedProjectID {
+            issueDrivenProjectChangeID = resolvedProjectID
+            projectId = resolvedProjectID
+            applyGGModeDefault(for: resolvedProjectID)
+            base = stackPinnedBase ?? state.config.worktrees.baseBranch
+            loadBranchesForSelectedProject()
+        }
+        let names = Self.namesAfterIssueAttach(
+            branchSeed: effects.branchSeed,
+            createsGGStack: createsGGStack,
+            branch: branch,
+            stackName: stackName
+        )
+        branch = names.branch
+        stackName = names.stackName
+        if effects.shouldSelectChat, acpSegmentEnabled {
+            openAfterCreate = true
+            launchMode = .acp
+            persistableLaunchMode = .acp
+            launchAgentId = Self.issueLaunchAgent(from: state.agentRegistry.enabled())
+        }
+        issueSheetPresentation = nil
+        createErrorMessage = nil
+    }
+
+    private func removeIssue() {
+        if let preference = issueState.remove() {
+            openAfterCreate = preference.openAfterCreate
+            launchMode = preference.launchMode
+            persistableLaunchMode = preference.persistableLaunchMode
+            launchAgentId = preference.launchAgentID
+        }
+    }
+
     private func applyGGModeDefault(for selectedProjectId: String) {
         guard let project = state.projects.first(where: { $0.id == selectedProjectId }) else {
             ggMode = .off
@@ -404,22 +489,25 @@ struct NewWorktreeDialog: View {
     private func create() {
         guard let project = state.projects.first(where: { $0.id == projectId }) else { return }
         let dest = URL(fileURLWithPath: renderedPath)
-        let surface: WorktreeLaunchSurface
-        if !openAfterCreate {
-            surface = .none
-        } else {
-            switch launchMode {
-            case .terminal:
-                surface = .terminal(agentId: launchAgentId == "none" ? nil : launchAgentId)
-            case .acp:
-                guard launchAgentId != "none" else {
-                    // Defensive: confirm button should already be disabled.
-                    createErrorMessage = "Pick an ACP-capable agent for the chat session."
-                    return
-                }
-                surface = .acp(agentId: launchAgentId)
-            }
+        let issueDraft = issueState.draft
+        guard launchMode != .acp || !openAfterCreate || launchAgentId != "none" else {
+            // Defensive: confirm button should already be disabled.
+            createErrorMessage = "Pick an ACP-capable agent for the chat session."
+            return
         }
+        let surface = Self.launchSurfaceForCreate(
+            openAfterCreate: openAfterCreate,
+            launchMode: launchMode,
+            launchAgentId: launchAgentId,
+            issueDraft: issueDraft,
+            makePreparedPrompt: { prompt in
+                PreparedWorktreeACPPrompt(
+                    sessionID: UUID().uuidString,
+                    promptID: UUID(),
+                    text: prompt
+                )
+            }
+        )
         Task { @MainActor in
             let id = await state.createWorktree(
                 projectId: project.id,
@@ -428,7 +516,8 @@ struct NewWorktreeDialog: View {
                 destination: dest,
                 runStartup: runStartup,
                 launchSurface: surface,
-                ggWorktreeMode: ggMode
+                ggWorktreeMode: ggMode,
+                issueAttachment: issueDraft?.attachment
             )
             guard !id.isEmpty else {
                 createErrorMessage = "A worktree already exists at this path."
@@ -595,6 +684,70 @@ struct NewWorktreeDialog: View {
         return availableBranches.first ?? configuredDefault
     }
 
+    nonisolated static func projectIDAfterIssueAttach(
+        preferredProjectID: String?,
+        currentProjectID: String,
+        availableProjectIDs: [String]
+    ) -> String {
+        guard let preferredProjectID,
+              availableProjectIDs.contains(preferredProjectID)
+        else { return currentProjectID }
+        return preferredProjectID
+    }
+
+    nonisolated static func namesAfterIssueAttach(
+        branchSeed: String,
+        createsGGStack: Bool,
+        branch: String,
+        stackName: String
+    ) -> (branch: String, stackName: String) {
+        if createsGGStack {
+            return (branch, branchSeed)
+        }
+        return (branchSeed, stackName)
+    }
+
+    nonisolated static func issueLaunchAgent(from agents: [AgentDefinition]) -> String {
+        acpCapableAgents(from: agents).first?.id ?? "none"
+    }
+
+    nonisolated static func issuePromptForLaunch(
+        draft: AttachedIssueDraft?,
+        openAfterCreate: Bool,
+        launchMode: AppConfig.LauncherMode
+    ) -> String? {
+        guard openAfterCreate, launchMode == .acp else { return nil }
+        return draft?.prompt
+    }
+
+    nonisolated static func launchSurfaceForCreate(
+        openAfterCreate: Bool,
+        launchMode: AppConfig.LauncherMode,
+        launchAgentId: String,
+        issueDraft: AttachedIssueDraft?,
+        makePreparedPrompt: (String) -> PreparedWorktreeACPPrompt
+    ) -> WorktreeLaunchSurface {
+        guard openAfterCreate else { return .none }
+        switch launchMode {
+        case .terminal:
+            return .terminal(agentId: launchAgentId == "none" ? nil : launchAgentId)
+        case .acp:
+            let preparedPrompt = issueDraft.map { makePreparedPrompt($0.prompt) }
+            return .acp(agentId: launchAgentId, preparedPrompt: preparedPrompt)
+        }
+    }
+
+    nonisolated static func appliesParentFieldsAfterIssueAttach(existingDraft: AttachedIssueDraft?) -> Bool {
+        existingDraft == nil
+    }
+
+    nonisolated static func appliesLaunchDefaultsAfterProjectChange(
+        projectID: String,
+        issueDrivenProjectID: String?
+    ) -> Bool {
+        issueDrivenProjectID != projectID
+    }
+
     nonisolated static let ggModeSegments: [NewWorktreeGGModeSegment] = [
         .init(mode: .on, label: "On", icon: .stack),
         .init(mode: .off, label: "Off", icon: .disabled),
@@ -617,6 +770,46 @@ struct NewWorktreeDialog: View {
         }
     }
 
+    private var issueAttachmentSection: some View {
+        Group {
+            if let draft = issueState.draft {
+                HStack(spacing: 8) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Issue")
+                            .font(.system(size: 11.5, weight: .medium))
+                            .foregroundColor(theme.color("fg-muted"))
+                        Text(draft.attachment.displayTitle)
+                            .font(.system(size: 12))
+                            .foregroundColor(theme.color("fg"))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    Spacer(minLength: 8)
+                    AlasButton(title: "Edit", style: .subtle) {
+                        issueSheetPresentation = AttachIssuePresentation(draft: draft)
+                    }
+                    AlasButton(title: "Remove", style: .subtle, action: removeIssue)
+                    AlasButton(title: "Open", style: .subtle) {
+                        NSWorkspace.shared.open(draft.attachment.canonicalURL)
+                    }
+                }
+                .padding(8)
+                .background(theme.color("bg-0"))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .strokeBorder(theme.color("line"), lineWidth: 0.5)
+                )
+            } else {
+                HStack {
+                    AlasButton(title: "Attach issue...", style: .subtle) {
+                        issueSheetPresentation = AttachIssuePresentation(draft: nil)
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+        }
+    }
+
     // MARK: - Launch surface UI
 
     private var pickerAgents: [AgentDefinition] {
@@ -632,7 +825,7 @@ struct NewWorktreeDialog: View {
     }
 
     private var launchAgentPicker: some View {
-        Picker("", selection: $launchAgentId) {
+        Picker("", selection: launchAgentSelection) {
             if launchMode == .terminal {
                 Text("None").tag("none")
             }
@@ -648,6 +841,16 @@ struct NewWorktreeDialog: View {
         .pickerStyle(.menu)
         .labelsHidden()
         .fixedSize()
+    }
+
+    private var launchAgentSelection: Binding<String> {
+        Binding(
+            get: { launchAgentId },
+            set: { newValue in
+                launchAgentId = newValue
+                issueState.recordLaunchPreferenceChangeAfterAttach()
+            }
+        )
     }
 
     private var launchSurfaceSegmented: some View {
@@ -700,6 +903,7 @@ struct NewWorktreeDialog: View {
                 enabledAgents: state.agentRegistry.enabled()
             )
         }
+        issueState.recordLaunchPreferenceChangeAfterAttach()
     }
 
     // MARK: - Launch surface helpers

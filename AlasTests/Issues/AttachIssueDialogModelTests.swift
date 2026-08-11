@@ -144,6 +144,41 @@ struct AttachIssueDialogModelTests {
         #expect(!model.prompt.contains("Keep this only for the first issue."))
     }
 
+    @Test("reopened generated drafts keep generated prompt ownership")
+    func reopenedGeneratedDraftsKeepGeneratedPromptOwnership() {
+        let source = Fixture.resolvedIssue().source
+        let draft = AttachedIssueDraft(
+            source: source,
+            projectID: "alas",
+            branchSeed: "feature/42-fix-offline-sync-conflicts",
+            prompt: IssuePromptBuilder.build(source: source)
+        )
+        let model = AttachIssueDialogModel(environment: Fixture().environment, initialDraft: draft)
+
+        model.title = "Fix reopened issue"
+        model.context = "Use the updated reopened context."
+
+        #expect(model.prompt.contains("Fix reopened issue"))
+        #expect(model.prompt.contains("Use the updated reopened context."))
+    }
+
+    @Test("reopened custom drafts keep user prompt ownership")
+    func reopenedCustomDraftsKeepUserPromptOwnership() {
+        let source = Fixture.resolvedIssue().source
+        let draft = AttachedIssueDraft(
+            source: source,
+            projectID: "alas",
+            branchSeed: "feature/42-fix-offline-sync-conflicts",
+            prompt: "Keep this reopened custom prompt."
+        )
+        let model = AttachIssueDialogModel(environment: Fixture().environment, initialDraft: draft)
+
+        model.title = "Fix reopened issue"
+        model.context = "Use the updated reopened context."
+
+        #expect(model.prompt == "Keep this reopened custom prompt.")
+    }
+
     @Test("changing input rejects a stale generation")
     func rejectsStaleGenerationAfterInputChange() async {
         let fixture = Fixture(suspendResolution: true)

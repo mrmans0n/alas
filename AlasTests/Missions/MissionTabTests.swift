@@ -267,7 +267,9 @@ struct MissionTabTests {
                 projectId: fixture.worktree.projectId,
                 message: "branch exists",
                 base: "origin/main",
-                ggWorktreeMode: .off
+                ggWorktreeMode: .off,
+                launchSurface: .none,
+                issueAttachment: nil
             )
         )
         await fixture.state.missions.load()
