@@ -139,6 +139,7 @@ struct DialogHeaderIconButton: View {
         .padding(.top, -4)
         .onHover { hovering = $0 }
         .help(tooltip)
+        .accessibilityLabel(tooltip)
     }
 }
 
