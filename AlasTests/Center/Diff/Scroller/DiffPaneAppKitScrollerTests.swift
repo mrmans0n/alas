@@ -83,6 +83,7 @@ struct DiffPaneAppKitScrollerTests {
         layout: Binding<DiffLayoutMode>,
         wrap: Binding<Bool>,
         whitespace: Binding<Bool>,
+        verticalScrollMode: DiffPaneVerticalScrollMode = .internalScroll,
         onReviewLineSelected: @escaping (DiffReviewLineAnchor) -> Void = { _ in }
     ) -> some View {
         DiffPaneView(
@@ -94,6 +95,7 @@ struct DiffPaneAppKitScrollerTests {
             codeFontFamily: "",
             codeFontSize: 13,
             showsToolbar: false,
+            verticalScrollMode: verticalScrollMode,
             onReviewLineSelected: onReviewLineSelected,
             hunkActions: { _ in DiffPaneHunkActions(stage: {}, discard: {}) }
         )
@@ -138,25 +140,10 @@ struct DiffPaneAppKitScrollerTests {
         view.layoutSubtreeIfNeeded()
     }
 
-    @Test("only internally scrolling panes switch to AppKit")
-    func switchContract() {
-        #expect(DiffPaneView.usesAppKitScroller(flagEnabled: true, verticalScrollMode: .internalScroll))
-        #expect(!DiffPaneView.usesAppKitScroller(flagEnabled: false, verticalScrollMode: .internalScroll))
-        #expect(!DiffPaneView.usesAppKitScroller(flagEnabled: true, verticalScrollMode: .staticHeight))
-    }
-
-    @Test("mounted AppKit pane retains standalone diff interactions")
+    @Test("mounted pane ignores the stale AppKit scroller preference")
     func mountedPaneInteractions() throws {
-        let originalOverride = AppKitDiffScrollerFlag.readOverride(from: .standard)
-        defer {
-            if let originalOverride {
-                AppKitDiffScrollerFlag.setOverride(originalOverride)
-            } else {
-                UserDefaults.standard.removeObject(forKey: AppKitDiffScrollerFlag.defaultsKey)
-                NotificationCenter.default.post(name: AppKitDiffScrollerFlag.overrideDidChangeNotification, object: nil)
-            }
-        }
-        AppKitDiffScrollerFlag.setOverride(true)
+        UserDefaults.standard.set(false, forKey: "alas.diff.appKitScroller")
+        defer { UserDefaults.standard.removeObject(forKey: "alas.diff.appKitScroller") }
         let state = DiffPaneHarnessState(layout: .split, wrap: false, whitespace: false)
         var selectedAnchor: DiffReviewLineAnchor?
         let mounted = mount(DiffPaneHarness(
@@ -198,7 +185,6 @@ struct DiffPaneAppKitScrollerTests {
         state.layout = .stacked
         state.wrap = true
         state.whitespace = true
-        AppKitDiffScrollerFlag.setOverride(true)
         settle(mounted.1.view)
 
         #expect(appKitScroller(in: mounted.1.view) != nil)
@@ -208,18 +194,8 @@ struct DiffPaneAppKitScrollerTests {
         #expect(renderedText(in: mounted.1.view).contains { $0.contains("let·value1·=·1") })
     }
 
-    @Test("AppKit hosts stay bounded and rebuild after a flag change")
-    func hostsAreBoundedAndFlagChangeRetainsBindings() throws {
-        let originalOverride = AppKitDiffScrollerFlag.readOverride(from: .standard)
-        defer {
-            if let originalOverride {
-                AppKitDiffScrollerFlag.setOverride(originalOverride)
-            } else {
-                UserDefaults.standard.removeObject(forKey: AppKitDiffScrollerFlag.defaultsKey)
-                NotificationCenter.default.post(name: AppKitDiffScrollerFlag.overrideDidChangeNotification, object: nil)
-            }
-        }
-        AppKitDiffScrollerFlag.setOverride(true)
+    @Test("AppKit hosts stay bounded for large standalone diffs")
+    func hostsStayBounded() throws {
         var layout = DiffLayoutMode.stacked
         var wrap = true
         var whitespace = true
@@ -232,24 +208,25 @@ struct DiffPaneAppKitScrollerTests {
         ))
         defer { DiffPaneHarnessRetainer.retain(mounted.0, mounted.1) }
 
-        let initialScroller = try #require(appKitScroller(in: mounted.1.view))
+        _ = try #require(appKitScroller(in: mounted.1.view))
         let hostCount = allSubviews(of: mounted.1.view).filter { $0 is AppKitDiffRowHostingView }.count
         #expect(hostCount > 0)
         #expect(hostCount < sourceModel.groups.count)
-
-        AppKitDiffScrollerFlag.setOverride(false)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-        mounted.1.view.layoutSubtreeIfNeeded()
-        #expect(appKitScroller(in: mounted.1.view) == nil)
-
-        AppKitDiffScrollerFlag.setOverride(true)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-        mounted.1.view.layoutSubtreeIfNeeded()
-        let rebuiltScroller = try #require(appKitScroller(in: mounted.1.view))
-        #expect(ObjectIdentifier(rebuiltScroller) != ObjectIdentifier(initialScroller))
-        #expect(layout == .stacked)
-        #expect(wrap)
-        #expect(whitespace)
         #expect(renderedText(in: mounted.1.view).contains { $0.contains("source·model·survives·rebuild") })
+    }
+
+    @Test("static-height pane renders its diff without an AppKit vertical scroller")
+    func staticHeightPaneStaysInSwiftUI() {
+        let mounted = mount(pane(
+            model: model(sourceMarker: "static height content"),
+            layout: .constant(.stacked),
+            wrap: .constant(false),
+            whitespace: .constant(false),
+            verticalScrollMode: .staticHeight
+        ))
+        defer { DiffPaneHarnessRetainer.retain(mounted.0, mounted.1) }
+
+        #expect(appKitScroller(in: mounted.1.view) == nil)
+        #expect(renderedText(in: mounted.1.view).contains { $0.contains("static height content") })
     }
 }

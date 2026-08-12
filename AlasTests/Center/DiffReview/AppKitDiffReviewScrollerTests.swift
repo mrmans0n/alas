@@ -3,11 +3,6 @@ import Testing
 
 @Suite("AppKitDiffReviewScroller")
 struct AppKitDiffReviewScrollerTests {
-    @Test func switchFollowsRuntimeFlag() {
-        #expect(DiffReviewSurface.usesAppKitScroller(flagEnabled: true))
-        #expect(!DiffReviewSurface.usesAppKitScroller(flagEnabled: false))
-    }
-
     @Test func fileCommandsTargetHeadersAtTop() {
         let fileID = fileID()
         let headerID = AppKitDiffReviewRowID.header(fileID: fileID)

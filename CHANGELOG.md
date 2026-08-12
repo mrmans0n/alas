@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### ✨ Features
+
+- Make AppKit diff scrolling the production implementation across diff, review, and split-preview panes.
+
 ## [0.14.8] - 2026-08-11
 
 ### ✨ Features

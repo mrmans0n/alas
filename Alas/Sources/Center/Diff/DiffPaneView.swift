@@ -564,7 +564,6 @@ struct DiffPaneView: View {
     @Environment(\.theme) private var theme
     @State private var presentationState = DiffPanePresentationState()
     @State private var staticRowsWidth: CGFloat = 0
-    @State private var appKitScrollerEnabled = AppKitDiffScrollerFlag.isEnabled
     @State private var activeThreadReplanGeneration = 0
 
     init(
@@ -632,7 +631,6 @@ struct DiffPaneView: View {
                     toolbar
                 }
                 diffBody
-                    .id(appKitScrollerEnabled)
             }
             .frame(
                 maxWidth: .infinity,
@@ -641,38 +639,16 @@ struct DiffPaneView: View {
             )
             .background(theme.color("bg-1"))
         }
-        .onReceive(
-            NotificationCenter.default.publisher(for: AppKitDiffScrollerFlag.overrideDidChangeNotification)
-        ) { _ in
-            let flagEnabled = AppKitDiffScrollerFlag.isEnabled
-            guard flagEnabled != appKitScrollerEnabled else { return }
-            presentationState = DiffPanePresentationState()
-            appKitScrollerEnabled = flagEnabled
-        }
         .onReceive(presentationState.$activeThreadID) { _ in
             activeThreadReplanGeneration &+= 1
         }
-    }
-
-    nonisolated static func usesAppKitScroller(
-        flagEnabled: Bool,
-        verticalScrollMode: DiffPaneVerticalScrollMode
-    ) -> Bool {
-        guard flagEnabled else { return false }
-        if case .internalScroll = verticalScrollMode {
-            return true
-        }
-        return false
     }
 
     @ViewBuilder
     private var diffBody: some View {
         let _ = activeThreadReplanGeneration
         let input = synchronizedRowPlanInput()
-        if Self.usesAppKitScroller(
-            flagEnabled: appKitScrollerEnabled,
-            verticalScrollMode: verticalScrollMode
-        ) {
+        if verticalScrollMode == .internalScroll {
             let fusionStates = resolvedHunkFusionStates
             let plan = DiffPaneRowPlanBuilder.build(input: input, state: presentationState)
                 .withContentInsets(.init(
@@ -687,14 +663,6 @@ struct DiffPaneView: View {
                 onActiveOwnerChange: { _ in },
                 onScrollRequestCompletion: { _ in }
             )
-        } else if verticalScrollMode == .internalScroll {
-            GeometryReader { proxy in
-                ScrollView(.vertical) {
-                    lazyRowsStack
-                        .frame(minWidth: proxy.size.width, alignment: .topLeading)
-                }
-                .defaultScrollAnchor(.topLeading)
-            }
         } else {
             staticRowsStack
                 .background(
@@ -715,6 +683,16 @@ struct DiffPaneView: View {
                     idealHeight: staticRowsEstimatedHeight,
                     alignment: .topLeading
                 )
+        }
+    }
+
+    private var legacyInternalScrollBody: some View {
+        GeometryReader { proxy in
+            ScrollView(.vertical) {
+                lazyRowsStack
+                    .frame(minWidth: proxy.size.width, alignment: .topLeading)
+            }
+            .defaultScrollAnchor(.topLeading)
         }
     }
 

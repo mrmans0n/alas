@@ -94,7 +94,6 @@ struct DiffReviewSurface: View {
     @State private var appKitScrollCompletionGate = AppKitDiffReviewScrollCompletionGate()
     @State private var contextExpandedFileIDs: Set<DiffReviewFileID> = []
     @State private var synchronizedFileSetKey: String?
-    @State private var appKitScrollerEnabled = AppKitDiffScrollerFlag.isEnabled
     @StateObject private var appKitPresentationStore = AppKitDiffReviewPresentationStore()
     /// The file the scrollspy last reported as scrolled into view. Used to tell
     /// cross-file comment navigation (file section not yet realized → needs a
@@ -246,10 +245,6 @@ struct DiffReviewSurface: View {
         .onChange(of: fileSetKey) { _, _ in
             synchronizeSelectionWithSession()
         }
-        .onReceive(NotificationCenter.default.publisher(for: AppKitDiffScrollerFlag.overrideDidChangeNotification)) { _ in
-            appKitScrollerEnabled = AppKitDiffScrollerFlag.isEnabled
-            resetScrollCommandBookkeeping()
-        }
     }
 
     private func reviewSurface(firstFileID: DiffReviewFileID) -> some View {
@@ -271,14 +266,7 @@ struct DiffReviewSurface: View {
                 threads: threads,
                 onSelectFile: scrollToFile
             )
-            Group {
-                if Self.usesAppKitScroller(flagEnabled: appKitScrollerEnabled) {
-                    appKitMainReviewStream(session)
-                } else {
-                    legacyMainReviewStream(session, firstFileID: firstFileID)
-                }
-            }
-            .id(appKitScrollerEnabled)
+            appKitMainReviewStream(session)
             if shouldShowReviewSummaryRail {
                 ReviewDraftSummaryRail(
                     comments: allDraftComments,
@@ -677,15 +665,6 @@ struct DiffReviewSurface: View {
     private func queueProgrammaticFileScroll(to id: DiffReviewFileID) {
         scrollSpyActiveFileID = id
         scrollCommand = scrollCommandController.command(to: id)
-
-        guard !appKitScrollerEnabled else { return }
-
-        let token = programmaticScroll.beginProgrammaticScroll(to: id)
-
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 250_000_000)
-            programmaticScroll.finishProgrammaticScroll(token)
-        }
     }
 
     private func updateSelectedFileFromAppKitViewport(_ fileID: DiffReviewFileID) {
@@ -711,15 +690,6 @@ struct DiffReviewSurface: View {
         self.appKitProgrammaticScroll = nil
     }
 
-    private func resetScrollCommandBookkeeping() {
-        scrollCommand = nil
-        scrollCommandController.reset()
-        programmaticScroll = DiffReviewProgrammaticScrollController()
-        appKitProgrammaticScroll = nil
-        appKitScrollCompletionGate = AppKitDiffReviewScrollCompletionGate()
-        scrollSpyActiveFileID = nil
-    }
-
     private func inlineAnnotations(for filePath: String) -> [DiffInlineAnnotation] {
         annotations
             .filter { $0.path == filePath }
@@ -738,10 +708,6 @@ struct DiffReviewSurface: View {
 private struct AppKitDiffReviewProgrammaticScroll {
     let requestGeneration: Int
     let token: DiffReviewProgrammaticScrollController.Token
-}
-
-extension DiffReviewSurface {
-    static func usesAppKitScroller(flagEnabled: Bool) -> Bool { flagEnabled }
 }
 
 enum DiffReviewSurfaceSelectionSync {

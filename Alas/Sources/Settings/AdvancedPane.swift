@@ -6,11 +6,6 @@ struct AdvancedPane: View {
     @State private var pendingAction: CleanupAction?
     @State private var cleanupMessage: String?
     @State private var isCleaningStaleProjects = false
-    /// Mirrors `AppKitDiffScrollerFlag.isEnabled` in observable state.
-    /// Reading the flag straight from a `Binding` getter renders the toggle
-    /// correctly once but never invalidates this view, so the switch could
-    /// keep drawing its old position after the override had already changed.
-    @State private var appKitDiffScrollerEnabled = AppKitDiffScrollerFlag.isEnabled
 
     var body: some View {
         ScrollView {
@@ -28,18 +23,6 @@ struct AdvancedPane: View {
                         AlasToggle(on: Binding(
                             get: { state.missionsEnabled },
                             set: { state.setMissionsEnabled($0) }
-                        ))
-                    }
-                    SettingsRow(
-                        name: "AppKit diff scrollers",
-                        desc: "Replaces vertical scrolling in diff and review panes with an AppKit-backed scroller. Toggling this re-creates open diff views, so their scroll positions are lost."
-                    ) {
-                        AlasToggle(on: Binding(
-                            get: { appKitDiffScrollerEnabled },
-                            set: {
-                                appKitDiffScrollerEnabled = $0
-                                AppKitDiffScrollerFlag.setOverride($0)
-                            }
                         ))
                     }
                 }
@@ -89,13 +72,6 @@ struct AdvancedPane: View {
             }
         } message: { action in
             Text(action.message(projectCount: state.projects.count))
-        }
-        .onReceive(
-            NotificationCenter.default.publisher(for: AppKitDiffScrollerFlag.overrideDidChangeNotification)
-        ) { _ in
-            // Keeps the switch honest when the override changes from outside
-            // this pane — a `defaults write`, or another window's copy of it.
-            appKitDiffScrollerEnabled = AppKitDiffScrollerFlag.isEnabled
         }
     }
 
