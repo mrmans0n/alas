@@ -67,6 +67,13 @@ struct NewWorktreeDialog: View {
         DialogContainer(
             title: "New worktree",
             subtitle: subtitleText,
+            headerAccessory: {
+                if issueState.draft == nil {
+                    DialogHeaderIconButton(icon: "paperclip", tooltip: "Attach issue…") {
+                        issueSheetPresentation = AttachIssuePresentation(draft: nil)
+                    }
+                }
+            },
             content: {
                 if state.projects.isEmpty {
                     DialogField(label: "Repository") {
@@ -770,43 +777,35 @@ struct NewWorktreeDialog: View {
         }
     }
 
+    @ViewBuilder
     private var issueAttachmentSection: some View {
-        Group {
-            if let draft = issueState.draft {
-                HStack(spacing: 8) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Issue")
-                            .font(.system(size: 11.5, weight: .medium))
-                            .foregroundColor(theme.color("fg-muted"))
-                        Text(draft.attachment.displayTitle)
-                            .font(.system(size: 12))
-                            .foregroundColor(theme.color("fg"))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                    Spacer(minLength: 8)
-                    AlasButton(title: "Edit", style: .subtle) {
-                        issueSheetPresentation = AttachIssuePresentation(draft: draft)
-                    }
-                    AlasButton(title: "Remove", style: .subtle, action: removeIssue)
-                    AlasButton(title: "Open", style: .subtle) {
-                        NSWorkspace.shared.open(draft.attachment.canonicalURL)
-                    }
+        if let draft = issueState.draft {
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Issue")
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundColor(theme.color("fg-muted"))
+                    Text(draft.attachment.displayTitle)
+                        .font(.system(size: 12))
+                        .foregroundColor(theme.color("fg"))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
-                .padding(8)
-                .background(theme.color("bg-0"))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .strokeBorder(theme.color("line"), lineWidth: 0.5)
-                )
-            } else {
-                HStack {
-                    AlasButton(title: "Attach issue...", style: .subtle) {
-                        issueSheetPresentation = AttachIssuePresentation(draft: nil)
-                    }
-                    Spacer(minLength: 0)
+                Spacer(minLength: 8)
+                AlasButton(title: "Edit", style: .subtle) {
+                    issueSheetPresentation = AttachIssuePresentation(draft: draft)
+                }
+                AlasButton(title: "Remove", style: .subtle, action: removeIssue)
+                AlasButton(title: "Open", style: .subtle) {
+                    NSWorkspace.shared.open(draft.attachment.canonicalURL)
                 }
             }
+            .padding(8)
+            .background(theme.color("bg-0"))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(theme.color("line"), lineWidth: 0.5)
+            )
         }
     }
 
