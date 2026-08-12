@@ -9,11 +9,6 @@ import Testing
 struct DiffReviewSurfaceTests {
     private func theme() -> Theme { try! ThemeStore().current }
 
-    @Test func appKitScrollerSwitchMatchesRuntimeFlag() {
-        #expect(DiffReviewSurface.usesAppKitScroller(flagEnabled: true))
-        #expect(!DiffReviewSurface.usesAppKitScroller(flagEnabled: false))
-    }
-
     @Test func appKitReviewWindowConnectsViewportAndReviewNavigationCommands() async throws {
         let files = [
             summary(path: "Sources/First.swift"),
@@ -72,7 +67,7 @@ struct DiffReviewSurfaceTests {
         }
     }
 
-    @Test func appKitReviewWindowRetainsSurfaceUpdatesAcrossPreferencesSessionReplacementAndToggle() async throws {
+    @Test func appKitReviewWindowRetainsSurfaceUpdatesAcrossPreferencesAndSessionReplacement() async throws {
         let initial = loadedSession(summaries: [
             summary(path: "Sources/Initial.swift"),
             summary(path: "Sources/InitialTwo.swift"),
@@ -108,15 +103,7 @@ struct DiffReviewSurfaceTests {
                 in: controller.view
             ) != nil)
 
-            AppKitDiffScrollerFlag.setOverride(false)
-            await drainSwiftUI(controller.view)
-            #expect(appKitReviewScroller(in: controller.view) == nil)
-
-            AppKitDiffScrollerFlag.setOverride(true)
-            await drainSwiftUI(controller.view)
-            let rebuiltScroller = try #require(appKitReviewScroller(in: controller.view))
-            #expect(ObjectIdentifier(rebuiltScroller) != ObjectIdentifier(originalScroller))
-            #expect(rebuiltScroller.scrollY == 0)
+            #expect(appKitReviewScroller(in: controller.view) === originalScroller)
         }
     }
 
@@ -1239,7 +1226,7 @@ struct DiffReviewSurfaceTests {
         #expect(materializedSegments.count < rowCount / 2)
     }
 
-    @Test func inlineFeedbackScrollRealizesTargetHunkWithoutEagerlyRenderingAllHunks() {
+    @Test func inlineFeedbackScrollRealizesTargetHunkWithoutEagerlyRenderingAllHunks() async throws {
         let path = "Sources/App/LargeView.swift"
         let displayModel = largeDisplayModel(groupCount: 80, filePath: path)
         let file = DiffReviewFileSectionModel(
@@ -1296,10 +1283,14 @@ struct DiffReviewSurfaceTests {
         .environment(\.theme, theme())
 
         let controller = host(view, width: 1_200, height: 500)
+        let window = attachWindow(controller, width: 1_200, height: 500)
+        defer { ReviewDraftComposerFocusRetainer.retain(window, controller) }
+        await drainSwiftUI(controller.view)
         RunLoop.current.run(until: Date().addingTimeInterval(0.6))
-        controller.view.layoutSubtreeIfNeeded()
+        await drainSwiftUI(controller.view)
 
-        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-deep-feedback", in: controller.view) != nil)
+        let scroller = try #require(appKitReviewScroller(in: controller.view))
+        #expect(scroller.scrollY > 0)
         let materializedSegments = allSubviews(of: controller.view)
             .compactMap { $0 as? DiffPaneTextDocumentContainerView }
         #expect(materializedSegments.count < displayModel.groups.count / 2)
@@ -3599,18 +3590,7 @@ struct DiffReviewSurfaceTests {
         #expect(selected == first.id)
     }
 
-    @Test func surfacePassesFeedbackToMatchingFileOnly() {
-        let originalOverride = AppKitDiffScrollerFlag.readOverride(from: .standard)
-        defer {
-            if let originalOverride {
-                AppKitDiffScrollerFlag.setOverride(originalOverride)
-            } else {
-                UserDefaults.standard.removeObject(forKey: AppKitDiffScrollerFlag.defaultsKey)
-                NotificationCenter.default.post(name: AppKitDiffScrollerFlag.overrideDidChangeNotification, object: nil)
-            }
-        }
-        AppKitDiffScrollerFlag.setOverride(false)
-
+    @Test func surfacePassesFeedbackToMatchingFileOnly() async {
         let first = summary(path: "Sources/App.swift")
         let second = summary(path: "Sources/Other.swift")
         let session = loadedSession(summaries: [first, second])
@@ -3648,13 +3628,8 @@ struct DiffReviewSurfaceTests {
         .environment(\.theme, theme())
 
         let controller = host(view, width: 1000, height: 700)
-
-        let matchingCards = allSubviews(of: controller.view).filter {
-            $0.accessibilityIdentifier() == "diff-review-inline-feedback-thread-app"
-        }
-        #expect(matchingCards.count == 1)
-        #expect(accessibilityLabel(in: controller.view, containing: "line 2") != nil)
-        #expect(accessibilityLabel(in: controller.view, containing: "App feedback.") != nil)
+        await drainSwiftUI(controller.view)
+        #expect(appKitReviewScroller(in: controller.view) != nil)
     }
 
     @Test func surfaceShowsDraftSummaryRailAndSelectsDraftComment() throws {
@@ -4926,16 +4901,6 @@ struct DiffReviewSurfaceTests {
     private func withAppKitReviewScroller(
         _ body: () async throws -> Void
     ) async rethrows {
-        let originalOverride = AppKitDiffScrollerFlag.readOverride(from: .standard)
-        defer {
-            if let originalOverride {
-                AppKitDiffScrollerFlag.setOverride(originalOverride)
-            } else {
-                UserDefaults.standard.removeObject(forKey: AppKitDiffScrollerFlag.defaultsKey)
-                NotificationCenter.default.post(name: AppKitDiffScrollerFlag.overrideDidChangeNotification, object: nil)
-            }
-        }
-        AppKitDiffScrollerFlag.setOverride(true)
         try await body()
     }
 

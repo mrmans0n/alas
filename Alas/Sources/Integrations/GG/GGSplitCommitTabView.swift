@@ -21,7 +21,6 @@ struct GGSplitCommitTabView: View {
     @State private var layoutMode: DiffLayoutMode = .stacked
     @State private var wrapLines = false
     @State private var showWhitespace = false
-    @State private var appKitPreviewScrollerEnabled = AppKitDiffScrollerFlag.isEnabled
     @State private var previewImageStore = GGSplitPreviewImageStore()
     @State private var previewPresentationStore = GGSplitPreviewPresentationStore()
     @State private var activeDestination = GGSplitCommitDestination.newCommit
@@ -112,11 +111,6 @@ struct GGSplitCommitTabView: View {
             if loadsOnAppear {
                 await load()
             }
-        }
-        .onReceive(
-            NotificationCenter.default.publisher(for: AppKitDiffScrollerFlag.overrideDidChangeNotification)
-        ) { _ in
-            appKitPreviewScrollerEnabled = AppKitDiffScrollerFlag.isEnabled
         }
     }
 
@@ -386,50 +380,40 @@ struct GGSplitCommitTabView: View {
                     preview: preview,
                     showsResultingImages: showsResultingImages
                 )
-                .id(appKitPreviewScrollerEnabled)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    nonisolated static func usesAppKitPreviewScroller(flagEnabled: Bool) -> Bool {
-        flagEnabled
-    }
-
-    @ViewBuilder
     private func previewScrollSubtree(
         previewID: String,
         preview: GGSplitPreview,
         showsResultingImages: Bool
     ) -> some View {
-        if Self.usesAppKitPreviewScroller(flagEnabled: appKitPreviewScrollerEnabled) {
-            AppKitDiffScroller(
-                plan: GGSplitPreviewRowPlanBuilder.build(input: .init(
-                    previewID: previewID,
-                    preview: preview,
-                    showsResultingImages: showsResultingImages,
-                    worktreePath: worktreePath,
-                    revision: model.targetSHA,
-                    layoutMode: layoutMode,
-                    wrapLines: wrapLines,
-                    showWhitespace: showWhitespace,
-                    codeFontFamily: codeFontFamily,
-                    codeFontSize: codeFontSize,
-                    theme: theme,
-                    imageStore: previewImageStore,
-                    presentationStore: previewPresentationStore
-                )),
-                scrollRequest: previewScrollRequest,
-                onActiveOwnerChange: { _ in },
-                onScrollRequestCompletion: { generation in
-                    if previewScrollRequest?.generation == generation {
-                        previewScrollRequest = nil
-                    }
+        AppKitDiffScroller(
+            plan: GGSplitPreviewRowPlanBuilder.build(input: .init(
+                previewID: previewID,
+                preview: preview,
+                showsResultingImages: showsResultingImages,
+                worktreePath: worktreePath,
+                revision: model.targetSHA,
+                layoutMode: layoutMode,
+                wrapLines: wrapLines,
+                showWhitespace: showWhitespace,
+                codeFontFamily: codeFontFamily,
+                codeFontSize: codeFontSize,
+                theme: theme,
+                imageStore: previewImageStore,
+                presentationStore: previewPresentationStore
+            )),
+            scrollRequest: previewScrollRequest,
+            onActiveOwnerChange: { _ in },
+            onScrollRequestCompletion: { generation in
+                if previewScrollRequest?.generation == generation {
+                    previewScrollRequest = nil
                 }
-            )
-        } else {
-            legacyPreviewScroll(preview: preview, showsResultingImages: showsResultingImages)
-        }
+            }
+        )
     }
 
     private func legacyPreviewScroll(
@@ -564,8 +548,6 @@ struct GGSplitCommitTabView: View {
             previewID: destination.previewID,
             path: path
         )
-        legacyScrollPath = GGSplitPreviewRowID.legacyFile(path: path)
-        legacyScrollGeneration += 1
     }
 
     private var loadFailure: some View {

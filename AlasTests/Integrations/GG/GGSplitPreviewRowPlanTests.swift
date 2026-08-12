@@ -64,12 +64,6 @@ struct GGSplitPreviewRowPlanTests {
         #expect(store.keysForTests == [key])
     }
 
-    @Test("feature flag selects only the native preview scroller")
-    func featureFlagSwitch() {
-        #expect(GGSplitCommitTabView.usesAppKitPreviewScroller(flagEnabled: true))
-        #expect(!GGSplitCommitTabView.usesAppKitPreviewScroller(flagEnabled: false))
-    }
-
     @Test("file navigation targets stable pane-scoped headers with fresh generations")
     func fileNavigationRequests() {
         var coordinator = GGSplitPreviewScrollRequestCoordinator()
