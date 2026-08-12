@@ -43,6 +43,34 @@ struct AppKitDiffScrollerStressTests {
         #expect(applyCount == 2)
     }
 
+    @Test("viewport movement does not rescan plan-wide row retention")
+    func viewportMovementDoesNotRescanRowRetention() {
+        let stack = makeStack()
+        var rows = (0..<20_000).map { row(index: $0) }
+        rows[0] = accessibleRow(retention: .pinned)
+        stack.reconciler.apply(plan: AppKitDiffRowPlan(rows: rows), contentWidth: stack.scrollView.contentWidth)
+
+        let inspectionsAfterApply = stack.reconciler.retentionInspectionCountForTests
+        #expect(inspectionsAfterApply == 20_000)
+        #expect(stack.reconciler.pinnedRowIDsForTests == ["focus-row"])
+
+        for (generation, index) in [5_000, 10_000, 15_000, 19_999].enumerated() {
+            stack.reconciler.scroll(to: AppKitDiffScrollRequest(
+                targetID: "row-\(index)", fallbackID: nil, alignment: .top,
+                animated: false, generation: generation
+            ))
+        }
+
+        #expect(stack.reconciler.retentionInspectionCountForTests == inspectionsAfterApply)
+        #expect(stack.pool.mountedIDs.contains("focus-row"))
+
+        rows[0] = accessibleRow(retention: .recyclable)
+        stack.reconciler.apply(plan: AppKitDiffRowPlan(rows: rows), contentWidth: stack.scrollView.contentWidth)
+        #expect(stack.reconciler.retentionInspectionCountForTests == inspectionsAfterApply + 20_000)
+        #expect(stack.reconciler.pinnedRowIDsForTests.isEmpty)
+        #expect(!stack.pool.mountedIDs.contains("focus-row"))
+    }
+
     @Test("hosted accessibility survives recycling and focus retention can be released")
     func accessibilityAndFocusRetention() throws {
         let stack = makeStack()
