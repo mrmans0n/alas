@@ -6,9 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.9] - 2026-08-12
+
 ### ✨ Features
 
-- Make AppKit diff scrolling the production implementation across diff, review, and split-preview panes.
+- Make AppKit diff scrolling the production implementation across diff, review, and split-preview panes (#1018).
+- Move the worktree issue attachment action into the new-worktree dialog header (#1017).
+
+### ⚡ Performance
+
+- Cache pinned diff rows in AppKit mode to avoid repeated retention scans during viewport updates (#1016).
 
 ## [0.14.8] - 2026-08-11
 
