@@ -11,6 +11,7 @@ final class AppKitDiffScrollerReconciler {
 
     private var specsByID: [String: AppKitDiffRowSpec] = [:]
     private var orderedIDs: [String] = []
+    private var pinnedRowIDs: Set<String> = []
     private var measuredHeights: [String: CGFloat] = [:]
     private var contentWidth: CGFloat = 0
     private var contentInsets: AppKitDiffContentInsets = .zero
@@ -22,6 +23,8 @@ final class AppKitDiffScrollerReconciler {
     #if DEBUG
     private(set) var fullPlanApplyCountForTests = 0
     private(set) var layoutPassCountForTests = 0
+    private(set) var retentionInspectionCountForTests = 0
+    var pinnedRowIDsForTests: Set<String> { pinnedRowIDs }
     #endif
 
     init(
@@ -65,9 +68,16 @@ final class AppKitDiffScrollerReconciler {
         let previousSpecs = specsByID
         let previousMeasuredHeights = measuredHeights
         var nextSpecs: [String: AppKitDiffRowSpec] = [:]
+        var nextPinnedRowIDs: Set<String> = []
         var nextMeasuredHeights: [String: CGFloat] = [:]
         for spec in plan.rows {
+            #if DEBUG
+            retentionInspectionCountForTests += 1
+            #endif
             nextSpecs[spec.id] = spec
+            if spec.retention == .pinned {
+                nextPinnedRowIDs.insert(spec.id)
+            }
             if !widthChanged,
                previousSpecs[spec.id]?.equalityToken.isEqual(to: spec.equalityToken) == true,
                let height = previousMeasuredHeights[spec.id] {
@@ -97,6 +107,7 @@ final class AppKitDiffScrollerReconciler {
         let previousScrollY = scrollView.scrollY
         specsByID = nextSpecs
         orderedIDs = ids
+        pinnedRowIDs = nextPinnedRowIDs
         measuredHeights = nextMeasuredHeights
         contentWidth = rowContentWidth
         contentInsets = plan.contentInsets
@@ -244,8 +255,7 @@ final class AppKitDiffScrollerReconciler {
             let bandIDs = Set(band.compactMap { index in
                 orderedIDs.indices.contains(index) ? orderedIDs[index] : nil
             })
-            let pinnedIDs = Set(specsByID.values.lazy.filter { $0.retention == .pinned }.map(\.id))
-            let keep = bandIDs.union(pinnedIDs)
+            let keep = bandIDs.union(pinnedRowIDs)
             pool.releaseAll(except: keep)
 
             var geometryChanged = false
