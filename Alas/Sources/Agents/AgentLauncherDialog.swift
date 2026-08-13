@@ -20,7 +20,7 @@ struct AgentLauncherDialog: View {
 
                     VStack(spacing: 0) {
                         inputRow
-                        if chatAgent == nil {
+                        if showsModePicker {
                             modePicker
                         }
                         Divider().background(theme.color("line"))
@@ -63,6 +63,12 @@ struct AgentLauncherDialog: View {
         appState.agentLauncher.rows(enabledAgents: appState.agentRegistry.enabled())
     }
 
+    /// Hidden while browsing an agent's sessions, and while the launcher is
+    /// pinned to one surface (opened from "New Agent in Chat"/"in Terminal").
+    private var showsModePicker: Bool {
+        chatAgent == nil && !appState.agentLauncher.isModeLocked
+    }
+
     private var inputRow: some View {
         HStack(spacing: 8) {
             if let chatAgent {
@@ -86,26 +92,15 @@ struct AgentLauncherDialog: View {
                 // Intercept tab BEFORE the TextField hands it to the
                 // system focus traversal. Without this the key would
                 // bounce out of the search field instead of toggling
-                // mode.
+                // mode. Still swallowed while the mode is locked — the
+                // alternative is focus escaping the field on ⇥.
                 .onKeyPress(.tab) {
-                    toggleMode(reverse: false)
+                    appState.agentLauncher.toggleMode()
                     return .handled
                 }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
-    }
-
-    /// Cycle between terminal and ACP modes. `reverse` walks the other
-    /// way (for shift-tab) — currently we only have two modes so it's
-    /// the same flip either way, but the flag keeps the call site honest
-    /// if more modes get added.
-    private func toggleMode(reverse: Bool) {
-        let cycle = AppConfig.LauncherMode.allCases
-        let i = cycle.firstIndex(of: appState.agentLauncher.mode) ?? 0
-        let step = reverse ? -1 : 1
-        let next = (i + step + cycle.count) % cycle.count
-        appState.agentLauncher.mode = cycle[next]
     }
 
     private var placeholder: String {
@@ -144,7 +139,7 @@ struct AgentLauncherDialog: View {
                          label: String) -> some View {
         let isOn = appState.agentLauncher.mode == mode
         return Button {
-            appState.agentLauncher.mode = mode
+            appState.agentLauncher.selectMode(mode)
         } label: {
             HStack(spacing: 5) {
                 Icon(name: icon, size: 11,
@@ -359,7 +354,7 @@ struct AgentLauncherDialog: View {
         HStack(spacing: 12) {
             label("↑↓ navigate")
             label(chatAgent == nil ? "↵ select" : "↵ open")
-            if chatAgent == nil { label("⇥ swap mode") }
+            if showsModePicker { label("⇥ swap mode") }
             label(chatAgent == nil ? "esc close" : "esc back")
             Spacer()
         }

@@ -791,6 +791,7 @@ extension AppConfig {
         shortcutOverrides =
             (try? c.decode([String: ShortcutBinding?].self, forKey: .shortcutOverrides)) ?? [:]
         migrateLegacyFindAndReplaceShortcutOverride()
+        migrateLegacyAgentLauncherShortcutOverrides()
         removeShortcutOverridesCollidingWithReservedBindings()
     }
 }
@@ -807,6 +808,29 @@ private extension AppConfig {
         }
         shortcutOverrides.updateValue(legacyOverride, forKey: replaceKey)
         shortcutOverrides.removeValue(forKey: legacyKey)
+    }
+
+    /// `launchAgentTerminal`/`launchAgentChat` were split into three actions:
+    /// `launchAgent` (surface picker), `launchAgentInTerminal` and
+    /// `launchAgentInChat`. Carry any custom binding over to the action that
+    /// kept its meaning; an override that merely restated the old default is
+    /// dropped so the new defaults apply.
+    mutating func migrateLegacyAgentLauncherShortcutOverrides() {
+        let renames: [(legacyKey: String, legacyDefault: ShortcutBinding, action: ShortcutAction)] = [
+            ("launchAgentTerminal",
+             .init(key: "t", modifiers: [.command, .option]),
+             .launchAgent),
+            ("launchAgentChat",
+             .init(key: "t", modifiers: [.command, .option, .shift]),
+             .launchAgentInChat),
+        ]
+        for (legacyKey, legacyDefault, action) in renames {
+            guard let legacyOverride = shortcutOverrides[legacyKey] else { continue }
+            shortcutOverrides.removeValue(forKey: legacyKey)
+            guard legacyOverride != legacyDefault,
+                  !shortcutOverrides.keys.contains(action.rawValue) else { continue }
+            shortcutOverrides.updateValue(legacyOverride, forKey: action.rawValue)
+        }
     }
 
     mutating func removeShortcutOverridesCollidingWithReservedBindings() {

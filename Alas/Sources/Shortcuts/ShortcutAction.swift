@@ -15,7 +15,8 @@ enum ShortcutGroup: String, CaseIterable, Sendable {
 enum ShortcutAction: String, CaseIterable, Codable, Sendable {
     // Global
     case searchFiles, switchRepository, findAndReplace, replaceInEditor, toggleSidebar, toggleRightPane,
-         createProject, newWorktree, focusMainWorktree, newTerminalTab, launchAgentTerminal, launchAgentChat,
+         createProject, newWorktree, focusMainWorktree, newTerminalTab,
+         launchAgent, launchAgentInTerminal, launchAgentInChat,
          openReviewPalette, runScript, selectPreviousTab, selectNextTab,
          increaseFontSize, decreaseFontSize, resetFontSize
     // Code editor
@@ -28,7 +29,8 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
     var group: ShortcutGroup {
         switch self {
         case .searchFiles, .switchRepository, .findAndReplace, .replaceInEditor, .toggleSidebar, .toggleRightPane,
-             .createProject, .newWorktree, .focusMainWorktree, .newTerminalTab, .launchAgentTerminal, .launchAgentChat,
+             .createProject, .newWorktree, .focusMainWorktree, .newTerminalTab,
+             .launchAgent, .launchAgentInTerminal, .launchAgentInChat,
              .openReviewPalette, .runScript, .selectPreviousTab, .selectNextTab,
              .increaseFontSize, .decreaseFontSize, .resetFontSize:
             return .global
@@ -55,8 +57,9 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         case .newWorktree:              return "New Worktree"
         case .focusMainWorktree:        return "Focus Main Worktree"
         case .newTerminalTab:           return "New Terminal Tab"
-        case .launchAgentTerminal:      return "Launch Agent"
-        case .launchAgentChat:          return "Launch Agent Chat"
+        case .launchAgent:              return "Launch Agent"
+        case .launchAgentInTerminal:    return "Launch Agent in Terminal"
+        case .launchAgentInChat:        return "Launch Agent in Chat"
         case .openReviewPalette:        return "Review Worktree"
         case .runScript:                return "Run Script"
         case .selectPreviousTab:        return "Select Previous Tab"
@@ -84,8 +87,9 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         switch self {
         case .searchFiles:        return "Open the file search"
         case .switchRepository:   return "Open the repository picker"
-        case .launchAgentTerminal: return "Open the agent launcher on the default surface"
-        case .launchAgentChat:     return "Open the agent launcher in Chat mode"
+        case .launchAgent:            return "Open the agent launcher with the surface picker"
+        case .launchAgentInTerminal:  return "Open the agent launcher locked to Terminal"
+        case .launchAgentInChat:      return "Open the agent launcher locked to Chat"
         case .openReviewPalette:   return "Open the review target palette"
         case .runScript:           return "Open the run script palette"
         case .commitInComposer:   return "In the draft commit tab"
@@ -120,8 +124,9 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         // Cmd+Shift+M is Toggle Markdown Preview; Cmd+Option+M is macOS Minimize All.
         case .focusMainWorktree:        return .init(key: "m",          modifiers: [.command, .control])
         case .newTerminalTab:           return .init(key: "t",          modifiers: [.command])
-        case .launchAgentTerminal:      return .init(key: "t",          modifiers: [.command, .option])
-        case .launchAgentChat:          return .init(key: "t",          modifiers: [.command, .option, .shift])
+        case .launchAgent:              return .init(key: "t",          modifiers: [.command, .option])
+        case .launchAgentInTerminal:    return .init(key: "t",          modifiers: [.command, .option, .shift])
+        case .launchAgentInChat:        return .init(key: "c",          modifiers: [.command, .option, .shift])
         case .openReviewPalette:        return .init(key: "r",          modifiers: [.command, .shift])
         case .runScript:                return .init(key: "r",          modifiers: [.command])
         case .selectPreviousTab:        return .init(key: "tab",        modifiers: [.control, .shift])

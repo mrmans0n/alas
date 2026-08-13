@@ -31,14 +31,16 @@ struct AppStateOverlayFocusTests {
         let state = AppState()
 
         state.openSearchOverlay()
-        state.toggleAgentLauncherOverlay(canOpen: true)
+        state.openAgentLauncherOverlay(.picker)
 
         #expect(!state.isSearchOpen)
         #expect(!state.isRepoSelectorOpen)
         #expect(state.isAgentLauncherOpen)
         #expect(state.isKeyboardOverlayOpen)
 
-        state.toggleAgentLauncherOverlay(canOpen: true)
+        // How AgentLauncherDialog.close() dismisses itself.
+        state.agentLauncher.reset()
+        state.isAgentLauncherOpen = false
 
         #expect(!state.isSearchOpen)
         #expect(!state.isRepoSelectorOpen)

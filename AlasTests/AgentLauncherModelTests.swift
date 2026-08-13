@@ -105,5 +105,49 @@ struct AgentLauncherModelTests {
         #expect(model.mode == .acp)
         #expect(model.query == "")
         #expect(model.selectedIndex == 0)
+        #expect(!model.isModeLocked)
+    }
+
+    @Test func toggleModeSwapsSurfaceWhenUnlocked() {
+        let model = AgentLauncherModel()
+        model.prepareForOpen(defaultMode: .terminal)
+
+        model.toggleMode()
+        #expect(model.mode == .acp)
+
+        model.toggleMode(reverse: true)
+        #expect(model.mode == .terminal)
+    }
+
+    @Test func lockedLauncherIgnoresModeChanges() {
+        let model = AgentLauncherModel()
+        model.prepareForOpen(defaultMode: .acp, locked: true)
+
+        #expect(model.isModeLocked)
+
+        model.toggleMode()
+        #expect(model.mode == .acp)
+
+        model.selectMode(.terminal)
+        #expect(model.mode == .acp)
+    }
+
+    @Test func resetClearsModeLock() {
+        let model = AgentLauncherModel()
+        model.prepareForOpen(defaultMode: .terminal, locked: true)
+
+        model.reset()
+
+        #expect(!model.isModeLocked)
+    }
+
+    @Test func reopeningUnlockedClearsPriorLock() {
+        let model = AgentLauncherModel()
+        model.prepareForOpen(defaultMode: .acp, locked: true)
+
+        model.prepareForOpen(defaultMode: .terminal)
+
+        #expect(!model.isModeLocked)
+        #expect(model.mode == .terminal)
     }
 }

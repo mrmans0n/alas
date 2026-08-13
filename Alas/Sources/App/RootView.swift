@@ -295,11 +295,11 @@ struct RootView: View {
             } else {
                 EmptyTabView(
                     onNewTerminal: {},
-                    onNewAgentTerminal: {},
-                    onNewAgentChat: {},
+                    onNewAgentInChat: {},
+                    onNewAgentInTerminal: {},
                     newTerminalShortcut: nil,
-                    newAgentTerminalShortcut: nil,
-                    newAgentChatShortcut: nil
+                    newAgentInChatShortcut: nil,
+                    newAgentInTerminalShortcut: nil
                 )
             }
         }
@@ -1019,8 +1019,8 @@ private struct RootBaseHandlers: ViewModifier {
         let r = q
             .onReceive(NotificationCenter.default.publisher(for: .alasOpenAgentLauncher)) { notification in
                 guard selectedWorktree() != nil else { return }
-                let mode = notification.object as? AppConfig.LauncherMode
-                state.openAgentLauncherOverlay(mode: mode)
+                let request = notification.object as? AgentLauncherRequest ?? .picker
+                state.openAgentLauncherOverlay(request)
             }
         let r2 = r
             .onReceive(NotificationCenter.default.publisher(for: .alasOpenRunScriptPalette)) { _ in

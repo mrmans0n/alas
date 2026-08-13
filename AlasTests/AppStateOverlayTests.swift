@@ -92,28 +92,45 @@ struct AppStateOverlayTests {
         #expect(state.agentLauncher.mode == .acp)
     }
 
-    @Test func toggleAgentLauncherClosedOpensUsingConfiguredDefault() {
+    @Test func lockedChatRequestPinsModeRegardlessOfDefault() {
         let state = AppState(store: MemoryStore())
-        state.config.agents.defaultLauncherMode = .acp
+        state.config.agents.defaultLauncherMode = .terminal
 
-        state.toggleAgentLauncherOverlay(canOpen: true)
+        state.openAgentLauncherOverlay(.locked(.acp))
 
         #expect(state.isAgentLauncherOpen)
         #expect(state.agentLauncher.mode == .acp)
+        #expect(state.agentLauncher.isModeLocked)
     }
 
-    @Test func toggleAgentLauncherOpenClosesAndResets() {
+    @Test func lockedTerminalRequestPinsModeRegardlessOfDefault() {
         let state = AppState(store: MemoryStore())
-        state.isAgentLauncherOpen = true
-        state.agentLauncher.mode = .acp
-        state.agentLauncher.query = "claude"
-        state.agentLauncher.selectedIndex = 3
+        state.config.agents.defaultLauncherMode = .acp
 
-        state.toggleAgentLauncherOverlay(canOpen: true)
+        state.openAgentLauncherOverlay(.locked(.terminal))
+
+        #expect(state.agentLauncher.mode == .terminal)
+        #expect(state.agentLauncher.isModeLocked)
+    }
+
+    @Test func pickerRequestUsesConfiguredDefaultUnlocked() {
+        let state = AppState(store: MemoryStore())
+        state.config.agents.defaultLauncherMode = .acp
+
+        state.openAgentLauncherOverlay(.picker)
+
+        #expect(state.agentLauncher.mode == .acp)
+        #expect(!state.agentLauncher.isModeLocked)
+    }
+
+    @Test func closingLockedLauncherClearsTheLock() {
+        let state = AppState(store: MemoryStore())
+        state.openAgentLauncherOverlay(.locked(.acp))
+
+        state.openSearchOverlay()
 
         #expect(!state.isAgentLauncherOpen)
-        #expect(state.agentLauncher.query == "")
-        #expect(state.agentLauncher.selectedIndex == 0)
+        #expect(!state.agentLauncher.isModeLocked)
     }
 
     @Test func openingRunScriptPaletteWhileOpenKeepsLoadedScripts() {

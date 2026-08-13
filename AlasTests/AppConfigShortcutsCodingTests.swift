@@ -95,6 +95,40 @@ struct AppConfigShortcutsCodingTests {
         #expect(decoded.shortcutOverrides[ShortcutAction.findAndReplace.rawValue] == nil)
     }
 
+    @Test func migratesLegacyAgentLauncherOverridesToSplitActions() throws {
+        var cfg = AppConfig.defaults
+        let legacyLauncher = ShortcutBinding(key: "j", modifiers: [.command, .option])
+        let legacyChat = ShortcutBinding(key: "k", modifiers: [.command, .option, .shift])
+        cfg.shortcutOverrides = [
+            "launchAgentTerminal": legacyLauncher,
+            "launchAgentChat": legacyChat,
+        ]
+
+        let data = try JSONEncoder().encode(cfg)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+
+        #expect(decoded.shortcutOverrides[ShortcutAction.launchAgent.rawValue] == .some(legacyLauncher))
+        #expect(decoded.shortcutOverrides[ShortcutAction.launchAgentInChat.rawValue] == .some(legacyChat))
+        #expect(decoded.shortcutOverrides[ShortcutAction.launchAgentInTerminal.rawValue] == nil)
+        #expect(decoded.shortcutOverrides["launchAgentTerminal"] == nil)
+        #expect(decoded.shortcutOverrides["launchAgentChat"] == nil)
+    }
+
+    @Test func dropsLegacyAgentLauncherOverridesThatRestateOldDefaults() throws {
+        var cfg = AppConfig.defaults
+        cfg.shortcutOverrides = [
+            "launchAgentTerminal": ShortcutBinding(key: "t", modifiers: [.command, .option]),
+            "launchAgentChat": ShortcutBinding(key: "t", modifiers: [.command, .option, .shift]),
+        ]
+
+        let data = try JSONEncoder().encode(cfg)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+
+        #expect(decoded.shortcutOverrides.isEmpty)
+        #expect(ShortcutAction.launchAgentInChat.defaultBinding ==
+                ShortcutBinding(key: "c", modifiers: [.command, .option, .shift]))
+    }
+
     @Test func dropsOverridesThatCollideWithReservedBindingsOnDecode() throws {
         var cfg = AppConfig.defaults
         let preserved = ShortcutBinding(key: "j", modifiers: [.command, .option])
