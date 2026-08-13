@@ -18,6 +18,7 @@ struct RunScriptCompletionMonitorTests {
         #expect(command.contains("tail -c 1052672"))
         #expect(command.contains("captured=1"))
         #expect(command.contains("cat \"$body\""))
+        #expect(command.contains("\"$body\" \"$completion.status\""))
         #expect(command.contains("[ \"$exit_code\" != 0 ]"))
         #expect(command.contains("ALAS_RUN_V1"))
         #expect(command.contains("rm -f"))

@@ -65,21 +65,39 @@ extension AppState {
     ) -> String {
         let transcript = capturePathShellLiteral(capturePaths.transcript)
         let completion = capturePathShellLiteral(capturePaths.completion)
+        let status = capturePathShellLiteral("\(capturePaths.completion).status")
         let transcriptDir = capturePathShellLiteral((capturePaths.transcript as NSString).deletingLastPathComponent)
         let completionDir = capturePathShellLiteral((capturePaths.completion as NSString).deletingLastPathComponent)
         let quotedCommandLine = shellQuote(commandLine)
+        let quotedDarwinCommandLine = shellQuote("""
+        \(commandLine)
+        code=$?
+        printf '%s\\n' "$code" > \(status)
+        exit "$code"
+        """)
         let exitLine = exitOnCompletion ? "\nexit \"$exit_code\"" : "\n(exit \"$exit_code\")"
         return """
         transcript=\(transcript)
         completion=\(completion)
         mkdir -p \(transcriptDir) \(completionDir) || exit 1
         chmod 700 \(transcriptDir) \(completionDir) || exit 1
-        find \(transcriptDir) \(completionDir) -type f \\( -name '*.log' -o -name '*.done' -o -name '*.tmp' \\) -mtime +7 -exec rm -f {} + 2>/dev/null || true
+        find \(transcriptDir) \(completionDir) -type f \\( -name '*.log' -o -name '*.done' -o -name '*.tmp' -o -name '*.body' -o -name '*.status' \\) -mtime +7 -exec rm -f {} + 2>/dev/null || true
+        private_umask=$(umask)
         umask 077
+        : > "$transcript" || exit 1
+        chmod 600 "$transcript" || exit 1
+        umask "$private_umask"
         if command -v script >/dev/null 2>&1; then
           if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
-            script -qeF "$transcript" /usr/bin/env -u SCRIPT \(commandLine)
-            exit_code=$?
+            rm -f \(status)
+            script -q "$transcript" /usr/bin/env -u SCRIPT /bin/sh -c \(quotedDarwinCommandLine)
+            script_status=$?
+            if [ -f \(status) ]; then
+              exit_code=$(cat \(status))
+            else
+              exit_code=$script_status
+            fi
+            rm -f \(status)
           elif script --version 2>/dev/null | grep -qi 'util-linux'; then
             script -qefc \(quotedCommandLine) "$transcript"
             exit_code=$?
@@ -92,8 +110,11 @@ extension AppState {
           exit_code=$?
         fi
         tmp="$completion.tmp"
+        private_umask=$(umask)
+        umask 077
         printf '%s\\n' "$exit_code" > "$tmp"
-        mv "$tmp" "$completion"\(exitLine)
+        mv "$tmp" "$completion"
+        umask "$private_umask"\(exitLine)
         """
     }
 

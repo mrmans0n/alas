@@ -103,7 +103,7 @@ enum RunScriptCompletionMonitor {
         fi
         printf 'ALAS_RUN_V1\\t%s\\t%s\\t%s\\n' "$exit_code" "$captured" "$truncated"
         if [ "$captured" = 1 ]; then cat "$body"; fi
-        rm -f "$transcript" "$completion" "$completion.tmp" "$body"
+        rm -f "$transcript" "$completion" "$completion.tmp" "$body" "$completion.status"
         """
     }
 
@@ -117,7 +117,7 @@ enum RunScriptCompletionMonitor {
             options: [.skipsHiddenFiles]
         ) else { return }
         let cutoff = now.addingTimeInterval(-7 * 24 * 60 * 60)
-        for entry in entries where ["log", "done", "tmp"].contains(entry.pathExtension) {
+        for entry in entries where ["log", "done", "tmp", "body", "status"].contains(entry.pathExtension) {
             let modified = (try? entry.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? now
             if modified < cutoff {
                 try? FileManager.default.removeItem(at: entry)
@@ -130,6 +130,7 @@ enum RunScriptCompletionMonitor {
             try? FileManager.default.removeItem(atPath: paths.transcript)
             try? FileManager.default.removeItem(atPath: paths.completion)
             try? FileManager.default.removeItem(atPath: "\(paths.completion).tmp")
+            try? FileManager.default.removeItem(atPath: "\(paths.completion).status")
         }
         while !FileManager.default.fileExists(atPath: paths.completion) {
             try Task.checkCancellation()
