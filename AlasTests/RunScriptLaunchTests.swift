@@ -319,6 +319,49 @@ struct RunScriptLaunchTests {
     }
 
     @MainActor
+    @Test func processExitAllowsCompletedMonitorToReportFailure() async throws {
+        let fixture = try makeAppStateFixture(waiter: { _ in
+            try await Task.sleep(for: .milliseconds(20))
+            return RunScriptCompletion(exitCode: 42, transcript: Data("bad\n".utf8), truncated: false)
+        })
+
+        fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
+        try await Task.sleep(for: .milliseconds(50))
+        let tab = try #require(fixture.state.tabs.tabs(forWorktree: fixture.worktree.id).first)
+        guard case .terminal(let terminal) = tab else {
+            Issue.record("Expected terminal tab")
+            return
+        }
+
+        fixture.state.closePaneForProcessExit(worktreeId: fixture.worktree.id, leafId: terminal.focusedLeafId)
+        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+
+        #expect(fixture.state.runScriptFailures(in: fixture.worktree.id).count == 1)
+    }
+
+    @MainActor
+    @Test func bulkClosingRunScriptTerminalCancelsRunMonitor() async throws {
+        let fixture = try makeAppStateFixture(waiter: { _ in
+            try await Task.sleep(for: .seconds(5))
+            return RunScriptCompletion(exitCode: 1, transcript: nil, truncated: false)
+        })
+
+        fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
+        try await Task.sleep(for: .milliseconds(50))
+        let runTab = try #require(fixture.state.tabs.tabs(forWorktree: fixture.worktree.id).first)
+        let otherTab = fixture.state.tabs.appendTerminal(
+            worktreeId: fixture.worktree.id,
+            title: "Other",
+            sessionId: "other"
+        )
+
+        fixture.state.closeTabsToLeft(worktreeId: fixture.worktree.id, of: otherTab.id)
+
+        #expect(!fixture.state.tabs.tabs(forWorktree: fixture.worktree.id).contains(where: { $0.id == runTab.id }))
+        #expect(fixture.state.runScriptCompletionTaskCountForTesting == 0)
+    }
+
+    @MainActor
     @Test func doubleLaunchCreatesOneMonitor() async throws {
         let waitCount = LockedCounter()
         let fixture = try makeAppStateFixture(waiter: { _ in

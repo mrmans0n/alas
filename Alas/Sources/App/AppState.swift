@@ -4935,7 +4935,7 @@ final class AppState {
             return state.root.find(leafId: leafId) != nil
         }?.id
         guard let tabId = owningTabId else { return }
-        cancelRunScriptCompletionTasks(sessionID: leafId)
+        cancelRunScriptCompletionTasks(sessionID: leafId, after: .seconds(2))
         guard let outcome = tabs.removeLeaf(
             worktreeId: worktreeId, tabId: tabId, leafId: leafId
         ) else { return }
@@ -5745,6 +5745,7 @@ final class AppState {
             if let tab = allTabs.first(where: { $0.id == id }),
                case .terminal(let s) = tab {
                 for leaf in s.root.leaves() {
+                    cancelRunScriptCompletionTasks(sessionID: leaf.id)
                     closeTerminalSession(id: leaf.id, worktreeId: worktreeId, projectPath: projectPath)
                 }
             }

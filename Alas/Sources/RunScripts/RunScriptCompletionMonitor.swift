@@ -20,6 +20,7 @@ struct RunScriptCompletion: Equatable, Sendable {
 
 enum RunScriptCompletionMonitor {
     static let outputByteLimit = 1_048_576
+    private static let outputBoundaryLookbehind = 4_096
 
     static func paths(runID: String, host: String?) throws -> RunScriptCaptureLocation {
         guard UUID(uuidString: runID) != nil else { throw MonitorError.invalidRunID }
@@ -99,7 +100,7 @@ enum RunScriptCompletionMonitor {
           if [ "${size:-0}" -gt \(byteLimit) ]; then truncated=1; fi
         fi
         printf 'ALAS_RUN_V1\\t%s\\t%s\\t%s\\n' "$exit_code" "$captured" "$truncated"
-        if [ "$captured" = 1 ]; then tail -c \(byteLimit) "$transcript"; fi
+        if [ "$captured" = 1 ]; then tail -c \(byteLimit + outputBoundaryLookbehind) "$transcript"; fi
         rm -f "$transcript" "$completion" "$completion.tmp"
         """
     }
@@ -144,7 +145,8 @@ enum RunScriptCompletionMonitor {
         let url = URL(fileURLWithPath: paths.transcript)
         let attributes = try FileManager.default.attributesOfItem(atPath: paths.transcript)
         let size = (attributes[.size] as? NSNumber)?.uint64Value ?? 0
-        let offset = size > UInt64(outputByteLimit) ? size - UInt64(outputByteLimit) : 0
+        let readLimit = UInt64(outputByteLimit + outputBoundaryLookbehind)
+        let offset = size > readLimit ? size - readLimit : 0
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
         try handle.seek(toOffset: offset)

@@ -71,7 +71,7 @@ extension AppState {
         completion=\(completion)
         mkdir -p \(transcriptDir) \(completionDir) || exit 1
         chmod 700 \(transcriptDir) \(completionDir) || exit 1
-        find \(transcriptDir) -type f \\( -name '*.log' -o -name '*.done' -o -name '*.tmp' \\) -mtime +7 -exec rm -f {} + 2>/dev/null || true
+        find \(transcriptDir) \(completionDir) -type f \\( -name '*.log' -o -name '*.done' -o -name '*.tmp' \\) -mtime +7 -exec rm -f {} + 2>/dev/null || true
         umask 077
         if command -v script >/dev/null 2>&1; then
           if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
@@ -290,10 +290,26 @@ extension AppState {
         cleanupCaptureLocation(location)
     }
 
-    func cancelRunScriptCompletionTasks(sessionID: String) {
-        for (runID, entry) in runScriptCompletionTasks where entry.sessionID == sessionID {
-            runScriptCompletionTasks.removeValue(forKey: runID)?.task.cancel()
-            cleanupCaptureLocation(entry.location)
+    private func cancelRunScriptCompletionTask(runID: String) {
+        guard let entry = runScriptCompletionTasks.removeValue(forKey: runID) else { return }
+        entry.task.cancel()
+        cleanupCaptureLocation(entry.location)
+    }
+
+    func cancelRunScriptCompletionTasks(sessionID: String, after delay: Duration? = nil) {
+        let runIDs = runScriptCompletionTasks.compactMap { runID, entry in
+            entry.sessionID == sessionID ? runID : nil
+        }
+        guard let delay else {
+            for runID in runIDs { cancelRunScriptCompletionTask(runID: runID) }
+            return
+        }
+        for runID in runIDs {
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: delay)
+                guard self?.runScriptCompletionTasks[runID]?.sessionID == sessionID else { return }
+                self?.cancelRunScriptCompletionTask(runID: runID)
+            }
         }
     }
 
