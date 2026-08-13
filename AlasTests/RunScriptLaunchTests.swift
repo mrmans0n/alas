@@ -3,6 +3,11 @@ import Testing
 @testable import Alas
 
 struct RunScriptLaunchTests {
+    private let capture = RunScriptCapturePaths(
+        transcript: "/tmp/alas-runs/run-1.log",
+        completion: "/tmp/alas-runs/run-1.done"
+    )
+
     private func script(
         executable: Bool,
         onExit: RunScriptOnExit = .keep,
@@ -52,6 +57,70 @@ struct RunScriptLaunchTests {
         #expect(suffix.hasSuffix("exit_code=$?\nexit \"$exit_code\""))
     }
 
+    @Test func capturedRunContainsBothHostRecorderForms() throws {
+        let suffix = try AppState.runScriptStartupScript(
+            script: script(executable: true, onExit: .close),
+            worktreeRoot: URL(fileURLWithPath: "/wt"),
+            branch: "main", projectName: "alas", repoRoot: "/repo", capturePaths: capture
+        )
+        #expect(suffix.contains("uname -s"))
+        #expect(suffix.contains("script -qF"))
+        #expect(suffix.contains("script -qefc"))
+        #expect(suffix.contains("env -u SCRIPT"))
+        #expect(suffix.contains("command -v script"))
+        #expect(suffix.contains("exit_code=$?"))
+        #expect(suffix.contains("mv"))
+        #expect(suffix.hasSuffix("exit \"$exit_code\""))
+    }
+
+    @Test func capturedCloseRunRecordsOutputAndCompletion() throws {
+        let dir = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let capture = RunScriptCapturePaths(
+            transcript: dir.appendingPathComponent("run.log").path,
+            completion: dir.appendingPathComponent("run.done").path
+        )
+        let scriptURL = dir.appendingPathComponent("exit-42.sh")
+        try "#!/bin/sh\nprintf 'stdout-line\\n'\nprintf 'stderr-line\\n' >&2\nprintf 'script=%s\\n' \"${SCRIPT-unset}\"\nprintf 'cwd=%s\\n' \"$PWD\"\nprintf 'branch=%s\\n' \"$ALAS_BRANCH\"\nexit 42\n".write(to: scriptURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
+        let suffix = try AppState.runScriptStartupScript(
+            script: RunScript(scope: .repo, fileName: scriptURL.lastPathComponent, fileURL: scriptURL, displayName: "Exit 42", onExit: .close, cwd: nil, isExecutable: true),
+            worktreeRoot: dir, branch: "main", projectName: "alas", repoRoot: dir.path, capturePaths: capture
+        )
+
+        let process = try runZsh(suffix)
+        #expect(process.terminationStatus == 42)
+        #expect(try String(contentsOfFile: capture.completion, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines) == "42")
+        let transcript = try String(contentsOfFile: capture.transcript, encoding: .utf8)
+        #expect(transcript.contains("stdout-line"))
+        #expect(transcript.contains("stderr-line"))
+        #expect(transcript.contains("script=unset"))
+        #expect(transcript.contains("cwd=\(dir.path)"))
+        #expect(transcript.contains("branch=main"))
+    }
+
+    @Test func capturedKeepRunAllowsFollowingCommand() throws {
+        let dir = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let capture = RunScriptCapturePaths(
+            transcript: dir.appendingPathComponent("run.log").path,
+            completion: dir.appendingPathComponent("run.done").path
+        )
+        let scriptURL = dir.appendingPathComponent("exit-42.sh")
+        try "#!/bin/sh\nexit 42\n".write(to: scriptURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
+        let suffix = try AppState.runScriptStartupScript(
+            script: RunScript(scope: .repo, fileName: scriptURL.lastPathComponent, fileURL: scriptURL, displayName: "Exit 42", onExit: .keep, cwd: nil, isExecutable: true),
+            worktreeRoot: dir, branch: "main", projectName: "alas", repoRoot: dir.path, capturePaths: capture
+        )
+
+        let marker = dir.appendingPathComponent("marker")
+        let process = try runZsh("\(suffix)\nprintf marker > \(AppState.shellQuote(marker.path))")
+        #expect(process.terminationStatus == 0)
+        #expect(FileManager.default.fileExists(atPath: marker.path))
+        #expect(try String(contentsOfFile: capture.completion, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines) == "42")
+    }
+
     @Test func closeOnExitPreservesScriptStatusInZsh() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -76,6 +145,21 @@ struct RunScriptLaunchTests {
         process.waitUntilExit()
 
         #expect(process.terminationStatus == 42)
+    }
+
+    private func makeTemporaryDirectory() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    private func runZsh(_ command: String) throws -> Process {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-fc", command]
+        try process.run()
+        process.waitUntilExit()
+        return process
     }
 
     @Test func cwdJoinsWorktreeRoot() throws {

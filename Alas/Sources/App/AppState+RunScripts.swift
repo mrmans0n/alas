@@ -1,5 +1,10 @@
 import Foundation
 
+struct RunScriptCapturePaths: Equatable, Sendable {
+    let transcript: String
+    let completion: String
+}
+
 extension AppState {
     // MARK: - Launch
 
@@ -12,7 +17,8 @@ extension AppState {
         worktreeRoot: URL,
         branch: String,
         projectName: String,
-        repoRoot: String
+        repoRoot: String,
+        capturePaths: RunScriptCapturePaths? = nil
     ) throws -> String {
         let cwd = script.cwd.map { worktreeRoot.appendingPathComponent($0).path } ?? worktreeRoot.path
         let env = [
@@ -36,10 +42,55 @@ extension AppState {
             env: env,
             exitOnCompletion: script.onExit == .close
         )
+        let commandLine = try shellCommand(command: command, args: args, env: env)
         // A missing/misspelled `alas-cwd` must stop the run rather than fall
         // through and execute the script from wherever the shell happened to
         // start — that's silently dangerous for build/cleanup scripts.
-        return "cd \(shellQuote(cwd)) || exit 1\n\(run)"
+        let prefix = "cd \(shellQuote(cwd)) || exit 1\n"
+        guard let capturePaths else { return prefix + run }
+        return prefix + capturedRunScript(
+            commandLine: commandLine,
+            capturePaths: capturePaths,
+            exitOnCompletion: script.onExit == .close
+        )
+    }
+
+    nonisolated private static func capturedRunScript(
+        commandLine: String,
+        capturePaths: RunScriptCapturePaths,
+        exitOnCompletion: Bool
+    ) -> String {
+        let transcript = shellQuote(capturePaths.transcript)
+        let completion = shellQuote(capturePaths.completion)
+        let transcriptDir = shellQuote((capturePaths.transcript as NSString).deletingLastPathComponent)
+        let completionDir = shellQuote((capturePaths.completion as NSString).deletingLastPathComponent)
+        let quotedCommandLine = shellQuote(commandLine)
+        let exitLine = exitOnCompletion ? "\nexit \"$exit_code\"" : ""
+        return """
+        transcript=\(transcript)
+        completion=\(completion)
+        mkdir -p \(transcriptDir) \(completionDir) || exit 1
+        chmod 700 \(transcriptDir) \(completionDir) || exit 1
+        umask 077
+        if command -v script >/dev/null 2>&1; then
+          if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
+            script -qF "$transcript" /usr/bin/env -u SCRIPT \(commandLine)
+            exit_code=$?
+          elif script --version 2>/dev/null | grep -qi 'util-linux'; then
+            script -qefc \(quotedCommandLine) "$transcript"
+            exit_code=$?
+          else
+            \(commandLine)
+            exit_code=$?
+          fi
+        else
+          \(commandLine)
+          exit_code=$?
+        fi
+        tmp="$completion.tmp"
+        printf '%s\\n' "$exit_code" > "$tmp"
+        mv "$tmp" "$completion"\(exitLine)
+        """
     }
 
     func runningScriptTab(for script: RunScript, in worktree: Worktree) -> Tab? {
