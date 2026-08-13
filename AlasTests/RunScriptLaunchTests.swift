@@ -131,9 +131,11 @@ struct RunScriptLaunchTests {
         )
 
         let marker = dir.appendingPathComponent("marker")
-        let process = try runZsh("\(suffix)\nprintf marker > \(AppState.shellQuote(marker.path))")
+        let status = dir.appendingPathComponent("status")
+        let process = try runZsh("\(suffix)\nprintf '%s' \"$?\" > \(AppState.shellQuote(status.path))\nprintf marker > \(AppState.shellQuote(marker.path))")
         #expect(process.terminationStatus == 0)
         #expect(FileManager.default.fileExists(atPath: marker.path))
+        #expect(try String(contentsOf: status, encoding: .utf8) == "42")
         #expect(try String(contentsOfFile: capture.completion, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines) == "42")
     }
 

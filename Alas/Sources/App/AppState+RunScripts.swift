@@ -65,7 +65,7 @@ extension AppState {
         let transcriptDir = capturePathShellLiteral((capturePaths.transcript as NSString).deletingLastPathComponent)
         let completionDir = capturePathShellLiteral((capturePaths.completion as NSString).deletingLastPathComponent)
         let quotedCommandLine = shellQuote(commandLine)
-        let exitLine = exitOnCompletion ? "\nexit \"$exit_code\"" : ""
+        let exitLine = exitOnCompletion ? "\nexit \"$exit_code\"" : "\n(exit \"$exit_code\")"
         return """
         transcript=\(transcript)
         completion=\(completion)

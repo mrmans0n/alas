@@ -4941,7 +4941,7 @@ final class AppState {
         ) else { return }
         switch outcome {
         case .tabRemoved:
-            closeTab(worktreeId: worktreeId, tabId: tabId)
+            closeTab(worktreeId: worktreeId, tabId: tabId, cancelRunScriptMonitors: false)
         case .leafRemoved:
             closeTerminalSession(
                 id: leafId,
@@ -5688,7 +5688,7 @@ final class AppState {
         body(session)
     }
 
-    func closeTab(worktreeId: String, tabId: TabID) {
+    func closeTab(worktreeId: String, tabId: TabID, cancelRunScriptMonitors: Bool = true) {
         if globalTabs.tabs.contains(where: { $0.id == tabId }) {
             closeGlobalTab(tabId: tabId)
             return
@@ -5698,7 +5698,9 @@ final class AppState {
         if let tab = allTabs.first(where: { $0.id == tabId }) {
             if case .terminal(let s) = tab {
                 for leaf in s.root.leaves() {
-                    cancelRunScriptCompletionTasks(sessionID: leaf.id)
+                    if cancelRunScriptMonitors {
+                        cancelRunScriptCompletionTasks(sessionID: leaf.id)
+                    }
                     closeTerminalSession(id: leaf.id, worktreeId: worktreeId, projectPath: projectPath)
                 }
             }
