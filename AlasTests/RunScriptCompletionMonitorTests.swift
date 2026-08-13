@@ -16,6 +16,8 @@ struct RunScriptCompletionMonitorTests {
         let paths = RunScriptCapturePaths(transcript: "/tmp/a'b.log", completion: "/tmp/a'b.done")
         let command = RunScriptCompletionMonitor.remoteWaitCommand(paths: paths, byteLimit: 1_048_576)
         #expect(command.contains("tail -c 1052672"))
+        #expect(command.contains("captured=1"))
+        #expect(command.contains("cat \"$body\""))
         #expect(command.contains("[ \"$exit_code\" != 0 ]"))
         #expect(command.contains("ALAS_RUN_V1"))
         #expect(command.contains("rm -f"))

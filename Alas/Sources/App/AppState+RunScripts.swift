@@ -1,4 +1,7 @@
 import Foundation
+import os
+
+private let runScriptLogger = Logger(subsystem: "io.nlopez.alas", category: "RunScripts")
 
 struct RunScriptCapturePaths: Equatable, Sendable {
     let transcript: String
@@ -280,6 +283,9 @@ extension AppState {
                     ))
                 } catch is CancellationError {
                 } catch {
+                    runScriptLogger.error(
+                        "Run script completion monitor failed for run \(runID, privacy: .public) at \(String(describing: location), privacy: .public): \(String(describing: error), privacy: .public)"
+                    )
                 }
             }
         )

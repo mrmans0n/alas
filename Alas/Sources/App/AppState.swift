@@ -5699,7 +5699,7 @@ final class AppState {
             if case .terminal(let s) = tab {
                 for leaf in s.root.leaves() {
                     if cancelRunScriptMonitors {
-                        cancelRunScriptCompletionTasks(sessionID: leaf.id)
+                        cancelRunScriptCompletionTasks(sessionID: leaf.id, after: .seconds(2))
                     }
                     closeTerminalSession(id: leaf.id, worktreeId: worktreeId, projectPath: projectPath)
                 }
@@ -5747,7 +5747,7 @@ final class AppState {
             if let tab = allTabs.first(where: { $0.id == id }),
                case .terminal(let s) = tab {
                 for leaf in s.root.leaves() {
-                    cancelRunScriptCompletionTasks(sessionID: leaf.id)
+                    cancelRunScriptCompletionTasks(sessionID: leaf.id, after: .seconds(2))
                     closeTerminalSession(id: leaf.id, worktreeId: worktreeId, projectPath: projectPath)
                 }
             }

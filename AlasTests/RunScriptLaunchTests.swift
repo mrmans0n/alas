@@ -332,7 +332,26 @@ struct RunScriptLaunchTests {
 
         fixture.state.closeTab(worktreeId: fixture.worktree.id, tabId: tab.id)
 
+        #expect(fixture.state.runScriptCompletionTaskCountForTesting == 1)
+        try await Task.sleep(for: .milliseconds(2_200))
         #expect(fixture.state.runScriptCompletionTaskCountForTesting == 0)
+    }
+
+    @MainActor
+    @Test func closingCompletedKeepOpenRunScriptTerminalPreservesFailure() async throws {
+        let fixture = try makeAppStateFixture(waiter: { _ in
+            try await Task.sleep(for: .milliseconds(200))
+            return RunScriptCompletion(exitCode: 42, transcript: Data("bad\n".utf8), truncated: false)
+        })
+
+        fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
+        try await Task.sleep(for: .milliseconds(50))
+        let tab = try #require(fixture.state.tabs.tabs(forWorktree: fixture.worktree.id).first)
+
+        fixture.state.closeTab(worktreeId: fixture.worktree.id, tabId: tab.id)
+        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+
+        #expect(fixture.state.runScriptFailures(in: fixture.worktree.id).count == 1)
     }
 
     @MainActor
@@ -375,6 +394,8 @@ struct RunScriptLaunchTests {
         fixture.state.closeTabsToLeft(worktreeId: fixture.worktree.id, of: otherTab.id)
 
         #expect(!fixture.state.tabs.tabs(forWorktree: fixture.worktree.id).contains(where: { $0.id == runTab.id }))
+        #expect(fixture.state.runScriptCompletionTaskCountForTesting == 1)
+        try await Task.sleep(for: .milliseconds(2_200))
         #expect(fixture.state.runScriptCompletionTaskCountForTesting == 0)
     }
 

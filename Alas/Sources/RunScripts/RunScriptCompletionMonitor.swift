@@ -90,18 +90,20 @@ enum RunScriptCompletionMonitor {
         return """
         transcript=\(transcript)
         completion=\(completion)
+        body="$completion.body"
         while [ ! -f "$completion" ]; do sleep 0.2; done
         exit_code=$(cat "$completion")
         captured=0
         truncated=0
         if [ "$exit_code" != 0 ] && [ -f "$transcript" ]; then
-          captured=1
-          size=$(wc -c < "$transcript" | tr -d ' ')
-          if [ "${size:-0}" -gt \(byteLimit) ]; then truncated=1; fi
+          if size=$(wc -c < "$transcript" | tr -d ' ') && tail -c \(byteLimit + outputBoundaryLookbehind) "$transcript" > "$body"; then
+            captured=1
+            if [ "${size:-0}" -gt \(byteLimit) ]; then truncated=1; fi
+          fi
         fi
         printf 'ALAS_RUN_V1\\t%s\\t%s\\t%s\\n' "$exit_code" "$captured" "$truncated"
-        if [ "$captured" = 1 ]; then tail -c \(byteLimit + outputBoundaryLookbehind) "$transcript"; fi
-        rm -f "$transcript" "$completion" "$completion.tmp"
+        if [ "$captured" = 1 ]; then cat "$body"; fi
+        rm -f "$transcript" "$completion" "$completion.tmp" "$body"
         """
     }
 
