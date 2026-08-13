@@ -5,9 +5,10 @@ import Testing
 struct RunScriptCompletionMonitorTests {
     @Test func remoteFrameIsBinarySafe() throws {
         let body = Data([0x00, 0x0A, 0xFF, 0x41])
-        let framed = Data("ALAS_RUN_V1\t9\t1\t0\n".utf8) + body
+        let framed = Data("ALAS_RUN_V1\t9\t1\t0\t1700000000\n".utf8) + body
         let result = try RunScriptCompletionMonitor.parseRemotePayload(framed)
         #expect(result.exitCode == 9)
+        #expect(result.completedAt == Date(timeIntervalSince1970: 1_700_000_000))
         #expect(result.transcript == body)
         #expect(!result.truncated)
     }
@@ -19,6 +20,7 @@ struct RunScriptCompletionMonitorTests {
         #expect(command.contains("captured=1"))
         #expect(command.contains("cat \"$body\""))
         #expect(command.contains("\"$body\" \"$completion.status\""))
+        #expect(command.contains("completed_at=${2:-$(date +%s)}"))
         #expect(command.contains("[ \"$exit_code\" != 0 ]"))
         #expect(command.contains("ALAS_RUN_V1"))
         #expect(command.contains("rm -f"))
@@ -57,10 +59,11 @@ struct RunScriptCompletionMonitorTests {
         )
         let transcript = Data((String(repeating: "x", count: 32) + "tail").utf8)
         try transcript.write(to: URL(fileURLWithPath: paths.transcript))
-        try "7\n".write(toFile: paths.completion, atomically: true, encoding: .utf8)
+        try "7\t1700000000\n".write(toFile: paths.completion, atomically: true, encoding: .utf8)
 
         let result = try await RunScriptCompletionMonitor.wait(for: location)
         #expect(result.exitCode == 7)
+        #expect(result.completedAt == Date(timeIntervalSince1970: 1_700_000_000))
         #expect(result.transcript == transcript)
         #expect(!result.truncated)
         #expect(!FileManager.default.fileExists(atPath: paths.transcript))

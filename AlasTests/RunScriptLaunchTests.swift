@@ -67,7 +67,7 @@ struct RunScriptLaunchTests {
         #expect(suffix.contains("prepare_transcript()"))
         #expect(suffix.contains("prepare_transcript\n    rm -f"))
         #expect(suffix.contains("prepare_transcript\n    script -qefc"))
-        #expect(suffix.contains("script -q \"$transcript\" /usr/bin/env -u SCRIPT /bin/sh -c"))
+        #expect(suffix.contains("/usr/bin/script -q \"$transcript\" /usr/bin/env -u SCRIPT /bin/sh -c"))
         #expect(suffix.contains("script -qefc"))
         #expect(suffix.contains("env -u SCRIPT"))
         #expect(suffix.contains("private_umask=$(umask)"))
@@ -113,7 +113,7 @@ struct RunScriptLaunchTests {
 
         let process = try runZsh(suffix)
         #expect(process.terminationStatus == 42)
-        #expect(try String(contentsOfFile: capture.completion, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines) == "42")
+        #expect(try String(contentsOfFile: capture.completion, encoding: .utf8).hasPrefix("42\t"))
         let transcript = try String(contentsOfFile: capture.transcript, encoding: .utf8)
         #expect(transcript.contains("stdout-line"))
         #expect(transcript.contains("stderr-line"))
@@ -143,7 +143,7 @@ struct RunScriptLaunchTests {
         #expect(process.terminationStatus == 0)
         #expect(FileManager.default.fileExists(atPath: marker.path))
         #expect(try String(contentsOf: status, encoding: .utf8) == "42")
-        #expect(try String(contentsOfFile: capture.completion, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines) == "42")
+        #expect(try String(contentsOfFile: capture.completion, encoding: .utf8).hasPrefix("42\t"))
     }
 
     @Test func closeOnExitPreservesScriptStatusInZsh() throws {

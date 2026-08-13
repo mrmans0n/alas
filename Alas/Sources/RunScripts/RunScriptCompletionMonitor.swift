@@ -14,8 +14,16 @@ enum RunScriptCaptureLocation: Equatable, Sendable {
 
 struct RunScriptCompletion: Equatable, Sendable {
     let exitCode: Int32
+    let completedAt: Date
     let transcript: Data?
     let truncated: Bool
+
+    init(exitCode: Int32, completedAt: Date = Date(), transcript: Data?, truncated: Bool) {
+        self.exitCode = exitCode
+        self.completedAt = completedAt
+        self.transcript = transcript
+        self.truncated = truncated
+    }
 }
 
 enum RunScriptCompletionMonitor {
@@ -68,7 +76,7 @@ enum RunScriptCompletionMonitor {
               let header = String(data: data[..<newline], encoding: .utf8)
         else { throw MonitorError.malformedRemotePayload }
         let parts = header.split(separator: "\t", omittingEmptySubsequences: false)
-        guard parts.count == 4,
+        guard (parts.count == 4 || parts.count == 5),
               parts[0] == "ALAS_RUN_V1",
               let exitCode = Int32(parts[1]),
               let captured = Int(parts[2]),
@@ -76,9 +84,13 @@ enum RunScriptCompletionMonitor {
               (captured == 0 || captured == 1),
               (truncated == 0 || truncated == 1)
         else { throw MonitorError.malformedRemotePayload }
+        let completedAt = parts.count == 5
+            ? Date(timeIntervalSince1970: TimeInterval(String(parts[4])) ?? Date().timeIntervalSince1970)
+            : Date()
         let body = data[data.index(after: newline)...]
         return RunScriptCompletion(
             exitCode: exitCode,
+            completedAt: completedAt,
             transcript: captured == 1 ? Data(body) : nil,
             truncated: truncated == 1
         )
@@ -92,7 +104,9 @@ enum RunScriptCompletionMonitor {
         completion=\(completion)
         body="$completion.body"
         while [ ! -f "$completion" ]; do sleep 0.2; done
-        exit_code=$(cat "$completion")
+        set -- $(cat "$completion")
+        exit_code=$1
+        completed_at=${2:-$(date +%s)}
         captured=0
         truncated=0
         if [ "$exit_code" != 0 ] && [ -f "$transcript" ]; then
@@ -101,7 +115,7 @@ enum RunScriptCompletionMonitor {
             if [ "${size:-0}" -gt \(byteLimit) ]; then truncated=1; fi
           fi
         fi
-        printf 'ALAS_RUN_V1\\t%s\\t%s\\t%s\\n' "$exit_code" "$captured" "$truncated"
+        printf 'ALAS_RUN_V1\\t%s\\t%s\\t%s\\t%s\\n' "$exit_code" "$captured" "$truncated" "$completed_at"
         if [ "$captured" = 1 ]; then cat "$body"; fi
         rm -f "$transcript" "$completion" "$completion.tmp" "$body" "$completion.status" || true
         """
@@ -138,12 +152,18 @@ enum RunScriptCompletionMonitor {
         }
         let statusText = try String(contentsOfFile: paths.completion, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let exitCode = Int32(statusText) else { throw MonitorError.malformedStatus }
+        let parts = statusText.split(whereSeparator: \.isWhitespace)
+        guard let exitCodeText = parts.first,
+              let exitCode = Int32(exitCodeText)
+        else { throw MonitorError.malformedStatus }
+        let completedAt = parts.dropFirst().first
+            .flatMap { TimeInterval(String($0)) }
+            .map { Date(timeIntervalSince1970: $0) } ?? Date()
         guard exitCode != 0 else {
-            return RunScriptCompletion(exitCode: exitCode, transcript: nil, truncated: false)
+            return RunScriptCompletion(exitCode: exitCode, completedAt: completedAt, transcript: nil, truncated: false)
         }
         guard FileManager.default.fileExists(atPath: paths.transcript) else {
-            return RunScriptCompletion(exitCode: exitCode, transcript: nil, truncated: false)
+            return RunScriptCompletion(exitCode: exitCode, completedAt: completedAt, transcript: nil, truncated: false)
         }
         let url = URL(fileURLWithPath: paths.transcript)
         do {
@@ -156,11 +176,12 @@ enum RunScriptCompletionMonitor {
             try handle.seek(toOffset: offset)
             return RunScriptCompletion(
                 exitCode: exitCode,
+                completedAt: completedAt,
                 transcript: try handle.readToEnd() ?? Data(),
                 truncated: offset > 0
             )
         } catch {
-            return RunScriptCompletion(exitCode: exitCode, transcript: nil, truncated: false)
+            return RunScriptCompletion(exitCode: exitCode, completedAt: completedAt, transcript: nil, truncated: false)
         }
     }
 

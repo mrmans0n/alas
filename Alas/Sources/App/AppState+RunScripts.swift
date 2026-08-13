@@ -90,10 +90,10 @@ extension AppState {
           umask "$private_umask"
         }
         if command -v script >/dev/null 2>&1; then
-          if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
+          if [ "$(uname -s 2>/dev/null)" = Darwin ] && [ -x /usr/bin/script ]; then
             prepare_transcript
             rm -f \(status)
-            script -q "$transcript" /usr/bin/env -u SCRIPT /bin/sh -c \(quotedDarwinCommandLine)
+            /usr/bin/script -q "$transcript" /usr/bin/env -u SCRIPT /bin/sh -c \(quotedDarwinCommandLine)
             script_status=$?
             if [ -f \(status) ]; then
               exit_code=$(cat \(status))
@@ -116,7 +116,7 @@ extension AppState {
         tmp="$completion.tmp"
         private_umask=$(umask)
         umask 077
-        printf '%s\\n' "$exit_code" > "$tmp"
+        printf '%s\\t%s\\n' "$exit_code" "$(date +%s)" > "$tmp"
         mv "$tmp" "$completion"
         umask "$private_umask"\(exitLine)
         """
@@ -303,7 +303,7 @@ extension AppState {
                         worktreeID: worktree.id,
                         branch: worktree.branch,
                         exitCode: completion.exitCode,
-                        completedAt: Date(),
+                        completedAt: completion.completedAt,
                         capturedOutput: capturedOutput
                     ))
                 } catch is CancellationError {
