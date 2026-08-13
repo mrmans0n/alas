@@ -66,7 +66,7 @@ struct ACPTranscriptScrollerLiveScrollTests {
         )
     }
 
-    @Test("an upward live scroll past the pause tolerance pauses tail-follow, with no current NSEvent")
+    @Test("an upward live scroll pauses tail-follow, with no current NSEvent")
     func liveScrollUpPausesTailFollow() {
         // The coordinator must stay in scope: its `onScroll` closure captures
         // it weakly, so binding it to `_` would silently disable every scroll
@@ -75,13 +75,29 @@ struct ACPTranscriptScrollerLiveScrollTests {
         #expect(host.session.followsTranscriptTail, "fixture should start following the tail")
         #expect(scroller.distanceFromBottom < 1, "fixture should start pinned to the bottom")
 
-        // 470pt from the bottom: the furthest the real captured gesture got,
-        // and comfortably past `pauseTolerance` (160).
+        // 470pt from the bottom: the furthest the real captured gesture got.
         liveScroll(scroller, to: max(0, scroller.contentHeight - scroller.viewportHeight - 470))
 
         #expect(
             host.session.followsTranscriptTail == false,
             "a deliberate upward scroll must pause tail-follow even though NSApp.currentEvent is not a scrollWheel"
+        )
+        withExtendedLifetime(coordinator) {}
+    }
+
+    @Test("a small upward live scroll remains where the reader stopped after settling")
+    func smallLiveScrollDoesNotSnapBackAfterSettling() async throws {
+        let (host, scroller, coordinator) = tailFollowingHost()
+        let target = max(0, scroller.contentHeight - scroller.viewportHeight - 80)
+
+        liveScroll(scroller, to: target)
+        let distanceFromBottom = scroller.distanceFromBottom
+        try await Task.sleep(for: .milliseconds(700))
+
+        #expect(!host.session.followsTranscriptTail)
+        #expect(
+            abs(scroller.distanceFromBottom - distanceFromBottom) < 1,
+            "the settled transcript changed its tail distance from \(distanceFromBottom) to \(scroller.distanceFromBottom)"
         )
         withExtendedLifetime(coordinator) {}
     }
