@@ -487,7 +487,7 @@ private struct RunScriptMenu: View {
                 Text("No run scripts")
             }
             Divider()
-            Button("New Repo Script…") { onNew(.repo) }
+            Button("New Repository Script…") { onNew(.repo) }
             Button("New Global Script…") { onNew(.global) }
             Button("Edit Scripts…") { onEdit() }
         } label: {
