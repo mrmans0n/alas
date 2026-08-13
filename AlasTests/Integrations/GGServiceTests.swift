@@ -27,11 +27,11 @@ private struct FakeGGRunner: GGCommandRunning {
 }
 
 struct GGServiceTests {
-    @Test func processRunnerUsesShortTimeoutOnlyForStackQueries() async throws {
+    @Test func processRunnerUsesGGTimeoutForEveryCommand() async throws {
         let cases: [([String], TimeInterval)] = [
-            (["ls", "--json"], Process.defaultTimeout),
-            (["--client-operation-id", "alas:1", "ls", "--json"], Process.defaultTimeout),
-            (["ls", "--json", "--client-operation-id", "alas:1"], Process.defaultTimeout),
+            (["ls", "--json"], 600),
+            (["--client-operation-id", "alas:1", "ls", "--json"], 600),
+            (["ls", "--json", "--client-operation-id", "alas:1"], 600),
             (["sync", "--json"], 600),
             (["sync", "--help"], 600),
             (["ls"], 600),

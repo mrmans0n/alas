@@ -63,24 +63,17 @@ struct ProcessGGCommandRunner: GGCommandRunning {
     }
 
     func run(args: [String], cwd: URL?) async throws -> ProcessResult {
-        let timeout = Self.isStackQuery(args) ? Process.defaultTimeout : Self.commandTimeout
         return try await processLaunch(
             "/usr/bin/env",
             ["gg"] + args,
             cwd,
             Process.gitEnv(),
-            timeout
+            Self.commandTimeout
         )
     }
 
     func runStreaming(args: [String], cwd: URL?) -> AsyncThrowingStream<String, Error> {
         Self.streamProcess(executable: "/usr/bin/env", args: ["gg"] + args, cwd: cwd, env: Process.gitEnv(), timeout: Self.commandTimeout)
-    }
-
-    private static func isStackQuery(_ args: [String]) -> Bool {
-        let commandIndex = args.first == "--client-operation-id" ? 2 : 0
-        guard args.indices.contains(commandIndex), args[commandIndex] == "ls" else { return false }
-        return args[args.index(after: commandIndex)...].contains("--json")
     }
 
     /// Pipe-lifecycle core of `runStreaming`, parameterized on the
