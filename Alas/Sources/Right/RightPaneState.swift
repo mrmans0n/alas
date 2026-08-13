@@ -139,6 +139,7 @@ final class RightPaneState: GGSplitCommitServicing {
     var ggStackLoadState: GGStackLoadState = .inactive
     var ggStackRemoteError: String? = nil
     var ggStackRemoteEnrichmentPending = false
+    private var ggStackRemoteMetadataCache: GGStack?
     @ObservationIgnored
     var ggCapabilities: @MainActor () -> GGCapabilities = {
         GGAvailability.shared.capabilities
@@ -987,6 +988,7 @@ final class RightPaneState: GGSplitCommitServicing {
             ggStackLoadState = .inactive
             ggStackRemoteError = nil
             ggStackRemoteEnrichmentPending = false
+            ggStackRemoteMetadataCache = nil
             if ggStack != nil { ggStack = nil }
             if !ggStackDisplayCommits.isEmpty { ggStackDisplayCommits = [] }
             if GGStackSummaryStore.shared.summaries[worktree.path.path] != nil {
@@ -1066,7 +1068,7 @@ final class RightPaneState: GGSplitCommitServicing {
                 refreshRemote: !usesLocalSnapshot
             )
             if usesLocalSnapshot {
-                stack = stack?.mergingRemoteMetadata(from: previousStack)
+                stack = stack?.mergingRemoteMetadata(from: previousStack ?? ggStackRemoteMetadataCache)
             }
             let displayCommits: [CommitInfo]
             if let stack {
@@ -1106,6 +1108,7 @@ final class RightPaneState: GGSplitCommitServicing {
             if GGStackSummaryStore.shared.summaries[worktree.path.path] != summary {
                 GGStackSummaryStore.shared.summaries[worktree.path.path] = summary
             }
+            ggStackRemoteMetadataCache = nil
             await reconcileGGUndoCandidateIfNeeded()
             guard usesLocalSnapshot else { return }
 
@@ -1215,6 +1218,7 @@ final class RightPaneState: GGSplitCommitServicing {
         if !ggStackDisplayCommits.isEmpty { ggStackDisplayCommits = [] }
         ggStackLoadState = ggContext.isActive ? .loading : .inactive
         ggStackRemoteError = nil
+        ggStackRemoteMetadataCache = nil
         if GGStackSummaryStore.shared.summaries[worktree.path.path] != nil {
             GGStackSummaryStore.shared.summaries[worktree.path.path] = nil
         }
@@ -1236,7 +1240,9 @@ final class RightPaneState: GGSplitCommitServicing {
     @MainActor
     @discardableResult
     func reevaluateGGGate() -> Task<Void, Never> {
+        let remoteMetadata = ggStack
         invalidateGGPresentation(startingRefresh: false)
+        ggStackRemoteMetadataCache = remoteMetadata
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
             await self.refreshGGStack()

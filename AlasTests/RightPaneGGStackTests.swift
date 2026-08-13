@@ -80,15 +80,18 @@ private final class SequencedFakeGGRunner: GGCommandRunning, @unchecked Sendable
 private final class LocalFirstGGRunner: GGCommandRunning, @unchecked Sendable {
     private(set) var calls: [[String]] = []
     var delaysRemote = false
+    var localJSON = GGStackModelsTests.fixture
+    var remoteResults: [ProcessResult] = []
 
     func run(args: [String], cwd: URL?) async throws -> ProcessResult {
         calls.append(args)
         if args == ["ls", "--json", "--no-refresh"] {
-            return ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
+            return ProcessResult(exitCode: 0, stdout: localJSON, stderr: "")
         }
         if delaysRemote {
             try await Task.sleep(nanoseconds: 1_000_000_000)
         }
+        if !remoteResults.isEmpty { return remoteResults.removeFirst() }
         throw GGServiceError.commandFailed(stderr: "remote unavailable")
     }
 }
@@ -785,6 +788,37 @@ struct RightPaneGGStackTests {
         #expect(state.ggStackDisplayCommits.count == 3)
         #expect(state.ggStackRemoteError == "remote unavailable")
         #expect(!state.ggStackRemoteEnrichmentPending)
+    }
+
+    @Test func manualRetryPreservesCachedMetadataWhenRemoteFailsAgain() async {
+        let runner = LocalFirstGGRunner()
+        runner.localJSON = GGStackModelsTests.fixture
+            .replacingOccurrences(of: #""pr_state": "merged""#, with: #""pr_state": null"#)
+            .replacingOccurrences(of: #""pr_state": "open""#, with: #""pr_state": null"#)
+            .replacingOccurrences(of: #""ci_status": "success""#, with: #""ci_status": null"#)
+            .replacingOccurrences(of: #""ci_status": "running""#, with: #""ci_status": null"#)
+        runner.remoteResults = [
+            ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: ""),
+        ]
+        let state = makeState()
+        state.ggService = GGService(runner: runner)
+        state.ggCapabilities = {
+            GGCapabilities(
+                structuredSplit: false,
+                keepCurrentUnstack: false,
+                localStackSnapshot: true
+            )
+        }
+        state.ggContextProvider = { _ in .active(stackName: "agent-inbox") }
+
+        await state.refreshGGStack()
+        #expect(state.ggStack?.entries[0].prState == .merged)
+
+        await state.reevaluateGGGate().value
+
+        #expect(state.ggStack?.entries[0].prState == .merged)
+        #expect(state.ggStack?.entries[0].ciStatus == .success)
+        #expect(state.ggStackRemoteError == "remote unavailable")
     }
 
     @Test func failedHydrationClearsStackAndKeepsPlainCommitRows() async {
