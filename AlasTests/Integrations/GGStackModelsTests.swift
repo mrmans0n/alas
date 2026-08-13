@@ -106,6 +106,25 @@ struct GGStackModelsTests {
         #expect(merged.entries[1].ciStatus == .running)
     }
 
+    @Test func localStackMatchesLegacyRemoteMetadataBySHA() {
+        let local = GGStack(
+            name: "stack", base: "main", totalCommits: 1, syncedCommits: 1,
+            currentPosition: 1, behindBase: nil,
+            entries: [GGStackEntry(position: 1, sha: "abcdef0", title: "one", isCurrent: true)]
+        )
+        let remote = GGStack(
+            name: "stack", base: "main", totalCommits: 1, syncedCommits: 1,
+            currentPosition: 1, behindBase: nil,
+            entries: [GGStackEntry(position: 1, sha: "abcdef012345", title: "one", prNumber: 42, prState: .open, ciStatus: .success, isCurrent: true)]
+        )
+
+        let merged = local.mergingRemoteMetadata(from: remote)
+
+        #expect(merged.entries[0].prNumber == 42)
+        #expect(merged.entries[0].prState == .open)
+        #expect(merged.entries[0].ciStatus == .success)
+    }
+
     @Test func entryMatchesFullCommitSHAByPrefix() throws {
         let snapshot = try GGStackSnapshot.decode(fromJSON: Data(Self.fixture.utf8))
         let stack = try #require(snapshot.stack)

@@ -135,8 +135,10 @@ struct GGStack: Decodable, Equatable {
             behindBase: behindBase,
             entries: entries.map { entry in
                 guard let match = remote.entries.first(where: {
-                    entry.ggId != nil ? $0.ggId == entry.ggId : $0.prNumber == entry.prNumber
-                }), entry.ggId != nil || entry.prNumber != nil
+                    if let ggId = entry.ggId { return $0.ggId == ggId }
+                    if let prNumber = entry.prNumber { return $0.prNumber == prNumber }
+                    return entry.sha.hasPrefix($0.sha) || $0.sha.hasPrefix(entry.sha)
+                })
                 else { return entry }
                 return GGStackEntry(
                     position: entry.position,
@@ -144,7 +146,7 @@ struct GGStack: Decodable, Equatable {
                     title: entry.title,
                     ggId: entry.ggId,
                     ggParent: entry.ggParent,
-                    prNumber: entry.prNumber,
+                    prNumber: entry.prNumber ?? match.prNumber,
                     prState: match.prState,
                     approved: match.approved,
                     ciStatus: match.ciStatus,
