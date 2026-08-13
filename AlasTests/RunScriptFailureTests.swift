@@ -21,7 +21,8 @@ struct RunScriptFailureTests {
 
     @Test func dismissAndPurgeAreWorktreeScoped() {
         var queue = RunScriptFailureQueue()
-        queue.append(failure(1, worktreeID: "a")); queue.append(failure(2, worktreeID: "b"))
+        queue.append(failure(1, worktreeID: "a"))
+        queue.append(failure(2, worktreeID: "b"))
         queue.dismiss(id: "failure-1", worktreeID: "a")
         #expect(queue.failures(for: "a").isEmpty)
         #expect(queue.failures(for: "b").map(\.id) == ["failure-2"])
