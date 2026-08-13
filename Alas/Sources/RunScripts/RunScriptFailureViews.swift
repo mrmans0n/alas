@@ -27,7 +27,7 @@ struct RunScriptFailureDetailPresentation: Equatable {
         case .available(let text, _):
             text.isEmpty ? "No output was captured." : text
         case .unavailable:
-            "No output was captured."
+            "Output could not be captured."
         }
     }
 

@@ -64,10 +64,11 @@ struct RunScriptLaunchTests {
             branch: "main", projectName: "alas", repoRoot: "/repo", capturePaths: capture
         )
         #expect(suffix.contains("uname -s"))
-        #expect(suffix.contains("script -qF"))
+        #expect(suffix.contains("script -qeF"))
         #expect(suffix.contains("script -qefc"))
         #expect(suffix.contains("env -u SCRIPT"))
         #expect(suffix.contains("command -v script"))
+        #expect(suffix.contains("find"))
         #expect(suffix.contains("exit_code=$?"))
         #expect(suffix.contains("mv"))
         #expect(suffix.hasSuffix("exit \"$exit_code\""))
@@ -299,6 +300,22 @@ struct RunScriptLaunchTests {
 
         #expect(fixture.state.runScriptCompletionTaskCountForTesting == 0)
         #expect(fixture.state.runScriptFailures(in: fixture.worktree.id).isEmpty)
+    }
+
+    @MainActor
+    @Test func closingRunScriptTerminalCancelsRunMonitor() async throws {
+        let fixture = try makeAppStateFixture(waiter: { _ in
+            try await Task.sleep(for: .seconds(5))
+            return RunScriptCompletion(exitCode: 1, transcript: nil, truncated: false)
+        })
+
+        fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
+        try await Task.sleep(for: .milliseconds(50))
+        let tab = try #require(fixture.state.tabs.tabs(forWorktree: fixture.worktree.id).first)
+
+        fixture.state.closeTab(worktreeId: fixture.worktree.id, tabId: tab.id)
+
+        #expect(fixture.state.runScriptCompletionTaskCountForTesting == 0)
     }
 
     @MainActor

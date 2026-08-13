@@ -93,7 +93,7 @@ enum RunScriptCompletionMonitor {
         exit_code=$(cat "$completion")
         captured=0
         truncated=0
-        if [ -f "$transcript" ]; then
+        if [ "$exit_code" != 0 ] && [ -f "$transcript" ]; then
           captured=1
           size=$(wc -c < "$transcript" | tr -d ' ')
           if [ "${size:-0}" -gt \(byteLimit) ]; then truncated=1; fi

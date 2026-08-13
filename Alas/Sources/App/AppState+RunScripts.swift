@@ -71,10 +71,11 @@ extension AppState {
         completion=\(completion)
         mkdir -p \(transcriptDir) \(completionDir) || exit 1
         chmod 700 \(transcriptDir) \(completionDir) || exit 1
+        find \(transcriptDir) -type f \\( -name '*.log' -o -name '*.done' -o -name '*.tmp' \\) -mtime +7 -exec rm -f {} + 2>/dev/null || true
         umask 077
         if command -v script >/dev/null 2>&1; then
           if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
-            script -qF "$transcript" /usr/bin/env -u SCRIPT \(commandLine)
+            script -qeF "$transcript" /usr/bin/env -u SCRIPT \(commandLine)
             exit_code=$?
           elif script --version 2>/dev/null | grep -qi 'util-linux'; then
             script -qefc \(quotedCommandLine) "$transcript"
@@ -174,12 +175,6 @@ extension AppState {
             let captureLocation: RunScriptCaptureLocation
             do {
                 captureLocation = try RunScriptCompletionMonitor.paths(runID: runID, host: project.host)
-                startRunScriptCompletionMonitor(
-                    runID: runID,
-                    location: captureLocation,
-                    script: script,
-                    worktree: worktree
-                )
                 let suffix = try Self.runScriptStartupScript(
                     script: script,
                     worktreeRoot: worktree.path,
@@ -189,11 +184,21 @@ extension AppState {
                     capturePaths: captureLocation.paths
                 )
                 do {
-                    _ = try await openTerminalTabPreparingRemoteZmxIfNeeded(
+                    let tab = try await openTerminalTabPreparingRemoteZmxIfNeeded(
                         for: worktree,
                         startupScriptSuffix: suffix,
                         titleOverride: script.displayName,
                         runScriptKey: script.key
+                    )
+                    guard case .terminal(let terminalState) = tab,
+                          let sessionID = terminalState.runScriptLeafId
+                    else { return }
+                    startRunScriptCompletionMonitor(
+                        runID: runID,
+                        sessionID: sessionID,
+                        location: captureLocation,
+                        script: script,
+                        worktree: worktree
                     )
                 } catch {
                     cancelRunScriptCompletionTask(runID: runID, location: captureLocation)
@@ -233,12 +238,15 @@ extension AppState {
 
     private func startRunScriptCompletionMonitor(
         runID: String,
+        sessionID: String,
         location: RunScriptCaptureLocation,
         script: RunScript,
         worktree: Worktree
     ) {
         runScriptCompletionTasks[runID] = (
             worktreeID: worktree.id,
+            sessionID: sessionID,
+            location: location,
             task: Task { @MainActor [weak self] in
                 guard let self else { return }
                 defer { runScriptCompletionTasks.removeValue(forKey: runID) }
@@ -282,9 +290,17 @@ extension AppState {
         cleanupCaptureLocation(location)
     }
 
+    func cancelRunScriptCompletionTasks(sessionID: String) {
+        for (runID, entry) in runScriptCompletionTasks where entry.sessionID == sessionID {
+            runScriptCompletionTasks.removeValue(forKey: runID)?.task.cancel()
+            cleanupCaptureLocation(entry.location)
+        }
+    }
+
     func cleanupRunScriptState(worktreeID: String) {
         for (runID, entry) in runScriptCompletionTasks where entry.worktreeID == worktreeID {
             runScriptCompletionTasks.removeValue(forKey: runID)?.task.cancel()
+            cleanupCaptureLocation(entry.location)
         }
         runScriptFailureQueue.purge(worktreeID: worktreeID)
         if selectedRunScriptFailure?.worktreeID == worktreeID {
