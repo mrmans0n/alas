@@ -86,6 +86,17 @@ struct GGServiceTests {
         #expect(runner.lastCwd == URL(fileURLWithPath: "/tmp/wt"))
     }
 
+    @Test func currentStackCanSkipRemoteRefresh() async throws {
+        let runner = FakeGGRunner(
+            result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
+        )
+        let service = GGService(runner: runner)
+
+        _ = try await service.currentStack(worktreePath: "/tmp/wt", refreshRemote: false)
+
+        #expect(runner.lastArgs == ["ls", "--json", "--no-refresh"])
+    }
+
     @Test func currentStackReturnsNilOffStack() async throws {
         let runner = FakeGGRunner(
             result: ProcessResult(

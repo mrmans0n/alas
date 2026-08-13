@@ -318,6 +318,7 @@ struct GGService {
         let unstack = try? await runner.run(args: ["unstack", "--help"], cwd: nil)
         let sc = try? await runner.run(args: ["sc", "--help"], cwd: nil)
         let sync = try? await runner.run(args: ["sync", "--help"], cwd: nil)
+        let ls = try? await runner.run(args: ["ls", "--help"], cwd: nil)
         return GGCapabilities(
             structuredSplit: split?.exitCode == 0
                 && split?.stdout.contains("--describe") == true
@@ -328,21 +329,31 @@ struct GGService {
                 && root?.stdout.contains("--client-operation-id") == true,
             stagedOnlyAmend: sc?.exitCode == 0
                 && sc?.stdout.contains("--staged-only") == true,
-            syncJSONL: sync?.exitCode == 0 && sync?.stdout.contains("--jsonl") == true
+            syncJSONL: sync?.exitCode == 0 && sync?.stdout.contains("--jsonl") == true,
+            localStackSnapshot: ls?.exitCode == 0
+                && ls?.stdout.contains("--no-refresh") == true
         )
     }
 
     /// Loads the current branch's stack via `gg ls --json`. Returns nil
     /// when the branch is not a gg stack (gg emits the all-stacks shape).
-    func currentStack(worktreePath: String) async throws -> GGStack? {
-        try await currentStackSnapshot(worktreePath: worktreePath).stack
+    func currentStack(worktreePath: String, refreshRemote: Bool = true) async throws -> GGStack? {
+        try await currentStackSnapshot(
+            worktreePath: worktreePath,
+            refreshRemote: refreshRemote
+        ).stack
     }
 
-    func currentStackSnapshot(worktreePath: String) async throws -> GGStackSnapshot {
+    func currentStackSnapshot(
+        worktreePath: String,
+        refreshRemote: Bool = true
+    ) async throws -> GGStackSnapshot {
         let result: ProcessResult
         do {
             result = try await runner.run(
-                args: ["ls", "--json"],
+                args: refreshRemote
+                    ? ["ls", "--json"]
+                    : ["ls", "--json", "--no-refresh"],
                 cwd: URL(fileURLWithPath: worktreePath)
             )
         } catch let error as GGServiceError {

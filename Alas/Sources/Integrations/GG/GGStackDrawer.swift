@@ -122,7 +122,7 @@ struct GGStackDrawer: View {
         expandableCollapsedRow(
             title: model.title,
             summaryChip: model.summaryChip,
-            isPaused: model.isPaused,
+            isPaused: model.isPaused || rps.ggStackRemoteError != nil,
             showsLoading: false
         )
     }
@@ -266,6 +266,16 @@ struct GGStackDrawer: View {
     @ViewBuilder
     private func expandedBody(_ model: GGStackReadinessModel) -> some View {
         VStack(alignment: .leading, spacing: 8) {
+            if let error = rps.ggStackRemoteError {
+                Text("PR status unavailable: \(error)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(theme.color("warn"))
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Retry PR status", action: refresh)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(isRefreshing)
+            }
             if model.isPaused {
                 if let progress = model.syncProgress { syncProgressView(progress) }
                 Text("A gg operation is paused on conflicts. Resolve them in the Conflicts section, then Continue — or Abort to roll back.")

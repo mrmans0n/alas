@@ -20,6 +20,7 @@ private struct HelpGGRunner: GGCommandRunning {
     let unstack: String?
     let sc: String?
     let sync: String?
+    let ls: String?
 
     init(
         version: String? = "1.0.0",
@@ -27,7 +28,8 @@ private struct HelpGGRunner: GGCommandRunning {
         split: String?,
         unstack: String?,
         sc: String? = nil,
-        sync: String? = nil
+        sync: String? = nil,
+        ls: String? = nil
     ) {
         self.version = version
         self.root = root
@@ -35,6 +37,7 @@ private struct HelpGGRunner: GGCommandRunning {
         self.unstack = unstack
         self.sc = sc
         self.sync = sync
+        self.ls = ls
     }
 
     func run(args: [String], cwd: URL?) async throws -> ProcessResult {
@@ -57,6 +60,9 @@ private struct HelpGGRunner: GGCommandRunning {
         case ["sync", "--help"]:
             guard let sync else { break }
             return ProcessResult(exitCode: 0, stdout: sync, stderr: "")
+        case ["ls", "--help"]:
+            guard let ls else { break }
+            return ProcessResult(exitCode: 0, stdout: ls, stderr: "")
         default:
             break
         }
@@ -138,6 +144,16 @@ struct GGAvailabilityTests {
             split: "", unstack: "", sync: "--json"
         ))
         #expect(!(await old.probeCapabilities()).syncJSONL)
+    }
+
+    @Test func localStackSnapshotCapabilityUsesListHelpAndDefaultsOff() async {
+        let current = GGService(runner: HelpGGRunner(
+            split: "", unstack: "", ls: "--json --no-refresh"
+        ))
+        #expect((await current.probeCapabilities()).localStackSnapshot)
+
+        let old = GGService(runner: HelpGGRunner(split: "", unstack: "", ls: "--json"))
+        #expect(!(await old.probeCapabilities()).localStackSnapshot)
     }
 
     @Test func probePopulatesVersionAndMCPPath() async {

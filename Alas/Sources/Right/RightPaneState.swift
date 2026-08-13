@@ -137,6 +137,13 @@ final class RightPaneState: GGSplitCommitServicing {
     var ggEffectiveConfig: GGEffectiveConfig = .defaults
     var ggContext: GGWorktreeContext = .inactive(reason: .policyOff)
     var ggStackLoadState: GGStackLoadState = .inactive
+    var ggStackRemoteError: String? = nil
+    var ggStackRemoteEnrichmentPending = false
+    private var ggStackRemoteMetadataCache: GGStack?
+    @ObservationIgnored
+    var ggCapabilities: @MainActor () -> GGCapabilities = {
+        GGAvailability.shared.capabilities
+    }
     /// Injected by RightPaneStore to resolve the current live branch against
     /// app-, project-, and worktree-level GG policy.
     var ggContextProvider: (@MainActor (_ branch: String) -> GGWorktreeContext)? = nil
@@ -979,6 +986,9 @@ final class RightPaneState: GGSplitCommitServicing {
             }
             ggStackCommitsKey = nil
             ggStackLoadState = .inactive
+            ggStackRemoteError = nil
+            ggStackRemoteEnrichmentPending = false
+            ggStackRemoteMetadataCache = nil
             if ggStack != nil { ggStack = nil }
             if !ggStackDisplayCommits.isEmpty { ggStackDisplayCommits = [] }
             if GGStackSummaryStore.shared.summaries[worktree.path.path] != nil {
@@ -999,6 +1009,12 @@ final class RightPaneState: GGSplitCommitServicing {
         // to share the same commits (e.g. right after `git checkout -b`)
         // must not reuse the old branch's cached stack.
         let key = currentGGStackCommitsKey
+        if !forceRemote, key == ggStackCommitsKey, ggStackRemoteEnrichmentPending {
+            await enrichGGStackRemote(
+                snapshotGeneration: snapshotGeneration,
+                refreshGeneration: refreshGeneration
+            )
+        }
         guard forceRemote || key != ggStackCommitsKey else {
             await reconcileGGUndoCandidateIfNeeded()
             return
@@ -1036,6 +1052,8 @@ final class RightPaneState: GGSplitCommitServicing {
         }
         invalidateOlderHistoryForDisplaySourceChange()
         ggStackLoadState = .loading
+        ggStackRemoteError = nil
+        ggStackRemoteEnrichmentPending = false
         ggStackCommitsKey = nil
         if ggStack != nil { ggStack = nil }
         if !ggStackDisplayCommits.isEmpty { ggStackDisplayCommits = [] }
@@ -1044,7 +1062,14 @@ final class RightPaneState: GGSplitCommitServicing {
         }
         ggMutationCoordinator.suspendUndoCandidate()
         do {
-            let stack = try await ggService.currentStack(worktreePath: worktree.path.path)
+            let usesLocalSnapshot = ggCapabilities().localStackSnapshot
+            var stack = try await ggService.currentStack(
+                worktreePath: worktree.path.path,
+                refreshRemote: !usesLocalSnapshot
+            )
+            if usesLocalSnapshot {
+                stack = stack?.mergingRemoteMetadata(from: previousStack ?? ggStackRemoteMetadataCache)
+            }
             let displayCommits: [CommitInfo]
             if let stack {
                 let infos = stack.entries.isEmpty
@@ -1083,7 +1108,14 @@ final class RightPaneState: GGSplitCommitServicing {
             if GGStackSummaryStore.shared.summaries[worktree.path.path] != summary {
                 GGStackSummaryStore.shared.summaries[worktree.path.path] = summary
             }
+            ggStackRemoteMetadataCache = nil
             await reconcileGGUndoCandidateIfNeeded()
+            guard usesLocalSnapshot else { return }
+
+            await enrichGGStackRemote(
+                snapshotGeneration: snapshotGeneration,
+                refreshGeneration: refreshGeneration
+            )
         } catch {
             // A transient gg/provider failure (gh/glab auth hiccup, network
             // blip, etc.) must not cache the *failed* key `key` — it stays
@@ -1115,12 +1147,40 @@ final class RightPaneState: GGSplitCommitServicing {
             ggStackLoadState = .failed(
                 (error as? GGServiceError)?.userMessage ?? error.localizedDescription
             )
+            ggStackRemoteError = nil
             // The cached stack we just dropped belonged to a different key, so
             // the current stack identity is unknown until a refresh succeeds.
             // Hide any recovery candidate (keeping its marker) so the drawer
             // does not offer an Undo scoped to the previous stack; it is
             // rebuilt once a later reconcile validates against the new stack.
             ggMutationCoordinator.suspendUndoCandidate()
+        }
+    }
+
+    private func enrichGGStackRemote(snapshotGeneration: Int, refreshGeneration: UInt) async {
+        ggStackRemoteEnrichmentPending = true
+        do {
+            let remote = try await ggService.currentStack(worktreePath: worktree.path.path)
+            if Task.isCancelled { return }
+            guard snapshotGeneration == snapshotInvalidationGeneration,
+                  refreshGeneration == ggStackRefreshGeneration,
+                  ggStackCommitsKey == currentGGStackCommitsKey
+            else { return }
+            if let enriched = ggStack?.mergingRemoteMetadata(from: remote), ggStack != enriched {
+                ggStack = enriched
+                GGStackSummaryStore.shared.summaries[worktree.path.path] = enriched.summary
+            }
+            ggStackRemoteError = nil
+            ggStackRemoteEnrichmentPending = false
+        } catch {
+            if Task.isCancelled { return }
+            guard snapshotGeneration == snapshotInvalidationGeneration,
+                  refreshGeneration == ggStackRefreshGeneration,
+                  ggStackCommitsKey == currentGGStackCommitsKey
+            else { return }
+            ggStackRemoteError = (error as? GGServiceError)?.userMessage
+                ?? error.localizedDescription
+            ggStackRemoteEnrichmentPending = false
         }
     }
 
@@ -1157,6 +1217,8 @@ final class RightPaneState: GGSplitCommitServicing {
         if ggStack != nil { ggStack = nil }
         if !ggStackDisplayCommits.isEmpty { ggStackDisplayCommits = [] }
         ggStackLoadState = ggContext.isActive ? .loading : .inactive
+        ggStackRemoteError = nil
+        ggStackRemoteMetadataCache = nil
         if GGStackSummaryStore.shared.summaries[worktree.path.path] != nil {
             GGStackSummaryStore.shared.summaries[worktree.path.path] = nil
         }
@@ -1178,7 +1240,9 @@ final class RightPaneState: GGSplitCommitServicing {
     @MainActor
     @discardableResult
     func reevaluateGGGate() -> Task<Void, Never> {
+        let remoteMetadata = ggStack
         invalidateGGPresentation(startingRefresh: false)
+        ggStackRemoteMetadataCache = remoteMetadata
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
             await self.refreshGGStack()
