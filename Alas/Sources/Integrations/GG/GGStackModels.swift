@@ -135,7 +135,9 @@ struct GGStack: Decodable, Equatable {
             behindBase: behindBase,
             entries: entries.map { entry in
                 guard let match = remote.entries.first(where: {
-                    if let ggId = entry.ggId { return $0.ggId == ggId }
+                    if let ggId = entry.ggId {
+                        return $0.ggId == ggId && (entry.prNumber == nil || $0.prNumber == nil || entry.prNumber == $0.prNumber)
+                    }
                     if let prNumber = entry.prNumber { return $0.prNumber == prNumber }
                     return entry.sha.hasPrefix($0.sha) || $0.sha.hasPrefix(entry.sha)
                 })

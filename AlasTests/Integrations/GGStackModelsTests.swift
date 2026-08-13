@@ -125,6 +125,26 @@ struct GGStackModelsTests {
         #expect(merged.entries[0].ciStatus == .success)
     }
 
+    @Test func localStackDoesNotReuseMetadataWhenPRNumberChanges() {
+        let local = GGStack(
+            name: "stack", base: "main", totalCommits: 1, syncedCommits: 1,
+            currentPosition: 1, behindBase: nil,
+            entries: [GGStackEntry(position: 1, sha: "newaaaa", title: "one", ggId: "id-1", prNumber: 11, isCurrent: true)]
+        )
+        let remote = GGStack(
+            name: "stack", base: "main", totalCommits: 1, syncedCommits: 1,
+            currentPosition: 1, behindBase: nil,
+            entries: [GGStackEntry(position: 1, sha: "oldaaaa", title: "one", ggId: "id-1", prNumber: 10, prState: .merged, approved: true, ciStatus: .success, isCurrent: true)]
+        )
+
+        let merged = local.mergingRemoteMetadata(from: remote)
+
+        #expect(merged.entries[0].prNumber == 11)
+        #expect(merged.entries[0].prState == nil)
+        #expect(!merged.entries[0].approved)
+        #expect(merged.entries[0].ciStatus == nil)
+    }
+
     @Test func entryMatchesFullCommitSHAByPrefix() throws {
         let snapshot = try GGStackSnapshot.decode(fromJSON: Data(Self.fixture.utf8))
         let stack = try #require(snapshot.stack)
