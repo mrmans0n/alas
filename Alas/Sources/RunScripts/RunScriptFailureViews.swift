@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct RunScriptFailureBannerPresentation: Equatable {
@@ -37,6 +38,10 @@ struct RunScriptFailureDetailPresentation: Equatable {
         } else {
             nil
         }
+    }
+
+    var completedText: String {
+        failure.completedAt.formatted(date: .abbreviated, time: .standard)
     }
 }
 
@@ -103,8 +108,15 @@ struct RunScriptFailureDetailView: View {
                     Text("Exit code \(failure.exitCode) on \(failure.branch)")
                         .font(.subheadline)
                         .foregroundStyle(theme.color("fg-muted"))
+                    Text("Completed \(presentation.completedText)")
+                        .font(.caption)
+                        .foregroundStyle(theme.color("fg-muted"))
                 }
                 Spacer()
+                Button("Copy Output") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(presentation.outputText, forType: .string)
+                }
                 Button("Done") { dismiss() }
                     .keyboardShortcut(.defaultAction)
             }

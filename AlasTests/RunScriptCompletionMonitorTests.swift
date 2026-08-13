@@ -121,4 +121,22 @@ struct RunScriptCompletionMonitorTests {
         }
         #expect(!FileManager.default.fileExists(atPath: paths.completion))
     }
+
+    @Test func localFailureWithUnreadableTranscriptStillReportsFailure() async throws {
+        let runID = UUID().uuidString
+        let location = try RunScriptCompletionMonitor.paths(runID: runID, host: nil)
+        guard case let .local(paths) = location else {
+            Issue.record("Expected local paths")
+            return
+        }
+        try FileManager.default.createDirectory(
+            at: URL(fileURLWithPath: paths.transcript),
+            withIntermediateDirectories: true
+        )
+        try "9\n".write(toFile: paths.completion, atomically: true, encoding: .utf8)
+
+        let result = try await RunScriptCompletionMonitor.wait(for: location)
+        #expect(result.exitCode == 9)
+        #expect(result.transcript == nil)
+    }
 }

@@ -37,6 +37,12 @@ struct RunScriptFailureTests {
         #expect(!result.truncated)
     }
 
+    @Test func tailNormalizesCRLFBeforeCarriageReturnHandling() {
+        let data = Data("error\r\nprogress\rdone\n".utf8)
+        let result = ANSIPlainTextSnapshot.tail(from: data, byteLimit: 1_024, normalizesCRLF: true)
+        #expect(result.text == "error\ndone\n")
+    }
+
     @Test func tailDoesNotSplitUnicode() {
         let data = Data((String(repeating: "x", count: 20) + "🎉end").utf8)
         let result = ANSIPlainTextSnapshot.tail(from: data, byteLimit: 7)

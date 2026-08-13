@@ -143,18 +143,22 @@ enum RunScriptCompletionMonitor {
             return RunScriptCompletion(exitCode: exitCode, transcript: nil, truncated: false)
         }
         let url = URL(fileURLWithPath: paths.transcript)
-        let attributes = try FileManager.default.attributesOfItem(atPath: paths.transcript)
-        let size = (attributes[.size] as? NSNumber)?.uint64Value ?? 0
-        let readLimit = UInt64(outputByteLimit + outputBoundaryLookbehind)
-        let offset = size > readLimit ? size - readLimit : 0
-        let handle = try FileHandle(forReadingFrom: url)
-        defer { try? handle.close() }
-        try handle.seek(toOffset: offset)
-        return RunScriptCompletion(
-            exitCode: exitCode,
-            transcript: try handle.readToEnd() ?? Data(),
-            truncated: offset > 0
-        )
+        do {
+            let attributes = try FileManager.default.attributesOfItem(atPath: paths.transcript)
+            let size = (attributes[.size] as? NSNumber)?.uint64Value ?? 0
+            let readLimit = UInt64(outputByteLimit + outputBoundaryLookbehind)
+            let offset = size > readLimit ? size - readLimit : 0
+            let handle = try FileHandle(forReadingFrom: url)
+            defer { try? handle.close() }
+            try handle.seek(toOffset: offset)
+            return RunScriptCompletion(
+                exitCode: exitCode,
+                transcript: try handle.readToEnd() ?? Data(),
+                truncated: offset > 0
+            )
+        } catch {
+            return RunScriptCompletion(exitCode: exitCode, transcript: nil, truncated: false)
+        }
     }
 
     private static func remotePathShellLiteral(_ path: String) -> String {

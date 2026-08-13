@@ -284,6 +284,21 @@ struct RunScriptLaunchTests {
     }
 
     @MainActor
+    @Test func closeAllTabsPreservesQueuedRunFailures() async throws {
+        let fixture = try makeAppStateFixture(waiter: { _ in
+            RunScriptCompletion(exitCode: 42, transcript: Data("bad\n".utf8), truncated: false)
+        })
+
+        fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
+        try await Task.sleep(for: .milliseconds(50))
+        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+
+        fixture.state.closeAllTabs(worktreeId: fixture.worktree.id)
+
+        #expect(fixture.state.runScriptFailures(in: fixture.worktree.id).count == 1)
+    }
+
+    @MainActor
     @Test func terminalOpenFailureCancelsRunMonitor() async throws {
         let fixture = try makeAppStateFixture(
             waiter: { _ in

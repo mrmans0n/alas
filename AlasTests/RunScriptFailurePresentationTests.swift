@@ -22,6 +22,7 @@ struct RunScriptFailurePresentationTests {
 
         #expect(withOutput.outputText == "stderr\n")
         #expect(withOutput.outputFooter == "Output truncated")
+        #expect(!withOutput.completedText.isEmpty)
         #expect(withoutOutput.outputText == "Output could not be captured.")
         #expect(withoutOutput.outputFooter == nil)
     }

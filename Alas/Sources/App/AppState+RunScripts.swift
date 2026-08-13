@@ -313,13 +313,15 @@ extension AppState {
         }
     }
 
-    func cleanupRunScriptState(worktreeID: String) {
+    func cleanupRunScriptState(worktreeID: String, purgeFailures: Bool = true) {
         for (runID, entry) in runScriptCompletionTasks where entry.worktreeID == worktreeID {
             runScriptCompletionTasks.removeValue(forKey: runID)?.task.cancel()
             cleanupCaptureLocation(entry.location)
         }
-        runScriptFailureQueue.purge(worktreeID: worktreeID)
-        if selectedRunScriptFailure?.worktreeID == worktreeID {
+        if purgeFailures {
+            runScriptFailureQueue.purge(worktreeID: worktreeID)
+        }
+        if purgeFailures, selectedRunScriptFailure?.worktreeID == worktreeID {
             selectedRunScriptFailure = nil
         }
     }

@@ -86,12 +86,34 @@ struct ANSIPlainTextSnapshot: Equatable {
             slice = data
         }
 
+        let parsedSlice = normalizesCRLF ? slice.normalizingCRLF() : slice
         var stream = ANSIStream()
-        let text = stream.feed(slice).map(\.text).joined()
+        let text = stream.feed(parsedSlice).map(\.text).joined()
         return Self(
-            text: normalizesCRLF ? text.replacingOccurrences(of: "\r\n", with: "\n") : text,
+            text: text,
             truncated: didTruncate
         )
+    }
+}
+
+private extension Data {
+    func normalizingCRLF() -> Data {
+        var bytes: [UInt8] = []
+        bytes.reserveCapacity(count)
+        var index = startIndex
+        while index < endIndex {
+            if self[index] == 0x0D {
+                let next = self.index(after: index)
+                if next < endIndex, self[next] == 0x0A {
+                    bytes.append(0x0A)
+                    index = self.index(after: next)
+                    continue
+                }
+            }
+            bytes.append(self[index])
+            index = self.index(after: index)
+        }
+        return Data(bytes)
     }
 }
 
