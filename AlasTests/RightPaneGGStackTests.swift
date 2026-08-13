@@ -753,6 +753,40 @@ struct RightPaneGGStackTests {
         await refresh.value
     }
 
+    @Test func cancelledRemoteEnrichmentIsRetriedForTheSameStack() async throws {
+        let runner = LocalFirstGGRunner()
+        runner.delaysRemote = true
+        let state = makeState()
+        state.ggService = GGService(runner: runner)
+        state.ggCapabilities = {
+            GGCapabilities(
+                structuredSplit: false,
+                keepCurrentUnstack: false,
+                localStackSnapshot: true
+            )
+        }
+        state.ggContextProvider = { _ in .active(stackName: "agent-inbox") }
+
+        let first = Task { @MainActor in await state.refreshGGStack() }
+        for _ in 0..<500 where runner.calls.count < 2 {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        first.cancel()
+        await first.value
+
+        await state.refreshGGStack()
+
+        #expect(runner.calls == [
+            ["ls", "--json", "--no-refresh"],
+            ["ls", "--json"],
+            ["ls", "--json"],
+        ])
+        #expect(state.ggStackLoadState == .loaded)
+        #expect(state.ggStackDisplayCommits.count == 3)
+        #expect(state.ggStackRemoteError == "remote unavailable")
+        #expect(!state.ggStackRemoteEnrichmentPending)
+    }
+
     @Test func failedHydrationClearsStackAndKeepsPlainCommitRows() async {
         let state = makeState()
         let reachable = commit(sha: String(repeating: "f", count: 40), stackShaped: true)
