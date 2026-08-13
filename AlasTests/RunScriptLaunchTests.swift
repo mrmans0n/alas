@@ -229,7 +229,8 @@ struct RunScriptLaunchTests {
             terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
                 openCount += 1
                 return AppState.OpenedTerminalSession(id: "session-\(openCount)", foregroundPid: { nil })
-            }
+            },
+            runScriptCompletionWaiter: { _ in RunScriptCompletion(exitCode: 0, transcript: nil, truncated: false) }
         )
         state.projectsManager = ProjectsManager(persistedProjects: [project])
 
@@ -244,6 +245,76 @@ struct RunScriptLaunchTests {
         }
         #expect(scriptTabs.count == 1)
         #expect(state.pendingScriptLaunches.isEmpty)
+    }
+
+    @MainActor
+    @Test func nonZeroRunCreatesFailureWithSanitizedOutput() async throws {
+        let fixture = try makeAppStateFixture(waiter: { _ in
+            RunScriptCompletion(
+                exitCode: 42,
+                transcript: Data("bad\u{1B}[31m output\u{1B}[0m\n".utf8),
+                truncated: false
+            )
+        })
+
+        fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
+        try await Task.sleep(for: .milliseconds(50))
+        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+
+        let failures = fixture.state.runScriptFailures(in: fixture.worktree.id)
+        #expect(failures.count == 1)
+        #expect(failures[0].scriptName == "Dev")
+        #expect(failures[0].exitCode == 42)
+        #expect(failures[0].branch == "main")
+        #expect(failures[0].capturedOutput == .available(text: "bad output\n", truncated: false))
+    }
+
+    @MainActor
+    @Test func zeroRunCreatesNoFailure() async throws {
+        let fixture = try makeAppStateFixture(waiter: { _ in
+            RunScriptCompletion(exitCode: 0, transcript: Data("ok\n".utf8), truncated: false)
+        })
+
+        fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
+        try await Task.sleep(for: .milliseconds(50))
+        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+
+        #expect(fixture.state.runScriptFailures(in: fixture.worktree.id).isEmpty)
+    }
+
+    @MainActor
+    @Test func terminalOpenFailureCancelsRunMonitor() async throws {
+        let fixture = try makeAppStateFixture(
+            waiter: { _ in
+                try await Task.sleep(for: .seconds(5))
+                return RunScriptCompletion(exitCode: 1, transcript: nil, truncated: false)
+            },
+            terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
+                throw NSError(domain: "test", code: 1)
+            }
+        )
+
+        fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(fixture.state.runScriptCompletionTaskCountForTesting == 0)
+        #expect(fixture.state.runScriptFailures(in: fixture.worktree.id).isEmpty)
+    }
+
+    @MainActor
+    @Test func doubleLaunchCreatesOneMonitor() async throws {
+        let waitCount = LockedCounter()
+        let fixture = try makeAppStateFixture(waiter: { _ in
+            waitCount.increment()
+            return RunScriptCompletion(exitCode: 0, transcript: nil, truncated: false)
+        })
+
+        fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
+        fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
+        try await Task.sleep(for: .milliseconds(50))
+        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+
+        #expect(waitCount.value == 1)
     }
 
     @MainActor
@@ -275,5 +346,64 @@ struct RunScriptLaunchTests {
         )
 
         #expect(state.runningScriptTab(for: runScript, in: worktree) == nil)
+    }
+
+    @MainActor
+    private func makeAppStateFixture(
+        waiter: @escaping AppState.RunScriptCompletionWaiter,
+        terminalSessionOpener: AppState.TerminalSessionOpener? = nil
+    ) throws -> (state: AppState, script: RunScript, worktree: Worktree) {
+        let dir = try makeTemporaryDirectory()
+        let scriptURL = dir.appendingPathComponent("dev.sh")
+        try "echo hi\n".write(to: scriptURL, atomically: true, encoding: .utf8)
+        let runScript = RunScript(
+            scope: .repo,
+            fileName: "dev.sh",
+            fileURL: scriptURL,
+            displayName: "Dev",
+            onExit: .keep,
+            cwd: nil,
+            isExecutable: false
+        )
+        let project = ProjectConfig(id: "project", name: "Project", path: dir.path, color: "blue", addedAt: Date())
+        let worktree = Worktree(
+            id: "wt",
+            projectId: project.id,
+            name: "main",
+            branch: "main",
+            path: dir,
+            status: .clean,
+            lastActivity: Date()
+        )
+        var openCount = 0
+        let opener = terminalSessionOpener ?? { _, _, _, _, _, _, _, _, _ in
+            openCount += 1
+            return AppState.OpenedTerminalSession(id: "session-\(openCount)", foregroundPid: { nil })
+        }
+        let state = AppState(
+            store: MemoryStore(),
+            fileActionErrorHandler: { _, _ in },
+            terminalSessionOpener: opener,
+            runScriptCompletionWaiter: waiter
+        )
+        state.projectsManager = ProjectsManager(persistedProjects: [project])
+        return (state, runScript, worktree)
+    }
+}
+
+private final class LockedCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var value: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
+    }
+
+    func increment() {
+        lock.lock()
+        count += 1
+        lock.unlock()
     }
 }

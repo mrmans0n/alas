@@ -170,24 +170,140 @@ extension AppState {
         pendingScriptLaunches.insert(launchKey)
         Task { @MainActor in
             defer { pendingScriptLaunches.remove(launchKey) }
+            let runID = UUID().uuidString
+            let captureLocation: RunScriptCaptureLocation
             do {
+                captureLocation = try RunScriptCompletionMonitor.paths(runID: runID, host: project.host)
+                startRunScriptCompletionMonitor(
+                    runID: runID,
+                    location: captureLocation,
+                    script: script,
+                    worktree: worktree
+                )
                 let suffix = try Self.runScriptStartupScript(
                     script: script,
                     worktreeRoot: worktree.path,
                     branch: worktree.branch,
                     projectName: project.name,
-                    repoRoot: project.path
+                    repoRoot: project.path,
+                    capturePaths: captureLocation.paths
                 )
-                _ = try await openTerminalTabPreparingRemoteZmxIfNeeded(
-                    for: worktree,
-                    startupScriptSuffix: suffix,
-                    titleOverride: script.displayName,
-                    runScriptKey: script.key
-                )
+                do {
+                    _ = try await openTerminalTabPreparingRemoteZmxIfNeeded(
+                        for: worktree,
+                        startupScriptSuffix: suffix,
+                        titleOverride: script.displayName,
+                        runScriptKey: script.key
+                    )
+                } catch {
+                    cancelRunScriptCompletionTask(runID: runID, location: captureLocation)
+                    throw error
+                }
             } catch {
                 showFileActionError(title: "Run Script Failed", message: error.localizedDescription)
             }
         }
+    }
+
+    func runScriptFailures(in worktreeID: String) -> [RunScriptFailure] {
+        runScriptFailureQueue.failures(for: worktreeID)
+    }
+
+    func dismissRunScriptFailure(id: String, worktreeID: String) {
+        runScriptFailureQueue.dismiss(id: id, worktreeID: worktreeID)
+        if selectedRunScriptFailure?.id == id, selectedRunScriptFailure?.worktreeID == worktreeID {
+            selectedRunScriptFailure = nil
+        }
+    }
+
+    func presentRunScriptFailure(_ failure: RunScriptFailure) {
+        selectedRunScriptFailure = failure
+    }
+
+    func waitForRunScriptCompletionTasksForTesting() async {
+        let tasks = runScriptCompletionTasks.values.map { $0.task }
+        for task in tasks {
+            await task.value
+        }
+    }
+
+    var runScriptCompletionTaskCountForTesting: Int {
+        runScriptCompletionTasks.count
+    }
+
+    private func startRunScriptCompletionMonitor(
+        runID: String,
+        location: RunScriptCaptureLocation,
+        script: RunScript,
+        worktree: Worktree
+    ) {
+        runScriptCompletionTasks[runID] = (
+            worktreeID: worktree.id,
+            task: Task { @MainActor [weak self] in
+                guard let self else { return }
+                defer { runScriptCompletionTasks.removeValue(forKey: runID) }
+                do {
+                    let completion = try await runScriptCompletionWaiter(location)
+                    guard completion.exitCode != 0 else { return }
+                    let capturedOutput: RunScriptCapturedOutput
+                    if let transcript = completion.transcript {
+                        let snapshot = ANSIPlainTextSnapshot.tail(
+                            from: transcript,
+                            byteLimit: RunScriptCompletionMonitor.outputByteLimit,
+                            normalizesCRLF: true
+                        )
+                        capturedOutput = .available(
+                            text: snapshot.text,
+                            truncated: completion.truncated || snapshot.truncated
+                        )
+                    } else {
+                        capturedOutput = .unavailable
+                    }
+                    runScriptFailureQueue.append(RunScriptFailure(
+                        id: UUID().uuidString,
+                        runID: runID,
+                        scriptKey: script.key,
+                        scriptName: script.displayName,
+                        worktreeID: worktree.id,
+                        branch: worktree.branch,
+                        exitCode: completion.exitCode,
+                        completedAt: Date(),
+                        capturedOutput: capturedOutput
+                    ))
+                } catch is CancellationError {
+                } catch {
+                }
+            }
+        )
+    }
+
+    private func cancelRunScriptCompletionTask(runID: String, location: RunScriptCaptureLocation) {
+        runScriptCompletionTasks.removeValue(forKey: runID)?.task.cancel()
+        cleanupCaptureLocation(location)
+    }
+
+    func cleanupRunScriptState(worktreeID: String) {
+        for (runID, entry) in runScriptCompletionTasks where entry.worktreeID == worktreeID {
+            runScriptCompletionTasks.removeValue(forKey: runID)?.task.cancel()
+        }
+        runScriptFailureQueue.purge(worktreeID: worktreeID)
+        if selectedRunScriptFailure?.worktreeID == worktreeID {
+            selectedRunScriptFailure = nil
+        }
+    }
+
+    func cancelAllRunScriptCompletionTasks() {
+        for entry in runScriptCompletionTasks.values {
+            entry.task.cancel()
+        }
+        runScriptCompletionTasks.removeAll()
+    }
+
+    private func cleanupCaptureLocation(_ location: RunScriptCaptureLocation) {
+        guard case let .local(paths) = location else { return }
+        try? FileManager.default.removeItem(atPath: paths.transcript)
+        try? FileManager.default.removeItem(atPath: paths.completion)
+        try? FileManager.default.removeItem(atPath: "\(paths.completion).tmp")
     }
 
     // MARK: - Edit

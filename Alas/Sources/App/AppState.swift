@@ -74,6 +74,7 @@ final class AppState {
     typealias CloseTabConfirmer = @MainActor (CloseTabConfirmationPolicy.Prompt) -> Bool
     typealias ACPDetachRunner = @MainActor (ACPSessionManager, ACPSession.ID) async -> Void
     typealias RemoteAccelerationPreparer = @MainActor (ProjectConfig) async -> Void
+    typealias RunScriptCompletionWaiter = @Sendable (RunScriptCaptureLocation) async throws -> RunScriptCompletion
     static let piMCPGeneratedConfigExcludePath = ".pi/mcp.json"
 
     /// Stable for this process; identifies this app instance to the ACP
@@ -85,6 +86,10 @@ final class AppState {
     var projectsManager: ProjectsManager
     let globalTabs: GlobalTabsManager
     private(set) var closedTabHistory = ClosedTabHistory()
+    var runScriptFailureQueue = RunScriptFailureQueue()
+    var selectedRunScriptFailure: RunScriptFailure?
+    @ObservationIgnored var runScriptCompletionTasks: [String: (worktreeID: String, task: Task<Void, Never>)] = [:]
+    @ObservationIgnored let runScriptCompletionWaiter: RunScriptCompletionWaiter
     private(set) var isReopeningClosedTab = false
     var canReopenClosedTab: Bool { !isReopeningClosedTab && !closedTabHistory.isEmpty }
     private var unpersistedGGWorktreeModes: [String: [String: GGWorktreeMode]] = [:]
@@ -648,6 +653,7 @@ final class AppState {
         missionStartupReviewSnapshot: MissionStartupReviewSnapshot? = nil,
         missionBranchTipOverride: MissionBranchTip? = nil,
         missionArchiveRecorder: MissionArchiveRecorder? = nil,
+        runScriptCompletionWaiter: @escaping RunScriptCompletionWaiter = RunScriptCompletionMonitor.wait(for:),
         missionsEnabled: Bool = MissionsFeatureFlag.isEnabled,
         missionsFeatureUpdates: AnyPublisher<Bool, Never> = MissionsFeatureFlag.updates(),
         globalTabs: GlobalTabsManager = GlobalTabsManager(),
@@ -671,6 +677,7 @@ final class AppState {
         self.missionStartupReviewSnapshot = missionStartupReviewSnapshot
         self.missionBranchTipOverride = missionBranchTipOverride
         self.missionArchiveRecorder = missionArchiveRecorder
+        self.runScriptCompletionWaiter = runScriptCompletionWaiter
         self.missionsEnabled = missionsEnabled
         let config = (try? store.readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? AppConfig.defaults
         let projectsFile = (try? store.readIfExists(ProjectsFile.self, from: Paths.projectsFile)) ?? ProjectsFile(projects: [])
@@ -733,7 +740,11 @@ final class AppState {
             }
         }
         AlasTerminationCoordinator.shared.flush = { [weak self] in
+            await self?.cancelAllRunScriptCompletionTasks()
             await self?.flushAllACPComposerDrafts()
+        }
+        Task.detached {
+            RunScriptCompletionMonitor.cleanupStaleLocalFiles()
         }
 
         // Kick off a background resolution of the user's login-shell PATH so
@@ -5986,6 +5997,7 @@ final class AppState {
     /// touching git or persistence. Shared between Close-All, archive, and
     /// delete so the bookkeeping stays in one place.
     private func cleanupWorktreeState(worktreeId: String) {
+        cleanupRunScriptState(worktreeID: worktreeId)
         closedTabHistory.purge(worktreeID: worktreeId)
         let allTabs = tabs.tabs(forWorktree: worktreeId)
         let closed = tabs.closeAll(worktreeId: worktreeId)

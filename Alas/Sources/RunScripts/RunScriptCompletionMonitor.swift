@@ -3,6 +3,13 @@ import Foundation
 enum RunScriptCaptureLocation: Equatable, Sendable {
     case local(paths: RunScriptCapturePaths)
     case remote(host: String, paths: RunScriptCapturePaths)
+
+    var paths: RunScriptCapturePaths {
+        switch self {
+        case let .local(paths), let .remote(_, paths):
+            paths
+        }
+    }
 }
 
 struct RunScriptCompletion: Equatable, Sendable {
