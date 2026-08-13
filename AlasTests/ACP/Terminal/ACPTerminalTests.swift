@@ -237,6 +237,21 @@ struct ACPTerminalTests {
         #expect(snap.text == "HELLO")
     }
 
+    @Test("snapshot keeps ANSI and CRLF normalization behavior")
+    func snapshotANSICRLFBehavior() async throws {
+        let t = try ACPTerminal(
+            id: "tansi-crlf",
+            command: "/bin/sh",
+            args: ["-c", "printf '\\033[31mnew\\033[0m\\r\\n'"],
+            env: [:],
+            cwd: "/tmp",
+            outputByteLimit: 1_024,
+            normalizesCRLF: true
+        )
+        _ = await t.waitForExit()
+        #expect(t.snapshot(byteLimit: 1_024).text == "\n")
+    }
+
     @Test("snapshot tail starts at a UTF-8 codepoint boundary")
     func snapshotUTF8Boundary() async throws {
         // 4 × 🎉 = 16 bytes (each 4 bytes). Limit to 9: naive byte

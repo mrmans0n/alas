@@ -49,6 +49,52 @@ struct ANSITailBuffer {
     }
 }
 
+struct ANSIPlainTextSnapshot: Equatable {
+    let text: String
+    let truncated: Bool
+
+    static func tail(from data: Data, byteLimit: Int, normalizesCRLF: Bool = false) -> Self {
+        let limit = max(1, byteLimit)
+        let didTruncate = data.count > limit
+        let slice: Data
+        if didTruncate {
+            let all = [UInt8](data)
+            var start = all.count - limit
+            let lookbackFloor = max(0, start - 16)
+            var i = start - 1
+            while i >= lookbackFloor {
+                if all[i] == 0x1B {
+                    var hasFinal = false
+                    if i + 1 < start, all[i + 1] == 0x5B {
+                        for k in (i + 2) ..< start where all[k] >= 0x40 && all[k] <= 0x7E {
+                            hasFinal = true
+                            break
+                        }
+                    } else {
+                        hasFinal = true
+                    }
+                    if !hasFinal { start = i }
+                    break
+                }
+                i -= 1
+            }
+            while start < all.count, (all[start] & 0xC0) == 0x80 {
+                start += 1
+            }
+            slice = Data(all[start...])
+        } else {
+            slice = data
+        }
+
+        var stream = ANSIStream()
+        let text = stream.feed(slice).map(\.text).joined()
+        return Self(
+            text: normalizesCRLF ? text.replacingOccurrences(of: "\r\n", with: "\n") : text,
+            truncated: didTruncate
+        )
+    }
+}
+
 private enum ANSIStreamEvent {
     case text(AttributedRun)
     case carriageReturn

@@ -484,47 +484,12 @@ final class ACPTerminal: ObservableObject {
     ///    multibyte codepoints aren't split mid-sequence.
     func snapshot(byteLimit: Int) -> (text: String, truncated: Bool) {
         let limit = max(1, min(byteLimit, Self.internalBufferCap))
-        let retained = buffer
-        let didTruncate = retained.count > limit
-        let slice: Data
-        if didTruncate {
-            let all = [UInt8](retained)
-            var start = all.count - limit
-            // Lookback for an unterminated CSI escape. CSI param bytes
-            // are 0x30..0x3F; finals are 0x40..0x7E. If we find an ESC
-            // within 16 bytes of the cut whose final hasn't yet been
-            // seen, extend the slice start back to include it.
-            let lookbackFloor = max(0, start - 16)
-            var i = start - 1
-            while i >= lookbackFloor {
-                if all[i] == 0x1B {
-                    var hasFinal = false
-                    if i + 1 < start, all[i + 1] == 0x5B {
-                        for k in (i + 2) ..< start where all[k] >= 0x40 && all[k] <= 0x7E {
-                            hasFinal = true
-                            break
-                        }
-                    } else {
-                        hasFinal = true  // 2-char ESC (already complete) or OSC (handled by parser)
-                    }
-                    if !hasFinal { start = i }
-                    break
-                }
-                i -= 1
-            }
-            // Skip leading UTF-8 continuation bytes (10xxxxxx).
-            while start < all.count, (all[start] & 0xC0) == 0x80 {
-                start += 1
-            }
-            slice = Data(all[start ..< all.count])
-        } else {
-            slice = retained
-        }
-        // Strip ANSI for the JSON response (agents shouldn't see escape codes).
-        var stream = ANSIStream()
-        let runs = stream.feed(slice)
-        let text = runs.map(\.text).joined()
-        return (normalizesCRLF ? Self.normalizeCRLF(text) : text, truncated || didTruncate)
+        let snapshot = ANSIPlainTextSnapshot.tail(
+            from: buffer,
+            byteLimit: limit,
+            normalizesCRLF: normalizesCRLF
+        )
+        return (snapshot.text, truncated || snapshot.truncated)
     }
 
     /// Remote SSH terminals use a pty, which translates LF to CRLF. Preserve
