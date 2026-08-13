@@ -308,6 +308,22 @@ struct RunScriptLaunchTests {
     }
 
     @MainActor
+    @Test func closeAllTabsAllowsCompletedRunMonitorToReportFailure() async throws {
+        let fixture = try makeAppStateFixture(waiter: { _ in
+            try await Task.sleep(for: .milliseconds(200))
+            return RunScriptCompletion(exitCode: 42, transcript: Data("bad\n".utf8), truncated: false)
+        })
+
+        fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
+        try await Task.sleep(for: .milliseconds(50))
+
+        fixture.state.closeAllTabs(worktreeId: fixture.worktree.id)
+        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+
+        #expect(fixture.state.runScriptFailures(in: fixture.worktree.id).count == 1)
+    }
+
+    @MainActor
     @Test func terminalOpenFailureCancelsRunMonitor() async throws {
         let fixture = try makeAppStateFixture(
             waiter: { _ in
@@ -429,6 +445,23 @@ struct RunScriptLaunchTests {
         try await Task.sleep(for: .milliseconds(20))
         #expect(state.runScriptCompletionTaskCountForTesting == 1)
         state.cancelAllRunScriptCompletionTasks()
+    }
+
+    @MainActor
+    @Test func processExitEventuallyCancelsRemoteMonitor() async throws {
+        let state = AppState(store: MemoryStore())
+        let runID = UUID().uuidString
+        state.runScriptCompletionTasks[runID] = (
+            worktreeID: "wt",
+            sessionID: "session",
+            location: try RunScriptCompletionMonitor.paths(runID: runID, host: "devbox"),
+            task: Task {}
+        )
+
+        state.cancelRunScriptCompletionTasks(sessionID: "session", after: .milliseconds(30))
+
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(state.runScriptCompletionTaskCountForTesting == 0)
     }
 
     @MainActor
