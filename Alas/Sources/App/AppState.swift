@@ -4970,6 +4970,7 @@ final class AppState {
             requestCloseTab(worktreeId: worktreeId, tabId: activeId)
         } else {
             let closedLeafId = outcome.closedLeafId
+            cancelRunScriptCompletionTasks(sessionID: closedLeafId, after: .seconds(2))
             closeTerminalSession(
                 id: closedLeafId,
                 worktreeId: worktreeId,

@@ -72,9 +72,22 @@ enum RunScriptCompletionMonitor {
     }
 
     static func parseRemotePayload(_ data: Data) throws -> RunScriptCompletion {
-        guard let newline = data.firstIndex(of: 0x0A),
-              let header = String(data: data[..<newline], encoding: .utf8)
-        else { throw MonitorError.malformedRemotePayload }
+        let marker = Data("ALAS_RUN_V1\t".utf8)
+        var searchStart = data.startIndex
+        while let range = data.range(of: marker, options: [], in: searchStart..<data.endIndex) {
+            guard let newline = data[range.lowerBound...].firstIndex(of: 0x0A),
+                  let header = String(data: data[range.lowerBound..<newline], encoding: .utf8),
+                  let completion = parseRemoteHeader(header, body: data[data.index(after: newline)...])
+            else {
+                searchStart = data.index(after: range.lowerBound)
+                continue
+            }
+            return completion
+        }
+        throw MonitorError.malformedRemotePayload
+    }
+
+    private static func parseRemoteHeader(_ header: String, body: Data.SubSequence) -> RunScriptCompletion? {
         let parts = header.split(separator: "\t", omittingEmptySubsequences: false)
         guard (parts.count == 4 || parts.count == 5),
               parts[0] == "ALAS_RUN_V1",
@@ -83,11 +96,10 @@ enum RunScriptCompletionMonitor {
               let truncated = Int(parts[3]),
               (captured == 0 || captured == 1),
               (truncated == 0 || truncated == 1)
-        else { throw MonitorError.malformedRemotePayload }
+        else { return nil }
         let completedAt = parts.count == 5
             ? Date(timeIntervalSince1970: TimeInterval(String(parts[4])) ?? Date().timeIntervalSince1970)
             : Date()
-        let body = data[data.index(after: newline)...]
         return RunScriptCompletion(
             exitCode: exitCode,
             completedAt: completedAt,

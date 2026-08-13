@@ -345,6 +345,37 @@ struct RunScriptLaunchTests {
     }
 
     @MainActor
+    @Test func closingSplitRunScriptPaneCancelsRunMonitor() async throws {
+        let fixture = try makeAppStateFixture(waiter: { _ in
+            try await Task.sleep(for: .seconds(5))
+            return RunScriptCompletion(exitCode: 1, transcript: nil, truncated: false)
+        })
+
+        fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
+        try await Task.sleep(for: .milliseconds(50))
+        let tab = try #require(fixture.state.tabs.tabs(forWorktree: fixture.worktree.id).first)
+        guard case .terminal(let terminal) = tab else {
+            Issue.record("Expected terminal tab")
+            return
+        }
+        let runLeafID = terminal.focusedLeafId
+        _ = fixture.state.tabs.splitFocusedLeaf(
+            worktreeId: fixture.worktree.id,
+            tabId: tab.id,
+            axis: .vertical,
+            newLeafId: "split",
+            newSessionId: "split"
+        )
+        _ = fixture.state.tabs.setFocusedLeaf(worktreeId: fixture.worktree.id, tabId: tab.id, leafId: runLeafID)
+
+        fixture.state.closeFocusedPane(worktreeId: fixture.worktree.id)
+
+        #expect(fixture.state.runScriptCompletionTaskCountForTesting == 1)
+        try await Task.sleep(for: .milliseconds(2_200))
+        #expect(fixture.state.runScriptCompletionTaskCountForTesting == 0)
+    }
+
+    @MainActor
     @Test func closingCompletedKeepOpenRunScriptTerminalPreservesFailure() async throws {
         let fixture = try makeAppStateFixture(waiter: { _ in
             try await Task.sleep(for: .milliseconds(200))

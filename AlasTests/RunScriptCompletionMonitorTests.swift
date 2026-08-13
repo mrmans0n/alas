@@ -13,6 +13,14 @@ struct RunScriptCompletionMonitorTests {
         #expect(!result.truncated)
     }
 
+    @Test func remoteFrameCanFollowLoginShellOutput() throws {
+        let body = Data("captured\n".utf8)
+        let framed = Data("Last login: today\nALAS_RUN_V1\t9\t1\t0\t1700000000\n".utf8) + body
+        let result = try RunScriptCompletionMonitor.parseRemotePayload(framed)
+        #expect(result.exitCode == 9)
+        #expect(result.transcript == body)
+    }
+
     @Test func remoteCommandQuotesAndBoundsOutput() {
         let paths = RunScriptCapturePaths(transcript: "/tmp/a'b.log", completion: "/tmp/a'b.done")
         let command = RunScriptCompletionMonitor.remoteWaitCommand(paths: paths, byteLimit: 1_048_576)
