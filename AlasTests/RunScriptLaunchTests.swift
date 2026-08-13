@@ -383,6 +383,24 @@ struct RunScriptLaunchTests {
     }
 
     @MainActor
+    @Test func processExitDoesNotCancelRemoteMonitorAfterLocalGrace() async throws {
+        let state = AppState(store: MemoryStore())
+        let runID = UUID().uuidString
+        state.runScriptCompletionTasks[runID] = (
+            worktreeID: "wt",
+            sessionID: "session",
+            location: try RunScriptCompletionMonitor.paths(runID: runID, host: "devbox"),
+            task: Task {}
+        )
+
+        state.cancelRunScriptCompletionTasks(sessionID: "session", after: .milliseconds(1), includeRemote: false)
+
+        try await Task.sleep(for: .milliseconds(20))
+        #expect(state.runScriptCompletionTaskCountForTesting == 1)
+        state.cancelAllRunScriptCompletionTasks()
+    }
+
+    @MainActor
     @Test func bulkClosingRunScriptTerminalCancelsRunMonitor() async throws {
         let fixture = try makeAppStateFixture(waiter: { _ in
             try await Task.sleep(for: .seconds(5))

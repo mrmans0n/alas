@@ -4935,7 +4935,7 @@ final class AppState {
             return state.root.find(leafId: leafId) != nil
         }?.id
         guard let tabId = owningTabId else { return }
-        cancelRunScriptCompletionTasks(sessionID: leafId, after: .seconds(2))
+        cancelRunScriptCompletionTasks(sessionID: leafId, after: .seconds(2), includeRemote: false)
         guard let outcome = tabs.removeLeaf(
             worktreeId: worktreeId, tabId: tabId, leafId: leafId
         ) else { return }

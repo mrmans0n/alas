@@ -103,7 +103,7 @@ enum RunScriptCompletionMonitor {
         fi
         printf 'ALAS_RUN_V1\\t%s\\t%s\\t%s\\n' "$exit_code" "$captured" "$truncated"
         if [ "$captured" = 1 ]; then cat "$body"; fi
-        rm -f "$transcript" "$completion" "$completion.tmp" "$body" "$completion.status"
+        rm -f "$transcript" "$completion" "$completion.tmp" "$body" "$completion.status" || true
         """
     }
 

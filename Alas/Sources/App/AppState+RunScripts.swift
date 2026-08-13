@@ -327,9 +327,14 @@ extension AppState {
         cleanupCaptureLocation(entry.location)
     }
 
-    func cancelRunScriptCompletionTasks(sessionID: String, after delay: Duration? = nil) {
-        let runIDs = runScriptCompletionTasks.compactMap { runID, entry in
-            entry.sessionID == sessionID ? runID : nil
+    func cancelRunScriptCompletionTasks(
+        sessionID: String,
+        after delay: Duration? = nil,
+        includeRemote: Bool = true
+    ) {
+        let runIDs = runScriptCompletionTasks.compactMap { runID, entry -> String? in
+            if !includeRemote, case .remote = entry.location { return nil }
+            return entry.sessionID == sessionID ? runID : nil
         }
         guard let delay else {
             for runID in runIDs { cancelRunScriptCompletionTask(runID: runID) }

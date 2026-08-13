@@ -22,6 +22,7 @@ struct RunScriptCompletionMonitorTests {
         #expect(command.contains("[ \"$exit_code\" != 0 ]"))
         #expect(command.contains("ALAS_RUN_V1"))
         #expect(command.contains("rm -f"))
+        #expect(command.contains("|| true"))
         #expect(!command.contains("/tmp/a'b.log"))
     }
 
