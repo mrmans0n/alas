@@ -106,6 +106,29 @@ struct CommitMessageEditorViewTests {
         window.orderOut(nil)
     }
 
+    @Test func subjectKeepsFocusAcrossRepeatedTextUpdates() async throws {
+        let model = CommitComposerModel(subject: "", body: "")
+        let controller = NSHostingController(rootView: CommitComposerHarness(model: model, theme: currentTheme()))
+        let window = attach(controller)
+        await drain(controller.view)
+
+        let subject = try #require(firstSubview(of: PairedTextFieldBackingView.self, in: controller.view))
+        #expect(window.makeFirstResponder(subject))
+        let editor = try #require(subject.currentEditor() as? PairedDelimiterTextView)
+
+        for character in ["a", "b", "c"] {
+            editor.performKeyboardTextInsertion {
+                editor.insertText(character, replacementRange: NSRange(location: NSNotFound, length: 0))
+            }
+            try await Task.sleep(for: .milliseconds(50))
+            await drain(controller.view)
+            #expect(window.firstResponder === editor)
+        }
+        #expect(model.subject == "abc")
+
+        window.orderOut(nil)
+    }
+
     private func attach<Content: View>(_ controller: NSHostingController<Content>) -> NSWindow {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 480, height: 240),
