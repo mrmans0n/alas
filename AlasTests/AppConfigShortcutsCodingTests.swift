@@ -95,6 +95,95 @@ struct AppConfigShortcutsCodingTests {
         #expect(decoded.shortcutOverrides[ShortcutAction.findAndReplace.rawValue] == nil)
     }
 
+    @Test func migratesLegacyAgentLauncherOverridesToSplitActions() throws {
+        var cfg = AppConfig.defaults
+        let legacyLauncher = ShortcutBinding(key: "j", modifiers: [.command, .option])
+        let legacyChat = ShortcutBinding(key: "k", modifiers: [.command, .option, .shift])
+        cfg.shortcutOverrides = [
+            "launchAgentTerminal": legacyLauncher,
+            "launchAgentChat": legacyChat,
+        ]
+
+        let data = try JSONEncoder().encode(cfg)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+
+        #expect(decoded.shortcutOverrides[ShortcutAction.launchAgent.rawValue] == .some(legacyLauncher))
+        #expect(decoded.shortcutOverrides[ShortcutAction.launchAgentInChat.rawValue] == .some(legacyChat))
+        #expect(decoded.shortcutOverrides[ShortcutAction.launchAgentInTerminal.rawValue] == nil)
+        #expect(decoded.shortcutOverrides["launchAgentTerminal"] == nil)
+        #expect(decoded.shortcutOverrides["launchAgentChat"] == nil)
+    }
+
+    @Test func dropsLegacyAgentLauncherOverridesThatRestateOldDefaults() throws {
+        var cfg = AppConfig.defaults
+        cfg.shortcutOverrides = [
+            "launchAgentTerminal": ShortcutBinding(key: "t", modifiers: [.command, .option]),
+            "launchAgentChat": ShortcutBinding(key: "t", modifiers: [.command, .option, .shift]),
+        ]
+
+        let data = try JSONEncoder().encode(cfg)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+
+        #expect(decoded.shortcutOverrides.isEmpty)
+        #expect(ShortcutAction.launchAgentInChat.defaultBinding ==
+                ShortcutBinding(key: "c", modifiers: [.command, .option, .shift]))
+    }
+
+    @Test func unbindsNewChatActionWhenItsDefaultIsAlreadyTaken() throws {
+        var cfg = AppConfig.defaults
+        let chatDefault = ShortcutBinding(key: "c", modifiers: [.command, .option, .shift])
+        cfg.shortcutOverrides = [ShortcutAction.toggleRightPane.rawValue: chatDefault]
+
+        let data = try JSONEncoder().encode(cfg)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+
+        // The user keeps their chord; the new action starts unbound rather
+        // than registering the same one.
+        #expect(decoded.shortcutOverrides[ShortcutAction.toggleRightPane.rawValue] == .some(chatDefault))
+        #expect(decoded.shortcutOverrides[ShortcutAction.launchAgentInChat.rawValue] == .some(nil))
+    }
+
+    @Test func unbindsNewTerminalActionWhenItsDefaultIsAlreadyTaken() throws {
+        var cfg = AppConfig.defaults
+        let terminalDefault = ShortcutBinding(key: "t", modifiers: [.command, .option, .shift])
+        cfg.shortcutOverrides = [
+            "launchAgentChat": nil,
+            ShortcutAction.openReviewPalette.rawValue: terminalDefault,
+        ]
+
+        let data = try JSONEncoder().encode(cfg)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+
+        #expect(decoded.shortcutOverrides[ShortcutAction.openReviewPalette.rawValue] == .some(terminalDefault))
+        #expect(decoded.shortcutOverrides[ShortcutAction.launchAgentInTerminal.rawValue] == .some(nil))
+    }
+
+    @Test func leavesNewAgentDefaultsAloneWhenNothingClaimsThem() throws {
+        var cfg = AppConfig.defaults
+        cfg.shortcutOverrides = [
+            ShortcutAction.toggleRightPane.rawValue: ShortcutBinding(key: "j", modifiers: [.command, .option])
+        ]
+
+        let data = try JSONEncoder().encode(cfg)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+
+        #expect(decoded.shortcutOverrides[ShortcutAction.launchAgentInChat.rawValue] == nil)
+        #expect(decoded.shortcutOverrides[ShortcutAction.launchAgentInTerminal.rawValue] == nil)
+    }
+
+    @Test func doesNotUnbindNewActionThatCarriedAMigratedOverride() throws {
+        var cfg = AppConfig.defaults
+        let custom = ShortcutBinding(key: "c", modifiers: [.command, .option, .shift])
+        // Legacy chat override lands on launchAgentInChat, which then holds
+        // ⌘⌥⇧C itself — that is not a collision with another action.
+        cfg.shortcutOverrides = ["launchAgentChat": custom]
+
+        let data = try JSONEncoder().encode(cfg)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+
+        #expect(decoded.shortcutOverrides[ShortcutAction.launchAgentInChat.rawValue] == .some(custom))
+    }
+
     @Test func dropsOverridesThatCollideWithReservedBindingsOnDecode() throws {
         var cfg = AppConfig.defaults
         let preserved = ShortcutBinding(key: "j", modifiers: [.command, .option])

@@ -19,11 +19,11 @@ struct EmptyTabViewTests {
     func emptyStateRenders() {
         let view = EmptyTabView(
             onNewTerminal: {},
-            onNewAgentTerminal: {},
-            onNewAgentChat: {},
+            onNewAgentInChat: {},
+            onNewAgentInTerminal: {},
             newTerminalShortcut: "⌘ T",
-            newAgentTerminalShortcut: nil,
-            newAgentChatShortcut: nil
+            newAgentInChatShortcut: nil,
+            newAgentInTerminalShortcut: nil
         )
         .environment(\.theme, currentTheme())
 

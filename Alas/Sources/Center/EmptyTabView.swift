@@ -4,11 +4,11 @@ struct EmptyTabView: View {
     static let emptyIcon = "🥺"
 
     let onNewTerminal: () -> Void
-    let onNewAgentTerminal: () -> Void
-    let onNewAgentChat: () -> Void
+    let onNewAgentInChat: () -> Void
+    let onNewAgentInTerminal: () -> Void
     let newTerminalShortcut: String?
-    let newAgentTerminalShortcut: String?
-    let newAgentChatShortcut: String?
+    let newAgentInChatShortcut: String?
+    let newAgentInTerminalShortcut: String?
     @Environment(\.theme) var theme
 
     var body: some View {
@@ -42,17 +42,17 @@ struct EmptyTabView: View {
                 )
                 EmptyTabActionRow(
                     icon: "sparkle",
-                    title: "New Agent",
-                    subtitle: "Pick an agent to launch on the default surface",
-                    shortcut: newAgentTerminalShortcut,
-                    action: onNewAgentTerminal
+                    title: "New Agent in Chat",
+                    subtitle: "Pick an ACP-capable agent for chat",
+                    shortcut: newAgentInChatShortcut,
+                    action: onNewAgentInChat
                 )
                 EmptyTabActionRow(
                     icon: "sparkle",
-                    title: "New Agent Chat",
-                    subtitle: "Pick an ACP-capable agent for chat",
-                    shortcut: newAgentChatShortcut,
-                    action: onNewAgentChat
+                    title: "New Agent in Terminal",
+                    subtitle: "Pick an agent to run in a terminal",
+                    shortcut: newAgentInTerminalShortcut,
+                    action: onNewAgentInTerminal
                 )
             }
             .frame(maxWidth: 420)

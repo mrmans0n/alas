@@ -262,14 +262,22 @@ struct AlasApp: App {
             }
             .keyboardShortcut(state.shortcut(for: .newTerminalTab))
             Button("Launch Agent…") {
-                NotificationCenter.default.post(name: .alasOpenAgentLauncher, object: nil)
+                NotificationCenter.default.post(name: .alasOpenAgentLauncher,
+                                                object: AgentLauncherRequest.picker)
             }
-            .keyboardShortcut(state.shortcut(for: .launchAgentTerminal))
+            .keyboardShortcut(state.shortcut(for: .launchAgent))
             .disabled(state.projects.isEmpty)
-            Button("Launch Agent Chat…") {
-                NotificationCenter.default.post(name: .alasOpenAgentLauncher, object: AppConfig.LauncherMode.acp)
+            Button("Launch Agent in Chat…") {
+                NotificationCenter.default.post(name: .alasOpenAgentLauncher,
+                                                object: AgentLauncherRequest.locked(.acp))
             }
-            .keyboardShortcut(state.shortcut(for: .launchAgentChat))
+            .keyboardShortcut(state.shortcut(for: .launchAgentInChat))
+            .disabled(state.projects.isEmpty)
+            Button("Launch Agent in Terminal…") {
+                NotificationCenter.default.post(name: .alasOpenAgentLauncher,
+                                                object: AgentLauncherRequest.locked(.terminal))
+            }
+            .keyboardShortcut(state.shortcut(for: .launchAgentInTerminal))
             .disabled(state.projects.isEmpty)
             Button("Close Tab") {
                 NotificationCenter.default.post(name: .alasCloseTab, object: nil)

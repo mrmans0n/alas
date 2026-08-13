@@ -332,11 +332,11 @@ struct CenterPaneView: View {
                 } else if tabs.isEmpty {
                     EmptyTabView(
                         onNewTerminal: openTerminal,
-                        onNewAgentTerminal: { state.openAgentLauncherOverlay(mode: nil) },
-                        onNewAgentChat: { state.openAgentLauncherOverlay(mode: .acp) },
+                        onNewAgentInChat: { state.openAgentLauncherOverlay(.locked(.acp)) },
+                        onNewAgentInTerminal: { state.openAgentLauncherOverlay(.locked(.terminal)) },
                         newTerminalShortcut: state.binding(for: .newTerminalTab)?.displayString,
-                        newAgentTerminalShortcut: state.binding(for: .launchAgentTerminal)?.displayString,
-                        newAgentChatShortcut: state.binding(for: .launchAgentChat)?.displayString
+                        newAgentInChatShortcut: state.binding(for: .launchAgentInChat)?.displayString,
+                        newAgentInTerminalShortcut: state.binding(for: .launchAgentInTerminal)?.displayString
                     )
                 } else if let activeId = composition.activeId,
                           let tab = tabs.first(where: { $0.id == activeId }) {

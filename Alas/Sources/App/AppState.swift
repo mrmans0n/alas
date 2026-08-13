@@ -365,7 +365,11 @@ final class AppState {
         }
     }
 
-    func openAgentLauncherOverlay(mode: AppConfig.LauncherMode? = nil) {
+    func openAgentLauncherOverlay(_ request: AgentLauncherRequest) {
+        openAgentLauncherOverlay(mode: request.mode, locked: request.isLocked)
+    }
+
+    func openAgentLauncherOverlay(mode: AppConfig.LauncherMode? = nil, locked: Bool = false) {
         reviewPalette.close()
         isReviewPaletteOpen = false
         search.close()
@@ -375,19 +379,10 @@ final class AppState {
         runScriptPalette.reset()
         isRunScriptPaletteOpen = false
         agentLauncher.prepareForOpen(
-            defaultMode: mode ?? config.agents.defaultLauncherMode
+            defaultMode: mode ?? config.agents.defaultLauncherMode,
+            locked: locked
         )
         isAgentLauncherOpen = true
-    }
-
-    func toggleAgentLauncherOverlay(canOpen: Bool) {
-        guard canOpen else { return }
-        if isAgentLauncherOpen {
-            agentLauncher.reset()
-            isAgentLauncherOpen = false
-        } else {
-            openAgentLauncherOverlay(mode: nil)
-        }
     }
 
     func openRunScriptPaletteOverlay(mode: RunScriptPaletteModel.Mode = .run) {
