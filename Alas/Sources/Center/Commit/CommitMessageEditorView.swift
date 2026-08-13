@@ -17,7 +17,7 @@ struct CommitMessageEditorView: View {
     var accessory: AnyView? = nil
 
     @Environment(\.theme) private var theme
-    @FocusState private var focused: Field?
+    @State private var focused: Field?
     private enum Field: Hashable { case subject, body }
 
     private var canRunPrimary: Bool {
