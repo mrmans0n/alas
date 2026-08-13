@@ -793,6 +793,8 @@ extension AppConfig {
         migrateLegacyFindAndReplaceShortcutOverride()
         migrateLegacyAgentLauncherShortcutOverrides()
         removeShortcutOverridesCollidingWithReservedBindings()
+        // Last: it must see the final override set.
+        unbindNewAgentLauncherDefaultsClaimedByOverrides()
     }
 }
 
@@ -830,6 +832,25 @@ private extension AppConfig {
             guard legacyOverride != legacyDefault,
                   !shortcutOverrides.keys.contains(action.rawValue) else { continue }
             shortcutOverrides.updateValue(legacyOverride, forKey: action.rawValue)
+        }
+    }
+
+    /// The split actions introduce defaults (⌘⌥⇧C, and ⌘⌥⇧T for the terminal
+    /// half) that an older config may already have assigned to something else
+    /// — legal at the time, since `conflict(for:excluding:)` only guards
+    /// interactive assignment in Settings, never decode. Without an override
+    /// of their own the new actions would silently claim the same chord and
+    /// both menu items would register it. Leave the user's binding alone and
+    /// start the new action explicitly unbound; Settings can restore its
+    /// default once the chord is free.
+    mutating func unbindNewAgentLauncherDefaultsClaimedByOverrides() {
+        for action in [ShortcutAction.launchAgentInTerminal, .launchAgentInChat] {
+            guard !shortcutOverrides.keys.contains(action.rawValue) else { continue }
+            let isClaimed = shortcutOverrides.contains { key, override in
+                key != action.rawValue && override == action.defaultBinding
+            }
+            guard isClaimed else { continue }
+            shortcutOverrides.updateValue(nil, forKey: action.rawValue)
         }
     }
 
