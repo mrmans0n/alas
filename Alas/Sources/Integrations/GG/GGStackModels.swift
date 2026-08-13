@@ -124,6 +124,36 @@ struct GGStack: Decodable, Equatable {
         entries.first { sha.hasPrefix($0.sha) || $0.sha.hasPrefix(sha) }
     }
 
+    func mergingRemoteMetadata(from remote: GGStack?) -> GGStack {
+        guard let remote, name == remote.name else { return self }
+        return GGStack(
+            name: name,
+            base: base,
+            totalCommits: totalCommits,
+            syncedCommits: syncedCommits,
+            currentPosition: currentPosition,
+            behindBase: behindBase,
+            entries: entries.map { entry in
+                guard let match = remote.entries.first(where: {
+                    entry.ggId != nil ? $0.ggId == entry.ggId : $0.prNumber == entry.prNumber
+                }), entry.ggId != nil || entry.prNumber != nil
+                else { return entry }
+                return GGStackEntry(
+                    position: entry.position,
+                    sha: entry.sha,
+                    title: entry.title,
+                    ggId: entry.ggId,
+                    ggParent: entry.ggParent,
+                    prNumber: entry.prNumber,
+                    prState: match.prState,
+                    approved: match.approved,
+                    ciStatus: match.ciStatus,
+                    isCurrent: entry.isCurrent
+                )
+            }
+        )
+    }
+
     func projectCommits(_ infosBySHA: [String: CommitInfo]) throws -> [CommitInfo] {
         guard hasValidEntryShape,
               infosBySHA.allSatisfy({ !$0.key.isEmpty && $0.key == $0.value.sha })

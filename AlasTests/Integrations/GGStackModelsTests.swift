@@ -80,6 +80,32 @@ struct GGStackModelsTests {
         #expect(summary.total == 3)
     }
 
+    @Test func localStackRetainsRemoteMetadataByStableIdentity() {
+        let local = GGStack(
+            name: "stack", base: "main", totalCommits: 2, syncedCommits: 2,
+            currentPosition: 2, behindBase: nil,
+            entries: [
+                GGStackEntry(position: 1, sha: "newaaaa", title: "one", ggId: "id-1", prNumber: 10),
+                GGStackEntry(position: 2, sha: "newbbbb", title: "two", prNumber: 20, isCurrent: true),
+            ]
+        )
+        let remote = GGStack(
+            name: "stack", base: "main", totalCommits: 2, syncedCommits: 2,
+            currentPosition: 2, behindBase: nil,
+            entries: [
+                GGStackEntry(position: 1, sha: "oldaaaa", title: "old", ggId: "id-1", prNumber: 10, prState: .merged, approved: true, ciStatus: .success),
+                GGStackEntry(position: 2, sha: "oldbbbb", title: "old", prNumber: 20, prState: .open, ciStatus: .running, isCurrent: true),
+            ]
+        )
+
+        let merged = local.mergingRemoteMetadata(from: remote)
+
+        #expect(merged.entries.map(\.sha) == ["newaaaa", "newbbbb"])
+        #expect(merged.entries.map(\.prState) == [.merged, .open])
+        #expect(merged.entries[0].approved)
+        #expect(merged.entries[1].ciStatus == .running)
+    }
+
     @Test func entryMatchesFullCommitSHAByPrefix() throws {
         let snapshot = try GGStackSnapshot.decode(fromJSON: Data(Self.fixture.utf8))
         let stack = try #require(snapshot.stack)

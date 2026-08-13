@@ -77,6 +77,22 @@ private final class SequencedFakeGGRunner: GGCommandRunning, @unchecked Sendable
     }
 }
 
+private final class LocalFirstGGRunner: GGCommandRunning, @unchecked Sendable {
+    private(set) var calls: [[String]] = []
+    var delaysRemote = false
+
+    func run(args: [String], cwd: URL?) async throws -> ProcessResult {
+        calls.append(args)
+        if args == ["ls", "--json", "--no-refresh"] {
+            return ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
+        }
+        if delaysRemote {
+            try await Task.sleep(nanoseconds: 1_000_000_000)
+        }
+        throw GGServiceError.commandFailed(stderr: "remote unavailable")
+    }
+}
+
 enum GGStackClassificationFixture: CaseIterable, Sendable {
     case nilStack
     case zeroTotalWithEntry
@@ -685,6 +701,56 @@ struct RightPaneGGStackTests {
         #expect(state.ggStackDisplayCommits.map(\.shortSha) == ["ccccccc", "bbbbbbb", "aaaaaaa"])
         #expect(state.commitsForDisplay == state.ggStackDisplayCommits)
         #expect(state.commits == [reachable])
+    }
+
+    @Test func localFirstRefreshKeepsRowsWhenRemoteEnrichmentFails() async {
+        let runner = LocalFirstGGRunner()
+        let state = makeState()
+        state.ggService = GGService(runner: runner)
+        state.ggCapabilities = {
+            GGCapabilities(
+                structuredSplit: false,
+                keepCurrentUnstack: false,
+                localStackSnapshot: true
+            )
+        }
+        state.ggContextProvider = { _ in .active(stackName: "agent-inbox") }
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "a", count: 40), stackShaped: true)]
+
+        await state.refreshGGStack()
+
+        #expect(runner.calls == [
+            ["ls", "--json", "--no-refresh"],
+            ["ls", "--json"],
+        ])
+        #expect(state.ggStackLoadState == .loaded)
+        #expect(state.ggStackDisplayCommits.count == 3)
+        #expect(state.ggStackRemoteError == "remote unavailable")
+    }
+
+    @Test func localFirstRefreshPublishesRowsBeforeRemoteEnrichmentCompletes() async throws {
+        let runner = LocalFirstGGRunner()
+        runner.delaysRemote = true
+        let state = makeState()
+        state.ggService = GGService(runner: runner)
+        state.ggCapabilities = {
+            GGCapabilities(
+                structuredSplit: false,
+                keepCurrentUnstack: false,
+                localStackSnapshot: true
+            )
+        }
+        state.ggContextProvider = { _ in .active(stackName: "agent-inbox") }
+
+        let refresh = Task { @MainActor in await state.refreshGGStack() }
+        for _ in 0..<500 where runner.calls.count < 2 {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+
+        #expect(state.ggStackLoadState == .loaded)
+        #expect(state.ggStackDisplayCommits.count == 3)
+        refresh.cancel()
+        await refresh.value
     }
 
     @Test func failedHydrationClearsStackAndKeepsPlainCommitRows() async {
