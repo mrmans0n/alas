@@ -150,7 +150,7 @@ struct RunScriptDialog: View {
                     if hovering { appState.runScriptPalette.setSelectedIndex(index) }
                 }
         case .newRepoScript:
-            newScriptRow("New Repo Script…", isSelected: index == appState.runScriptPalette.selectedIndex)
+            newScriptRow("New Repository Script…", isSelected: index == appState.runScriptPalette.selectedIndex)
                 .onTapGesture {
                     appState.runScriptPalette.setSelectedIndex(index)
                     activate()
