@@ -326,6 +326,13 @@ struct CenterPaneView: View {
                     missionsEnabled: missionsEnabled
                 )
             }
+            if let banner = RunScriptFailureBannerPresentation(failures: state.runScriptFailures(in: worktree.id)) {
+                RunScriptFailureBanner(
+                    presentation: banner,
+                    onOpen: { state.presentRunScriptFailure(banner.failure) },
+                    onDismiss: { state.dismissRunScriptFailure(id: banner.failure.id, worktreeID: worktree.id) }
+                )
+            }
             Group {
                 if tabs.isEmpty, !state.tabs.hasLoaded {
                     Spinner()
@@ -577,6 +584,9 @@ struct CenterPaneView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(theme.color("bg-1"))
+        .sheet(item: $state.selectedRunScriptFailure) { failure in
+            RunScriptFailureDetailView(failure: failure)
+        }
     }
 
     private var rightPaneActivationKey: String {
