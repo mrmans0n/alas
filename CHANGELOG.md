@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.10] - 2026-08-13
+
+### 🐛 Fixes
+
+- Keep the draft commit editor focused while typing (#1019).
+
 ## [0.14.9] - 2026-08-12
 
 ### ✨ Features
