@@ -22,6 +22,7 @@ struct RunScriptFailureQueue: Equatable {
 
     mutating func append(_ failure: RunScriptFailure) {
         byWorktree[failure.worktreeID, default: []].insert(failure, at: 0)
+        byWorktree[failure.worktreeID]!.sort { $0.completedAt > $1.completedAt }
         byWorktree[failure.worktreeID] = Array(byWorktree[failure.worktreeID]!.prefix(3))
     }
 

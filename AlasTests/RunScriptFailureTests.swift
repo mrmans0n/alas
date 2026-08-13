@@ -19,6 +19,13 @@ struct RunScriptFailureTests {
         #expect(queue.failures(for: "wt").map(\.id) == ["failure-4", "failure-3", "failure-2"])
     }
 
+    @Test func queueEvictsByCompletionTime() {
+        var queue = RunScriptFailureQueue()
+        for index in 2...4 { queue.append(failure(index)) }
+        queue.append(failure(1))
+        #expect(queue.failures(for: "wt").map(\.id) == ["failure-4", "failure-3", "failure-2"])
+    }
+
     @Test func dismissAndPurgeAreWorktreeScoped() {
         var queue = RunScriptFailureQueue()
         queue.append(failure(1, worktreeID: "a"))
