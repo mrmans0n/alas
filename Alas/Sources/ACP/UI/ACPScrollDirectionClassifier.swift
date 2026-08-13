@@ -18,11 +18,6 @@ enum ACPScrollDirectionClassifier {
     /// considered to be "at the tail." Matches the prior `tailTolerance`.
     static let bottomTolerance: CGFloat = 36
 
-    /// Distance from the bottom before an upward scroll pauses tail following.
-    /// Roughly eight transcript text lines: enough to filter trackpad/layout
-    /// micro-hops while still respecting a deliberate scroll away.
-    static let pauseTolerance: CGFloat = 160
-
     static func decide(
         previousOffsetY: CGFloat?,
         newOffsetY: CGFloat,
@@ -39,11 +34,12 @@ enum ACPScrollDirectionClassifier {
         // Only a live scroll gesture pauses tail-following. Bounds changes
         // with no current input event are layout, not intent: a tool card
         // above the fold finishing async layout, streaming content reflow, or
-        // animated-restore lag can shift the viewport upward past
-        // `pauseTolerance` on their own. Treating those as "user scrolled up"
-        // is what made the transcript jump up a few lines and stop following
-        // while agents were still streaming.
-        guard isUserDriven, movedUp, distanceFromBottom > pauseTolerance else { return .noChange }
+        // animated-restore lag can shift the viewport upward on their own.
+        // Treating those as "user scrolled up" is what made the transcript
+        // stop following while agents were still streaming. Once verified
+        // user input has moved outside `bottomTolerance`, however, the reader
+        // has deliberately left the tail and must not be snapped back later.
+        guard isUserDriven, movedUp else { return .noChange }
         return .userScrolledUp
     }
 }

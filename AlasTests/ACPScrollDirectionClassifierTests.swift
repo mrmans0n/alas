@@ -144,7 +144,7 @@ struct ACPScrollDirectionClassifierTests {
         #expect(decision == .userAtBottom)
     }
 
-    @Test func upwardMoveNearTailDoesNotPause() {
+    @Test func layoutInducedUpwardMoveNearTailDoesNotPause() {
         // A small upward hop near the tail should not latch auto-scroll off.
         let viewportH: CGFloat = 600
         let contentH: CGFloat = 5000
@@ -177,7 +177,7 @@ struct ACPScrollDirectionClassifierTests {
     @Test func layoutInducedUpwardMoveAwayFromTailDoesNotPause() {
         // The classic "jumps up a few lines on its own" failure: a tool card
         // above the fold finishing async layout (or restore lag) shifts the
-        // viewport past pauseTolerance with NO live scroll gesture. Without a
+        // viewport far from the tail with NO live scroll gesture. Without a
         // user event this must not latch auto-scroll off.
         let viewportH: CGFloat = 600
         let contentH: CGFloat = 5000
@@ -193,7 +193,7 @@ struct ACPScrollDirectionClassifierTests {
         #expect(decision == .noChange)
     }
 
-    @Test func restoringUserInputNearTailDoesNotPause() {
+    @Test func restoringUserInputOutsideBottomTolerancePauses() {
         let viewportH: CGFloat = 600
         let contentH: CGFloat = 5000
         let newY = contentH - viewportH - 80
@@ -205,7 +205,7 @@ struct ACPScrollDirectionClassifierTests {
             isRestoring: true,
             isUserDriven: true
         )
-        #expect(decision == .noChange)
+        #expect(decision == .userScrolledUp)
     }
 
     @Test func contentShorterThanViewportIsAtBottom() {
@@ -232,7 +232,7 @@ struct ACPScrollDirectionClassifierTests {
         #expect(decision == .noChange)
     }
 
-    // MARK: - Boundary tests pinning upwardEpsilon, bottomTolerance, and pauseTolerance
+    // MARK: - Boundary tests pinning upwardEpsilon and bottomTolerance
     //
     // Derive values from the classifier's constants so the tests track
     // any retune of the thresholds instead of silently passing.
@@ -292,26 +292,10 @@ struct ACPScrollDirectionClassifierTests {
         #expect(decision == .noChange)
     }
 
-    @Test func atExactPauseToleranceBoundaryDoesNotPause() {
-        // distanceFromBottom == pauseTolerance → strict `>` means noChange.
+    @Test func justOutsideBottomTolerancePausesOnUserDrivenUpwardMove() {
         let viewportH: CGFloat = 600
         let contentH: CGFloat = 5000
-        let newY = contentH - viewportH - ACPScrollDirectionClassifier.pauseTolerance
-        let decision = ACPScrollDirectionClassifier.decide(
-            previousOffsetY: newY + 10,
-            newOffsetY: newY,
-            viewportHeight: viewportH,
-            contentHeight: contentH,
-            isRestoring: false
-        )
-        #expect(decision == .noChange)
-    }
-
-    @Test func justOutsidePauseTolerancePausesOnUpwardMove() {
-        // distanceFromBottom == pauseTolerance + 1 and moving up → userScrolledUp.
-        let viewportH: CGFloat = 600
-        let contentH: CGFloat = 5000
-        let newY = contentH - viewportH - ACPScrollDirectionClassifier.pauseTolerance - 1
+        let newY = contentH - viewportH - ACPScrollDirectionClassifier.bottomTolerance - 1
         let decision = ACPScrollDirectionClassifier.decide(
             previousOffsetY: newY + 10,
             newOffsetY: newY,

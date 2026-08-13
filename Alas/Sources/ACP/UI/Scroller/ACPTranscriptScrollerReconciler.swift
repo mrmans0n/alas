@@ -304,24 +304,20 @@ final class ACPTranscriptScrollerReconciler {
     ///
     /// Those two are not the same thing, and treating `followsTail` alone as
     /// the answer is what made the transcript jump to the newest message
-    /// while the user was scrolling back. `ACPScrollDirectionClassifier
-    /// .pauseTolerance` deliberately withholds the tail-follow pause for the
-    /// first 160pt of upward travel (so trackpad micro-hops and layout reflow
-    /// can't stop the follow), so throughout that band the coordinator is
-    /// still reporting `followsTail: true` while the user is demonstrably
-    /// scrolling away. Any update landing in that window — a streamed chunk,
-    /// a queue change, any SwiftUI invalidation at all, since `updateNSView`
-    /// runs `apply()` unconditionally — slammed the viewport back to the
-    /// bottom mid-gesture.
+    /// while the user was scrolling back. Before the coordinator classifies
+    /// the first upward scroll tick, it can still report `followsTail: true`
+    /// while the user is already moving away. Any update landing in that
+    /// window — a streamed chunk, a queue change, any SwiftUI invalidation at
+    /// all, since `updateNSView` runs `apply()` unconditionally — must not slam
+    /// the viewport back to the bottom mid-gesture.
     ///
     /// Position alone is NOT enough to decide this, and gating on it alone
-    /// was wrong: between `bottomTolerance` and `pauseTolerance` (37–160pt
-    /// off the bottom) the session still reports that it follows the tail, so
-    /// suppressing the pin there indefinitely leaves a state with neither
-    /// behavior — streaming content accumulates below the viewport while the
-    /// "go to newest" affordance stays hidden, because it keys off
-    /// `session.followsTranscriptTail` which nothing has paused. The
-    /// suppression is therefore scoped to an ACTIVE GESTURE. This includes
+    /// was wrong: while the viewport remains within `bottomTolerance` the
+    /// session still reports that it follows the tail. Suppressing the pin
+    /// there indefinitely leaves a state with neither behavior — streaming
+    /// content accumulates below the viewport while the "go to newest"
+    /// affordance stays hidden. The suppression is therefore scoped to an
+    /// ACTIVE GESTURE. This includes
     /// elastic overrun at the bottom: `distanceFromBottom` is clamped to zero
     /// there, but re-pinning would fight AppKit's rebound. Once the gesture
     /// ends, an update re-pins exactly as it always did.
@@ -334,9 +330,9 @@ final class ACPTranscriptScrollerReconciler {
     ///
     /// The state machine still converges from here: scrolling back within
     /// `bottomTolerance` re-arms the glue through the coordinator's
-    /// `.userAtBottom` → `resumeTailFollow`, and travelling past
-    /// `pauseTolerance` pauses the follow outright. What it no longer does is
-    /// fight a gesture that is still in progress.
+    /// `.userAtBottom` → `resumeTailFollow`, and travelling past that tolerance
+    /// pauses the follow outright. What it no longer does is fight a gesture
+    /// that is still in progress.
     ///
     /// The "at the tail" test is skipped on the RISING EDGE of tail-follow —
     /// `followsTail` true where `wasFollowingTail` is false. That transition
@@ -704,11 +700,9 @@ final class ACPTranscriptScrollerReconciler {
     /// The re-pin additionally requires the viewport to have BEEN at the tail
     /// when the invalidation arrived, not merely `lastFollowsTail`. Those two
     /// are not the same thing, and conflating them made scrolling back
-    /// impossible: `ACPScrollDirectionClassifier.pauseTolerance` deliberately
-    /// withholds the tail-follow pause for the first 160pt of upward travel
-    /// (so trackpad micro-hops and layout reflow don't stop the follow), so
-    /// every scroll tick inside that band still reports `lastFollowsTail ==
-    /// true`. Each such tick mounts the rows the scroll exposed, and
+    /// impossible: before the coordinator pauses tail-follow for a verified
+    /// upward gesture, a scroll tick can still report `lastFollowsTail ==
+    /// true`. That tick mounts the rows the scroll exposed, and
     /// `performLayoutPass`'s mount-time `measuredHeight(forWidth:)` reassigns
     /// `rootView`, which SwiftUI answers by invalidating the hosting view's
     /// intrinsic size — landing right here. Re-pinning then yanked the user
@@ -724,9 +718,9 @@ final class ACPTranscriptScrollerReconciler {
     /// the viewport to BE at the tail — keeps the behavior this method exists for —
     /// content growing under a viewport that IS sitting at the tail keeps the
     /// tail glued — while leaving a viewport the user has already moved off
-    /// the tail alone. `bottomTolerance` (not `pauseTolerance`) is the right
-    /// threshold: the question here is "is the viewport at the tail right
-    /// now", which is exactly what that constant answers for the classifier.
+    /// the tail alone. `bottomTolerance` is the right threshold: the question
+    /// here is "is the viewport at the tail right now", which is exactly what
+    /// that constant answers for the classifier.
     /// While genuinely pinned, `scrollToBottom()` remains idempotent — its
     /// `setScrollY` clamp reports no `onScroll` change (`reportScroll` skips
     /// when the offset is unchanged) — so calling it on every tail-following

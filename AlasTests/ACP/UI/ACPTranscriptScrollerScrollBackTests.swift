@@ -8,10 +8,9 @@ import Testing
 /// SwiftUI content is measured as they mount.
 ///
 /// This is the shape of the bug that made the AppKit scroller unusable: a
-/// user scrolling up out of the tail is inside
-/// `ACPScrollDirectionClassifier.pauseTolerance` for the first 160pt, so
-/// tail-follow is deliberately still on. Every tick mounts the rows the
-/// scroll just exposed, mount-time measurement invalidates the hosting view's
+/// user scrolling up out of the tail can arrive before the coordinator has
+/// paused tail-follow. That tick mounts the rows the scroll just exposed,
+/// mount-time measurement invalidates the hosting view's
 /// intrinsic size, and `remeasureRow` re-pinned to the bottom — putting the
 /// user back where they started, forever.
 @MainActor
@@ -183,9 +182,8 @@ struct ACPTranscriptScrollerScrollBackTests {
         )
     }
 
-    /// The mirror of the `remeasureRow` trap, one level up: inside
-    /// `ACPScrollDirectionClassifier.pauseTolerance` the coordinator has not
-    /// paused tail-follow yet, so any SwiftUI update landing mid-gesture
+    /// The mirror of the `remeasureRow` trap, one level up: before the
+    /// coordinator has paused tail-follow, any SwiftUI update landing mid-gesture
     /// reaches `apply(followsTail: true)` and used to slam the viewport back
     /// to the bottom — the user scrolls up, and the transcript jumps to the
     /// newest message "for no reason".
@@ -197,8 +195,8 @@ struct ACPTranscriptScrollerScrollBackTests {
         nsWindow.layoutIfNeeded()
         #expect(scroller.distanceFromBottom < 1)
 
-        // The user scrolls up less than `pauseTolerance`, so tail-follow is
-        // deliberately still on — exactly as the coordinator leaves it.
+        // Model the instant before the coordinator's pause reaches the
+        // reconciler: the viewport moved, but tail-follow is still on.
         let target = scroller.scrollY - 90
         scroller.contentView.setBoundsOrigin(NSPoint(x: 0, y: target))
         scroller.reflectScrolledClipView(scroller.contentView)
@@ -220,12 +218,10 @@ struct ACPTranscriptScrollerScrollBackTests {
         #expect(abs(scroller.scrollY - target) < 0.5, "viewport was re-pinned to \(scroller.scrollY)")
     }
 
-    /// The suppression must not outlive the gesture. Between
-    /// `bottomTolerance` and `pauseTolerance` the session still reports that
-    /// it follows the tail, so a viewport left permanently unpinned there
-    /// would get neither behavior: streaming content piling up below the
-    /// fold while the "go to newest" affordance stays hidden, because it keys
-    /// off `session.followsTranscriptTail` and nothing paused it.
+    /// The suppression must not outlive the gesture when the reconciler still
+    /// has tail-follow armed. A viewport left permanently unpinned in that
+    /// state would get neither behavior: streaming content piling up below the
+    /// fold while the "go to newest" affordance stays hidden.
     @Test("once the gesture ends, an update re-pins to the tail again")
     func rePinResumesAfterTheGestureEnds() async throws {
         let (reconciler, scroller, _, nsWindow) = makeStackInWindow()
@@ -233,8 +229,7 @@ struct ACPTranscriptScrollerScrollBackTests {
         reconciler.apply(specs: specs, contentWidth: 800, followsTail: true)
         nsWindow.layoutIfNeeded()
 
-        // Parked in the band where tail-follow is deliberately still on:
-        // past `bottomTolerance`, short of `pauseTolerance`.
+        // Model stale tail-follow state during a gesture.
         let target = scroller.scrollY - 90
         scroller.contentView.setBoundsOrigin(NSPoint(x: 0, y: target))
         scroller.reflectScrolledClipView(scroller.contentView)
