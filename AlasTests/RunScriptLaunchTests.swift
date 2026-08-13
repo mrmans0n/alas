@@ -73,6 +73,21 @@ struct RunScriptLaunchTests {
         #expect(suffix.hasSuffix("exit \"$exit_code\""))
     }
 
+    @Test func capturedRemoteHomePathsExpandAtRuntime() throws {
+        let suffix = try AppState.runScriptStartupScript(
+            script: script(executable: true, onExit: .close),
+            worktreeRoot: URL(fileURLWithPath: "/wt"),
+            branch: "main", projectName: "alas", repoRoot: "/repo",
+            capturePaths: RunScriptCapturePaths(
+                transcript: "~/.alas/run-transcripts/run.log",
+                completion: "~/.alas/run-transcripts/run.done"
+            )
+        )
+        #expect(suffix.contains("transcript=\"$HOME/.alas/run-transcripts/run.log\""))
+        #expect(suffix.contains("completion=\"$HOME/.alas/run-transcripts/run.done\""))
+        #expect(!suffix.contains("'~/.alas"))
+    }
+
     @Test func capturedCloseRunRecordsOutputAndCompletion() throws {
         let dir = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }

@@ -60,10 +60,10 @@ extension AppState {
         capturePaths: RunScriptCapturePaths,
         exitOnCompletion: Bool
     ) -> String {
-        let transcript = shellQuote(capturePaths.transcript)
-        let completion = shellQuote(capturePaths.completion)
-        let transcriptDir = shellQuote((capturePaths.transcript as NSString).deletingLastPathComponent)
-        let completionDir = shellQuote((capturePaths.completion as NSString).deletingLastPathComponent)
+        let transcript = capturePathShellLiteral(capturePaths.transcript)
+        let completion = capturePathShellLiteral(capturePaths.completion)
+        let transcriptDir = capturePathShellLiteral((capturePaths.transcript as NSString).deletingLastPathComponent)
+        let completionDir = capturePathShellLiteral((capturePaths.completion as NSString).deletingLastPathComponent)
         let quotedCommandLine = shellQuote(commandLine)
         let exitLine = exitOnCompletion ? "\nexit \"$exit_code\"" : ""
         return """
@@ -91,6 +91,11 @@ extension AppState {
         printf '%s\\n' "$exit_code" > "$tmp"
         mv "$tmp" "$completion"\(exitLine)
         """
+    }
+
+    nonisolated private static func capturePathShellLiteral(_ path: String) -> String {
+        guard path.hasPrefix("~/") else { return shellQuote(path) }
+        return "\"$HOME/\(path.dropFirst(2).doubleQuotedShellEscaped)\""
     }
 
     func runningScriptTab(for script: RunScript, in worktree: Worktree) -> Tab? {
@@ -285,5 +290,15 @@ extension AppState {
             edit: { [weak self] script in self?.editScript(script, in: worktree) },
             newScript: { [weak self] scope in self?.newRunScript(scope: scope, in: worktree) }
         )
+    }
+}
+
+private extension StringProtocol {
+    var doubleQuotedShellEscaped: String {
+        String(self)
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "$", with: "\\$")
+            .replacingOccurrences(of: "`", with: "\\`")
     }
 }

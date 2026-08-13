@@ -4,6 +4,16 @@ import Foundation
 
 @Suite(.serialized)
 struct ProcessGitDataTests {
+    @Test func runDataWithoutTimeoutStillCancelsProcess() async throws {
+        let task = Task { try await Process.runData("/bin/sleep", args: ["5"], timeout: nil) }
+        try await Task.sleep(for: .milliseconds(100))
+        task.cancel()
+        let started = Date()
+        let result = try await task.value
+        #expect(Date().timeIntervalSince(started) < 3)
+        #expect(result.exitCode != 0)
+    }
+
     @Test func returnsRawBinaryBytesFromGitShowBlob() async throws {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-gd-\(UUID().uuidString)")
