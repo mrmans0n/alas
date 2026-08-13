@@ -82,13 +82,16 @@ extension AppState {
         mkdir -p \(transcriptDir) \(completionDir) || exit 1
         chmod 700 \(transcriptDir) \(completionDir) || exit 1
         find \(transcriptDir) \(completionDir) -type f \\( -name '*.log' -o -name '*.done' -o -name '*.tmp' -o -name '*.body' -o -name '*.status' \\) -mtime +7 -exec rm -f {} + 2>/dev/null || true
-        private_umask=$(umask)
-        umask 077
-        : > "$transcript" || exit 1
-        chmod 600 "$transcript" || exit 1
-        umask "$private_umask"
+        prepare_transcript() {
+          private_umask=$(umask)
+          umask 077
+          : > "$transcript" || exit 1
+          chmod 600 "$transcript" || exit 1
+          umask "$private_umask"
+        }
         if command -v script >/dev/null 2>&1; then
           if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
+            prepare_transcript
             rm -f \(status)
             script -q "$transcript" /usr/bin/env -u SCRIPT /bin/sh -c \(quotedDarwinCommandLine)
             script_status=$?
@@ -99,6 +102,7 @@ extension AppState {
             fi
             rm -f \(status)
           elif script --version 2>/dev/null | grep -qi 'util-linux'; then
+            prepare_transcript
             script -qefc \(quotedCommandLine) "$transcript"
             exit_code=$?
           else

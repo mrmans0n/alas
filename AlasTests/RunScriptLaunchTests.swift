@@ -64,6 +64,9 @@ struct RunScriptLaunchTests {
             branch: "main", projectName: "alas", repoRoot: "/repo", capturePaths: capture
         )
         #expect(suffix.contains("uname -s"))
+        #expect(suffix.contains("prepare_transcript()"))
+        #expect(suffix.contains("prepare_transcript\n    rm -f"))
+        #expect(suffix.contains("prepare_transcript\n    script -qefc"))
         #expect(suffix.contains("script -q \"$transcript\" /usr/bin/env -u SCRIPT /bin/sh -c"))
         #expect(suffix.contains("script -qefc"))
         #expect(suffix.contains("env -u SCRIPT"))
