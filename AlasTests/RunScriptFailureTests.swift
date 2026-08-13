@@ -50,4 +50,12 @@ struct RunScriptFailureTests {
         #expect(result.truncated)
         #expect(!result.text.contains("�"))
     }
+
+    @Test func tailSanitizesControlsFromRetainedLookbehindBeforeTrimming() {
+        let data = Data(("\u{1B}]8;;" + String(repeating: "secret", count: 500) + "\u{07}visible").utf8)
+        let result = ANSIPlainTextSnapshot.tail(from: data, byteLimit: 16)
+        #expect(result.text == "visible")
+        #expect(result.truncated)
+        #expect(!result.text.contains("secret"))
+    }
 }

@@ -5,6 +5,11 @@ struct RunScriptFailureBannerPresentation: Equatable {
     let failure: RunScriptFailure
     let overflowCount: Int
 
+    init(failure: RunScriptFailure, overflowCount: Int = 0) {
+        self.failure = failure
+        self.overflowCount = overflowCount
+    }
+
     init?(failures: [RunScriptFailure]) {
         guard let newest = failures.max(by: { $0.completedAt < $1.completedAt }) else { return nil }
         failure = newest

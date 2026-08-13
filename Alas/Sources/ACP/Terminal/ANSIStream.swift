@@ -52,51 +52,35 @@ struct ANSITailBuffer {
 struct ANSIPlainTextSnapshot: Equatable {
     let text: String
     let truncated: Bool
+    private static let sanitizerLookbehindByteLimit = 4_096
 
     static func tail(from data: Data, byteLimit: Int, normalizesCRLF: Bool = false) -> Self {
         let limit = max(1, byteLimit)
-        let didTruncate = data.count > limit
-        let slice: Data
-        if didTruncate {
-            let all = [UInt8](data)
-            var start = all.count - limit
-            let lookbackFloor = max(0, start - 16)
-            var i = start - 1
-            while i >= lookbackFloor {
-                if all[i] == 0x1B {
-                    var hasFinal = false
-                    if i + 1 < start, all[i + 1] == 0x5B {
-                        for k in (i + 2) ..< start where all[k] >= 0x40 && all[k] <= 0x7E {
-                            hasFinal = true
-                            break
-                        }
-                    } else {
-                        hasFinal = true
-                    }
-                    if !hasFinal { start = i }
-                    break
-                }
-                i -= 1
-            }
-            while start < all.count, (all[start] & 0xC0) == 0x80 {
-                start += 1
-            }
-            slice = Data(all[start...])
-        } else {
-            slice = data
-        }
+        let slice = data.utf8Suffix(byteLimit: limit + sanitizerLookbehindByteLimit)
 
         let parsedSlice = normalizesCRLF ? slice.normalizingCRLF() : slice
         var stream = ANSIStream()
-        let text = stream.feed(parsedSlice).map(\.text).joined()
+        let parsedText = stream.feed(parsedSlice).map(\.text).joined()
+        let tail = parsedText.utf8Suffix(byteLimit: limit)
         return Self(
-            text: text,
-            truncated: didTruncate
+            text: tail.text,
+            truncated: data.count > limit || tail.truncated
         )
     }
 }
 
 private extension Data {
+    func utf8Suffix(byteLimit: Int) -> Data {
+        let limit = Swift.max(1, byteLimit)
+        guard count > limit else { return self }
+        let bytes = [UInt8](self)
+        var start = bytes.count - limit
+        while start < bytes.count, (bytes[start] & 0xC0) == 0x80 {
+            start += 1
+        }
+        return Data(bytes[start...])
+    }
+
     func normalizingCRLF() -> Data {
         var bytes: [UInt8] = []
         bytes.reserveCapacity(count)
@@ -114,6 +98,19 @@ private extension Data {
             index = self.index(after: index)
         }
         return Data(bytes)
+    }
+}
+
+private extension String {
+    func utf8Suffix(byteLimit: Int) -> (text: String, truncated: Bool) {
+        let limit = max(1, byteLimit)
+        let bytes = Array(utf8)
+        guard bytes.count > limit else { return (self, false) }
+        var start = bytes.count - limit
+        while start < bytes.count, (bytes[start] & 0xC0) == 0x80 {
+            start += 1
+        }
+        return (String(decoding: bytes[start...], as: UTF8.self), true)
     }
 }
 
