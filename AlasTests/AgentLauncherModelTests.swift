@@ -132,6 +132,20 @@ struct AgentLauncherModelTests {
         #expect(model.mode == .acp)
     }
 
+    @Test func everyPrepareForOpenBumpsTheOpenTick() {
+        let model = AgentLauncherModel()
+        let initial = model.openTick
+
+        model.prepareForOpen(defaultMode: .acp)
+        let afterFirst = model.openTick
+        #expect(afterFirst != initial)
+
+        // Re-opening on another surface while already open must still signal
+        // the dialog, so it can tear down the ACP session browser.
+        model.prepareForOpen(defaultMode: .terminal, locked: true)
+        #expect(model.openTick != afterFirst)
+    }
+
     @Test func resetClearsModeLock() {
         let model = AgentLauncherModel()
         model.prepareForOpen(defaultMode: .terminal, locked: true)

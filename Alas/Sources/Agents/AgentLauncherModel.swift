@@ -31,6 +31,11 @@ final class AgentLauncherModel {
     /// in Chat" and friends): the segmented picker is hidden and ⇥ no longer
     /// swaps modes.
     private(set) var isModeLocked: Bool = false
+    /// Bumped by every `prepareForOpen`. Re-opening an already-visible
+    /// launcher never flips `AppState.isAgentLauncherOpen`, so the dialog
+    /// watches this instead to tear down view-local state (the ACP session
+    /// browser) that belongs to the previous open.
+    private(set) var openTick: Int = 0
     var query: String = "" {
         didSet { selectedIndex = 0 }
     }
@@ -97,6 +102,7 @@ final class AgentLauncherModel {
         mode = defaultMode
         scrollToSelectionTick = 0
         isModeLocked = locked
+        openTick &+= 1
     }
 
     /// Cycle between terminal and ACP modes. `reverse` walks the other way

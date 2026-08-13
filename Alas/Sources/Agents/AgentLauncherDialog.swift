@@ -51,11 +51,16 @@ struct AgentLauncherDialog: View {
             }
         }
         .onChange(of: appState.isAgentLauncherOpen) { _, isOpen in
-            if isOpen {
-                requestInputFocus()
-            } else {
-                resetSessionBrowser()
-            }
+            if !isOpen { resetSessionBrowser() }
+        }
+        // Fires on every open request, including one that arrives while the
+        // launcher is already visible (⌘⌥⇧T while browsing an agent's
+        // sessions). That case never flips `isAgentLauncherOpen`, so without
+        // this the session browser would outlive the surface it belongs to
+        // and ↵ would still start a chat under a Terminal lock.
+        .onChange(of: appState.agentLauncher.openTick) { _, _ in
+            resetSessionBrowser()
+            requestInputFocus()
         }
     }
 
@@ -92,10 +97,12 @@ struct AgentLauncherDialog: View {
                 // Intercept tab BEFORE the TextField hands it to the
                 // system focus traversal. Without this the key would
                 // bounce out of the search field instead of toggling
-                // mode. Still swallowed while the mode is locked — the
-                // alternative is focus escaping the field on ⇥.
+                // mode. Still swallowed when the picker is hidden (locked,
+                // or browsing sessions) — the alternative is focus escaping
+                // the field, and swapping mode under a visible session list
+                // would leave ↵ launching a chat on the Terminal surface.
                 .onKeyPress(.tab) {
-                    appState.agentLauncher.toggleMode()
+                    if showsModePicker { appState.agentLauncher.toggleMode() }
                     return .handled
                 }
         }
