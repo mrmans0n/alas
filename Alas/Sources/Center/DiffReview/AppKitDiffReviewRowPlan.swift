@@ -184,8 +184,8 @@ struct AppKitDiffReviewRowInput {
             clearPendingDraft()
             return
         }
-        state.actionRelay.saveDraftComment(canonicalAnchor, body: body)
         clearPendingDraft()
+        state.actionRelay.saveDraftComment(canonicalAnchor, body: body)
     }
 
     func loadContextAndExpand(
