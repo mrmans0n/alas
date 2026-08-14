@@ -276,23 +276,22 @@ function handle(msg) {
 function renderSessions(sessions) {
   const list = $("session-list"); list.innerHTML = "";
   sessionTitles = new Map(sessions.map(s => [s.id, s.title]));
-  sortedSessions(sessions).forEach(s => list.appendChild(renderSessionRow(s)));
+  RemoteSessionOrdering.groupSessions(sessions).forEach(section => {
+    const element = el("section", "session-section");
+    element.append(el("h2", "session-section-title", section.title));
+    const rows = el("div", "session-section-list");
+    section.sessions.forEach(s => rows.appendChild(renderSessionRow(s)));
+    element.append(rows);
+    list.appendChild(element);
+  });
   if (currentSession) setDetailTitle(currentSession);
-}
-
-function sortedSessions(sessions) {
-  return [...sessions].sort((a, b) => Number(sessionIsActive(b)) - Number(sessionIsActive(a)));
-}
-
-function sessionIsActive(session) {
-  return session.isActive !== false;
 }
 
 function renderSessionRow(s) {
   const row = document.createElement("div");
   row.dataset.sessionId = s.id;
   row.className = "session-row";
-  const active = sessionIsActive(s);
+  const active = RemoteSessionOrdering.sessionIsActive(s);
   row.classList.add(active ? "session-row-active" : "session-row-inactive");
 
   const open = document.createElement("button");
@@ -314,7 +313,7 @@ function renderSessionRow(s) {
 
   if (s.worktree) {
     row.classList.add("session-row-card");
-    open.append(el("div", "session-worktree", `${s.worktree.projectName} / ${s.worktree.worktreeName}`));
+    open.append(el("div", "session-worktree", s.worktree.worktreeName));
     const meta = el("div", "session-meta");
     const parts = sessionMetaParts(s.worktree);
     parts.forEach(part => meta.append(part));
