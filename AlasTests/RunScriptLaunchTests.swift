@@ -78,7 +78,7 @@ struct RunScriptLaunchTests {
         #expect(suffix.contains("find"))
         #expect(suffix.contains("exit_code=$?"))
         #expect(suffix.contains("mv"))
-        #expect(suffix.hasSuffix("exit \"$exit_code\""))
+        #expect(suffix.contains("exit \"$exit_code\""))
     }
 
     @Test func capturedRemoteHomePathsExpandAtRuntime() throws {
@@ -139,9 +139,12 @@ struct RunScriptLaunchTests {
 
         let marker = dir.appendingPathComponent("marker")
         let status = dir.appendingPathComponent("status")
-        let process = try runZsh("\(suffix)\nprintf '%s' \"$?\" > \(AppState.shellQuote(status.path))\nprintf marker > \(AppState.shellQuote(marker.path))")
+        let leaked = dir.appendingPathComponent("leaked")
+        #expect(suffix.contains("unset -f prepare_transcript __alas_run_script_capture"))
+        let process = try runZsh("\(suffix)\nprintf '%s' \"$?\" > \(AppState.shellQuote(status.path))\n( set | grep -q '^transcript=' || set | grep -q '^completion=' || set | grep -q '^exit_code=' || set | grep -q '^completed_at=' || typeset -f prepare_transcript >/dev/null || typeset -f __alas_run_script_capture >/dev/null ) && printf leaked > \(AppState.shellQuote(leaked.path))\nprintf marker > \(AppState.shellQuote(marker.path))")
         #expect(process.terminationStatus == 0)
         #expect(FileManager.default.fileExists(atPath: marker.path))
+        #expect(!FileManager.default.fileExists(atPath: leaked.path))
         #expect(try String(contentsOf: status, encoding: .utf8) == "42")
         #expect(try String(contentsOfFile: capture.completion, encoding: .utf8).hasPrefix("42\t"))
     }

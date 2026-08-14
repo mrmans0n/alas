@@ -75,11 +75,15 @@ extension AppState {
         printf '%s\\n' "$code" > \(status)
         exit "$code"
         """)
-        let exitLine = exitOnCompletion ? "\nexit \"$exit_code\"" : "\n(exit \"$exit_code\")"
+        let finishLine = exitOnCompletion
+            ? "\nexit \"$exit_code\""
+            : "\nunset -f prepare_transcript __alas_run_script_capture\nreturn \"$exit_code\""
         return """
-        transcript=\(transcript)
-        completion=\(completion)
-        capture_ready=0
+        __alas_run_script_capture() {
+        local transcript=\(transcript)
+        local completion=\(completion)
+        local capture_ready=0
+        local private_umask result script_status exit_code tmp completed_at
         if mkdir -p \(transcriptDir) \(completionDir) 2>/dev/null && chmod 700 \(transcriptDir) \(completionDir) 2>/dev/null; then
           capture_ready=1
           find \(transcriptDir) \(completionDir) -type f \\( -name '*.log' -o -name '*.done' -o -name '*.tmp' -o -name '*.body' -o -name '*.status' \\) -mtime +7 -exec rm -f {} + 2>/dev/null || true
@@ -132,7 +136,9 @@ extension AppState {
           printf '%s\\t%s\\n' "$exit_code" "$completed_at" > "$tmp"
           mv "$tmp" "$completion"
           umask "$private_umask"
-        fi\(exitLine)
+        fi\(finishLine)
+        }
+        __alas_run_script_capture
         """
     }
 
