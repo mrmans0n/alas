@@ -124,6 +124,7 @@ struct RemoteAppStateAccessTests {
             id: tab.sessionId,
             title: "New session",
             titleSource: .placeholder,
+            updatedAt: 1,
             in: manager
         )
         try await seedStoredSession(
@@ -131,6 +132,7 @@ struct RemoteAppStateAccessTests {
             title: "Actual Remote Title",
             titleSource: .manual,
             remoteSessionId: "remote-shared",
+            updatedAt: 2,
             in: manager
         )
 
@@ -140,6 +142,7 @@ struct RemoteAppStateAccessTests {
         #expect(summaries.first?.id == tab.sessionId)
         #expect(summaries.first?.title == "Actual Remote Title")
         #expect(summaries.first?.isActive == true)
+        #expect(summaries.first?.updatedAt == 2)
     }
 
     @Test func remoteSessionSummariesMarkStoredRowsWithoutTabsInactive() async throws {
@@ -159,6 +162,7 @@ struct RemoteAppStateAccessTests {
             id: "historical-\(UUID().uuidString)",
             title: "Historical",
             titleSource: .manual,
+            updatedAt: 42,
             in: manager
         )
 
@@ -166,6 +170,8 @@ struct RemoteAppStateAccessTests {
         let historical = try #require(summaries.first { $0.title == "Historical" })
 
         #expect(!historical.isActive)
+        #expect(historical.projectId == state.projects.first?.id)
+        #expect(historical.updatedAt == 42)
     }
 
     @Test func openingUncachedStoredSessionUsesPersistedTitleForTab() async throws {
