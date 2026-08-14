@@ -4935,8 +4935,7 @@ final class AppState {
             return state.root.find(leafId: leafId) != nil
         }?.id
         guard let tabId = owningTabId else { return }
-        cancelRunScriptCompletionTasks(sessionID: leafId, after: .seconds(2), includeRemote: false)
-        cancelRunScriptCompletionTasks(sessionID: leafId, after: .seconds(30))
+        scheduleRunScriptCompletionCancellation(sessionID: leafId)
         guard let outcome = tabs.removeLeaf(
             worktreeId: worktreeId, tabId: tabId, leafId: leafId
         ) else { return }
@@ -4971,7 +4970,7 @@ final class AppState {
             requestCloseTab(worktreeId: worktreeId, tabId: activeId)
         } else {
             let closedLeafId = outcome.closedLeafId
-            cancelRunScriptCompletionTasks(sessionID: closedLeafId, after: .seconds(2))
+            scheduleRunScriptCompletionCancellation(sessionID: closedLeafId)
             closeTerminalSession(
                 id: closedLeafId,
                 worktreeId: worktreeId,
@@ -5701,7 +5700,7 @@ final class AppState {
             if case .terminal(let s) = tab {
                 for leaf in s.root.leaves() {
                     if cancelRunScriptMonitors {
-                        cancelRunScriptCompletionTasks(sessionID: leaf.id, after: .seconds(2))
+                        scheduleRunScriptCompletionCancellation(sessionID: leaf.id)
                     }
                     closeTerminalSession(id: leaf.id, worktreeId: worktreeId, projectPath: projectPath)
                 }
@@ -5749,7 +5748,7 @@ final class AppState {
             if let tab = allTabs.first(where: { $0.id == id }),
                case .terminal(let s) = tab {
                 for leaf in s.root.leaves() {
-                    cancelRunScriptCompletionTasks(sessionID: leaf.id, after: .seconds(2))
+                    scheduleRunScriptCompletionCancellation(sessionID: leaf.id)
                     closeTerminalSession(id: leaf.id, worktreeId: worktreeId, projectPath: projectPath)
                 }
             }

@@ -525,6 +525,45 @@ struct RunScriptLaunchTests {
     }
 
     @MainActor
+    @Test func closingSplitRunScriptPanePreservesRemoteMonitorAfterLocalGrace() async throws {
+        let state = AppState(store: MemoryStore())
+        let project = ProjectConfig(id: "project", name: "Project", path: "/repo", color: "blue", addedAt: Date())
+        let worktree = Worktree(
+            id: "wt",
+            projectId: project.id,
+            name: "main",
+            branch: "main",
+            path: URL(fileURLWithPath: "/repo"),
+            status: .clean,
+            lastActivity: Date()
+        )
+        state.projectsManager = ProjectsManager(persistedProjects: [project])
+        let tab = state.tabs.appendTerminal(worktreeId: worktree.id, title: "Run", sessionId: "session")
+        _ = state.tabs.splitFocusedLeaf(
+            worktreeId: worktree.id,
+            tabId: tab.id,
+            axis: .vertical,
+            newLeafId: "other",
+            newSessionId: "other"
+        )
+        _ = state.tabs.setFocusedLeaf(worktreeId: worktree.id, tabId: tab.id, leafId: "session")
+
+        let runID = UUID().uuidString
+        state.runScriptCompletionTasks[runID] = (
+            worktreeID: worktree.id,
+            sessionID: "session",
+            location: try RunScriptCompletionMonitor.paths(runID: runID, host: "devbox"),
+            task: Task {}
+        )
+
+        state.closeFocusedPane(worktreeId: worktree.id)
+
+        try await Task.sleep(for: .milliseconds(2_200))
+        #expect(state.runScriptCompletionTaskCountForTesting == 1)
+        state.cancelAllRunScriptCompletionTasks()
+    }
+
+    @MainActor
     @Test func closingCompletedKeepOpenRunScriptTerminalPreservesFailure() async throws {
         let fixture = try makeAppStateFixture(waiter: { _ in
             try await Task.sleep(for: .milliseconds(200))

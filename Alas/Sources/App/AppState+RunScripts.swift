@@ -430,6 +430,11 @@ extension AppState {
         }
     }
 
+    func scheduleRunScriptCompletionCancellation(sessionID: String) {
+        cancelRunScriptCompletionTasks(sessionID: sessionID, after: .seconds(2), includeRemote: false)
+        cancelRunScriptCompletionTasks(sessionID: sessionID, after: .seconds(30))
+    }
+
     private func cancelRunScriptCompletionTasksIfSessionStillExited(
         sessionID: String,
         after delay: Duration,

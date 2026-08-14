@@ -18,7 +18,7 @@ enum RemoteTerminalScript {
         guard let suffix = startupSuffix, !suffix.isEmpty else {
             return "\"$SHELL\" -l"
         }
-        return "\"$SHELL\" -l -c \(SSHCommand.shellQuote("\(suffix); exec \"$SHELL\" -l"))"
+        return "/bin/sh -lc \(SSHCommand.shellQuote("\(suffix); exec \"$SHELL\" -l"))"
     }
 
     static func attachScript(
