@@ -19,13 +19,17 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  warm-release-x86:
-    name: Warm x86_64 Release Dependencies
+  warm-release-dependencies:
+    name: Warm ${{ matrix.arch }} Release Dependencies
     # `inputs.ref` selects the checkout; `github.ref` keeps manual cache
     # producers in the default-branch cache scope.
     if: github.event_name == 'schedule' || (github.ref == 'refs/heads/main' && (inputs.ref == '' || inputs.ref == 'main'))
     runs-on: macos-26
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, x86_64]
     steps:
       - name: Checkout (with submodules)
         uses: actions/checkout@v7.0.1
@@ -42,21 +46,21 @@ jobs:
 
       - name: Compute Ghostty cache key inputs
         run: |
-          ALAS_GHOSTTY_TARGET_ARCH=x86_64 ./scripts/build-ghostty.sh --print-fingerprint > .ghostty-pin
+          ALAS_GHOSTTY_TARGET_ARCH="${{ matrix.arch }}" ./scripts/build-ghostty.sh --print-fingerprint > .ghostty-pin
           cat .ghostty-pin
 
       - name: Restore Ghostty cache
         id: ghostty-cache
         uses: actions/cache/restore@v6
         with:
-          path: ~/Library/Caches/Alas/GhosttyKit/x86_64
-          key: ghostty-${{ runner.os }}-x86_64-${{ hashFiles('.ghostty-pin') }}
+          path: ~/Library/Caches/Alas/GhosttyKit/${{ matrix.arch }}
+          key: ghostty-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('.ghostty-pin') }}
           restore-keys: |
-            ghostty-${{ runner.os }}-x86_64-
+            ghostty-${{ runner.os }}-${{ matrix.arch }}-
 
-      - name: Build Ghostty xcframework (x86_64)
+      - name: Build Ghostty xcframework (${{ matrix.arch }})
         env:
-          ALAS_GHOSTTY_TARGET_ARCH: x86_64
+          ALAS_GHOSTTY_TARGET_ARCH: ${{ matrix.arch }}
           ALAS_GHOSTTY_CACHE_KEEP: 1
         run: ./scripts/build-ghostty.sh
 
@@ -64,7 +68,7 @@ jobs:
         if: success() && steps.ghostty-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
-          path: ~/Library/Caches/Alas/GhosttyKit/x86_64
+          path: ~/Library/Caches/Alas/GhosttyKit/${{ matrix.arch }}
           key: ${{ steps.ghostty-cache.outputs.cache-primary-key }}
 
       - name: Compute prebuilt tools cache key inputs
@@ -94,15 +98,15 @@ jobs:
             .build/alas-helper/fingerprint
             .build/alas-cli/*/release/alas
             .build/alas-cli/fingerprint
-          key: tools-${{ runner.os }}-x86_64-${{ hashFiles('.tools-pin') }}
+          key: tools-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('.tools-pin') }}
           restore-keys: |
-            tools-${{ runner.os }}-x86_64-
+            tools-${{ runner.os }}-${{ matrix.arch }}-
             tools-${{ runner.os }}-arm64-
 
-      - name: Prebuild zmx + fff + Alas Helper + Alas CLI (x86_64)
+      - name: Prebuild zmx + fff + Alas Helper + Alas CLI (${{ matrix.arch }})
         env:
-          ALAS_ZMX_TARGET_ARCH: x86_64
-          ALAS_FFF_TARGET_ARCH: x86_64
+          ALAS_ZMX_TARGET_ARCH: ${{ matrix.arch }}
+          ALAS_FFF_TARGET_ARCH: ${{ matrix.arch }}
         run: |
           ./scripts/build-zmx.sh
           ./scripts/build-fff.sh
