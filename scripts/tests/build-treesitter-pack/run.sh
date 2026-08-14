@@ -169,4 +169,39 @@ run_script
 grep -q "^cargo RUSTC=" "${invocations}"
 test "$(cat "${last_good_archive}")" != "${last_good_content}"
 
+# --- 7. a failure between the archive promotion and the fingerprint write
+#        (here: install_headers failing on a missing header source) must not
+#        leave the previous build's fingerprint on disk describing content
+#        that has already been overwritten with something newer — the
+#        archive copy happens before install_headers, so by the time this
+#        fails the live archive no longer matches what the old fingerprint
+#        recorded. An absent fingerprint (forcing a full rebuild next time)
+#        is the only safe state here, not the stale marker.
+pre_interrupt_content="$(cat "${last_good_archive}")"
+printf 'fn main() { /* changed once more, headers will fail */ }\n' > "${pack_src}/src/lib.rs"
+mv "${pack_src}/include/treesitter_pack.h" "${pack_src}/include/treesitter_pack.h.bak"
+: > "${invocations}"
+if run_script > "${sandbox}/out7" 2>&1; then
+    echo "expected a missing header source to fail the build" >&2
+    exit 1
+fi
+mv "${pack_src}/include/treesitter_pack.h.bak" "${pack_src}/include/treesitter_pack.h"
+
+grep -q "^cargo RUSTC=" "${invocations}"
+# the archive copy happens before install_headers, so the validated new
+# archive was promoted even though the overall run failed afterward
+test "$(cat "${last_good_archive}")" != "${pre_interrupt_content}"
+# and the fingerprint was removed up front, before promotion began, so no
+# stale marker survives to mispair with this newly promoted archive
+test ! -f "${srcroot}/.build/treesitter-pack/x86_64/fingerprint"
+
+# --- 7b. recovery: fixing the header source and rerunning must do a full
+#         rebuild (there is no fingerprint left to trust) and end in a
+#         consistent state again
+: > "${invocations}"
+run_script
+grep -q "^cargo RUSTC=" "${invocations}"
+test -f "${srcroot}/.build/treesitter-pack/x86_64/fingerprint"
+test -f "${srcroot}/.build/treesitter-pack/include/treesitter_pack.h"
+
 echo "build-treesitter-pack tests passed"

@@ -165,6 +165,18 @@ do
 done
 [ -z "${missing}" ] || die "archive is missing grammar entry points:${missing}"
 
+# Clear the recorded fingerprint before promoting the validated archive. On a
+# rebuild, `fingerprint_path` still holds the *previous* build's fingerprint
+# at this point — an interruption (or an `install_headers` failure) between
+# here and the fingerprint write below would otherwise leave that stale
+# marker on disk pointing at content it no longer describes: the archive has
+# already been promoted, but the recorded fingerprint still matches the
+# old inputs. Reverting to those old inputs would then fast-path a mismatched
+# archive. Removing the marker first means any interruption in this window
+# leaves no fingerprint at all, forcing a full rebuild and revalidation next
+# time instead of trusting a pairing that never happened.
+rm -f "${fingerprint_path}"
+
 # --checksum forces a content comparison instead of rsync's default
 # size+mtime quick check, which can skip a copy it deems "unchanged" when a
 # rebuild happens to produce same-size output within the same mtime tick — a
@@ -172,8 +184,8 @@ done
 rsync -a --checksum "${cargo_output}" "${lib_output}"
 install_headers
 
-# Written last so an interruption between the archive copy and the header
-# install leaves an absent fingerprint rather than a stale-valid one.
+# Written last so the fingerprint only ever exists once the archive and
+# headers it describes are fully installed.
 printf '%s\n' "${fingerprint}" > "${fingerprint_path}"
 
 echo "build-treesitter-pack.sh: built ${lib_output}"
