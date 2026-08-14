@@ -64,8 +64,8 @@ struct RunScriptLaunchTests {
             branch: "main", projectName: "alas", repoRoot: "/repo", capturePaths: capture
         )
         #expect(suffix.contains("uname -s"))
-        #expect(suffix.contains("prepare_transcript()"))
-        #expect(suffix.contains("if prepare_transcript; then"))
+        #expect(suffix.contains("__alas_prepare_run_transcript()"))
+        #expect(suffix.contains("if __alas_prepare_run_transcript; then"))
         #expect(suffix.contains("/usr/bin/script -q \"$transcript\" /usr/bin/env -u SCRIPT /bin/sh -c"))
         #expect(suffix.contains("script -qefc"))
         #expect(suffix.contains("env -u SCRIPT"))
@@ -141,8 +141,8 @@ struct RunScriptLaunchTests {
         let marker = dir.appendingPathComponent("marker")
         let status = dir.appendingPathComponent("status")
         let leaked = dir.appendingPathComponent("leaked")
-        #expect(suffix.contains("unset -f prepare_transcript __alas_run_script_capture"))
-        let process = try runZsh("\(suffix)\nprintf '%s' \"$?\" > \(AppState.shellQuote(status.path))\n( set | grep -q '^transcript=' || set | grep -q '^completion=' || set | grep -q '^exit_code=' || set | grep -q '^completed_at=' || typeset -f prepare_transcript >/dev/null || typeset -f __alas_run_script_capture >/dev/null ) && printf leaked > \(AppState.shellQuote(leaked.path))\nprintf marker > \(AppState.shellQuote(marker.path))")
+        #expect(suffix.contains("unset -f __alas_prepare_run_transcript __alas_run_script_capture"))
+        let process = try runZsh("\(suffix)\nprintf '%s' \"$?\" > \(AppState.shellQuote(status.path))\n( set | grep -q '^transcript=' || set | grep -q '^completion=' || set | grep -q '^exit_code=' || set | grep -q '^completed_at=' || set | grep -q '^__alas_' || typeset -f __alas_prepare_run_transcript >/dev/null || typeset -f __alas_run_script_capture >/dev/null || typeset -f __alas_finish_run_script_capture >/dev/null ) && printf leaked > \(AppState.shellQuote(leaked.path))\nprintf marker > \(AppState.shellQuote(marker.path))")
         #expect(process.terminationStatus == 0)
         #expect(FileManager.default.fileExists(atPath: marker.path))
         #expect(!FileManager.default.fileExists(atPath: leaked.path))
@@ -235,11 +235,11 @@ struct RunScriptLaunchTests {
             worktreeRoot: dir, branch: "main", projectName: "alas", repoRoot: dir.path, capturePaths: capture
         )
 
-        let status = dir.appendingPathComponent("status")
-        let process = try runZsh("set -e\n\(suffix)\nprintf '%s' \"$?\" > \(AppState.shellQuote(status.path))")
+        let restored = dir.appendingPathComponent("restored")
+        let process = try runZsh("set -e\n\(suffix)\ncase $- in *e*) printf restored > \(AppState.shellQuote(restored.path)) ;; esac\nset +e")
 
         #expect(process.terminationStatus == 0)
-        #expect(try String(contentsOf: status, encoding: .utf8) == "42")
+        #expect(try String(contentsOf: restored, encoding: .utf8) == "restored")
         #expect(try String(contentsOfFile: capture.completion, encoding: .utf8).hasPrefix("42\t"))
     }
 

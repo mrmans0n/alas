@@ -77,19 +77,23 @@ extension AppState {
         """)
         let finishLine = exitOnCompletion
             ? "\nexit \"$exit_code\""
-            : "\nif [ \"$publish_failed\" = 1 ]; then\n  unset -f prepare_transcript __alas_run_script_capture\n  exit \"$exit_code\"\nfi\nif [ \"$alas_errexit_was_set\" = 1 ] && [ \"$exit_code\" = 0 ]; then\n  set -e\nfi\nunset -f prepare_transcript __alas_run_script_capture\nreturn \"$exit_code\""
+            : "\nif [ \"$publish_failed\" = 1 ]; then\n  exit \"$exit_code\"\nfi\nif [ \"$alas_errexit_was_set\" = 1 ]; then\n  set -e\nfi\nreturn \"$exit_code\""
         return """
+        __alas_run_script_errexit_was_set=0
+        case $- in
+          *e*) __alas_run_script_errexit_was_set=1 ;;
+        esac
         __alas_run_script_capture() {
         local transcript=\(transcript)
         local completion=\(completion)
         local transcript_ready=0
         local completion_ready=0
         local publish_failed=0
-        local alas_errexit_was_set=0
+        local alas_errexit_was_set=$__alas_run_script_errexit_was_set
         local private_umask result script_status exit_code tmp completed_at
-        case $- in
-          *e*) alas_errexit_was_set=1; set +e ;;
-        esac
+        if [ "$alas_errexit_was_set" = 1 ]; then
+          set +e
+        fi
         if mkdir -p \(transcriptDir) 2>/dev/null && chmod 700 \(transcriptDir) 2>/dev/null; then
           transcript_ready=1
           find \(transcriptDir) -type f \\( -name '*.log' -o -name '*.done' -o -name '*.tmp' -o -name '*.body' -o -name '*.status' \\) -mtime +7 -exec rm -f {} + 2>/dev/null || true
@@ -98,7 +102,7 @@ extension AppState {
           completion_ready=1
           find \(completionDir) -type f \\( -name '*.log' -o -name '*.done' -o -name '*.tmp' -o -name '*.body' -o -name '*.status' \\) -mtime +7 -exec rm -f {} + 2>/dev/null || true
         fi
-        prepare_transcript() {
+        __alas_prepare_run_transcript() {
           private_umask=$(umask)
           umask 077
           : > "$transcript" 2>/dev/null && chmod 600 "$transcript" 2>/dev/null
@@ -108,7 +112,7 @@ extension AppState {
         }
         if [ "$transcript_ready" = 1 ] && command -v script >/dev/null 2>&1; then
           if [ "$(uname -s 2>/dev/null)" = Darwin ] && [ -x /usr/bin/script ]; then
-            if prepare_transcript; then
+            if __alas_prepare_run_transcript; then
               rm -f \(status)
               if /usr/bin/script -q "$transcript" /usr/bin/env -u SCRIPT /bin/sh -c \(quotedDarwinCommandLine); then
                 script_status=0
@@ -129,7 +133,7 @@ extension AppState {
               fi
             fi
           elif script --version 2>/dev/null | grep -qi 'util-linux'; then
-            if prepare_transcript; then
+            if __alas_prepare_run_transcript; then
               if script -qefc \(quotedCommandLine) "$transcript"; then
                 exit_code=0
               else
@@ -168,7 +172,23 @@ extension AppState {
           umask "$private_umask"
         fi\(finishLine)
         }
-        __alas_run_script_capture
+        if __alas_run_script_capture; then
+          __alas_run_script_status=0
+        else
+          __alas_run_script_status=$?
+        fi
+        __alas_finish_run_script_capture() {
+          local captured_status=$1
+          unset __alas_run_script_errexit_was_set __alas_run_script_status
+          unset -f __alas_prepare_run_transcript __alas_run_script_capture __alas_finish_run_script_capture
+          return "$captured_status"
+        }
+        if [ "$__alas_run_script_errexit_was_set" = 1 ]; then
+          unset __alas_run_script_errexit_was_set __alas_run_script_status
+          unset -f __alas_prepare_run_transcript __alas_run_script_capture __alas_finish_run_script_capture
+        else
+          __alas_finish_run_script_capture "$__alas_run_script_status"
+        fi
         """
     }
 
