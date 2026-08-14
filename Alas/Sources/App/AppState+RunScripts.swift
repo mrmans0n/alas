@@ -292,7 +292,7 @@ extension AppState {
                     let tab = try await openTerminalTabPreparingRemoteZmxIfNeeded(
                         for: worktree,
                         startupScriptSuffix: suffix,
-                        includeUserStartupScript: false,
+                        includeUserStartupScript: true,
                         titleOverride: script.displayName,
                         runScriptKey: script.key
                     )

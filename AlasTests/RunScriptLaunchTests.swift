@@ -730,7 +730,7 @@ struct RunScriptLaunchTests {
     }
 
     @MainActor
-    @Test func runScriptLaunchSkipsUserStartupScript() async throws {
+    @Test func runScriptLaunchIncludesUserStartupScript() async throws {
         var includeUserStartupScript: Bool?
         let fixture = try makeAppStateFixture(
             waiter: { _ in RunScriptCompletion(exitCode: 0, transcript: nil, truncated: false) },
@@ -743,7 +743,7 @@ struct RunScriptLaunchTests {
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
         try await Task.sleep(for: .milliseconds(50))
 
-        #expect(includeUserStartupScript == false)
+        #expect(includeUserStartupScript == true)
     }
 
     @MainActor
