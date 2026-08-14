@@ -368,9 +368,16 @@ struct TreeSitterHighlighterTests {
 
     @Test("markup, CSS, and SQL fallback emit useful spans")
     func chatFallbackBasics() throws {
-        let html = TreeSitterHighlighter.highlight(source: #"<button class="primary">Save</button>"#, fileExtension: "xml")
-        let css = TreeSitterHighlighter.highlight(source: #".primary { display: flex; color: #fff; }"#, fileExtension: "scss")
-        let sql = TreeSitterHighlighter.highlight(source: #"SELECT id FROM users WHERE active = true;"#, fileExtension: "sql")
+        // Calls `RegexFallbackHighlighter` directly: `xml` and `scss` now
+        // have real tree-sitter grammars, so routing through
+        // `TreeSitterHighlighter.highlight` would no longer reach the
+        // fallback this test targets. `<button class="...">` also isn't
+        // well-formed XML (bare markup, no declaration), which the real
+        // XML grammar can't parse meaningfully anyway — the fallback's
+        // markup heuristic is the only thing that makes sense of it.
+        let html = RegexFallbackHighlighter.highlight(source: #"<button class="primary">Save</button>"#, fileExtension: "xml")
+        let css = RegexFallbackHighlighter.highlight(source: #".primary { display: flex; color: #fff; }"#, fileExtension: "scss")
+        let sql = RegexFallbackHighlighter.highlight(source: #"SELECT id FROM users WHERE active = true;"#, fileExtension: "sql")
 
         #expect(html.contains(where: { $0.capture == .keyword }))
         #expect(html.contains(where: { $0.capture == .attribute }))
@@ -510,7 +517,13 @@ struct TreeSitterHighlighterTests {
     @Test("CSS fallback does not treat hashes as line comments")
     func cssFallbackDoesNotTreatHashesAsLineComments() throws {
         let src = #".primary { color: #fff; background: red; } #app { display: grid; }"#
-        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "scss")
+        // `scss` now has a real tree-sitter grammar (merged with CSS), so this
+        // targets the fallback directly. `sass` (the indented-syntax dialect,
+        // no grammar of its own) would also still route through
+        // `TreeSitterHighlighter.highlight`, but calling the fallback
+        // directly matches the other tests in this group and doesn't depend
+        // on `sass` staying ungrammared.
+        let spans = RegexFallbackHighlighter.highlight(source: src, fileExtension: "scss")
         let swallowedRange = NSRange(src.range(of: "#fff; background")!, in: src)
 
         #expect(capture(for: "background", in: src, spans: spans) == .keyword)
@@ -521,7 +534,10 @@ struct TreeSitterHighlighterTests {
     @Test("markup fallback captures spaced and boolean attributes exactly")
     func markupFallbackExactAttributes() throws {
         let src = #"<button class = "primary" disabled>Save</button>"#
-        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "xml")
+        // `xml` now has a real tree-sitter grammar, and this markup (a bare
+        // tag with a boolean attribute) isn't well-formed XML anyway — call
+        // the fallback directly rather than route through it.
+        let spans = RegexFallbackHighlighter.highlight(source: src, fileExtension: "xml")
 
         #expect(capture(for: "class", in: src, spans: spans) == .attribute)
         #expect(capture(for: "disabled", in: src, spans: spans) == .attribute)
@@ -531,7 +547,7 @@ struct TreeSitterHighlighterTests {
     @Test("markup fallback does not classify assigned text outside tags as attributes")
     func markupFallbackDoesNotClassifyAssignedTextOutsideTagsAsAttributes() throws {
         let src = #"x = 1 <button class="primary">Save</button>"#
-        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "xml")
+        let spans = RegexFallbackHighlighter.highlight(source: src, fileExtension: "xml")
 
         #expect(capture(for: "x", in: src, spans: spans) != .attribute)
         #expect(capture(for: "class", in: src, spans: spans) == .attribute)
@@ -541,7 +557,7 @@ struct TreeSitterHighlighterTests {
     @Test("markup fallback does not recover boolean attributes inside comments or strings")
     func markupFallbackSkipsBooleanAttributesInsideCommentsAndStrings() throws {
         let src = #"<!-- <button disabled> --> <input disabled value="<tag disabled>">"#
-        let spans = TreeSitterHighlighter.highlight(source: src, fileExtension: "xml")
+        let spans = RegexFallbackHighlighter.highlight(source: src, fileExtension: "xml")
 
         #expect(capture(for: "disabled", occurrence: 0, in: src, spans: spans) != .attribute)
         #expect(capture(for: "disabled", occurrence: 1, in: src, spans: spans) == .attribute)
