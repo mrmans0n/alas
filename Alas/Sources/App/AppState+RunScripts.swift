@@ -116,7 +116,8 @@ extension AppState {
         tmp="$completion.tmp"
         private_umask=$(umask)
         umask 077
-        printf '%s\\t%s\\n' "$exit_code" "$(date +%s)" > "$tmp"
+        completed_at=$(perl -MTime::HiRes=time -e 'printf "%.6f\\n", time' 2>/dev/null || date +%s)
+        printf '%s\\t%s\\n' "$exit_code" "$completed_at" > "$tmp"
         mv "$tmp" "$completion"
         umask "$private_umask"\(exitLine)
         """

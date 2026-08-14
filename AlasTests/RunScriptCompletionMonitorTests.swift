@@ -5,10 +5,10 @@ import Testing
 struct RunScriptCompletionMonitorTests {
     @Test func remoteFrameIsBinarySafe() throws {
         let body = Data([0x00, 0x0A, 0xFF, 0x41])
-        let framed = Data("ALAS_RUN_V1\t9\t1\t0\t1700000000\n".utf8) + body
+        let framed = Data("ALAS_RUN_V1\t9\t1\t0\t1700000000.125\n".utf8) + body
         let result = try RunScriptCompletionMonitor.parseRemotePayload(framed)
         #expect(result.exitCode == 9)
-        #expect(result.completedAt == Date(timeIntervalSince1970: 1_700_000_000))
+        #expect(result.completedAt == Date(timeIntervalSince1970: 1_700_000_000.125))
         #expect(result.transcript == body)
         #expect(!result.truncated)
     }

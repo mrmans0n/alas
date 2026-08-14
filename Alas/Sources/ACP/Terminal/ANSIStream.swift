@@ -58,7 +58,8 @@ struct ANSIPlainTextSnapshot: Equatable {
         let limit = max(1, byteLimit)
         let slice = data.utf8Suffix(byteLimit: limit + sanitizerLookbehindByteLimit)
 
-        let parsedSlice = normalizesCRLF ? slice.normalizingCRLF() : slice
+        let safeSlice = slice.droppingLeadingPartialOSCFragmentIfNeeded(truncated: data.count > slice.count)
+        let parsedSlice = normalizesCRLF ? safeSlice.normalizingCRLF() : safeSlice
         var stream = ANSIStream()
         let parsedText = stream.feed(parsedSlice).map(\.text).joined()
         let tail = parsedText.utf8Suffix(byteLimit: limit)
@@ -79,6 +80,22 @@ private extension Data {
             start += 1
         }
         return Data(bytes[start...])
+    }
+
+    func droppingLeadingPartialOSCFragmentIfNeeded(truncated: Bool) -> Data {
+        guard truncated, !isEmpty else { return self }
+        let bytes = [UInt8](self)
+        let firstEscape = bytes.firstIndex(of: 0x1B)
+        if let bel = bytes.firstIndex(of: 0x07),
+           firstEscape.map({ bel < $0 }) ?? true {
+            return bel + 1 < bytes.count ? Data(bytes[(bel + 1)...]) : Data()
+        }
+        if let escape = firstEscape,
+           escape + 1 < bytes.count,
+           bytes[escape + 1] == 0x5C {
+            return escape + 2 < bytes.count ? Data(bytes[(escape + 2)...]) : Data()
+        }
+        return self
     }
 
     func normalizingCRLF() -> Data {
