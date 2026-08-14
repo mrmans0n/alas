@@ -148,6 +148,7 @@ private struct ANSIOutputBuffer {
     private(set) var runs: [AttributedRun] = []
     private(set) var retainedByteCount = 0
     private var currentLineStart = 0
+    private var cursorBackspaces = 0
 
     init(byteLimit: Int) {
         self.byteLimit = byteLimit
@@ -157,6 +158,7 @@ private struct ANSIOutputBuffer {
         runs.removeAll(keepingCapacity: true)
         retainedByteCount = 0
         currentLineStart = 0
+        cursorBackspaces = 0
     }
 
     mutating func apply(_ events: [ANSIStreamEvent]) {
@@ -165,19 +167,46 @@ private struct ANSIOutputBuffer {
             case .text(let run):
                 append(run)
             case .carriageReturn:
+                cursorBackspaces = 0
                 guard currentLineStart < runs.count else { continue }
                 for run in runs[currentLineStart...] {
                     retainedByteCount -= run.text.utf8.count
                 }
                 runs.removeSubrange(currentLineStart...)
             case .backspace:
-                removeLastCharacterFromCurrentLine()
+                cursorBackspaces = min(cursorBackspaces + 1, currentLineCharacterCount())
             }
         }
         trimToByteLimit()
     }
 
     private mutating func append(_ run: AttributedRun) {
+        guard !run.text.isEmpty else { return }
+        guard cursorBackspaces > 0 else {
+            appendRaw(run)
+            return
+        }
+
+        var pending = ""
+        for character in run.text {
+            if character == "\n" {
+                cursorBackspaces = 0
+                pending.append(character)
+            } else if cursorBackspaces > 0 {
+                if !pending.isEmpty {
+                    appendRaw(AttributedRun(text: pending, attributes: run.attributes))
+                    pending.removeAll(keepingCapacity: true)
+                }
+                replaceCharacter(offsetFromLineEnd: cursorBackspaces, with: character, attributes: run.attributes)
+                cursorBackspaces -= 1
+            } else {
+                pending.append(character)
+            }
+        }
+        appendRaw(AttributedRun(text: pending, attributes: run.attributes))
+    }
+
+    private mutating func appendRaw(_ run: AttributedRun) {
         guard !run.text.isEmpty else { return }
         retainedByteCount += run.text.utf8.count
 
@@ -196,15 +225,54 @@ private struct ANSIOutputBuffer {
         }
     }
 
-    private mutating func removeLastCharacterFromCurrentLine() {
-        guard currentLineStart < runs.count else { return }
-        for index in stride(from: runs.count - 1, through: currentLineStart, by: -1) {
-            guard let last = runs[index].text.popLast() else { continue }
-            retainedByteCount -= last.utf8.count
-            if runs[index].text.isEmpty {
-                runs.remove(at: index)
+    private func currentLineCharacterCount() -> Int {
+        guard currentLineStart < runs.count else { return 0 }
+        return runs[currentLineStart...].reduce(0) { $0 + $1.text.count }
+    }
+
+    private mutating func replaceCharacter(
+        offsetFromLineEnd: Int,
+        with character: Character,
+        attributes: ANSIAttributes
+    ) {
+        var target = currentLineCharacterCount() - offsetFromLineEnd
+        guard target >= 0 else { return }
+        for index in currentLineStart..<runs.count {
+            let runLength = runs[index].text.count
+            guard target >= runLength else {
+                replaceCharacter(in: index, at: target, with: character, attributes: attributes)
+                return
             }
-            return
+            target -= runLength
+        }
+    }
+
+    private mutating func replaceCharacter(
+        in runIndex: Int,
+        at characterIndex: Int,
+        with character: Character,
+        attributes: ANSIAttributes
+    ) {
+        let text = runs[runIndex].text
+        let stringIndex = text.index(text.startIndex, offsetBy: characterIndex)
+        let nextIndex = text.index(after: stringIndex)
+        let replaced = text[stringIndex]
+        retainedByteCount += character.utf8.count - replaced.utf8.count
+
+        if runs[runIndex].attributes == attributes {
+            runs[runIndex].text.replaceSubrange(stringIndex..<nextIndex, with: String(character))
+        } else {
+            let before = String(text[..<stringIndex])
+            let after = String(text[nextIndex...])
+            var replacement: [AttributedRun] = []
+            if !before.isEmpty {
+                replacement.append(AttributedRun(text: before, attributes: runs[runIndex].attributes))
+            }
+            replacement.append(AttributedRun(text: String(character), attributes: attributes))
+            if !after.isEmpty {
+                replacement.append(AttributedRun(text: after, attributes: runs[runIndex].attributes))
+            }
+            runs.replaceSubrange(runIndex...runIndex, with: replacement)
         }
     }
 
