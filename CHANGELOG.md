@@ -6,6 +6,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.11] - 2026-08-14
+
+### ✨ Features
+
+- Lock the agent launcher surface from the empty state (#1025).
+- Show alerts when run scripts fail (#1023).
+
+### 🐛 Fixes
+
+- Rename the new repo script to the new repository script (#1024).
+- Load `gg` stacks before PR status (#1021).
+- Prevent ACP chat scroll jumps after reading (#1022).
+- Avoid `gg` stack query timeouts (#1020).
+
 ## [0.14.10] - 2026-08-13
 
 ### 🐛 Fixes
