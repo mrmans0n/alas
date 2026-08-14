@@ -20,7 +20,7 @@ enum RemoteTerminalScript {
         }
         let command = SSHCommand.shellQuote("\(suffix); exec \"$SHELL\" -l")
         if suffix.contains("__alas_run_script_capture()") {
-            return "/bin/sh -lc \(command)"
+            return "\"$SHELL\" -l -c \(SSHCommand.shellQuote("exec /bin/sh -lc \(command)"))"
         }
         return "\"$SHELL\" -l -c \(command)"
     }

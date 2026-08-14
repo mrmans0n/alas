@@ -38,7 +38,7 @@ struct RemoteTerminalScriptTests {
             useZmx: false, startupSuffix: "__alas_run_script_capture() { :; }"
         )
         #expect(script.contains("exec /bin/sh -lc"))
-        #expect(!script.contains("exec \"$SHELL\" -l -c"))
+        #expect(script.contains("exec \"$SHELL\" -l -c"))
     }
 
     @Test func surfaceInvocationIsInteractiveWithForcedTTY() {
