@@ -15,7 +15,11 @@ function compareSessions(a, b) {
   if (recency) return recency;
 
   const title = String(a.title || "").localeCompare(String(b.title || ""), undefined, { sensitivity: "accent" });
-  return title || String(a.id || "").localeCompare(String(b.id || ""), undefined, { sensitivity: "accent" });
+  if (title) return title;
+
+  const aID = String(a.id || "");
+  const bID = String(b.id || "");
+  return aID === bID ? 0 : aID < bID ? -1 : 1;
 }
 
 function groupSessions(sessions) {

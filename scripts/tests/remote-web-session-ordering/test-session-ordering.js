@@ -31,4 +31,11 @@ const equalTimestamps = ordering.groupSessions([
 
 assert.deepStrictEqual(equalTimestamps[0].sessions.map(({ id }) => id), ["a-id", "z-id", "b-id"]);
 
+const caseSensitiveIds = ordering.groupSessions([
+  session("a-id", "repo-case", "Case", 50, true, "same"),
+  session("A-id", "repo-case", "Case", 50, true, "Same"),
+]);
+
+assert.deepStrictEqual(caseSensitiveIds[0].sessions.map(({ id }) => id), ["A-id", "a-id"]);
+
 console.log("session ordering tests passed");
