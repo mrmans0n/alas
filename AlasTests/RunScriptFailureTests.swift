@@ -72,4 +72,11 @@ struct RunScriptFailureTests {
         #expect(result.text == "importanterror")
         #expect(!result.truncated)
     }
+
+    @Test func tailStripsAnsiStringControlPayloads() {
+        let data = Data(("before\u{1B}Psecret\u{1B}\\middle\u{1B}_hidden\u{1B}\\after").utf8)
+        let result = ANSIPlainTextSnapshot.tail(from: data, byteLimit: 64)
+        #expect(result.text == "beforemiddleafter")
+        #expect(!result.truncated)
+    }
 }

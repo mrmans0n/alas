@@ -349,6 +349,9 @@ struct ANSIStream {
         case 0x5D:                      // ']'  OSC introducer
             paramBuf = ""
             state = .oscString
+        case 0x50, 0x58, 0x5E, 0x5F:    // DCS, SOS, PM, APC string controls
+            paramBuf = ""
+            state = .oscString
         default:
             // Two-character ESC sequence (e.g. ESC c), discard and resume.
             state = .text
