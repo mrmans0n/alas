@@ -28,7 +28,11 @@ struct AgentLauncherDialog: View {
                         footer
                     }
                     .frame(width: 460)
-                    .frame(maxHeight: 420)
+                    // No outer height cap: a max-only frame grows to the
+                    // proposed height, so the panel would stay 420pt tall and
+                    // center shorter content — leaving dead background above
+                    // the field and below the footer whenever the mode picker
+                    // is hidden (⌘⌥⇧T / ⌘⌥⇧C). The row list carries the cap.
                     .background(theme.color("bg-1").opacity(0.92))
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .overlay(
