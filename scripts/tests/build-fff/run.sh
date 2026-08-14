@@ -73,12 +73,23 @@ SRCROOT="${srcroot}" \
     PATH="${sandbox}/bin:${PATH}" \
     bash "${srcroot}/scripts/build-fff.sh"
 
-grep -qx 'rustup toolchain install stable --profile minimal' "${invocations}"
-grep -qx 'rustup target list --installed --toolchain stable' "${invocations}"
-grep -qx 'rustup target add --toolchain stable x86_64-apple-darwin' "${invocations}"
-grep -qx 'rustup which --toolchain stable rustc' "${invocations}"
-grep -qx 'rustup which --toolchain stable cargo' "${invocations}"
+grep -qx 'rustup toolchain install 1.97.1 --profile minimal' "${invocations}"
+grep -qx 'rustup target list --installed --toolchain 1.97.1' "${invocations}"
+grep -qx 'rustup target add --toolchain 1.97.1 x86_64-apple-darwin' "${invocations}"
+grep -qx 'rustup which --toolchain 1.97.1 rustc' "${invocations}"
+grep -qx 'rustup which --toolchain 1.97.1 cargo' "${invocations}"
 grep -q "^cargo RUSTC=${toolchain_bin}/rustc build " "${invocations}"
 test -f "${srcroot}/.build/fff/x86_64/install/lib/libfff_c.dylib"
+
+: > "${invocations}"
+SRCROOT="${srcroot}" \
+    ALAS_FFF_TARGET_ARCH="x86_64" \
+    ALAS_RUST_TOOLCHAIN="1.98.0" \
+    ALAS_RUSTUP_BIN="${sandbox}/rustup" \
+    PATH="${sandbox}/bin:${PATH}" \
+    bash "${srcroot}/scripts/build-fff.sh"
+
+grep -qx 'rustup toolchain install 1.98.0 --profile minimal' "${invocations}"
+grep -q "^cargo RUSTC=${toolchain_bin}/rustc build " "${invocations}"
 
 echo "build-fff tests passed"

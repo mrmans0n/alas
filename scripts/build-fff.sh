@@ -12,7 +12,7 @@ script_path="${script_dir}/$(basename "${BASH_SOURCE[0]}")"
 srcroot="${SRCROOT:-$(cd "${script_dir}/.." && pwd)}"
 fff_src="${srcroot}/ThirdParty/fff"
 rustup_bin="${ALAS_RUSTUP_BIN:-rustup}"
-rust_toolchain="${ALAS_RUST_TOOLCHAIN:-stable}"
+rust_toolchain="${ALAS_RUST_TOOLCHAIN:-1.97.1}"
 
 if [ -z "${ALAS_FFF_TARGET_ARCH:-}" ] && [ "${CURRENT_ARCH:-}" = "undefined_arch" ]; then
     target_arch="universal"
@@ -33,8 +33,8 @@ die() {
 }
 
 # Fingerprint over the fff submodule (HEAD + working-tree dirt), target
-# arch, and this script's content hash. A stale `.build/fff` from a
-# previous submodule checkout is invalidated by the SHA change.
+# arch, Rust toolchain, and this script's content hash. A stale `.build/fff`
+# from a previous submodule checkout or toolchain is invalidated.
 fff_sha="$(git -C "${fff_src}" rev-parse HEAD 2>/dev/null || echo "")"
 fff_dirt="$(
     {
@@ -47,7 +47,7 @@ fff_dirt="$(
     } | shasum -a 256 | awk '{print $1}'
 )"
 script_id="$(shasum -a 256 "${script_path}" 2>/dev/null | awk '{print $1}')"
-fingerprint="$(printf '%s\n%s\n%s\n%s\n' "${fff_sha}" "${fff_dirt}" "${target_arch}" "${script_id}" | shasum -a 256 | awk '{print $1}')"
+fingerprint="$(printf '%s\n%s\n%s\n%s\n%s\n' "${fff_sha}" "${fff_dirt}" "${target_arch}" "${rust_toolchain}" "${script_id}" | shasum -a 256 | awk '{print $1}')"
 
 # Fast path: if the expected dylib for this arch already exists AND the
 # fingerprint matches, skip the cargo build. The Xcode build phase runs

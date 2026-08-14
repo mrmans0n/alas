@@ -86,17 +86,16 @@ jobs:
         run: bash scripts/tests/build-alas-cli/run.sh
 
       - name: Compute Ghostty cache key inputs
-        # Submodules track their HEAD via .git/modules/... in the parent repo, so
-        # `ThirdParty/ghostty/.git` is a *file* (not a dir) and hashFiles can't
-        # follow it. Dump the submodule SHA + script hash into a small file we
-        # can feed to hashFiles. Re-runs whenever the pinned commit moves.
+        # Use the script's authoritative fingerprint so the Actions key tracks
+        # every input that can change the produced artifact.
         run: |
-          git -C ThirdParty/ghostty rev-parse HEAD > .ghostty-pin
-          shasum scripts/build-ghostty.sh >> .ghostty-pin
+          ALAS_GHOSTTY_TARGET_ARCH=arm64 ./scripts/build-ghostty.sh --print-fingerprint > .ghostty-pin
           cat .ghostty-pin
 
       - name: Restore Ghostty cache
-        # Split restore + save (Option B): the combined `actions/cache@v4` only
+        # Restore the shared arm64 cache. `build-ghostty.sh` validates the
+        # restored entry and populates `.build/ghostty`. Split restore + save
+        # (Option B): the combined `actions/cache@v4` only
         # saves at end-of-job on success. When build/test fails or is canceled,
         # we lose the freshly-built xcframework and the next CI run pays the
         # full 20–30 min cold zig build again. With explicit restore + save,
@@ -105,9 +104,10 @@ jobs:
         id: ghostty-cache
         uses: actions/cache/restore@v6
         with:
-          path: |
-            .build/ghostty
-          key: ghostty-${{ runner.os }}-${{ hashFiles('.ghostty-pin') }}
+          path: ~/Library/Caches/Alas/GhosttyKit/arm64
+          key: ghostty-${{ runner.os }}-arm64-${{ hashFiles('.ghostty-pin') }}
+          restore-keys: |
+            ghostty-${{ runner.os }}-arm64-
 
       - name: Build Ghostty xcframework
         # xcodebuild validates the GhosttyKit.xcframework dependency at the
@@ -115,6 +115,9 @@ jobs:
         # If the xcframework doesn't already exist on disk, the build fails
         # before our pre-build script ever gets a chance to produce it. So
         # we run the script as its own CI step, ahead of xcodebuild.
+        env:
+          ALAS_GHOSTTY_TARGET_ARCH: arm64
+          ALAS_GHOSTTY_CACHE_KEEP: 1
         run: ./scripts/build-ghostty.sh
 
       - name: Save Ghostty cache
@@ -125,8 +128,7 @@ jobs:
         if: success() && steps.ghostty-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
-          path: |
-            .build/ghostty
+          path: ~/Library/Caches/Alas/GhosttyKit/arm64
           key: ${{ steps.ghostty-cache.outputs.cache-primary-key }}
 
       - name: Compute prebuilt tools cache key inputs
@@ -242,25 +244,6 @@ jobs:
           path: .build/xcode/SourcePackages
           key: ${{ steps.swiftpm-cache.outputs.cache-primary-key }}
 
-      - name: Restore Swift compilation cache
-        # Xcode 26 compilation caching: the build system fingerprints each
-        # compile action and stores artifacts in a content-addressable store
-        # (CAS) under DerivedData. Restoring a recent CAS turns most of the
-        # app-module compile in Build for testing into cache hits. Content
-        # addressing makes stale restores safe: misses just compile as
-        # usual, hits are byte-exact — a wrong binary can't come out of it.
-        # The primary key embeds the commit SHA so it never hits; the
-        # restore-keys prefix pulls the most recent CAS for this toolchain
-        # (hash of .xcode-cache-toolchain, computed above), so an Xcode
-        # bump starts a fresh lineage instead of downloading useless bytes.
-        id: swiftcas-cache
-        uses: actions/cache/restore@v6
-        with:
-          path: .build/xcode/DerivedData/CompilationCache.noindex
-          key: swiftcas-${{ runner.os }}-${{ hashFiles('.xcode-cache-toolchain') }}-${{ github.sha }}
-          restore-keys: |
-            swiftcas-${{ runner.os }}-${{ hashFiles('.xcode-cache-toolchain') }}-
-
       - name: Build for testing
         # Splitting build/test into `build-for-testing` + `test-without-building`
         # avoids the lsregister/CoreServices hang we observed locally and on CI
@@ -281,33 +264,8 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            COMPILATION_CACHE_ENABLE_CACHING=YES \
+            -showBuildTimingSummary \
             build-for-testing
-
-      - name: Report Swift compilation cache size
-        # Round-2 experiment diagnostic: confirms the CAS actually lives
-        # where the cache steps expect (the default location under our
-        # -derivedDataPath) and how big it grows — that number decides
-        # whether every-run saves are sustainable inside the repo's 10 GB
-        # Actions cache quota. `|| true` keeps a missing dir (feature
-        # wrote nowhere / somewhere else) from failing the job; the save
-        # below surfaces the real error in that case.
-        run: |
-          du -sh .build/xcode/DerivedData/CompilationCache.noindex || true
-          ls .build/xcode/DerivedData/ || true
-
-      - name: Save Swift compilation cache
-        # Rolling snapshot: the primary key embeds the SHA and never hits,
-        # so every successful build saves a fresh CAS (no cache-hit gate
-        # needed). Saved BEFORE the test steps so an unrelated test failure
-        # doesn't throw away the compile work. Scoping does the sharing:
-        # main-push saves land in the repo-wide scope every PR restores
-        # from; PR-run saves warm that PR's own subsequent pushes.
-        if: success()
-        uses: actions/cache/save@v6
-        with:
-          path: .build/xcode/DerivedData/CompilationCache.noindex
-          key: ${{ steps.swiftcas-cache.outputs.cache-primary-key }}
 
       # Each xcodebuild test invocation gets its own LaunchServices /
       # CoreServices teardown cycle. Combining 4+ subprocess-heavy suites

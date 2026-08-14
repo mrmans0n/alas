@@ -43,8 +43,8 @@ env_vars=(
 )
 env "${env_vars[@]}" bash "${repo_root}/scripts/build-zmx.sh"
 first=$(cat "${counter}")
-[ "${first}" = "1" ] || { echo "expected 1 build on cold cache, got ${first}" >&2; exit 1; }
+[ "${first}" = "3" ] || { echo "expected 3 total Zig invocations on cold cache, got ${first}" >&2; exit 1; }
 
 env "${env_vars[@]}" bash "${repo_root}/scripts/build-zmx.sh"
 second=$(cat "${counter}")
-[ "${second}" = "1" ] || { echo "expected cache hit (still 1 build), got ${second}" >&2; exit 1; }
+[ "${second}" = "3" ] || { echo "expected cache hit (still 3 total Zig invocations), got ${second}" >&2; exit 1; }
