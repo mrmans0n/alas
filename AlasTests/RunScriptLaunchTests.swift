@@ -237,7 +237,7 @@ struct RunScriptLaunchTests {
 
         let restored = dir.appendingPathComponent("restored")
         let status = dir.appendingPathComponent("status")
-        let process = try runZsh("set -e\nif {\n\(suffix)\n}; then\n  printf '%s' \"$?\" > \(AppState.shellQuote(status.path))\nelse\n  printf '%s' \"$?\" > \(AppState.shellQuote(status.path))\nfi\ncase $- in *e*) printf restored > \(AppState.shellQuote(restored.path)) ;; esac\nset +e")
+        let process = try runZsh("set -e\n\(suffix)\nprintf '%s' \"$?\" > \(AppState.shellQuote(status.path))\nif typeset -f __alas_restore_run_script_errexit >/dev/null; then __alas_restore_run_script_errexit; fi\ncase $- in *e*) printf restored > \(AppState.shellQuote(restored.path)) ;; esac\nset +e")
 
         #expect(process.terminationStatus == 0)
         #expect(try String(contentsOf: restored, encoding: .utf8) == "restored")

@@ -79,12 +79,15 @@ extension AppState {
         """)
         let finishLine = exitOnCompletion
             ? "\nexit \"$exit_code\""
-            : "\nif [ \"$publish_failed\" = 1 ]; then\n  exit \"$exit_code\"\nfi\nif [ \"$alas_errexit_was_set\" = 1 ]; then\n  set -e\nfi\nreturn \"$exit_code\""
+            : "\nif [ \"$publish_failed\" = 1 ]; then\n  exit \"$exit_code\"\nfi\nreturn \"$exit_code\""
         return """
         __alas_run_script_errexit_was_set=0
         case $- in
           *e*) __alas_run_script_errexit_was_set=1 ;;
         esac
+        if [ "$__alas_run_script_errexit_was_set" = 1 ]; then
+          set +e
+        fi
         __alas_run_script_capture() {
         local transcript=\(transcript)
         local completion=\(completion)
@@ -190,7 +193,39 @@ extension AppState {
           unset -f __alas_prepare_run_transcript __alas_run_script_capture __alas_finish_run_script_capture
           return "$captured_status"
         }
-        __alas_finish_run_script_capture "$__alas_run_script_status"
+        if [ "$__alas_run_script_errexit_was_set" = 1 ]; then
+          set +e
+          if __alas_finish_run_script_capture "$__alas_run_script_status"; then
+            __alas_run_script_final_status=0
+          else
+            __alas_run_script_final_status=$?
+          fi
+          __alas_run_script_return_status() {
+            return "$__alas_run_script_final_status"
+          }
+          __alas_restore_run_script_errexit() {
+            set -e
+            if [ -n "${ZSH_VERSION-}" ]; then
+              precmd_functions=("${precmd_functions[@]:#__alas_restore_run_script_errexit}")
+            elif [ -n "${BASH_VERSION-}" ]; then
+              case "$PROMPT_COMMAND" in
+                "__alas_restore_run_script_errexit; "*) PROMPT_COMMAND=${PROMPT_COMMAND#__alas_restore_run_script_errexit; } ;;
+                "__alas_restore_run_script_errexit") unset PROMPT_COMMAND ;;
+              esac
+            fi
+            unset __alas_run_script_final_status
+            unset -f __alas_run_script_return_status
+            unset -f __alas_restore_run_script_errexit
+          }
+          if [ -n "${ZSH_VERSION-}" ]; then
+            precmd_functions=(__alas_restore_run_script_errexit "${precmd_functions[@]}")
+          elif [ -n "${BASH_VERSION-}" ]; then
+            PROMPT_COMMAND="__alas_restore_run_script_errexit${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
+          fi
+          __alas_run_script_return_status
+        else
+          __alas_finish_run_script_capture "$__alas_run_script_status"
+        fi
         """
     }
 
