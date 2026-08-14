@@ -303,6 +303,27 @@ struct RunScriptLaunchTests {
         #expect(lines[0] == "cd /wt/missing || exit 1")
     }
 
+    @Test func capturedCdFailurePublishesCompletion() throws {
+        let dir = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let capture = RunScriptCapturePaths(
+            transcript: dir.appendingPathComponent("run.log").path,
+            completion: dir.appendingPathComponent("run.done").path
+        )
+        let scriptURL = dir.appendingPathComponent("exit-42.sh")
+        try "#!/bin/sh\nexit 42\n".write(to: scriptURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
+        let suffix = try AppState.runScriptStartupScript(
+            script: RunScript(scope: .repo, fileName: scriptURL.lastPathComponent, fileURL: scriptURL, displayName: "Exit 42", onExit: .close, cwd: "missing", isExecutable: true),
+            worktreeRoot: dir, branch: "main", projectName: "alas", repoRoot: dir.path, capturePaths: capture
+        )
+
+        let process = try runZsh(suffix)
+
+        #expect(process.terminationStatus == 1)
+        #expect(try String(contentsOfFile: capture.completion, encoding: .utf8).hasPrefix("1\t"))
+    }
+
     private struct MemoryStore: PersistenceStoreProtocol {
         func write<T: Encodable>(_: T, to _: URL) throws {}
         func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }

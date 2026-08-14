@@ -51,8 +51,9 @@ extension AppState {
         // start — that's silently dangerous for build/cleanup scripts.
         let prefix = "cd \(shellQuote(cwd)) || exit 1\n"
         guard let capturePaths else { return prefix + run }
-        return prefix + capturedRunScript(
+        return capturedRunScript(
             commandLine: commandLine,
+            workingDirectory: shellQuote(cwd),
             capturePaths: capturePaths,
             exitOnCompletion: script.onExit == .close
         )
@@ -60,6 +61,7 @@ extension AppState {
 
     nonisolated private static func capturedRunScript(
         commandLine: String,
+        workingDirectory: String,
         capturePaths: RunScriptCapturePaths,
         exitOnCompletion: Bool
     ) -> String {
@@ -89,10 +91,15 @@ extension AppState {
         local transcript_ready=0
         local completion_ready=0
         local publish_failed=0
+        local setup_failed=0
         local alas_errexit_was_set=$__alas_run_script_errexit_was_set
         local private_umask result script_status exit_code tmp completed_at
         if [ "$alas_errexit_was_set" = 1 ]; then
           set +e
+        fi
+        if ! cd \(workingDirectory); then
+          exit_code=1
+          setup_failed=1
         fi
         if mkdir -p \(transcriptDir) 2>/dev/null && chmod 700 \(transcriptDir) 2>/dev/null; then
           transcript_ready=1
@@ -110,7 +117,7 @@ extension AppState {
           umask "$private_umask"
           return "$result"
         }
-        if [ "$transcript_ready" = 1 ] && command -v script >/dev/null 2>&1; then
+        if [ "$setup_failed" = 0 ] && [ "$transcript_ready" = 1 ] && command -v script >/dev/null 2>&1; then
           if [ "$(uname -s 2>/dev/null)" = Darwin ] && [ -x /usr/bin/script ]; then
             if __alas_prepare_run_transcript; then
               rm -f \(status)
@@ -153,7 +160,7 @@ extension AppState {
               exit_code=$?
             fi
           fi
-        else
+        elif [ "$setup_failed" = 0 ]; then
           if \(commandLine); then
             exit_code=0
           else
