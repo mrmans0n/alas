@@ -309,6 +309,43 @@ struct DiffReviewSurfaceTests {
         }
     }
 
+    @Test func appKitReviewWindowOpensNewlyPostedDraftCommentEditor() async throws {
+        let file = fileSection(
+            summary: summary(path: "Sources/NewDraft.swift"),
+            displayModel: displayModel()
+        )
+        let model = AppKitPostedDraftHarnessModel(file: file)
+
+        try await withAppKitReviewScroller {
+            let controller = host(
+                AppKitPostedDraftHarness(model: model).environment(\.theme, theme()),
+                width: 1_000,
+                height: 500
+            )
+            let window = attachWindow(controller, width: 1_000, height: 500)
+            window.makeKeyAndOrderFront(nil)
+            defer {
+                window.orderOut(nil)
+                ReviewDraftComposerFocusRetainer.retain(window, controller)
+            }
+            await drainSwiftUI(controller.view)
+
+            model.savePendingDraft(theme: theme())
+            await drainSwiftUI(controller.view)
+
+            #expect(clickAccessibilityElement(
+                withAccessibilityIdentifier: "diff-review-draft-comment-action-edit-new-draft",
+                in: controller.view
+            ))
+            await drainSwiftUI(controller.view)
+
+            #expect(subview(
+                withAccessibilityIdentifier: "diff-review-draft-comment-action-save-new-draft",
+                in: controller.view
+            ) != nil)
+        }
+    }
+
     @Test func appKitReviewWindowExpandsContextThroughRenderedControl() async throws {
         let summary = summary(path: "Sources/ContextControl.swift")
         let file = fileSection(
@@ -4941,6 +4978,28 @@ struct DiffReviewSurfaceTests {
         return false
     }
 
+    private func clickAccessibilityElement(withAccessibilityIdentifier identifier: String, in view: NSView) -> Bool {
+        guard let marker = subviews(withAccessibilityIdentifier: identifier, in: view).first,
+              let window = marker.window
+        else { return false }
+        let location = marker.convert(NSPoint(x: marker.bounds.midX, y: marker.bounds.midY), to: nil)
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            guard let event = NSEvent.mouseEvent(
+                with: type,
+                location: location,
+                modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber,
+                context: nil,
+                eventNumber: 0,
+                clickCount: 1,
+                pressure: 1
+            ) else { return false }
+            window.sendEvent(event)
+        }
+        return true
+    }
+
     private func pressButton(withToolTip toolTip: String, in view: NSView) -> Bool {
         for button in allSubviews(of: view).compactMap({ $0 as? NSButton })
             where button.toolTip == toolTip || button.accessibilityLabel() == toolTip {
@@ -5154,6 +5213,110 @@ private struct AppKitReviewSurfaceWindowHarness: View {
             draftCommentsByFileID: model.draftCommentsByFileID,
             draftCommentScrollCommand: model.draftCommentCommand,
             draftCommentActions: model.draftCommentActions
+        )
+    }
+}
+
+@Observable
+@MainActor
+private final class AppKitPostedDraftHarnessModel {
+    let file: DiffReviewFileSectionModel
+    let state = AppKitDiffReviewFileState()
+    var comments: [ReviewDraftComment] = []
+
+    init(file: DiffReviewFileSectionModel) {
+        self.file = file
+        state.pendingDraftAnchor = DiffReviewLineAnchor(
+            path: file.summary.path,
+            side: .new,
+            line: 2,
+            rowIndex: 1,
+            selectedText: "let b = 3"
+        )
+        state.pendingDraftBody = "Please revisit this line."
+    }
+
+    func input(theme: Theme) -> AppKitDiffReviewRowInput {
+        state.actionRelay.update(
+            inlineFeedbackActions: .init(),
+            onSelectInlineFeedback: { _ in },
+            draftCommentActions: ReviewDraftCommentActions(availability: { _ in
+                ReviewDraftCommentActionAvailability(
+                    canEdit: true,
+                    canDelete: false,
+                    canResolve: false,
+                    canDismiss: false,
+                    canCopyPrompt: false,
+                    canShowSendToAgent: false,
+                    canSendToAgent: false
+                )
+            }),
+            onSelectDraftComment: { _ in },
+            onSaveDraftComment: { [weak self] anchor, body in self?.post(anchor: anchor, body: body) },
+            onContextExpansionActivated: {},
+            onReply: { _, _ in },
+            onResolve: { _ in },
+            onUnresolve: { _ in },
+            onEdit: { _, _, _ in },
+            onDelete: { _, _ in },
+            onStageReply: { _, _ in }
+        )
+        return AppKitDiffReviewRowInput(
+            file: file,
+            draftComments: comments,
+            state: state,
+            theme: theme,
+            layoutMode: .stacked
+        )
+    }
+
+    func savePendingDraft(theme: Theme) {
+        input(theme: theme).savePendingDraft()
+    }
+
+    private func post(anchor: DiffReviewLineAnchor, body: String) {
+        comments = [ReviewDraftComment(
+            id: "new-draft",
+            sessionID: .commit(
+                worktreeID: "wt",
+                repositoryPath: URL(fileURLWithPath: "/repo"),
+                sha: "abc123"
+            ),
+            fileID: file.id,
+            path: anchor.path,
+            originalPath: nil,
+            side: anchor.side,
+            startLine: anchor.line,
+            endLine: anchor.endLine,
+            selectedText: anchor.selectedText,
+            bodyMarkdown: body,
+            state: .active,
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 1)
+        )]
+    }
+}
+
+@MainActor
+private struct AppKitPostedDraftHarness: View {
+    @Environment(\.theme) private var theme
+    @ObservedObject private var state: AppKitDiffReviewFileState
+    let model: AppKitPostedDraftHarnessModel
+
+    init(model: AppKitPostedDraftHarnessModel) {
+        self.model = model
+        _state = ObservedObject(wrappedValue: model.state)
+    }
+
+    var body: some View {
+        AppKitDiffReviewScroller(
+            inputs: [model.input(theme: theme)],
+            fileCommand: nil,
+            inlineFeedbackCommand: nil,
+            draftCommentCommand: nil,
+            onNavigationFile: { _, _ in },
+            onActiveFileChange: { _ in },
+            onProgrammaticScrollCompletion: { _ in }
         )
     }
 }
