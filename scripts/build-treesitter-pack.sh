@@ -13,6 +13,9 @@ srcroot="${SRCROOT:-$(cd "${script_dir}/.." && pwd)}"
 pack_src="${srcroot}/ThirdParty/treesitter-pack"
 rustup_bin="${ALAS_RUSTUP_BIN:-rustup}"
 rust_toolchain="${ALAS_RUST_TOOLCHAIN:-1.97.1}"
+# Resolved once so the fingerprint and the actual cargo invocation below
+# can't drift apart by each applying the `:-15.0` default independently.
+macos_deployment_target="${MACOSX_DEPLOYMENT_TARGET:-15.0}"
 
 if [ -z "${ALAS_TS_PACK_TARGET_ARCH:-}" ] && [ "${CURRENT_ARCH:-}" = "undefined_arch" ]; then
     target_arch="universal"
@@ -35,11 +38,15 @@ die() {
 [ -d "${pack_src}" ] || die "missing crate: ${pack_src}"
 
 # Fingerprint over the crate's own inputs (manifest, lockfile, sources,
-# queries, header), target arch, Rust toolchain, and this script. Unlike the
-# submodule-backed tools, this crate is tracked in-repo, so hashing its files
-# directly is both simpler and stricter than a git SHA — an uncommitted edit
-# to lib.rs invalidates the artifact too. Paths are relativized so the same
-# content fingerprints identically across worktrees.
+# queries, header), target arch, Rust toolchain, effective deployment
+# target, and this script. Unlike the submodule-backed tools, this crate is
+# tracked in-repo, so hashing its files directly is both simpler and
+# stricter than a git SHA — an uncommitted edit to lib.rs invalidates the
+# artifact too. Paths are relativized so the same content fingerprints
+# identically across worktrees. MACOSX_DEPLOYMENT_TARGET is included
+# because it's passed to cargo below and directly affects the compiled C
+# objects' minimum OS target — an archive cached under one value must not
+# be reused after that value changes.
 pack_id="$(
     (
         cd "${pack_src}"
@@ -52,24 +59,42 @@ pack_id="$(
     ) | shasum -a 256 | awk '{print $1}'
 )"
 script_id="$(shasum -a 256 "${script_path}" 2>/dev/null | awk '{print $1}')"
-fingerprint="$(printf '%s\n%s\n%s\n%s\n' "${pack_id}" "${target_arch}" "${rust_toolchain}" "${script_id}" | shasum -a 256 | awk '{print $1}')"
+fingerprint="$(printf '%s\n%s\n%s\n%s\n%s\n' "${pack_id}" "${target_arch}" "${rust_toolchain}" "${macos_deployment_target}" "${script_id}" | shasum -a 256 | awk '{print $1}')"
+
+# The installed header/modulemap live in a *shared* location — the header is
+# genuinely arch-independent C, so publishing per-arch copies would just be
+# duplication — but that sharing means the per-arch fast path above can't
+# validate them by existence alone. If x86_64 is built, then arm64 is built
+# after a header change (overwriting the shared copy), then the tree is
+# reverted and x86_64 is built again, x86_64's own fingerprint legitimately
+# matches its last build, but the shared header on disk is still arm64's
+# newer one. This tracks which pack_id + script the *installed* header
+# actually corresponds to, independent of arch/toolchain/deployment target
+# (none of which affect header content), so any arch's fast path can detect
+# a header that was last published by a different pack revision.
+header_fingerprint_path="${include_root}/fingerprint"
+header_fingerprint="$(printf '%s\n%s\n' "${pack_id}" "${script_id}" | shasum -a 256 | awk '{print $1}')"
 
 # Fast path: Xcode runs this phase on every build, but a cold cargo build of
 # 25 grammars takes minutes. Reuse the previous archive when the fingerprint
 # still matches. The header and modulemap are part of the check so a partial
-# clean that removed them can't leave the Swift compile without a module.
+# clean that removed them can't leave the Swift compile without a module;
+# header_fingerprint_path additionally guards against the shared-header
+# cross-contamination described above.
 if [ -f "${lib_output}" ] \
    && [ -f "${fingerprint_path}" ] \
    && [ -f "${include_root}/treesitter_pack.h" ] \
    && [ -f "${include_root}/module.modulemap" ] \
-   && [ "$(cat "${fingerprint_path}")" = "${fingerprint}" ]; then
+   && [ -f "${header_fingerprint_path}" ] \
+   && [ "$(cat "${fingerprint_path}")" = "${fingerprint}" ] \
+   && [ "$(cat "${header_fingerprint_path}")" = "${header_fingerprint}" ]; then
     echo "build-treesitter-pack.sh: fast path — ${lib_output} up to date (fingerprint ${fingerprint:0:12})"
     exit 0
 fi
 
 install_headers() {
     mkdir -p "${include_root}"
-    rsync -a "${pack_src}/include/treesitter_pack.h" "${include_root}/treesitter_pack.h"
+    rsync -a --checksum "${pack_src}/include/treesitter_pack.h" "${include_root}/treesitter_pack.h"
     cat > "${include_root}/module.modulemap" <<'MODULEMAP'
 module TreeSitterPack [system] {
     header "treesitter_pack.h"
@@ -77,6 +102,9 @@ module TreeSitterPack [system] {
     export *
 }
 MODULEMAP
+    # Written last, matching the archive fingerprint's own ordering: this
+    # marker exists only once both files it describes are fully installed.
+    printf '%s\n' "${header_fingerprint}" > "${header_fingerprint_path}"
 }
 
 if [ "${target_arch}" = "universal" ]; then
@@ -130,7 +158,7 @@ fi
 
 (
     cd "${pack_src}"
-    MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-15.0}" \
+    MACOSX_DEPLOYMENT_TARGET="${macos_deployment_target}" \
         RUSTC="${rustc_bin}" "${cargo_bin}" build \
             --release \
             --locked \

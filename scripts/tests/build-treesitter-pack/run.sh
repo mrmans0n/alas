@@ -151,6 +151,15 @@ run_universal() {
         bash "${srcroot}/scripts/build-treesitter-pack.sh"
 }
 
+run_script_deployment_target() {
+    SRCROOT="${srcroot}" \
+        ALAS_TS_PACK_TARGET_ARCH="x86_64" \
+        ALAS_RUSTUP_BIN="${sandbox}/rustup" \
+        MACOSX_DEPLOYMENT_TARGET="$1" \
+        PATH="${sandbox}/bin:${PATH}" \
+        bash "${srcroot}/scripts/build-treesitter-pack.sh"
+}
+
 # --- 1. cold build wires up the pinned toolchain and installs every artifact
 run_script
 
@@ -306,5 +315,50 @@ test ! -f "${srcroot}/.build/treesitter-pack/universal/fingerprint"
 run_universal
 test -f "${srcroot}/.build/treesitter-pack/universal/fingerprint"
 test -f "${srcroot}/.build/treesitter-pack/include/treesitter_pack.h"
+
+# --- 9. the shared include_root is arch-independent (one header serves
+#        every arch), but each arch's own fingerprint only covers *that
+#        arch's* archive — nothing previously verified that the *installed*
+#        header on disk still corresponds to the current inputs. Reproduces
+#        the exact cross-arch scenario this closes: build x86_64, build
+#        arm64 after a header change (republishing the shared header), then
+#        revert and rebuild x86_64. x86_64's own archive fingerprint alone
+#        would match its last build and wrongly fast-path, leaving the
+#        newer arm64-published header installed.
+header_src="${pack_src}/include/treesitter_pack.h"
+revision_a_header="$(cat "${header_src}")"
+
+run_script_arch x86_64 >/dev/null
+test "$(cat "${srcroot}/.build/treesitter-pack/include/treesitter_pack.h")" = "${revision_a_header}"
+
+printf '%s\n// revision B\n' "${revision_a_header}" > "${header_src}"
+run_script_arch arm64 >/dev/null
+test "$(cat "${srcroot}/.build/treesitter-pack/include/treesitter_pack.h")" != "${revision_a_header}"
+
+printf '%s\n' "${revision_a_header}" > "${header_src}"
+: > "${invocations}"
+run_script_arch x86_64 >/dev/null
+
+# without validating the installed header against the current pack_id, this
+# would have silently reused x86_64's cached archive+fingerprint pairing
+# while leaving revision B's header on disk
+grep -q "^cargo RUSTC=" "${invocations}"
+test "$(cat "${srcroot}/.build/treesitter-pack/include/treesitter_pack.h")" = "${revision_a_header}"
+
+# --- 10. MACOSX_DEPLOYMENT_TARGET is passed to cargo and directly affects
+#         the compiled objects' minimum OS target, so it must be part of the
+#         fingerprint — changing it must invalidate the fast path even when
+#         nothing else about the inputs changed.
+: > "${invocations}"
+run_script_deployment_target "14.0" >/dev/null
+grep -q "^cargo RUSTC=" "${invocations}"
+
+: > "${invocations}"
+run_script_deployment_target "14.0" >/dev/null
+test ! -s "${invocations}"
+
+: > "${invocations}"
+run_script >/dev/null
+grep -q "^cargo RUSTC=" "${invocations}"
 
 echo "build-treesitter-pack tests passed"
