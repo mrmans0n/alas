@@ -89,7 +89,9 @@ jobs:
           shasum scripts/build-ghostty.sh >> .ghostty-pin
 
       - name: Restore Ghostty cache
-        # Split restore + save — and gate save on main-built refs only — so a
+        # Restore the shared arm64 cache. `build-ghostty.sh` validates the
+        # restored entry and populates `.build/ghostty`. Split restore + save —
+        # and gate save on main-built refs only — so a
         # non-main dispatch building an arbitrary tree can never write into the
         # repo-wide cache scope. Without this gate, a feature ref leaving
         # .ghostty-pin unchanged could seed the main-scope key with a poisoned
@@ -98,9 +100,10 @@ jobs:
         id: ghostty-cache
         uses: actions/cache/restore@v6
         with:
-          path: |
-            .build/ghostty
-          key: ghostty-${{ runner.os }}-${{ hashFiles('.ghostty-pin') }}
+          path: ~/Library/Caches/Alas/GhosttyKit/arm64
+          key: ghostty-${{ runner.os }}-arm64-${{ hashFiles('.ghostty-pin') }}
+          restore-keys: |
+            ghostty-${{ runner.os }}-arm64-
 
       - name: Build Ghostty xcframework
         if: steps.skip-check.outputs.skip != 'true'
@@ -113,8 +116,7 @@ jobs:
           && (inputs.ref == '' || inputs.ref == 'main')
         uses: actions/cache/save@v6
         with:
-          path: |
-            .build/ghostty
+          path: ~/Library/Caches/Alas/GhosttyKit/arm64
           key: ${{ steps.ghostty-cache.outputs.cache-primary-key }}
 
       - name: Compute prebuilt tools cache key inputs

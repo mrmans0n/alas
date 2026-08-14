@@ -96,7 +96,9 @@ jobs:
           cat .ghostty-pin
 
       - name: Restore Ghostty cache
-        # Split restore + save (Option B): the combined `actions/cache@v4` only
+        # Restore the shared arm64 cache. `build-ghostty.sh` validates the
+        # restored entry and populates `.build/ghostty`. Split restore + save
+        # (Option B): the combined `actions/cache@v4` only
         # saves at end-of-job on success. When build/test fails or is canceled,
         # we lose the freshly-built xcframework and the next CI run pays the
         # full 20–30 min cold zig build again. With explicit restore + save,
@@ -105,9 +107,10 @@ jobs:
         id: ghostty-cache
         uses: actions/cache/restore@v6
         with:
-          path: |
-            .build/ghostty
-          key: ghostty-${{ runner.os }}-${{ hashFiles('.ghostty-pin') }}
+          path: ~/Library/Caches/Alas/GhosttyKit/arm64
+          key: ghostty-${{ runner.os }}-arm64-${{ hashFiles('.ghostty-pin') }}
+          restore-keys: |
+            ghostty-${{ runner.os }}-arm64-
 
       - name: Build Ghostty xcframework
         # xcodebuild validates the GhosttyKit.xcframework dependency at the
@@ -125,8 +128,7 @@ jobs:
         if: success() && steps.ghostty-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
-          path: |
-            .build/ghostty
+          path: ~/Library/Caches/Alas/GhosttyKit/arm64
           key: ${{ steps.ghostty-cache.outputs.cache-primary-key }}
 
       - name: Compute prebuilt tools cache key inputs
