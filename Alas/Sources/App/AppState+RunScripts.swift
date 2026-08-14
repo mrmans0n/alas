@@ -190,12 +190,7 @@ extension AppState {
           unset -f __alas_prepare_run_transcript __alas_run_script_capture __alas_finish_run_script_capture
           return "$captured_status"
         }
-        if [ "$__alas_run_script_errexit_was_set" = 1 ]; then
-          unset __alas_run_script_errexit_was_set __alas_run_script_status
-          unset -f __alas_prepare_run_transcript __alas_run_script_capture __alas_finish_run_script_capture
-        else
-          __alas_finish_run_script_capture "$__alas_run_script_status"
-        fi
+        __alas_finish_run_script_capture "$__alas_run_script_status"
         """
     }
 
