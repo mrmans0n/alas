@@ -82,11 +82,16 @@ extension AppState {
         __alas_run_script_capture() {
         local transcript=\(transcript)
         local completion=\(completion)
-        local capture_ready=0
+        local transcript_ready=0
+        local completion_ready=0
         local private_umask result script_status exit_code tmp completed_at
-        if mkdir -p \(transcriptDir) \(completionDir) 2>/dev/null && chmod 700 \(transcriptDir) \(completionDir) 2>/dev/null; then
-          capture_ready=1
-          find \(transcriptDir) \(completionDir) -type f \\( -name '*.log' -o -name '*.done' -o -name '*.tmp' -o -name '*.body' -o -name '*.status' \\) -mtime +7 -exec rm -f {} + 2>/dev/null || true
+        if mkdir -p \(transcriptDir) 2>/dev/null && chmod 700 \(transcriptDir) 2>/dev/null; then
+          transcript_ready=1
+          find \(transcriptDir) -type f \\( -name '*.log' -o -name '*.done' -o -name '*.tmp' -o -name '*.body' -o -name '*.status' \\) -mtime +7 -exec rm -f {} + 2>/dev/null || true
+        fi
+        if mkdir -p \(completionDir) 2>/dev/null && chmod 700 \(completionDir) 2>/dev/null; then
+          completion_ready=1
+          find \(completionDir) -type f \\( -name '*.log' -o -name '*.done' -o -name '*.tmp' -o -name '*.body' -o -name '*.status' \\) -mtime +7 -exec rm -f {} + 2>/dev/null || true
         fi
         prepare_transcript() {
           private_umask=$(umask)
@@ -96,7 +101,7 @@ extension AppState {
           umask "$private_umask"
           return "$result"
         }
-        if [ "$capture_ready" = 1 ] && command -v script >/dev/null 2>&1; then
+        if [ "$transcript_ready" = 1 ] && command -v script >/dev/null 2>&1; then
           if [ "$(uname -s 2>/dev/null)" = Darwin ] && [ -x /usr/bin/script ]; then
             if prepare_transcript; then
               rm -f \(status)
@@ -128,7 +133,7 @@ extension AppState {
           \(commandLine)
           exit_code=$?
         fi
-        if [ "$capture_ready" = 1 ]; then
+        if [ "$completion_ready" = 1 ]; then
           tmp="$completion.tmp"
           private_umask=$(umask)
           umask 077

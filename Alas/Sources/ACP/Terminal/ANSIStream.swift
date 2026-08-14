@@ -52,10 +52,12 @@ struct ANSITailBuffer {
 struct ANSIPlainTextSnapshot: Equatable {
     let text: String
     let truncated: Bool
+    private static let parserLookbehindByteLimit = 4_096
 
     static func tail(from data: Data, byteLimit: Int, normalizesCRLF: Bool = false) -> Self {
         let limit = max(1, byteLimit)
-        let parsedSlice = normalizesCRLF ? data.normalizingCRLF() : data
+        let rawSlice = data.parserSafeSuffix(byteLimit: limit, lookbehind: parserLookbehindByteLimit)
+        let parsedSlice = normalizesCRLF ? rawSlice.normalizingCRLF() : rawSlice
         var stream = ANSIStream()
         let parsedText = stream.feed(parsedSlice).map(\.text).joined()
         let tail = parsedText.utf8Suffix(byteLimit: limit)
@@ -67,6 +69,27 @@ struct ANSIPlainTextSnapshot: Equatable {
 }
 
 private extension Data {
+    func parserSafeSuffix(byteLimit: Int, lookbehind: Int) -> Data {
+        let tail = utf8Suffix(byteLimit: Swift.max(1, byteLimit) + Swift.max(0, lookbehind))
+        guard tail.count < count else { return tail }
+        return tail.droppingLeadingPartialControlPayload()
+    }
+
+    func droppingLeadingPartialControlPayload() -> Data {
+        let bel = firstIndex(of: 0x07)
+        let esc = firstIndex(of: 0x1B)
+        if let bel, esc.map({ bel < $0 }) ?? true {
+            return Data(self[index(after: bel)...])
+        }
+        if let esc {
+            let next = index(after: esc)
+            if next < endIndex, self[next] == 0x5C {
+                return Data(self[index(after: next)...])
+            }
+        }
+        return self
+    }
+
     func utf8Suffix(byteLimit: Int) -> Data {
         let limit = Swift.max(1, byteLimit)
         guard count > limit else { return self }

@@ -71,7 +71,8 @@ struct RunScriptLaunchTests {
         #expect(suffix.contains("env -u SCRIPT"))
         #expect(suffix.contains("private_umask=$(umask)"))
         #expect(suffix.contains("umask \"$private_umask\""))
-        #expect(suffix.contains("capture_ready=0"))
+        #expect(suffix.contains("transcript_ready=0"))
+        #expect(suffix.contains("completion_ready=0"))
         #expect(suffix.contains("code=$?"))
         #expect(suffix.contains(".done.status"))
         #expect(suffix.contains("command -v script"))
@@ -171,6 +172,29 @@ struct RunScriptLaunchTests {
 
         #expect(process.terminationStatus == 42)
         #expect(try String(contentsOf: marker, encoding: .utf8) == "ran")
+    }
+
+    @Test func transcriptSetupFailureStillPublishesCompletion() throws {
+        let dir = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let blocked = dir.appendingPathComponent("blocked")
+        try "not a directory".write(to: blocked, atomically: true, encoding: .utf8)
+        let capture = RunScriptCapturePaths(
+            transcript: blocked.appendingPathComponent("run.log").path,
+            completion: dir.appendingPathComponent("run.done").path
+        )
+        let scriptURL = dir.appendingPathComponent("exit-42.sh")
+        try "#!/bin/sh\nexit 42\n".write(to: scriptURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
+        let suffix = try AppState.runScriptStartupScript(
+            script: RunScript(scope: .repo, fileName: scriptURL.lastPathComponent, fileURL: scriptURL, displayName: "Exit 42", onExit: .close, cwd: nil, isExecutable: true),
+            worktreeRoot: dir, branch: "main", projectName: "alas", repoRoot: dir.path, capturePaths: capture
+        )
+
+        let process = try runZsh(suffix)
+
+        #expect(process.terminationStatus == 42)
+        #expect(try String(contentsOfFile: capture.completion, encoding: .utf8).hasPrefix("42\t"))
     }
 
     @Test func closeOnExitPreservesScriptStatusInZsh() throws {
