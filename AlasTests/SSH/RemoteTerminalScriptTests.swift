@@ -29,11 +29,10 @@ struct RemoteTerminalScriptTests {
             worktreePath: "/srv/repo", sessionName: "alas-aaaa-bbbb",
             useZmx: true, startupSuffix: "claude --continue"
         )
-        #expect(script.contains("/bin/sh -lc 'claude --continue; exec \"$SHELL\" -l'"))
-        #expect(!script.contains("\"$SHELL\" -l -c"))
+        #expect(script.contains("\"$SHELL\" -l -c 'claude --continue; exec \"$SHELL\" -l'"))
     }
 
-    @Test func startupSuffixDoesNotDependOnRemoteLoginShellSyntax() {
+    @Test func runCaptureStartupSuffixUsesPortableShell() {
         let script = RemoteTerminalScript.attachScript(
             worktreePath: "/srv/repo", sessionName: "alas-aaaa-bbbb",
             useZmx: false, startupSuffix: "__alas_run_script_capture() { :; }"

@@ -701,6 +701,23 @@ struct RunScriptLaunchTests {
     }
 
     @MainActor
+    @Test func runScriptLaunchSkipsUserStartupScript() async throws {
+        var includeUserStartupScript: Bool?
+        let fixture = try makeAppStateFixture(
+            waiter: { _ in RunScriptCompletion(exitCode: 0, transcript: nil, truncated: false) },
+            terminalSessionOpener: { _, _, _, _, _, _, includeUserStartupScriptValue, _, _ in
+                includeUserStartupScript = includeUserStartupScriptValue
+                return AppState.OpenedTerminalSession(id: "session", foregroundPid: { nil })
+            }
+        )
+
+        fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(includeUserStartupScript == false)
+    }
+
+    @MainActor
     @Test func staleRunScriptTabWithoutLiveSessionIsNotRunning() throws {
         let state = AppState(store: MemoryStore())
         let runScript = script(executable: false)
