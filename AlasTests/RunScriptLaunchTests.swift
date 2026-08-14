@@ -197,6 +197,29 @@ struct RunScriptLaunchTests {
         #expect(try String(contentsOfFile: capture.completion, encoding: .utf8).hasPrefix("42\t"))
     }
 
+    @Test func keepRunExitsWhenCompletionPublicationFails() throws {
+        let dir = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let completionDir = dir.appendingPathComponent("completion")
+        let capture = RunScriptCapturePaths(
+            transcript: dir.appendingPathComponent("run.log").path,
+            completion: completionDir.appendingPathComponent("run.done").path
+        )
+        let scriptURL = dir.appendingPathComponent("exit-42.sh")
+        try "#!/bin/sh\nrm -rf \(AppState.shellQuote(completionDir.path))\nexit 42\n".write(to: scriptURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
+        let suffix = try AppState.runScriptStartupScript(
+            script: RunScript(scope: .repo, fileName: scriptURL.lastPathComponent, fileURL: scriptURL, displayName: "Exit 42", onExit: .keep, cwd: nil, isExecutable: true),
+            worktreeRoot: dir, branch: "main", projectName: "alas", repoRoot: dir.path, capturePaths: capture
+        )
+
+        let marker = dir.appendingPathComponent("marker")
+        let process = try runZsh("\(suffix)\nprintf marker > \(AppState.shellQuote(marker.path))")
+
+        #expect(process.terminationStatus == 42)
+        #expect(!FileManager.default.fileExists(atPath: marker.path))
+    }
+
     @Test func closeOnExitPreservesScriptStatusInZsh() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

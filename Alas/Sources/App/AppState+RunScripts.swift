@@ -77,13 +77,14 @@ extension AppState {
         """)
         let finishLine = exitOnCompletion
             ? "\nexit \"$exit_code\""
-            : "\nunset -f prepare_transcript __alas_run_script_capture\nreturn \"$exit_code\""
+            : "\nif [ \"$publish_failed\" = 1 ]; then\n  unset -f prepare_transcript __alas_run_script_capture\n  exit \"$exit_code\"\nfi\nunset -f prepare_transcript __alas_run_script_capture\nreturn \"$exit_code\""
         return """
         __alas_run_script_capture() {
         local transcript=\(transcript)
         local completion=\(completion)
         local transcript_ready=0
         local completion_ready=0
+        local publish_failed=0
         local private_umask result script_status exit_code tmp completed_at
         if mkdir -p \(transcriptDir) 2>/dev/null && chmod 700 \(transcriptDir) 2>/dev/null; then
           transcript_ready=1
@@ -138,8 +139,10 @@ extension AppState {
           private_umask=$(umask)
           umask 077
           completed_at=$(perl -MTime::HiRes=time -e 'printf "%.6f\\n", time' 2>/dev/null || date +%s)
-          printf '%s\\t%s\\n' "$exit_code" "$completed_at" > "$tmp"
-          mv "$tmp" "$completion"
+          if ! { printf '%s\\t%s\\n' "$exit_code" "$completed_at" > "$tmp" && mv "$tmp" "$completion"; }; then
+            publish_failed=1
+            rm -f "$tmp"
+          fi
           umask "$private_umask"
         fi\(finishLine)
         }
