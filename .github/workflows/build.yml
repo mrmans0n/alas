@@ -244,25 +244,6 @@ jobs:
           path: .build/xcode/SourcePackages
           key: ${{ steps.swiftpm-cache.outputs.cache-primary-key }}
 
-      - name: Restore Swift compilation cache
-        # Xcode 26 compilation caching: the build system fingerprints each
-        # compile action and stores artifacts in a content-addressable store
-        # (CAS) under DerivedData. Restoring a recent CAS turns most of the
-        # app-module compile in Build for testing into cache hits. Content
-        # addressing makes stale restores safe: misses just compile as
-        # usual, hits are byte-exact — a wrong binary can't come out of it.
-        # The primary key embeds the commit SHA so it never hits; the
-        # restore-keys prefix pulls the most recent CAS for this toolchain
-        # (hash of .xcode-cache-toolchain, computed above), so an Xcode
-        # bump starts a fresh lineage instead of downloading useless bytes.
-        id: swiftcas-cache
-        uses: actions/cache/restore@v6
-        with:
-          path: .build/xcode/DerivedData/CompilationCache.noindex
-          key: swiftcas-${{ runner.os }}-${{ hashFiles('.xcode-cache-toolchain') }}-${{ github.sha }}
-          restore-keys: |
-            swiftcas-${{ runner.os }}-${{ hashFiles('.xcode-cache-toolchain') }}-
-
       - name: Build for testing
         # Splitting build/test into `build-for-testing` + `test-without-building`
         # avoids the lsregister/CoreServices hang we observed locally and on CI
@@ -283,33 +264,8 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            COMPILATION_CACHE_ENABLE_CACHING=YES \
+            -showBuildTimingSummary \
             build-for-testing
-
-      - name: Report Swift compilation cache size
-        # Round-2 experiment diagnostic: confirms the CAS actually lives
-        # where the cache steps expect (the default location under our
-        # -derivedDataPath) and how big it grows — that number decides
-        # whether every-run saves are sustainable inside the repo's 10 GB
-        # Actions cache quota. `|| true` keeps a missing dir (feature
-        # wrote nowhere / somewhere else) from failing the job; the save
-        # below surfaces the real error in that case.
-        run: |
-          du -sh .build/xcode/DerivedData/CompilationCache.noindex || true
-          ls .build/xcode/DerivedData/ || true
-
-      - name: Save Swift compilation cache
-        # Rolling snapshot: the primary key embeds the SHA and never hits,
-        # so every successful build saves a fresh CAS (no cache-hit gate
-        # needed). Saved BEFORE the test steps so an unrelated test failure
-        # doesn't throw away the compile work. Scoping does the sharing:
-        # main-push saves land in the repo-wide scope every PR restores
-        # from; PR-run saves warm that PR's own subsequent pushes.
-        if: success()
-        uses: actions/cache/save@v6
-        with:
-          path: .build/xcode/DerivedData/CompilationCache.noindex
-          key: ${{ steps.swiftcas-cache.outputs.cache-primary-key }}
 
       # Each xcodebuild test invocation gets its own LaunchServices /
       # CoreServices teardown cycle. Combining 4+ subprocess-heavy suites

@@ -259,6 +259,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
+            -showBuildTimingSummary \
             build
 
       - name: Sign + notarize + staple .app (${{ matrix.arch }})
