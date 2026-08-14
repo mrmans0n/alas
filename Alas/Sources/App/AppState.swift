@@ -74,6 +74,7 @@ final class AppState {
     typealias CloseTabConfirmer = @MainActor (CloseTabConfirmationPolicy.Prompt) -> Bool
     typealias ACPDetachRunner = @MainActor (ACPSessionManager, ACPSession.ID) async -> Void
     typealias RemoteAccelerationPreparer = @MainActor (ProjectConfig) async -> Void
+    typealias RunScriptCompletionWaiter = @Sendable (RunScriptCaptureLocation) async throws -> RunScriptCompletion
     static let piMCPGeneratedConfigExcludePath = ".pi/mcp.json"
 
     /// Stable for this process; identifies this app instance to the ACP
@@ -85,6 +86,10 @@ final class AppState {
     var projectsManager: ProjectsManager
     let globalTabs: GlobalTabsManager
     private(set) var closedTabHistory = ClosedTabHistory()
+    var runScriptFailureQueue = RunScriptFailureQueue()
+    var selectedRunScriptFailure: RunScriptFailure?
+    @ObservationIgnored var runScriptCompletionTasks: [String: (worktreeID: String, sessionID: String, location: RunScriptCaptureLocation, task: Task<Void, Never>)] = [:]
+    @ObservationIgnored let runScriptCompletionWaiter: RunScriptCompletionWaiter
     private(set) var isReopeningClosedTab = false
     var canReopenClosedTab: Bool { !isReopeningClosedTab && !closedTabHistory.isEmpty }
     private var unpersistedGGWorktreeModes: [String: [String: GGWorktreeMode]] = [:]
@@ -643,6 +648,7 @@ final class AppState {
         missionStartupReviewSnapshot: MissionStartupReviewSnapshot? = nil,
         missionBranchTipOverride: MissionBranchTip? = nil,
         missionArchiveRecorder: MissionArchiveRecorder? = nil,
+        runScriptCompletionWaiter: @escaping RunScriptCompletionWaiter = RunScriptCompletionMonitor.wait(for:),
         missionsEnabled: Bool = MissionsFeatureFlag.isEnabled,
         missionsFeatureUpdates: AnyPublisher<Bool, Never> = MissionsFeatureFlag.updates(),
         globalTabs: GlobalTabsManager = GlobalTabsManager(),
@@ -666,6 +672,7 @@ final class AppState {
         self.missionStartupReviewSnapshot = missionStartupReviewSnapshot
         self.missionBranchTipOverride = missionBranchTipOverride
         self.missionArchiveRecorder = missionArchiveRecorder
+        self.runScriptCompletionWaiter = runScriptCompletionWaiter
         self.missionsEnabled = missionsEnabled
         let config = (try? store.readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? AppConfig.defaults
         let projectsFile = (try? store.readIfExists(ProjectsFile.self, from: Paths.projectsFile)) ?? ProjectsFile(projects: [])
@@ -728,7 +735,11 @@ final class AppState {
             }
         }
         AlasTerminationCoordinator.shared.flush = { [weak self] in
+            await self?.cancelAllRunScriptCompletionTasks()
             await self?.flushAllACPComposerDrafts()
+        }
+        Task.detached {
+            RunScriptCompletionMonitor.cleanupStaleLocalFiles()
         }
 
         // Kick off a background resolution of the user's login-shell PATH so
@@ -4919,12 +4930,13 @@ final class AppState {
             return state.root.find(leafId: leafId) != nil
         }?.id
         guard let tabId = owningTabId else { return }
+        scheduleRunScriptCompletionCancellation(sessionID: leafId)
         guard let outcome = tabs.removeLeaf(
             worktreeId: worktreeId, tabId: tabId, leafId: leafId
         ) else { return }
         switch outcome {
         case .tabRemoved:
-            closeTab(worktreeId: worktreeId, tabId: tabId)
+            closeTab(worktreeId: worktreeId, tabId: tabId, cancelRunScriptMonitors: false)
         case .leafRemoved:
             closeTerminalSession(
                 id: leafId,
@@ -4953,6 +4965,7 @@ final class AppState {
             requestCloseTab(worktreeId: worktreeId, tabId: activeId)
         } else {
             let closedLeafId = outcome.closedLeafId
+            scheduleRunScriptCompletionCancellation(sessionID: closedLeafId)
             closeTerminalSession(
                 id: closedLeafId,
                 worktreeId: worktreeId,
@@ -5671,7 +5684,7 @@ final class AppState {
         body(session)
     }
 
-    func closeTab(worktreeId: String, tabId: TabID) {
+    func closeTab(worktreeId: String, tabId: TabID, cancelRunScriptMonitors: Bool = true) {
         if globalTabs.tabs.contains(where: { $0.id == tabId }) {
             closeGlobalTab(tabId: tabId)
             return
@@ -5681,6 +5694,9 @@ final class AppState {
         if let tab = allTabs.first(where: { $0.id == tabId }) {
             if case .terminal(let s) = tab {
                 for leaf in s.root.leaves() {
+                    if cancelRunScriptMonitors {
+                        scheduleRunScriptCompletionCancellation(sessionID: leaf.id)
+                    }
                     closeTerminalSession(id: leaf.id, worktreeId: worktreeId, projectPath: projectPath)
                 }
             }
@@ -5727,6 +5743,7 @@ final class AppState {
             if let tab = allTabs.first(where: { $0.id == id }),
                case .terminal(let s) = tab {
                 for leaf in s.root.leaves() {
+                    scheduleRunScriptCompletionCancellation(sessionID: leaf.id)
                     closeTerminalSession(id: leaf.id, worktreeId: worktreeId, projectPath: projectPath)
                 }
             }
@@ -5980,7 +5997,10 @@ final class AppState {
     /// Tear down every tab/terminal/harness reference for a worktree id without
     /// touching git or persistence. Shared between Close-All, archive, and
     /// delete so the bookkeeping stays in one place.
-    private func cleanupWorktreeState(worktreeId: String) {
+    private func cleanupWorktreeState(worktreeId: String, purgeRunScriptFailures: Bool = true) {
+        if purgeRunScriptFailures {
+            cleanupRunScriptState(worktreeID: worktreeId, purgeFailures: true)
+        }
         closedTabHistory.purge(worktreeID: worktreeId)
         let allTabs = tabs.tabs(forWorktree: worktreeId)
         let closed = tabs.closeAll(worktreeId: worktreeId)
@@ -5991,7 +6011,7 @@ final class AppState {
     }
 
     func closeAllTabs(worktreeId: String) {
-        cleanupWorktreeState(worktreeId: worktreeId)
+        cleanupWorktreeState(worktreeId: worktreeId, purgeRunScriptFailures: false)
     }
 
     func closeTabsToLeft(worktreeId: String, of tabId: TabID) {

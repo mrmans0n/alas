@@ -221,8 +221,8 @@ struct ACPTerminalTests {
         // mid-CSI (suffix would start at `m`/`HELLO` or earlier).
         // The lookback must extend the slice start back to the ESC
         // so the parser strips the escape instead of emitting `mHELLO`
-        // or similar garbage. Resulting text must be a clean `HELLO`
-        // with no escape fragments.
+        // or similar garbage. The retained plain-text prefix is trimmed
+        // after parsing, so the final eight visible bytes are clean text.
         let t = try ACPTerminal(
             id: "tcut",
             command: "/bin/sh",
@@ -234,7 +234,22 @@ struct ACPTerminalTests {
         _ = await t.waitForExit()
         let snap = t.snapshot(byteLimit: 8)
         #expect(snap.truncated == true)
-        #expect(snap.text == "HELLO")
+        #expect(snap.text == "fixHELLO")
+    }
+
+    @Test("snapshot keeps ANSI and CRLF normalization behavior")
+    func snapshotANSICRLFBehavior() async throws {
+        let t = try ACPTerminal(
+            id: "tansi-crlf",
+            command: "/bin/sh",
+            args: ["-c", "printf '\\033[31mnew\\033[0m\\r\\n'"],
+            env: [:],
+            cwd: "/tmp",
+            outputByteLimit: 1_024,
+            normalizesCRLF: true
+        )
+        _ = await t.waitForExit()
+        #expect(t.snapshot(byteLimit: 1_024).text == "new\n")
     }
 
     @Test("snapshot tail starts at a UTF-8 codepoint boundary")

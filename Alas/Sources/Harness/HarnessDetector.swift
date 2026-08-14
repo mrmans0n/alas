@@ -23,6 +23,10 @@ final class HarnessDetector {
         queue.sync { providers[sessionId] != nil }
     }
 
+    func foregroundPid(sessionId: String) -> pid_t? {
+        queue.sync { providers[sessionId]?() }
+    }
+
     func start() {
         let t = DispatchSource.makeTimerSource(queue: queue)
         t.schedule(deadline: .now() + 0.5, repeating: 1.0)

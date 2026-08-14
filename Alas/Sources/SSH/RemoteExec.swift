@@ -46,7 +46,7 @@ enum RemoteExec {
         host: String,
         cwd: String?,
         command: String,
-        timeout: TimeInterval = Process.defaultTimeout,
+        timeout: TimeInterval? = Process.defaultTimeout,
         pathPolicy: SSHCommand.PathPolicy = .augmented
     ) async throws -> ProcessResultData {
         let invocation = invocation(

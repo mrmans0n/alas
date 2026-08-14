@@ -326,6 +326,8 @@ struct CenterPaneView: View {
                     missionsEnabled: missionsEnabled
                 )
             }
+            let runScriptFailures = state.runScriptFailures(in: worktree.id)
+                .sorted { $0.completedAt > $1.completedAt }
             Group {
                 if tabs.isEmpty, !state.tabs.hasLoaded {
                     Spinner()
@@ -575,8 +577,26 @@ struct CenterPaneView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay(alignment: .bottomTrailing) {
+                if !runScriptFailures.isEmpty {
+                    VStack(alignment: .trailing, spacing: 8) {
+                        ForEach(runScriptFailures, id: \.id) { failure in
+                            RunScriptFailureBanner(
+                                presentation: RunScriptFailureBannerPresentation(failure: failure),
+                                onOpen: { state.presentRunScriptFailure(failure) },
+                                onDismiss: { state.dismissRunScriptFailure(id: failure.id, worktreeID: worktree.id) }
+                            )
+                            .frame(width: 360)
+                        }
+                    }
+                    .padding(12)
+                }
+            }
         }
         .background(theme.color("bg-1"))
+        .sheet(item: $state.selectedRunScriptFailure) { failure in
+            RunScriptFailureDetailView(failure: failure)
+        }
     }
 
     private var rightPaneActivationKey: String {

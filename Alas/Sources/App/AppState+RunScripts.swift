@@ -1,4 +1,12 @@
 import Foundation
+import os
+
+private let runScriptLogger = Logger(subsystem: "io.nlopez.alas", category: "RunScripts")
+
+struct RunScriptCapturePaths: Equatable, Sendable {
+    let transcript: String
+    let completion: String
+}
 
 extension AppState {
     // MARK: - Launch
@@ -12,7 +20,8 @@ extension AppState {
         worktreeRoot: URL,
         branch: String,
         projectName: String,
-        repoRoot: String
+        repoRoot: String,
+        capturePaths: RunScriptCapturePaths? = nil
     ) throws -> String {
         let cwd = script.cwd.map { worktreeRoot.appendingPathComponent($0).path } ?? worktreeRoot.path
         let env = [
@@ -36,10 +45,193 @@ extension AppState {
             env: env,
             exitOnCompletion: script.onExit == .close
         )
+        let commandLine = try shellCommand(command: command, args: args, env: env)
         // A missing/misspelled `alas-cwd` must stop the run rather than fall
         // through and execute the script from wherever the shell happened to
         // start — that's silently dangerous for build/cleanup scripts.
-        return "cd \(shellQuote(cwd)) || exit 1\n\(run)"
+        let prefix = "cd \(shellQuote(cwd)) || exit 1\n"
+        guard let capturePaths else { return prefix + run }
+        return capturedRunScript(
+            commandLine: commandLine,
+            workingDirectory: shellQuote(cwd),
+            capturePaths: capturePaths,
+            exitOnCompletion: script.onExit == .close
+        )
+    }
+
+    nonisolated private static func capturedRunScript(
+        commandLine: String,
+        workingDirectory: String,
+        capturePaths: RunScriptCapturePaths,
+        exitOnCompletion: Bool
+    ) -> String {
+        let transcript = capturePathShellLiteral(capturePaths.transcript)
+        let completion = capturePathShellLiteral(capturePaths.completion)
+        let status = capturePathShellLiteral("\(capturePaths.completion).status")
+        let transcriptDir = capturePathShellLiteral((capturePaths.transcript as NSString).deletingLastPathComponent)
+        let completionDir = capturePathShellLiteral((capturePaths.completion as NSString).deletingLastPathComponent)
+        let quotedCommandLine = shellQuote(commandLine)
+        let quotedDarwinCommandLine = shellQuote("""
+        \(commandLine)
+        code=$?
+        printf '%s\\n' "$code" > \(status)
+        exit "$code"
+        """)
+        let finishLine = exitOnCompletion
+            ? "\nexit \"$exit_code\""
+            : "\nif [ \"$publish_failed\" = 1 ]; then\n  exit \"$exit_code\"\nfi\nreturn \"$exit_code\""
+        return """
+        __alas_run_script_errexit_was_set=0
+        case $- in
+          *e*) __alas_run_script_errexit_was_set=1 ;;
+        esac
+        if [ "$__alas_run_script_errexit_was_set" = 1 ]; then
+          set +e
+        fi
+        __alas_run_script_capture() {
+        local transcript=\(transcript)
+        local completion=\(completion)
+        local transcript_ready=0
+        local completion_ready=0
+        local publish_failed=0
+        local setup_failed=0
+        local alas_errexit_was_set=$__alas_run_script_errexit_was_set
+        local private_umask result script_status exit_code tmp completed_at
+        if [ "$alas_errexit_was_set" = 1 ]; then
+          set +e
+        fi
+        if ! cd \(workingDirectory); then
+          exit_code=1
+          setup_failed=1
+        fi
+        if mkdir -p \(transcriptDir) 2>/dev/null && chmod 700 \(transcriptDir) 2>/dev/null; then
+          transcript_ready=1
+          find \(transcriptDir) -type f \\( -name '*.log' -o -name '*.done' -o -name '*.tmp' -o -name '*.body' -o -name '*.status' \\) -mtime +7 -exec rm -f {} + 2>/dev/null || true
+        fi
+        if mkdir -p \(completionDir) 2>/dev/null && chmod 700 \(completionDir) 2>/dev/null; then
+          completion_ready=1
+          find \(completionDir) -type f \\( -name '*.log' -o -name '*.done' -o -name '*.tmp' -o -name '*.body' -o -name '*.status' \\) -mtime +7 -exec rm -f {} + 2>/dev/null || true
+        fi
+        __alas_prepare_run_transcript() {
+          private_umask=$(umask)
+          umask 077
+          : > "$transcript" 2>/dev/null && chmod 600 "$transcript" 2>/dev/null
+          result=$?
+          umask "$private_umask"
+          return "$result"
+        }
+        if [ "$setup_failed" = 0 ] && [ "$transcript_ready" = 1 ] && command -v script >/dev/null 2>&1; then
+          if [ "$(uname -s 2>/dev/null)" = Darwin ] && [ -x /usr/bin/script ]; then
+            if __alas_prepare_run_transcript; then
+              rm -f \(status)
+              if /usr/bin/script -q "$transcript" /usr/bin/env -u SCRIPT /bin/sh -c \(quotedDarwinCommandLine); then
+                script_status=0
+              else
+                script_status=$?
+              fi
+              if [ -f \(status) ]; then
+                exit_code=$(cat \(status))
+              else
+                exit_code=$script_status
+              fi
+              rm -f \(status)
+            else
+              if \(commandLine); then
+                exit_code=0
+              else
+                exit_code=$?
+              fi
+            fi
+          elif script --version 2>/dev/null | grep -qi 'util-linux'; then
+            if __alas_prepare_run_transcript; then
+              if script -qefc \(quotedCommandLine) "$transcript"; then
+                exit_code=0
+              else
+                exit_code=$?
+              fi
+            else
+              if \(commandLine); then
+                exit_code=0
+              else
+                exit_code=$?
+              fi
+            fi
+          else
+            if \(commandLine); then
+              exit_code=0
+            else
+              exit_code=$?
+            fi
+          fi
+        elif [ "$setup_failed" = 0 ]; then
+          if \(commandLine); then
+            exit_code=0
+          else
+            exit_code=$?
+          fi
+        fi
+        if [ "$completion_ready" = 1 ]; then
+          tmp="$completion.tmp"
+          private_umask=$(umask)
+          umask 077
+          completed_at=$(perl -MTime::HiRes=time -e 'printf "%.6f\\n", time' 2>/dev/null || date +%s)
+          if ! { printf '%s\\t%s\\n' "$exit_code" "$completed_at" > "$tmp" && mv "$tmp" "$completion"; }; then
+            publish_failed=1
+            rm -f "$tmp"
+          fi
+          umask "$private_umask"
+        fi\(finishLine)
+        }
+        if __alas_run_script_capture; then
+          __alas_run_script_status=0
+        else
+          __alas_run_script_status=$?
+        fi
+        __alas_finish_run_script_capture() {
+          local captured_status=$1
+          unset __alas_run_script_errexit_was_set __alas_run_script_status
+          unset -f __alas_prepare_run_transcript __alas_run_script_capture __alas_finish_run_script_capture
+          return "$captured_status"
+        }
+        if [ "$__alas_run_script_errexit_was_set" = 1 ]; then
+          set +e
+          if __alas_finish_run_script_capture "$__alas_run_script_status"; then
+            __alas_run_script_final_status=0
+          else
+            __alas_run_script_final_status=$?
+          fi
+          __alas_run_script_return_status() {
+            return "$__alas_run_script_final_status"
+          }
+          __alas_restore_run_script_errexit() {
+            set -e
+            if [ -n "${ZSH_VERSION-}" ]; then
+              precmd_functions=("${precmd_functions[@]:#__alas_restore_run_script_errexit}")
+            elif [ -n "${BASH_VERSION-}" ]; then
+              case "$PROMPT_COMMAND" in
+                "__alas_restore_run_script_errexit; "*) PROMPT_COMMAND=${PROMPT_COMMAND#__alas_restore_run_script_errexit; } ;;
+                "__alas_restore_run_script_errexit") unset PROMPT_COMMAND ;;
+              esac
+            fi
+            unset __alas_run_script_final_status
+            unset -f __alas_run_script_return_status
+            unset -f __alas_restore_run_script_errexit
+          }
+          if [ -n "${ZSH_VERSION-}" ]; then
+            precmd_functions=(__alas_restore_run_script_errexit "${precmd_functions[@]}")
+          elif [ -n "${BASH_VERSION-}" ]; then
+            PROMPT_COMMAND="__alas_restore_run_script_errexit${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
+          fi
+          __alas_run_script_return_status
+        else
+          __alas_finish_run_script_capture "$__alas_run_script_status"
+        fi
+        """
+    }
+
+    nonisolated private static func capturePathShellLiteral(_ path: String) -> String {
+        guard path.hasPrefix("~/") else { return shellQuote(path) }
+        return "\"$HOME/\(path.dropFirst(2).doubleQuotedShellEscaped)\""
     }
 
     func runningScriptTab(for script: RunScript, in worktree: Worktree) -> Tab? {
@@ -114,24 +306,219 @@ extension AppState {
         pendingScriptLaunches.insert(launchKey)
         Task { @MainActor in
             defer { pendingScriptLaunches.remove(launchKey) }
+            let runID = UUID().uuidString
+            let captureLocation: RunScriptCaptureLocation
             do {
+                captureLocation = try RunScriptCompletionMonitor.paths(runID: runID, host: project.host)
                 let suffix = try Self.runScriptStartupScript(
                     script: script,
                     worktreeRoot: worktree.path,
                     branch: worktree.branch,
                     projectName: project.name,
-                    repoRoot: project.path
+                    repoRoot: project.path,
+                    capturePaths: captureLocation.paths
                 )
-                _ = try await openTerminalTabPreparingRemoteZmxIfNeeded(
-                    for: worktree,
-                    startupScriptSuffix: suffix,
-                    titleOverride: script.displayName,
-                    runScriptKey: script.key
-                )
+                do {
+                    let tab = try await openTerminalTabPreparingRemoteZmxIfNeeded(
+                        for: worktree,
+                        startupScriptSuffix: suffix,
+                        includeUserStartupScript: true,
+                        titleOverride: script.displayName,
+                        runScriptKey: script.key
+                    )
+                    guard case .terminal(let terminalState) = tab,
+                          let sessionID = terminalState.runScriptLeafId
+                    else { return }
+                    startRunScriptCompletionMonitor(
+                        runID: runID,
+                        sessionID: sessionID,
+                        location: captureLocation,
+                        script: script,
+                        worktree: worktree
+                    )
+                    if runScriptSessionForegroundPidIsMissing(sessionID: sessionID) {
+                        cancelRunScriptCompletionTasksIfSessionStillExited(sessionID: sessionID, after: .seconds(2), includeRemote: false)
+                        cancelRunScriptCompletionTasksIfSessionStillExited(sessionID: sessionID, after: .seconds(30))
+                    }
+                } catch {
+                    cancelRunScriptCompletionTask(runID: runID, location: captureLocation)
+                    throw error
+                }
             } catch {
                 showFileActionError(title: "Run Script Failed", message: error.localizedDescription)
             }
         }
+    }
+
+    func runScriptFailures(in worktreeID: String) -> [RunScriptFailure] {
+        runScriptFailureQueue.failures(for: worktreeID)
+    }
+
+    func dismissRunScriptFailure(id: String, worktreeID: String) {
+        runScriptFailureQueue.dismiss(id: id, worktreeID: worktreeID)
+        if selectedRunScriptFailure?.id == id, selectedRunScriptFailure?.worktreeID == worktreeID {
+            selectedRunScriptFailure = nil
+        }
+    }
+
+    func presentRunScriptFailure(_ failure: RunScriptFailure) {
+        selectedRunScriptFailure = failure
+    }
+
+    func waitForRunScriptCompletionTasksForTesting() async {
+        let tasks = runScriptCompletionTasks.values.map { $0.task }
+        for task in tasks {
+            await task.value
+        }
+    }
+
+    var runScriptCompletionTaskCountForTesting: Int {
+        runScriptCompletionTasks.count
+    }
+
+    private func startRunScriptCompletionMonitor(
+        runID: String,
+        sessionID: String,
+        location: RunScriptCaptureLocation,
+        script: RunScript,
+        worktree: Worktree
+    ) {
+        runScriptCompletionTasks[runID] = (
+            worktreeID: worktree.id,
+            sessionID: sessionID,
+            location: location,
+            task: Task { @MainActor [weak self] in
+                guard let self else { return }
+                defer { runScriptCompletionTasks.removeValue(forKey: runID) }
+                do {
+                    let completion = try await runScriptCompletionWaiter(location)
+                    guard completion.exitCode != 0 else { return }
+                    let capturedOutput: RunScriptCapturedOutput
+                    if let transcript = completion.transcript {
+                        let snapshot = ANSIPlainTextSnapshot.tail(
+                            from: transcript,
+                            byteLimit: RunScriptCompletionMonitor.outputByteLimit,
+                            normalizesCRLF: true
+                        )
+                        capturedOutput = .available(
+                            text: snapshot.text,
+                            truncated: completion.truncated || snapshot.truncated
+                        )
+                    } else {
+                        capturedOutput = .unavailable
+                    }
+                    runScriptFailureQueue.append(RunScriptFailure(
+                        id: UUID().uuidString,
+                        runID: runID,
+                        scriptKey: script.key,
+                        scriptName: script.displayName,
+                        worktreeID: worktree.id,
+                        branch: worktree.branch,
+                        exitCode: completion.exitCode,
+                        completedAt: completion.completedAt,
+                        capturedOutput: capturedOutput
+                    ))
+                } catch is CancellationError {
+                } catch {
+                    runScriptLogger.error(
+                        "Run script completion monitor failed for run \(runID, privacy: .public) at \(String(describing: location), privacy: .public): \(String(describing: error), privacy: .public)"
+                    )
+                }
+            }
+        )
+    }
+
+    private func cancelRunScriptCompletionTask(runID: String, location: RunScriptCaptureLocation) {
+        runScriptCompletionTasks.removeValue(forKey: runID)?.task.cancel()
+        cleanupCaptureLocation(location)
+    }
+
+    private func cancelRunScriptCompletionTask(runID: String) {
+        guard let entry = runScriptCompletionTasks.removeValue(forKey: runID) else { return }
+        entry.task.cancel()
+        cleanupCaptureLocation(entry.location)
+    }
+
+    func cancelRunScriptCompletionTasks(
+        sessionID: String,
+        after delay: Duration? = nil,
+        includeRemote: Bool = true
+    ) {
+        let runIDs = runScriptCompletionTasks.compactMap { runID, entry -> String? in
+            if !includeRemote, case .remote = entry.location { return nil }
+            return entry.sessionID == sessionID ? runID : nil
+        }
+        guard let delay else {
+            for runID in runIDs { cancelRunScriptCompletionTask(runID: runID) }
+            return
+        }
+        for runID in runIDs {
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: delay)
+                guard self?.runScriptCompletionTasks[runID]?.sessionID == sessionID else { return }
+                self?.cancelRunScriptCompletionTask(runID: runID)
+            }
+        }
+    }
+
+    func scheduleRunScriptCompletionCancellation(sessionID: String) {
+        cancelRunScriptCompletionTasks(sessionID: sessionID, after: .seconds(2), includeRemote: false)
+        cancelRunScriptCompletionTasks(sessionID: sessionID, after: .seconds(30))
+    }
+
+    private func cancelRunScriptCompletionTasksIfSessionStillExited(
+        sessionID: String,
+        after delay: Duration,
+        includeRemote: Bool = true
+    ) {
+        let runIDs = runScriptCompletionTasks.compactMap { runID, entry -> String? in
+            if !includeRemote, case .remote = entry.location { return nil }
+            return entry.sessionID == sessionID ? runID : nil
+        }
+        for runID in runIDs {
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: delay)
+                guard let self,
+                      self.runScriptCompletionTasks[runID]?.sessionID == sessionID,
+                      self.runScriptSessionForegroundPidIsMissing(sessionID: sessionID)
+                else { return }
+                self.cancelRunScriptCompletionTask(runID: runID)
+            }
+        }
+    }
+
+    private func runScriptSessionForegroundPidIsMissing(sessionID: String) -> Bool {
+        terminal.registry.session(for: sessionID)?.surface.foregroundPid == nil
+            && harness.detector.foregroundPid(sessionId: sessionID) == nil
+    }
+
+    func cleanupRunScriptState(worktreeID: String, purgeFailures: Bool = true) {
+        for (runID, entry) in runScriptCompletionTasks where entry.worktreeID == worktreeID {
+            runScriptCompletionTasks.removeValue(forKey: runID)?.task.cancel()
+            cleanupCaptureLocation(entry.location)
+        }
+        if purgeFailures {
+            runScriptFailureQueue.purge(worktreeID: worktreeID)
+        }
+        if purgeFailures, selectedRunScriptFailure?.worktreeID == worktreeID {
+            selectedRunScriptFailure = nil
+        }
+    }
+
+    func cancelAllRunScriptCompletionTasks() {
+        for entry in runScriptCompletionTasks.values {
+            entry.task.cancel()
+            cleanupCaptureLocation(entry.location)
+        }
+        runScriptCompletionTasks.removeAll()
+    }
+
+    private func cleanupCaptureLocation(_ location: RunScriptCaptureLocation) {
+        guard case let .local(paths) = location else { return }
+        try? FileManager.default.removeItem(atPath: paths.transcript)
+        try? FileManager.default.removeItem(atPath: paths.completion)
+        try? FileManager.default.removeItem(atPath: "\(paths.completion).tmp")
+        try? FileManager.default.removeItem(atPath: "\(paths.completion).status")
     }
 
     // MARK: - Edit
@@ -234,5 +621,15 @@ extension AppState {
             edit: { [weak self] script in self?.editScript(script, in: worktree) },
             newScript: { [weak self] scope in self?.newRunScript(scope: scope, in: worktree) }
         )
+    }
+}
+
+private extension StringProtocol {
+    var doubleQuotedShellEscaped: String {
+        String(self)
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "$", with: "\\$")
+            .replacingOccurrences(of: "`", with: "\\`")
     }
 }

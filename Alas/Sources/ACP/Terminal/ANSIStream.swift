@@ -49,9 +49,95 @@ struct ANSITailBuffer {
     }
 }
 
+struct ANSIPlainTextSnapshot: Equatable {
+    let text: String
+    let truncated: Bool
+    private static let parserLookbehindByteLimit = 4_096
+
+    static func tail(from data: Data, byteLimit: Int, normalizesCRLF: Bool = false) -> Self {
+        let limit = max(1, byteLimit)
+        let rawSlice = data.parserSafeSuffix(byteLimit: limit, lookbehind: parserLookbehindByteLimit)
+        let parsedSlice = normalizesCRLF ? rawSlice.normalizingCRLF() : rawSlice
+        var stream = ANSIStream()
+        let parsedText = stream.feed(parsedSlice).map(\.text).joined()
+        let tail = parsedText.utf8Suffix(byteLimit: limit)
+        return Self(
+            text: tail.text,
+            truncated: data.count > limit || tail.truncated
+        )
+    }
+}
+
+private extension Data {
+    func parserSafeSuffix(byteLimit: Int, lookbehind: Int) -> Data {
+        let tail = utf8Suffix(byteLimit: Swift.max(1, byteLimit) + Swift.max(0, lookbehind))
+        guard tail.count < count else { return tail }
+        return tail.droppingLeadingPartialControlPayload()
+    }
+
+    func droppingLeadingPartialControlPayload() -> Data {
+        let bel = firstIndex(of: 0x07)
+        let esc = firstIndex(of: 0x1B)
+        if let bel, esc.map({ bel < $0 }) ?? true {
+            return Data(self[index(after: bel)...])
+        }
+        if let esc {
+            let next = index(after: esc)
+            if next < endIndex, self[next] == 0x5C {
+                return Data(self[index(after: next)...])
+            }
+        }
+        return self
+    }
+
+    func utf8Suffix(byteLimit: Int) -> Data {
+        let limit = Swift.max(1, byteLimit)
+        guard count > limit else { return self }
+        let bytes = [UInt8](self)
+        var start = bytes.count - limit
+        while start < bytes.count, (bytes[start] & 0xC0) == 0x80 {
+            start += 1
+        }
+        return Data(bytes[start...])
+    }
+
+    func normalizingCRLF() -> Data {
+        var bytes: [UInt8] = []
+        bytes.reserveCapacity(count)
+        var index = startIndex
+        while index < endIndex {
+            if self[index] == 0x0D {
+                let next = self.index(after: index)
+                if next < endIndex, self[next] == 0x0A {
+                    bytes.append(0x0A)
+                    index = self.index(after: next)
+                    continue
+                }
+            }
+            bytes.append(self[index])
+            index = self.index(after: index)
+        }
+        return Data(bytes)
+    }
+}
+
+private extension String {
+    func utf8Suffix(byteLimit: Int) -> (text: String, truncated: Bool) {
+        let limit = max(1, byteLimit)
+        let bytes = Array(utf8)
+        guard bytes.count > limit else { return (self, false) }
+        var start = bytes.count - limit
+        while start < bytes.count, (bytes[start] & 0xC0) == 0x80 {
+            start += 1
+        }
+        return (String(decoding: bytes[start...], as: UTF8.self), true)
+    }
+}
+
 private enum ANSIStreamEvent {
     case text(AttributedRun)
     case carriageReturn
+    case backspace
 }
 
 /// Applies parser events to rendered runs. Keeping this separate from the
@@ -62,6 +148,7 @@ private struct ANSIOutputBuffer {
     private(set) var runs: [AttributedRun] = []
     private(set) var retainedByteCount = 0
     private var currentLineStart = 0
+    private var cursorBackspaces = 0
 
     init(byteLimit: Int) {
         self.byteLimit = byteLimit
@@ -71,6 +158,7 @@ private struct ANSIOutputBuffer {
         runs.removeAll(keepingCapacity: true)
         retainedByteCount = 0
         currentLineStart = 0
+        cursorBackspaces = 0
     }
 
     mutating func apply(_ events: [ANSIStreamEvent]) {
@@ -79,17 +167,46 @@ private struct ANSIOutputBuffer {
             case .text(let run):
                 append(run)
             case .carriageReturn:
+                cursorBackspaces = 0
                 guard currentLineStart < runs.count else { continue }
                 for run in runs[currentLineStart...] {
                     retainedByteCount -= run.text.utf8.count
                 }
                 runs.removeSubrange(currentLineStart...)
+            case .backspace:
+                cursorBackspaces = min(cursorBackspaces + 1, currentLineCharacterCount())
             }
         }
         trimToByteLimit()
     }
 
     private mutating func append(_ run: AttributedRun) {
+        guard !run.text.isEmpty else { return }
+        guard cursorBackspaces > 0 else {
+            appendRaw(run)
+            return
+        }
+
+        var pending = ""
+        for character in run.text {
+            if character == "\n" {
+                cursorBackspaces = 0
+                pending.append(character)
+            } else if cursorBackspaces > 0 {
+                if !pending.isEmpty {
+                    appendRaw(AttributedRun(text: pending, attributes: run.attributes))
+                    pending.removeAll(keepingCapacity: true)
+                }
+                replaceCharacter(offsetFromLineEnd: cursorBackspaces, with: character, attributes: run.attributes)
+                cursorBackspaces -= 1
+            } else {
+                pending.append(character)
+            }
+        }
+        appendRaw(AttributedRun(text: pending, attributes: run.attributes))
+    }
+
+    private mutating func appendRaw(_ run: AttributedRun) {
         guard !run.text.isEmpty else { return }
         retainedByteCount += run.text.utf8.count
 
@@ -105,6 +222,57 @@ private struct ANSIOutputBuffer {
 
         if run.text.last == "\n" {
             currentLineStart = runs.count
+        }
+    }
+
+    private func currentLineCharacterCount() -> Int {
+        guard currentLineStart < runs.count else { return 0 }
+        return runs[currentLineStart...].reduce(0) { $0 + $1.text.count }
+    }
+
+    private mutating func replaceCharacter(
+        offsetFromLineEnd: Int,
+        with character: Character,
+        attributes: ANSIAttributes
+    ) {
+        var target = currentLineCharacterCount() - offsetFromLineEnd
+        guard target >= 0 else { return }
+        for index in currentLineStart..<runs.count {
+            let runLength = runs[index].text.count
+            guard target >= runLength else {
+                replaceCharacter(in: index, at: target, with: character, attributes: attributes)
+                return
+            }
+            target -= runLength
+        }
+    }
+
+    private mutating func replaceCharacter(
+        in runIndex: Int,
+        at characterIndex: Int,
+        with character: Character,
+        attributes: ANSIAttributes
+    ) {
+        let text = runs[runIndex].text
+        let stringIndex = text.index(text.startIndex, offsetBy: characterIndex)
+        let nextIndex = text.index(after: stringIndex)
+        let replaced = text[stringIndex]
+        retainedByteCount += character.utf8.count - replaced.utf8.count
+
+        if runs[runIndex].attributes == attributes {
+            runs[runIndex].text.replaceSubrange(stringIndex..<nextIndex, with: String(character))
+        } else {
+            let before = String(text[..<stringIndex])
+            let after = String(text[nextIndex...])
+            var replacement: [AttributedRun] = []
+            if !before.isEmpty {
+                replacement.append(AttributedRun(text: before, attributes: runs[runIndex].attributes))
+            }
+            replacement.append(AttributedRun(text: String(character), attributes: attributes))
+            if !after.isEmpty {
+                replacement.append(AttributedRun(text: after, attributes: runs[runIndex].attributes))
+            }
+            runs.replaceSubrange(runIndex...runIndex, with: replacement)
         }
     }
 
@@ -206,8 +374,12 @@ struct ANSIStream {
             flushTextBytes()
             flushCurrentLine()
             events.append(.carriageReturn)
-        case 0x07, 0x08:                // BEL, BS — drop
+        case 0x07:                      // BEL — drop
             return
+        case 0x08:                      // BS — move left before the next write
+            flushTextBytes()
+            flushCurrentLine()
+            events.append(.backspace)
         case 0x0A:                      // LF — keep, commit line, advance marker
             textBytes.append(b)
             flushTextBytes()
@@ -262,6 +434,9 @@ struct ANSIStream {
             paramBuf = ""
             state = .csiParams
         case 0x5D:                      // ']'  OSC introducer
+            paramBuf = ""
+            state = .oscString
+        case 0x50, 0x58, 0x5E, 0x5F:    // DCS, SOS, PM, APC string controls
             paramBuf = ""
             state = .oscString
         default:

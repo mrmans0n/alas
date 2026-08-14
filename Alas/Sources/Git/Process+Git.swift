@@ -251,7 +251,7 @@ extension Process {
         args: [String],
         cwd: URL? = nil,
         env: [String: String]? = nil,
-        timeout: TimeInterval = Process.defaultTimeout
+        timeout: TimeInterval? = Process.defaultTimeout
     ) async throws -> ProcessResultData {
         try validateLaunchConfiguration(executable: executable, args: args, cwd: cwd)
 
@@ -300,16 +300,18 @@ extension Process {
         try? errPipe.fileHandleForWriting.close()
 
         let timedOutFlag = TimedOutFlag()
-        let watchdog = Task {
-            try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-            if Task.isCancelled { return }
-            if process.isRunning {
-                timedOutFlag.mark()
-                fputs(
-                    "[Process watchdog] \(timeout)s timeout — terminating: \(executable) \(args.joined(separator: " "))\n",
-                    stderr
-                )
-                terminateProcessWithEscalation(process)
+        let watchdog = timeout.map { timeout in
+            Task {
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                if Task.isCancelled { return }
+                if process.isRunning {
+                    timedOutFlag.mark()
+                    fputs(
+                        "[Process watchdog] \(timeout)s timeout — terminating: \(executable) \(args.joined(separator: " "))\n",
+                        stderr
+                    )
+                    terminateProcessWithEscalation(process)
+                }
             }
         }
 
@@ -318,7 +320,7 @@ extension Process {
         } onCancel: {
             terminateProcessWithEscalation(process)
         }
-        watchdog.cancel()
+        watchdog?.cancel()
 
         async let outClosed = outAccum.waitForClose(timeoutNanoseconds: 2_000_000_000)
         async let errClosed = errAccum.waitForClose(timeoutNanoseconds: 2_000_000_000)
@@ -326,7 +328,7 @@ extension Process {
         outPipe.fileHandleForReading.readabilityHandler = nil
         errPipe.fileHandleForReading.readabilityHandler = nil
 
-        if timedOutFlag.value {
+        if timedOutFlag.value, let timeout {
             throw ProcessError.timedOut(executable: executable, args: args, seconds: timeout)
         }
 
