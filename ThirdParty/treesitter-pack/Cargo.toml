@@ -46,7 +46,7 @@ tree-sitter-hcl = { git = "https://github.com/tree-sitter-grammars/tree-sitter-h
 # Only used by tests that compile a `Query` against a `tree_sitter::Language`
 # to validate a vendored query text actually parses — real Query compilation,
 # not just presence, catches a grammar/query mismatch before it ships.
-tree-sitter = "0.25"
+tree-sitter = "0.26"
 
 [profile.release]
 opt-level = 2
