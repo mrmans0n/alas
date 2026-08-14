@@ -94,11 +94,58 @@ cat "${symbols}"
 exit 1
 EOF
 
-chmod +x "${sandbox}/rustup" "${toolchain_bin}/rustc" "${toolchain_bin}/cargo" "${sandbox}/bin/nm"
+# Minimal `lipo -create IN... -output OUT`: concatenates the slice contents
+# so the universal test below can tell which slices actually went into it.
+#
+# If ${lipo_break_marker} exists, it also corrupts the shared include_root
+# right after producing output — simulating an interruption landing exactly
+# between lipo and install_headers in the universal branch, without touching
+# pack_src (which would invalidate the per-arch fingerprints too) or
+# pre-corrupting include_root (which the per-arch fast paths check as well,
+# before lipo ever runs).
+lipo_break_marker="${sandbox}/break-after-lipo"
+cat > "${sandbox}/bin/lipo" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+inputs=()
+output=""
+while [ "\$#" -gt 0 ]; do
+    case "\$1" in
+        -create) shift ;;
+        -output) output="\$2"; shift 2 ;;
+        *) inputs+=("\$1"); shift ;;
+    esac
+done
+: > "\${output}"
+for f in "\${inputs[@]}"; do cat "\${f}" >> "\${output}"; done
+if [ -f "${lipo_break_marker}" ]; then
+    rm -rf "${srcroot}/.build/treesitter-pack/include"
+    : > "${srcroot}/.build/treesitter-pack/include"
+fi
+EOF
+
+chmod +x "${sandbox}/rustup" "${toolchain_bin}/rustc" "${toolchain_bin}/cargo" \
+    "${sandbox}/bin/nm" "${sandbox}/bin/lipo"
 
 run_script() {
     SRCROOT="${srcroot}" \
         ALAS_TS_PACK_TARGET_ARCH="x86_64" \
+        ALAS_RUSTUP_BIN="${sandbox}/rustup" \
+        PATH="${sandbox}/bin:${PATH}" \
+        bash "${srcroot}/scripts/build-treesitter-pack.sh"
+}
+
+run_script_arch() {
+    SRCROOT="${srcroot}" \
+        ALAS_TS_PACK_TARGET_ARCH="$1" \
+        ALAS_RUSTUP_BIN="${sandbox}/rustup" \
+        PATH="${sandbox}/bin:${PATH}" \
+        bash "${srcroot}/scripts/build-treesitter-pack.sh"
+}
+
+run_universal() {
+    SRCROOT="${srcroot}" \
+        CURRENT_ARCH="undefined_arch" \
         ALAS_RUSTUP_BIN="${sandbox}/rustup" \
         PATH="${sandbox}/bin:${PATH}" \
         bash "${srcroot}/scripts/build-treesitter-pack.sh"
@@ -202,6 +249,62 @@ test ! -f "${srcroot}/.build/treesitter-pack/x86_64/fingerprint"
 run_script
 grep -q "^cargo RUSTC=" "${invocations}"
 test -f "${srcroot}/.build/treesitter-pack/x86_64/fingerprint"
+test -f "${srcroot}/.build/treesitter-pack/include/treesitter_pack.h"
+
+# --- 8. the universal (lipo) path has its own promotion sequence, separate
+#        from the per-arch path above, and needs the identical ordering fix:
+#        clear the universal fingerprint before lipo starts overwriting the
+#        universal archive, not only after install_headers succeeds.
+#
+# Build both slices for the current inputs so the universal build's own
+# recursive per-arch calls fast-path (no header access, nothing to break)
+# and only the universal-level lipo + install_headers step is exercised.
+run_script_arch arm64 >/dev/null
+run_script_arch x86_64 >/dev/null
+
+universal_archive="${srcroot}/.build/treesitter-pack/universal/install/lib/libalas_treesitter_pack.a"
+
+# --- 8a. a clean first universal build succeeds, promotes normally, and its
+#         archive is exactly the two current slices combined
+: > "${invocations}"
+run_universal
+test -f "${universal_archive}"
+test -f "${srcroot}/.build/treesitter-pack/universal/fingerprint"
+test "$(cat "${universal_archive}")" = "$(cat "${srcroot}/.build/treesitter-pack/arm64/install/lib/libalas_treesitter_pack.a" \
+    "${srcroot}/.build/treesitter-pack/x86_64/install/lib/libalas_treesitter_pack.a")"
+
+# --- 8b. break the universal-level install_headers on a fresh universal
+#         build, via the fake lipo's break-after-lipo marker (see above) —
+#         both per-arch fast paths reference the exact same shared
+#         include_root the universal level does, so corrupting it before
+#         the run (or touching pack_src, which would change pack_id) would
+#         break the per-arch recursive calls too and the failure would land
+#         there instead of in the universal level's own install_headers.
+rm -f "${srcroot}/.build/treesitter-pack/universal/fingerprint"
+: > "${lipo_break_marker}"
+if run_universal > "${sandbox}/out8" 2>&1; then
+    echo "expected a corrupted include dir to fail the universal build" >&2
+    exit 1
+fi
+rm -f "${lipo_break_marker}"
+rm -f "${srcroot}/.build/treesitter-pack/include"
+
+# lipo runs before install_headers, so it already combined the current
+# slices into the universal archive even though the overall run failed
+# afterward — confirmed by the archive matching a fresh concatenation of
+# both slices (the slices themselves did not change between 8a and 8b, so
+# this is expected to equal 8a's archive too, but is computed fresh here
+# rather than compared against a captured "last good" value).
+expected_lipo_output="$(cat "${srcroot}/.build/treesitter-pack/arm64/install/lib/libalas_treesitter_pack.a" \
+    "${srcroot}/.build/treesitter-pack/x86_64/install/lib/libalas_treesitter_pack.a")"
+test "$(cat "${universal_archive}")" = "${expected_lipo_output}"
+# and the universal fingerprint must be absent — not stale — afterward
+test ! -f "${srcroot}/.build/treesitter-pack/universal/fingerprint"
+
+# --- 8c. recovery: rerunning once include_root is no longer blocked must
+#         succeed and restore a consistent universal archive + fingerprint
+run_universal
+test -f "${srcroot}/.build/treesitter-pack/universal/fingerprint"
 test -f "${srcroot}/.build/treesitter-pack/include/treesitter_pack.h"
 
 echo "build-treesitter-pack tests passed"

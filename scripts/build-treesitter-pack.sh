@@ -90,6 +90,14 @@ if [ "${target_arch}" = "universal" ]; then
     [ -f "${arm64_slice}" ] || die "missing arm64 archive at ${arm64_slice}"
     [ -f "${x86_64_slice}" ] || die "missing x86_64 archive at ${x86_64_slice}"
 
+    # Same ordering fix as the per-arch path below: clear the recorded
+    # fingerprint before lipo starts overwriting the live universal archive.
+    # Each slice is already validated by its own recursive per-arch
+    # invocation above, but an interruption or install_headers failure
+    # between lipo and the fingerprint write here would otherwise leave a
+    # newly promoted archive paired with the *previous* universal build's
+    # stale fingerprint.
+    rm -f "${fingerprint_path}"
     lipo -create "${arm64_slice}" "${x86_64_slice}" -output "${lib_output}"
     install_headers
     printf '%s\n' "${fingerprint}" > "${fingerprint_path}"
