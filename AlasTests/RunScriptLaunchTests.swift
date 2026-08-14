@@ -65,13 +65,13 @@ struct RunScriptLaunchTests {
         )
         #expect(suffix.contains("uname -s"))
         #expect(suffix.contains("prepare_transcript()"))
-        #expect(suffix.contains("prepare_transcript\n    rm -f"))
-        #expect(suffix.contains("prepare_transcript\n    script -qefc"))
+        #expect(suffix.contains("if prepare_transcript; then"))
         #expect(suffix.contains("/usr/bin/script -q \"$transcript\" /usr/bin/env -u SCRIPT /bin/sh -c"))
         #expect(suffix.contains("script -qefc"))
         #expect(suffix.contains("env -u SCRIPT"))
         #expect(suffix.contains("private_umask=$(umask)"))
         #expect(suffix.contains("umask \"$private_umask\""))
+        #expect(suffix.contains("capture_ready=0"))
         #expect(suffix.contains("code=$?"))
         #expect(suffix.contains(".done.status"))
         #expect(suffix.contains("command -v script"))
@@ -144,6 +144,30 @@ struct RunScriptLaunchTests {
         #expect(FileManager.default.fileExists(atPath: marker.path))
         #expect(try String(contentsOf: status, encoding: .utf8) == "42")
         #expect(try String(contentsOfFile: capture.completion, encoding: .utf8).hasPrefix("42\t"))
+    }
+
+    @Test func captureSetupFailureStillRunsScript() throws {
+        let dir = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let blocked = dir.appendingPathComponent("blocked")
+        try "not a directory".write(to: blocked, atomically: true, encoding: .utf8)
+        let capture = RunScriptCapturePaths(
+            transcript: blocked.appendingPathComponent("run.log").path,
+            completion: blocked.appendingPathComponent("run.done").path
+        )
+        let scriptURL = dir.appendingPathComponent("exit-42.sh")
+        let marker = dir.appendingPathComponent("marker")
+        try "#!/bin/sh\nprintf ran > \(AppState.shellQuote(marker.path))\nexit 42\n".write(to: scriptURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
+        let suffix = try AppState.runScriptStartupScript(
+            script: RunScript(scope: .repo, fileName: scriptURL.lastPathComponent, fileURL: scriptURL, displayName: "Exit 42", onExit: .close, cwd: nil, isExecutable: true),
+            worktreeRoot: dir, branch: "main", projectName: "alas", repoRoot: dir.path, capturePaths: capture
+        )
+
+        let process = try runZsh(suffix)
+
+        #expect(process.terminationStatus == 42)
+        #expect(try String(contentsOf: marker, encoding: .utf8) == "ran")
     }
 
     @Test func closeOnExitPreservesScriptStatusInZsh() throws {
@@ -340,6 +364,21 @@ struct RunScriptLaunchTests {
 
         #expect(fixture.state.runScriptCompletionTaskCountForTesting == 0)
         #expect(fixture.state.runScriptFailures(in: fixture.worktree.id).isEmpty)
+    }
+
+    @MainActor
+    @Test func alreadyExitedRunScriptTerminalCancelsRunMonitor() async throws {
+        let fixture = try makeAppStateFixture(waiter: { _ in
+            try await Task.sleep(for: .seconds(5))
+            return RunScriptCompletion(exitCode: 1, transcript: nil, truncated: false)
+        })
+
+        fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(fixture.state.runScriptCompletionTaskCountForTesting == 1)
+        try await Task.sleep(for: .milliseconds(2_200))
+        #expect(fixture.state.runScriptCompletionTaskCountForTesting == 0)
     }
 
     @MainActor

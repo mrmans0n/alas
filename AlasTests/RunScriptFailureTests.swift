@@ -65,4 +65,11 @@ struct RunScriptFailureTests {
         #expect(result.truncated)
         #expect(!result.text.contains("secret"))
     }
+
+    @Test func tailPreservesTextBeforeOrdinaryBEL() {
+        let data = Data(("important\u{07}\u{1B}[31merror\u{1B}[0m").utf8)
+        let result = ANSIPlainTextSnapshot.tail(from: data, byteLimit: 64)
+        #expect(result.text == "importanterror")
+        #expect(!result.truncated)
+    }
 }

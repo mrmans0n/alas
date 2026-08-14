@@ -79,32 +79,43 @@ extension AppState {
         return """
         transcript=\(transcript)
         completion=\(completion)
-        mkdir -p \(transcriptDir) \(completionDir) || exit 1
-        chmod 700 \(transcriptDir) \(completionDir) || exit 1
-        find \(transcriptDir) \(completionDir) -type f \\( -name '*.log' -o -name '*.done' -o -name '*.tmp' -o -name '*.body' -o -name '*.status' \\) -mtime +7 -exec rm -f {} + 2>/dev/null || true
+        capture_ready=0
+        if mkdir -p \(transcriptDir) \(completionDir) 2>/dev/null && chmod 700 \(transcriptDir) \(completionDir) 2>/dev/null; then
+          capture_ready=1
+          find \(transcriptDir) \(completionDir) -type f \\( -name '*.log' -o -name '*.done' -o -name '*.tmp' -o -name '*.body' -o -name '*.status' \\) -mtime +7 -exec rm -f {} + 2>/dev/null || true
+        fi
         prepare_transcript() {
           private_umask=$(umask)
           umask 077
-          : > "$transcript" || exit 1
-          chmod 600 "$transcript" || exit 1
+          : > "$transcript" 2>/dev/null && chmod 600 "$transcript" 2>/dev/null
+          result=$?
           umask "$private_umask"
+          return "$result"
         }
-        if command -v script >/dev/null 2>&1; then
+        if [ "$capture_ready" = 1 ] && command -v script >/dev/null 2>&1; then
           if [ "$(uname -s 2>/dev/null)" = Darwin ] && [ -x /usr/bin/script ]; then
-            prepare_transcript
-            rm -f \(status)
-            /usr/bin/script -q "$transcript" /usr/bin/env -u SCRIPT /bin/sh -c \(quotedDarwinCommandLine)
-            script_status=$?
-            if [ -f \(status) ]; then
-              exit_code=$(cat \(status))
+            if prepare_transcript; then
+              rm -f \(status)
+              /usr/bin/script -q "$transcript" /usr/bin/env -u SCRIPT /bin/sh -c \(quotedDarwinCommandLine)
+              script_status=$?
+              if [ -f \(status) ]; then
+                exit_code=$(cat \(status))
+              else
+                exit_code=$script_status
+              fi
+              rm -f \(status)
             else
-              exit_code=$script_status
+              \(commandLine)
+              exit_code=$?
             fi
-            rm -f \(status)
           elif script --version 2>/dev/null | grep -qi 'util-linux'; then
-            prepare_transcript
-            script -qefc \(quotedCommandLine) "$transcript"
-            exit_code=$?
+            if prepare_transcript; then
+              script -qefc \(quotedCommandLine) "$transcript"
+              exit_code=$?
+            else
+              \(commandLine)
+              exit_code=$?
+            fi
           else
             \(commandLine)
             exit_code=$?
@@ -113,13 +124,15 @@ extension AppState {
           \(commandLine)
           exit_code=$?
         fi
-        tmp="$completion.tmp"
-        private_umask=$(umask)
-        umask 077
-        completed_at=$(perl -MTime::HiRes=time -e 'printf "%.6f\\n", time' 2>/dev/null || date +%s)
-        printf '%s\\t%s\\n' "$exit_code" "$completed_at" > "$tmp"
-        mv "$tmp" "$completion"
-        umask "$private_umask"\(exitLine)
+        if [ "$capture_ready" = 1 ]; then
+          tmp="$completion.tmp"
+          private_umask=$(umask)
+          umask 077
+          completed_at=$(perl -MTime::HiRes=time -e 'printf "%.6f\\n", time' 2>/dev/null || date +%s)
+          printf '%s\\t%s\\n' "$exit_code" "$completed_at" > "$tmp"
+          mv "$tmp" "$completion"
+          umask "$private_umask"
+        fi\(exitLine)
         """
     }
 
@@ -229,6 +242,10 @@ extension AppState {
                         script: script,
                         worktree: worktree
                     )
+                    if terminal.registry.session(for: sessionID)?.surface.foregroundPid == nil {
+                        cancelRunScriptCompletionTasks(sessionID: sessionID, after: .seconds(2), includeRemote: false)
+                        cancelRunScriptCompletionTasks(sessionID: sessionID, after: .seconds(30))
+                    }
                 } catch {
                     cancelRunScriptCompletionTask(runID: runID, location: captureLocation)
                     throw error
