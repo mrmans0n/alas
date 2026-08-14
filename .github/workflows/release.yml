@@ -58,22 +58,12 @@ jobs:
 
       - name: Compute Ghostty cache key inputs
         run: |
-          git -C ThirdParty/ghostty rev-parse HEAD > .ghostty-pin
-          shasum scripts/build-ghostty.sh >> .ghostty-pin
+          ALAS_GHOSTTY_TARGET_ARCH="${{ matrix.arch }}" ./scripts/build-ghostty.sh --print-fingerprint > .ghostty-pin
+          cat .ghostty-pin
 
       - name: Restore Ghostty cache
-        # Split restore + save: the combined `actions/cache@v5` only saves at
-        # end-of-job on success. With explicit restore + save, the cache is
-        # persisted immediately after the Ghostty build completes, before
-        # notary work starts.
-        #
-        # Each matrix leg gets its own arch-qualified cache key so two runners
-        # don't race on saving the same immutable key.
-        #
-        # restore-keys gives us a warm cache when .ghostty-pin changes (new
-        # submodule SHA or build-ghostty.sh edit): we fall back to the most
-        # recent prior cache, and build-ghostty.sh's in-script fingerprint
-        # table can fast-path the build if any prior fingerprint matches.
+        # Release restores trusted cache entries only; the build script
+        # validates them before populating this checkout.
         id: ghostty-cache
         uses: actions/cache/restore@v6
         with:
@@ -133,18 +123,6 @@ jobs:
         env:
           ALAS_GHOSTTY_TARGET_ARCH: ${{ matrix.arch }}
         run: ./scripts/build-ghostty.sh
-
-      - name: Save Ghostty cache
-        # Save immediately after the Ghostty build completes, BEFORE the rest
-        # of the job (xcodebuild + notarytool) has a chance to fail. If we
-        # waited until end-of-job, a notary timeout would throw away ~12 min
-        # of cold zig work. `cache-hit != 'true'` skips a no-op save when
-        # restore already hit the exact primary key.
-        if: success() && steps.ghostty-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v6
-        with:
-          path: ~/Library/Caches/Alas/GhosttyKit/${{ matrix.arch }}
-          key: ${{ steps.ghostty-cache.outputs.cache-primary-key }}
 
       - name: Compute prebuilt tools cache key inputs
         # Same pin-file pattern as .ghostty-pin: the fingerprint inputs the
@@ -214,39 +192,12 @@ jobs:
           ./scripts/build-alas-helper.sh
           ./scripts/build-alas-cli.sh
 
-      - name: Save prebuilt tools cache
-        # Save immediately after the prebuild step succeeds, BEFORE
-        # xcodebuild/tests get a chance to fail — same split restore/save
-        # rationale as the Ghostty cache above.
-        if: success() && steps.tools-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v6
-        with:
-          path: |
-            ~/Library/Caches/Alas/zmx
-            .build/zmx/linux-*/install
-            .build/zmx/linux-*/fingerprint
-            .build/fff/*/install
-            .build/fff/*/fingerprint
-            .build/fff/include
-            .build/alas-helper/*/release/alas-helper
-            .build/alas-helper/fingerprint
-            .build/alas-cli/*/release/alas
-            .build/alas-cli/fingerprint
-          key: ${{ steps.tools-cache.outputs.cache-primary-key }}
-
       - name: Resolve SwiftPM packages
         run: |
           xcodebuild -resolvePackageDependencies \
             -project Alas.xcodeproj \
             -scheme Alas \
             -clonedSourcePackagesDirPath .build/xcode/SourcePackages
-
-      - name: Save SwiftPM package cache
-        if: success() && steps.swiftpm-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v6
-        with:
-          path: .build/xcode/SourcePackages
-          key: ${{ steps.swiftpm-cache.outputs.cache-primary-key }}
 
       - name: Build release app (${{ matrix.arch }})
         run: |

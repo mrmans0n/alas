@@ -42,8 +42,8 @@ jobs:
 
       - name: Compute Ghostty cache key inputs
         run: |
-          git -C ThirdParty/ghostty rev-parse HEAD > .ghostty-pin
-          shasum scripts/build-ghostty.sh >> .ghostty-pin
+          ALAS_GHOSTTY_TARGET_ARCH=x86_64 ./scripts/build-ghostty.sh --print-fingerprint > .ghostty-pin
+          cat .ghostty-pin
 
       - name: Restore Ghostty cache
         id: ghostty-cache
@@ -57,6 +57,7 @@ jobs:
       - name: Build Ghostty xcframework (x86_64)
         env:
           ALAS_GHOSTTY_TARGET_ARCH: x86_64
+          ALAS_GHOSTTY_CACHE_KEEP: 1
         run: ./scripts/build-ghostty.sh
 
       - name: Save Ghostty cache
@@ -191,8 +192,8 @@ jobs:
       - name: Compute Ghostty cache key inputs
         if: steps.skip-check.outputs.skip != 'true'
         run: |
-          git -C ThirdParty/ghostty rev-parse HEAD > .ghostty-pin
-          shasum scripts/build-ghostty.sh >> .ghostty-pin
+          ALAS_GHOSTTY_TARGET_ARCH=arm64 ./scripts/build-ghostty.sh --print-fingerprint > .ghostty-pin
+          cat .ghostty-pin
 
       - name: Restore Ghostty cache
         # Restore the shared arm64 cache. `build-ghostty.sh` validates the
@@ -213,6 +214,9 @@ jobs:
 
       - name: Build Ghostty xcframework
         if: steps.skip-check.outputs.skip != 'true'
+        env:
+          ALAS_GHOSTTY_TARGET_ARCH: arm64
+          ALAS_GHOSTTY_CACHE_KEEP: 1
         run: ./scripts/build-ghostty.sh
 
       - name: Save Ghostty cache (main builds only)

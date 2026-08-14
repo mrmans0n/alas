@@ -86,13 +86,10 @@ jobs:
         run: bash scripts/tests/build-alas-cli/run.sh
 
       - name: Compute Ghostty cache key inputs
-        # Submodules track their HEAD via .git/modules/... in the parent repo, so
-        # `ThirdParty/ghostty/.git` is a *file* (not a dir) and hashFiles can't
-        # follow it. Dump the submodule SHA + script hash into a small file we
-        # can feed to hashFiles. Re-runs whenever the pinned commit moves.
+        # Use the script's authoritative fingerprint so the Actions key tracks
+        # every input that can change the produced artifact.
         run: |
-          git -C ThirdParty/ghostty rev-parse HEAD > .ghostty-pin
-          shasum scripts/build-ghostty.sh >> .ghostty-pin
+          ALAS_GHOSTTY_TARGET_ARCH=arm64 ./scripts/build-ghostty.sh --print-fingerprint > .ghostty-pin
           cat .ghostty-pin
 
       - name: Restore Ghostty cache
@@ -118,6 +115,9 @@ jobs:
         # If the xcframework doesn't already exist on disk, the build fails
         # before our pre-build script ever gets a chance to produce it. So
         # we run the script as its own CI step, ahead of xcodebuild.
+        env:
+          ALAS_GHOSTTY_TARGET_ARCH: arm64
+          ALAS_GHOSTTY_CACHE_KEEP: 1
         run: ./scripts/build-ghostty.sh
 
       - name: Save Ghostty cache
