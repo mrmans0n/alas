@@ -19,6 +19,110 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  warm-release-x86:
+    name: Warm x86_64 Release Dependencies
+    if: github.event_name == 'schedule' || inputs.ref == '' || inputs.ref == 'main'
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ inputs.ref || 'main' }}
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Install zig@0.15
+        run: brew install zig@0.15
+
+      - name: Test build-ghostty.sh harness
+        run: bash scripts/tests/build-ghostty/run.sh
+
+      - name: Compute Ghostty cache key inputs
+        run: |
+          git -C ThirdParty/ghostty rev-parse HEAD > .ghostty-pin
+          shasum scripts/build-ghostty.sh >> .ghostty-pin
+
+      - name: Restore Ghostty cache
+        id: ghostty-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/Library/Caches/Alas/GhosttyKit/x86_64
+          key: ghostty-${{ runner.os }}-x86_64-${{ hashFiles('.ghostty-pin') }}
+          restore-keys: |
+            ghostty-${{ runner.os }}-x86_64-
+
+      - name: Build Ghostty xcframework (x86_64)
+        env:
+          ALAS_GHOSTTY_TARGET_ARCH: x86_64
+        run: ./scripts/build-ghostty.sh
+
+      - name: Save Ghostty cache
+        if: success() && steps.ghostty-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/Library/Caches/Alas/GhosttyKit/x86_64
+          key: ${{ steps.ghostty-cache.outputs.cache-primary-key }}
+
+      - name: Compute prebuilt tools cache key inputs
+        run: |
+          git -C ThirdParty/zmx rev-parse HEAD > .tools-pin
+          {
+            git -C ThirdParty/fff rev-parse HEAD
+            git rev-parse HEAD:AlasHelper
+            git rev-parse HEAD:AlasCLI
+            shasum scripts/build-zmx.sh scripts/build-fff.sh scripts/build-alas-helper.sh scripts/build-alas-cli.sh
+            shasum -a 256 "$(brew --prefix zig@0.15)/bin/zig"
+          } >> .tools-pin
+          cat .tools-pin
+
+      - name: Restore prebuilt tools cache
+        id: tools-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/Library/Caches/Alas/zmx
+            .build/zmx/linux-*/install
+            .build/zmx/linux-*/fingerprint
+            .build/fff/*/install
+            .build/fff/*/fingerprint
+            .build/fff/include
+            .build/alas-helper/*/release/alas-helper
+            .build/alas-helper/fingerprint
+            .build/alas-cli/*/release/alas
+            .build/alas-cli/fingerprint
+          key: tools-${{ runner.os }}-x86_64-${{ hashFiles('.tools-pin') }}
+          restore-keys: |
+            tools-${{ runner.os }}-x86_64-
+            tools-${{ runner.os }}-arm64-
+
+      - name: Prebuild zmx + fff + Alas Helper + Alas CLI (x86_64)
+        env:
+          ALAS_ZMX_TARGET_ARCH: x86_64
+          ALAS_FFF_TARGET_ARCH: x86_64
+        run: |
+          ./scripts/build-zmx.sh
+          ./scripts/build-fff.sh
+          ./scripts/build-alas-helper.sh
+          ./scripts/build-alas-cli.sh
+
+      - name: Save prebuilt tools cache
+        if: success() && steps.tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/Library/Caches/Alas/zmx
+            .build/zmx/linux-*/install
+            .build/zmx/linux-*/fingerprint
+            .build/fff/*/install
+            .build/fff/*/fingerprint
+            .build/fff/include
+            .build/alas-helper/*/release/alas-helper
+            .build/alas-helper/fingerprint
+            .build/alas-cli/*/release/alas
+            .build/alas-cli/fingerprint
+          key: ${{ steps.tools-cache.outputs.cache-primary-key }}
+
   nightly:
     runs-on: macos-26
     # Two notarytool --wait --timeout 30m calls in this job (one for the

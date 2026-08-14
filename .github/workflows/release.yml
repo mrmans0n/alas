@@ -194,6 +194,7 @@ jobs:
           key: tools-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('.tools-pin') }}
           restore-keys: |
             tools-${{ runner.os }}-${{ matrix.arch }}-
+            tools-${{ runner.os }}-arm64-
 
       - name: Prebuild zmx + fff + Alas Helper + Alas CLI (${{ matrix.arch }})
         # These normally run as pre-build script phases *inside* xcodebuild,
