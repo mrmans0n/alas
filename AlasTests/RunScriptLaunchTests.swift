@@ -637,6 +637,35 @@ struct RunScriptLaunchTests {
     }
 
     @MainActor
+    @Test func cancelAllRunScriptMonitorsCleansLocalCaptureFiles() throws {
+        let dir = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let paths = RunScriptCapturePaths(
+            transcript: dir.appendingPathComponent("run.log").path,
+            completion: dir.appendingPathComponent("run.done").path
+        )
+        for path in [paths.transcript, paths.completion, "\(paths.completion).tmp", "\(paths.completion).status"] {
+            FileManager.default.createFile(atPath: path, contents: Data("x".utf8))
+        }
+        let state = AppState(store: MemoryStore())
+        let runID = UUID().uuidString
+        state.runScriptCompletionTasks[runID] = (
+            worktreeID: "wt",
+            sessionID: "session",
+            location: .local(paths: paths),
+            task: Task {}
+        )
+
+        state.cancelAllRunScriptCompletionTasks()
+
+        #expect(state.runScriptCompletionTaskCountForTesting == 0)
+        #expect(!FileManager.default.fileExists(atPath: paths.transcript))
+        #expect(!FileManager.default.fileExists(atPath: paths.completion))
+        #expect(!FileManager.default.fileExists(atPath: "\(paths.completion).tmp"))
+        #expect(!FileManager.default.fileExists(atPath: "\(paths.completion).status"))
+    }
+
+    @MainActor
     @Test func transientMissingPidDoesNotCancelRunMonitor() async throws {
         var pidChecks = 0
         let fixture = try makeAppStateFixture(

@@ -478,6 +478,7 @@ extension AppState {
     func cancelAllRunScriptCompletionTasks() {
         for entry in runScriptCompletionTasks.values {
             entry.task.cancel()
+            cleanupCaptureLocation(entry.location)
         }
         runScriptCompletionTasks.removeAll()
     }
@@ -487,6 +488,7 @@ extension AppState {
         try? FileManager.default.removeItem(atPath: paths.transcript)
         try? FileManager.default.removeItem(atPath: paths.completion)
         try? FileManager.default.removeItem(atPath: "\(paths.completion).tmp")
+        try? FileManager.default.removeItem(atPath: "\(paths.completion).status")
     }
 
     // MARK: - Edit
