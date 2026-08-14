@@ -21,7 +21,9 @@ concurrency:
 jobs:
   warm-release-x86:
     name: Warm x86_64 Release Dependencies
-    if: github.event_name == 'schedule' || inputs.ref == '' || inputs.ref == 'main'
+    # `inputs.ref` selects the checkout; `github.ref` keeps manual cache
+    # producers in the default-branch cache scope.
+    if: github.event_name == 'schedule' || (github.ref == 'refs/heads/main' && (inputs.ref == '' || inputs.ref == 'main'))
     runs-on: macos-26
     timeout-minutes: 45
     steps:
