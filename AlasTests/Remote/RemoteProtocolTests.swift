@@ -80,6 +80,8 @@ struct RemoteProtocolTests {
             agentId: "claude",
             status: "streaming",
             canDrive: false,
+            projectId: "project-1",
+            updatedAt: 123,
             worktree: RemoteWorktreeSummary(
                 projectName: "alas",
                 worktreeName: "nacho-improve-remote-sessions",
@@ -95,6 +97,16 @@ struct RemoteProtocolTests {
             )
         )
         #expect(try roundTrip(summary) == summary)
+    }
+
+    @Test func sessionSummaryDecodesLegacyPayloadWithoutProjectOrActivity() throws {
+        let summary = try JSONDecoder().decode(
+            RemoteSessionSummary.self,
+            from: Data(#"{"id":"s1","title":"Legacy","agentId":"claude","status":"idle","canDrive":true}"#.utf8)
+        )
+
+        #expect(summary.projectId == nil)
+        #expect(summary.updatedAt == 0)
     }
 
     @Test func worktreeOptionRoundTrips() throws {

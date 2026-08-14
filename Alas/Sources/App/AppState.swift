@@ -8479,6 +8479,8 @@ extension AppState: RemoteSessionsProvider {
     private func remoteSessionSummary(
         session: ACPSession,
         manager: ACPSessionManager,
+        projectId: String,
+        updatedAt: Int64,
         worktreeSummary: RemoteWorktreeSummary?
     ) -> RemoteSessionSummary {
         let streamingState = manager.runners[session.id]?.session.transcript.streamingState
@@ -8489,6 +8491,8 @@ extension AppState: RemoteSessionsProvider {
             agentId: session.agentId,
             status: RemoteSessionGateway.stateString(streamingState),
             canDrive: manager.isWriter(for: session.id),
+            projectId: projectId,
+            updatedAt: updatedAt,
             worktree: worktreeSummary
         )
     }
@@ -8499,10 +8503,13 @@ extension AppState: RemoteSessionsProvider {
 
         for mgr in acpManagers.values {
             let worktreeSummary: RemoteWorktreeSummary?
+            let projectId: String?
             if let resolved = projectAndWorktree(withWorktreeId: mgr.worktreeId) {
                 worktreeSummary = await remoteWorktreeSummary(project: resolved.project, worktree: resolved.worktree)
+                projectId = resolved.project.id
             } else {
                 worktreeSummary = nil
+                projectId = nil
             }
 
             for row in mgr.sessionRows where !row.archived {
@@ -8519,6 +8526,8 @@ extension AppState: RemoteSessionsProvider {
                     hasRunner: state != nil,
                     isActive: hasOpenACPSessionTab(worktreeId: mgr.worktreeId, sessionId: row.id),
                     canDrive: mgr.isWriter(for: row.id),
+                    projectId: projectId,
+                    updatedAt: row.updatedAt,
                     worktree: worktreeSummary
                 )
                 let identity = remoteSessionListIdentity(worktreeId: mgr.worktreeId, row: effectiveRow)
@@ -8557,6 +8566,8 @@ extension AppState: RemoteSessionsProvider {
         var hasRunner: Bool
         var isActive: Bool
         var canDrive: Bool
+        var projectId: String?
+        var updatedAt: Int64
         let worktree: RemoteWorktreeSummary?
 
         init(
@@ -8565,6 +8576,8 @@ extension AppState: RemoteSessionsProvider {
             hasRunner: Bool,
             isActive: Bool,
             canDrive: Bool,
+            projectId: String?,
+            updatedAt: Int64,
             worktree: RemoteWorktreeSummary?
         ) {
             self.operationalRow = row
@@ -8573,6 +8586,8 @@ extension AppState: RemoteSessionsProvider {
             self.hasRunner = hasRunner
             self.isActive = isActive
             self.canDrive = canDrive
+            self.projectId = projectId
+            self.updatedAt = updatedAt
             self.worktree = worktree
         }
 
@@ -8584,12 +8599,16 @@ extension AppState: RemoteSessionsProvider {
                 status: status,
                 canDrive: canDrive,
                 isActive: isActive,
+                projectId: projectId,
+                updatedAt: updatedAt,
                 worktree: worktree
             )
         }
 
         func merging(_ other: RemoteSessionSummaryCandidate) -> RemoteSessionSummaryCandidate {
             var merged = self
+            merged.updatedAt = max(merged.updatedAt, other.updatedAt)
+            merged.projectId = merged.projectId ?? other.projectId
             if other.isBetterOperationalRow(than: merged) {
                 merged.operationalRow = other.operationalRow
                 merged.status = other.status
@@ -8693,7 +8712,14 @@ extension AppState: RemoteSessionsProvider {
         }
 
         let worktreeSummary = remoteWorktreeSummaryWithoutMetrics(project: resolved.project, worktree: resolved.worktree)
-        return .success(remoteSessionSummary(session: session, manager: manager, worktreeSummary: worktreeSummary))
+        let updatedAt = manager.sessionRows.first(where: { $0.id == session.id })?.updatedAt ?? 0
+        return .success(remoteSessionSummary(
+            session: session,
+            manager: manager,
+            projectId: resolved.project.id,
+            updatedAt: updatedAt,
+            worktreeSummary: worktreeSummary
+        ))
     }
 
     func session(for id: String) -> ACPSession? {

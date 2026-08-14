@@ -44,15 +44,18 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".tool-toggle"))
     }
 
-    @Test func toolCardMobileFixBustsServiceWorkerAssetCache() throws {
+    @Test func remoteSessionOrderingAssetsAreLoadedAndCached() throws {
         let html = try asset("index.html")
         let sw = try asset("sw.js")
 
-        #expect(html.contains(#"/app.js?v=61"#))
-        #expect(html.contains(#"/style.css?v=39"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v39";"#))
-        #expect(sw.contains(#""/app.js?v=61""#))
-        #expect(sw.contains(#""/style.css?v=39""#))
+        #expect(html.contains(#"/session-ordering.js?v=1"#))
+        #expect(html.range(of: #"/session-ordering.js?v=1"#)!.lowerBound < html.range(of: #"/app.js?v=62"#)!.lowerBound)
+        #expect(html.contains(#"/app.js?v=62"#))
+        #expect(html.contains(#"/style.css?v=40"#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v40";"#))
+        #expect(sw.contains(#""/session-ordering.js?v=1""#))
+        #expect(sw.contains(#""/app.js?v=62""#))
+        #expect(sw.contains(#""/style.css?v=40""#))
     }
 
     @Test func remoteWebToolRowsAvoidNativeButtonRenderingOnMobileSafari() throws {
@@ -65,11 +68,11 @@ struct RemoteWebAssetTests {
         #expect(app.contains("toggle.tabIndex = 0"))
         #expect(app.contains("function handleCardToggleKeydown"))
         #expect(!app.contains(#"const button = el("button", "tool-toggle")"#))
-        #expect(html.contains(#"/app.js?v=61"#))
-        #expect(html.contains(#"/style.css?v=39"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v39";"#))
-        #expect(sw.contains(#""/app.js?v=61""#))
-        #expect(sw.contains(#""/style.css?v=39""#))
+        #expect(html.contains(#"/app.js?v=62"#))
+        #expect(html.contains(#"/style.css?v=40"#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v40";"#))
+        #expect(sw.contains(#""/app.js?v=62""#))
+        #expect(sw.contains(#""/style.css?v=40""#))
     }
 
     @Test func remoteBareURLLinkifierPreservesIndentedCodeBlocks() throws {
@@ -96,8 +99,11 @@ struct RemoteWebAssetTests {
 
         #expect(app.contains("function sessionMetaParts"))
         #expect(app.contains("function renderSessionRow"))
-        #expect(app.contains("function sortedSessions"))
-        #expect(app.contains("function sessionIsActive"))
+        #expect(app.contains("RemoteSessionOrdering.groupSessions(sessions)"))
+        #expect(app.contains("listedSessions.set(session.id, session);"))
+        #expect(app.contains("renderSessions([...listedSessions.values()]);"))
+        #expect(app.contains("session-section-title"))
+        #expect(app.contains("s.worktree.worktreeName"))
         #expect(app.contains(#""session-row-active""#))
         #expect(app.contains(#""session-row-inactive""#))
         #expect(app.contains(#""Active""#))
@@ -110,8 +116,11 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".session-state-active"))
         #expect(css.contains(".session-state-inactive"))
         #expect(css.contains(".session-meta"))
-        #expect(html.contains("/app.js?v=61"))
-        #expect(html.contains("/style.css?v=39"))
+        #expect(css.contains(".session-section"))
+        #expect(css.contains(".session-section-title"))
+        #expect(css.contains(".session-section-list"))
+        #expect(html.contains("/app.js?v=62"))
+        #expect(html.contains("/style.css?v=40"))
     }
 
     @Test func remoteWebExposesSessionRenameControls() throws {
@@ -136,8 +145,8 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".session-open"))
         #expect(css.contains("#detail-title"))
         #expect(css.contains(".sheet-input"))
-        #expect(sw.contains(#""/app.js?v=61""#))
-        #expect(sw.contains(#""/style.css?v=39""#))
+        #expect(sw.contains(#""/app.js?v=62""#))
+        #expect(sw.contains(#""/style.css?v=40""#))
     }
 
     @Test func configSheetScrollsWhenModelListOverflows() throws {
@@ -285,9 +294,9 @@ struct RemoteWebAssetTests {
     @Test func incrementalTranscriptBustsServiceWorkerAssetCache() throws {
         let sw = try asset("sw.js")
         let html = try asset("index.html")
-        #expect(sw.contains("alas-remote-shell-v39"))
-        #expect(sw.contains("/app.js?v=61"))
-        #expect(html.contains("app.js?v=61"))
+        #expect(sw.contains("alas-remote-shell-v40"))
+        #expect(sw.contains("/app.js?v=62"))
+        #expect(html.contains("app.js?v=62"))
     }
 
     // Regression (codex review, PR #775): applyPage used to clear the

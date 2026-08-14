@@ -13,6 +13,7 @@ let queueItems = [];             // [{id, text, imageCount, resourceCount, statu
 let steerUndoAvailable = false;
 let lastStreamingState = "idle"; // so composer state can be recomputed on text input
 let sessionTitles = new Map();
+let listedSessions = new Map();
 let canDrive = false, canDriveKnown = false;
 let reconnectDelay = 1500;
 let reconnectTimer = null;
@@ -275,24 +276,25 @@ function handle(msg) {
 
 function renderSessions(sessions) {
   const list = $("session-list"); list.innerHTML = "";
+  listedSessions.clear();
+  sessions.forEach(s => listedSessions.set(s.id, s));
   sessionTitles = new Map(sessions.map(s => [s.id, s.title]));
-  sortedSessions(sessions).forEach(s => list.appendChild(renderSessionRow(s)));
+  RemoteSessionOrdering.groupSessions(sessions).forEach(section => {
+    const element = el("section", "session-section");
+    element.append(el("h2", "session-section-title", section.title));
+    const rows = el("div", "session-section-list");
+    section.sessions.forEach(s => rows.appendChild(renderSessionRow(s)));
+    element.append(rows);
+    list.appendChild(element);
+  });
   if (currentSession) setDetailTitle(currentSession);
-}
-
-function sortedSessions(sessions) {
-  return [...sessions].sort((a, b) => Number(sessionIsActive(b)) - Number(sessionIsActive(a)));
-}
-
-function sessionIsActive(session) {
-  return session.isActive !== false;
 }
 
 function renderSessionRow(s) {
   const row = document.createElement("div");
   row.dataset.sessionId = s.id;
   row.className = "session-row";
-  const active = sessionIsActive(s);
+  const active = RemoteSessionOrdering.sessionIsActive(s);
   row.classList.add(active ? "session-row-active" : "session-row-inactive");
 
   const open = document.createElement("button");
@@ -314,7 +316,7 @@ function renderSessionRow(s) {
 
   if (s.worktree) {
     row.classList.add("session-row-card");
-    open.append(el("div", "session-worktree", `${s.worktree.projectName} / ${s.worktree.worktreeName}`));
+    open.append(el("div", "session-worktree", s.worktree.worktreeName));
     const meta = el("div", "session-meta");
     const parts = sessionMetaParts(s.worktree);
     parts.forEach(part => meta.append(part));
@@ -646,16 +648,8 @@ function applyCreatedSession(session) {
 
   const previousSession = currentSession;
   hideCreateSheet(true);
-  sessionTitles.set(session.id, session.title);
-  const list = $("session-list");
-  const row = renderSessionRow(session);
-  const existing = Array.from(document.querySelectorAll("[data-session-id]"))
-    .find(candidate => candidate.dataset.sessionId === session.id);
-  if (existing) {
-    existing.replaceWith(row);
-  } else {
-    list.prepend(row);
-  }
+  listedSessions.set(session.id, session);
+  renderSessions([...listedSessions.values()]);
   if (previousSession && previousSession !== session.id) send({ type: "unsubscribe", sessionId: previousSession });
   openSession(session.id);
 }
