@@ -60,6 +60,9 @@ cat > "${toolchain_bin}/rustc" <<'EOF'
 exit 0
 EOF
 
+build_counter="${sandbox}/build-counter"
+echo 0 > "${build_counter}"
+
 cat > "${toolchain_bin}/cargo" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
@@ -74,7 +77,12 @@ while [ "\$#" -gt 0 ]; do
     esac
 done
 mkdir -p "\${target_dir}/\${target}/release"
-touch "\${target_dir}/\${target}/release/libalas_treesitter_pack.a"
+# Each invocation's archive gets distinguishable content (a build counter)
+# rather than an empty file, so the test suite can tell whether a given
+# build's output ever actually reached the live archive path.
+n=\$(( \$(cat "${build_counter}") + 1 ))
+echo "\${n}" > "${build_counter}"
+echo "build \${n}" > "\${target_dir}/\${target}/release/libalas_treesitter_pack.a"
 EOF
 
 # Real nm exits non-zero on archives holding symbol-less objects, so the fake
@@ -118,6 +126,9 @@ printf 'fn main() { /* changed */ }\n' > "${pack_src}/src/lib.rs"
 run_script
 grep -q "^cargo RUSTC=" "${invocations}"
 
+last_good_archive="${srcroot}/.build/treesitter-pack/x86_64/install/lib/libalas_treesitter_pack.a"
+last_good_content="$(cat "${last_good_archive}")"
+
 # --- 4. a grammar missing from the archive fails the build instead of
 #        shipping a pack that silently renders that language as plain text
 write_symbols "${all_symbols[@]/lua/}"
@@ -127,15 +138,35 @@ if run_script > "${sandbox}/out" 2>&1; then
     exit 1
 fi
 grep -q 'tree_sitter_lua' "${sandbox}/out"
+grep -q "^cargo RUSTC=" "${invocations}"
+
+# --- 4b. the failed build must not have overwritten the last good archive —
+#         validation happens against cargo's fresh output before it is ever
+#         copied over the live path, so a rejected build leaves the previous
+#         good archive (and its fingerprint) exactly as they were.
+test "$(cat "${last_good_archive}")" = "${last_good_content}"
 
 # --- 5. a failed build must not leave a fingerprint that would fast-path the
 #        broken archive on the next run
 test ! -f "${srcroot}/.build/treesitter-pack/x86_64/fingerprint" \
     || ! diff -q <(cat "${srcroot}/.build/treesitter-pack/x86_64/fingerprint") /dev/null >/dev/null 2>&1
 
+# --- 5b. reverting to the last-good inputs must still reuse the untouched
+#         last-good archive via the normal fast path (not rebuild, and
+#         certainly not the rejected one from step 4) — this is the scenario
+#         the fix protects: a revert after a failed grammar update.
+printf 'fn main() { /* changed */ }\n' > "${pack_src}/src/lib.rs"
+: > "${invocations}"
+run_script
+test ! -s "${invocations}"
+test "$(cat "${last_good_archive}")" = "${last_good_content}"
+
+# --- 6. a subsequent successful build still rebuilds and promotes normally
+printf 'fn main() { /* changed again, fixed */ }\n' > "${pack_src}/src/lib.rs"
 : > "${invocations}"
 write_symbols "${all_symbols[@]}"
 run_script
 grep -q "^cargo RUSTC=" "${invocations}"
+test "$(cat "${last_good_archive}")" != "${last_good_content}"
 
 echo "build-treesitter-pack tests passed"

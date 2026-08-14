@@ -133,19 +133,26 @@ fi
 cargo_output="${build_root}/cargo-target/${cargo_target}/release/libalas_treesitter_pack.a"
 [ -f "${cargo_output}" ] || die "cargo did not produce ${cargo_output}"
 
-rsync -a "${cargo_output}" "${lib_output}"
-install_headers
-
 # Guard against a silently partial link surface: every grammar entry point the
 # Swift registry can ask for must be *defined* in the archive. A grammar crate
 # that stops being pulled into the link graph would otherwise only surface as a
 # missing symbol at app link time, or worse, as silently unhighlighted text.
 #
+# This runs against `cargo_output` — the freshly built archive still outside
+# `lib_output` — rather than against `lib_output` after copying it there.
+# Validating in place would mean a failed guard leaves a broken archive at the
+# live path while `fingerprint_path` still holds the *previous* good
+# fingerprint (only written on success below). If the inputs were then
+# reverted to that previous state, the fast path would match on the stale
+# fingerprint and reuse the broken archive without ever re-running `nm`. By
+# validating before anything touches `lib_output`, a failed build always
+# leaves the last good archive and fingerprint untouched.
+#
 # nm exits non-zero on archives that contain symbol-less objects, so its
 # output is captured to a file rather than piped — under `pipefail` a pipe
 # would report every symbol as missing regardless of what grep found.
 symbol_dump="${build_root}/symbols.txt"
-nm -g "${lib_output}" > "${symbol_dump}" 2>/dev/null || true
+nm -g "${cargo_output}" > "${symbol_dump}" 2>/dev/null || true
 missing=""
 for symbol in \
     bash c cpp css dockerfile go hcl html java javascript json kotlin lua \
@@ -157,6 +164,13 @@ do
     fi
 done
 [ -z "${missing}" ] || die "archive is missing grammar entry points:${missing}"
+
+# --checksum forces a content comparison instead of rsync's default
+# size+mtime quick check, which can skip a copy it deems "unchanged" when a
+# rebuild happens to produce same-size output within the same mtime tick — a
+# real risk across fast, repeated local rebuilds, not just a test artifact.
+rsync -a --checksum "${cargo_output}" "${lib_output}"
+install_headers
 
 # Written last so an interruption between the archive copy and the header
 # install leaves an absent fingerprint rather than a stale-valid one.
