@@ -1,40 +1,73 @@
 import Foundation
 import SwiftTreeSitter
-import TreeSitterBash
-import TreeSitterC
-import TreeSitterCPP
-import TreeSitterCSS
-import TreeSitterDockerfile
-import TreeSitterGo
-import TreeSitterHCL
-import TreeSitterHTML
-import TreeSitterJava
-import TreeSitterJavaScript
-import TreeSitterKotlin
-import TreeSitterJSON
-import TreeSitterLua
-import TreeSitterMarkdown
-import TreeSitterMarkdownInline
-import TreeSitterPHP
-import TreeSitterPython
-import TreeSitterRuby
-import TreeSitterRust
-import TreeSitterSwift
-import TreeSitterTOML
-import TreeSitterTSX
-import TreeSitterTypeScript
-import TreeSitterYAML
+import TreeSitterPack
 
-/// Maps a file extension to a `SwiftTreeSitter.Language` and the
-/// matching `highlights.scm` `Query`. `Language` and `Query` are immutable
-/// after construction, so we memoize them at module level — without this,
-/// `DiffTabView`'s per-line `tokenize` calls would re-scan the bundle and
-/// recompile the query thousands of times per render.
+/// Maps a file extension to a `SwiftTreeSitter.Language` and the matching
+/// `highlights.scm` `Query`. `Language` and `Query` are immutable after
+/// construction, so we memoize them at module level — without this,
+/// `DiffTabView`'s per-line `tokenize` calls would re-scan and recompile the
+/// query thousands of times per render.
+///
+/// Grammars and queries both come from `ThirdParty/treesitter-pack`, a Rust
+/// staticlib linked into the app (see `scripts/build-treesitter-pack.sh`).
+/// Queries are compiled into the binary there, so there is nothing to look up
+/// on disk at runtime.
 enum LanguageRegistry {
     private static let cacheLock = NSLock()
     nonisolated(unsafe) private static var languageCache: [String: Language] = [:]
     nonisolated(unsafe) private static var queryCache: [String: Query] = [:]
     nonisolated(unsafe) private static var queryMissCache: Set<String> = []
+
+    /// File extension → grammar id in the pack. `markdown-inline` and
+    /// `php-only` are not real extensions; they are how callers ask for the
+    /// sub-grammars used to highlight embedded content.
+    private static let languageIDsByExtension: [String: String] = [
+        "swift": "swift",
+        "yaml": "yaml", "yml": "yaml",
+        "json": "json",
+        "toml": "toml",
+        "py": "python",
+        "rb": "ruby",
+        "lua": "lua",
+        "rs": "rust",
+        "go": "go",
+        "sh": "bash", "bash": "bash", "zsh": "bash",
+        // All JS variants share one grammar — it parses JSX natively.
+        "js": "javascript", "mjs": "javascript", "cjs": "javascript",
+        "jsx": "javascript",
+        "ts": "typescript",
+        "tsx": "tsx",
+        "java": "java",
+        "kt": "kotlin", "kts": "kotlin",
+        "c": "c", "h": "c",
+        "cpp": "cpp", "cc": "cpp", "cxx": "cpp",
+        "hpp": "cpp", "hh": "cpp", "hxx": "cpp",
+        "html": "html", "htm": "html",
+        "css": "css",
+        "php": "php",
+        "php-only": "php_only",
+        "md": "markdown", "markdown": "markdown",
+        "markdown-inline": "markdown_inline",
+        "hcl": "hcl", "tf": "hcl", "tfvars": "hcl",
+        "dockerfile": "dockerfile"
+    ]
+
+    /// Grammar ids whose highlight query is more than just their own, listed
+    /// in concatenation order. This covers two cases: grammars that inherit
+    /// patterns from a base grammar via a `;;; inherits:` directive nothing in
+    /// this path honors (TS ⇐ JS, C++ ⇐ C), and grammars shipping an overlay
+    /// beside the base query (JS + JSX). Any id absent here uses its own query.
+    ///
+    /// The JSX overlay is merged for every JavaScript file, not just `.jsx` —
+    /// in pure-JS files its patterns simply never match. TSX gets it too, but
+    /// plain TypeScript must not: that grammar has no `jsx_*` nodes, so
+    /// including the overlay would fail `Query` compilation outright.
+    private static let queryIDsByLanguageID: [String: [String]] = [
+        "javascript": ["javascript", "javascript_jsx"],
+        "typescript": ["javascript", "typescript"],
+        "tsx": ["javascript", "javascript_jsx", "tsx"],
+        "cpp": ["c", "cpp"]
+    ]
 
     static func highlighterExtension(forPath path: String) -> String {
         let filename = (path as NSString).lastPathComponent.lowercased()
@@ -47,186 +80,38 @@ enum LanguageRegistry {
         cacheLock.lock()
         defer { cacheLock.unlock() }
         if let cached = languageCache[key] { return cached }
-        let lang: Language?
-        switch key {
-        case "swift":         lang = Language(language: tree_sitter_swift())
-        case "yaml", "yml":   lang = Language(language: tree_sitter_yaml())
-        case "json":          lang = Language(language: tree_sitter_json())
-        case "toml":          lang = Language(language: tree_sitter_toml())
-        case "py":            lang = Language(language: tree_sitter_python())
-        case "rb":            lang = Language(language: tree_sitter_ruby())
-        case "lua":           lang = Language(language: tree_sitter_lua())
-        case "rs":            lang = Language(language: tree_sitter_rust())
-        case "go":            lang = Language(language: tree_sitter_go())
-        case "sh", "bash", "zsh":
-                              lang = Language(language: tree_sitter_bash())
-        case "js", "mjs", "cjs", "jsx":
-                              lang = Language(language: tree_sitter_javascript())
-        case "ts":            lang = Language(language: tree_sitter_typescript())
-        case "tsx":           lang = Language(language: tree_sitter_tsx())
-        case "java":          lang = Language(language: tree_sitter_java())
-        case "kt", "kts":     lang = Language(language: tree_sitter_kotlin())
-        case "c", "h":        lang = Language(language: tree_sitter_c())
-        case "cpp", "cc", "cxx", "hpp", "hh", "hxx":
-                              lang = Language(language: tree_sitter_cpp())
-        case "html", "htm":   lang = Language(language: tree_sitter_html())
-        case "css":           lang = Language(language: tree_sitter_css())
-        case "php":           lang = Language(language: tree_sitter_php())
-        case "php-only":      lang = Language(language: tree_sitter_php_only())
-        case "md", "markdown":
-                              lang = Language(language: tree_sitter_markdown())
-        case "markdown-inline":
-                              lang = Language(language: tree_sitter_markdown_inline())
-        case "hcl", "tf", "tfvars":
-                              lang = Language(language: tree_sitter_hcl())
-        case "dockerfile":    lang = Language(language: tree_sitter_dockerfile())
-        default:              lang = nil
+        guard let id = languageIDsByExtension[key],
+              let pointer = id.withCString({ alas_ts_language($0) }) else {
+            return nil
         }
-        if let lang { languageCache[key] = lang }
+        let lang = Language(OpaquePointer(pointer))
+        languageCache[key] = lang
         return lang
     }
 
-    /// Loads the highlight query bundled with the grammar package.
+    /// Loads and compiles the highlight query for `ext`.
     static func highlightQuery(forExtension ext: String) -> Query? {
         let key = ext.lowercased()
         cacheLock.lock()
-        if let cached = queryCache[key] { cacheLock.unlock()
-        return cached }
-        if queryMissCache.contains(key) { cacheLock.unlock()
-        return nil }
+        if let cached = queryCache[key] {
+            cacheLock.unlock()
+            return cached
+        }
+        if queryMissCache.contains(key) {
+            cacheLock.unlock()
+            return nil
+        }
         cacheLock.unlock()
 
-        guard let lang = language(forFileExtension: ext) else { return nil }
         let query: Query?
-        switch key {
-        case "swift":
-            query = loadQuery(named: "highlights",
-                              bundleNameContains: "TreeSitterSwift",
-                              language: lang)
-        case "yaml", "yml":
-            query = loadQuery(named: "highlights",
-                              bundleNameContains: "TreeSitterYAML",
-                              language: lang)
-        case "json":
-            query = loadQuery(named: "highlights",
-                              bundleNameContains: "TreeSitterJSON",
-                              language: lang)
-        case "toml":
-            query = loadQuery(named: "highlights",
-                              bundleNameContains: "TreeSitterTOML",
-                              language: lang)
-        case "py":
-            query = loadQuery(named: "highlights",
-                              bundleNameContains: "TreeSitterPython",
-                              language: lang)
-        case "rb":
-            query = loadQuery(named: "highlights",
-                              bundleNameContains: "TreeSitterRuby",
-                              language: lang)
-        case "lua":
-            query = loadQuery(named: "highlights",
-                              bundleNameContains: "TreeSitterLua",
-                              language: lang)
-        case "rs":
-            query = loadQuery(named: "highlights",
-                              bundleNameContains: "TreeSitterRust",
-                              language: lang)
-        case "go":
-            query = loadQuery(named: "highlights",
-                              bundleNameContains: "TreeSitterGo",
-                              language: lang)
-        case "sh", "bash", "zsh":
-            query = loadQuery(named: "highlights",
-                              bundleNameContains: "TreeSitterBash",
-                              language: lang)
-        case "js", "mjs", "cjs", "jsx":
-            // All JS variants share one grammar (it parses JSX natively).
-            // Merge the JSX overlay so JSX tags/attributes get captured —
-            // for pure-JS files the overlay just doesn't match.
-            query = loadMergedQuery(
-                sources: [
-                    ("TreeSitterJavaScript", "highlights"),
-                    ("TreeSitterJavaScript", "highlights-jsx")
-                ],
-                language: lang
-            )
-        case "ts":
-            // TS query inherits from JS — merge them so strings, functions,
-            // comments etc. are colored alongside the TS-specific captures.
-            // No JSX overlay: the TS grammar lacks `jsx_*` nodes, so loading
-            // the overlay would fail Query compilation.
-            query = loadMergedQuery(
-                sources: [
-                    ("TreeSitterJavaScript", "highlights"),
-                    ("TreeSitterTypeScript_TreeSitterTypeScript", "highlights")
-                ],
-                language: lang
-            )
-        case "tsx":
-            // TSX has both TS-specific nodes and JSX nodes, so include the
-            // JSX overlay alongside the TS overlay.
-            query = loadMergedQuery(
-                sources: [
-                    ("TreeSitterJavaScript", "highlights"),
-                    ("TreeSitterJavaScript", "highlights-jsx"),
-                    ("TreeSitterTypeScript_TreeSitterTSX", "highlights")
-                ],
-                language: lang
-            )
-        case "java":
-            query = loadQuery(named: "highlights",
-                              bundleNameContains: "TreeSitterJava_TreeSitterJava",
-                              language: lang)
-        case "kt", "kts":
-            query = loadQuery(named: "highlights",
-                              bundleNameContains: "TreeSitterKotlin",
-                              language: lang)
-        case "c", "h":
-            query = loadQuery(named: "highlights",
-                              bundleNameContains: "TreeSitterC_TreeSitterC",
-                              language: lang)
-        case "cpp", "cc", "cxx", "hpp", "hh", "hxx":
-            // C++ inherits from C — merge so primitive types, control
-            // flow, and preprocessor directives are colored alongside
-            // the C++-specific overlay (templates, namespaces, etc.).
-            query = loadMergedQuery(
-                sources: [
-                    ("TreeSitterC_TreeSitterC", "highlights"),
-                    ("TreeSitterCPP_TreeSitterCPP", "highlights")
-                ],
-                language: lang
-            )
-        case "html", "htm":
-            query = loadQuery(named: "highlights",
-                              bundleNameContains: "TreeSitterHTML",
-                              language: lang)
-        case "css":
-            query = loadQuery(named: "highlights",
-                              bundleNameContains: "TreeSitterCSS",
-                              language: lang)
-        case "php":
-            query = loadQuery(named: "highlights",
-                              bundleNameContains: "TreeSitterPHP",
-                              language: lang)
-        case "php-only":
-            query = loadPHPOnlyQuery(language: lang)
-        case "md", "markdown":
-            query = loadQuery(named: "highlights",
-                              bundleNameContains: "TreeSitterMarkdown_TreeSitterMarkdown",
-                              language: lang)
-        case "markdown-inline":
-            query = loadQuery(named: "highlights",
-                              bundleNameContains: "TreeSitterMarkdown_TreeSitterMarkdownInline",
-                              language: lang)
-        case "hcl", "tf", "tfvars":
-            query = loadQuery(named: "highlights",
-                              bundleNameContains: "TreeSitterHCL",
-                              language: lang)
-        case "dockerfile":
-            query = loadQuery(named: "highlights",
-                              bundleNameContains: "TreeSitterDockerfile",
-                              language: lang)
-        default:
+        if let lang = language(forFileExtension: key),
+           let id = languageIDsByExtension[key] {
+            if id == "php_only" {
+                query = phpOnlyQuery(language: lang)
+            } else {
+                query = mergedQuery(ids: queryIDsByLanguageID[id] ?? [id], language: lang)
+            }
+        } else {
             query = nil
         }
 
@@ -240,57 +125,30 @@ enum LanguageRegistry {
         return query
     }
 
-    /// The grammar packages ship pure C with no Swift symbol we can
-    /// pass to `Bundle(for:)`, so we locate the resource bundle by
-    /// scanning `Bundle.allBundles` for the SPM-generated name
-    /// (`<Pkg>_<Target>.bundle`, e.g. `TreeSitterSwift_TreeSitterSwift.bundle`).
-    private static func loadQuery(
-        named name: String,
-        bundleNameContains needle: String,
-        language: Language
-    ) -> Query? {
-        loadMergedQuery(
-            sources: [(needle, name)],
-            language: language
-        )
-    }
-
-    /// Loads `.scm` files from multiple bundles (each pair selects a
-    /// specific `queryName` inside a `bundleNeedle`-matched bundle) and
-    /// compiles their concatenated text as one Query against `language`.
-    ///
-    /// This serves two needs: (a) grammars that inherit query patterns
-    /// from a base grammar via a `;;; inherits:` directive the
-    /// SwiftTreeSitter loader doesn't honor (TS ⇐ JS, C++ ⇐ C), and (b)
-    /// grammars that ship an extension overlay alongside the base query
-    /// (JS+JSX shipping `highlights.scm` + `highlights-jsx.scm`).
-    /// Sources are loaded in order; any missing bundle or file is
-    /// silently skipped.
-    private static func loadMergedQuery(
-        sources: [(bundleNeedle: String, queryName: String)],
-        language: Language
-    ) -> Query? {
-        var combined = Data()
-        for (needle, name) in sources {
-            guard let bundle = grammarBundle(named: needle) else { continue }
-            let url = bundle.url(forResource: "queries/\(name)", withExtension: "scm")
-                ?? bundle.url(forResource: name, withExtension: "scm",
-                              subdirectory: "queries")
-                ?? bundle.url(forResource: name, withExtension: "scm")
-            guard let url, let data = try? Data(contentsOf: url) else { continue }
-            combined.append(data)
-            combined.append(0x0A)  // newline between files
-        }
+    /// Compiles the concatenation of `ids`' queries as one `Query`. Missing
+    /// ids are skipped rather than failing the whole query, matching how the
+    /// previous bundle-based loader tolerated an absent `.scm`.
+    private static func mergedQuery(ids: [String], language: Language) -> Query? {
+        let combined = ids.compactMap(queryText(id:)).joined(separator: "\n")
         guard !combined.isEmpty else { return nil }
-        return try? Query(language: language, data: combined)
+        return try? Query(language: language, data: Data(combined.utf8))
     }
 
-    private static func loadPHPOnlyQuery(language: Language) -> Query? {
-        guard let data = queryData(bundleNeedle: "TreeSitterPHP", queryName: "highlights"),
-              let queryText = String(data: data, encoding: .utf8) else {
+    /// PHP-only reuses the PHP query with the `php_tag`/`php_end_tag` pattern
+    /// removed — that grammar has no such nodes.
+    private static func phpOnlyQuery(language: Language) -> Query? {
+        guard let text = queryText(id: "php") else { return nil }
+        return try? Query(language: language, data: Data(phpOnlyQueryText(from: text).utf8))
+    }
+
+    /// The pack returns static UTF-8 bytes that are not NUL-terminated, so the
+    /// length is read back through `out_len` rather than inferred.
+    private static func queryText(id: String) -> String? {
+        var length = 0
+        guard let bytes = id.withCString({ alas_ts_query($0, &length) }), length > 0 else {
             return nil
         }
-        return try? Query(language: language, data: Data(phpOnlyQueryText(from: queryText).utf8))
+        return String(decoding: UnsafeBufferPointer(start: bytes, count: length), as: UTF8.self)
     }
 
     static func phpOnlyQueryText(from queryText: String) -> String {
@@ -300,49 +158,5 @@ enum LanguageRegistry {
         }
         let range = NSRange(location: 0, length: (queryText as NSString).length)
         return regex.stringByReplacingMatches(in: queryText, range: range, withTemplate: "")
-    }
-
-    private static func queryData(bundleNeedle: String, queryName: String) -> Data? {
-        guard let bundle = grammarBundle(named: bundleNeedle) else { return nil }
-        let url = bundle.url(forResource: "queries/\(queryName)", withExtension: "scm")
-            ?? bundle.url(forResource: queryName, withExtension: "scm",
-                          subdirectory: "queries")
-            ?? bundle.url(forResource: queryName, withExtension: "scm")
-        guard let url else { return nil }
-        return try? Data(contentsOf: url)
-    }
-
-    private static func grammarBundle(named needle: String) -> Bundle? {
-        // Resource-only bundles produced by SPM (e.g.
-        // `TreeSitterSwift_TreeSitterSwift.bundle`) live next to the host
-        // executable in `Contents/Resources/` — they aren't in
-        // `Bundle.allBundles` until explicitly loaded. Search the host's
-        // bundleURL for a child whose lastPathComponent contains `needle`,
-        // covering both the app target and the .xctest test runner.
-        let candidates: [Bundle] = [.main] + Bundle.allBundles + Bundle.allFrameworks
-        for host in candidates {
-            let resourcesURL = host.bundleURL.appendingPathComponent("Contents/Resources")
-            if let entries = try? FileManager.default.contentsOfDirectory(
-                at: resourcesURL, includingPropertiesForKeys: nil
-            ) {
-                let matches = entries.filter {
-                    $0.lastPathComponent.contains(needle)
-                        && $0.pathExtension == "bundle"
-                }
-                let exactName = "\(needle).bundle"
-                let match = matches.first(where: { $0.lastPathComponent == exactName })
-                    ?? matches.first
-                if let match, let b = Bundle(url: match) {
-                    return b
-                }
-            }
-        }
-        // Last-ditch fallback for bundles already loaded by name.
-        if let b = Bundle.allBundles.first(where: {
-            $0.bundleURL.lastPathComponent.contains(needle)
-        }) {
-            return b
-        }
-        return nil
     }
 }

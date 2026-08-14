@@ -1,0 +1,52 @@
+[package]
+name = "alas-treesitter-pack"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "C ABI over the tree-sitter grammars Alas bundles"
+license = "MIT"
+
+[lib]
+name = "alas_treesitter_pack"
+# rlib alongside staticlib so `cargo test` can link the crate; it does not
+# affect the static library Alas links.
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+tree-sitter-bash = "0.25.1"
+tree-sitter-c = "0.24.2"
+tree-sitter-cpp = "0.23.4"
+tree-sitter-css = "0.25.0"
+tree-sitter-dockerfile = "0.2.0"
+tree-sitter-go = "0.25.0"
+tree-sitter-html = "0.23.2"
+tree-sitter-java = "0.23.5"
+tree-sitter-javascript = "0.25.0"
+tree-sitter-json = "0.24.8"
+# fwcd/tree-sitter-kotlin is stale (last release Aug 2024); this is the
+# tree-sitter-grammars org's maintained successor. It ships no queries, so
+# queries/kotlin/highlights.scm below is vendored from the fwcd grammar
+# Alas shipped previously and verified to still compile (see kotlin_query_compiles_against_kotlin_ng_grammar).
+tree-sitter-kotlin-ng = "1.1.0"
+tree-sitter-lua = "0.5.0"
+tree-sitter-md = "0.5.3"
+tree-sitter-php = "0.24.2"
+tree-sitter-python = "0.25.0"
+tree-sitter-ruby = "0.23.1"
+tree-sitter-rust = "0.24.2"
+tree-sitter-swift = "0.7.3"
+tree-sitter-toml-ng = "0.7.0"
+tree-sitter-typescript = "0.23.2"
+tree-sitter-yaml = "0.7.2"
+
+# crates.io only has 1.1.0; Alas ships the v1.2.0 grammar.
+tree-sitter-hcl = { git = "https://github.com/tree-sitter-grammars/tree-sitter-hcl", tag = "v1.2.0" }
+
+[dev-dependencies]
+# Only used by tests that compile a `Query` against a `tree_sitter::Language`
+# to validate a vendored query text actually parses — real Query compilation,
+# not just presence, catches a grammar/query mismatch before it ships.
+tree-sitter = "0.25"
+
+[profile.release]
+opt-level = 2

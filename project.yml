@@ -16,92 +16,13 @@ settings:
     GENERATE_INFOPLIST_FILE: NO
 
 packages:
+  # Only the tree-sitter *runtime* and Swift API come from SwiftPM. The
+  # grammars themselves live in ThirdParty/treesitter-pack, a Rust staticlib
+  # that depends on them via cargo and exposes languages + highlight queries
+  # over a small C ABI (see scripts/build-treesitter-pack.sh).
   SwiftTreeSitter:
     url: https://github.com/tree-sitter/swift-tree-sitter
     from: 0.25.0
-  TreeSitterSwift:
-    url: https://github.com/alex-pinkus/tree-sitter-swift
-    # tag 0.7.3-with-generated-files; this fork's `main` branch
-    # gitignores generated parser files, so SPM consumers must
-    # pin to a `*-with-generated-files` revision.
-    revision: 31d17fe7e818a2048c808b5c6fdc2dc792f4f5b5
-  TreeSitterYAML:
-    # Vendored at ThirdParty/TreeSitterYAML — upstream's Package.swift
-    # conditionally adds src/scanner.c via a relative-path FileManager
-    # check that returns false during SPM resolution, dropping the
-    # external scanner and breaking the link.
-    path: ThirdParty/TreeSitterYAML
-  TreeSitterJSON:
-    url: https://github.com/tree-sitter/tree-sitter-json
-    from: 0.24.8
-  TreeSitterTOML:
-    url: https://github.com/tree-sitter-grammars/tree-sitter-toml
-    from: 0.7.0
-  TreeSitterPython:
-    # Vendored at ThirdParty/TreeSitterPython — upstream's Package.swift
-    # has the same broken `FileManager.fileExists` scanner conditional
-    # as tree-sitter-yaml.
-    path: ThirdParty/TreeSitterPython
-  TreeSitterRuby:
-    url: https://github.com/tree-sitter/tree-sitter-ruby
-    from: 0.23.1
-  TreeSitterLua:
-    # Vendored at ThirdParty/TreeSitterLua — upstream's Package.swift
-    # has the same broken `FileManager.fileExists` scanner conditional
-    # as tree-sitter-yaml.
-    path: ThirdParty/TreeSitterLua
-  TreeSitterRust:
-    url: https://github.com/tree-sitter/tree-sitter-rust
-    from: 0.24.2
-  TreeSitterGo:
-    url: https://github.com/tree-sitter/tree-sitter-go
-    from: 0.25.0
-  TreeSitterBash:
-    url: https://github.com/tree-sitter/tree-sitter-bash
-    from: 0.25.1
-  TreeSitterJavaScript:
-    # Vendored at ThirdParty/TreeSitterJavaScript — upstream's Package.swift
-    # has the same broken `FileManager.fileExists` scanner conditional as
-    # tree-sitter-yaml.
-    path: ThirdParty/TreeSitterJavaScript
-  TreeSitterTypeScript:
-    # Single package, two targets (TreeSitterTypeScript for .ts,
-    # TreeSitterTSX for .tsx). The umbrella product pulls in both.
-    url: https://github.com/tree-sitter/tree-sitter-typescript
-    from: 0.23.2
-  TreeSitterJava:
-    url: https://github.com/tree-sitter/tree-sitter-java
-    from: 0.23.5
-  TreeSitterKotlin:
-    url: https://github.com/fwcd/tree-sitter-kotlin
-    from: 0.3.8
-  TreeSitterC:
-    url: https://github.com/tree-sitter/tree-sitter-c
-    from: 0.24.2
-  TreeSitterCPP:
-    url: https://github.com/tree-sitter/tree-sitter-cpp
-    from: 0.23.4
-  TreeSitterHTML:
-    url: https://github.com/tree-sitter/tree-sitter-html
-    from: 0.23.2
-  TreeSitterCSS:
-    # Vendored at ThirdParty/TreeSitterCSS — upstream's Package.swift
-    # has the same broken `FileManager.fileExists` scanner conditional
-    # as tree-sitter-yaml.
-    path: ThirdParty/TreeSitterCSS
-  TreeSitterPHP:
-    url: https://github.com/tree-sitter/tree-sitter-php
-    from: 0.24.2
-  TreeSitterMarkdown:
-    url: https://github.com/tree-sitter-grammars/tree-sitter-markdown
-    from: 0.5.3
-  TreeSitterHCL:
-    # Vendored at ThirdParty/TreeSitterHCL — upstream's Package.swift
-    # does not include query resources.
-    path: ThirdParty/TreeSitterHCL
-  TreeSitterDockerfile:
-    url: https://github.com/camdencheek/tree-sitter-dockerfile
-    from: 0.2.0
   Markdown:
     url: https://github.com/apple/swift-markdown
     from: 0.8.0
@@ -152,50 +73,6 @@ targets:
       - sdk: libsqlite3.tbd
       - package: SwiftTreeSitter
         product: SwiftTreeSitter
-      - package: TreeSitterSwift
-        product: TreeSitterSwift
-      - package: TreeSitterYAML
-        product: TreeSitterYAML
-      - package: TreeSitterJSON
-        product: TreeSitterJSON
-      - package: TreeSitterTOML
-        product: TreeSitterTOML
-      - package: TreeSitterPython
-        product: TreeSitterPython
-      - package: TreeSitterRuby
-        product: TreeSitterRuby
-      - package: TreeSitterLua
-        product: TreeSitterLua
-      - package: TreeSitterRust
-        product: TreeSitterRust
-      - package: TreeSitterGo
-        product: TreeSitterGo
-      - package: TreeSitterBash
-        product: TreeSitterBash
-      - package: TreeSitterJavaScript
-        product: TreeSitterJavaScript
-      - package: TreeSitterTypeScript
-        product: TreeSitterTypeScript
-      - package: TreeSitterJava
-        product: TreeSitterJava
-      - package: TreeSitterKotlin
-        product: TreeSitterKotlin
-      - package: TreeSitterC
-        product: TreeSitterC
-      - package: TreeSitterCPP
-        product: TreeSitterCPP
-      - package: TreeSitterHTML
-        product: TreeSitterHTML
-      - package: TreeSitterCSS
-        product: TreeSitterCSS
-      - package: TreeSitterPHP
-        product: TreeSitterPHP
-      - package: TreeSitterMarkdown
-        product: TreeSitterMarkdown
-      - package: TreeSitterHCL
-        product: TreeSitterHCL
-      - package: TreeSitterDockerfile
-        product: TreeSitterDockerfile
       - package: Markdown
         product: Markdown
       - package: BeautifulMermaidSwift
@@ -208,10 +85,10 @@ targets:
         ENABLE_HARDENED_RUNTIME: YES
         CODE_SIGN_STYLE: Automatic
         CODE_SIGN_IDENTITY: "-"
-        HEADER_SEARCH_PATHS: $(inherited) $(SRCROOT)/.build/fff/include
-        LIBRARY_SEARCH_PATHS: $(inherited) $(SRCROOT)/.build/fff/$(CURRENT_ARCH)/install/lib $(SRCROOT)/.build/fff/universal/install/lib
+        HEADER_SEARCH_PATHS: $(inherited) $(SRCROOT)/.build/fff/include $(SRCROOT)/.build/treesitter-pack/include
+        LIBRARY_SEARCH_PATHS: $(inherited) $(SRCROOT)/.build/fff/$(CURRENT_ARCH)/install/lib $(SRCROOT)/.build/fff/universal/install/lib $(SRCROOT)/.build/treesitter-pack/$(CURRENT_ARCH)/install/lib $(SRCROOT)/.build/treesitter-pack/universal/install/lib
         LD_RUNPATH_SEARCH_PATHS: $(inherited) @executable_path/../Frameworks
-        OTHER_LDFLAGS: $(inherited) -lc++ -lfff_c
+        OTHER_LDFLAGS: $(inherited) -lc++ -lfff_c -lalas_treesitter_pack
     preBuildScripts:
       - name: Build GhosttyKit
         script: '"${SRCROOT}/scripts/build-ghostty.sh"'
@@ -227,6 +104,9 @@ targets:
         basedOnDependencyAnalysis: false
       - name: Build fff
         script: '"${SRCROOT}/scripts/build-fff.sh"'
+        basedOnDependencyAnalysis: false
+      - name: Build TreeSitter Pack
+        script: '"${SRCROOT}/scripts/build-treesitter-pack.sh"'
         basedOnDependencyAnalysis: false
     postBuildScripts:
       - name: Embed Ghostty Resources
@@ -250,8 +130,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.nlopez.alas.tests
         GENERATE_INFOPLIST_FILE: YES
-        HEADER_SEARCH_PATHS: $(inherited) $(SRCROOT)/.build/fff/include
-        LIBRARY_SEARCH_PATHS: $(inherited) $(SRCROOT)/.build/fff/$(CURRENT_ARCH)/install/lib $(SRCROOT)/.build/fff/universal/install/lib
+        HEADER_SEARCH_PATHS: $(inherited) $(SRCROOT)/.build/fff/include $(SRCROOT)/.build/treesitter-pack/include
+        LIBRARY_SEARCH_PATHS: $(inherited) $(SRCROOT)/.build/fff/$(CURRENT_ARCH)/install/lib $(SRCROOT)/.build/fff/universal/install/lib $(SRCROOT)/.build/treesitter-pack/$(CURRENT_ARCH)/install/lib $(SRCROOT)/.build/treesitter-pack/universal/install/lib
         LD_RUNPATH_SEARCH_PATHS: $(inherited) @loader_path/../Frameworks @executable_path/../Frameworks
         TEST_HOST: $(BUILT_PRODUCTS_DIR)/Alas.app/Contents/MacOS/Alas
         BUNDLE_LOADER: $(TEST_HOST)
