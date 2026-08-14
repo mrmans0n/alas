@@ -253,9 +253,9 @@ extension AppState {
                         script: script,
                         worktree: worktree
                     )
-                    if terminal.registry.session(for: sessionID)?.surface.foregroundPid == nil {
-                        cancelRunScriptCompletionTasks(sessionID: sessionID, after: .seconds(2), includeRemote: false)
-                        cancelRunScriptCompletionTasks(sessionID: sessionID, after: .seconds(30))
+                    if runScriptSessionForegroundPidIsMissing(sessionID: sessionID) {
+                        cancelRunScriptCompletionTasksIfSessionStillExited(sessionID: sessionID, after: .seconds(2), includeRemote: false)
+                        cancelRunScriptCompletionTasksIfSessionStillExited(sessionID: sessionID, after: .seconds(30))
                     }
                 } catch {
                     cancelRunScriptCompletionTask(runID: runID, location: captureLocation)
@@ -376,6 +376,32 @@ extension AppState {
                 self?.cancelRunScriptCompletionTask(runID: runID)
             }
         }
+    }
+
+    private func cancelRunScriptCompletionTasksIfSessionStillExited(
+        sessionID: String,
+        after delay: Duration,
+        includeRemote: Bool = true
+    ) {
+        let runIDs = runScriptCompletionTasks.compactMap { runID, entry -> String? in
+            if !includeRemote, case .remote = entry.location { return nil }
+            return entry.sessionID == sessionID ? runID : nil
+        }
+        for runID in runIDs {
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: delay)
+                guard let self,
+                      self.runScriptCompletionTasks[runID]?.sessionID == sessionID,
+                      self.runScriptSessionForegroundPidIsMissing(sessionID: sessionID)
+                else { return }
+                self.cancelRunScriptCompletionTask(runID: runID)
+            }
+        }
+    }
+
+    private func runScriptSessionForegroundPidIsMissing(sessionID: String) -> Bool {
+        terminal.registry.session(for: sessionID)?.surface.foregroundPid == nil
+            && harness.detector.foregroundPid(sessionId: sessionID) == nil
     }
 
     func cleanupRunScriptState(worktreeID: String, purgeFailures: Bool = true) {

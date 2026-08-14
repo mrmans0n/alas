@@ -531,6 +531,30 @@ struct RunScriptLaunchTests {
     }
 
     @MainActor
+    @Test func transientMissingPidDoesNotCancelRunMonitor() async throws {
+        var pidChecks = 0
+        let fixture = try makeAppStateFixture(
+            waiter: { _ in
+                try await Task.sleep(for: .seconds(5))
+                return RunScriptCompletion(exitCode: 1, transcript: nil, truncated: false)
+            },
+            terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
+                AppState.OpenedTerminalSession(id: "session", foregroundPid: {
+                    pidChecks += 1
+                    return pidChecks == 1 ? nil : 123
+                })
+            }
+        )
+
+        fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(fixture.state.runScriptCompletionTaskCountForTesting == 1)
+        try await Task.sleep(for: .milliseconds(2_200))
+        #expect(fixture.state.runScriptCompletionTaskCountForTesting == 1)
+        fixture.state.cancelAllRunScriptCompletionTasks()
+    }
+
+    @MainActor
     @Test func bulkClosingRunScriptTerminalCancelsRunMonitor() async throws {
         let fixture = try makeAppStateFixture(waiter: { _ in
             try await Task.sleep(for: .seconds(5))
