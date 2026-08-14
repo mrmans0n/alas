@@ -8479,6 +8479,8 @@ extension AppState: RemoteSessionsProvider {
     private func remoteSessionSummary(
         session: ACPSession,
         manager: ACPSessionManager,
+        projectId: String,
+        updatedAt: Int64,
         worktreeSummary: RemoteWorktreeSummary?
     ) -> RemoteSessionSummary {
         let streamingState = manager.runners[session.id]?.session.transcript.streamingState
@@ -8489,6 +8491,8 @@ extension AppState: RemoteSessionsProvider {
             agentId: session.agentId,
             status: RemoteSessionGateway.stateString(streamingState),
             canDrive: manager.isWriter(for: session.id),
+            projectId: projectId,
+            updatedAt: updatedAt,
             worktree: worktreeSummary
         )
     }
@@ -8708,7 +8712,14 @@ extension AppState: RemoteSessionsProvider {
         }
 
         let worktreeSummary = remoteWorktreeSummaryWithoutMetrics(project: resolved.project, worktree: resolved.worktree)
-        return .success(remoteSessionSummary(session: session, manager: manager, worktreeSummary: worktreeSummary))
+        let updatedAt = manager.sessionRows.first(where: { $0.id == session.id })?.updatedAt ?? 0
+        return .success(remoteSessionSummary(
+            session: session,
+            manager: manager,
+            projectId: resolved.project.id,
+            updatedAt: updatedAt,
+            worktreeSummary: worktreeSummary
+        ))
     }
 
     func session(for id: String) -> ACPSession? {

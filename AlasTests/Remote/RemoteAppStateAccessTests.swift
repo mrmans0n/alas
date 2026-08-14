@@ -568,6 +568,9 @@ struct RemoteAppStateAccessTests {
         #expect(state.tabs.activeTabId(forWorktree: worktreeId) == tab.id)
         let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
         #expect(manager.liveSession(for: summary.id) != nil)
+        let row = try #require(manager.sessionRows.first { $0.id == summary.id })
+        #expect(summary.projectId == state.projects.first?.id)
+        #expect(summary.updatedAt == row.updatedAt)
         #expect(scheduledAttach?.managerWorktreeId == worktreeId)
         #expect(scheduledAttach?.sessionId == summary.id)
     }
