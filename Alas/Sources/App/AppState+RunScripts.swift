@@ -77,7 +77,7 @@ extension AppState {
         """)
         let finishLine = exitOnCompletion
             ? "\nexit \"$exit_code\""
-            : "\nif [ \"$publish_failed\" = 1 ]; then\n  unset -f prepare_transcript __alas_run_script_capture\n  exit \"$exit_code\"\nfi\nunset -f prepare_transcript __alas_run_script_capture\nreturn \"$exit_code\""
+            : "\nif [ \"$publish_failed\" = 1 ]; then\n  unset -f prepare_transcript __alas_run_script_capture\n  exit \"$exit_code\"\nfi\nif [ \"$alas_errexit_was_set\" = 1 ] && [ \"$exit_code\" = 0 ]; then\n  set -e\nfi\nunset -f prepare_transcript __alas_run_script_capture\nreturn \"$exit_code\""
         return """
         __alas_run_script_capture() {
         local transcript=\(transcript)
@@ -85,7 +85,11 @@ extension AppState {
         local transcript_ready=0
         local completion_ready=0
         local publish_failed=0
+        local alas_errexit_was_set=0
         local private_umask result script_status exit_code tmp completed_at
+        case $- in
+          *e*) alas_errexit_was_set=1; set +e ;;
+        esac
         if mkdir -p \(transcriptDir) 2>/dev/null && chmod 700 \(transcriptDir) 2>/dev/null; then
           transcript_ready=1
           find \(transcriptDir) -type f \\( -name '*.log' -o -name '*.done' -o -name '*.tmp' -o -name '*.body' -o -name '*.status' \\) -mtime +7 -exec rm -f {} + 2>/dev/null || true
@@ -106,8 +110,11 @@ extension AppState {
           if [ "$(uname -s 2>/dev/null)" = Darwin ] && [ -x /usr/bin/script ]; then
             if prepare_transcript; then
               rm -f \(status)
-              /usr/bin/script -q "$transcript" /usr/bin/env -u SCRIPT /bin/sh -c \(quotedDarwinCommandLine)
-              script_status=$?
+              if /usr/bin/script -q "$transcript" /usr/bin/env -u SCRIPT /bin/sh -c \(quotedDarwinCommandLine); then
+                script_status=0
+              else
+                script_status=$?
+              fi
               if [ -f \(status) ]; then
                 exit_code=$(cat \(status))
               else
@@ -115,24 +122,39 @@ extension AppState {
               fi
               rm -f \(status)
             else
-              \(commandLine)
-              exit_code=$?
+              if \(commandLine); then
+                exit_code=0
+              else
+                exit_code=$?
+              fi
             fi
           elif script --version 2>/dev/null | grep -qi 'util-linux'; then
             if prepare_transcript; then
-              script -qefc \(quotedCommandLine) "$transcript"
-              exit_code=$?
+              if script -qefc \(quotedCommandLine) "$transcript"; then
+                exit_code=0
+              else
+                exit_code=$?
+              fi
             else
-              \(commandLine)
-              exit_code=$?
+              if \(commandLine); then
+                exit_code=0
+              else
+                exit_code=$?
+              fi
             fi
           else
-            \(commandLine)
-            exit_code=$?
+            if \(commandLine); then
+              exit_code=0
+            else
+              exit_code=$?
+            fi
           fi
         else
-          \(commandLine)
-          exit_code=$?
+          if \(commandLine); then
+            exit_code=0
+          else
+            exit_code=$?
+          fi
         fi
         if [ "$completion_ready" = 1 ]; then
           tmp="$completion.tmp"
