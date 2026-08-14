@@ -6,6 +6,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.12] - 2026-08-14
+
+### 🐛 Fixes
+
+- Keep new draft review comments interactive (#1027).
+- Group remote sessions by repository with stable ordering (#1026).
+
+### 🏗️ Internal
+
+- Speed up CI release builds (#1028).
+
 ## [0.14.11] - 2026-08-14
 
 ### ✨ Features
