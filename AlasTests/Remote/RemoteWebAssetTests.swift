@@ -100,6 +100,8 @@ struct RemoteWebAssetTests {
         #expect(app.contains("function sessionMetaParts"))
         #expect(app.contains("function renderSessionRow"))
         #expect(app.contains("RemoteSessionOrdering.groupSessions(sessions)"))
+        #expect(app.contains("listedSessions.set(session.id, session);"))
+        #expect(app.contains("renderSessions([...listedSessions.values()]);"))
         #expect(app.contains("session-section-title"))
         #expect(app.contains("s.worktree.worktreeName"))
         #expect(app.contains(#""session-row-active""#))
