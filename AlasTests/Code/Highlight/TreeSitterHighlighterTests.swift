@@ -579,6 +579,33 @@ struct TreeSitterHighlighterTests {
         #expect(captures.contains(.string))
     }
 
+    /// Every extension the registry claims to support must resolve to both a
+    /// grammar and a compiled query. A typo in the extension-to-grammar-id
+    /// mapping, or a grammar that drops out of the linked pack, otherwise
+    /// surfaces only as that language silently rendering as plain text.
+    @Test("every supported extension resolves to a grammar and a query")
+    func everySupportedExtensionResolves() throws {
+        let extensions = [
+            "swift", "yaml", "yml", "json", "toml", "py", "rb", "lua", "rs", "go",
+            "sh", "bash", "zsh", "js", "mjs", "cjs", "jsx", "ts", "tsx", "java",
+            "kt", "kts", "c", "h", "cpp", "cc", "cxx", "hpp", "hh", "hxx",
+            "html", "htm", "css", "php", "php-only", "md", "markdown",
+            "markdown-inline", "hcl", "tf", "tfvars", "dockerfile"
+        ]
+
+        for ext in extensions {
+            #expect(LanguageRegistry.language(forFileExtension: ext) != nil, "no grammar for .\(ext)")
+            #expect(LanguageRegistry.highlightQuery(forExtension: ext) != nil, "no query for .\(ext)")
+        }
+    }
+
+    @Test("unknown extensions resolve to no grammar")
+    func unknownExtensionsResolveToNothing() throws {
+        #expect(LanguageRegistry.language(forFileExtension: "nosuchlang") == nil)
+        #expect(LanguageRegistry.highlightQuery(forExtension: "nosuchlang") == nil)
+        #expect(LanguageRegistry.language(forFileExtension: "") == nil)
+    }
+
     private func capture(for substring: String, in source: String, spans: [HighlightSpan]) -> HighlightCapture? {
         guard let range = source.range(of: substring) else { return nil }
         let nsRange = NSRange(range, in: source)

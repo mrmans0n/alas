@@ -6,6 +6,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### 🏗️ Internal
+
+- Deliver every tree-sitter grammar through a single Rust staticlib
+  (`ThirdParty/treesitter-pack`) instead of 22 SwiftPM packages and six
+  vendored grammar trees. Grammars are now cargo dependencies, and highlight
+  queries are compiled into the binary rather than looked up in SPM resource
+  bundles at runtime.
+- Kotlin highlighting moved from the stale `fwcd/tree-sitter-kotlin` grammar
+  to the maintained `tree-sitter-kotlin-ng`, with a highlight query
+  hand-written for it (the grammar ships none upstream).
+
 ## [0.14.12] - 2026-08-14
 
 ### 🐛 Fixes

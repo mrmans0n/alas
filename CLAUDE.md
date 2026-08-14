@@ -55,6 +55,33 @@ older than `ALAS_GHOSTTY_LOCK_STALE_SECS`) are reclaimed automatically.
 consulted, and CI uses `actions/cache` keyed off `.ghostty-pin` to restore
 `.build/ghostty` directly.
 
+## Tree-sitter grammars
+
+All grammars live in `ThirdParty/treesitter-pack`, a Rust staticlib that
+depends on them via cargo and exposes two lookups over a C ABI
+(`alas_ts_language`, `alas_ts_query`). Highlight queries are compiled into the
+binary, so there are no SPM resource bundles to locate at runtime. Only the
+tree-sitter *runtime* (`SwiftTreeSitter`) still comes from SwiftPM.
+
+**Add or update a grammar:**
+
+1. Edit `ThirdParty/treesitter-pack/Cargo.toml`.
+2. Register the id in `src/lib.rs` — the `extern "C"` entry point, `LANGUAGES`,
+   and `QUERIES`. Crates whose query const is absent or commented out need
+   their `.scm` copied into `queries/<id>/` (HCL and Dockerfile already are).
+3. Map the file extension to the id in `LanguageRegistry.swift`.
+4. `cd ThirdParty/treesitter-pack && cargo test` — the suite asserts every
+   registered language resolves and every query is non-empty.
+
+`scripts/build-treesitter-pack.sh` builds it, fingerprinting the crate's own
+files (manifest, lockfile, sources, queries, header) plus arch, toolchain, and
+script hash, so an uncommitted `lib.rs` edit invalidates the artifact. It also
+refuses to publish an archive missing any grammar entry point — a crate that
+drops out of the link graph fails the build instead of silently degrading a
+language to plain text.
+
+**Nuke the build:** `rm -rf .build/treesitter-pack`
+
 ## Xcode build-state remediation
 
 Alas worktree-heavy development can leave many stale Xcode DerivedData entries

@@ -146,7 +146,8 @@ jobs:
             git -C ThirdParty/fff rev-parse HEAD
             git rev-parse HEAD:AlasHelper
             git rev-parse HEAD:AlasCLI
-            shasum scripts/build-zmx.sh scripts/build-fff.sh scripts/build-alas-helper.sh scripts/build-alas-cli.sh
+            git rev-parse HEAD:ThirdParty/treesitter-pack
+            shasum scripts/build-zmx.sh scripts/build-fff.sh scripts/build-alas-helper.sh scripts/build-alas-cli.sh scripts/build-treesitter-pack.sh
             shasum -a 256 "$(brew --prefix zig@0.15)/bin/zig"
           } >> .tools-pin
           cat .tools-pin
@@ -172,6 +173,9 @@ jobs:
             .build/fff/*/install
             .build/fff/*/fingerprint
             .build/fff/include
+            .build/treesitter-pack/*/install
+            .build/treesitter-pack/*/fingerprint
+            .build/treesitter-pack/include
             .build/alas-helper/*/release/alas-helper
             .build/alas-helper/fingerprint
             .build/alas-cli/*/release/alas
@@ -180,7 +184,7 @@ jobs:
           restore-keys: |
             tools-${{ runner.os }}-arm64-
 
-      - name: Prebuild zmx + fff + Alas Helper + Alas CLI
+      - name: Prebuild zmx + fff + tree-sitter pack + Alas Helper + Alas CLI
         # These normally run as pre-build script phases *inside* xcodebuild,
         # where a cold run buries ~11 min of zig/cargo work inside the build
         # step and a later failure throws it away. Run them as their own
@@ -189,6 +193,7 @@ jobs:
         run: |
           ./scripts/build-zmx.sh
           ./scripts/build-fff.sh
+          ./scripts/build-treesitter-pack.sh
           ./scripts/build-alas-helper.sh
           ./scripts/build-alas-cli.sh
 
@@ -206,6 +211,9 @@ jobs:
             .build/fff/*/install
             .build/fff/*/fingerprint
             .build/fff/include
+            .build/treesitter-pack/*/install
+            .build/treesitter-pack/*/fingerprint
+            .build/treesitter-pack/include
             .build/alas-helper/*/release/alas-helper
             .build/alas-helper/fingerprint
             .build/alas-cli/*/release/alas
@@ -226,7 +234,7 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: .build/xcode/SourcePackages
-          key: swiftpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.xcode-cache-toolchain', 'project.yml', 'Alas.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'ThirdParty/TreeSitter*/Package.swift') }}
+          key: swiftpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.xcode-cache-toolchain', 'project.yml', 'Alas.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
           restore-keys: |
             swiftpm-${{ runner.os }}-${{ runner.arch }}-
 

@@ -10,6 +10,7 @@ xcuserdata/
 .build/
 AlasHelper/target/
 AlasCLI/target/
+ThirdParty/treesitter-pack/target/
 
 # macOS
 .DS_Store
