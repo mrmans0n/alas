@@ -294,9 +294,9 @@ struct RemoteWebAssetTests {
     @Test func incrementalTranscriptBustsServiceWorkerAssetCache() throws {
         let sw = try asset("sw.js")
         let html = try asset("index.html")
-        #expect(sw.contains("alas-remote-shell-v39"))
-        #expect(sw.contains("/app.js?v=61"))
-        #expect(html.contains("app.js?v=61"))
+        #expect(sw.contains("alas-remote-shell-v40"))
+        #expect(sw.contains("/app.js?v=62"))
+        #expect(html.contains("app.js?v=62"))
     }
 
     // Regression (codex review, PR #775): applyPage used to clear the

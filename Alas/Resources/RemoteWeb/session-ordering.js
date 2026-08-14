@@ -49,7 +49,12 @@ function groupSessions(sessions) {
   return sections.sort((a, b) => {
     if (a.isOther) return 1;
     if (b.isOther) return -1;
-    return Math.max(...b.sessions.map(sessionRecency)) - Math.max(...a.sessions.map(sessionRecency));
+    const recency = Math.max(...b.sessions.map(sessionRecency)) - Math.max(...a.sessions.map(sessionRecency));
+    if (recency) return recency;
+
+    const title = a.title.localeCompare(b.title, undefined, { sensitivity: "accent" });
+    if (title) return title;
+    return a.id === b.id ? 0 : a.id < b.id ? -1 : 1;
   });
 }
 

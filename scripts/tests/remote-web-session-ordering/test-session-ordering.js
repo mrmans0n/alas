@@ -38,4 +38,11 @@ const caseSensitiveIds = ordering.groupSessions([
 
 assert.deepStrictEqual(caseSensitiveIds[0].sessions.map(({ id }) => id), ["A-id", "a-id"]);
 
+const equalRecencySections = ordering.groupSessions([
+  session("z-session", "repo-z", "Zulu", 50, true),
+  session("a-session", "repo-a", "Alpha", 50, true),
+]);
+
+assert.deepStrictEqual(equalRecencySections.map(({ id }) => id), ["repo-a", "repo-z"]);
+
 console.log("session ordering tests passed");
