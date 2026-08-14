@@ -44,6 +44,13 @@ struct RunScriptFailureTests {
         #expect(!result.truncated)
     }
 
+    @Test func tailAppliesBackspaceOverwrite() {
+        let data = Data("abc\u{08}X\n".utf8)
+        let result = ANSIPlainTextSnapshot.tail(from: data, byteLimit: 1_024)
+        #expect(result.text == "abX\n")
+        #expect(!result.truncated)
+    }
+
     @Test func tailNormalizesCRLFBeforeCarriageReturnHandling() {
         let data = Data("error\r\nprogress\rdone\n".utf8)
         let result = ANSIPlainTextSnapshot.tail(from: data, byteLimit: 1_024, normalizesCRLF: true)

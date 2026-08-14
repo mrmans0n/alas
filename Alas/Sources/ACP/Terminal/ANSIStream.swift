@@ -137,6 +137,7 @@ private extension String {
 private enum ANSIStreamEvent {
     case text(AttributedRun)
     case carriageReturn
+    case backspace
 }
 
 /// Applies parser events to rendered runs. Keeping this separate from the
@@ -169,6 +170,8 @@ private struct ANSIOutputBuffer {
                     retainedByteCount -= run.text.utf8.count
                 }
                 runs.removeSubrange(currentLineStart...)
+            case .backspace:
+                removeLastCharacterFromCurrentLine()
             }
         }
         trimToByteLimit()
@@ -190,6 +193,18 @@ private struct ANSIOutputBuffer {
 
         if run.text.last == "\n" {
             currentLineStart = runs.count
+        }
+    }
+
+    private mutating func removeLastCharacterFromCurrentLine() {
+        guard currentLineStart < runs.count else { return }
+        for index in stride(from: runs.count - 1, through: currentLineStart, by: -1) {
+            guard let last = runs[index].text.popLast() else { continue }
+            retainedByteCount -= last.utf8.count
+            if runs[index].text.isEmpty {
+                runs.remove(at: index)
+            }
+            return
         }
     }
 
@@ -291,8 +306,12 @@ struct ANSIStream {
             flushTextBytes()
             flushCurrentLine()
             events.append(.carriageReturn)
-        case 0x07, 0x08:                // BEL, BS — drop
+        case 0x07:                      // BEL — drop
             return
+        case 0x08:                      // BS — move left before the next write
+            flushTextBytes()
+            flushCurrentLine()
+            events.append(.backspace)
         case 0x0A:                      // LF — keep, commit line, advance marker
             textBytes.append(b)
             flushTextBytes()
