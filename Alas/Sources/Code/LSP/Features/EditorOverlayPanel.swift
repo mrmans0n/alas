@@ -30,12 +30,12 @@ final class EditorOverlayPanel {
         contentViewController: NSViewController,
         size: NSSize,
         anchor: NSRect,
-        in textView: NSTextView
+        in hostView: NSView
     ) {
         let panel = ensurePanel(size: size)
         panel.contentViewController = contentViewController
-        panel.setFrame(frame(for: size, anchor: anchor, in: textView), display: true, animate: false)
-        attach(panel, to: textView.window)
+        panel.setFrame(frame(for: size, anchor: anchor, in: hostView), display: true, animate: false)
+        attach(panel, to: hostView.window)
         if !panel.isVisible {
             panel.orderFront(nil)
         }
@@ -80,12 +80,12 @@ final class EditorOverlayPanel {
         panel.level = parentWindow.level
     }
 
-    func frame(for size: NSSize, anchor: NSRect, in textView: NSTextView) -> NSRect {
-        guard let window = textView.window else {
+    func frame(for size: NSSize, anchor: NSRect, in hostView: NSView) -> NSRect {
+        guard let window = hostView.window else {
             return NSRect(origin: .zero, size: size)
         }
 
-        let windowRect = textView.convert(anchor, to: nil)
+        let windowRect = hostView.convert(anchor, to: nil)
         let screenRect = window.convertToScreen(windowRect)
         let visibleFrame = (window.screen ?? NSScreen.main)?.visibleFrame ?? screenRect
         let x = min(
@@ -112,7 +112,7 @@ final class EditorOverlayPanel {
 
 enum EditorOverlayPanelTesting {
     @MainActor
-    static func frame(for panel: EditorOverlayPanel, size: NSSize, anchor: NSRect, in textView: NSTextView) -> NSRect {
-        panel.frame(for: size, anchor: anchor, in: textView)
+    static func frame(for panel: EditorOverlayPanel, size: NSSize, anchor: NSRect, in hostView: NSView) -> NSRect {
+        panel.frame(for: size, anchor: anchor, in: hostView)
     }
 }

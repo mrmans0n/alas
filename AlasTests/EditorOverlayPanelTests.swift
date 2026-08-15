@@ -5,25 +5,15 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct EditorOverlayPanelTests {
-    private func makeTextView(in window: NSWindow) -> CodeTextView {
-        let storage = NSTextStorage(string: "hello world")
-        let layoutManager = NSLayoutManager()
-        let container = NSTextContainer(size: NSSize(width: 800, height: 600))
-        layoutManager.addTextContainer(container)
-        storage.addLayoutManager(layoutManager)
-        let textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), textContainer: container)
-        window.contentView = textView
-        return textView
+    private func makeHostView(in window: NSWindow) -> NSView {
+        let hostView = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        window.contentView = hostView
+        return hostView
     }
 
     @Test func frameReturnsZeroSizedWhenViewHasNoWindow() {
-        let storage = NSTextStorage(string: "x")
-        let layoutManager = NSLayoutManager()
-        let container = NSTextContainer(size: NSSize(width: 100, height: 100))
-        layoutManager.addTextContainer(container)
-        storage.addLayoutManager(layoutManager)
-        let textView = CodeTextView(frame: .zero, textContainer: container)
-        #expect(textView.window == nil)
+        let hostView = NSView(frame: .zero)
+        #expect(hostView.window == nil)
         let panel = EditorOverlayPanel()
         let size = NSSize(width: 200, height: 120)
 
@@ -31,7 +21,7 @@ struct EditorOverlayPanelTests {
             for: panel,
             size: size,
             anchor: NSRect(x: 50, y: 80, width: 20, height: 20),
-            in: textView
+            in: hostView
         )
 
         #expect(frame.size == size)
@@ -45,7 +35,7 @@ struct EditorOverlayPanelTests {
             backing: .buffered,
             defer: true
         )
-        let textView = makeTextView(in: window)
+        let hostView = makeHostView(in: window)
         let panel = EditorOverlayPanel()
         let size = NSSize(width: 300, height: 100)
         let anchor = NSRect(x: 50, y: 300, width: 40, height: 16)
@@ -54,10 +44,10 @@ struct EditorOverlayPanelTests {
             for: panel,
             size: size,
             anchor: anchor,
-            in: textView
+            in: hostView
         )
 
-        let anchorScreen = window.convertToScreen(textView.convert(anchor, to: nil))
+        let anchorScreen = window.convertToScreen(hostView.convert(anchor, to: nil))
         #expect(frame.maxY < anchorScreen.minY)
         #expect(frame.size == size)
     }
