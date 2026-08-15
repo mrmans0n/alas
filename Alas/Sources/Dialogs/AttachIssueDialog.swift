@@ -26,11 +26,13 @@ struct AttachIssueDialog: View {
     }
 
     var body: some View {
-        switch model.phase {
-        case .entry, .resolving:
-            entrySheet
-        case .confirmation:
-            confirmationSheet
+        Group {
+            switch model.phase {
+            case .entry, .resolving:
+                entrySheet
+            case .confirmation:
+                confirmationSheet
+            }
         }
         .onChange(of: model.phase) { _, phase in
             guard phase != .entry else { return }
@@ -68,7 +70,10 @@ struct AttachIssueDialog: View {
                             model.reference = accepted
                         },
                         onDismiss: autocomplete.dismiss,
-                        onFocusLost: autocomplete.dismiss
+                        onFocusLost: {
+                            autocomplete.dismiss()
+                            autocomplete.cancelInFlightLoad()
+                        }
                     )
                 }
                 if model.phase == .resolving {
