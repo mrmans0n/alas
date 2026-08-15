@@ -1,5 +1,15 @@
 import Foundation
 
+struct CodeHostIssueSuggestion: Equatable, Sendable, Identifiable {
+    let provider: CodeHostKind
+    let number: Int
+    let title: String
+    let canonicalURL: URL
+    let createdAt: Date
+
+    var id: String { "\(provider.rawValue):\(canonicalURL.absoluteString)" }
+}
+
 protocol CodeHostIssueProviding: Sendable {
     var kind: CodeHostKind { get }
     var executable: String { get }
@@ -7,6 +17,7 @@ protocol CodeHostIssueProviding: Sendable {
     func isAvailable(cwd: URL) async -> Bool
     func isAuthenticated(remote: CodeHostRemote, cwd: URL) async -> Bool
     func issue(remote: CodeHostRemote, number: Int, cwd: URL) async throws -> CodeHostIssueSnapshot
+    func openIssues(remote: CodeHostRemote, limit: Int, cwd: URL) async throws -> [CodeHostIssueSuggestion]
 }
 
 enum CodeHostIssueProviderError: LocalizedError, Equatable, Sendable {

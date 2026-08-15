@@ -57,6 +57,10 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         return try Self.parseIssue(result.stdout, remote: remote, requestedNumber: number)
     }
 
+    func openIssues(remote: CodeHostRemote, limit: Int, cwd: URL) async throws -> [CodeHostIssueSuggestion] {
+        throw CodeHostProviderError.unsupportedProvider(.gitlab)
+    }
+
     func currentReviewRequest(
         remote: CodeHostRemote,
         branch: String,

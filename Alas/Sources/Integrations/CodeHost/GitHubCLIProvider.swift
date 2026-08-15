@@ -289,6 +289,24 @@ struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         return try Self.parseIssue(result.stdout, remote: remote, requestedNumber: number)
     }
 
+    func openIssues(remote: CodeHostRemote, limit: Int, cwd: URL) async throws -> [CodeHostIssueSuggestion] {
+        guard limit > 0 else { return [] }
+        let result = try await runner.run(
+            executable,
+            args: [
+                "api", "--hostname", remote.host, "--method", "GET",
+                "repos/\(remote.repositorySlug)/issues",
+                "-f", "state=open", "-f", "sort=created", "-f", "direction=desc",
+                "-f", "per_page=\(limit)",
+            ],
+            cwd: cwd
+        )
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "gh api issues", stderr: result.stderr)
+        }
+        return try Self.parseOpenIssues(result.stdout, remote: remote, limit: limit)
+    }
+
     func currentReviewRequest(
         remote: CodeHostRemote,
         branch: String,
@@ -1912,6 +1930,36 @@ struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         )
     }
 
+    static func parseOpenIssues(_ json: String, remote: CodeHostRemote, limit: Int) throws -> [CodeHostIssueSuggestion] {
+        let responses: [GitHubOpenIssueResponse]
+        do {
+            responses = try JSONDecoder().decode([GitHubOpenIssueResponse].self, from: Data(json.utf8))
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse GitHub issue list output.")
+        }
+
+        let suggestions = try responses.compactMap { response -> CodeHostIssueSuggestion? in
+            guard response.pullRequest == nil else { return nil }
+            guard response.number > 0,
+                  !response.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  let url = try parseOptionalHTTPURL(response.htmlURL, context: "GitHub issue output is missing a valid URL."),
+                  let createdAt = parseDate(response.createdAt, formatOptions: [.withInternetDateTime]) ?? parseDate(response.createdAt, formatOptions: [.withInternetDateTime, .withFractionalSeconds]),
+                  case .url(let kind, let host, let repositorySlug, let number) = try CodeHostIssueInput.parse(url.absoluteString),
+                  kind == .github,
+                  host.caseInsensitiveCompare(remote.host) == .orderedSame,
+                  repositorySlug.caseInsensitiveCompare(remote.repositorySlug) == .orderedSame,
+                  number == response.number
+            else {
+                throw CodeHostProviderError.malformedOutput("GitHub issue output is missing required fields.")
+            }
+            return CodeHostIssueSuggestion(provider: .github, number: response.number, title: response.title, canonicalURL: url, createdAt: createdAt)
+        }
+        return suggestions.sorted {
+            if $0.createdAt != $1.createdAt { return $0.createdAt > $1.createdAt }
+            return $0.number > $1.number
+        }.prefix(limit).map { $0 }
+    }
+
     private static func parseOptionalHTTPURL(_ value: String?, context: String) throws -> URL? {
         guard let value,
               !value.isEmpty
@@ -2354,6 +2402,24 @@ private struct ReviewThreadCommentNode: Decodable {
     let author: ReviewThreadAuthor?
     let viewerDidAuthor: Bool?
 }
+
+private struct GitHubOpenIssueResponse: Decodable {
+    let number: Int
+    let title: String
+    let htmlURL: String
+    let createdAt: String
+    let pullRequest: GitHubPullRequestMarker?
+
+    enum CodingKeys: String, CodingKey {
+        case number
+        case title
+        case htmlURL = "html_url"
+        case createdAt = "created_at"
+        case pullRequest = "pull_request"
+    }
+}
+
+private struct GitHubPullRequestMarker: Decodable {}
 
 private struct ReviewThreadAuthor: Decodable {
     let login: String
