@@ -1752,7 +1752,6 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
                   case .url(let kind, let host, let repositorySlug, let number) = try CodeHostIssueInput.parse(url.absoluteString),
                   kind == .gitlab,
                   host.caseInsensitiveCompare(remote.host) == .orderedSame,
-                  repositorySlug.caseInsensitiveCompare(remote.repositorySlug) == .orderedSame,
                   number == response.iid
             else {
                 throw CodeHostProviderError.malformedOutput("GitLab issue output is missing required fields.")

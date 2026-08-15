@@ -25,10 +25,10 @@ struct GitHubCLIProviderTests {
         #expect(issues.map(\.number) == [42, 40])
         #expect(issues.map(\.title) == ["Newest issue", "Older issue"])
         #expect(await runner.commands.first?.args == [
-            "api", "--hostname", "github.example.com", "--method", "GET",
+            "api", "--hostname", "github.example.com", "--method", "GET", "--paginate", "--slurp",
             "repos/mrmans0n/alas/issues",
             "-f", "state=open", "-f", "sort=created", "-f", "direction=desc",
-            "-f", "per_page=2",
+            "-f", "per_page=100",
         ])
     }
 

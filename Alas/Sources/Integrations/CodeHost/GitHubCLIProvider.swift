@@ -294,10 +294,10 @@ struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         let result = try await runner.run(
             executable,
             args: [
-                "api", "--hostname", remote.host, "--method", "GET",
+                "api", "--hostname", remote.host, "--method", "GET", "--paginate", "--slurp",
                 "repos/\(remote.repositorySlug)/issues",
                 "-f", "state=open", "-f", "sort=created", "-f", "direction=desc",
-                "-f", "per_page=\(limit)",
+                "-f", "per_page=100",
             ],
             cwd: cwd
         )
@@ -1933,7 +1933,12 @@ struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding {
     static func parseOpenIssues(_ json: String, remote: CodeHostRemote, limit: Int) throws -> [CodeHostIssueSuggestion] {
         let responses: [GitHubOpenIssueResponse]
         do {
-            responses = try JSONDecoder().decode([GitHubOpenIssueResponse].self, from: Data(json.utf8))
+            let data = Data(json.utf8)
+            if let pages = try? JSONDecoder().decode([[GitHubOpenIssueResponse]].self, from: data) {
+                responses = pages.flatMap { $0 }
+            } else {
+                responses = try JSONDecoder().decode([GitHubOpenIssueResponse].self, from: data)
+            }
         } catch {
             throw CodeHostProviderError.malformedOutput("Unable to parse GitHub issue list output.")
         }
@@ -1947,7 +1952,6 @@ struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding {
                   case .url(let kind, let host, let repositorySlug, let number) = try CodeHostIssueInput.parse(url.absoluteString),
                   kind == .github,
                   host.caseInsensitiveCompare(remote.host) == .orderedSame,
-                  repositorySlug.caseInsensitiveCompare(remote.repositorySlug) == .orderedSame,
                   number == response.number
             else {
                 throw CodeHostProviderError.malformedOutput("GitHub issue output is missing required fields.")
