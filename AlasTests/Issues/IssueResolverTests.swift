@@ -505,6 +505,7 @@ struct IssueResolverTests {
 
         func isAvailable(cwd: URL) async -> Bool { isAvailable }
         func isAuthenticated(remote: CodeHostRemote, cwd: URL) async -> Bool { isAuthenticated }
+        func openIssues(remote: CodeHostRemote, limit: Int, cwd: URL) async throws -> [CodeHostIssueSuggestion] { [] }
 
         func issue(remote: CodeHostRemote, number: Int, cwd: URL) async throws -> CodeHostIssueSnapshot {
             await recorder?.recordResolve()

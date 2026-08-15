@@ -3,6 +3,51 @@ import Testing
 @testable import Alas
 
 struct GitHubCLIProviderTests {
+    @Test func openIssuesRequestsNewestOpenIssuesAndExcludesPullRequests() async throws {
+        let runner = FakeRunner(results: [ProcessResult(
+            exitCode: 0,
+            stdout: """
+            [
+              {"number":40,"title":"Older issue","html_url":"https://github.example.com/mrmans0n/alas/issues/40","created_at":"2026-08-10T08:00:00Z"},
+              {"number":41,"title":"Pull request","html_url":"https://github.example.com/mrmans0n/alas/pull/41","created_at":"2026-08-12T08:00:00Z","pull_request":{"url":"https://api.github.example.com/repos/mrmans0n/alas/pulls/41","merged_at":null}},
+              {"number":42,"title":"Newest issue","html_url":"https://github.example.com/mrmans0n/alas/issues/42","created_at":"2026-08-15T08:00:00Z"}
+            ]
+            """,
+            stderr: ""
+        )])
+
+        let issues = try await GitHubCLIProvider(runner: runner).openIssues(
+            remote: Self.enterpriseRemote,
+            limit: 2,
+            cwd: Self.cwd
+        )
+
+        #expect(issues.map(\.number) == [42, 40])
+        #expect(issues.map(\.title) == ["Newest issue", "Older issue"])
+        #expect(await runner.commands.first?.args == [
+            "api", "--hostname", "github.example.com", "--method", "GET", "--paginate", "--slurp",
+            "repos/mrmans0n/alas/issues",
+            "-f", "state=open", "-f", "sort=created", "-f", "direction=desc",
+            "-f", "per_page=100",
+        ])
+    }
+
+    @Test func openIssuesRejectsMalformedCanonicalURL() async {
+        let runner = FakeRunner(results: [ProcessResult(
+            exitCode: 0,
+            stdout: "[{\"number\":42,\"title\":\"Broken\",\"html_url\":\"https:///missing-host\",\"created_at\":\"2026-08-15T08:00:00Z\"}]",
+            stderr: ""
+        )])
+
+        await #expect(throws: CodeHostProviderError.self) {
+            try await GitHubCLIProvider(runner: runner).openIssues(
+                remote: Self.enterpriseRemote,
+                limit: 50,
+                cwd: Self.cwd
+            )
+        }
+    }
+
     @Test func issueUsesHostAwareAPIAndMapsSnapshot() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: Self.issueOutput, stderr: ""),

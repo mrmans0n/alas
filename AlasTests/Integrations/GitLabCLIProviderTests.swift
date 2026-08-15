@@ -4,6 +4,53 @@ import Testing
 @testable import Alas
 
 struct GitLabCLIProviderTests {
+    @Test func openIssuesRequestsNewestOpenedIssuesAndNormalizesOrder() async throws {
+        let runner = FakeRunner(results: [ProcessResult(
+            exitCode: 0,
+            stdout: """
+            [
+              {"iid":77,"title":"Older issue","web_url":"https://gitlab.example.com/platform/mobile/alas/-/issues/77","created_at":"2026-08-10T08:00:00Z"},
+              {"iid":81,"title":"Newest issue","web_url":"https://gitlab.example.com/platform/mobile/alas/-/issues/81","created_at":"2026-08-15T08:00:00Z"}
+            ]
+            """,
+            stderr: ""
+        )])
+
+        let issues = try await GitLabCLIProvider(runner: runner).openIssues(
+            remote: Self.remote,
+            limit: 50,
+            cwd: Self.cwd
+        )
+
+        #expect(issues.map(\.number) == [81, 77])
+        #expect(await runner.commands.first?.args == [
+            "api", "projects/platform%2Fmobile%2Falas/issues",
+            "--hostname", "gitlab.example.com", "--output", "json", "--method", "GET",
+            "-f", "state=opened", "-f", "order_by=created_at", "-f", "sort=desc",
+            "-f", "per_page=50",
+        ])
+    }
+
+    @Test func openIssuesReportsCommandFailure() async {
+        let runner = FakeRunner(results: [ProcessResult(exitCode: 1, stdout: "", stderr: "permission denied")])
+
+        await #expect(throws: CodeHostProviderError.commandFailed(command: "glab api issues", stderr: "permission denied")) {
+            try await GitLabCLIProvider(runner: runner).openIssues(remote: Self.remote, limit: 50, cwd: Self.cwd)
+        }
+    }
+
+    @Test func openIssuesRejectsMalformedWebURL() async {
+        let runner = FakeRunner(results: [ProcessResult(
+            exitCode: 0,
+            stdout: "[{\"iid\":77,\"title\":\"Issue\",\"web_url\":\"not-a-url\",\"created_at\":\"2026-08-10T08:00:00Z\"}]",
+            stderr: ""
+        )])
+
+        await #expect(throws: CodeHostProviderError.malformedOutput("GitLab issue output is missing a valid URL.")) {
+            try await GitLabCLIProvider(runner: runner).openIssues(remote: Self.remote, limit: 50, cwd: Self.cwd)
+        }
+    }
+
     @Test func issueUsesEncodedSubgroupProjectAndMapsSnapshot() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: Self.issueOutput, stderr: ""),

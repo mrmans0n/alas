@@ -5,6 +5,14 @@ import Testing
 @MainActor
 @Suite("Attach Issue dialog model")
 struct AttachIssueDialogModelTests {
+    @Test("the selected project is exposed for issue autocomplete")
+    func exposesSelectedProjectForIssueAutocomplete() {
+        let fixture = Fixture(selectedProjectID: "alas")
+        let model = AttachIssueDialogModel(environment: fixture.environment)
+
+        #expect(model.autocompleteProjectID == "alas")
+    }
+
     @Test("resolving a URL preselects its exact candidate project and seeds the draft")
     func resolvesURLAndSeedsDraft() async {
         let fixture = Fixture()
@@ -130,6 +138,8 @@ struct AttachIssueDialogModelTests {
                     ? Fixture.resolvedIssue(displayReference: "#43", title: "Fix second issue")
                     : Fixture.resolvedIssue(displayReference: "#42", title: "Fix first issue")
             },
+            loadSuggestions: { _, _ in [] },
+            selectedProjectID: "alas",
             projects: { [project] },
             configuredBranchPrefix: { _ in "feature/" }
         ))
@@ -251,13 +261,15 @@ private final class Fixture {
     let resolutionFailure: IssueResolutionFailure?
     let projects: [ProjectConfig]
     let suspendResolution: Bool
+    let selectedProjectID: String
     private var continuation: CheckedContinuation<Void, Never>?
 
     init(
         resolution: ResolvedIssue? = nil,
         resolutionFailure: IssueResolutionFailure? = nil,
         candidateProjectIDs: [String] = ["alas"],
-        suspendResolution: Bool = false
+        suspendResolution: Bool = false,
+        selectedProjectID: String = "alas"
     ) {
         projects = [ProjectConfig(
             id: "alas",
@@ -269,6 +281,7 @@ private final class Fixture {
         self.resolution = resolution ?? Self.resolvedIssue(candidateProjectIDs: candidateProjectIDs)
         self.resolutionFailure = resolutionFailure
         self.suspendResolution = suspendResolution
+        self.selectedProjectID = selectedProjectID
     }
 
     var environment: AttachIssueDialogModel.Environment {
@@ -282,6 +295,8 @@ private final class Fixture {
                 if let resolutionFailure { throw resolutionFailure }
                 return resolution
             },
+            loadSuggestions: { _, _ in [] },
+            selectedProjectID: selectedProjectID,
             projects: { [self] in projects },
             configuredBranchPrefix: { _ in "feature/" }
         )

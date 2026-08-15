@@ -1334,6 +1334,17 @@ final class AppState {
         ))
     }
 
+    func makeIssueSuggestionLoader() -> IssueSuggestionLoader {
+        let projects = projects
+        return IssueSuggestionLoader(environment: .init(
+            projects: { projects },
+            remotes: { project in
+                try await GitService().remotes(worktreePath: URL(fileURLWithPath: project.path))
+            },
+            providers: .live()
+        ))
+    }
+
     private func refreshMissionSource(
         _ source: IssueSnapshot,
         projectID: String
