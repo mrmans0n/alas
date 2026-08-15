@@ -25,7 +25,7 @@ struct LanguageRegistryTests {
         "dart": "dart",
         "ex": "elixir", "exs": "elixir",
         "erl": "erlang", "hrl": "erlang",
-        "hs": "haskell",
+        "hs": "haskell", "lhs": "haskell",
         "clj": "clojure", "cljs": "clojure", "cljc": "clojure", "edn": "clojure",
         "jl": "julia",
         "zig": "zig",
@@ -106,6 +106,13 @@ struct LanguageRegistryTests {
     func csxFilesResolveToCSharp() throws {
         let resolved = LanguageRegistry.highlighterExtension(forPath: "/repo/build.csx")
         #expect(resolved == "csx")
+        #expect(LanguageRegistry.language(forFileExtension: resolved) != nil)
+    }
+
+    @Test(".lhs literate Haskell resolves to the Haskell grammar")
+    func lhsFilesResolveToHaskell() throws {
+        let resolved = LanguageRegistry.highlighterExtension(forPath: "/repo/Main.lhs")
+        #expect(resolved == "lhs")
         #expect(LanguageRegistry.language(forFileExtension: resolved) != nil)
     }
 

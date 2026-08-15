@@ -56,7 +56,7 @@ enum LanguageRegistry {
         "dart": "dart",
         "ex": "elixir", "exs": "elixir",
         "erl": "erlang", "hrl": "erlang",
-        "hs": "haskell",
+        "hs": "haskell", "lhs": "haskell",
         "clj": "clojure", "cljs": "clojure", "cljc": "clojure", "edn": "clojure",
         "jl": "julia",
         "zig": "zig",
