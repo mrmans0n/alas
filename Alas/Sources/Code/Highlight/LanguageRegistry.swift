@@ -92,7 +92,8 @@ enum LanguageRegistry {
         "makefile": "mk",
         "gnumakefile": "mk",
         "cmakelists.txt": "cmake",
-        ".editorconfig": "ini"
+        ".editorconfig": "ini",
+        "jenkinsfile": "groovy"
     ]
 
     /// Grammar ids whose highlight query is more than just their own, listed

@@ -79,7 +79,8 @@ struct LanguageRegistryTests {
             "/repo/GNUmakefile": "mk",
             // `.txt` would otherwise win and resolve to nothing.
             "/repo/CMakeLists.txt": "cmake",
-            "/repo/.editorconfig": "ini"
+            "/repo/.editorconfig": "ini",
+            "/repo/Jenkinsfile": "groovy"
         ]
         for (path, expected) in cases {
             let resolved = LanguageRegistry.highlighterExtension(forPath: path)

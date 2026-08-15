@@ -145,6 +145,7 @@ struct ACPCodeBlockHighlighterTests {
         #expect(ACPCodeLanguage.highlighterExtension(forPath: "CMakeLists.txt") == "cmake")
         #expect(ACPCodeLanguage.highlighterExtension(forPath: "Containerfile") == "dockerfile")
         #expect(ACPCodeLanguage.highlighterExtension(forPath: ".editorconfig") == "ini")
+        #expect(ACPCodeLanguage.highlighterExtension(forPath: "Jenkinsfile") == "groovy")
         #expect(ACPCodeLanguage.highlighterExtension(forPath: "Program.cs") == "cs")
         #expect(ACPCodeLanguage.highlighterExtension(forPath: "main.zig") == "zig")
     }
