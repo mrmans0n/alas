@@ -261,6 +261,7 @@ private final class Fixture {
     let resolutionFailure: IssueResolutionFailure?
     let projects: [ProjectConfig]
     let suspendResolution: Bool
+    let selectedProjectID: String
     private var continuation: CheckedContinuation<Void, Never>?
 
     init(
@@ -280,6 +281,7 @@ private final class Fixture {
         self.resolution = resolution ?? Self.resolvedIssue(candidateProjectIDs: candidateProjectIDs)
         self.resolutionFailure = resolutionFailure
         self.suspendResolution = suspendResolution
+        self.selectedProjectID = selectedProjectID
     }
 
     var environment: AttachIssueDialogModel.Environment {

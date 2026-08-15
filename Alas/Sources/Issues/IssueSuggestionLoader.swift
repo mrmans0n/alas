@@ -14,20 +14,25 @@ struct IssueSuggestionLoader: Sendable {
             throw CodeHostProviderError.malformedOutput("The selected project is no longer available.")
         }
         let remotes = try await environment.remotes(project)
-        guard let remote = candidateRemotes(remotes).first else {
+        let candidates = candidateRemotes(remotes)
+        guard !candidates.isEmpty else {
             throw CodeHostProviderError.malformedOutput("The selected project has no supported code host remote.")
         }
-        guard let provider = environment.providers.provider(for: remote.kind) else {
-            throw CodeHostProviderError.unsupportedProvider(remote.kind)
-        }
         let cwd = URL(fileURLWithPath: project.path)
-        guard await provider.isAvailable(cwd: cwd) else {
-            throw CodeHostProviderError.cliMissing(provider.executable)
+        var lastError: Error?
+        for remote in candidates {
+            guard let provider = environment.providers.provider(for: remote.kind) else { continue }
+            guard await provider.isAvailable(cwd: cwd) else {
+                lastError = CodeHostProviderError.cliMissing(provider.executable)
+                continue
+            }
+            guard await provider.isAuthenticated(remote: remote, cwd: cwd) else {
+                lastError = CodeHostProviderError.unauthenticated(remote.host)
+                continue
+            }
+            return try await provider.openIssues(remote: remote, limit: limit, cwd: cwd)
         }
-        guard await provider.isAuthenticated(remote: remote, cwd: cwd) else {
-            throw CodeHostProviderError.unauthenticated(remote.host)
-        }
-        return try await provider.openIssues(remote: remote, limit: limit, cwd: cwd)
+        throw lastError ?? CodeHostProviderError.malformedOutput("The selected project has no supported code host remote.")
     }
 
     private func candidateRemotes(_ remotes: [GitRemote]) -> [CodeHostRemote] {
