@@ -6,6 +6,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.13] - 2026-08-15
+
+### ✨ Features
+
+- Add built-in LSP presets for the newly bundled grammars (#1035).
+- Add message quote actions in chat (#1034).
+- Add 24 more tree-sitter language grammars (#1033).
+
+### 🐛 Fixes
+
+- Drop dead space in the mode-locked agent launcher (#1030).
+
 ### 🏗️ Internal
 
 - Deliver every tree-sitter grammar through a single Rust staticlib
@@ -16,6 +28,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Kotlin highlighting moved from the stale `fwcd/tree-sitter-kotlin` grammar
   to the maintained `tree-sitter-kotlin-ng`, with a highlight query
   hand-written for it (the grammar ships none upstream).
+- Warm nightly release caches for arm64 (#1029).
 
 ## [0.14.12] - 2026-08-14
 
