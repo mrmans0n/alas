@@ -19,7 +19,7 @@ struct LanguageRegistryTests {
         "json": "json", "yaml": "yaml", "toml": "toml", "md": "markdown",
         "tf": "hcl", "lua": "lua", "sh": "bash",
         // Added alongside the new grammars.
-        "cs": "csharp",
+        "cs": "csharp", "csx": "csharp",
         "scala": "scala", "sc": "scala", "sbt": "scala",
         "r": "r",
         "dart": "dart",
@@ -99,6 +99,13 @@ struct LanguageRegistryTests {
         // path this needs to resolve for in practice.
         let resolved = LanguageRegistry.highlighterExtension(forPath: "/repo/build.sbt")
         #expect(resolved == "sbt")
+        #expect(LanguageRegistry.language(forFileExtension: resolved) != nil)
+    }
+
+    @Test(".csx C# scripts resolve to the C# grammar")
+    func csxFilesResolveToCSharp() throws {
+        let resolved = LanguageRegistry.highlighterExtension(forPath: "/repo/build.csx")
+        #expect(resolved == "csx")
         #expect(LanguageRegistry.language(forFileExtension: resolved) != nil)
     }
 

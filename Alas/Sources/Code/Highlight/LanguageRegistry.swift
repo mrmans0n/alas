@@ -50,7 +50,7 @@ enum LanguageRegistry {
         "markdown-inline": "markdown_inline",
         "hcl": "hcl", "tf": "hcl", "tfvars": "hcl",
         "dockerfile": "dockerfile",
-        "cs": "csharp",
+        "cs": "csharp", "csx": "csharp",
         "scala": "scala", "sc": "scala", "sbt": "scala",
         "r": "r",
         "dart": "dart",

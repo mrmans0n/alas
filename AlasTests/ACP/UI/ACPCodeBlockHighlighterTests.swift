@@ -149,6 +149,7 @@ struct ACPCodeBlockHighlighterTests {
         #expect(ACPCodeLanguage.highlighterExtension(forPath: "Program.cs") == "cs")
         #expect(ACPCodeLanguage.highlighterExtension(forPath: "main.zig") == "zig")
         #expect(ACPCodeLanguage.highlighterExtension(forPath: "build.sbt") == "sbt")
+        #expect(ACPCodeLanguage.highlighterExtension(forPath: "build.csx") == "csx")
     }
 
     @Test("tool output syntax prefers diff shape over paths")
