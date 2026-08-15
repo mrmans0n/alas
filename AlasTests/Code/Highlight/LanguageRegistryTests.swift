@@ -20,7 +20,7 @@ struct LanguageRegistryTests {
         "tf": "hcl", "lua": "lua", "sh": "bash",
         // Added alongside the new grammars.
         "cs": "csharp",
-        "scala": "scala", "sc": "scala",
+        "scala": "scala", "sc": "scala", "sbt": "scala",
         "r": "r",
         "dart": "dart",
         "ex": "elixir", "exs": "elixir",
@@ -90,6 +90,16 @@ struct LanguageRegistryTests {
                 "\(path) resolved to no grammar"
             )
         }
+    }
+
+    @Test("build.sbt resolves to the Scala grammar")
+    func sbtFilesResolveToScala() throws {
+        // `.sbt` is a real (if unusual) extension, not a filename special
+        // case, but sbt projects' conventional `build.sbt` is exactly the
+        // path this needs to resolve for in practice.
+        let resolved = LanguageRegistry.highlighterExtension(forPath: "/repo/build.sbt")
+        #expect(resolved == "sbt")
+        #expect(LanguageRegistry.language(forFileExtension: resolved) != nil)
     }
 
     @Test("A plain .txt file still resolves to nothing")

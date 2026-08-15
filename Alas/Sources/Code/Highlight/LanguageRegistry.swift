@@ -51,7 +51,7 @@ enum LanguageRegistry {
         "hcl": "hcl", "tf": "hcl", "tfvars": "hcl",
         "dockerfile": "dockerfile",
         "cs": "csharp",
-        "scala": "scala", "sc": "scala",
+        "scala": "scala", "sc": "scala", "sbt": "scala",
         "r": "r",
         "dart": "dart",
         "ex": "elixir", "exs": "elixir",

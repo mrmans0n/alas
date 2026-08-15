@@ -148,6 +148,7 @@ struct ACPCodeBlockHighlighterTests {
         #expect(ACPCodeLanguage.highlighterExtension(forPath: "Jenkinsfile") == "groovy")
         #expect(ACPCodeLanguage.highlighterExtension(forPath: "Program.cs") == "cs")
         #expect(ACPCodeLanguage.highlighterExtension(forPath: "main.zig") == "zig")
+        #expect(ACPCodeLanguage.highlighterExtension(forPath: "build.sbt") == "sbt")
     }
 
     @Test("tool output syntax prefers diff shape over paths")
