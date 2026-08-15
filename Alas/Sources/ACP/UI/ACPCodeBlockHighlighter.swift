@@ -73,7 +73,28 @@ enum ACPCodeLanguage {
         case "tfvars": return "tfvars"
         case "dockerfile": return "dockerfile"
         case "sql": return "sql"
-        case "pl", "perl", "ex", "exs", "elixir", "ini":
+        case "cs", "csharp", "c#": return "cs"
+        case "scala": return "scala"
+        case "r": return "r"
+        case "dart": return "dart"
+        case "ex", "exs", "elixir": return "ex"
+        case "erl", "erlang": return "erl"
+        case "hs", "haskell": return "hs"
+        case "clj", "cljs", "cljc", "edn", "clojure": return "clj"
+        case "jl", "julia": return "jl"
+        case "zig": return "zig"
+        case "ps1", "pwsh", "powershell": return "ps1"
+        case "groovy", "gradle": return "groovy"
+        case "objc", "objective-c", "objectivec", "m", "mm": return "m"
+        case "graphql", "gql": return "graphql"
+        case "proto", "protobuf": return "proto"
+        case "svelte": return "svelte"
+        case "ini", "dosini", "properties", "cfg": return "ini"
+        case "make", "makefile", "mk": return "mk"
+        case "cmake": return "cmake"
+        // No tree-sitter-perl grammar exists (see ThirdParty/treesitter-pack's
+        // Cargo.toml for why), so Perl fences stay plain.
+        case "pl", "perl":
             return nil
         default:
             return nil
@@ -85,8 +106,14 @@ enum ACPCodeLanguage {
         if LanguageRegistry.language(forFileExtension: normalized) != nil {
             return normalized
         }
+        // `xml`, `scss`, and `sql` used to need a case here too, back when
+        // they had no tree-sitter grammar and only `RegexFallbackHighlighter`
+        // could render them; now they resolve through the branch above like
+        // any other grammar-backed extension. `diff`/`patch` and `sass` (no
+        // grammar of its own — `scss` covers only the SCSS dialect) still
+        // rely purely on that fallback, so they stay listed here.
         switch normalized {
-        case "diff", "patch", "xml", "scss", "sass", "sql":
+        case "diff", "patch", "sass":
             return normalized
         default:
             return nil

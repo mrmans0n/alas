@@ -85,6 +85,6 @@ struct InlineDiffView: View {
     }
 
     private var fileExtension: String {
-        (relativePath as NSString).pathExtension
+        LanguageRegistry.highlighterExtension(forPath: relativePath)
     }
 }
