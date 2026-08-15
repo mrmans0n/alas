@@ -626,7 +626,7 @@ struct DraftReviewRequestTabView: View {
     private func makeLSPContext(relativePath: String) -> DiffPaneLSPContext? {
         let fileURL = worktreePath.appendingPathComponent(relativePath)
         guard FileManager.default.fileExists(atPath: fileURL.path),
-              let language = appState.lsp.language(forFileExtension: (relativePath as NSString).pathExtension)
+              let language = appState.lsp.language(forPath: relativePath)
         else {
             return nil
         }

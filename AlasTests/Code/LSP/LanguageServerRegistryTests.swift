@@ -212,6 +212,39 @@ struct LanguageServerRegistryTests {
         }
     }
 
+    @Test("CMakeLists.txt resolves to cmake despite its .txt extension")
+    func cmakeListsResolvesByFilename() {
+        let r = LanguageServerRegistry(userDefined: [])
+        // The one file every CMake project has; extension-only lookup sees
+        // "txt" and would never reach the cmake server.
+        #expect(r.language(forPath: "/repo/CMakeLists.txt") == "cmake")
+        #expect(r.language(forPath: "/repo/nested/CMakeLists.txt") == "cmake")
+        #expect(LanguageServerRegistry.extensionKey(forPath: "/repo/CMakeLists.txt") == "cmake")
+        // Case-insensitive, like every other lookup here.
+        #expect(r.language(forPath: "/repo/cmakelists.txt") == "cmake")
+    }
+
+    @Test("extensionKey is a drop-in for pathExtension elsewhere")
+    func extensionKeyMatchesPathExtension() {
+        // Everything that is not a filename special case must behave exactly
+        // as the `pathExtension` it replaced, or migrating the call sites
+        // would have changed unrelated languages.
+        for path in ["/a/b/App.swift", "/a/b/main.rs", "/a/b/notes.txt",
+                     "/a/b/script.PY", "/a/b/no-extension", "/a/CMakeLists.txt.bak"] {
+            let expected = (path as NSString).pathExtension.lowercased()
+            #expect(LanguageServerRegistry.extensionKey(forPath: path) == expected,
+                    "\(path) should reduce to \(expected)")
+        }
+    }
+
+    @Test("a plain .txt file still resolves to no language")
+    func plainTextStillUnmapped() {
+        let r = LanguageServerRegistry(userDefined: [])
+        // Guards against the filename table swallowing every .txt file.
+        #expect(r.language(forPath: "/repo/notes.txt") == nil)
+        #expect(r.language(forPath: "/repo/CMakeLists.txt.bak") == nil)
+    }
+
     @Test("no two built-ins claim the same extension")
     func builtInExtensionsAreDisjoint() {
         var owner: [String: String] = [:]

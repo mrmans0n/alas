@@ -64,7 +64,7 @@ struct InstallNudgeResolver {
     }
 
     func nudgeData(forAbsolutePath absolutePath: String) -> InstallNudgeData? {
-        let ext = (absolutePath as NSString).pathExtension.lowercased()
+        let ext = LanguageServerRegistry.extensionKey(forPath: absolutePath)
         guard !ext.isEmpty else { return nil }
 
         if registry.language(forFileExtension: ext) != nil {

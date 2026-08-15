@@ -374,6 +374,36 @@ struct LanguageServerRegistry {
         return merged.first(where: { $0.language == language && $0.enabled })
     }
 
+    /// Files whose *name* identifies the language, because their extension
+    /// either doesn't exist or actively misleads. `CMakeLists.txt` is the
+    /// motivating case: its `pathExtension` is `txt`, so extension-only
+    /// lookup would never reach the `cmake` server for the one file every
+    /// CMake project is guaranteed to have.
+    ///
+    /// Values are extension keys, not language IDs, so a filename resolves
+    /// through exactly the same table as a normal extension.
+    /// `LanguageRegistry.extensionsByFilename` is the highlighting side's
+    /// equivalent; this one is deliberately narrower — it lists only
+    /// filenames whose language has a built-in server.
+    private static let extensionsByFilename: [String: String] = [
+        "cmakelists.txt": "cmake"
+    ]
+
+    /// The extension key to look a path up by. Identical to `pathExtension`
+    /// apart from the filenames above, so it is a safe drop-in wherever a
+    /// path was previously reduced with `pathExtension`.
+    static func extensionKey(forPath path: String) -> String {
+        let filename = (path as NSString).lastPathComponent.lowercased()
+        if let mapped = extensionsByFilename[filename] { return mapped }
+        return (path as NSString).pathExtension.lowercased()
+    }
+
+    /// Language for `path`, honouring filename-identified files. Prefer this
+    /// over `language(forFileExtension:)` whenever a full path is in hand.
+    func language(forPath path: String) -> String? {
+        language(forFileExtension: Self.extensionKey(forPath: path))
+    }
+
     func language(forFileExtension ext: String) -> String? {
         let lower = ext.lowercased()
         // Skip disabled entries so a stale disabled config can't mask an

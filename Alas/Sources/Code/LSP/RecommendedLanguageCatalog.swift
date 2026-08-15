@@ -301,12 +301,26 @@ enum RecommendedLanguageCatalog {
         byLanguage[language]
     }
 
-    /// All language IDs that share the same install recipes as `language` —
-    /// i.e. the canonical language plus every entry that aliases to it. Used
-    /// after an install completes to re-fire `didOpen` for buffers in every
-    /// language served by the just-installed binary (e.g. installing
+    /// All language IDs served by the same install as `language`. Used after
+    /// an install completes to re-fire `didOpen` for buffers in every
+    /// language the just-installed package covers (e.g. installing
     /// typescript-language-server from a `.tsx` banner should also revive
     /// open `.ts`/`.js`/`.jsx` tabs).
+    ///
+    /// Membership is two things, not one:
+    ///
+    /// 1. the alias chain — the canonical language plus everything aliasing
+    ///    to it, which covers the TypeScript family and C/C++/Objective-C;
+    /// 2. any *other* canonical language whose resolved recipes are
+    ///    identical, because one package can supply several servers that are
+    ///    not aliases of each other. `vscode-langservers-extracted` is the
+    ///    case in point: it installs the JSON, CSS and HTML binaries in one
+    ///    go, so installing it from a CSS banner has to revive open HTML and
+    ///    JSON tabs too — they are equally un-blocked by that install.
+    ///
+    /// Recipe matching is skipped for entries with no recipes at all, or
+    /// every bundled/unprovisioned language (swift, c, …) would collapse
+    /// into one group on the strength of being equally empty.
     ///
     /// If `language` is not in the catalog, returns `[language]` unchanged.
     static func aliasGroup(forLanguage language: String) -> [String] {
@@ -317,6 +331,13 @@ enum RecommendedLanguageCatalog {
         let canonical = entry.aliasOf ?? entry.language
         var group = [canonical]
         for other in allEntries where other.aliasOf == canonical && other.language != canonical {
+            group.append(other.language)
+        }
+
+        let recipes = entry.resolvedRecipes
+        guard !recipes.isEmpty else { return group }
+        for other in allEntries
+        where !group.contains(other.language) && other.resolvedRecipes == recipes {
             group.append(other.language)
         }
         return group

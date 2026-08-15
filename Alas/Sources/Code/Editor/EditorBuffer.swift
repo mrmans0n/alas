@@ -392,7 +392,7 @@ final class EditorBuffer {
         self.worktreeId = worktreeId
         self.tabId = tabId
         self.lsp = lsp
-        self.language = lsp?.language(forFileExtension: (relativePath as NSString).pathExtension)
+        self.language = lsp?.language(forPath: relativePath)
         let delegate = BufferStorageDelegate { [weak self] edit in self?.handleEdit(edit: edit) }
         self.storageDelegate = delegate
         self.storage.delegate = delegate
@@ -933,7 +933,7 @@ final class EditorBuffer {
         languageReopenTask?.cancel()
         languageReopenTask = nil
         relativePath = newRelativePath
-        language = lsp?.language(forFileExtension: (newRelativePath as NSString).pathExtension)
+        language = lsp?.language(forPath: newRelativePath)
         if wasDirty {
             updateOriginalFileIdentity(from: newURL)
             let differsFromOriginal = movedFileDiffersFromOriginal ?? Self.movedFileDiffersFromOriginal(
@@ -1164,7 +1164,7 @@ final class EditorBuffer {
         do {
             try write(canonical: canonical, to: newURL, createDirectories: true)
             relativePath = newRelativePath
-            language = lsp?.language(forFileExtension: (newRelativePath as NSString).pathExtension)
+            language = lsp?.language(forPath: newRelativePath)
             originalText = canonical
             updateOriginalMtime(from: newURL)
             updateOriginalFileIdentity(from: newURL)
@@ -1204,7 +1204,7 @@ final class EditorBuffer {
                 try FileManager.default.moveItem(at: oldURL, to: newURL)
             }
             relativePath = newRelativePath
-            language = lsp?.language(forFileExtension: (newRelativePath as NSString).pathExtension)
+            language = lsp?.language(forPath: newRelativePath)
             updateOriginalMtime(from: newURL)
             updateOriginalFileIdentity(from: newURL)
             if dirty {
@@ -1258,7 +1258,7 @@ final class EditorBuffer {
                 host: host, path: newURL.path, content: lineEnding.normalize(canonical)
             )
             relativePath = newRelativePath
-            language = lsp?.language(forFileExtension: (newRelativePath as NSString).pathExtension)
+            language = lsp?.language(forPath: newRelativePath)
             originalText = canonical
             originalMtime = mtime
             discardSnapshot()
@@ -1297,7 +1297,7 @@ final class EditorBuffer {
                 ])
             }
             relativePath = newRelativePath
-            language = lsp?.language(forFileExtension: (newRelativePath as NSString).pathExtension)
+            language = lsp?.language(forPath: newRelativePath)
             if dirty { snapshotNow() } else { discardSnapshot() }
             notifyDidClose(url: oldURL)
             notifyDidOpen(url: newURL, text: storage.string)
@@ -1678,7 +1678,7 @@ final class EditorBuffer {
         let resolvedLanguage = languageOverride
             ?? openedLanguage
             ?? language
-            ?? lsp.language(forFileExtension: ((relativePath as NSString).pathExtension))
+            ?? lsp.language(forPath: relativePath)
         guard let resolvedLanguage else {
             try await saveAwaitingRemote()
             return
@@ -1778,7 +1778,7 @@ final class EditorBuffer {
         if oldRelativePath != snap.relativePath {
             pendingRestoredPathChange = (oldRelativePath, snap.relativePath)
         }
-        language = lsp?.language(forFileExtension: (snap.relativePath as NSString).pathExtension)
+        language = lsp?.language(forPath: snap.relativePath)
         withLoadEditTrackingSuppressed {
             storage.setAttributedString(NSAttributedString(string: snap.content))
         }
