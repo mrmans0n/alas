@@ -174,6 +174,123 @@ enum RecommendedLanguageCatalog {
                 InstallRecipe(installer: .brew, package: "JetBrains/utils/kotlin-lsp"),
             ]
         ),
+        // Objective-C rides on clangd, so it inherits C's (deliberately
+        // empty) recipes for the keg-only-llvm reason documented above.
+        RecommendedLanguage(
+            language: "objective-c",
+            displayName: "Objective-C",
+            masonId: nil,
+            aliasOf: "c",
+            recipes: []
+        ),
+        RecommendedLanguage(
+            language: "objective-cpp",
+            displayName: "Objective-C",
+            masonId: nil,
+            aliasOf: "c",
+            recipes: []
+        ),
+        // Same package as the JSON entry above — one install covers
+        // JSON + CSS + SCSS + HTML.
+        RecommendedLanguage(
+            language: "css",
+            displayName: "CSS / SCSS",
+            masonId: "css-lsp",
+            aliasOf: nil,
+            recipes: [
+                InstallRecipe(installer: .brew, package: "vscode-langservers-extracted"),
+                InstallRecipe(installer: .npm, package: "vscode-langservers-extracted"),
+            ]
+        ),
+        RecommendedLanguage(
+            language: "scss",
+            displayName: "CSS / SCSS",
+            masonId: nil,
+            aliasOf: "css",
+            recipes: []
+        ),
+        RecommendedLanguage(
+            language: "html",
+            displayName: "HTML",
+            masonId: "html-lsp",
+            aliasOf: nil,
+            recipes: [
+                InstallRecipe(installer: .brew, package: "vscode-langservers-extracted"),
+                InstallRecipe(installer: .npm, package: "vscode-langservers-extracted"),
+            ]
+        ),
+        RecommendedLanguage(
+            language: "scala",
+            displayName: "Scala",
+            masonId: "metals",
+            aliasOf: nil,
+            recipes: [
+                InstallRecipe(installer: .brew, package: "metals"),
+            ]
+        ),
+        RecommendedLanguage(
+            language: "clojure",
+            displayName: "Clojure",
+            masonId: "clojure-lsp",
+            aliasOf: nil,
+            recipes: [
+                InstallRecipe(installer: .brew, package: "clojure-lsp"),
+            ]
+        ),
+        RecommendedLanguage(
+            language: "zig",
+            displayName: "Zig",
+            masonId: "zls",
+            aliasOf: nil,
+            recipes: [
+                InstallRecipe(installer: .brew, package: "zls"),
+            ]
+        ),
+        RecommendedLanguage(
+            language: "elixir",
+            displayName: "Elixir",
+            masonId: "elixir-ls",
+            aliasOf: nil,
+            recipes: [
+                InstallRecipe(installer: .brew, package: "elixir-ls"),
+            ]
+        ),
+        RecommendedLanguage(
+            language: "cmake",
+            displayName: "CMake",
+            masonId: "cmake-language-server",
+            aliasOf: nil,
+            recipes: [
+                InstallRecipe(installer: .brew, package: "cmake-language-server"),
+                InstallRecipe(installer: .pipx, package: "cmake-language-server"),
+            ]
+        ),
+        // The language server is a subcommand of the SDK, so the install is
+        // the whole SDK rather than a standalone server package.
+        RecommendedLanguage(
+            language: "dart",
+            displayName: "Dart",
+            masonId: nil,
+            aliasOf: nil,
+            recipes: [
+                InstallRecipe(installer: .brew, package: "dart-sdk"),
+            ]
+        ),
+        // Homebrew's haskell-language-server is built against specific GHC
+        // versions and does not bring one: its own caveat says "You need to
+        // provide your own GHC or install one with `brew install ghc`".
+        // Installing this alone gets a server that completes the LSP
+        // handshake but cannot type-check a project until a matching GHC is
+        // present — worth knowing before treating a green install as done.
+        RecommendedLanguage(
+            language: "haskell",
+            displayName: "Haskell",
+            masonId: "haskell-language-server",
+            aliasOf: nil,
+            recipes: [
+                InstallRecipe(installer: .brew, package: "haskell-language-server"),
+            ]
+        ),
     ]
 
     private static let byLanguage: [String: RecommendedLanguage] = Dictionary(

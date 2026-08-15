@@ -137,4 +137,90 @@ struct LanguageServerRegistryTests {
         #expect(entry?.command == "lua-language-server")
         #expect(entry?.extensions == ["lua"])
     }
+
+    @Test("Objective-C built-ins reuse clangd with distinct language IDs")
+    func objectiveCBuiltIns() {
+        let m = LanguageServerRegistry.builtIns.first(where: { $0.language == "objective-c" })
+        let mm = LanguageServerRegistry.builtIns.first(where: { $0.language == "objective-cpp" })
+        #expect(m?.command == "clangd")
+        #expect(mm?.command == "clangd")
+        // clangd picks its dialect from the languageId, so `.mm` must not be
+        // folded into the objective-c entry.
+        #expect(m?.extensions == ["m"])
+        #expect(mm?.extensions == ["mm"])
+    }
+
+    @Test("css, scss and html built-ins use the vscode-langservers binaries")
+    func webBuiltIns() {
+        let css = LanguageServerRegistry.builtIns.first(where: { $0.language == "css" })
+        let scss = LanguageServerRegistry.builtIns.first(where: { $0.language == "scss" })
+        let html = LanguageServerRegistry.builtIns.first(where: { $0.language == "html" })
+        #expect(css?.command == "vscode-css-language-server")
+        // One server, two languageIds: it keys off the document's languageId
+        // rather than re-deriving the dialect from the extension.
+        #expect(scss?.command == "vscode-css-language-server")
+        #expect(html?.command == "vscode-html-language-server")
+        for entry in [css, scss, html] {
+            #expect(entry?.args == ["--stdio"])
+        }
+    }
+
+    @Test("haskell built-in uses the wrapper binary, not the bare name")
+    func haskellUsesWrapper() {
+        let entry = LanguageServerRegistry.builtIns.first(where: { $0.language == "haskell" })
+        // Homebrew ships only GHC-version-suffixed binaries plus this
+        // wrapper — there is no plain `haskell-language-server` on PATH, so
+        // the obvious name would report "not installed" forever.
+        #expect(entry?.command == "haskell-language-server-wrapper")
+        #expect(entry?.args == ["--lsp"])
+    }
+
+    @Test("dart built-in selects the LSP protocol explicitly")
+    func dartBuiltIn() {
+        let entry = LanguageServerRegistry.builtIns.first(where: { $0.language == "dart" })
+        // The server is an SDK subcommand and speaks the legacy analysis
+        // protocol without `--protocol=lsp`.
+        #expect(entry?.command == "dart")
+        #expect(entry?.args == ["language-server", "--protocol=lsp"])
+    }
+
+    @Test("new presets are reachable by extension")
+    func newPresetsByExtension() {
+        let r = LanguageServerRegistry(userDefined: [])
+        let expected: [String: String] = [
+            "m": "objective-c",
+            "mm": "objective-cpp",
+            "css": "css",
+            "scss": "scss",
+            "html": "html",
+            "htm": "html",
+            "scala": "scala",
+            "sbt": "scala",
+            "clj": "clojure",
+            "edn": "clojure",
+            "zig": "zig",
+            "ex": "elixir",
+            "exs": "elixir",
+            "cmake": "cmake",
+            "dart": "dart",
+            "hs": "haskell",
+            "lhs": "haskell",
+        ]
+        for (ext, language) in expected {
+            #expect(r.language(forFileExtension: ext) == language,
+                    "\(ext) should resolve to \(language)")
+        }
+    }
+
+    @Test("no two built-ins claim the same extension")
+    func builtInExtensionsAreDisjoint() {
+        var owner: [String: String] = [:]
+        for entry in LanguageServerRegistry.builtIns {
+            for ext in entry.extensions {
+                #expect(owner[ext] == nil,
+                        "extension '\(ext)' claimed by both \(owner[ext] ?? "?") and \(entry.language)")
+                owner[ext] = entry.language
+            }
+        }
+    }
 }

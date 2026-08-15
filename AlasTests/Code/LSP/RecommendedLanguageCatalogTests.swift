@@ -76,6 +76,48 @@ struct RecommendedLanguageCatalogTests {
         }
     }
 
+    @Test("objective-c and objective-cpp alias to c (clangd)")
+    func objectiveCAliases() {
+        for lang in ["objective-c", "objective-cpp"] {
+            let entry = RecommendedLanguageCatalog.entry(forLanguage: lang)
+            #expect(entry?.aliasOf == "c", "\(lang) should alias to c")
+            // Inherits c's deliberately empty recipes (keg-only llvm).
+            #expect(entry?.resolvedRecipes.isEmpty == true)
+        }
+    }
+
+    @Test("scss aliases to css; both install vscode-langservers-extracted")
+    func scssAliasesToCSS() {
+        let scss = RecommendedLanguageCatalog.entry(forLanguage: "scss")
+        #expect(scss?.aliasOf == "css")
+        // Same package the JSON entry installs, so one install covers
+        // JSON + CSS + SCSS + HTML.
+        for lang in ["css", "scss", "html"] {
+            let entry = RecommendedLanguageCatalog.entry(forLanguage: lang)
+            #expect(entry?.resolvedRecipes.first?.package == "vscode-langservers-extracted",
+                    "\(lang) should install vscode-langservers-extracted")
+        }
+    }
+
+    @Test("brew-core presets name a real formula")
+    func brewCorePresets() {
+        let expected: [String: String] = [
+            "scala": "metals",
+            "clojure": "clojure-lsp",
+            "zig": "zls",
+            "elixir": "elixir-ls",
+            "cmake": "cmake-language-server",
+            "dart": "dart-sdk",
+            "haskell": "haskell-language-server",
+        ]
+        for (lang, formula) in expected {
+            let entry = RecommendedLanguageCatalog.entry(forLanguage: lang)
+            #expect(entry != nil, "missing catalog entry for \(lang)")
+            let brew = entry?.resolvedRecipes.first(where: { $0.installer == .brew })
+            #expect(brew?.package == formula, "\(lang) should brew-install \(formula)")
+        }
+    }
+
     @Test("alias entries carry empty own recipes")
     func aliasOwnRecipesEmpty() {
         let alias = RecommendedLanguageCatalog.allEntries.first(where: { $0.language == "typescriptreact" })
