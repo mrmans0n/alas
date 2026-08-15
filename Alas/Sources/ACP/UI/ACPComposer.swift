@@ -68,6 +68,10 @@ struct ACPInputField: NSViewRepresentable {
             guard let coord, let tv = coord.textView as? ACPNSTextView else { return }
             tv.presentImagePicker()
         }
+        actions.insertQuote = { [weak coord] message in
+            guard let coord, let textView = coord.textView else { return }
+            coord.insertQuote(message, into: textView)
+        }
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true
         scroll.drawsBackground = false
@@ -360,6 +364,36 @@ struct ACPInputField: NSViewRepresentable {
                 pendingSubmitID = submitID
                 clearVisibleDraft(in: textView)
             }
+        }
+
+        func insertQuote(_ message: String, into textView: NSTextView) {
+            guard !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            if let textView = textView as? ACPNSTextView {
+                textView.dismissSlashPanel()
+            }
+
+            let selection = textView.selectedRange()
+            let source = textView.string as NSString
+            let needsLeadingNewline = selection.location > 0
+                && source.character(at: selection.location - 1) != 0x0A
+            let suffixLocation = NSMaxRange(selection)
+            let needsTrailingSpacer = suffixLocation < source.length
+                && source.character(at: suffixLocation) != 0x0A
+            let leading = needsLeadingNewline ? "\n" : ""
+            let quoted = ACPMessageQuote.markdown(message)
+            let caretPrefix = leading + quoted + "\n"
+            let replacement = caretPrefix + (needsTrailingSpacer ? "\n" : "")
+
+            textView.typingAttributes = [
+                .font: typography.appKitFont(),
+                .foregroundColor: NSColor.labelColor,
+            ]
+            textView.insertText(replacement, replacementRange: selection)
+            textView.setSelectedRange(NSRange(
+                location: selection.location + (caretPrefix as NSString).length,
+                length: 0
+            ))
+            textView.window?.makeFirstResponder(textView)
         }
 
         func beginPendingImageFileInsertion() -> Int {

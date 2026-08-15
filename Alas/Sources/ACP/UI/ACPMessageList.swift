@@ -30,6 +30,7 @@ struct ACPMessageList: View {
     /// the row is gone or the payload is undecodable.
     let onLoadFullToolCallContent: (String) async -> String?
     let forkTargets: [ACPSessionForkTarget]
+    let onQuote: (String) -> Void
     let onFork: (ACPForkMessageBoundary, String) -> Void
     let onOpenForkSource: (String) -> Void
     let agentDisplayName: (String) -> String
@@ -55,6 +56,7 @@ struct ACPMessageList: View {
                 onOpenDiff: onOpenDiff,
                 onLoadFullToolCallContent: onLoadFullToolCallContent,
                 forkTargets: forkTargets,
+                onQuote: onQuote,
                 onFork: onFork,
                 rememberedScrollAnchor: rememberedScrollAnchor,
                 onRememberScrollAnchor: onRememberScrollAnchor,

@@ -14,6 +14,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
     let onOpenDiff: (String) -> Void
     let onLoadFullToolCallContent: (String) async -> String?
     let forkTargets: [ACPSessionForkTarget]
+    var onQuote: (String) -> Void = { _ in }
     let onFork: (ACPForkMessageBoundary, String) -> Void
     let rememberedScrollAnchor: () -> String?
     let onRememberScrollAnchor: (String?, Int?, Bool) -> Void
@@ -403,6 +404,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 onLoadFullToolCallContent: host.onLoadFullToolCallContent,
                 isForkEligible: host.session.canForkMessage(at: row.index),
                 forkTargets: host.forkTargets,
+                onQuote: host.onQuote,
                 onFork: host.onFork
             )
             // Column framing (max width / horizontal padding / centering)
