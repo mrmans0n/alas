@@ -1336,7 +1336,7 @@ final class AppState {
 
     func makeIssueSuggestionLoader() -> IssueSuggestionLoader {
         let projects = projects
-        IssueSuggestionLoader(environment: .init(
+        return IssueSuggestionLoader(environment: .init(
             projects: { projects },
             remotes: { project in
                 try await GitService().remotes(worktreePath: URL(fileURLWithPath: project.path))
