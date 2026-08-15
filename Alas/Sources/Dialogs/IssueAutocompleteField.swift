@@ -143,10 +143,11 @@ private struct IssueAutocompleteTextField: NSViewRepresentable {
                 }
                 return true
             case #selector(NSResponder.cancelOperation(_:)):
+                let wasVisible = popupIsVisible
                 dismissedText = parent.text
                 parent.onDismiss()
                 hidePopup()
-                return popupIsVisible
+                return wasVisible
             default:
                 return false
             }
@@ -171,9 +172,9 @@ private struct IssueAutocompleteTextField: NSViewRepresentable {
             )
             popup.show(
                 root: root,
-                width: max(field.bounds.width, 1),
+                width: max(IssueCompletionGeometry.popupAnchor(for: field.bounds).width, 1),
                 rowCount: popupRowCount,
-                anchor: field.bounds,
+                anchor: IssueCompletionGeometry.popupAnchor(for: field.bounds),
                 in: field
             )
         }
@@ -200,6 +201,14 @@ private struct IssueAutocompleteTextField: NSViewRepresentable {
 
 private final class IssueAutocompleteNSTextField: NSTextField {
     var focusOnAppear = false
+}
+
+enum IssueCompletionGeometry {
+    static let chromeHorizontalInset: CGFloat = 10
+
+    static func popupAnchor(for fieldBounds: NSRect) -> NSRect {
+        fieldBounds.insetBy(dx: -chromeHorizontalInset, dy: 0)
+    }
 }
 
 @MainActor
