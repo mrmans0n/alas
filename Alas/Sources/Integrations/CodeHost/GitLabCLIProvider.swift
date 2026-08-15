@@ -58,7 +58,21 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
     }
 
     func openIssues(remote: CodeHostRemote, limit: Int, cwd: URL) async throws -> [CodeHostIssueSuggestion] {
-        throw CodeHostProviderError.unsupportedProvider(.gitlab)
+        guard limit > 0 else { return [] }
+        let result = try await runner.run(
+            executable,
+            args: [
+                "api", "projects/\(Self.encodedProjectPath(remote.repositorySlug))/issues",
+                "--hostname", remote.host, "--output", "json", "--method", "GET",
+                "-f", "state=opened", "-f", "order_by=created_at", "-f", "sort=desc",
+                "-f", "per_page=\(limit)",
+            ],
+            cwd: cwd
+        )
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "glab api issues", stderr: result.stderr)
+        }
+        return try Self.parseOpenIssues(result.stdout, remote: remote, limit: limit)
     }
 
     func currentReviewRequest(
@@ -1722,6 +1736,35 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         )
     }
 
+    static func parseOpenIssues(_ json: String, remote: CodeHostRemote, limit: Int) throws -> [CodeHostIssueSuggestion] {
+        let responses: [GitLabOpenIssueResponse]
+        do {
+            responses = try JSONDecoder().decode([GitLabOpenIssueResponse].self, from: Data(json.utf8))
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse GitLab issue list output.")
+        }
+
+        let suggestions = try responses.map { response in
+            guard response.iid > 0,
+                  !response.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  let url = try parseOptionalHTTPURL(response.webURL, context: "GitLab issue output is missing a valid URL."),
+                  let createdAt = try parseOptionalGitLabDate(response.createdAt),
+                  case .url(let kind, let host, let repositorySlug, let number) = try CodeHostIssueInput.parse(url.absoluteString),
+                  kind == .gitlab,
+                  host.caseInsensitiveCompare(remote.host) == .orderedSame,
+                  repositorySlug.caseInsensitiveCompare(remote.repositorySlug) == .orderedSame,
+                  number == response.iid
+            else {
+                throw CodeHostProviderError.malformedOutput("GitLab issue output is missing required fields.")
+            }
+            return CodeHostIssueSuggestion(provider: .gitlab, number: response.iid, title: response.title, canonicalURL: url, createdAt: createdAt)
+        }
+        return suggestions.sorted {
+            if $0.createdAt != $1.createdAt { return $0.createdAt > $1.createdAt }
+            return $0.number > $1.number
+        }.prefix(limit).map { $0 }
+    }
+
     private static func parseDate(_ value: String, formatOptions: ISO8601DateFormatter.Options) -> Date? {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = formatOptions
@@ -2045,6 +2088,19 @@ private struct GitLabIssueResponse: Decodable {
     }
 
     struct Assignee: Decodable { let username: String? }
+}
+
+private struct GitLabOpenIssueResponse: Decodable {
+    let iid: Int
+    let title: String
+    let webURL: String?
+    let createdAt: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case iid, title
+        case webURL = "web_url"
+        case createdAt = "created_at"
+    }
 }
 
 private struct GitLabPipeline: Decodable {
