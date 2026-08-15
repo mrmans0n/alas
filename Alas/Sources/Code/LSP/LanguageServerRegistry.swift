@@ -234,6 +234,134 @@ struct LanguageServerRegistry {
             env: [:],
             rootMarkers: [".luarc.json", ".luarc.jsonc", "stylua.toml", ".git"],
             enabled: true
+        ),
+        // clangd already ships with the Xcode command line tools and is
+        // already the C/C++ preset, so Objective-C costs no new dependency.
+        // The LSP spec's IDs are `objective-c` / `objective-cpp`; clangd
+        // switches dialect on them, so `.mm` must not be folded into the
+        // `objective-c` entry.
+        LanguageServerConfig(
+            language: "objective-c",
+            extensions: ["m"],
+            command: "clangd",
+            args: [],
+            env: [:],
+            rootMarkers: ["compile_commands.json", "CMakeLists.txt", "Makefile", ".git"],
+            enabled: true
+        ),
+        LanguageServerConfig(
+            language: "objective-cpp",
+            extensions: ["mm"],
+            command: "clangd",
+            args: [],
+            env: [:],
+            rootMarkers: ["compile_commands.json", "CMakeLists.txt", "Makefile", ".git"],
+            enabled: true
+        ),
+        // CSS/SCSS/HTML all come from vscode-langservers-extracted, which is
+        // already the recommended install for the JSON preset above — so for
+        // anyone who took that nudge these light up with nothing further to
+        // install. The CSS server handles both dialects but keys off the
+        // document's languageId, so `scss` needs its own entry rather than
+        // being an extension on the `css` one.
+        LanguageServerConfig(
+            language: "css",
+            extensions: ["css"],
+            command: "vscode-css-language-server",
+            args: ["--stdio"],
+            env: [:],
+            rootMarkers: ["package.json", ".git"],
+            enabled: true
+        ),
+        LanguageServerConfig(
+            language: "scss",
+            extensions: ["scss"],
+            command: "vscode-css-language-server",
+            args: ["--stdio"],
+            env: [:],
+            rootMarkers: ["package.json", ".git"],
+            enabled: true
+        ),
+        LanguageServerConfig(
+            language: "html",
+            extensions: ["html", "htm"],
+            command: "vscode-html-language-server",
+            args: ["--stdio"],
+            env: [:],
+            rootMarkers: ["package.json", ".git"],
+            enabled: true
+        ),
+        LanguageServerConfig(
+            language: "scala",
+            extensions: ["scala", "sbt", "sc"],
+            command: "metals",
+            args: [],
+            env: [:],
+            rootMarkers: ["build.sbt", "build.sc", "build.gradle", "pom.xml", ".git"],
+            enabled: true
+        ),
+        LanguageServerConfig(
+            language: "clojure",
+            extensions: ["clj", "cljs", "cljc", "edn"],
+            command: "clojure-lsp",
+            args: [],
+            env: [:],
+            rootMarkers: ["deps.edn", "project.clj", "shadow-cljs.edn", "bb.edn", ".git"],
+            enabled: true
+        ),
+        LanguageServerConfig(
+            language: "zig",
+            extensions: ["zig"],
+            command: "zls",
+            args: [],
+            env: [:],
+            rootMarkers: ["build.zig", "build.zig.zon", ".git"],
+            enabled: true
+        ),
+        LanguageServerConfig(
+            language: "elixir",
+            extensions: ["ex", "exs"],
+            command: "elixir-ls",
+            args: [],
+            env: [:],
+            rootMarkers: ["mix.exs", ".git"],
+            enabled: true
+        ),
+        LanguageServerConfig(
+            language: "cmake",
+            extensions: ["cmake"],
+            command: "cmake-language-server",
+            args: [],
+            env: [:],
+            rootMarkers: ["CMakeLists.txt", ".git"],
+            enabled: true
+        ),
+        // The LSP is a subcommand of the Dart SDK's own driver rather than a
+        // standalone binary, and it speaks the legacy analysis-server
+        // protocol unless `--protocol=lsp` is passed.
+        LanguageServerConfig(
+            language: "dart",
+            extensions: ["dart"],
+            command: "dart",
+            args: ["language-server", "--protocol=lsp"],
+            env: [:],
+            rootMarkers: ["pubspec.yaml", ".git"],
+            enabled: true
+        ),
+        // `haskell-language-server-wrapper`, not `haskell-language-server`:
+        // Homebrew ships only GHC-version-suffixed binaries
+        // (`haskell-language-server-9.12`, `-9.14`, …) plus this wrapper,
+        // which picks the one matching the project's GHC. There is no
+        // unsuffixed binary, so the obvious command name would resolve to
+        // nothing and report "not installed" forever.
+        LanguageServerConfig(
+            language: "haskell",
+            extensions: ["hs", "lhs"],
+            command: "haskell-language-server-wrapper",
+            args: ["--lsp"],
+            env: [:],
+            rootMarkers: ["*.cabal", "stack.yaml", "cabal.project", "package.yaml", ".git"],
+            enabled: true
         )
     ]
 
@@ -244,6 +372,36 @@ struct LanguageServerRegistry {
     func entry(forLanguage language: String) -> LanguageServerConfig? {
         let merged = mergedEntries
         return merged.first(where: { $0.language == language && $0.enabled })
+    }
+
+    /// Files whose *name* identifies the language, because their extension
+    /// either doesn't exist or actively misleads. `CMakeLists.txt` is the
+    /// motivating case: its `pathExtension` is `txt`, so extension-only
+    /// lookup would never reach the `cmake` server for the one file every
+    /// CMake project is guaranteed to have.
+    ///
+    /// Values are extension keys, not language IDs, so a filename resolves
+    /// through exactly the same table as a normal extension.
+    /// `LanguageRegistry.extensionsByFilename` is the highlighting side's
+    /// equivalent; this one is deliberately narrower — it lists only
+    /// filenames whose language has a built-in server.
+    private static let extensionsByFilename: [String: String] = [
+        "cmakelists.txt": "cmake"
+    ]
+
+    /// The extension key to look a path up by. Identical to `pathExtension`
+    /// apart from the filenames above, so it is a safe drop-in wherever a
+    /// path was previously reduced with `pathExtension`.
+    static func extensionKey(forPath path: String) -> String {
+        let filename = (path as NSString).lastPathComponent.lowercased()
+        if let mapped = extensionsByFilename[filename] { return mapped }
+        return (path as NSString).pathExtension.lowercased()
+    }
+
+    /// Language for `path`, honouring filename-identified files. Prefer this
+    /// over `language(forFileExtension:)` whenever a full path is in hand.
+    func language(forPath path: String) -> String? {
+        language(forFileExtension: Self.extensionKey(forPath: path))
     }
 
     func language(forFileExtension ext: String) -> String? {

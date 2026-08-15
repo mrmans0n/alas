@@ -301,9 +301,9 @@ final class CodeEditorCoordinator {
         // churning undo/selection state.
         let inferred: String?
         if let abs = externalAbsolutePath {
-            inferred = appState.lsp.language(forFileExtension: (abs as NSString).pathExtension)
+            inferred = appState.lsp.language(forPath: abs)
         } else {
-            inferred = appState.lsp.language(forFileExtension: (relativePath as NSString).pathExtension)
+            inferred = appState.lsp.language(forPath: relativePath)
         }
         let nextLanguage: String?
         if let buf = self.buffer, currentWorktreeId == worktreeId, currentTabId == tabId {
@@ -367,9 +367,7 @@ final class CodeEditorCoordinator {
                 let originatingFileURL: URL? = originatingRelativePath.flatMap {
                     worktreeRoot.appendingPathComponent($0)
                 }
-                let language = appState.lsp.language(
-                    forFileExtension: (abs as NSString).pathExtension
-                )
+                let language = appState.lsp.language(forPath: abs)
                 nextBuffer = appState.tabs.externalBuffer(
                     worktreeId: worktreeId,
                     tabId: tabId,
@@ -470,7 +468,7 @@ final class CodeEditorCoordinator {
         self.buffer = buffer
         self.currentRoot = buffer.worktreeRoot
         self.currentRelativePath = buffer.relativePath
-        let ext = (buffer.relativePath as NSString).pathExtension
+        let ext = LanguageServerRegistry.extensionKey(forPath: buffer.relativePath)
         let freshlyInferred = appState.lsp.language(forFileExtension: ext)
         // Layer a pre-existing override on top of the freshly inferred
         // language. We don't read `buffer.effectiveLanguage` directly

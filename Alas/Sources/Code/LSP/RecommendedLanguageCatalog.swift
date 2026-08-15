@@ -174,6 +174,123 @@ enum RecommendedLanguageCatalog {
                 InstallRecipe(installer: .brew, package: "JetBrains/utils/kotlin-lsp"),
             ]
         ),
+        // Objective-C rides on clangd, so it inherits C's (deliberately
+        // empty) recipes for the keg-only-llvm reason documented above.
+        RecommendedLanguage(
+            language: "objective-c",
+            displayName: "Objective-C",
+            masonId: nil,
+            aliasOf: "c",
+            recipes: []
+        ),
+        RecommendedLanguage(
+            language: "objective-cpp",
+            displayName: "Objective-C",
+            masonId: nil,
+            aliasOf: "c",
+            recipes: []
+        ),
+        // Same package as the JSON entry above — one install covers
+        // JSON + CSS + SCSS + HTML.
+        RecommendedLanguage(
+            language: "css",
+            displayName: "CSS / SCSS",
+            masonId: "css-lsp",
+            aliasOf: nil,
+            recipes: [
+                InstallRecipe(installer: .brew, package: "vscode-langservers-extracted"),
+                InstallRecipe(installer: .npm, package: "vscode-langservers-extracted"),
+            ]
+        ),
+        RecommendedLanguage(
+            language: "scss",
+            displayName: "CSS / SCSS",
+            masonId: nil,
+            aliasOf: "css",
+            recipes: []
+        ),
+        RecommendedLanguage(
+            language: "html",
+            displayName: "HTML",
+            masonId: "html-lsp",
+            aliasOf: nil,
+            recipes: [
+                InstallRecipe(installer: .brew, package: "vscode-langservers-extracted"),
+                InstallRecipe(installer: .npm, package: "vscode-langservers-extracted"),
+            ]
+        ),
+        RecommendedLanguage(
+            language: "scala",
+            displayName: "Scala",
+            masonId: "metals",
+            aliasOf: nil,
+            recipes: [
+                InstallRecipe(installer: .brew, package: "metals"),
+            ]
+        ),
+        RecommendedLanguage(
+            language: "clojure",
+            displayName: "Clojure",
+            masonId: "clojure-lsp",
+            aliasOf: nil,
+            recipes: [
+                InstallRecipe(installer: .brew, package: "clojure-lsp"),
+            ]
+        ),
+        RecommendedLanguage(
+            language: "zig",
+            displayName: "Zig",
+            masonId: "zls",
+            aliasOf: nil,
+            recipes: [
+                InstallRecipe(installer: .brew, package: "zls"),
+            ]
+        ),
+        RecommendedLanguage(
+            language: "elixir",
+            displayName: "Elixir",
+            masonId: "elixir-ls",
+            aliasOf: nil,
+            recipes: [
+                InstallRecipe(installer: .brew, package: "elixir-ls"),
+            ]
+        ),
+        RecommendedLanguage(
+            language: "cmake",
+            displayName: "CMake",
+            masonId: "cmake-language-server",
+            aliasOf: nil,
+            recipes: [
+                InstallRecipe(installer: .brew, package: "cmake-language-server"),
+                InstallRecipe(installer: .pipx, package: "cmake-language-server"),
+            ]
+        ),
+        // The language server is a subcommand of the SDK, so the install is
+        // the whole SDK rather than a standalone server package.
+        RecommendedLanguage(
+            language: "dart",
+            displayName: "Dart",
+            masonId: nil,
+            aliasOf: nil,
+            recipes: [
+                InstallRecipe(installer: .brew, package: "dart-sdk"),
+            ]
+        ),
+        // Homebrew's haskell-language-server is built against specific GHC
+        // versions and does not bring one: its own caveat says "You need to
+        // provide your own GHC or install one with `brew install ghc`".
+        // Installing this alone gets a server that completes the LSP
+        // handshake but cannot type-check a project until a matching GHC is
+        // present — worth knowing before treating a green install as done.
+        RecommendedLanguage(
+            language: "haskell",
+            displayName: "Haskell",
+            masonId: "haskell-language-server",
+            aliasOf: nil,
+            recipes: [
+                InstallRecipe(installer: .brew, package: "haskell-language-server"),
+            ]
+        ),
     ]
 
     private static let byLanguage: [String: RecommendedLanguage] = Dictionary(
@@ -184,12 +301,26 @@ enum RecommendedLanguageCatalog {
         byLanguage[language]
     }
 
-    /// All language IDs that share the same install recipes as `language` —
-    /// i.e. the canonical language plus every entry that aliases to it. Used
-    /// after an install completes to re-fire `didOpen` for buffers in every
-    /// language served by the just-installed binary (e.g. installing
+    /// All language IDs served by the same install as `language`. Used after
+    /// an install completes to re-fire `didOpen` for buffers in every
+    /// language the just-installed package covers (e.g. installing
     /// typescript-language-server from a `.tsx` banner should also revive
     /// open `.ts`/`.js`/`.jsx` tabs).
+    ///
+    /// Membership is two things, not one:
+    ///
+    /// 1. the alias chain — the canonical language plus everything aliasing
+    ///    to it, which covers the TypeScript family and C/C++/Objective-C;
+    /// 2. any *other* canonical language whose resolved recipes are
+    ///    identical, because one package can supply several servers that are
+    ///    not aliases of each other. `vscode-langservers-extracted` is the
+    ///    case in point: it installs the JSON, CSS and HTML binaries in one
+    ///    go, so installing it from a CSS banner has to revive open HTML and
+    ///    JSON tabs too — they are equally un-blocked by that install.
+    ///
+    /// Recipe matching is skipped for entries with no recipes at all, or
+    /// every bundled/unprovisioned language (swift, c, …) would collapse
+    /// into one group on the strength of being equally empty.
     ///
     /// If `language` is not in the catalog, returns `[language]` unchanged.
     static func aliasGroup(forLanguage language: String) -> [String] {
@@ -200,6 +331,13 @@ enum RecommendedLanguageCatalog {
         let canonical = entry.aliasOf ?? entry.language
         var group = [canonical]
         for other in allEntries where other.aliasOf == canonical && other.language != canonical {
+            group.append(other.language)
+        }
+
+        let recipes = entry.resolvedRecipes
+        guard !recipes.isEmpty else { return group }
+        for other in allEntries
+        where !group.contains(other.language) && other.resolvedRecipes == recipes {
             group.append(other.language)
         }
         return group

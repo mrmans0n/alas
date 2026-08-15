@@ -197,7 +197,7 @@ struct DiffTabView: View {
         else {
             return nil
         }
-        guard let language = appState.lsp.language(forFileExtension: (relativePath as NSString).pathExtension) else {
+        guard let language = appState.lsp.language(forPath: relativePath) else {
             return nil
         }
         return DiffPaneLSPContext(

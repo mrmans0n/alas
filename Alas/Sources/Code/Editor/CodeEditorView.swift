@@ -154,8 +154,11 @@ struct CodeEditorView: NSViewRepresentable {
         let buffer: EditorBuffer
         if let abs = externalAbsolutePath {
             let absoluteURL = URL(fileURLWithPath: abs)
-            let ext = (abs as NSString).pathExtension
-            let language = appState.lsp.language(forFileExtension: ext)
+            // Path-based so filename-identified files (CMakeLists.txt) get a
+            // language here too. A nil language would be stored in
+            // ExternalLSPInfo and leave the tab permanently unregistered with
+            // the server, including after an install completes.
+            let language = appState.lsp.language(forPath: abs)
             let originatingFileURL: URL? = originatingRelativePath.map { worktreeRoot.appendingPathComponent($0) }
             buffer = appState.tabs.externalBuffer(
                 worktreeId: worktreeId,

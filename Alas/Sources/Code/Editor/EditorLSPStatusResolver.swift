@@ -26,7 +26,7 @@ struct EditorLSPStatusResolver {
     let registry: RegistryProbe
 
     func resolve(absolutePath: String, override: String?, worktreeRoot: URL) -> EditorLSPStatus {
-        let ext = (absolutePath as NSString).pathExtension.lowercased()
+        let ext = LanguageServerRegistry.extensionKey(forPath: absolutePath)
         let inferred = registry.language(forFileExtension: ext)
         guard let language = override ?? inferred else {
             return .noLanguage(fileExtension: ext)

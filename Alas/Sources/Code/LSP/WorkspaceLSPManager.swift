@@ -11,8 +11,17 @@ extension Notification.Name {
 @MainActor
 protocol DocumentFormatter: AnyObject {
     func language(forFileExtension ext: String) -> String?
+    func language(forPath path: String) -> String?
     func formatting(for fileURL: URL, languageId: String, options: LSPFormattingOptions) async -> [LSPTextEdit]?
     func didChange(worktreeRoot: URL, fileURL: URL, languageId: String, text: String, edits: [EditorTextEdit]?) async
+}
+
+extension DocumentFormatter {
+    /// Reduces the path to its lookup key and defers to the extension-based
+    /// requirement, so a conformance only has to implement one of the two.
+    func language(forPath path: String) -> String? {
+        language(forFileExtension: LanguageServerRegistry.extensionKey(forPath: path))
+    }
 }
 
 @Observable

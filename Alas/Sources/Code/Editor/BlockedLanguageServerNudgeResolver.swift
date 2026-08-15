@@ -37,7 +37,7 @@ struct BlockedLanguageServerNudgeResolver {
     }
 
     func nudgeData(forAbsolutePath absolutePath: String) -> BlockedNudgeData? {
-        let ext = (absolutePath as NSString).pathExtension.lowercased()
+        let ext = LanguageServerRegistry.extensionKey(forPath: absolutePath)
         guard !ext.isEmpty else { return nil }
         guard let language = registry.language(forFileExtension: ext) else { return nil }
         guard let entry = registry.allEntries().first(where: { $0.language == language }) else { return nil }

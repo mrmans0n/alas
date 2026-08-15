@@ -76,6 +76,87 @@ struct RecommendedLanguageCatalogTests {
         }
     }
 
+    @Test("objective-c and objective-cpp alias to c (clangd)")
+    func objectiveCAliases() {
+        for lang in ["objective-c", "objective-cpp"] {
+            let entry = RecommendedLanguageCatalog.entry(forLanguage: lang)
+            #expect(entry?.aliasOf == "c", "\(lang) should alias to c")
+            // Inherits c's deliberately empty recipes (keg-only llvm).
+            #expect(entry?.resolvedRecipes.isEmpty == true)
+        }
+    }
+
+    @Test("scss aliases to css; both install vscode-langservers-extracted")
+    func scssAliasesToCSS() {
+        let scss = RecommendedLanguageCatalog.entry(forLanguage: "scss")
+        #expect(scss?.aliasOf == "css")
+        // Same package the JSON entry installs, so one install covers
+        // JSON + CSS + SCSS + HTML.
+        for lang in ["css", "scss", "html"] {
+            let entry = RecommendedLanguageCatalog.entry(forLanguage: lang)
+            #expect(entry?.resolvedRecipes.first?.package == "vscode-langservers-extracted",
+                    "\(lang) should install vscode-langservers-extracted")
+        }
+    }
+
+    @Test("brew-core presets name a real formula")
+    func brewCorePresets() {
+        let expected: [String: String] = [
+            "scala": "metals",
+            "clojure": "clojure-lsp",
+            "zig": "zls",
+            "elixir": "elixir-ls",
+            "cmake": "cmake-language-server",
+            "dart": "dart-sdk",
+            "haskell": "haskell-language-server",
+        ]
+        for (lang, formula) in expected {
+            let entry = RecommendedLanguageCatalog.entry(forLanguage: lang)
+            #expect(entry != nil, "missing catalog entry for \(lang)")
+            let brew = entry?.resolvedRecipes.first(where: { $0.installer == .brew })
+            #expect(brew?.package == formula, "\(lang) should brew-install \(formula)")
+        }
+    }
+
+    @Test("one install's languages are grouped together for reopen")
+    func aliasGroupSpansSharedInstalls() {
+        // vscode-langservers-extracted ships the JSON, CSS and HTML servers
+        // in one package, so installing it from any one of their banners has
+        // to revive open tabs in all of them — they are equally un-blocked.
+        for entryPoint in ["css", "scss", "html", "json", "jsonc"] {
+            let group = Set(RecommendedLanguageCatalog.aliasGroup(forLanguage: entryPoint))
+            for expected in ["css", "scss", "html", "json", "jsonc"] {
+                #expect(group.contains(expected),
+                        "installing from \(entryPoint) should also refresh \(expected)")
+            }
+        }
+    }
+
+    @Test("shared-install grouping does not merge unrelated languages")
+    func aliasGroupDoesNotOvermerge() {
+        // Languages with no recipes at all (bundled or unprovisionable) must
+        // not collapse into one group on the strength of being equally empty.
+        let swift = Set(RecommendedLanguageCatalog.aliasGroup(forLanguage: "swift"))
+        #expect(swift == ["swift"])
+
+        let c = Set(RecommendedLanguageCatalog.aliasGroup(forLanguage: "c"))
+        #expect(c.contains("c") && c.contains("cpp"))
+        #expect(c.contains("objective-c") && c.contains("objective-cpp"))
+        #expect(!c.contains("swift"))
+
+        // Distinct packages stay distinct.
+        let rust = Set(RecommendedLanguageCatalog.aliasGroup(forLanguage: "rust"))
+        #expect(rust == ["rust"])
+        let scala = Set(RecommendedLanguageCatalog.aliasGroup(forLanguage: "scala"))
+        #expect(scala == ["scala"])
+    }
+
+    @Test("typescript family still groups as before")
+    func typescriptGroupUnchanged() {
+        let group = Set(RecommendedLanguageCatalog.aliasGroup(forLanguage: "typescript"))
+        #expect(group == ["typescript", "typescriptreact", "javascript", "javascriptreact"])
+    }
+
     @Test("alias entries carry empty own recipes")
     func aliasOwnRecipesEmpty() {
         let alias = RecommendedLanguageCatalog.allEntries.first(where: { $0.language == "typescriptreact" })
