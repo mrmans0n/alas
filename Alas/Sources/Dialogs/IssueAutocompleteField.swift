@@ -6,6 +6,7 @@ struct IssueAutocompleteField: View {
     let state: IssueAutocompleteModel.State
     let suggestions: [CodeHostIssueSuggestion]
     let selectedIndex: Int
+    let isPresented: Bool
     let focusOnAppear: Bool
     let isEnabled: Bool
     let onTextChange: (String) -> Void
@@ -23,6 +24,7 @@ struct IssueAutocompleteField: View {
             state: state,
             suggestions: suggestions,
             selectedIndex: selectedIndex,
+            isPresented: isPresented,
             focusOnAppear: focusOnAppear,
             isEnabled: isEnabled,
             theme: theme,
@@ -42,6 +44,7 @@ private struct IssueAutocompleteTextField: NSViewRepresentable {
     let state: IssueAutocompleteModel.State
     let suggestions: [CodeHostIssueSuggestion]
     let selectedIndex: Int
+    let isPresented: Bool
     let focusOnAppear: Bool
     let isEnabled: Bool
     let theme: Theme
@@ -100,8 +103,6 @@ private struct IssueAutocompleteTextField: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextFieldDelegate {
         var parent: IssueAutocompleteTextField
         private let popup = IssueCompletionWindowController()
-        private var dismissedText: String?
-
         init(_ parent: IssueAutocompleteTextField) {
             self.parent = parent
         }
@@ -112,7 +113,6 @@ private struct IssueAutocompleteTextField: NSViewRepresentable {
 
         func controlTextDidChange(_ notification: Notification) {
             guard let field = notification.object as? NSTextField else { return }
-            dismissedText = nil
             if field.stringValue != parent.text {
                 parent.onTextChange(field.stringValue)
             }
@@ -144,7 +144,6 @@ private struct IssueAutocompleteTextField: NSViewRepresentable {
                 return true
             case #selector(NSResponder.cancelOperation(_:)):
                 let wasVisible = popupIsVisible
-                dismissedText = parent.text
                 parent.onDismiss()
                 hidePopup()
                 return wasVisible
@@ -184,9 +183,7 @@ private struct IssueAutocompleteTextField: NSViewRepresentable {
         }
 
         private var popupIsVisible: Bool {
-            parent.text.hasPrefix("#")
-                && dismissedText != parent.text
-                && parent.state != .idle
+            parent.isPresented && parent.state != .idle
         }
 
         private var popupHasSelectableRows: Bool {

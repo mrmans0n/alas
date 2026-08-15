@@ -97,6 +97,13 @@ final class IssueAutocompleteModel {
         dismissedReference = reference
     }
 
+    func cancel() {
+        task?.cancel()
+        task = nil
+        generation &+= 1
+        state = .idle
+    }
+
     func waitForCurrentLoadForTesting() async {
         await task?.value
     }

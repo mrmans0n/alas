@@ -10,6 +10,7 @@ struct AttachIssueDialog: View {
     let onAttach: (AttachedIssueDraft) -> Void
 
     @State private var model: AttachIssueDialogModel
+    @State private var autocomplete: IssueAutocompleteModel
     @Environment(\.theme) private var theme
 
     init(
@@ -19,6 +20,7 @@ struct AttachIssueDialog: View {
         onAttach: @escaping (AttachedIssueDraft) -> Void
     ) {
         _model = State(initialValue: AttachIssueDialogModel(environment: environment, initialDraft: initialDraft))
+        _autocomplete = State(initialValue: IssueAutocompleteModel(load: environment.loadSuggestions))
         self.onCancel = onCancel
         self.onAttach = onAttach
     }
@@ -30,6 +32,15 @@ struct AttachIssueDialog: View {
         case .confirmation:
             confirmationSheet
         }
+        .onChange(of: model.phase) { _, phase in
+            guard phase != .entry else { return }
+            autocomplete.dismiss()
+            autocomplete.cancel()
+        }
+        .onDisappear {
+            autocomplete.dismiss()
+            autocomplete.cancel()
+        }
     }
 
     private var entrySheet: some View {
@@ -38,13 +49,27 @@ struct AttachIssueDialog: View {
             subtitle: "Resolve an issue and prepare the first Chat prompt.",
             content: {
                 DialogField(label: "Issue link") {
-                    AlasField(
-                        text: Bindable(model).reference,
-                        placeholder: "#42 or https://...",
+                    IssueAutocompleteField(
+                        text: autocompleteReferenceBinding,
+                        state: autocomplete.state,
+                        suggestions: autocomplete.filteredSuggestions,
+                        selectedIndex: autocomplete.selectedIndex,
+                        isPresented: autocomplete.isPresented,
                         focusOnAppear: true,
-                        onSubmit: resolve
+                        isEnabled: model.phase != .resolving,
+                        onTextChange: { reference in
+                            model.reference = reference
+                            autocomplete.referenceChanged(reference, projectID: model.autocompleteProjectID)
+                        },
+                        onSubmit: resolve,
+                        onMoveSelection: autocomplete.moveSelection,
+                        onAcceptSelection: {
+                            guard let accepted = autocomplete.acceptSelection() else { return }
+                            model.reference = accepted
+                        },
+                        onDismiss: autocomplete.dismiss,
+                        onFocusLost: autocomplete.dismiss
                     )
-                    .disabled(model.phase == .resolving)
                 }
                 if model.phase == .resolving {
                     HStack(spacing: 8) {
@@ -78,6 +103,9 @@ struct AttachIssueDialog: View {
                 && !model.reference.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         )
         .interactiveDismissDisabled(model.phase == .resolving)
+        .onAppear {
+            autocomplete.referenceChanged(model.reference, projectID: model.autocompleteProjectID)
+        }
     }
 
     private var confirmationSheet: some View {
@@ -131,6 +159,16 @@ struct AttachIssueDialog: View {
         )
     }
 
+    private var autocompleteReferenceBinding: Binding<String> {
+        Binding(
+            get: { model.reference },
+            set: { reference in
+                model.reference = reference
+                autocomplete.referenceChanged(reference, projectID: model.autocompleteProjectID)
+            }
+        )
+    }
+
     private func textEditor(text: Binding<String>, minHeight: CGFloat, maxHeight: CGFloat) -> some View {
         TextEditor(text: text)
             .font(.system(size: 12))
@@ -146,6 +184,8 @@ struct AttachIssueDialog: View {
     }
 
     private func resolve() {
+        autocomplete.dismiss()
+        autocomplete.cancel()
         Task { await model.resolve() }
     }
 

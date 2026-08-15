@@ -12,6 +12,8 @@ final class AttachIssueDialogModel {
 
     struct Environment {
         let resolve: (String) async throws -> ResolvedIssue
+        let loadSuggestions: @Sendable (String, Int) async throws -> [CodeHostIssueSuggestion]
+        let selectedProjectID: String
         let projects: () -> [ProjectConfig]
         let configuredBranchPrefix: (String) -> String
     }
@@ -80,6 +82,10 @@ final class AttachIssueDialogModel {
             title: source.title,
             prefix: environment.configuredBranchPrefix(projectID ?? "")
         )
+    }
+
+    var autocompleteProjectID: String {
+        environment.selectedProjectID
     }
 
     func resolve() async {

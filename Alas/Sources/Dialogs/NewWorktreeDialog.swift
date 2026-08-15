@@ -426,10 +426,15 @@ struct NewWorktreeDialog: View {
     }
 
     private func attachIssueEnvironment() -> AttachIssueDialogModel.Environment {
-        .init(
+        let loader = state.makeIssueSuggestionLoader()
+        return .init(
             resolve: { reference in
                 try await state.makeIssueResolver(selectedProjectID: projectId).resolve(reference)
             },
+            loadSuggestions: { projectID, limit in
+                try await loader.suggestions(projectID: projectID, limit: limit)
+            },
+            selectedProjectID: projectId,
             projects: { state.projects },
             configuredBranchPrefix: { _ in state.config.worktrees.branchPrefix }
         )
