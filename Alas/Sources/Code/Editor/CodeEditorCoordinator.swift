@@ -367,9 +367,7 @@ final class CodeEditorCoordinator {
                 let originatingFileURL: URL? = originatingRelativePath.flatMap {
                     worktreeRoot.appendingPathComponent($0)
                 }
-                let language = appState.lsp.language(
-                    forFileExtension: (abs as NSString).pathExtension
-                )
+                let language = appState.lsp.language(forPath: abs)
                 nextBuffer = appState.tabs.externalBuffer(
                     worktreeId: worktreeId,
                     tabId: tabId,

@@ -2356,7 +2356,7 @@ final class TabsManager {
         }
         guard let lsp else { return }
         for (tabId, entry) in externalTabURLs {
-            let ext = entry.url.pathExtension.lowercased()
+            let ext = LanguageServerRegistry.extensionKey(forPath: entry.url.path)
             guard normalized.contains(ext), lsp.language(forFileExtension: ext) == language else { continue }
             guard var info = externalLSPInfo[tabId] else { continue }
             guard info.language == nil || info.language == language else { continue }

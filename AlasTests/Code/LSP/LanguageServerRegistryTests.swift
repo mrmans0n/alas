@@ -245,6 +245,19 @@ struct LanguageServerRegistryTests {
         #expect(r.language(forPath: "/repo/CMakeLists.txt.bak") == nil)
     }
 
+    @MainActor
+    @Test("DocumentFormatter's default routes filenames through the key")
+    func documentFormatterDefaultResolvesFilenames() {
+        // External tabs and formatAndSave reach the registry through this
+        // protocol, and conformances implement only the extension-based
+        // requirement — so the default has to do the filename normalisation
+        // or those paths silently regress to a nil language.
+        let formatter = RegistryBackedFormatter()
+        #expect(formatter.language(forPath: "/repo/CMakeLists.txt") == "cmake")
+        #expect(formatter.language(forPath: "/repo/App.swift") == "swift")
+        #expect(formatter.language(forPath: "/repo/notes.txt") == nil)
+    }
+
     @Test("no two built-ins claim the same extension")
     func builtInExtensionsAreDisjoint() {
         var owner: [String: String] = [:]
@@ -256,4 +269,22 @@ struct LanguageServerRegistryTests {
             }
         }
     }
+}
+
+/// Implements only the extension-based requirement, exactly as the real
+/// conformances and test fakes do, so `language(forPath:)` exercises the
+/// protocol's default implementation rather than a bespoke override.
+@MainActor
+private final class RegistryBackedFormatter: DocumentFormatter, @unchecked Sendable {
+    private let registry = LanguageServerRegistry(userDefined: [])
+
+    func language(forFileExtension ext: String) -> String? {
+        registry.language(forFileExtension: ext)
+    }
+
+    func formatting(for fileURL: URL, languageId: String, options: LSPFormattingOptions) async -> [LSPTextEdit]? {
+        nil
+    }
+
+    func didChange(worktreeRoot: URL, fileURL: URL, languageId: String, text: String, edits: [EditorTextEdit]?) async {}
 }
