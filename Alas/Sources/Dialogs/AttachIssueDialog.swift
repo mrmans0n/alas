@@ -35,11 +35,11 @@ struct AttachIssueDialog: View {
         .onChange(of: model.phase) { _, phase in
             guard phase != .entry else { return }
             autocomplete.dismiss()
-            autocomplete.cancel()
+            autocomplete.cancelInFlightLoad()
         }
         .onDisappear {
             autocomplete.dismiss()
-            autocomplete.cancel()
+            autocomplete.cancelInFlightLoad()
         }
     }
 
@@ -185,7 +185,7 @@ struct AttachIssueDialog: View {
 
     private func resolve() {
         autocomplete.dismiss()
-        autocomplete.cancel()
+        autocomplete.cancelInFlightLoad()
         Task { await model.resolve() }
     }
 

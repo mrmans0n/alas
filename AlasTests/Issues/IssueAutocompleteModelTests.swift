@@ -139,6 +139,22 @@ struct IssueAutocompleteModelTests {
         #expect(model.isPresented)
     }
 
+    @Test func completedSuggestionsRemainCachedAfterResolvingAndReturningToEntry() async {
+        let loader = ControlledLoader()
+        let model = IssueAutocompleteModel(load: loader.load)
+
+        model.referenceChanged("#", projectID: "alas")
+        await loader.waitUntilCalled()
+        await loader.finish(with: [Self.issue42])
+        await model.waitForCurrentLoadForTesting()
+
+        model.cancelInFlightLoad()
+        model.referenceChanged("#", projectID: "alas")
+
+        #expect(model.filteredSuggestions == [Self.issue42])
+        #expect(await loader.callCount == 1)
+    }
+
     @Test func changingProjectInvalidatesCacheAndLoadsForNewProject() async {
         let loader = ControlledLoader()
         let model = IssueAutocompleteModel(load: loader.load)

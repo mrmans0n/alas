@@ -97,11 +97,13 @@ final class IssueAutocompleteModel {
         dismissedReference = reference
     }
 
-    func cancel() {
+    func cancelInFlightLoad() {
         task?.cancel()
         task = nil
         generation &+= 1
-        state = .idle
+        if case .loading = state {
+            state = .idle
+        }
     }
 
     func waitForCurrentLoadForTesting() async {
