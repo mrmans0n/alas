@@ -3,9 +3,8 @@ import SwiftUI
 
 /// Reserves a hover-revealed action affordance in the right gutter of a
 /// transcript message. The "…" opens a native menu — the per-message action
-/// surface. Today it carries a single action ("Copy message"); future
-/// actions (e.g. fork-from-here) slot in as additional buttons with no
-/// structural change.
+/// surface. Text actions and fork-from-here share this menu without adding
+/// per-action buttons to the transcript row.
 ///
 /// Reusable across message kinds: currently wraps user and agent rows; other
 /// block types can opt in later by wrapping their content the same way.
@@ -38,6 +37,7 @@ struct ACPMessageGutter<Content: View>: View {
     let copySource: CopySource
     let forkBoundary: ACPForkMessageBoundary?
     let forkTargets: [ACPSessionForkTarget]
+    let onQuote: (String) -> Void
     let onFork: (ACPForkMessageBoundary, String) -> Void
     @ViewBuilder var content: Content
 
@@ -81,6 +81,7 @@ struct ACPMessageGutter<Content: View>: View {
             copySource: copySource,
             forkBoundary: forkBoundary,
             forkTargets: forkTargets,
+            onQuote: onQuote,
             onFork: onFork,
             tint: theme.color("fg-muted")
         )
@@ -100,6 +101,7 @@ private struct ACPMessageActionsButton: NSViewRepresentable {
     let copySource: ACPMessageCopySource
     let forkBoundary: ACPForkMessageBoundary?
     let forkTargets: [ACPSessionForkTarget]
+    let onQuote: (String) -> Void
     let onFork: (ACPForkMessageBoundary, String) -> Void
     let tint: Color
 
@@ -108,6 +110,7 @@ private struct ACPMessageActionsButton: NSViewRepresentable {
             copySource: copySource,
             forkBoundary: forkBoundary,
             forkTargets: forkTargets,
+            onQuote: onQuote,
             onFork: onFork
         )
     }
@@ -124,6 +127,7 @@ private struct ACPMessageActionsButton: NSViewRepresentable {
         context.coordinator.copySource = copySource
         context.coordinator.forkBoundary = forkBoundary
         context.coordinator.forkTargets = forkTargets
+        context.coordinator.onQuote = onQuote
         context.coordinator.onFork = onFork
         button.contentTintColor = NSColor(tint)
     }
@@ -133,17 +137,20 @@ private struct ACPMessageActionsButton: NSViewRepresentable {
         var copySource: ACPMessageCopySource
         var forkBoundary: ACPForkMessageBoundary?
         var forkTargets: [ACPSessionForkTarget]
+        var onQuote: (String) -> Void
         var onFork: (ACPForkMessageBoundary, String) -> Void
 
         init(
             copySource: ACPMessageCopySource,
             forkBoundary: ACPForkMessageBoundary?,
             forkTargets: [ACPSessionForkTarget],
+            onQuote: @escaping (String) -> Void,
             onFork: @escaping (ACPForkMessageBoundary, String) -> Void
         ) {
             self.copySource = copySource
             self.forkBoundary = forkBoundary
             self.forkTargets = forkTargets
+            self.onQuote = onQuote
             self.onFork = onFork
         }
 
@@ -156,6 +163,16 @@ private struct ACPMessageActionsButton: NSViewRepresentable {
             )
             copyItem.target = self
             menu.addItem(copyItem)
+            let markdown = copySource.markdown
+            if ACPMessageQuote.canQuote(markdown) {
+                let quoteItem = NSMenuItem(
+                    title: "Quote",
+                    action: #selector(quoteMessage(_:)),
+                    keyEquivalent: ""
+                )
+                quoteItem.target = self
+                menu.addItem(quoteItem)
+            }
             if forkBoundary != nil, !forkTargets.isEmpty {
                 menu.addItem(.separator())
                 let forkItem = NSMenuItem(title: "Fork from here", action: nil, keyEquivalent: "")
@@ -187,6 +204,12 @@ private struct ACPMessageActionsButton: NSViewRepresentable {
             let text = copySource.markdown
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
+        }
+
+        @objc private func quoteMessage(_ sender: NSMenuItem) {
+            let markdown = copySource.markdown
+            guard ACPMessageQuote.canQuote(markdown) else { return }
+            onQuote(markdown)
         }
 
         @objc private func forkFromHere(_ sender: NSMenuItem) {

@@ -21,7 +21,7 @@ struct ACPTranscriptRowContent: View, Equatable {
     // (`transcript`/`session` are `let` properties on `ACPSession`, never
     // reassigned), or closures whose behavior only depends on already-compared
     // data:
-    // - `onOpenDiff` / queue callbacks capture stable host references
+    // - `onOpenDiff` / `onQuote` / queue callbacks capture stable host references
     //   (`state`, `worktree`, `manager`, `sessionId`) wired once by
     //   `ACPTabView`, not per-render-varying state.
     // - `onLoadFullToolCallContent` is only ever invoked when
@@ -47,6 +47,7 @@ struct ACPTranscriptRowContent: View, Equatable {
     let onLoadFullToolCallContent: (String) async -> String?
     let isForkEligible: Bool
     let forkTargets: [ACPSessionForkTarget]
+    var onQuote: (String) -> Void = { _ in }
     let onFork: (ACPForkMessageBoundary, String) -> Void
 
     static func == (lhs: Self, rhs: Self) -> Bool {
@@ -99,6 +100,7 @@ struct ACPTranscriptRowContent: View, Equatable {
                 copySource: .text(text),
                 forkBoundary: forkBoundary(kind: .user),
                 forkTargets: forkTargets,
+                onQuote: onQuote,
                 onFork: onFork
             ) {
                 UserMessageRow(
@@ -114,6 +116,7 @@ struct ACPTranscriptRowContent: View, Equatable {
                 copySource: .streaming(buf),
                 forkBoundary: forkBoundary(kind: .agent),
                 forkTargets: forkTargets,
+                onQuote: onQuote,
                 onFork: onFork
             ) {
                 AgentMessageRow(

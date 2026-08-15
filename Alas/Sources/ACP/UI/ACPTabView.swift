@@ -104,6 +104,7 @@ private struct ACPSessionView: View {
     @Environment(\.theme) private var theme
     @State private var composerFocusRequest: Int = 0
     @StateObject private var composerDropRouter = ACPComposerDropRouter()
+    @StateObject private var composerActions = ACPComposerActions()
 
     private var adapterTarget: ACPAdapterTarget {
         guard let host = RemoteHostRegistry.shared.host(forPath: worktree.path.path) else {
@@ -438,6 +439,9 @@ private struct ACPSessionView: View {
                     sessionId: sessionId, toolCallId: toolCallId)
             },
             forkTargets: state.acpForkTargets(sourceAgentID: session.agentId),
+            onQuote: { message in
+                composerActions.quote(message)
+            },
             onFork: { boundary, targetAgentID in
                 state.forkACPSession(
                     worktree: worktree,
@@ -489,6 +493,7 @@ private struct ACPSessionView: View {
             placement: placement,
             contentMaxWidth: contentMaxWidth,
             typography: typography ?? chatTypography,
+            actions: composerActions,
             filesProvider: { [state, worktree] in
                 await state.fileIndex.invalidate(forWorktreePath: worktree.path)
                 async let entries = try? state.fileIndex.entries(forWorktreePath: worktree.path)

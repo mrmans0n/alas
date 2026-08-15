@@ -7,6 +7,74 @@ import Testing
 @MainActor
 @Suite("ACP composer draft bridge")
 struct ACPComposerDraftBridgeTests {
+    @Test("formats every message line as a Markdown quote")
+    func formatsMessageQuote() {
+        #expect(ACPMessageQuote.markdown("one\n\n**two**") == "> one\n> \n> **two**")
+    }
+
+    @Test("only non-whitespace messages can be quoted")
+    func messageQuoteEligibility() {
+        #expect(ACPMessageQuote.canQuote("hello"))
+        #expect(!ACPMessageQuote.canQuote(" \n\t"))
+    }
+
+    @Test("composer actions forward quote requests")
+    func composerActionsForwardQuoteRequests() {
+        let actions = ACPComposerActions()
+        var received: String?
+        actions.insertQuote = { received = $0 }
+
+        actions.quote("hello")
+
+        #expect(received == "hello")
+    }
+
+    @Test("quote insertion replaces selection and leaves caret on an empty line")
+    func quoteInsertionReplacesSelection() {
+        let textView = NSTextView()
+        textView.string = "Before replace after"
+        textView.setSelectedRange(NSRange(location: 7, length: 7))
+        let coordinator = makeCoordinator(sendOnEnter: true) { _, _, _, _, _ in true }
+        coordinator.textView = textView
+
+        coordinator.insertQuote("first\nsecond", into: textView)
+
+        #expect(textView.string == "Before \n> first\n> second\n\n after")
+        #expect(textView.selectedRange() == NSRange(location: 25, length: 0))
+    }
+
+    @Test("quote insertion preserves composer chips around the caret")
+    func quoteInsertionPreservesChips() {
+        let mention = ACPMentionChipAttachment(
+            displayName: "File.swift",
+            uri: "file:///tmp/File.swift"
+        )
+        let attributed = NSMutableAttributedString(attachment: mention)
+        attributed.addAttribute(
+            .attachmentURI,
+            value: "file:///tmp/File.swift",
+            range: NSRange(location: 0, length: attributed.length)
+        )
+        attributed.append(NSAttributedString(string: " tail"))
+        let textView = NSTextView()
+        textView.textStorage?.setAttributedString(attributed)
+        textView.setSelectedRange(NSRange(location: 1, length: 0))
+        let coordinator = makeCoordinator(sendOnEnter: true) { _, _, _, _, _ in true }
+        coordinator.textView = textView
+
+        coordinator.insertQuote("quoted", into: textView)
+
+        #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()) == ACPComposerDraft(
+            segments: [
+                .mention(displayName: "File.swift", uri: "file:///tmp/File.swift"),
+                .text("\n"),
+                .text("> quoted\n\n"),
+                .text(" tail"),
+            ]
+        ))
+        #expect(textView.selectedRange() == NSRange(location: 11, length: 0))
+    }
+
     @Test("dismantling the composer preserves window undo actions")
     func dismantlingComposerPreservesWindowUndoActions() {
         let textView = ACPNSTextView()

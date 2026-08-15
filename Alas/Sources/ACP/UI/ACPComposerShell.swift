@@ -105,12 +105,12 @@ struct ACPComposer: View {
     let placement: ACPComposerPlacement
     let contentMaxWidth: CGFloat
     let typography: ACPChatTypography
+    let actions: ACPComposerActions
     let onSubmit: ACPComposerSubmitHandler
     let filesProvider: (@Sendable () async -> [URL])?
 
     @Environment(\.theme) private var theme
     @State private var inputFocused = false
-    @StateObject private var actions = ACPComposerActions()
     @State private var hasText: Bool = false
     @State private var imageNotice: String?
 
@@ -125,6 +125,7 @@ struct ACPComposer: View {
         placement: ACPComposerPlacement = .bottom,
         contentMaxWidth: CGFloat = ACPChatLayout.defaultContentMaxWidth,
         typography: ACPChatTypography = .default,
+        actions: ACPComposerActions,
         filesProvider: (@Sendable () async -> [URL])? = nil,
         onSubmit: @escaping ACPComposerSubmitHandler
     ) {
@@ -139,6 +140,7 @@ struct ACPComposer: View {
         self.placement = placement
         self.contentMaxWidth = contentMaxWidth
         self.typography = typography
+        self.actions = actions
         self.filesProvider = filesProvider
         self.onSubmit = onSubmit
     }
