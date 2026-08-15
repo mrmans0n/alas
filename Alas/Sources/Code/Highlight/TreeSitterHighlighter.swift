@@ -271,7 +271,10 @@ struct TreeSitterHighlighter {
     }
 }
 
-private enum RegexFallbackHighlighter {
+/// Not `private`: tests exercise this directly, bypassing `LanguageRegistry`
+/// routing, so its markup/CSS-specific heuristics stay covered even for
+/// extensions (`xml`, `scss`, ...) that a real tree-sitter grammar now claims.
+enum RegexFallbackHighlighter {
     static func highlight(source: String, fileExtension ext: String) -> [HighlightSpan] {
         let language = language(forFileExtension: ext)
         guard language != "plain" else { return [] }

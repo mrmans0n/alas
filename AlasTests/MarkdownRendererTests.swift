@@ -199,6 +199,29 @@ struct MarkdownRendererTests {
         #expect(color != defaultFG)
     }
 
+    @Test func highlightsNewGrammarCodeBlocks() throws {
+        // Regression coverage for the 2026-08 grammar additions: each of
+        // these fence labels must resolve through fenceLanguageToExtension
+        // and actually highlight, not just render monospaced plain text.
+        let theme = try Theme.loadBundled(id: "cool-slate")
+        let defaultFG = NSColor(theme.color("fg"))
+        let cases: [(label: String, source: String, needle: String)] = [
+            ("csharp", "public class Greeter {}", "class"),
+            ("elixir", "defmodule Greeter do\nend", "defmodule"),
+            ("graphql", "query GetUser { user { name } }", "query"),
+            ("zig", "pub fn greet() void {}", "pub"),
+            ("ini", "[server]\nhost = localhost", "server")
+        ]
+        for testCase in cases {
+            let r = try MarkdownRendererTests.render("```\(testCase.label)\n\(testCase.source)\n```")
+            let s = r.attributedString
+            let range = (s.string as NSString).range(of: testCase.needle)
+            try #require(range.location != NSNotFound, "\(testCase.label): needle not found in rendered output")
+            let color = s.attribute(.foregroundColor, at: range.location, effectiveRange: nil) as? NSColor
+            #expect(color != defaultFG, "\(testCase.label) did not highlight")
+        }
+    }
+
     @Test func unknownLanguageRemainsPlainMonospaced() throws {
         let r = try MarkdownRendererTests.render("```neverheardofit\nfoo\n```")
         let s = r.attributedString

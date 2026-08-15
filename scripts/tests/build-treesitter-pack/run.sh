@@ -24,9 +24,11 @@ printf '; query\n' > "${pack_src}/queries/hcl/highlights.scm"
 # Every grammar the script asserts on. The fake nm below prints these back in
 # `nm -g` format so the happy path passes without a real cargo build.
 all_symbols=(
-    bash c cpp css dockerfile go hcl html java javascript json kotlin lua
-    markdown markdown_inline php php_only python ruby rust swift toml tsx
-    typescript yaml
+    bash c c_sharp clojure_orchard cmake cpp css dart dockerfile elixir
+    erlang go graphql groovy haskell hcl html ini java javascript json
+    julia kotlin lua make markdown markdown_inline objc php php_only
+    powershell proto python r ruby rust scala scss sql svelte swift toml
+    tsx typescript xml yaml zig
 )
 write_symbols() {
     : > "${symbols}"

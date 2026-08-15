@@ -169,6 +169,7 @@
 		1B16FCB3621BB868C34334D7 /* ACPStreamingTextTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F16F771D1DD9CAC618459D41 /* ACPStreamingTextTests.swift */; };
 		1B197F39E826079635F843EB /* GitServiceHeadMessageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38F5019E0550FA05436EFC74 /* GitServiceHeadMessageTests.swift */; };
 		1B1A33B610D29116A1D08A74 /* PointingHandCursor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D4A000B32C3BF0E253BB0B6 /* PointingHandCursor.swift */; };
+		1B2909B6FF2CF876FA6B937B /* LanguageRegistryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 322B5870F5D4DCBE6F07121B /* LanguageRegistryTests.swift */; };
 		1B387AAB575A42ED1AFB5D46 /* RepoSelectorRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F787781F8DE2077B7B679C07 /* RepoSelectorRowView.swift */; };
 		1B68197F3766CF78E8FED978 /* MissionLegPromptBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9EF117AF22C11E37BB5B1F0 /* MissionLegPromptBuilder.swift */; };
 		1B7A283F7F585BA8D67C1959 /* ACPSteerUndoToast.swift in Sources */ = {isa = PBXBuildFile; fileRef = C741E646CFDECE0AF9520265 /* ACPSteerUndoToast.swift */; };
@@ -1888,6 +1889,7 @@
 		31F3A80227DD4A52C4752722 /* CompletionWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompletionWindowController.swift; sourceTree = "<group>"; };
 		321866B3EB8CCE337B1D3A58 /* ACPMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPMessage.swift; sourceTree = "<group>"; };
 		321E1DBC8C06504AD3EE7D6E /* WorktreeWatcherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeWatcherTests.swift; sourceTree = "<group>"; };
+		322B5870F5D4DCBE6F07121B /* LanguageRegistryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LanguageRegistryTests.swift; sourceTree = "<group>"; };
 		3253B229B757C725B7747249 /* initialize-request.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "initialize-request.json"; sourceTree = "<group>"; };
 		327D6F0E386398E6A512ADDF /* ProviderReviewActionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderReviewActionsTests.swift; sourceTree = "<group>"; };
 		328607AAAAA12EE2206ED5A4 /* LanguageRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LanguageRegistry.swift; sourceTree = "<group>"; };
@@ -4879,6 +4881,7 @@
 		99296E46F8BEA6DE0DFBBBD2 /* Highlight */ = {
 			isa = PBXGroup;
 			children = (
+				322B5870F5D4DCBE6F07121B /* LanguageRegistryTests.swift */,
 				20556618656218B845371F37 /* TreeSitterHighlighterTests.swift */,
 			);
 			path = Highlight;
@@ -7309,6 +7312,7 @@
 				FD797B47C5EE0F82796A3733 /* LSPInstallerTests.swift in Sources */,
 				79575F0DA597D2C2DFCDC9E2 /* LSPMessagesTests.swift in Sources */,
 				C2CE2E3DE88344FDDE67D66A /* LSPTransportTests.swift in Sources */,
+				1B2909B6FF2CF876FA6B937B /* LanguageRegistryTests.swift in Sources */,
 				4153DAD75F27395D2D385BED /* LanguageServerAvailabilityTests.swift in Sources */,
 				9422B6F8F6C1E3E64B259712 /* LanguageServerRegistryTests.swift in Sources */,
 				599A6D9A3A1CCF1F618146C8 /* LegacyHookSweepTests.swift in Sources */,

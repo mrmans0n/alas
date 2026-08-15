@@ -191,9 +191,11 @@ symbol_dump="${build_root}/symbols.txt"
 nm -g "${cargo_output}" > "${symbol_dump}" 2>/dev/null || true
 missing=""
 for symbol in \
-    bash c cpp css dockerfile go hcl html java javascript json kotlin lua \
-    markdown markdown_inline php php_only python ruby rust swift toml tsx \
-    typescript yaml
+    bash c c_sharp clojure_orchard cmake cpp css dart dockerfile elixir \
+    erlang go graphql groovy haskell hcl html ini java javascript json \
+    julia kotlin lua make markdown markdown_inline objc php php_only \
+    powershell proto python r ruby rust scala scss sql svelte swift toml \
+    tsx typescript xml yaml zig
 do
     if ! grep -qE " T _tree_sitter_${symbol}\$" "${symbol_dump}"; then
         missing="${missing} tree_sitter_${symbol}"

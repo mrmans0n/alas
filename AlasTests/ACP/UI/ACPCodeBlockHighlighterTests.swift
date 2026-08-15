@@ -77,14 +77,49 @@ struct ACPCodeBlockHighlighterTests {
         #expect(ACPCodeLanguage.highlighterExtension(for: "sql") == "sql")
     }
 
-    @Test("future-known unsupported ACP fence labels remain plain")
-    func futureKnownUnsupportedFenceLabelsRemainPlain() {
+    @Test("maps fence labels for the 2026-08 grammar additions")
+    func mapsNewGrammarFenceLabels() {
+        #expect(ACPCodeLanguage.highlighterExtension(for: "cs") == "cs")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "csharp") == "cs")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "c#") == "cs")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "scala") == "scala")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "r") == "r")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "dart") == "dart")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "ex") == "ex")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "exs") == "ex")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "elixir") == "ex")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "erl") == "erl")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "erlang") == "erl")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "hs") == "hs")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "haskell") == "hs")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "clj") == "clj")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "clojure") == "clj")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "jl") == "jl")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "julia") == "jl")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "zig") == "zig")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "ps1") == "ps1")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "powershell") == "ps1")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "groovy") == "groovy")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "gradle") == "groovy")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "objc") == "m")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "objective-c") == "m")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "graphql") == "graphql")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "gql") == "graphql")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "proto") == "proto")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "protobuf") == "proto")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "svelte") == "svelte")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "ini") == "ini")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "make") == "mk")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "makefile") == "mk")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "cmake") == "cmake")
+    }
+
+    @Test("labels with no grammar remain plain")
+    func labelsWithNoGrammarRemainPlain() {
+        // No tree-sitter-perl grammar exists at all (see the pack's
+        // Cargo.toml for why the only published version is unusable).
         #expect(ACPCodeLanguage.highlighterExtension(for: "pl") == nil)
         #expect(ACPCodeLanguage.highlighterExtension(for: "perl") == nil)
-        #expect(ACPCodeLanguage.highlighterExtension(for: "ex") == nil)
-        #expect(ACPCodeLanguage.highlighterExtension(for: "exs") == nil)
-        #expect(ACPCodeLanguage.highlighterExtension(for: "elixir") == nil)
-        #expect(ACPCodeLanguage.highlighterExtension(for: "ini") == nil)
     }
 
     @Test("path resolution maps only supported editor highlighter paths")
@@ -98,6 +133,24 @@ struct ACPCodeBlockHighlighterTests {
         #expect(ACPCodeLanguage.highlighterExtension(forPath: "changes.patch") == "patch")
         #expect(ACPCodeLanguage.highlighterExtension(forPath: "query.sql") == "sql")
         #expect(ACPCodeLanguage.highlighterExtension(forPath: "README") == nil)
+    }
+
+    @Test("path resolution routes filename-based grammars through LanguageRegistry")
+    func pathResolutionRoutesFilenameBasedGrammars() {
+        // Regression coverage: this previously went through a bare
+        // `pathExtension` in some call sites, which resolves `Makefile` to
+        // "" and `CMakeLists.txt` to "txt" — losing the grammar entirely.
+        #expect(ACPCodeLanguage.highlighterExtension(forPath: "Makefile") == "mk")
+        #expect(ACPCodeLanguage.highlighterExtension(forPath: "GNUmakefile") == "mk")
+        #expect(ACPCodeLanguage.highlighterExtension(forPath: "CMakeLists.txt") == "cmake")
+        #expect(ACPCodeLanguage.highlighterExtension(forPath: "Containerfile") == "dockerfile")
+        #expect(ACPCodeLanguage.highlighterExtension(forPath: ".editorconfig") == "ini")
+        #expect(ACPCodeLanguage.highlighterExtension(forPath: "Jenkinsfile") == "groovy")
+        #expect(ACPCodeLanguage.highlighterExtension(forPath: "Program.cs") == "cs")
+        #expect(ACPCodeLanguage.highlighterExtension(forPath: "main.zig") == "zig")
+        #expect(ACPCodeLanguage.highlighterExtension(forPath: "build.sbt") == "sbt")
+        #expect(ACPCodeLanguage.highlighterExtension(forPath: "build.csx") == "csx")
+        #expect(ACPCodeLanguage.highlighterExtension(forPath: "Main.lhs") == "lhs")
     }
 
     @Test("tool output syntax prefers diff shape over paths")
@@ -188,9 +241,11 @@ struct ACPCodeBlockHighlighterTests {
             content: "let value = 1",
             locations: ["Sources/App.swift", "Sources/Other.swift"]
         ) == nil)
+        // `.ini` gained a grammar alongside this test's other additions, so a
+        // plain `.txt` is the still-genuinely-unsupported case here now.
         #expect(ACPToolOutputSyntax.highlighterExtension(
             content: "theme = cool-slate",
-            locations: ["config.ini"]
+            locations: ["notes.txt"]
         ) == nil)
     }
 
@@ -403,7 +458,7 @@ struct ACPCodeBlockHighlighterTests {
         let theme = try Theme.loadBundled(id: "cool-slate")
         let editorTheme = EditorTheme(theme: theme)
         let content = "theme = cool-slate"
-        let ext = ACPToolOutputSyntax.highlighterExtension(content: content, locations: ["config.ini"])
+        let ext = ACPToolOutputSyntax.highlighterExtension(content: content, locations: ["notes.txt"])
         let attributed = ACPCodeBlockHighlighter.attributedString(
             code: content,
             language: ext,

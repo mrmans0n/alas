@@ -49,7 +49,51 @@ enum LanguageRegistry {
         "md": "markdown", "markdown": "markdown",
         "markdown-inline": "markdown_inline",
         "hcl": "hcl", "tf": "hcl", "tfvars": "hcl",
-        "dockerfile": "dockerfile"
+        "dockerfile": "dockerfile",
+        "cs": "csharp", "csx": "csharp",
+        "scala": "scala", "sc": "scala", "sbt": "scala",
+        "r": "r",
+        "dart": "dart",
+        "ex": "elixir", "exs": "elixir",
+        "erl": "erlang", "hrl": "erlang",
+        "hs": "haskell", "lhs": "haskell",
+        "clj": "clojure", "cljs": "clojure", "cljc": "clojure", "edn": "clojure",
+        "jl": "julia",
+        "zig": "zig",
+        "ps1": "powershell", "psm1": "powershell", "psd1": "powershell",
+        // Gradle build scripts are Groovy; `.gradle.kts` lands on Kotlin via
+        // its own `kts` entry above.
+        "groovy": "groovy", "gradle": "groovy", "gvy": "groovy",
+        // `.m` is Objective-C here rather than MATLAB — this is a macOS
+        // workspace, and `.mm` next to it is unambiguous.
+        "m": "objc", "mm": "objc",
+        "sql": "sql",
+        "graphql": "graphql", "gql": "graphql",
+        "proto": "proto",
+        "scss": "scss",
+        "svelte": "svelte",
+        "xml": "xml", "xsd": "xml", "xsl": "xml", "xslt": "xml", "svg": "xml",
+        "plist": "xml", "storyboard": "xml", "xib": "xml",
+        "csproj": "xml", "resx": "xml",
+        "ini": "ini", "cfg": "ini", "properties": "ini",
+        "mk": "make",
+        "cmake": "cmake",
+        // TypeScript's ESM/CJS variants, which the base `ts` entry misses.
+        "mts": "typescript", "cts": "typescript"
+    ]
+
+    /// Files whose language is carried by the whole filename rather than an
+    /// extension. Values are keys into `languageIDsByExtension`, not grammar
+    /// ids. `CMakeLists.txt` is why this is matched before the extension: its
+    /// `.txt` would otherwise win and resolve to nothing.
+    private static let extensionsByFilename: [String: String] = [
+        "dockerfile": "dockerfile",
+        "containerfile": "dockerfile",
+        "makefile": "mk",
+        "gnumakefile": "mk",
+        "cmakelists.txt": "cmake",
+        ".editorconfig": "ini",
+        "jenkinsfile": "groovy"
     ]
 
     /// Grammar ids whose highlight query is more than just their own, listed
@@ -62,16 +106,23 @@ enum LanguageRegistry {
     /// in pure-JS files its patterns simply never match. TSX gets it too, but
     /// plain TypeScript must not: that grammar has no `jsx_*` nodes, so
     /// including the overlay would fail `Query` compilation outright.
+    /// Objective-C and SCSS both extend another grammar the same way C++ does.
+    /// SCSS is the starkest case: its own query covers only SCSS-specific
+    /// constructs (mixins, `@use`, variables) and names no selector, property,
+    /// colour or comment node at all, so without CSS merged in front of it a
+    /// stylesheet would highlight almost nothing.
     private static let queryIDsByLanguageID: [String: [String]] = [
         "javascript": ["javascript", "javascript_jsx"],
         "typescript": ["javascript", "typescript"],
         "tsx": ["javascript", "javascript_jsx", "tsx"],
-        "cpp": ["c", "cpp"]
+        "cpp": ["c", "cpp"],
+        "objc": ["c", "objc"],
+        "scss": ["css", "scss"]
     ]
 
     static func highlighterExtension(forPath path: String) -> String {
         let filename = (path as NSString).lastPathComponent.lowercased()
-        if filename == "dockerfile" { return "dockerfile" }
+        if let byFilename = extensionsByFilename[filename] { return byFilename }
         return (path as NSString).pathExtension.lowercased()
     }
 

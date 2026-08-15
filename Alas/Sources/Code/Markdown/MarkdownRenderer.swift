@@ -67,7 +67,32 @@ final class MarkdownRenderer {
         "typescript": "ts", "ts": "ts",
         "javascript": "js", "js": "js",
         "tsx": "tsx", "jsx": "jsx",
-        "kotlin": "kt", "kt": "kt"
+        "kotlin": "kt", "kt": "kt",
+        // The languages ThirdParty/treesitter-pack registered alongside this
+        // list's original entries. No perl: no tree-sitter-perl grammar
+        // exists (see the pack's Cargo.toml for why).
+        "cs": "cs", "csharp": "cs", "c#": "cs",
+        "scala": "scala",
+        "r": "r",
+        "dart": "dart",
+        "ex": "ex", "exs": "ex", "elixir": "ex",
+        "erl": "erl", "erlang": "erl",
+        "hs": "hs", "haskell": "hs",
+        "clj": "clj", "cljs": "clj", "cljc": "clj", "edn": "clj", "clojure": "clj",
+        "jl": "jl", "julia": "jl",
+        "zig": "zig",
+        "ps1": "ps1", "pwsh": "ps1", "powershell": "ps1",
+        "groovy": "groovy", "gradle": "groovy",
+        "objc": "m", "objective-c": "m", "objectivec": "m", "m": "m", "mm": "m",
+        "sql": "sql",
+        "xml": "xml",
+        "graphql": "graphql", "gql": "graphql",
+        "make": "mk", "makefile": "mk", "mk": "mk",
+        "cmake": "cmake",
+        "proto": "proto", "protobuf": "proto",
+        "scss": "scss",
+        "svelte": "svelte",
+        "ini": "ini", "dosini": "ini", "properties": "ini", "cfg": "ini"
     ]
 
     private func extensionFor(fenceLanguage info: String?) -> String? {

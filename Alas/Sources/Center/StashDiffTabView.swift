@@ -97,7 +97,7 @@ struct StashDiffTabView: View {
             } else if let displayModel {
                 DiffPaneView(
                     model: displayModel,
-                    fileExtension: (state.file.path as NSString).pathExtension,
+                    fileExtension: LanguageRegistry.highlighterExtension(forPath: state.file.path),
                     layoutMode: $layoutMode,
                     wrapLines: $wrapLines,
                     showWhitespace: $showWhitespace,

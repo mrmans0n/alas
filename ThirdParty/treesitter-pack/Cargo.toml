@@ -15,38 +15,87 @@ crate-type = ["staticlib", "rlib"]
 [dependencies]
 tree-sitter-bash = "0.25.1"
 tree-sitter-c = "0.24.2"
+tree-sitter-c-sharp = "0.23.5"
+# Preferred over `tree-sitter-clojure` (0.1.0, and stale): this one is current
+# and keeps `tree-sitter` to a dev-dependency, reaching the grammar through
+# `tree-sitter-language`. That matters because the `tree-sitter` crate sets
+# `links = "tree-sitter"`, so every requirement in the graph must resolve to a
+# single version — a grammar that pins one hard can veto every other grammar.
+# Its C entry point is `tree_sitter_clojure_orchard`, not `tree_sitter_clojure`.
+tree-sitter-clojure-orchard = "0.2.8"
+tree-sitter-cmake = "0.7.4"
 tree-sitter-cpp = "0.23.4"
 tree-sitter-css = "0.25.0"
+tree-sitter-dart = "0.2.0"
 tree-sitter-dockerfile = "0.2.0"
+tree-sitter-elixir = "0.3.5"
+tree-sitter-erlang = "0.20.0"
 tree-sitter-go = "0.25.0"
+tree-sitter-graphql = "0.2.0"
+tree-sitter-haskell = "0.23.1"
 tree-sitter-html = "0.23.2"
+tree-sitter-ini = "1.4.0"
 tree-sitter-java = "0.23.5"
 tree-sitter-javascript = "0.25.0"
 tree-sitter-json = "0.24.8"
+tree-sitter-julia = "0.23.1"
 # fwcd/tree-sitter-kotlin is stale (last release Aug 2024); this is the
 # tree-sitter-grammars org's maintained successor. It ships no queries, so
 # queries/kotlin/highlights.scm below is vendored from the fwcd grammar
 # Alas shipped previously and verified to still compile (see kotlin_query_compiles_against_kotlin_ng_grammar).
 tree-sitter-kotlin-ng = "1.1.0"
 tree-sitter-lua = "0.5.0"
+tree-sitter-make = "1.1.1"
 tree-sitter-md = "0.5.3"
+tree-sitter-objc = "3.0.2"
+# No Perl grammar here on purpose: tree-sitter-perl 1.1.2 (the only version
+# ever published) is a broken publish — its bindings `include_str!` a
+# `queries/` directory the package does not ship, so the crate cannot compile.
 tree-sitter-php = "0.24.2"
+tree-sitter-powershell = "0.26.4"
+tree-sitter-proto = "0.4.0"
 tree-sitter-python = "0.25.0"
+tree-sitter-r = "1.3.0"
 tree-sitter-ruby = "0.23.1"
 tree-sitter-rust = "0.24.2"
+tree-sitter-scala = "0.26.2"
+tree-sitter-scss = "1.0.0"
+# The maintained SQL grammar. `tree-sitter-sql` on crates.io is an
+# unrelated 0.0.2 stub — do not swap it in.
+tree-sitter-sequel = "0.3.11"
+tree-sitter-svelte = "0.10.2"
 tree-sitter-swift = "0.7.3"
 tree-sitter-toml-ng = "0.7.0"
 tree-sitter-typescript = "0.23.2"
+tree-sitter-xml = "0.7.0"
 tree-sitter-yaml = "0.7.2"
+tree-sitter-zig = "1.1.2"
 
 # crates.io only has 1.1.0; Alas ships the v1.2.0 grammar.
 tree-sitter-hcl = { git = "https://github.com/tree-sitter-grammars/tree-sitter-hcl", tag = "v1.2.0" }
+
+# Not the crates.io `tree-sitter-groovy` (amaanq's, 0.1.2): that grammar has no
+# highlight query published anywhere, and the only maintained Groovy query —
+# nvim-treesitter's — is written against *this* grammar instead. The two
+# disagree on 22 of 33 named nodes, so the query is not portable between them.
+# Pinned to the revision nvim-treesitter itself pins, so the vendored
+# queries/groovy/highlights.scm and this grammar stay a matched pair.
+tree-sitter-groovy = { git = "https://github.com/murtaza64/tree-sitter-groovy", rev = "deb0dcf8c4544f07564060f6e9b9f6e4b0bfc27d" }
 
 [dev-dependencies]
 # Only used by tests that compile a `Query` against a `tree_sitter::Language`
 # to validate a vendored query text actually parses — real Query compilation,
 # not just presence, catches a grammar/query mismatch before it ships.
-tree-sitter = "0.25"
+#
+# The `tree-sitter` crate sets `links = "tree-sitter"`, so only one version may
+# ever exist in the graph. This must stay compatible with every grammar that
+# depends on it non-optionally — currently tree-sitter-groovy (`~0.26.8`) — or
+# resolution fails outright. Bump it only alongside those.
+tree-sitter = "0.26"
+# Lets the tests turn a raw `tree_sitter_*` entry point back into a
+# `tree_sitter::Language`, so every registered grammar can be exercised
+# generically rather than one hand-written test per language.
+tree-sitter-language = "0.1"
 
 [profile.release]
 opt-level = 2
