@@ -118,11 +118,19 @@ final class CodeEditorLayoutManager: NSLayoutManager {
         }
     }
 
+    static func usesScalarMarker(for scalar: Unicode.Scalar?, range: NSRange, glyphCharacterRange: NSRange) -> Bool {
+        scalar.map(Self.usesInsertionMarker) == true
+            || glyphCharacterRange.location != range.location
+            || glyphCharacterRange.length != range.length
+    }
+
     private func decorationRect(forCharacterRange range: NSRange, scalar: Unicode.Scalar? = nil) -> NSRect {
         guard let container = textContainers.first else { return .zero }
         let glyph = glyphIndexForCharacter(at: range.location)
         var rect = boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: container)
-        if scalar.map(Self.usesInsertionMarker) == true || rect.width <= 1 {
+        let glyphCharacters = characterRange(forGlyphRange: NSRange(location: glyph, length: 1), actualGlyphRange: nil)
+        let usesScalarMarker = Self.usesScalarMarker(for: scalar, range: range, glyphCharacterRange: glyphCharacters)
+        if usesScalarMarker || rect.width <= 1 {
             let line = lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
             let x: CGFloat
             if scalar.map(Self.usesInsertionMarker) == true {
@@ -130,6 +138,9 @@ final class CodeEditorLayoutManager: NSLayoutManager {
                     ? glyphIndexForCharacter(at: NSMaxRange(range))
                     : numberOfGlyphs
                 x = nextGlyph < numberOfGlyphs ? location(forGlyphAt: nextGlyph).x : rect.maxX
+            } else if usesScalarMarker {
+                let offset = CGFloat(range.location - glyphCharacters.location)
+                x = rect.minX + rect.width * offset / CGFloat(max(glyphCharacters.length, 1))
             } else {
                 x = location(forGlyphAt: glyph).x
             }

@@ -59,4 +59,9 @@ struct WarningCharacterTests {
         #expect(!CodeEditorLayoutManager.usesInsertionMarker(for: "\n".unicodeScalars.first!))
         #expect(!CodeEditorLayoutManager.usesInsertionMarker(for: Unicode.Scalar(0x2013)!))
     }
+
+    @Test func usesScalarMarkerForPartialCompositeGlyphWarnings() {
+        #expect(CodeEditorLayoutManager.usesScalarMarker(for: Unicode.Scalar(0x1F3FD), range: NSRange(location: 2, length: 2), glyphCharacterRange: NSRange(location: 0, length: 4)))
+        #expect(!CodeEditorLayoutManager.usesScalarMarker(for: Unicode.Scalar(0x2013), range: NSRange(location: 0, length: 1), glyphCharacterRange: NSRange(location: 0, length: 1)))
+    }
 }

@@ -183,8 +183,15 @@ struct CodeEditorView: NSViewRepresentable {
         // storage<->layoutManager binding (see `bindBuffer`) so that swapping
         // buffers across tab switches can rebind onto the new storage; we
         // pass an unattached layout manager here.
-        let layoutManager = CodeEditorLayoutManager()
-        layoutManager.update(configuration: textRendering, theme: theme)
+        let rendersTextDecorations = externalAbsolutePath == nil || externalEditable
+        let layoutManager: NSLayoutManager
+        if rendersTextDecorations {
+            let manager = CodeEditorLayoutManager()
+            manager.update(configuration: textRendering, theme: theme)
+            layoutManager = manager
+        } else {
+            layoutManager = NSLayoutManager()
+        }
         let containerSize = NSSize(
             width: CGFloat.greatestFiniteMagnitude,
             height: CGFloat.greatestFiniteMagnitude
@@ -207,9 +214,11 @@ struct CodeEditorView: NSViewRepresentable {
         textView.isHorizontallyResizable = true
         textView.isVerticallyResizable = true
         textView.autoresizingMask = []
-        textView.warningToolTipProvider = { [weak layoutManager, weak textView] point in
-            guard let layoutManager, let textView else { return nil }
-            return layoutManager.warningToolTip(at: point, in: textView)
+        if let layoutManager = layoutManager as? CodeEditorLayoutManager {
+            textView.warningToolTipProvider = { [weak layoutManager, weak textView] point in
+                guard let layoutManager, let textView else { return nil }
+                return layoutManager.warningToolTip(at: point, in: textView)
+            }
         }
 
         scroll.documentView = textView
