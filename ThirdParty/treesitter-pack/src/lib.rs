@@ -39,7 +39,6 @@ extern "C" {
     fn tree_sitter_javascript() -> *const c_void;
     fn tree_sitter_json() -> *const c_void;
     fn tree_sitter_julia() -> *const c_void;
-    fn tree_sitter_kotlin() -> *const c_void;
     fn tree_sitter_lua() -> *const c_void;
     fn tree_sitter_make() -> *const c_void;
     fn tree_sitter_markdown() -> *const c_void;
@@ -78,13 +77,6 @@ const HCL_HIGHLIGHTS: &str = include_str!("../queries/hcl/highlights.scm");
 /// version; refresh it when the dependency moves.
 const DOCKERFILE_HIGHLIGHTS: &str = include_str!("../queries/dockerfile/highlights.scm");
 
-/// tree-sitter-kotlin-ng ships no `queries/` directory at all. This is the
-/// query Alas shipped from fwcd/tree-sitter-kotlin (the grammar's stale
-/// predecessor), carried over because kotlin-ng's node types are compatible —
-/// verified by `kotlin_query_compiles_against_kotlin_ng_grammar` actually
-/// compiling it against this grammar, not just checking the text is present.
-const KOTLIN_HIGHLIGHTS: &str = include_str!("../queries/kotlin/highlights.scm");
-
 /// tree-sitter-julia and tree-sitter-proto both package `queries/highlights.scm`
 /// but expose no const for it, and a crate cannot `include_str!` another
 /// crate's sources. Copied verbatim from each crate at the pinned version;
@@ -103,13 +95,12 @@ const GROOVY_HIGHLIGHTS: &str = include_str!("../queries/groovy/highlights.scm")
 /// These crates' queries are the local consts above, so nothing else here
 /// references the crates themselves and the linker is free to drop their
 /// objects — leaving `tree_sitter_hcl`, `tree_sitter_dockerfile`,
-/// `tree_sitter_kotlin` and friends unresolved. Touching one const each keeps
+/// and friends unresolved. Touching one const each keeps
 /// them in the link graph.
 #[used]
-static LINK_ANCHORS: [&str; 7] = [
+static LINK_ANCHORS: [&str; 6] = [
     tree_sitter_hcl::NODE_TYPES,
     tree_sitter_dockerfile::NODE_TYPES,
-    tree_sitter_kotlin_ng::NODE_TYPES,
     tree_sitter_julia::NODE_TYPES,
     tree_sitter_proto::NODE_TYPES,
     tree_sitter_graphql::NODE_TYPES,
@@ -141,7 +132,6 @@ static LANGUAGES: &[(&str, LanguageFn)] = &[
     ("javascript", tree_sitter_javascript),
     ("json", tree_sitter_json),
     ("julia", tree_sitter_julia),
-    ("kotlin", tree_sitter_kotlin),
     ("lua", tree_sitter_lua),
     ("make", tree_sitter_make),
     ("markdown", tree_sitter_markdown),
@@ -195,7 +185,6 @@ static QUERIES: &[(&str, &str)] = &[
     ("javascript_jsx", tree_sitter_javascript::JSX_HIGHLIGHT_QUERY),
     ("json", tree_sitter_json::HIGHLIGHTS_QUERY),
     ("julia", JULIA_HIGHLIGHTS),
-    ("kotlin", KOTLIN_HIGHLIGHTS),
     ("lua", tree_sitter_lua::HIGHLIGHTS_QUERY),
     ("make", tree_sitter_make::HIGHLIGHTS_QUERY),
     ("markdown", tree_sitter_md::HIGHLIGHT_QUERY_BLOCK),
@@ -402,69 +391,6 @@ mod tests {
             if let Err(error) = tree_sitter::Query::new(&language, &combined) {
                 panic!("merged query {parts:?} does not compile against {id}: {error:?}");
             }
-        }
-    }
-
-    /// `every_query_is_non_empty` only checks the text is present, not that
-    /// it is valid for the grammar it ships beside. `KOTLIN_HIGHLIGHTS` is the
-    /// one query in this crate not sourced from the grammar's own repo — that
-    /// grammar (tree-sitter-kotlin-ng) ships no queries at all, so this one is
-    /// hand-written against its node-types.json — and this compiles it for
-    /// real against the actual `TSLanguage`, so an incompatible node or field
-    /// name fails here, not just in the highlighting output.
-    #[test]
-    fn kotlin_query_compiles_against_kotlin_ng_grammar() {
-        let language: tree_sitter::Language = tree_sitter_kotlin_ng::LANGUAGE.into();
-        tree_sitter::Query::new(&language, KOTLIN_HIGHLIGHTS)
-            .expect("KOTLIN_HIGHLIGHTS must compile against tree-sitter-kotlin-ng's grammar");
-    }
-
-    /// Compiling proves the query is well-formed; it says nothing about
-    /// whether any pattern actually matches. Parse a small real Kotlin
-    /// snippet and confirm the query fires for the capture categories that
-    /// matter most for readability, so a query that "compiles but captures
-    /// nothing useful" fails here instead of shipping silently.
-    #[test]
-    fn kotlin_query_captures_expected_categories_on_real_source() {
-        let source = r#"
-            package com.alas.sample
-
-            import kotlin.collections.List
-
-            /** Doc comment */
-            class Greeter(private val name: String) {
-                // line comment
-                fun greet(times: Int = 1): String {
-                    val prefix = "Hello, "
-                    return prefix + name
-                }
-            }
-        "#;
-
-        use tree_sitter::StreamingIterator;
-
-        let language: tree_sitter::Language = tree_sitter_kotlin_ng::LANGUAGE.into();
-        let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&language).unwrap();
-        let tree = parser.parse(source, None).expect("kotlin source must parse");
-        assert!(!tree.root_node().has_error(), "kotlin sample has a parse error");
-
-        let query = tree_sitter::Query::new(&language, KOTLIN_HIGHLIGHTS).unwrap();
-        let mut cursor = tree_sitter::QueryCursor::new();
-        let capture_names = query.capture_names();
-        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
-        let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
-        while let Some(m) = matches.next() {
-            for c in m.captures {
-                seen.insert(capture_names[c.index as usize]);
-            }
-        }
-
-        for expected in ["keyword", "type", "function", "string", "comment"] {
-            assert!(
-                seen.iter().any(|c| *c == expected || c.starts_with(&format!("{expected}."))),
-                "no capture in {expected}(.*) fired on the sample; seen: {seen:?}"
-            );
         }
     }
 

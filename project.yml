@@ -16,13 +16,15 @@ settings:
     GENERATE_INFOPLIST_FILE: NO
 
 packages:
-  # Only the tree-sitter *runtime* and Swift API come from SwiftPM. The
-  # grammars themselves live in ThirdParty/treesitter-pack, a Rust staticlib
-  # that depends on them via cargo and exposes languages + highlight queries
-  # over a small C ABI (see scripts/build-treesitter-pack.sh).
+  # Only the tree-sitter *runtime* and Swift API come from SwiftPM. Grammars
+  # live in ThirdParty/treesitter-pack except Kotlin, which stays on the
+  # previous grammar until its replacement has a complete highlight query.
   SwiftTreeSitter:
     url: https://github.com/tree-sitter/swift-tree-sitter
     from: 0.25.0
+  TreeSitterKotlin:
+    url: https://github.com/fwcd/tree-sitter-kotlin
+    revision: e1a2d5ad1f61f5740677183cd4125bb071cd2f30
   Markdown:
     url: https://github.com/apple/swift-markdown
     from: 0.8.0
@@ -73,6 +75,8 @@ targets:
       - sdk: libsqlite3.tbd
       - package: SwiftTreeSitter
         product: SwiftTreeSitter
+      - package: TreeSitterKotlin
+        product: TreeSitterKotlin
       - package: Markdown
         product: Markdown
       - package: BeautifulMermaidSwift

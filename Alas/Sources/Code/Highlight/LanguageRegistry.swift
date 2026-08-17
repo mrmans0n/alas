@@ -1,5 +1,6 @@
 import Foundation
 import SwiftTreeSitter
+import TreeSitterKotlin
 import TreeSitterPack
 
 /// Maps a file extension to a `SwiftTreeSitter.Language` and the matching
@@ -8,10 +9,8 @@ import TreeSitterPack
 /// `DiffTabView`'s per-line `tokenize` calls would re-scan and recompile the
 /// query thousands of times per render.
 ///
-/// Grammars and queries both come from `ThirdParty/treesitter-pack`, a Rust
-/// staticlib linked into the app (see `scripts/build-treesitter-pack.sh`).
-/// Queries are compiled into the binary there, so there is nothing to look up
-/// on disk at runtime.
+/// Grammars and queries come from `ThirdParty/treesitter-pack`, except Kotlin,
+/// which keeps its previous SwiftPM grammar until its replacement is ready.
 enum LanguageRegistry {
     private static let cacheLock = NSLock()
     nonisolated(unsafe) private static var languageCache: [String: Language] = [:]
@@ -131,11 +130,16 @@ enum LanguageRegistry {
         cacheLock.lock()
         defer { cacheLock.unlock() }
         if let cached = languageCache[key] { return cached }
-        guard let id = languageIDsByExtension[key],
-              let pointer = id.withCString({ alas_ts_language($0) }) else {
-            return nil
+        let lang: Language?
+        if key == "kt" || key == "kts" {
+            lang = Language(language: tree_sitter_kotlin())
+        } else if let id = languageIDsByExtension[key],
+                  let pointer = id.withCString({ alas_ts_language($0) }) {
+            lang = Language(OpaquePointer(pointer))
+        } else {
+            lang = nil
         }
-        let lang = Language(OpaquePointer(pointer))
+        guard let lang else { return nil }
         languageCache[key] = lang
         return lang
     }
@@ -155,8 +159,10 @@ enum LanguageRegistry {
         cacheLock.unlock()
 
         let query: Query?
-        if let lang = language(forFileExtension: key),
-           let id = languageIDsByExtension[key] {
+        if let lang = language(forFileExtension: key), key == "kt" || key == "kts" {
+            query = kotlinQuery(language: lang)
+        } else if let lang = language(forFileExtension: key),
+                  let id = languageIDsByExtension[key] {
             if id == "php_only" {
                 query = phpOnlyQuery(language: lang)
             } else {
@@ -200,6 +206,33 @@ enum LanguageRegistry {
             return nil
         }
         return String(decoding: UnsafeBufferPointer(start: bytes, count: length), as: UTF8.self)
+    }
+
+    private static func kotlinQuery(language: Language) -> Query? {
+        guard let bundle = grammarBundle(named: "TreeSitterKotlin"),
+              let url = bundle.url(forResource: "queries/highlights", withExtension: "scm")
+                ?? bundle.url(forResource: "highlights", withExtension: "scm", subdirectory: "queries")
+                ?? bundle.url(forResource: "highlights", withExtension: "scm"),
+              let data = try? Data(contentsOf: url) else {
+            return nil
+        }
+        return try? Query(language: language, data: data)
+    }
+
+    private static func grammarBundle(named needle: String) -> Bundle? {
+        let candidates: [Bundle] = [.main] + Bundle.allBundles + Bundle.allFrameworks
+        for host in candidates {
+            let resourcesURL = host.bundleURL.appendingPathComponent("Contents/Resources")
+            guard let entries = try? FileManager.default.contentsOfDirectory(
+                at: resourcesURL, includingPropertiesForKeys: nil
+            ) else { continue }
+            if let url = entries.first(where: {
+                $0.lastPathComponent.contains(needle) && $0.pathExtension == "bundle"
+            }), let bundle = Bundle(url: url) {
+                return bundle
+            }
+        }
+        return Bundle.allBundles.first { $0.bundleURL.lastPathComponent.contains(needle) }
     }
 
     static func phpOnlyQueryText(from queryText: String) -> String {

@@ -234,6 +234,14 @@ struct TreeSitterHighlighterTests {
         #expect(kts.contains(where: { $0.capture == .keyword }))
     }
 
+    @Test("Kotlin enum entries are captured as constants")
+    func kotlinEnumEntries() throws {
+        let source = "enum class Color { Red }"
+        let spans = TreeSitterHighlighter.highlight(source: source, fileExtension: "kt")
+
+        #expect(capture(for: "Red", in: source, spans: spans) == .constant)
+    }
+
     @Test("YAML keys, strings, and numbers are captured")
     func yamlBasics() throws {
         let src = """

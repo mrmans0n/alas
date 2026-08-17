@@ -39,11 +39,6 @@ tree-sitter-java = "0.23.5"
 tree-sitter-javascript = "0.25.0"
 tree-sitter-json = "0.24.8"
 tree-sitter-julia = "0.23.1"
-# fwcd/tree-sitter-kotlin is stale (last release Aug 2024); this is the
-# tree-sitter-grammars org's maintained successor. It ships no queries, so
-# queries/kotlin/highlights.scm below is vendored from the fwcd grammar
-# Alas shipped previously and verified to still compile (see kotlin_query_compiles_against_kotlin_ng_grammar).
-tree-sitter-kotlin-ng = "1.1.0"
 tree-sitter-lua = "0.5.0"
 tree-sitter-make = "1.1.1"
 tree-sitter-md = "0.5.3"
