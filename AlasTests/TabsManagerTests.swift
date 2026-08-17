@@ -4,6 +4,30 @@ import Foundation
 
 @MainActor
 struct TabsManagerTests {
+    @Test func tabsFileSkipsRemovedMissionCaseWithoutDroppingSupportedTabs() throws {
+        let terminal = Tab.terminal(.init(id: "terminal-1", title: "Terminal", sessionId: "session-1"))
+        let encodedTerminal = try #require(
+            try JSONSerialization.jsonObject(with: JSONEncoder().encode(terminal)) as? [String: Any]
+        )
+        let data = try JSONSerialization.data(withJSONObject: [
+            "version": 1,
+            "tabs": [
+                encodedTerminal,
+                ["mission": ["_0": [
+                    "id": "mission:legacy",
+                    "missionID": ["rawValue": "legacy"],
+                    "title": "Legacy Mission",
+                ]]],
+            ],
+            "activeTabId": terminal.id,
+        ])
+
+        let decoded = try JSONDecoder().decode(TabsFile.self, from: data)
+
+        #expect(decoded.tabs == [terminal])
+        #expect(decoded.activeTabId == terminal.id)
+    }
+
     @Test func restoreInsertsAtAnchoredPositionAndActivates() {
         let worktreeID = "tabs-manager-restore-position"
         let manager = TabsManager(store: RestoreMemoryStore())
