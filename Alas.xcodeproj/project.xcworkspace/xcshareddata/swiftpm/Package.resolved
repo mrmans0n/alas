@@ -1,5 +1,5 @@
 {
-  "originHash" : "41c1b84941213acd7de42f0cd5eac086eb5206c72bd033a1a954898b0f78ee7a",
+  "originHash" : "6fb9739942b6051c722fd660c1a053164f6e84540f5ae38bc851d0c3ec3e208a",
   "pins" : [
     {
       "identity" : "beautiful-mermaid-swift",
@@ -53,14 +53,6 @@
       "state" : {
         "revision" : "da6fe9beb4f7f67beb75914ca8e0d48ae48d6406",
         "version" : "0.25.10"
-      }
-    },
-    {
-      "identity" : "tree-sitter-kotlin",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/fwcd/tree-sitter-kotlin",
-      "state" : {
-        "revision" : "e1a2d5ad1f61f5740677183cd4125bb071cd2f30"
       }
     }
   ],

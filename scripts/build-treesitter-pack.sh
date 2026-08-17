@@ -193,7 +193,7 @@ missing=""
 for symbol in \
     bash c c_sharp clojure_orchard cmake cpp css dart dockerfile elixir \
     erlang go graphql groovy haskell hcl html ini java javascript json \
-    julia lua make markdown markdown_inline objc php php_only \
+    julia kotlin lua make markdown markdown_inline objc php php_only \
     powershell proto python r ruby rust scala scss sql svelte swift toml \
     tsx typescript xml yaml zig
 do
