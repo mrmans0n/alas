@@ -3415,7 +3415,23 @@ extension ACPSessionManager {
                         runner.finishSuppressingLoadReplay(
                             throughYieldedUpdateCount: connection.client.yieldedUpdateCount
                         )
-                        throw error
+                        guard initialized.sessionCapabilities.supportsResume,
+                              ACPAuthFailure.message(from: error) == nil
+                        else { throw error }
+                        result = try await connection.resumeSession(
+                            cwd: worktreePath,
+                            sessionId: remoteId,
+                            mcpServers: wireMCPServers,
+                            brokerOperationKey: Self.brokerStartupOperationKey(
+                                sessionId: sessionId,
+                                method: "session/resume",
+                                remoteSessionId: remoteId
+                            )
+                        )
+                        restoreWarning = .init(
+                            message: "Earlier messages remain in the agent and are not available in Alas.",
+                            canSendTranscript: false
+                        )
                     }
                     if !pendingRecovery {
                         session.contextRecoveryStatus = nil

@@ -107,6 +107,25 @@ struct ACPSessionManagerRemoteRestoreTests {
         #expect(try store.loadSession(id: session.id)?.origin == .agentImported)
     }
 
+    @Test("imported sessions resume the same remote session when strict load fails")
+    func importedSessionResumesWhenLoadFails() async throws {
+        let (manager, _, client, session) = try fixture(origin: .agentImported)
+        scriptInitialize(client, canLoad: true, canResume: true)
+        client.script(method: "session/load") { _ in
+            throw JSONRPCError(code: -32603, message: "Internal error", data: nil)
+        }
+        client.script(method: "session/resume") { _ in Data("{}".utf8) }
+
+        await manager.attach(to: session.id, freshlyCreated: false)
+
+        #expect(client.sent.map(\.method) == ["initialize", "session/load", "session/resume"])
+        #expect(session.agentState == .ready)
+        #expect(session.remoteSessionId == "remote-id")
+        #expect(session.contextRestoreWarning?.canSendTranscript == false)
+        #expect(session.contextRestoreWarning?.message.contains("remain in the agent") == true)
+        await manager.detach(sessionId: session.id)
+    }
+
     @Test("imported sessions resume after their history has been persisted locally")
     func importedSessionWithLocalHistoryUsesResume() async throws {
         let (manager, store, client, session) = try fixture(
