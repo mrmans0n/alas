@@ -126,6 +126,70 @@ struct ACPSessionManagerRemoteRestoreTests {
         await manager.detach(sessionId: session.id)
     }
 
+    @Test("imported sessions retry a durably completed load before resuming")
+    func importedSessionRetriesDurableLoadCompletion() async throws {
+        let (manager, _, client, session) = try fixture(origin: .agentImported)
+        scriptInitialize(client, canLoad: true, canResume: true)
+        var loadAttempts = 0
+        client.script(method: "session/load") { _ in
+            loadAttempts += 1
+            if loadAttempts == 1 {
+                throw ACPBrokerDurableCompletionReplayError(
+                    outcome: .init(result: .object(["sessionId": .string("remote-id")]), error: nil),
+                    underlying: JSONRPCError(code: -32603, message: "Replay failed", data: nil)
+                )
+            }
+            return Data("{}".utf8)
+        }
+
+        await manager.attach(to: session.id, freshlyCreated: false)
+
+        #expect(client.sent.map(\.method) == ["initialize", "session/load", "session/load"])
+        #expect(session.agentState == .ready)
+        await manager.detach(sessionId: session.id)
+    }
+
+    @Test("strict load fallback keeps hydrated replay suppressed through resume")
+    func importedSessionLoadFallbackSuppressesResumeReplay() async throws {
+        let persistedToolCall = ACPMessage.toolCall(.init(
+            toolCallId: "tool-1",
+            title: "Read file",
+            kind: "read",
+            status: "completed",
+            content: "done"
+        ))
+        let (manager, store, client, session) = try fixture(
+            origin: .agentImported,
+            localMessage: persistedToolCall
+        )
+        scriptInitialize(client, canLoad: true, canResume: true)
+        client.script(method: "session/load") { _ in
+            throw JSONRPCError(code: -32603, message: "Internal error", data: nil)
+        }
+        client.scriptAsync(method: "session/resume") { _ in
+            client.emit(.init(sessionId: "remote-id", update: .toolCall(.init(
+                toolCallId: "tool-1",
+                title: "Read file",
+                kind: "read",
+                status: "completed",
+                content: [.content(.text("done"))],
+                locations: nil,
+                rawInput: nil,
+                rawOutput: nil
+            ))))
+            return Data("{}".utf8)
+        }
+
+        await manager.hydrateIfNeeded(id: session.id)
+        await manager.attach(to: session.id, freshlyCreated: false)
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        #expect(client.sent.map(\.method) == ["initialize", "session/load", "session/resume"])
+        #expect(session.transcript.messages.count == 1)
+        #expect(try store.messageCount(sessionId: session.id) == 1)
+        await manager.detach(sessionId: session.id)
+    }
+
     @Test("imported sessions resume after their history has been persisted locally")
     func importedSessionWithLocalHistoryUsesResume() async throws {
         let (manager, store, client, session) = try fixture(
