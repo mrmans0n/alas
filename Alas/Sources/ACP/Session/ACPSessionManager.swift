@@ -3878,7 +3878,7 @@ extension ACPSessionManager {
     ) async -> Bool {
         guard var session = sessions[sessionId] else { return false }
         let source = ACPDelegatedPromptSource(
-            sessionId: "mission:\(sessionId)",
+            sessionId: "delegated:\(sessionId)",
             messageId: id.uuidString
         )
         guard !session.queue.contains(where: {
