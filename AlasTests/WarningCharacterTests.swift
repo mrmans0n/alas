@@ -41,10 +41,20 @@ struct WarningCharacterTests {
     @Test func findsWarningsWithinComposedCharacterSequences() {
         let text = "a\u{034F}"
 
-        #expect(CodeEditorLayoutManager.warningCharacterRanges(
+        let ranges = CodeEditorLayoutManager.warningCharacterRanges(
             in: text as NSString,
             composedRange: NSRange(location: 0, length: 2),
             warningScalars: [0x034F]
-        ) == [(0x034F, NSRange(location: 1, length: 1))])
+        )
+
+        #expect(ranges.count == 1)
+        #expect(ranges.first?.0 == 0x034F)
+        #expect(ranges.first?.1 == NSRange(location: 1, length: 1))
+    }
+
+    @Test func usesInsertionMarkersForZeroWidthWarnings() {
+        #expect(CodeEditorLayoutManager.usesInsertionMarker(for: Unicode.Scalar(0x034F)!))
+        #expect(CodeEditorLayoutManager.usesInsertionMarker(for: Unicode.Scalar(0x200D)!))
+        #expect(!CodeEditorLayoutManager.usesInsertionMarker(for: Unicode.Scalar(0x2013)!))
     }
 }
