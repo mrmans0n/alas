@@ -127,6 +127,7 @@ struct CodeEditorView: NSViewRepresentable {
     let fontFamily: String
     let fontSize: Int
     let showLineNumbers: Bool
+    let textRendering: CodeEditorTextRenderingConfiguration
     var onTextViewAttached: (CodeTextView) -> Void = { _ in }
     var onTextViewDetached: (CodeTextView?) -> Void = { _ in }
     @Environment(\.theme) var theme
@@ -182,7 +183,8 @@ struct CodeEditorView: NSViewRepresentable {
         // storage<->layoutManager binding (see `bindBuffer`) so that swapping
         // buffers across tab switches can rebind onto the new storage; we
         // pass an unattached layout manager here.
-        let layoutManager = NSLayoutManager()
+        let layoutManager = CodeEditorLayoutManager()
+        layoutManager.update(configuration: textRendering, theme: theme)
         let containerSize = NSSize(
             width: CGFloat.greatestFiniteMagnitude,
             height: CGFloat.greatestFiniteMagnitude
@@ -205,6 +207,10 @@ struct CodeEditorView: NSViewRepresentable {
         textView.isHorizontallyResizable = true
         textView.isVerticallyResizable = true
         textView.autoresizingMask = []
+        textView.warningToolTipProvider = { [weak layoutManager, weak textView] point in
+            guard let layoutManager, let textView else { return nil }
+            return layoutManager.warningToolTip(at: point, in: textView)
+        }
 
         scroll.documentView = textView
         configureLineNumberRuler(for: scroll, textView: textView)
@@ -248,6 +254,7 @@ struct CodeEditorView: NSViewRepresentable {
 
         if let textView = nsView.documentView as? CodeTextView {
             configureLineNumberRuler(for: nsView, textView: textView)
+            (textView.layoutManager as? CodeEditorLayoutManager)?.update(configuration: textRendering, theme: theme)
         }
     }
 

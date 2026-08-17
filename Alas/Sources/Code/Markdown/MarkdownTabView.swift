@@ -188,7 +188,8 @@ struct MarkdownTabView: View {
             originatingRelativePath: originatingRelativePath,
             fontFamily: appState.config.code.fontFamily,
             fontSize: appState.config.code.fontSize,
-            showLineNumbers: appState.config.code.showLineNumbers
+            showLineNumbers: appState.config.code.showLineNumbers,
+            textRendering: CodeEditorTextRenderingConfiguration(code: appState.config.code)
         )
     }
 
