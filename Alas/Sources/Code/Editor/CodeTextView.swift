@@ -81,6 +81,11 @@ final class CodeTextView: NSTextView, FontSizeResponder {
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        refreshWarningToolTip()
+    }
+
     private func refreshWarningToolTip() {
         if let warningToolTipTag { removeToolTip(warningToolTipTag) }
         warningToolTipTag = warningToolTipProvider == nil ? nil : addToolTip(bounds, owner: self, userData: nil)

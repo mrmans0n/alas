@@ -121,8 +121,13 @@ final class CodeEditorLayoutManager: NSLayoutManager {
         var rect = boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: container)
         if scalar.map(Self.usesInsertionMarker) == true || rect.width <= 1 {
             let line = lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
-            let nextGlyph = glyphIndexForCharacter(at: NSMaxRange(range))
-            let x = nextGlyph < numberOfGlyphs ? location(forGlyphAt: nextGlyph).x : rect.maxX
+            let x: CGFloat
+            if scalar.map(Self.usesInsertionMarker) == true {
+                let nextGlyph = glyphIndexForCharacter(at: NSMaxRange(range))
+                x = nextGlyph < numberOfGlyphs ? location(forGlyphAt: nextGlyph).x : rect.maxX
+            } else {
+                x = location(forGlyphAt: glyph).x
+            }
             rect = NSRect(x: x, y: line.minY, width: 8, height: line.height)
         }
         return rect
