@@ -265,5 +265,4 @@ struct AppStatePersistenceTests {
         #expect(tracker.consumeChange(in: languageServerConfig) == true)
         #expect(tracker.consumeChange(in: languageServerConfig) == false)
     }
-
 }

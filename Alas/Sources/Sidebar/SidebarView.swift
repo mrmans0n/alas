@@ -273,5 +273,4 @@ struct SidebarView: View {
             spaceTitleVisible = false
         }
     }
-
 }

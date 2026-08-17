@@ -45,7 +45,6 @@ extension Paths {
     static var acpOrchestrationDB: URL {
         appSupportRoot.appendingPathComponent("acp-orchestration.sqlite")
     }
-
 }
 
 extension Paths {

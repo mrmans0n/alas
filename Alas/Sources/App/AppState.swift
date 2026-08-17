@@ -677,7 +677,6 @@ final class AppState {
             await GGAvailability.shared.probe()
             self?.rightPaneStore.reevaluateGGGates()
         }
-
     }
 
     /// All worktree IDs currently known to the projects manager (including

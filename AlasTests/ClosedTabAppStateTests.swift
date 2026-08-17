@@ -480,5 +480,4 @@ struct ClosedTabAppStateTests {
         #expect(!fixture.state.canReopenClosedTab)
         #expect(fixture.state.closedTabHistory.entries.isEmpty)
     }
-
 }

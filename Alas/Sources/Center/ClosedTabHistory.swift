@@ -84,7 +84,6 @@ struct ClosedTabHistory: Equatable {
     mutating func purge(worktreeID: String) {
         entries.removeAll { $0.snapshot.worktreeID == worktreeID }
     }
-
 }
 
 extension PaneNode {

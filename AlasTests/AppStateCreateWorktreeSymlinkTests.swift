@@ -84,5 +84,4 @@ struct AppStateCreateWorktreeSymlinkTests {
         #expect(state.projectsManager.operationState(for: optimisticId) == nil)
         #expect(state.selectedWorktreeId == optimisticId)
     }
-
 }

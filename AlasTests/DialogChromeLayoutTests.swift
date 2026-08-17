@@ -6,5 +6,4 @@ struct DialogChromeLayoutTests {
     func projectDialogWidthFitsIconControls() {
         #expect(DialogContainerLayout.projectWidth >= 640)
     }
-
 }
