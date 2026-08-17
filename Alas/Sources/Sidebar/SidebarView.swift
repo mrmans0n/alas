@@ -9,7 +9,6 @@ struct SidebarView: View {
     let onEditProject: (_ projectId: String) -> Void
     let onRemoveProject: (_ projectId: String) -> Void
     let onNewWorktree: (_ projectId: String?) -> Void
-    let onNewMission: () -> Void
     let onHideSidebar: () -> Void
     @Environment(\.theme) var theme
     @State private var spaceTitleVisible = false
@@ -35,22 +34,6 @@ struct SidebarView: View {
                 )
                 ScrollView(.vertical, showsIndicators: true) {
                     VStack(alignment: .leading, spacing: 8) {
-                        if state.missionsEnabled {
-                            MissionSidebarSection(
-                                model: missionSidebarModel,
-                                selectedMissionID: selectedMissionID,
-                                onOpenMission: { missionID in
-                                    _ = state.openMission(id: missionID)
-                                },
-                                onNewMission: onNewMission,
-                                onDeleteMission: { missionID in
-                                    Task { await state.deleteMission(id: missionID) }
-                                },
-                                onDeleteCompleted: { missionIDs in
-                                    Task { await state.deleteCompletedMissions(ids: missionIDs) }
-                                }
-                            )
-                        }
                         ForEach(state.activeSpaceProjects) { project in
                             RepoGroupView(
                                 project: project,
@@ -62,12 +45,7 @@ struct SidebarView: View {
                                         else { collapsedProjects.remove(project.id) }
                                     }
                                 ),
-                                selectedWorktreeId: Self.effectiveSelectedWorktreeId(
-                                    selectedWorktreeId: state.selectedWorktreeId,
-                                    activeMissionTab: state.missionsEnabled
-                                        ? state.globalTabs.activeMissionTab()
-                                        : nil
-                                ),
+                                selectedWorktreeId: state.selectedWorktreeId,
                                 isMain: { wt in state.projectsManager.isMain(wt, in: project) },
                                 operationState: { wt in
                                     state.projectsManager.operationState(for: wt.id)
@@ -282,13 +260,6 @@ struct SidebarView: View {
         return (base, ggWorktreeMode, launchSurface, issueAttachment)
     }
 
-    nonisolated static func effectiveSelectedWorktreeId(
-        selectedWorktreeId: String?,
-        activeMissionTab: MissionTabState?
-    ) -> String? {
-        activeMissionTab == nil ? selectedWorktreeId : nil
-    }
-
     private func showTransientSpaceTitle() {
         hideTitleTask?.cancel()
         spaceTitleVisible = true
@@ -303,34 +274,4 @@ struct SidebarView: View {
         }
     }
 
-    private var missionSidebarModel: MissionSidebarModel {
-        guard state.missionsEnabled else {
-            return MissionSidebarModel.make(
-                aggregates: [],
-                activeProjectIds: [],
-                existingProjectIds: [],
-                knownWorktreeIds: []
-            )
-        }
-        return state.missions.sidebarModel(
-            activeProjectIds: state.spacesManager.activeSpace?.projectIds ?? state.projects.map(\.id),
-            existingProjectIds: state.projects.map(\.id),
-            knownWorktreeIds: state.allWorktreeIds()
-        )
-    }
-
-    private var selectedMissionID: MissionID? {
-        guard state.missionsEnabled else { return nil }
-        if let tabState = state.globalTabs.activeMissionTab() {
-            return tabState.missionID
-        }
-        if let tabState = state.missingMissionTab {
-            return tabState.missionID
-        }
-        guard let worktreeID = state.selectedWorktreeId,
-              let tab = state.tabs.activeTab(forWorktree: worktreeID),
-              case .mission(let tabState) = tab
-        else { return nil }
-        return tabState.missionID
-    }
 }

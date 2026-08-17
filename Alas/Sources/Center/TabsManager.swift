@@ -161,8 +161,7 @@ final class TabsManager {
     }
 
     /// Loads every persisted tab file, including files whose worktree is not
-    /// currently discoverable. Legacy Mission tabs must be migrated before an
-    /// orphaned worktree can otherwise make them unreachable.
+    /// currently discoverable. `TabsFile` skips unsupported tab cases.
     func loadAllPersisted() {
         guard let relativeFiles = try? FileManager.default.subpathsOfDirectory(
             atPath: tabsDirectory.path

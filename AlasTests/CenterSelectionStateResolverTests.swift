@@ -5,148 +5,6 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct CenterSelectionStateResolverTests {
-    @Test func composesGlobalMissionAndWorktreeTabsInOneStrip() {
-        let mission = MissionTabState.fixture
-        let terminal = Tab.terminal(TerminalTabState(
-            id: "terminal-1",
-            title: "Terminal",
-            sessionId: "session-1"
-        ))
-
-        let composition = CenterTabComposition(
-            globalTabs: [.mission(mission)],
-            worktreeTabs: [terminal],
-            activeGlobalMissionTab: mission,
-            activeWorktreeTabId: terminal.id,
-            missionsEnabled: true
-        )
-
-        #expect(composition.tabs == [.mission(mission), terminal])
-        #expect(composition.activeId == mission.id)
-    }
-
-    @Test func disabledMissionsAreExcludedFromCenterComposition() {
-        let mission = MissionTabState.fixture
-        let terminal = Tab.terminal(TerminalTabState(
-            id: "terminal-1",
-            title: "Terminal",
-            sessionId: "session-1"
-        ))
-
-        let composition = CenterTabComposition(
-            globalTabs: [.mission(mission)],
-            worktreeTabs: [terminal],
-            activeGlobalMissionTab: mission,
-            activeWorktreeTabId: terminal.id,
-            missionsEnabled: false
-        )
-
-        #expect(composition.tabs == [terminal])
-        #expect(composition.activeId == terminal.id)
-    }
-
-    @Test func disabledMissionsExcludeLegacyWorktreeMissionAndKeepARegularTabActive() {
-        let mission = MissionTabState.fixture
-        let terminal = Tab.terminal(TerminalTabState(
-            id: "terminal-1",
-            title: "Terminal",
-            sessionId: "session-1"
-        ))
-
-        let composition = CenterTabComposition(
-            globalTabs: [],
-            worktreeTabs: [.mission(mission), terminal],
-            activeGlobalMissionTab: nil,
-            activeWorktreeTabId: mission.id,
-            missionsEnabled: false
-        )
-
-        #expect(composition.tabs == [terminal])
-        #expect(composition.activeId == terminal.id)
-    }
-
-    @Test func adjacentTabsFollowVisualOrderAndWrap() {
-        let mission = MissionTabState.fixture
-        let firstTerminal = Tab.terminal(TerminalTabState(
-            id: "terminal-1",
-            title: "First Terminal",
-            sessionId: "session-1"
-        ))
-        let secondTerminal = Tab.terminal(TerminalTabState(
-            id: "terminal-2",
-            title: "Second Terminal",
-            sessionId: "session-2"
-        ))
-
-        let fromMission = CenterTabComposition(
-            globalTabs: [.mission(mission)],
-            worktreeTabs: [firstTerminal, secondTerminal],
-            activeGlobalMissionTab: mission,
-            activeWorktreeTabId: firstTerminal.id
-        )
-        #expect(fromMission.adjacentTabID(in: .next) == firstTerminal.id)
-        #expect(fromMission.adjacentTabID(in: .previous) == secondTerminal.id)
-
-        let fromLastTerminal = CenterTabComposition(
-            globalTabs: [.mission(mission)],
-            worktreeTabs: [firstTerminal, secondTerminal],
-            activeGlobalMissionTab: nil,
-            activeWorktreeTabId: secondTerminal.id
-        )
-        #expect(fromLastTerminal.adjacentTabID(in: .next) == mission.id)
-        #expect(fromLastTerminal.adjacentTabID(in: .previous) == firstTerminal.id)
-    }
-
-    @Test func adjacentTabIsUnavailableWithoutAValidChoice() {
-        let terminal = Tab.terminal(TerminalTabState(
-            id: "terminal-1",
-            title: "Terminal",
-            sessionId: "session-1"
-        ))
-
-        let empty = CenterTabComposition(
-            globalTabs: [],
-            worktreeTabs: [],
-            activeGlobalMissionTab: nil,
-            activeWorktreeTabId: nil
-        )
-        let single = CenterTabComposition(
-            globalTabs: [],
-            worktreeTabs: [terminal],
-            activeGlobalMissionTab: nil,
-            activeWorktreeTabId: terminal.id
-        )
-        let missingActive = CenterTabComposition(
-            globalTabs: [],
-            worktreeTabs: [terminal, .mission(.fixture)],
-            activeGlobalMissionTab: nil,
-            activeWorktreeTabId: "missing-tab"
-        )
-
-        #expect(empty.adjacentTabID(in: .next) == nil)
-        #expect(single.adjacentTabID(in: .next) == nil)
-        #expect(missingActive.adjacentTabID(in: .previous) == nil)
-    }
-
-    @Test func bulkClosurePlanUsesTheComposedTabOrder() {
-        let firstMission = MissionTabState.fixture
-        let secondMission = MissionTabState(
-            missionID: MissionID(rawValue: "mission-2"),
-            title: "Second Mission"
-        )
-        let terminalID = "terminal-1"
-        let plan = CenterTabClosurePlan(orderedTabIDs: [
-            firstMission.id,
-            secondMission.id,
-            terminalID,
-        ])
-
-        #expect(plan.others(keeping: secondMission.id) == [firstMission.id, terminalID])
-        #expect(plan.all() == [firstMission.id, secondMission.id, terminalID])
-        #expect(plan.left(of: terminalID) == [firstMission.id, secondMission.id])
-        #expect(plan.right(of: firstMission.id) == [secondMission.id, terminalID])
-    }
-
     @Test func emptyWhenNoSelection() {
         let mgr = ProjectsManager(persistedProjects: [])
         let resolver = CenterSelectionStateResolver(
@@ -183,23 +41,6 @@ struct CenterSelectionStateResolverTests {
         #expect(result == .empty)
     }
 
-    @Test func globalMissionTakesPrecedenceOverSelectedWorktree() {
-        let project = ProjectConfig.fixture
-        let worktree = Worktree.fixture(projectId: project.id)
-        let manager = ProjectsManager(persistedProjects: [project])
-        manager.insertOptimisticWorktree(worktree)
-        let missionTab = MissionTabState.fixture
-
-        let result = CenterSelectionStateResolver(
-            selectedWorktreeId: worktree.id,
-            projects: [project],
-            projectsManager: manager,
-            activeGlobalMissionTab: missionTab
-        ).resolve()
-
-        #expect(result == .globalMission(missionTab))
-    }
-
     @Test func returnsWorktreeWhenNoOperationState() {
         let project = ProjectConfig(id: "p1", name: "A", path: "/tmp/a", color: "#fff", addedAt: Date())
         let wt = Worktree(id: "wt1", projectId: "p1", name: "main", branch: "main", path: URL(fileURLWithPath: "/tmp/a"), status: .clean, lastActivity: Date())
@@ -215,47 +56,6 @@ struct CenterSelectionStateResolverTests {
             #expect(returned.id == wt.id)
         } else {
             Issue.record("Expected .worktree, got \(result)")
-        }
-    }
-
-    @Test func returnsHiddenWorktreeOnlyForExplicitMissionSelection() {
-        let project = ProjectConfig(
-            id: "p1",
-            name: "A",
-            path: "/tmp/a",
-            color: "#fff",
-            addedAt: Date(),
-            hiddenWorktreePaths: ["/tmp/a-hidden"]
-        )
-        let worktree = Worktree(
-            id: "wt-hidden",
-            projectId: project.id,
-            name: "archived",
-            branch: "archived",
-            path: URL(fileURLWithPath: "/tmp/a-hidden"),
-            status: .clean,
-            lastActivity: Date()
-        )
-        let manager = ProjectsManager(persistedProjects: [project])
-        manager.insertOptimisticWorktree(worktree)
-
-        let ordinary = CenterSelectionStateResolver(
-            selectedWorktreeId: worktree.id,
-            projects: [project],
-            projectsManager: manager
-        ).resolve()
-        let mission = CenterSelectionStateResolver(
-            selectedWorktreeId: worktree.id,
-            projects: [project],
-            projectsManager: manager,
-            allowsHiddenSelectedWorktree: true
-        ).resolve()
-
-        #expect(ordinary == .empty)
-        if case .worktree(let resolved) = mission {
-            #expect(resolved == worktree)
-        } else {
-            Issue.record("Expected hidden Mission worktree")
         }
     }
 
@@ -365,11 +165,4 @@ private extension Worktree {
             lastActivity: Date(timeIntervalSince1970: 0)
         )
     }
-}
-
-private extension MissionTabState {
-    static let fixture = MissionTabState(
-        missionID: MissionID(rawValue: "mission-1"),
-        title: "Fix parser crash"
-    )
 }

@@ -14,7 +14,6 @@ enum Paths {
     static var appConfigFile: URL { appSupportRoot.appendingPathComponent("app.json") }
     static var projectsFile: URL { appSupportRoot.appendingPathComponent("projects.json") }
     static var spacesFile: URL { appSupportRoot.appendingPathComponent("spaces.json") }
-    static var globalTabsFile: URL { appSupportRoot.appendingPathComponent("global-tabs.json") }
     static var tabsDir: URL { appSupportRoot.appendingPathComponent("tabs", isDirectory: true) }
 
     static func ensureDirectoryExists(_ url: URL) throws {
@@ -47,9 +46,6 @@ extension Paths {
         appSupportRoot.appendingPathComponent("acp-orchestration.sqlite")
     }
 
-    static var missionsDB: URL {
-        appSupportRoot.appendingPathComponent("missions.sqlite")
-    }
 }
 
 extension Paths {
