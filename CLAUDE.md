@@ -27,8 +27,9 @@ xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' te
 `scripts/build-ghostty.sh` caches the built `GhosttyKit.xcframework` and
 `share/{ghostty,terminfo}` per host, keyed by a fingerprint over the Ghostty
 submodule (`HEAD` + working-tree diff + untracked files), the build script
-itself, and `mise.toml`. A fresh worktree whose fingerprint matches an
-existing entry skips zig entirely.
+itself, the resolved Zig toolchain, target arch, and an optional root
+`mise.toml` when present. A fresh worktree whose fingerprint matches an existing
+entry skips zig entirely.
 
 **Cache path:** `~/Library/Caches/Alas/GhosttyKit/<arch>/<fingerprint>/`
 
@@ -52,8 +53,7 @@ older than `ALAS_GHOSTTY_LOCK_STALE_SECS`) are reclaimed automatically.
 
 **CI:** GitHub Actions is unaffected. The script's per-worktree fast path
 (`.build/ghostty/fingerprint` match) wins before the shared cache is even
-consulted, and CI uses `actions/cache` keyed off `.ghostty-pin` to restore
-`.build/ghostty` directly.
+consulted.
 
 ## Tree-sitter grammars
 
