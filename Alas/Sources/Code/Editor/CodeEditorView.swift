@@ -206,7 +206,7 @@ struct CodeEditorView: NSViewRepresentable {
         textView.isHorizontallyResizable = true
         textView.isVerticallyResizable = true
         textView.autoresizingMask = []
-        configureTextRendering(on: textView, layoutManager: layoutManager, theme: theme)
+        configureTextRendering(on: textView, layoutManager: layoutManager, theme: theme, rendersTextDecorations: !buffer.readOnly)
 
         scroll.documentView = textView
         configureLineNumberRuler(for: scroll, textView: textView)
@@ -250,7 +250,12 @@ struct CodeEditorView: NSViewRepresentable {
 
         if let textView = nsView.documentView as? CodeTextView {
             configureLineNumberRuler(for: nsView, textView: textView)
-            configureTextRendering(on: textView, layoutManager: textView.layoutManager, theme: theme)
+            configureTextRendering(
+                on: textView,
+                layoutManager: textView.layoutManager,
+                theme: theme,
+                rendersTextDecorations: !context.coordinator.currentBufferReadOnly
+            )
         }
     }
 
@@ -276,13 +281,12 @@ struct CodeEditorView: NSViewRepresentable {
         }
     }
 
-    private func configureTextRendering(on textView: CodeTextView, layoutManager: NSLayoutManager?, theme: Theme) {
+    private func configureTextRendering(on textView: CodeTextView, layoutManager: NSLayoutManager?, theme: Theme, rendersTextDecorations: Bool) {
         guard let layoutManager = layoutManager as? CodeEditorLayoutManager else {
             textView.warningToolTipProvider = nil
             return
         }
 
-        let rendersTextDecorations = externalAbsolutePath == nil || externalEditable
         guard rendersTextDecorations else {
             layoutManager.disableRendering()
             textView.warningToolTipProvider = nil
