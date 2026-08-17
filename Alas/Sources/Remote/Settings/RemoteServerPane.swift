@@ -78,8 +78,9 @@ struct RemoteServerPane: View {
                                         Text(pickerAddressLabel(address)).tag(address.id)
                                     }
                                 }
-                                .pickerStyle(.segmented)
+                                .pickerStyle(.menu)
                                 .labelsHidden()
+                                .settingsDropdownFrame()
                             }
                         }
                         SettingsRow(
