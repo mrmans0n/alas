@@ -29,7 +29,7 @@ struct ACPSessionManagerTests {
         #expect(session.queue.count == 1)
         #expect(session.queue.first?.id == promptID)
         #expect(session.queue.first?.delegatedSource == ACPDelegatedPromptSource(
-            sessionId: "delegated:session",
+            sessionId: "mission:session",
             messageId: promptID.uuidString
         ))
         #expect(try store.loadQueue(sessionId: "session").map(\.id) == [promptID])
