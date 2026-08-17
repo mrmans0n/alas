@@ -143,7 +143,14 @@ final class CodeEditorLayoutManager: NSLayoutManager {
                 let nextGlyph = NSMaxRange(range) < (textStorage?.length ?? 0)
                     ? glyphIndexForCharacter(at: NSMaxRange(range))
                     : numberOfGlyphs
-                x = nextGlyph < numberOfGlyphs ? location(forGlyphAt: nextGlyph).x : rect.maxX
+                if nextGlyph < numberOfGlyphs, nextGlyph != glyph {
+                    x = location(forGlyphAt: nextGlyph).x
+                } else if usesScalarMarker {
+                    let offset = CGFloat(NSMaxRange(range) - glyphCharacters.location)
+                    x = rect.minX + rect.width * offset / CGFloat(max(glyphCharacters.length, 1))
+                } else {
+                    x = rect.maxX
+                }
             } else if usesScalarMarker {
                 let offset = CGFloat(range.location - glyphCharacters.location)
                 x = rect.minX + rect.width * offset / CGFloat(max(glyphCharacters.length, 1))
