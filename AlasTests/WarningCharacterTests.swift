@@ -55,6 +55,8 @@ struct WarningCharacterTests {
     @Test func usesInsertionMarkersForZeroWidthWarnings() {
         #expect(CodeEditorLayoutManager.usesInsertionMarker(for: Unicode.Scalar(0x034F)!))
         #expect(CodeEditorLayoutManager.usesInsertionMarker(for: Unicode.Scalar(0x200D)!))
+        #expect(!CodeEditorLayoutManager.usesInsertionMarker(for: "\t".unicodeScalars.first!))
+        #expect(!CodeEditorLayoutManager.usesInsertionMarker(for: "\n".unicodeScalars.first!))
         #expect(!CodeEditorLayoutManager.usesInsertionMarker(for: Unicode.Scalar(0x2013)!))
     }
 }

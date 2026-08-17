@@ -111,7 +111,8 @@ final class CodeEditorLayoutManager: NSLayoutManager {
     }
 
     static func usesInsertionMarker(for scalar: Unicode.Scalar) -> Bool {
-        switch scalar.properties.generalCategory {
+        if [0x0009, 0x000A, 0x000D].contains(scalar.value) { return false }
+        return switch scalar.properties.generalCategory {
         case .control, .enclosingMark, .format, .nonspacingMark: true
         default: false
         }
