@@ -2,12 +2,10 @@ import Foundation
 
 enum ClosedTabSnapshot: Equatable {
     case worktree(worktreeID: String, tab: Tab)
-    case global(GlobalTab)
 
     var tabID: TabID {
         switch self {
         case .worktree(_, let tab): tab.id
-        case .global(let tab): tab.id
         }
     }
 
@@ -85,15 +83,6 @@ struct ClosedTabHistory: Equatable {
 
     mutating func purge(worktreeID: String) {
         entries.removeAll { $0.snapshot.worktreeID == worktreeID }
-    }
-
-    mutating func purge(missionID: MissionID) {
-        entries.removeAll { entry in
-            guard case .global(let tab) = entry.snapshot,
-                  case .mission(let state) = tab
-            else { return false }
-            return state.missionID == missionID
-        }
     }
 }
 

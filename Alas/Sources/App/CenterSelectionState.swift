@@ -1,7 +1,6 @@
 import Foundation
 
 enum CenterSelectionState: Equatable {
-    case globalMission(MissionTabState)
     case worktree(Worktree)
     case deleting(Worktree)
     case deleteFailed(Worktree, message: String)
@@ -15,14 +14,9 @@ struct CenterSelectionStateResolver {
     let projects: [ProjectConfig]
     let projectsManager: ProjectsManager
     var isRefreshingProjectTopologies = false
-    var activeGlobalMissionTab: MissionTabState?
-    var allowsHiddenSelectedWorktree = false
 
     @MainActor
     func resolve() -> CenterSelectionState {
-        if let activeGlobalMissionTab {
-            return .globalMission(activeGlobalMissionTab)
-        }
         guard let id = selectedWorktreeId else {
             return isRefreshingProjectTopologies && !projects.isEmpty ? .loadingProject : .empty
         }
@@ -78,10 +72,6 @@ struct CenterSelectionStateResolver {
 
     @MainActor
     private func candidateWorktrees(projectId: String) -> [Worktree] {
-        if allowsHiddenSelectedWorktree {
-            projectsManager.worktrees(projectId: projectId)
-        } else {
-            projectsManager.visibleWorktrees(projectId: projectId)
-        }
+        projectsManager.visibleWorktrees(projectId: projectId)
     }
 }

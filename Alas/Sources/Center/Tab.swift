@@ -3,38 +3,6 @@ import Foundation
 
 typealias TabID = String
 
-struct MissionTabState: Codable, Equatable, Identifiable {
-    let id: TabID
-    let missionID: MissionID
-    var title: String
-
-    init(missionID: MissionID, title: String) {
-        id = "mission:\(missionID.rawValue)"
-        self.missionID = missionID
-        self.title = title
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case id
-        case missionID
-        case title
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        missionID = try container.decode(MissionID.self, forKey: .missionID)
-        title = try container.decode(String.self, forKey: .title)
-        id = "mission:\(missionID.rawValue)"
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(id, forKey: .id)
-        try container.encode(missionID, forKey: .missionID)
-        try container.encode(title, forKey: .title)
-    }
-}
-
 enum Tab: Codable, Equatable, Identifiable {
     case terminal(TerminalTabState)
     case editor(EditorTabState)
@@ -55,7 +23,6 @@ enum Tab: Codable, Equatable, Identifiable {
     case fileHistory(FileHistoryTabState)
     case ggInbox(GGInboxTabState)
     case ggSplitCommit(GGSplitCommitTabState)
-    case mission(MissionTabState)
 
     var id: TabID {
         switch self {
@@ -78,7 +45,6 @@ enum Tab: Codable, Equatable, Identifiable {
         case .fileHistory(let s):  return s.id
         case .ggInbox(let s):      return s.id
         case .ggSplitCommit(let s): return s.id
-        case .mission(let s):      return s.id
         }
     }
 
@@ -103,7 +69,6 @@ enum Tab: Codable, Equatable, Identifiable {
         case .fileHistory(let s):  return s.title
         case .ggInbox(let s):      return s.title
         case .ggSplitCommit:       return "Split Commit"
-        case .mission(let s):      return s.title
         }
     }
 
@@ -128,7 +93,6 @@ enum Tab: Codable, Equatable, Identifiable {
         case .fileHistory:  return "clock.arrow.circlepath"
         case .ggInbox:      return "branch"
         case .ggSplitCommit: return "arrow.trianglehead.branch"
-        case .mission:      return "scope"
         }
     }
 

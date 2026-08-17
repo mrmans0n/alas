@@ -11,28 +11,28 @@ struct ACPSessionManagerTests {
             .appendingPathComponent("mgr-stable-prompt-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
         let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
-        _ = manager.createSession(id: "mission-session", agentId: "codex", autoRunDefault: false)
+        _ = manager.createSession(id: "session", agentId: "codex", autoRunDefault: false)
         let promptID = UUID(uuidString: "C4A54F3E-C70B-4EB6-B20D-FC51E22D5C22")!
 
         #expect(await manager.enqueuePrompt(
             id: promptID,
             text: "Investigate.",
-            into: "mission-session"
+            into: "session"
         ))
         #expect(await manager.enqueuePrompt(
             id: promptID,
             text: "Investigate.",
-            into: "mission-session"
+            into: "session"
         ))
 
-        let session = try #require(manager.liveSession(for: "mission-session"))
+        let session = try #require(manager.liveSession(for: "session"))
         #expect(session.queue.count == 1)
         #expect(session.queue.first?.id == promptID)
         #expect(session.queue.first?.delegatedSource == ACPDelegatedPromptSource(
-            sessionId: "mission:mission-session",
+            sessionId: "mission:session",
             messageId: promptID.uuidString
         ))
-        #expect(try store.loadQueue(sessionId: "mission-session").map(\.id) == [promptID])
+        #expect(try store.loadQueue(sessionId: "session").map(\.id) == [promptID])
     }
 
     @Test("delegated prompt already recorded in the transcript is not requeued")
@@ -55,68 +55,6 @@ struct ACPSessionManagerTests {
             source: source,
             into: session.id
         ))
-        #expect(session.queue.isEmpty)
-    }
-
-    @Test("consumed Mission prompt remains deduplicated after session restore")
-    func consumedMissionPromptRemainsDeduplicatedAfterRestore() async throws {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-mission-receipt-\(UUID()).sqlite")
-        let store = try ACPSessionStore(path: url.path)
-        let sessionID = "mission-session"
-        let promptID = UUID(uuidString: "C4A54F3E-C70B-4EB6-B20D-FC51E22D5C22")!
-        try store.upsertSession(.init(
-            id: sessionID,
-            agentId: "codex",
-            title: "Mission",
-            currentModel: nil,
-            currentMode: nil,
-            autoRun: false,
-            createdAt: 0,
-            updatedAt: 0,
-            lastOpenedAt: 0,
-            archived: false
-        ))
-        let consumed: ACPMessage = .user(
-            id: UUID(),
-            messageId: nil,
-            text: "Investigate.",
-            attachments: [],
-            delegatedSource: ACPDelegatedPromptSource(
-                sessionId: "mission:\(sessionID)",
-                messageId: promptID.uuidString
-            )
-        )
-        try store.appendMessage(
-            sessionId: sessionID,
-            id: "consumed-prompt",
-            kind: consumed.kind,
-            seq: 0,
-            payload: try ACPMessageCodec.encode(consumed),
-            createdAt: 1
-        )
-        for index in 1..<100 {
-            let message = ACPMessage.user(
-                id: UUID(),
-                text: "later message \(index)",
-                attachments: []
-            )
-            try store.appendMessage(
-                sessionId: sessionID,
-                id: "later-\(index)",
-                kind: message.kind,
-                seq: Int64(index),
-                payload: try ACPMessageCodec.encode(message),
-                createdAt: Int64(index + 1)
-            )
-        }
-
-        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
-        let session = try #require(manager.placeholderSession(id: sessionID))
-        await manager.hydrateIfNeeded(id: sessionID)
-
-        #expect(session.transcript.messages.count == ACPTranscript.tailWindow)
-
-        #expect(await manager.enqueuePrompt(id: promptID, text: "Investigate.", into: sessionID))
         #expect(session.queue.isEmpty)
     }
 

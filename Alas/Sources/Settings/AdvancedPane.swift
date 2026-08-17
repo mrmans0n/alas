@@ -15,18 +15,6 @@ struct AdvancedPane: View {
                     .font(.system(size: 12.5)).foregroundColor(theme.color("fg-dim"))
                     .padding(.bottom, 12)
 
-                SettingsGroup(title: "Experiments") {
-                    SettingsRow(
-                        name: "Missions",
-                        desc: "Shows the experimental Missions interface and resumes its background coordination."
-                    ) {
-                        AlasToggle(on: Binding(
-                            get: { state.missionsEnabled },
-                            set: { state.setMissionsEnabled($0) }
-                        ))
-                    }
-                }
-
                 SettingsGroup(title: "Cleanup") {
                     SettingsRow(
                         name: "Clear all projects",

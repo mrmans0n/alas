@@ -51,7 +51,7 @@ struct ClosedTabAppStateTests {
     }
 
     private func makeFixture(
-        state: AppState = AppState(store: MemoryStore(), missionsEnabled: true)
+        state: AppState = AppState(store: MemoryStore())
     ) -> Fixture {
         let project = ProjectConfig(
             id: "closed-tabs-project",
@@ -103,6 +103,40 @@ struct ClosedTabAppStateTests {
         #expect(!fixture.state.canReopenClosedTab)
     }
 
+    @Test func centerTabNavigationUsesTheWorktreeActiveTab() {
+        let fixture = makeFixture()
+        let first = fixture.state.tabs.appendEditor(
+            worktreeId: fixture.first.id,
+            title: "one",
+            relativePath: "one.md"
+        )
+        let second = fixture.state.tabs.appendEditor(
+            worktreeId: fixture.first.id,
+            title: "two",
+            relativePath: "two.md"
+        )
+        let third = fixture.state.tabs.appendEditor(
+            worktreeId: fixture.first.id,
+            title: "three",
+            relativePath: "three.md"
+        )
+        _ = fixture.state.tabs.appendEditor(
+            worktreeId: fixture.second.id,
+            title: "other",
+            relativePath: "other.md"
+        )
+
+        fixture.state.activateWorktreeCenterTab(worktreeId: fixture.first.id, tabId: second.id)
+
+        #expect(fixture.state.activateCenterTabNumber(1, worktreeId: fixture.first.id) == first.id)
+        #expect(fixture.state.tabs.activeTabId(forWorktree: fixture.first.id) == first.id)
+
+        fixture.state.activateWorktreeCenterTab(worktreeId: fixture.first.id, tabId: second.id)
+
+        #expect(fixture.state.activateAdjacentCenterTab(.next, worktreeId: fixture.first.id) == third.id)
+        #expect(fixture.state.tabs.activeTabId(forWorktree: fixture.first.id) == third.id)
+    }
+
     @Test func automaticCloseDoesNotRecordHistory() {
         let fixture = makeFixture()
         let tab = fixture.state.tabs.appendEditor(
@@ -113,57 +147,6 @@ struct ClosedTabAppStateTests {
 
         fixture.state.closeTab(worktreeId: fixture.first.id, tabId: tab.id)
 
-        #expect(!fixture.state.canReopenClosedTab)
-    }
-
-    @Test func explicitGlobalCloseRecordsAndReopensMission() async {
-        let fixture = makeFixture()
-        let tab = fixture.state.globalTabs.openOrFocusMission(missionID: MissionID(rawValue: "closed-tabs-mission"), title: "Mission")
-
-        fixture.state.requestCloseGlobalTab(tabID: tab.id)
-        #expect(fixture.state.canReopenClosedTab)
-
-        await fixture.state.reopenLastClosedTab()
-
-        #expect(fixture.state.globalTabs.activeTabId == tab.id)
-        #expect(fixture.state.globalTabs.tabs.count == 1)
-    }
-
-    @Test func disabledMissionsSkipClosedGlobalTabsWhenReopeningEarlierWorktreeTab() async {
-        let fixture = makeFixture()
-        let local = fixture.state.tabs.appendEditor(
-            worktreeId: fixture.second.id,
-            title: "README.md",
-            relativePath: "README.md"
-        )
-        fixture.state.requestCloseTab(worktreeId: fixture.second.id, tabId: local.id)
-        let mission = fixture.state.globalTabs.openOrFocusMission(
-            missionID: MissionID(rawValue: "closed-tabs-disabled-mission"),
-            title: "Mission"
-        )
-        fixture.state.requestCloseGlobalTab(tabID: mission.id)
-        fixture.state.setMissionsEnabled(false)
-
-        await fixture.state.reopenLastClosedTab()
-
-        #expect(fixture.state.selectedWorktreeId == fixture.second.id)
-        #expect(fixture.state.tabs.activeTabId(forWorktree: fixture.second.id) == local.id)
-        #expect(fixture.state.closedTabHistory.entries.isEmpty)
-    }
-
-    @Test func reopenFocusesManuallyRestoredGlobalTabWithoutDuplication() async {
-        let fixture = makeFixture()
-        let tab = fixture.state.globalTabs.openOrFocusMission(missionID: MissionID(rawValue: "closed-tabs-mission"), title: "Mission")
-        fixture.state.requestCloseGlobalTab(tabID: tab.id)
-        _ = fixture.state.globalTabs.restore(
-            tab: tab,
-            placement: .init(previousID: nil, nextID: nil, ordinal: 0)
-        )
-
-        await fixture.state.reopenLastClosedTab()
-
-        #expect(fixture.state.globalTabs.tabs.map(\.id) == [tab.id])
-        #expect(fixture.state.globalTabs.activeTabId == tab.id)
         #expect(!fixture.state.canReopenClosedTab)
     }
 
@@ -293,20 +276,6 @@ struct ClosedTabAppStateTests {
 
         #expect(!state.canReopenClosedTab)
         #expect(state.tabs.tabs(forWorktree: worktree.id).contains(where: { $0.id == tab.id }))
-    }
-
-    @Test func closeCenterTabsRecordsGlobalAndLocalTabsInVisibleOrder() {
-        let fixture = makeFixture()
-        let global = fixture.state.globalTabs.openOrFocusMission(missionID: MissionID(rawValue: "closed-tabs-mission"), title: "Mission")
-        let local = fixture.state.tabs.appendEditor(
-            worktreeId: fixture.first.id,
-            title: "README.md",
-            relativePath: "README.md"
-        )
-
-        fixture.state.closeCenterTabs(worktreeId: fixture.first.id, tabIds: [global.id, local.id])
-
-        #expect(fixture.state.closedTabHistory.entries.map(\.snapshot.tabID) == [global.id, local.id])
     }
 
     @Test func reopeningTerminalRebuildsLayoutWithFreshSessions() async {
@@ -510,93 +479,5 @@ struct ClosedTabAppStateTests {
 
         #expect(!fixture.state.canReopenClosedTab)
         #expect(fixture.state.closedTabHistory.entries.isEmpty)
-    }
-
-    @Test func closedTabHistoryPurgesEntriesForOneMission() {
-        var history = ClosedTabHistory()
-        let kept = MissionID(rawValue: "kept-mission")
-        let removed = MissionID(rawValue: "removed-mission")
-        let placement = ClosedTabPlacement(previousID: nil, nextID: nil, ordinal: 0)
-        history.record(ClosedTabEntry(
-            snapshot: .global(.mission(MissionTabState(missionID: kept, title: "Kept"))),
-            placement: placement
-        ))
-        history.record(ClosedTabEntry(
-            snapshot: .global(.mission(MissionTabState(missionID: removed, title: "Removed"))),
-            placement: placement
-        ))
-
-        history.purge(missionID: removed)
-
-        #expect(history.count == 1)
-        #expect(history.last?.snapshot == .global(.mission(MissionTabState(missionID: kept, title: "Kept"))))
-    }
-
-    @Test func deletingAMissionClosesItsTabWithoutRecordingHistory() async {
-        let fixture = makeFixture()
-        let missionID = MissionID(rawValue: "closed-tabs-mission")
-        let tab = fixture.state.globalTabs.openOrFocusMission(missionID: missionID, title: "Mission")
-        #expect(fixture.state.globalTabs.tabs.map(\.id) == [tab.id])
-
-        await fixture.state.deleteMission(id: missionID)
-
-        #expect(fixture.state.globalTabs.tabs.isEmpty)
-        #expect(!fixture.state.canReopenClosedTab)
-    }
-
-    @Test func deletingCompletedMissionsClosesOnlyTheCompletedMissionsTab() async throws {
-        let completedID = MissionID(rawValue: "closed-tabs-completed-mission")
-        let runningID = MissionID(rawValue: "closed-tabs-running-mission")
-        let persistence = try Self.makeMixedMissionPersistence(completedID: completedID, runningID: runningID)
-        let state = AppState(store: MemoryStore(), missionPersistence: persistence, missionsEnabled: true)
-        let fixture = makeFixture(state: state)
-        await fixture.state.missions.load()
-
-        let completedTab = fixture.state.globalTabs.openOrFocusMission(missionID: completedID, title: "Completed Mission")
-        let runningTab = fixture.state.globalTabs.openOrFocusMission(missionID: runningID, title: "Running Mission")
-        #expect(fixture.state.globalTabs.tabs.map(\.id) == [completedTab.id, runningTab.id])
-
-        await fixture.state.deleteCompletedMissions(ids: [completedID, runningID])
-
-        #expect(fixture.state.globalTabs.tabs.map(\.id) == [runningTab.id])
-        #expect(!fixture.state.canReopenClosedTab)
-
-        // The running Mission's tab and its ordinary close/reopen behavior remain untouched.
-        fixture.state.requestCloseGlobalTab(tabID: runningTab.id)
-        #expect(fixture.state.canReopenClosedTab)
-
-        await fixture.state.reopenLastClosedTab()
-
-        #expect(fixture.state.globalTabs.tabs.map(\.id) == [runningTab.id])
-        #expect(fixture.state.globalTabs.activeTabId == runningTab.id)
-        #expect(!fixture.state.canReopenClosedTab)
-    }
-
-    private static func makeMixedMissionPersistence(
-        completedID: MissionID,
-        runningID: MissionID
-    ) throws -> MissionPersistence {
-        var completedAggregate = MissionFixtures.creatingMission(
-            id: completedID.rawValue,
-            issue: MissionFixtures.issue(number: 501)
-        )
-        completedAggregate.mission.state = .completed
-        completedAggregate.mission.setupCheckpoint = .running
-        completedAggregate.mission.completedAt = Date(timeIntervalSince1970: 200)
-
-        var runningAggregate = MissionFixtures.creatingMission(
-            id: runningID.rawValue,
-            issue: MissionFixtures.issue(number: 502)
-        )
-        runningAggregate.mission.state = .running
-        runningAggregate.mission.setupCheckpoint = .running
-
-        let path = FileManager.default.temporaryDirectory
-            .appendingPathComponent("closed-tabs-missions-\(UUID().uuidString).sqlite")
-            .path
-        let store = try MissionStore(path: path)
-        try store.insert(completedAggregate)
-        try store.insert(runningAggregate)
-        return MissionPersistence(path: path)
     }
 }

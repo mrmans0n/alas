@@ -6,9 +6,4 @@ struct DialogChromeLayoutTests {
     func projectDialogWidthFitsIconControls() {
         #expect(DialogContainerLayout.projectWidth >= 640)
     }
-
-    @Test("Mission confirmation reserves room for the issue and prompt")
-    func missionConfirmationWidthFitsEditableDraft() {
-        #expect(NewMissionDialog.confirmationWidth >= DialogContainerLayout.projectWidth)
-    }
 }

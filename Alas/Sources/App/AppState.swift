@@ -1,40 +1,7 @@
 import AppKit
-import Combine
 import Foundation
 import Observation
 import os
-
-enum MissionOpenError: LocalizedError, Equatable {
-    case missionUnavailable(MissionID)
-    case worktreeUnavailable(missionID: MissionID)
-
-    var errorDescription: String? {
-        switch self {
-        case .missionUnavailable:
-            "The Mission record is unavailable."
-        case .worktreeUnavailable:
-            "The Mission worktree is not available in Alas. Refresh the project worktrees and try again."
-        }
-    }
-}
-
-private struct MissingMissionRecoveryTarget: Equatable {
-    let worktreeID: String
-    let projectID: String
-    let destinationPath: String
-
-    init(missionID: MissionID, leg: MissionLeg) {
-        worktreeID = leg.worktreeId ?? "mission:\(missionID.rawValue)"
-        projectID = leg.projectId
-        destinationPath = URL(fileURLWithPath: leg.destinationPath).standardizedFileURL.path
-    }
-
-    func matches(_ leg: MissionLeg) -> Bool {
-        projectID == leg.projectId
-            && (worktreeID == leg.worktreeId
-                || destinationPath == URL(fileURLWithPath: leg.destinationPath).standardizedFileURL.path)
-    }
-}
 
 enum ReviewSessionConsolidation {
     static func merge(existing: ReviewSessionRecord, source: ReviewSessionRecord) -> ReviewSessionRecord {
@@ -70,7 +37,6 @@ enum ReviewSessionConsolidation {
 @Observable
 @MainActor
 final class AppState {
-    typealias MissionArchiveRecorder = @MainActor (String) async -> Void
     typealias CloseTabConfirmer = @MainActor (CloseTabConfirmationPolicy.Prompt) -> Bool
     typealias ACPDetachRunner = @MainActor (ACPSessionManager, ACPSession.ID) async -> Void
     typealias RemoteAccelerationPreparer = @MainActor (ProjectConfig) async -> Void
@@ -84,7 +50,6 @@ final class AppState {
     var config: AppConfig
     var themeStore: ThemeStore
     var projectsManager: ProjectsManager
-    let globalTabs: GlobalTabsManager
     private(set) var closedTabHistory = ClosedTabHistory()
     var runScriptFailureQueue = RunScriptFailureQueue()
     var selectedRunScriptFailure: RunScriptFailure?
@@ -95,11 +60,7 @@ final class AppState {
     private var unpersistedGGWorktreeModes: [String: [String: GGWorktreeMode]] = [:]
     var spacesManager: SpacesManager
     var selectedWorktreeId: String?
-    private(set) var missionsEnabled: Bool
     private(set) var isRefreshingProjectTopologies = false
-    private(set) var missingMissionTab: MissionTabState?
-    private var missingMissionRecoveryTarget: MissingMissionRecoveryTarget?
-    private(set) var resolvedMissionPaneBaseRefs: [MissionLegID: String] = [:]
     var pendingSettingsSection: SettingsSection?
     @ObservationIgnored
     private var _tabs: TabsManager?
@@ -593,27 +554,6 @@ final class AppState {
     @ObservationIgnored
     private let store: any PersistenceStoreProtocol
     @ObservationIgnored
-    private let missionPersistence: MissionPersistence
-    @ObservationIgnored
-    private let missionStartupReviewSnapshot: MissionStartupReviewSnapshot?
-    @ObservationIgnored
-    private let missionBranchTipOverride: MissionBranchTip?
-    @ObservationIgnored
-    private let missionArchiveRecorder: MissionArchiveRecorder?
-    @ObservationIgnored
-    private var missionController: MissionController?
-    var missions: MissionController {
-        if let missionController { return missionController }
-        let controller = makeMissionController()
-        if !missionsEnabled { controller.suspend() }
-        missionController = controller
-        return controller
-    }
-    @ObservationIgnored
-    private var missionFeatureTransition: Task<Void, Never>?
-    @ObservationIgnored
-    private var missionsFeatureFlagSubscription: AnyCancellable?
-    @ObservationIgnored
     private let persistenceErrorHandler: (String, String) -> Void
     @ObservationIgnored
     private let fileActionErrorHandler: (String, String) -> Void
@@ -637,7 +577,6 @@ final class AppState {
 
     init(
         store: any PersistenceStoreProtocol = PersistenceStore(),
-        missionPersistence: MissionPersistence = MissionPersistence(),
         persistenceErrorHandler: ((String, String) -> Void)? = nil,
         fileActionErrorHandler: ((String, String) -> Void)? = nil,
         closeTabConfirmer: CloseTabConfirmer? = nil,
@@ -645,18 +584,10 @@ final class AppState {
         acpDetachRunner: ACPDetachRunner? = nil,
         remoteAccelerationPreparer: RemoteAccelerationPreparer? = nil,
         projectGitWatcherFactory: @escaping @MainActor (URL) -> ProjectGitWatcher = { ProjectGitWatcher(repoPath: $0) },
-        missionStartupReviewSnapshot: MissionStartupReviewSnapshot? = nil,
-        missionBranchTipOverride: MissionBranchTip? = nil,
-        missionArchiveRecorder: MissionArchiveRecorder? = nil,
         runScriptCompletionWaiter: @escaping RunScriptCompletionWaiter = RunScriptCompletionMonitor.wait(for:),
-        missionsEnabled: Bool = MissionsFeatureFlag.isEnabled,
-        missionsFeatureUpdates: AnyPublisher<Bool, Never> = MissionsFeatureFlag.updates(),
-        globalTabs: GlobalTabsManager = GlobalTabsManager(),
         tabsManager: TabsManager? = nil
     ) {
         self.store = store
-        self.missionPersistence = missionPersistence
-        self.globalTabs = globalTabs
         _tabs = tabsManager
         self.persistenceErrorHandler = persistenceErrorHandler ?? { title, message in
             AppState.showWarningAlert(title: title, message: message)
@@ -669,11 +600,7 @@ final class AppState {
         self.acpDetachRunner = acpDetachRunner
         self.remoteAccelerationPreparer = remoteAccelerationPreparer
         self.projectGitWatcherFactory = projectGitWatcherFactory
-        self.missionStartupReviewSnapshot = missionStartupReviewSnapshot
-        self.missionBranchTipOverride = missionBranchTipOverride
-        self.missionArchiveRecorder = missionArchiveRecorder
         self.runScriptCompletionWaiter = runScriptCompletionWaiter
-        self.missionsEnabled = missionsEnabled
         let config = (try? store.readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? AppConfig.defaults
         let projectsFile = (try? store.readIfExists(ProjectsFile.self, from: Paths.projectsFile)) ?? ProjectsFile(projects: [])
         let spacesFile = try? store.readIfExists(SpacesFile.self, from: Paths.spacesFile)
@@ -719,21 +646,6 @@ final class AppState {
         // we'd resolve to a 0-element id list. RootView calls reloadTabs() after
         // refreshAll() returns.
         rightPaneStore.appState = self
-        rightPaneStore.reviewSnapshotDidChange = { [weak self] worktreeID, baseRef, snapshot in
-            Task { @MainActor [weak self] in
-                guard let self, missionsEnabled else { return }
-                let missionBaseRef = Self.missionCallbackBaseRef(
-                    worktreeID: worktreeID,
-                    paneBaseRef: baseRef,
-                    aggregates: missions.aggregates
-                )
-                await missions.refreshReviewSnapshot(
-                    worktreeId: worktreeID,
-                    baseRef: missionBaseRef,
-                    snapshot: snapshot
-                )
-            }
-        }
         AlasTerminationCoordinator.shared.flush = { [weak self] in
             await self?.cancelAllRunScriptCompletionTasks()
             await self?.flushAllACPComposerDrafts()
@@ -765,557 +677,6 @@ final class AppState {
             await GGAvailability.shared.probe()
             self?.rightPaneStore.reevaluateGGGates()
         }
-
-        missionsFeatureFlagSubscription = missionsFeatureUpdates
-            .removeDuplicates()
-            .sink { enabled in
-                Task { @MainActor [weak self] in
-                    self?.setMissionsEnabled(enabled)
-                }
-            }
-    }
-
-    func setMissionsEnabled(_ enabled: Bool) {
-        guard missionsEnabled != enabled else { return }
-        missionsEnabled = enabled
-        MissionsFeatureFlag.setEnabled(enabled)
-        missionFeatureTransition?.cancel()
-
-        if enabled {
-            missions.resume()
-            let selection = selectedWorktreeId
-            missionFeatureTransition = Task { @MainActor [weak self] in
-                guard let self else { return }
-                do {
-                    try globalTabs.loadAndMigrate(
-                        worktreeTabs: tabs,
-                        selectedWorktreeID: selection ?? resolvedSelectionForActiveSpaceForStartup()
-                    )
-                } catch {
-                    persistenceErrorHandler("Mission Tabs Save Failed", error.localizedDescription)
-                }
-                await missions.load()
-                guard !Task.isCancelled, missionsEnabled else { return }
-                let selectionBeforeReconcile = selectedWorktreeId
-                await reconcileLoadedMissionsForStartup()
-                guard !Task.isCancelled, missionsEnabled else { return }
-                if selectedWorktreeId != selectionBeforeReconcile {
-                    selectWorktree(id: selectionBeforeReconcile)
-                }
-            }
-        } else {
-            missionController?.suspend()
-            globalTabs.clearActiveTab()
-            missingMissionTab = nil
-            missingMissionRecoveryTarget = nil
-            let currentVisibleInActiveSpace = selectedWorktreeId.flatMap { selectedId in
-                activeSpaceProjects.contains { project in
-                    projectsManager.visibleWorktrees(projectId: project.id).contains { $0.id == selectedId }
-                } ? selectedId : nil
-            }
-            selectWorktree(id: currentVisibleInActiveSpace ?? resolvedSelectionForActiveSpaceForStartup())
-        }
-    }
-
-    func loadMissionsIfEnabledForStartup() async {
-        guard missionsEnabled else { return }
-        restoreGlobalTabsForStartup()
-        await missions.load()
-        guard missionsEnabled, !Task.isCancelled else { return }
-        await reconcileLoadedMissionsForStartup()
-    }
-
-    func waitForMissionFeatureTransitionForTesting() async {
-        await missionFeatureTransition?.value
-    }
-
-    private func makeMissionController() -> MissionController {
-        MissionController(environment: .init(
-            persistence: missionPersistence,
-            now: { Date() },
-            makeID: { UUID().uuidString },
-            plannedWorktreeID: { [weak self] leg in
-                guard let self, missionsEnabled,
-                      let project = self.projects.first(where: { $0.id == leg.projectId })
-                else {
-                    return .failure(.init(message: "The Mission project is no longer available."))
-                }
-                do {
-                    let destination = try await Self.preparedCreateWorktreeDestination(
-                        repoPath: URL(fileURLWithPath: project.path),
-                        destination: URL(fileURLWithPath: leg.destinationPath)
-                    )
-                    return .success(Worktree.makeId(path: destination))
-                } catch {
-                    return .failure(.init(message: error.localizedDescription))
-                }
-            },
-            worktreeAtDestination: { [weak self] projectID, destinationPath in
-                self?.missionWorktreeAtDestination(projectID: projectID, destinationPath: destinationPath)
-            },
-            createWorktree: { [weak self] leg in
-                guard let self, missionsEnabled else {
-                    return .failure(.init(message: "Alas is no longer available."))
-                }
-                return await self.createWorktreeAndWait(
-                    projectId: leg.projectId,
-                    base: leg.baseRef,
-                    branch: leg.branch,
-                    destination: URL(fileURLWithPath: leg.destinationPath),
-                    runStartup: true
-                )
-            },
-            startACP: { [weak self] leg, worktree in
-                guard let self, missionsEnabled else {
-                    return .failure(.init(message: "Alas is no longer available."))
-                }
-                guard let sessionID = leg.acpSessionId else {
-                    return .failure(.init(message: "The Mission ACP session was not reserved."))
-                }
-                do {
-                    let startedID = try await self.startACPSession(
-                        worktree: worktree,
-                        sessionID: sessionID,
-                        agentID: leg.agentId,
-                        promptID: leg.initialPromptId,
-                        prompt: leg.pendingInitialPrompt
-                    )
-                    return .success(startedID)
-                } catch {
-                    if let bootstrapError = error as? ACPWorktreeSessionBootstrapError {
-                        return .failure(MissionCoordinator.MissionOperationFailure(
-                            message: bootstrapError.message,
-                            consumedInitialPrompt: bootstrapError.consumedInitialPrompt
-                        ))
-                    }
-                    return .failure(.init(message: error.localizedDescription))
-                }
-            },
-            notifyChanged: { [weak self] aggregate in
-                guard let self, missionsEnabled else { return }
-                globalTabs.updateMissionTitle(
-                    missionID: aggregate.mission.id,
-                    title: aggregate.mission.title
-                )
-                if missingMissionTab?.missionID == aggregate.mission.id {
-                    missingMissionTab?.title = aggregate.mission.title
-                }
-            }
-        ), sourceRefresh: { [weak self] source, projectID in
-            guard let self, missionsEnabled else {
-                throw CodeHostProviderError.malformedOutput("Alas is no longer available.")
-            }
-            return try await self.refreshMissionSource(source, projectID: projectID)
-        }, reviewRepositoryMatches: { [weak self] projectID, baseRef, baseRemoteName, request in
-            guard let self, missionsEnabled,
-                  let project = self.projectsManager.projects.first(where: { $0.id == projectID }),
-                  let remotes = try? await GitService().remotes(
-                      worktreePath: URL(fileURLWithPath: project.path)
-                  )
-            else { return false }
-            let locator = IssueRepositoryLocator(
-                provider: request.provider,
-                host: request.remote.host,
-                repositorySlug: request.remote.repositorySlug
-            )
-            return Self.missionReviewRemote(
-                locator: locator,
-                baseRef: baseRef,
-                persistedRemoteName: baseRemoteName,
-                remotes: remotes
-            ) != nil
-        }, linkedReviewRequest: { [weak self] identity, projectID, baseRef in
-            guard self?.missionsEnabled == true else { return nil }
-            return await self?.refreshMissionReview(identity: identity, projectID: projectID, baseRef: baseRef)
-        }, branchTip: { [weak self] projectID, branch in
-            guard let self, missionsEnabled else { return nil }
-            if let missionBranchTipOverride = self.missionBranchTipOverride {
-                return await missionBranchTipOverride(projectID, branch)
-            }
-            return await self.missionBranchTip(projectID: projectID, branch: branch)
-        }, branchOwner: { [weak self] projectID, branch, baseRef in
-            guard self?.missionsEnabled == true else { return nil }
-            return await self?.missionBranchOwner(
-                projectID: projectID,
-                branch: branch,
-                baseRef: baseRef
-            )
-        }, projectExists: { [weak self] projectID in
-            self?.projectsManager.projects.contains(where: { $0.id == projectID }) == true
-        }, worktreeDiscoverySucceeded: { [weak self] projectID in
-            self?.projectsManager.worktreeDiscoverySucceeded(projectId: projectID) == true
-        }, worktreeArchived: { [weak self] projectID, destinationPath in
-            self?.projectsManager.isWorktreeHidden(
-                projectId: projectID,
-                path: URL(fileURLWithPath: destinationPath)
-            ) == true
-        }, reviewSnapshot: { [weak self] worktreeID, baseRef in
-            self?.rightPaneStore.reviewSnapshot(worktreeId: worktreeID, baseBranch: baseRef)
-        }, startupReviewSnapshot: { [weak self] worktree, baseRef in
-            guard let self, missionsEnabled else { return nil }
-            let paneBaseRef: String
-            if let match = missions.aggregates.lazy.compactMap({ aggregate -> (MissionAggregate, MissionLeg)? in
-                guard aggregate.mission.state != .completed,
-                      let leg = aggregate.legs.first(where: { $0.worktreeId == worktree.id })
-                else { return nil }
-                return (aggregate, leg)
-            }).first {
-                paneBaseRef = await missionPaneBaseRef(
-                    for: match.0,
-                    leg: match.1,
-                    worktree: worktree
-                )
-            } else {
-                paneBaseRef = baseRef
-            }
-            if let missionStartupReviewSnapshot = self.missionStartupReviewSnapshot {
-                return await missionStartupReviewSnapshot(worktree, paneBaseRef)
-            }
-            return await self.rightPaneStore.startupReviewSnapshot(
-                for: worktree,
-                baseBranch: paneBaseRef,
-                comparisonMode: self.config.changes.comparisonMode
-            )
-        }, discoverReviewRequest: { [weak self] projectID, branch, baseRef, headSHA, headOwner in
-            guard self?.missionsEnabled == true else { return nil }
-            return await self?.discoverMissionReview(
-                projectID: projectID,
-                branch: branch,
-                baseRef: baseRef,
-                headSHA: headSHA,
-                headOwner: headOwner
-            )
-        }, openMission: { [weak self] missionID in
-            guard self?.missionsEnabled == true else { return }
-            _ = self?.openMission(id: missionID)
-        })
-    }
-
-    func restoreGlobalTabsForStartup() {
-        guard missionsEnabled else { return }
-        do {
-            try globalTabs.loadPersistedTabs()
-        } catch {
-            persistenceErrorHandler("Mission Tabs Save Failed", error.localizedDescription)
-        }
-    }
-
-    func reconcileMissionsForStartup() async {
-        guard missionsEnabled else { return }
-        await missions.load()
-        await reconcileLoadedMissionsForStartup()
-    }
-
-    func reconcileLoadedMissionsForStartup() async {
-        guard missionsEnabled else { return }
-        await refreshRenamedMissionRepositories()
-        await missions.resolveLegacyBaseRemoteNames { [weak self] projectID, baseRef in
-            await self?.resolveLegacyMissionBaseRemoteName(projectID: projectID, baseRef: baseRef)
-        }
-        await missions.reconcileInterrupted()
-        presentMissingMissionRecoveryIfNeeded()
-    }
-
-    private func refreshRenamedMissionRepositories() async {
-        guard missionsEnabled else { return }
-        for aggregate in missions.aggregates where aggregate.mission.state != .completed {
-            guard let leg = aggregate.primaryLeg,
-                  let locator = aggregate.source.repositoryLocator,
-                  let project = projectsManager.projects.first(where: { $0.id == leg.projectId }),
-                  let remotes = try? await GitService().remotes(
-                      worktreePath: URL(fileURLWithPath: project.path)
-                  ),
-                  Self.missionRepositoryNeedsCanonicalRefresh(
-                      locator: locator,
-                      remotes: remotes
-                  )
-            else { continue }
-            await missions.refreshSource(aggregate.mission.id)
-        }
-    }
-
-    private func resolveLegacyMissionBaseRemoteName(
-        projectID: String,
-        baseRef: String
-    ) async -> String? {
-        guard let project = projectsManager.projects.first(where: { $0.id == projectID }) else {
-            return nil
-        }
-        let path = URL(fileURLWithPath: project.path)
-        do {
-            let git = GitService()
-            let remotes = try await git.remotes(worktreePath: path)
-            let localBranches = try await git.localBranches(at: path)
-            let branches = try await git.branches(at: path)
-            return MissionBaseReference.resolveLegacyRemoteName(
-                in: baseRef,
-                knownRemoteNames: Set(remotes.map(\.name)),
-                localBranchNames: Set(localBranches),
-                branchNames: Set(branches)
-            )
-        } catch {
-            return nil
-        }
-    }
-
-    @discardableResult
-    func openMission(id: MissionID) -> Result<Tab, MissionOpenError> {
-        guard missionsEnabled else { return .failure(.missionUnavailable(id)) }
-        guard let aggregate = missions.aggregate(id: id),
-              let leg = aggregate.primaryLeg
-        else {
-            return .failure(.missionUnavailable(id))
-        }
-
-        guard let worktree = resolvedMissionWorktree(for: aggregate) else {
-            let tab = presentMissingMissionTab(aggregate: aggregate, leg: leg)
-            return .success(.mission(tab))
-        }
-
-        let globalTab = globalTabs.openOrFocusMission(
-            missionID: id,
-            title: aggregate.mission.title
-        )
-        missingMissionTab = nil
-        missingMissionRecoveryTarget = nil
-        guard case .mission(let tab) = globalTab else {
-            preconditionFailure("Global Mission tabs always contain a Mission state.")
-        }
-        return .success(.mission(tab))
-    }
-
-    @discardableResult
-    private func presentMissingMissionTab(aggregate: MissionAggregate, leg: MissionLeg) -> MissionTabState {
-        let tab = MissionTabState(
-            missionID: aggregate.mission.id,
-            title: aggregate.mission.title
-        )
-        globalTabs.openOrFocusMission(missionID: aggregate.mission.id, title: aggregate.mission.title)
-        missingMissionTab = tab
-        missingMissionRecoveryTarget = MissingMissionRecoveryTarget(
-            missionID: aggregate.mission.id,
-            leg: leg
-        )
-        return tab
-    }
-
-    func openMissionChanges(
-        worktree: Worktree,
-        missionID: MissionID,
-        legID: MissionLegID
-    ) async {
-        guard missionsEnabled else { return }
-        guard let aggregate = missions.aggregate(id: missionID),
-              let leg = aggregate.legs.first(where: { $0.id == legID }),
-              missionWorktree(worktree, for: leg, aggregate: aggregate)?.id == worktree.id
-        else { return }
-        guard !projectsManager.isWorktreeHidden(
-            projectId: worktree.projectId,
-            path: worktree.path
-        ) else { return }
-
-        focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
-        let paneBaseRef = await missionPaneBaseRef(for: aggregate, leg: leg, worktree: worktree)
-        let rightPane = missionRightPaneState(for: worktree, baseRef: paneBaseRef)
-        rightPane.activeTab = .changes
-        if !config.rightPaneVisible {
-            config.rightPaneVisible = true
-            _ = saveConfig()
-        }
-    }
-
-    private func missionWorktree(
-        _ candidate: Worktree?,
-        for leg: MissionLeg,
-        aggregate: MissionAggregate
-    ) -> Worktree? {
-        guard let candidate,
-              candidate.projectId == leg.projectId,
-              candidate.branch == leg.branch,
-              leg.worktreeId == nil || candidate.id == leg.worktreeId
-        else { return nil }
-        guard let persistedLineageID = leg.worktreeLineageID,
-              candidate.lineageID == persistedLineageID
-        else { return nil }
-        guard aggregate.mission.state == .completed else { return candidate }
-        let candidatePath = candidate.path.standardizedFileURL.path
-        let ownedByALaterMission = missions.aggregates.contains { other in
-            guard other.mission.id != aggregate.mission.id,
-                  other.mission.createdAt > aggregate.mission.createdAt
-            else { return false }
-            return other.legs.contains { otherLeg in
-                guard otherLeg.projectId == candidate.projectId else { return false }
-                return otherLeg.worktreeId == candidate.id
-                    || URL(fileURLWithPath: otherLeg.destinationPath).standardizedFileURL.path == candidatePath
-            }
-        }
-        return ownedByALaterMission ? nil : candidate
-    }
-
-    @discardableResult
-    func refreshMission(_ id: MissionID) async -> MissionSourceRefreshResult {
-        guard missionsEnabled else { return .unavailable }
-        guard missions.aggregate(id: id) != nil else { return .unavailable }
-
-        let sourceResult = await missions.refreshSource(id)
-        guard let aggregate = missions.aggregate(id: id) else { return .unavailable }
-
-        for leg in aggregate.legs {
-            let candidate = missionWorktreeAtDestination(
-                projectID: leg.projectId,
-                destinationPath: leg.destinationPath
-            )
-            let worktree = missionWorktree(candidate, for: leg, aggregate: aggregate)
-            if let worktree,
-               !projectsManager.isWorktreeHidden(projectId: leg.projectId, path: worktree.path) {
-                let paneBaseRef = await missionPaneBaseRef(for: aggregate, leg: leg, worktree: worktree)
-                let rightPane = missionRightPaneState(for: worktree, baseRef: paneBaseRef)
-                await rightPane.refresh(forceReviewLoopRemote: true)
-                if let snapshot = rightPaneStore.reviewSnapshot(
-                    worktreeId: worktree.id,
-                    baseBranch: paneBaseRef
-                ) {
-                    await missions.discoverMergedReview(
-                        worktreeId: worktree.id,
-                        baseRef: leg.baseRef,
-                        snapshot: snapshot
-                    )
-                }
-            } else {
-                await missions.refreshReviewWithoutWorktree(id, legID: leg.id)
-            }
-        }
-        return sourceResult
-    }
-
-    private func resolvedMissionWorktree(for aggregate: MissionAggregate) -> Worktree? {
-        guard let leg = aggregate.primaryLeg else { return nil }
-        let candidate = missionWorktreeAtDestination(
-            projectID: leg.projectId,
-            destinationPath: leg.destinationPath
-        )
-        return missionWorktree(candidate, for: aggregate)
-    }
-
-    func missionWorktree(_ candidate: Worktree?, for aggregate: MissionAggregate) -> Worktree? {
-        guard let candidate = MissionTabContext.worktree(candidate, for: aggregate) else { return nil }
-        guard let leg = aggregate.primaryLeg,
-              let persistedLineageID = leg.worktreeLineageID,
-              candidate.lineageID == persistedLineageID
-        else { return nil }
-        guard aggregate.mission.state == .completed else { return candidate }
-        let candidatePath = candidate.path.standardizedFileURL.path
-        let ownedByALaterMission = missions.aggregates.contains { other in
-            guard other.mission.id != aggregate.mission.id,
-                  other.mission.createdAt > aggregate.mission.createdAt,
-                  let leg = other.primaryLeg,
-                  leg.projectId == candidate.projectId
-            else { return false }
-            return leg.worktreeId == candidate.id
-                || URL(fileURLWithPath: leg.destinationPath).standardizedFileURL.path == candidatePath
-        }
-        return ownedByALaterMission ? nil : candidate
-    }
-
-    private func missionRightPaneState(for worktree: Worktree, baseRef: String) -> RightPaneState {
-        rightPaneStore.state(
-            for: worktree,
-            baseBranch: baseRef,
-            comparisonMode: config.changes.comparisonMode
-        )
-    }
-
-    func activateMissionRightPane(worktree: Worktree, aggregate: MissionAggregate) async {
-        guard missionsEnabled else { return }
-        let paneBaseRef = await missionPaneBaseRef(for: aggregate, worktree: worktree)
-        _ = missionRightPaneState(for: worktree, baseRef: paneBaseRef)
-    }
-
-    private func missionPaneBaseRef(for aggregate: MissionAggregate, worktree: Worktree) async -> String {
-        guard let leg = aggregate.primaryLeg else { return config.worktrees.baseBranch }
-        return await missionPaneBaseRef(for: aggregate, leg: leg, worktree: worktree)
-    }
-
-    private func missionPaneBaseRef(
-        for aggregate: MissionAggregate,
-        leg: MissionLeg,
-        worktree: Worktree
-    ) async -> String {
-        let resolvedBaseRef: String
-        if let remotes = try? await GitService().remotes(worktreePath: worktree.path) {
-            resolvedBaseRef = Self.missionPaneBaseRef(
-                baseRef: leg.baseRef,
-                persistedRemoteName: leg.baseRemoteName,
-                remotes: remotes,
-                supportedKinds: CodeHostProviderRegistry.live().supportedKinds
-            )
-        } else {
-            resolvedBaseRef = leg.baseRef
-        }
-        resolvedMissionPaneBaseRefs[leg.id] = resolvedBaseRef
-        return resolvedBaseRef
-    }
-
-    static func missionPaneBaseRef(
-        baseRef: String,
-        persistedRemoteName: String?,
-        remotes: [GitRemote],
-        supportedKinds: Set<CodeHostKind>
-    ) -> String {
-        guard let persistedRemoteName, !persistedRemoteName.isEmpty else { return baseRef }
-        let branchName = MissionBaseReference.branchName(
-            baseRef,
-            persistedRemoteName: persistedRemoteName
-        )
-        guard let currentRemote = missionDiscoveryRemote(
-            baseRef: baseRef,
-            persistedRemoteName: persistedRemoteName,
-            remotes: remotes,
-            supportedKinds: supportedKinds
-        ) else { return baseRef }
-        return "\(currentRemote.remoteName)/\(branchName)"
-    }
-
-    static func missionPaneBaseRef(
-        locator: IssueRepositoryLocator,
-        baseRef: String,
-        persistedRemoteName: String?,
-        remotes: [GitRemote]
-    ) -> String {
-        guard let persistedRemoteName, !persistedRemoteName.isEmpty else { return baseRef }
-        let branchName = MissionBaseReference.branchName(
-            baseRef,
-            persistedRemoteName: persistedRemoteName
-        )
-        guard let currentRemote = missionReviewRemote(
-            locator: locator,
-            baseRef: baseRef,
-            remotes: remotes
-        ) else { return baseRef }
-        return "\(currentRemote.remoteName)/\(branchName)"
-    }
-
-    static func missionCallbackBaseRef(
-        worktreeID: String,
-        paneBaseRef: String,
-        aggregates: [MissionAggregate]
-    ) -> String {
-        for aggregate in aggregates where aggregate.mission.state != .completed {
-            if let leg = aggregate.legs.first(where: { $0.worktreeId == worktreeID }) {
-                return leg.baseRef
-            }
-        }
-        return paneBaseRef
-    }
-
-    func restoreDefaultRightPaneBaseAfterMission(worktree: Worktree) {
-        let defaultBase = config.worktrees.baseBranch
-        guard selectedWorktreeId == worktree.id else { return }
-        _ = rightPaneStore.state(
-            for: worktree,
-            baseBranch: defaultBase,
-            comparisonMode: config.changes.comparisonMode
-        )
     }
 
     func makeIssueResolver(selectedProjectID: String?) -> IssueResolver {
@@ -1343,337 +704,6 @@ final class AppState {
             },
             providers: .live()
         ))
-    }
-
-    private func refreshMissionSource(
-        _ source: IssueSnapshot,
-        projectID: String
-    ) async throws -> IssueSnapshot {
-        guard let project = projectsManager.projects.first(where: { $0.id == projectID }) else {
-            throw CodeHostProviderError.malformedOutput("The Mission project is no longer available.")
-        }
-        let issueProviders = CodeHostIssueProviderRegistry.live()
-        let registry = IssueProviderRegistry([
-            CodeHostIssueSourceProvider(kind: .github, providers: issueProviders),
-            CodeHostIssueSourceProvider(kind: .gitlab, providers: issueProviders),
-            ManualIssueProvider(),
-        ])
-        guard let provider = registry.provider(for: source.identity.providerID) else {
-            throw CodeHostProviderError.malformedOutput("Mission source refresh is unavailable.")
-        }
-        return try await provider.refresh(source, project: project) { project in
-            try await GitService().remotes(worktreePath: URL(fileURLWithPath: project.path))
-        }
-    }
-
-    static func missionRepositoryNeedsCanonicalRefresh(
-        locator: IssueRepositoryLocator,
-        remotes: [GitRemote]
-    ) -> Bool {
-        let candidates = remotes
-            .compactMap { CodeHostRemoteDetector.detect(from: [$0], matching: locator.provider) }
-            .filter { $0.host.caseInsensitiveCompare(locator.host) == .orderedSame }
-        return !candidates.isEmpty && !candidates.contains { candidate in
-            candidate.repositorySlug.caseInsensitiveCompare(locator.repositorySlug) == .orderedSame
-        }
-    }
-
-    private func refreshMissionReview(
-        identity: MissionReviewIdentity,
-        projectID: String,
-        baseRef: String
-    ) async -> ReviewRequest? {
-        guard let project = projectsManager.projects.first(where: { $0.id == projectID })
-        else { return nil }
-        let cwd = URL(fileURLWithPath: project.path)
-        do {
-            let remotes = try await GitService().remotes(worktreePath: cwd)
-            let matchingRemotes = remotes
-                .compactMap({ CodeHostRemoteDetector.detect(from: [$0], matching: identity.provider) })
-                .filter { candidate in
-                    candidate.host.caseInsensitiveCompare(identity.host) == .orderedSame
-                        && candidate.repositorySlug.caseInsensitiveCompare(identity.repositorySlug) == .orderedSame
-                }
-            let preferredRemoteName = CodeHostRemoteDetector.preferredRemoteName(
-                forBaseBranch: baseRef,
-                remotes: remotes
-            )
-            guard let remote = matchingRemotes.first(where: { $0.remoteName == preferredRemoteName })
-                ?? matchingRemotes.first,
-                let provider = CodeHostProviderRegistry.live().provider(for: identity.provider),
-                await provider.isAvailable(cwd: cwd),
-                await provider.isAuthenticated(remote: remote, cwd: cwd)
-            else { return nil }
-            let request = try await provider.reviewRequest(
-                remote: remote,
-                number: identity.number,
-                cwd: cwd
-            )
-            guard request.provider == identity.provider,
-                  request.remote.host.caseInsensitiveCompare(identity.host) == .orderedSame,
-                  request.remote.repositorySlug.caseInsensitiveCompare(identity.repositorySlug) == .orderedSame,
-                  request.number == identity.number
-            else { return nil }
-            return request
-        } catch {
-            return nil
-        }
-    }
-
-    private func discoverMissionReview(
-        projectID: String,
-        branch: String,
-        baseRef: String,
-        headSHA: String,
-        headOwner: String?
-    ) async -> ReviewRequest? {
-        guard let project = projectsManager.projects.first(where: { $0.id == projectID })
-        else { return nil }
-        let cwd = URL(fileURLWithPath: project.path)
-        do {
-            let remotes = try await GitService().remotes(worktreePath: cwd)
-            let registry = CodeHostProviderRegistry.live()
-            guard let remote = Self.missionDiscoveryRemote(
-                baseRef: baseRef,
-                remotes: remotes,
-                supportedKinds: registry.supportedKinds
-            ),
-                let provider = registry.provider(for: remote.kind),
-                await provider.isAvailable(cwd: cwd),
-                await provider.isAuthenticated(remote: remote, cwd: cwd)
-            else { return nil }
-            let request = try await provider.missionReviewRequest(
-                remote: remote,
-                branch: branch,
-                headOwner: headOwner,
-                baseBranch: Self.missionDiscoveryBaseBranch(
-                    baseRef: baseRef,
-                    remoteName: remote.remoteName
-                ),
-                headSHA: headSHA,
-                cwd: cwd
-            )
-            guard request?.headSHA == headSHA else { return nil }
-            return request
-        } catch {
-            return nil
-        }
-    }
-
-    static func missionDiscoveryRemote(
-        baseRef: String,
-        persistedRemoteName: String? = nil,
-        remotes: [GitRemote],
-        supportedKinds: Set<CodeHostKind>
-    ) -> CodeHostRemote? {
-        let preferredRemoteName = CodeHostRemoteDetector.preferredRemoteName(
-            forBaseBranch: baseRef,
-            remotes: remotes
-        )
-        let candidates = CodeHostRemoteDetector.detectAll(
-            from: remotes,
-            supportedKinds: supportedKinds,
-            preferredRemoteName: preferredRemoteName
-        )
-        let longestPrefixMatch = candidates
-            .filter { baseRef.hasPrefix("\($0.remoteName)/") }
-            .max { $0.remoteName.count < $1.remoteName.count }
-        let configuredBaseRemote = persistedRemoteName?.trimmingCharacters(
-            in: .whitespacesAndNewlines
-        )
-        if let configuredBaseRemote,
-           !configuredBaseRemote.isEmpty,
-           baseRef.hasPrefix("\(configuredBaseRemote)/"),
-           !remotes.contains(where: { $0.name == configuredBaseRemote }) {
-            return longestPrefixMatch
-                ?? (candidates.count == 1 ? candidates.first : nil)
-        }
-        return longestPrefixMatch ?? candidates.first
-    }
-
-    static func missionDiscoveryBaseBranch(baseRef: String, remoteName: String) -> String {
-        MissionBaseReference.branchName(baseRef, persistedRemoteName: remoteName)
-    }
-
-    static func missionReviewRemote(
-        locator: IssueRepositoryLocator,
-        baseRef: String,
-        persistedRemoteName: String? = nil,
-        remotes: [GitRemote]
-    ) -> CodeHostRemote? {
-        let detectedProviderRemotes = remotes
-            .compactMap { CodeHostRemoteDetector.detect(from: [$0], matching: locator.provider) }
-        let matchingRemotes = detectedProviderRemotes
-            .filter { candidate in
-                candidate.host.caseInsensitiveCompare(locator.host) == .orderedSame
-                    && candidate.repositorySlug.caseInsensitiveCompare(locator.repositorySlug) == .orderedSame
-            }
-        let configuredBaseRemote = persistedRemoteName?.trimmingCharacters(
-            in: .whitespacesAndNewlines
-        )
-        if let configuredBaseRemote,
-           !configuredBaseRemote.isEmpty,
-           baseRef.hasPrefix("\(configuredBaseRemote)/"),
-           remotes.contains(where: { $0.name == configuredBaseRemote }) {
-            return matchingRemotes.first(where: { $0.remoteName == configuredBaseRemote })
-        }
-        let longestPrefixMatch = matchingRemotes
-            .filter { baseRef.hasPrefix("\($0.remoteName)/") }
-            .max { $0.remoteName.count < $1.remoteName.count }
-        if let configuredBaseRemote,
-           !configuredBaseRemote.isEmpty,
-           baseRef.hasPrefix("\(configuredBaseRemote)/"),
-           !remotes.contains(where: { $0.name == configuredBaseRemote }) {
-            return longestPrefixMatch
-                ?? (detectedProviderRemotes.count == 1 ? matchingRemotes.first : nil)
-        }
-        let preferredRemoteName = CodeHostRemoteDetector.preferredRemoteName(
-            forBaseBranch: baseRef,
-            remotes: remotes
-        )
-        return longestPrefixMatch
-            ?? matchingRemotes.first(where: { $0.remoteName == preferredRemoteName })
-            ?? matchingRemotes.first
-    }
-
-    private func missionBranchTip(projectID: String, branch: String) async -> String? {
-        guard let project = projectsManager.projects.first(where: { $0.id == projectID })
-        else { return nil }
-        let result = try? await Process.git(
-            ["rev-parse", "--verify", "refs/heads/\(branch)"],
-            cwd: URL(fileURLWithPath: project.path)
-        )
-        guard result?.exitCode == 0 else { return nil }
-        let tip = result?.stdout.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return tip.isEmpty ? nil : tip
-    }
-
-    private func missionBranchOwner(
-        projectID: String,
-        branch: String,
-        baseRef: String
-    ) async -> String? {
-        guard let project = projectsManager.projects.first(where: { $0.id == projectID })
-        else { return nil }
-        let cwd = URL(fileURLWithPath: project.path)
-        guard let remotes = try? await GitService().remotes(worktreePath: cwd) else { return nil }
-        let branchPushRemote = try? await Process.git(
-            ["config", "--get", "branch.\(branch).pushRemote"],
-            cwd: cwd
-        )
-        let branchPushRemoteName = branchPushRemote?.stdout.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let defaultPushRemoteName: String
-        if branchPushRemoteName.isEmpty {
-            let defaultPushRemote = try? await Process.git(
-                ["config", "--get", "remote.pushDefault"],
-                cwd: cwd
-            )
-            defaultPushRemoteName = defaultPushRemote?.stdout.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        } else {
-            defaultPushRemoteName = ""
-        }
-        let branchRemoteName: String
-        if branchPushRemoteName.isEmpty, defaultPushRemoteName.isEmpty {
-            let upstream = try? await Process.git(
-                ["for-each-ref", "--format=%(upstream:remotename)", "refs/heads/\(branch)"],
-                cwd: cwd
-            )
-            branchRemoteName = upstream?.stdout.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        } else {
-            branchRemoteName = ""
-        }
-        let pushRemoteName = Self.effectiveMissionPushRemote(
-            branchPushRemoteName: branchPushRemoteName,
-            defaultPushRemoteName: defaultPushRemoteName,
-            branchRemoteName: branchRemoteName
-        )
-        return Self.missionBranchOwner(
-            baseRef: baseRef,
-            branchRemoteName: branchRemoteName,
-            pushRemoteName: pushRemoteName,
-            remotes: remotes,
-            supportedKinds: CodeHostProviderRegistry.live().supportedKinds
-        )
-    }
-
-    static func effectiveMissionPushRemote(
-        branchPushRemoteName: String,
-        defaultPushRemoteName: String,
-        branchRemoteName: String
-    ) -> String {
-        [branchPushRemoteName, defaultPushRemoteName, branchRemoteName]
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .first(where: { !$0.isEmpty }) ?? ""
-    }
-
-    static func missionBranchOwner(
-        baseRef: String,
-        branchRemoteName: String,
-        pushRemoteName: String = "",
-        remotes: [GitRemote],
-        supportedKinds: Set<CodeHostKind>
-    ) -> String? {
-        guard let discoveryRemote = missionDiscoveryRemote(
-            baseRef: baseRef,
-            remotes: remotes,
-            supportedKinds: supportedKinds
-        ) else { return nil }
-        let effectiveRemoteName = effectiveMissionPushRemote(
-            branchPushRemoteName: pushRemoteName,
-            defaultPushRemoteName: "",
-            branchRemoteName: branchRemoteName
-        )
-        let branchRemotes: [GitRemote]
-        if effectiveRemoteName.isEmpty {
-            branchRemotes = remotes.filter { $0.name == "origin" && $0.direction == .push }
-                + remotes.filter { $0.name == "origin" && $0.direction == .fetch }
-                + remotes.filter { $0.name != "origin" && $0.direction == .push }
-                + remotes.filter { $0.name != "origin" && $0.direction == .fetch }
-        } else {
-            let namedBranchRemotes = remotes.filter { $0.name == effectiveRemoteName }
-            branchRemotes = namedBranchRemotes.filter { $0.direction == .push }
-                + namedBranchRemotes.filter { $0.direction == .fetch }
-        }
-        let branchRemote = branchRemotes.lazy.compactMap { remote in
-            CodeHostRemoteDetector.detectAll(
-                from: [GitRemote(name: remote.name, url: remote.url)],
-                supportedKinds: supportedKinds
-            ).first
-        }.first
-        guard let branchRemote,
-              branchRemote.kind == discoveryRemote.kind,
-              branchRemote.host.caseInsensitiveCompare(discoveryRemote.host) == .orderedSame
-        else { return discoveryRemote.owner }
-        return branchRemote.owner
-    }
-
-    func reconcileDeletedMissionWorktree(_ worktreeID: String) async {
-        guard missionsEnabled else { return }
-        let missionLegs = missions.aggregates.flatMap { aggregate in
-            aggregate.legs.compactMap { leg in
-                leg.worktreeId == worktreeID ? (aggregate.mission.id, leg.id) : nil
-            }
-        }
-        for (missionID, legID) in missionLegs {
-            await missions.recordMissingWorktree(missionID, legID: legID)
-        }
-    }
-
-    /// Returns a worktree that is safe to reuse for a Mission checkpoint.
-    /// Pending and failed creates are optimistic rows, while a failed delete
-    /// leaves the real worktree in place and must remain reusable.
-    func missionWorktreeAtDestination(projectID: String, destinationPath: String) -> Worktree? {
-        let targetPath = URL(fileURLWithPath: destinationPath).standardizedFileURL.path
-        guard let worktree = projectsManager.worktrees(projectId: projectID).first(where: {
-            $0.path.standardizedFileURL.path == targetPath
-        })
-        else { return nil }
-        switch projectsManager.operationState(for: worktree.id) {
-        case nil, .preparingDelete, .deleteFailed:
-            return worktree
-        case .creating, .deleting, .createFailed:
-            return nil
-        }
     }
 
     /// All worktree IDs currently known to the projects manager (including
@@ -1858,84 +888,11 @@ final class AppState {
     /// worktree IDs that existed in `beforeIds` but are absent after a refresh.
     /// Also re-points selection if the selected worktree was removed.
     func cleanupMissingWorktrees(beforeIds: Set<String>) async {
-        let afterIds = allWorktreeIds()
-        let disappeared = beforeIds.subtracting(afterIds)
-        guard missionsEnabled else {
-            cleanupMissingWorktreeState(beforeIds: beforeIds, afterIds: afterIds)
-            return
-        }
-        let missingMissionLegs = missions.aggregates.flatMap { aggregate in
-            aggregate.legs.compactMap { leg -> (MissionID, MissionLegID)? in
-                guard leg.setupCheckpoint != .creatingWorktree,
-                      projects.contains(where: { $0.id == leg.projectId })
-                else { return nil }
-                let persistedID = leg.worktreeId ?? ""
-                let disappearedWorktree = disappeared.contains(persistedID)
-                let destinationWorktree = missionWorktreeAtDestination(
-                    projectID: leg.projectId,
-                    destinationPath: leg.destinationPath
-                )
-                let destinationMatches = destinationWorktree?.branch == leg.branch
-                    && leg.worktreeLineageID != nil
-                    && destinationWorktree?.lineageID == leg.worktreeLineageID
-                let replacementBranch = beforeIds.contains(persistedID)
-                    && !destinationMatches
-                let confirmedUnavailableAfterRefresh = [.running, .needsAttention].contains(leg.state)
-                    && projectsManager.worktreeDiscoverySucceeded(projectId: leg.projectId)
-                    && !destinationMatches
-                guard disappearedWorktree || replacementBranch || confirmedUnavailableAfterRefresh
-                else { return nil }
-                return (aggregate.mission.id, leg.id)
-            }
-        }
-        for (missionID, legID) in missingMissionLegs {
-            await missions.recordMissingWorktree(missionID, legID: legID)
-        }
-        let restoredMissionLegs = missions.aggregates.flatMap { aggregate in
-            aggregate.legs.compactMap { leg -> (MissionID, MissionLegID, MissionLeg)? in
-                guard leg.state == .needsAttention,
-                      leg.setupCheckpoint == .running,
-                      leg.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage,
-                      missionWorktreeAtDestination(
-                          projectID: leg.projectId,
-                          destinationPath: leg.destinationPath
-                      ).map({ worktree in
-                          worktree.branch == leg.branch
-                              && leg.worktreeLineageID != nil
-                              && worktree.lineageID == leg.worktreeLineageID
-                      }) == true
-                else { return nil }
-                return (aggregate.mission.id, leg.id, leg)
-            }
-        }
-        for (missionID, legID, _) in restoredMissionLegs {
-            await missions.recordAvailableWorktree(missionID, legID: legID)
-        }
-        if let missingMissionTab,
-           let missingMissionRecoveryTarget,
-           restoredMissionLegs.contains(where: {
-               $0.0 == missingMissionTab.missionID
-                   && missingMissionRecoveryTarget.matches($0.2)
-           }) {
-            self.missingMissionTab = nil
-            self.missingMissionRecoveryTarget = nil
-        }
-        cleanupMissingWorktreeState(beforeIds: beforeIds, afterIds: afterIds)
+        cleanupMissingWorktreeState(beforeIds: beforeIds, afterIds: allWorktreeIds())
     }
 
     private func cleanupMissingWorktreeState(beforeIds: Set<String>, afterIds: Set<String>) {
         let disappeared = beforeIds.subtracting(afterIds)
-        let selectedMissingMission: (tab: MissionTabState, target: MissingMissionRecoveryTarget)? = selectedWorktreeId.flatMap { worktreeID in
-            guard disappeared.contains(worktreeID),
-                  let tab = globalTabs.activeMissionTab(),
-                  let aggregate = missions.aggregate(id: tab.missionID),
-                  let leg = aggregate.legs.first(where: { $0.worktreeId == worktreeID })
-            else { return nil }
-            return (
-                tab,
-                MissingMissionRecoveryTarget(missionID: tab.missionID, leg: leg)
-            )
-        }
         for id in disappeared {
             cleanupWorktreeState(worktreeId: id)
         }
@@ -1951,36 +908,8 @@ final class AppState {
             saveSpaces()
         }
         if let current = selectedWorktreeId, !afterIds.contains(current) {
-            if let selectedMissingMission {
-                missingMissionTab = selectedMissingMission.tab
-                missingMissionRecoveryTarget = selectedMissingMission.target
-            } else {
-                selectWorktree(
-                    id: resolvedSelectionForActiveSpace(),
-                    preservingGlobalMission: globalTabs.activeMissionTab() != nil
-                )
-            }
+            selectWorktree(id: resolvedSelectionForActiveSpace())
         }
-    }
-
-    private func presentMissingMissionRecoveryIfNeeded() {
-        guard missionsEnabled else { return }
-        let activeProjectIDs = Set(activeSpaceProjects.map(\.id))
-        guard missingMissionTab == nil,
-              globalTabs.activeMissionTab() == nil,
-              let match = missions.aggregates.lazy.compactMap({ aggregate -> (MissionAggregate, MissionLeg)? in
-                  guard aggregate.mission.state != .completed else { return nil }
-                  guard let leg = aggregate.legs.first(where: {
-                      $0.state == .needsAttention
-                          && $0.attentionReason == MissionReadinessEvaluator.missingWorktreeMessage
-                          && activeProjectIDs.contains($0.projectId)
-                  }) else { return nil }
-                  return (aggregate, leg)
-              }).first,
-              projects.contains(where: { $0.id == match.1.projectId })
-        else { return }
-
-        presentMissingMissionTab(aggregate: match.0, leg: match.1)
     }
 
     /// Re-scan persisted tab JSONs for every currently-known worktree id. Call
@@ -1990,14 +919,6 @@ final class AppState {
             projectsManager.worktrees(projectId: $0.id).map(\.id)
         }
         tabs.loadAll(worktreeIds: allWorktreeIds)
-        if missionsEnabled {
-            do {
-                let migrationWorktreeID = selectedWorktreeId ?? resolvedSelectionForActiveSpaceForStartup()
-                try globalTabs.loadAndMigrate(worktreeTabs: tabs, selectedWorktreeID: migrationWorktreeID)
-            } catch {
-                persistenceErrorHandler("Mission Tabs Save Failed", error.localizedDescription)
-            }
-        }
         // When cross-quit persistence is disabled, drop every persisted
         // terminal tab right after load — across all worktrees, before
         // any lazy-display path could observe them — so orphan zmx
@@ -2201,23 +1122,6 @@ final class AppState {
     }
 
     func selectWorktree(id: String?) {
-        selectWorktree(id: id, preservingGlobalMission: false)
-    }
-
-    /// Records the initial background worktree without replacing a restored
-    /// global Mission selection or its missing-worktree recovery presentation.
-    func selectInitialWorktree(id: String?) {
-        selectWorktree(id: id, preservingGlobalMission: true)
-    }
-
-    private func selectWorktree(id: String?, preservingGlobalMission: Bool) {
-        if !preservingGlobalMission {
-            globalTabs.clearActiveTab()
-            if id != missingMissionRecoveryTarget?.worktreeID {
-                missingMissionTab = nil
-                missingMissionRecoveryTarget = nil
-            }
-        }
         guard selectedWorktreeId != id || spacesManager.activeSpace?.lastSelectedWorktreeId != id else { return }
         selectedWorktreeId = id
         spacesManager.setLastSelectedWorktree(id)
@@ -2231,34 +1135,19 @@ final class AppState {
         }
     }
 
+    func selectInitialWorktree(id: String?) {
+        selectWorktree(id: id)
+    }
+
     func activateWorktreeCenterTab(worktreeId: String, tabId: TabID) {
-        activateWorktreeTabPresentation()
         tabs.activate(worktreeId: worktreeId, tabId: tabId)
     }
 
-    func synchronizeVisibleWorktreeCenterTabIfNeeded(
-        worktreeId: String,
-        activeTabId: TabID?,
-        missionsEnabled: Bool
-    ) {
-        guard !missionsEnabled else { return }
-        if let activeTabId {
-            guard tabs.activeTabId(forWorktree: worktreeId) != activeTabId,
-                  tabs.tabs(forWorktree: worktreeId).contains(where: { $0.id == activeTabId })
-            else { return }
-            activateWorktreeCenterTab(worktreeId: worktreeId, tabId: activeTabId)
-        } else {
-            tabs.clearActiveTab(worktreeId: worktreeId)
-        }
+    func synchronizeVisibleWorktreeCenterTabIfNeeded(worktreeId: String, activeTabId: TabID?) {
+        guard let activeTabId else { return }
+        tabs.activate(worktreeId: worktreeId, tabId: activeTabId)
     }
 
-    private func activateWorktreeTabPresentation() {
-        globalTabs.clearActiveTab()
-        missingMissionTab = nil
-        missingMissionRecoveryTarget = nil
-    }
-
-    @discardableResult
     func switchToSpace(id: String) -> Bool {
         let previousSpaceId = spacesManager.activeSpaceId
         spacesManager.switchToSpace(id: id)
@@ -2337,7 +1226,6 @@ final class AppState {
         let wasSelectedProject = selectedWorktreeId.map { selectedId in
             projectsManager.visibleWorktrees(projectId: projectId).contains { $0.id == selectedId }
         } ?? false
-        let wasSelectedMissingMissionProject = missingMissionRecoveryTarget?.projectID == projectId
         let removedFromActiveSpace = spaceId == spacesManager.activeSpaceId
             && spacesManager.space(id: spaceId)?.projectIds.contains(projectId) == true
         if spacesManager.space(id: spaceId)?.projectIds.contains(projectId) == true {
@@ -2347,13 +1235,8 @@ final class AppState {
             spacesManager.addProject(projectId, toSpace: spaceId)
             guard spacesManager.space(id: spaceId)?.projectIds.contains(projectId) == true else { return }
         }
-        if removedFromActiveSpace, wasSelectedMissingMissionProject {
-            missingMissionTab = nil
-            missingMissionRecoveryTarget = nil
-            selectWorktree(id: nil)
-        } else if removedFromActiveSpace, wasSelectedProject {
-            let selection = resolvedSelectionForActiveSpace()
-            selectWorktree(id: selection)
+        if removedFromActiveSpace, wasSelectedProject {
+            selectWorktree(id: resolvedSelectionForActiveSpace())
         }
         saveSpaces()
     }
@@ -2953,131 +1836,6 @@ final class AppState {
             .appendingPathComponent(preparedDestination.lastPathComponent)
     }
 
-    func preparedMissionDraft(_ draft: MissionDraft) async throws -> MissionDraft {
-        guard missionsEnabled else { throw CancellationError() }
-        guard let project = projects.first(where: { $0.id == draft.projectId }) else {
-            throw CodeHostProviderError.malformedOutput("The selected repository is no longer available.")
-        }
-        let destination = try await Self.preparedCreateWorktreeDestination(
-            repoPath: URL(fileURLWithPath: project.path),
-            destination: URL(fileURLWithPath: draft.destinationPath)
-        )
-        let availableDestination = try await availablePreparedMissionDestination(
-            projectID: draft.projectId,
-            requested: destination,
-            projectPath: URL(fileURLWithPath: project.path)
-        )
-        return MissionDraft(
-            source: draft.source,
-            projectId: draft.projectId,
-            baseRef: draft.baseRef,
-            baseRemoteName: draft.baseRemoteName,
-            branch: draft.branch,
-            destinationPath: availableDestination.path,
-            agentId: draft.agentId,
-            initialPromptId: draft.initialPromptId,
-            initialPrompt: draft.initialPrompt
-        )
-    }
-
-    func preparedMissionLegDraft(_ draft: MissionLegDraft) async throws -> MissionLegDraft {
-        guard missionsEnabled else { throw CancellationError() }
-        guard let project = projects.first(where: { $0.id == draft.projectId }) else {
-            throw CodeHostProviderError.malformedOutput("The selected repository is no longer available.")
-        }
-        let destination = try await Self.preparedCreateWorktreeDestination(
-            repoPath: URL(fileURLWithPath: project.path),
-            destination: URL(fileURLWithPath: draft.destinationPath)
-        )
-        let availableDestination = try await availablePreparedMissionDestination(
-            projectID: draft.projectId,
-            requested: destination,
-            projectPath: URL(fileURLWithPath: project.path)
-        )
-        return MissionLegDraft(
-            projectId: draft.projectId,
-            baseRef: draft.baseRef,
-            baseRemoteName: draft.baseRemoteName,
-            branch: draft.branch,
-            destinationPath: availableDestination.path,
-            agentId: draft.agentId,
-            initialPromptId: draft.initialPromptId,
-            preparedPrompt: draft.preparedPrompt
-        )
-    }
-
-    private func availablePreparedMissionDestination(
-        projectID: String,
-        requested: URL,
-        projectPath: URL
-    ) async throws -> URL {
-        let worktreePaths = projectsManager.worktrees(projectId: projectID).map {
-            $0.path.standardizedFileURL.path
-        }
-        let missionPaths = missions.aggregates.flatMap { aggregate -> [String] in
-            guard aggregate.mission.state != .completed else { return [] }
-            return aggregate.legs.compactMap { leg in
-                guard leg.projectId == projectID else { return nil }
-                return URL(fileURLWithPath: leg.destinationPath).standardizedFileURL.path
-            }
-        }
-        let occupiedPaths = Set(worktreePaths + missionPaths)
-        if let host = RemoteHostRegistry.shared.host(forPath: projectPath.path) {
-            return try await Self.firstAvailableMissionDestination(
-                requested: requested,
-                occupiedPaths: occupiedPaths,
-                pathExists: { path in
-                    try await Self.remotePathExists(host: host, path: path)
-                }
-            )
-        }
-        return try await Self.firstAvailableMissionDestination(
-            requested: requested,
-            occupiedPaths: occupiedPaths,
-            pathExists: { FileManager.default.fileExists(atPath: $0) }
-        )
-    }
-
-    nonisolated static func firstAvailableMissionDestination(
-        requested: URL,
-        occupiedPaths: Set<String>,
-        pathExists: (String) async throws -> Bool
-    ) async throws -> URL {
-        func isAvailable(_ destination: URL) async throws -> Bool {
-            let path = destination.standardizedFileURL.path
-            guard !occupiedPaths.contains(path) else { return false }
-            let exists = try await pathExists(path)
-            return !exists
-        }
-        let requested = requested.standardizedFileURL
-        if try await isAvailable(requested) { return requested }
-        let parent = requested.deletingLastPathComponent()
-        let name = requested.lastPathComponent
-        var suffix = 2
-        while true {
-            let candidate = parent
-                .appendingPathComponent("\(name)-\(suffix)")
-                .standardizedFileURL
-            if try await isAvailable(candidate) {
-                return candidate
-            }
-            suffix += 1
-        }
-    }
-
-    nonisolated private static func remotePathExists(host: String, path: String) async throws -> Bool {
-        let command = "p=\(SSHCommand.shellQuote(path)); [ -e \"$p\" ] || [ -L \"$p\" ]"
-        let result = try await RemoteExec.run(host: host, cwd: nil, command: command)
-        if RemoteExec.isConnectionFailure(exitCode: result.exitCode) {
-            throw NSError(
-                domain: "RemoteMissionDestination",
-                code: Int(result.exitCode),
-                userInfo: [NSLocalizedDescriptionKey: "Could not check the Mission destination on \(host)."]
-            )
-        }
-        return result.exitCode == 0
-    }
-
     nonisolated static func destinationPathReplacingLocalHome(
         _ path: String,
         localHome: String = NSHomeDirectory(),
@@ -3256,10 +2014,6 @@ final class AppState {
         let afterIds = allWorktreeIds()
         let removedIds = beforeIds.subtracting(afterIds)
         cleanupMissingWorktreeState(beforeIds: beforeIds, afterIds: afterIds)
-        Task { @MainActor [weak self] in
-            guard let self, missionsEnabled else { return }
-            await missions.recordMissingWorktree(projectId: id, projectRemoved: true)
-        }
         for root in remoteRootsToUnregister {
             RemoteHostRegistry.shared.unregister(root: root)
         }
@@ -4161,27 +2915,6 @@ final class AppState {
             hidden: true
         )
         saveProjects()
-        if missionsEnabled,
-           projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path),
-           missions.hasActiveMission(worktreeId: worktree.id) {
-            Task { @MainActor [weak self] in
-                guard let self, missionsEnabled else { return }
-                if let missionArchiveRecorder = self.missionArchiveRecorder {
-                    await missionArchiveRecorder(worktree.id)
-                }
-                guard self.projectsManager.isWorktreeHidden(
-                    projectId: worktree.projectId,
-                    path: worktree.path
-                ) else { return }
-                await self.missions.recordArchive(worktreeId: worktree.id)
-                self.finishArchivingWorktree(
-                    worktree,
-                    removedIndex: removedIndex
-                )
-            }
-            return
-        }
-
         finishArchivingWorktree(worktree, removedIndex: removedIndex)
     }
 
@@ -4461,7 +3194,6 @@ final class AppState {
                 guard let self else { return }
                 if BinaryFileType.isKnownBinary(relativePath: url.path) {
                     _ = self.tabs.openBinaryPreview(worktreeId: worktreeId, relativePath: url.path)
-                    self.activateWorktreeTabPresentation()
                     if self.selectedWorktreeId != worktreeId,
                        let worktree = self.worktree(withId: worktreeId) {
                         self.focusGlobalWorktree(id: worktreeId, projectId: worktree.projectId)
@@ -4475,7 +3207,6 @@ final class AppState {
                     revealCharacter: nil,
                     originatingRelativePath: nil
                 )
-                self.activateWorktreeTabPresentation()
                 if self.selectedWorktreeId != worktreeId,
                    let worktree = self.worktree(withId: worktreeId) {
                     self.focusGlobalWorktree(id: worktreeId, projectId: worktree.projectId)
@@ -4499,7 +3230,6 @@ final class AppState {
                     revealCharacter: 0,
                     revealEndLine: lines.upperBound
                 )
-                self.activateWorktreeTabPresentation()
                 if self.selectedWorktreeId != worktreeId,
                    let worktree = self.worktree(withId: worktreeId) {
                     self.focusGlobalWorktree(id: worktreeId, projectId: worktree.projectId)
@@ -4754,7 +3484,6 @@ final class AppState {
         // `terminalSessionOpener` (test-only) generates its own id and we
         // honor it for backward-compat with existing tests.
         let tab = tabs.appendTerminal(worktreeId: worktree.id, title: title, sessionId: opened.id, runScriptKey: runScriptKey)
-        activateWorktreeTabPresentation()
         return tab
     }
 
@@ -5101,64 +3830,8 @@ final class AppState {
     }
 
     func handleCloseCenterShortcut(worktreeId: String?) {
-        if let activeGlobalTabID = globalTabs.activeTabId {
-            requestCloseGlobalTab(tabID: activeGlobalTabID)
-            return
-        }
         guard let worktreeId else { return }
         handleCloseShortcut(worktreeId: worktreeId)
-    }
-
-    func closeGlobalTab(tabId: TabID) {
-        let missionID = globalTabs.tabs.first(where: { $0.id == tabId }).flatMap { tab -> MissionID? in
-            guard case .mission(let mission) = tab else { return nil }
-            return mission.missionID
-        }
-        globalTabs.close(tabId: tabId)
-        if missingMissionTab?.missionID == missionID {
-            missingMissionTab = nil
-            missingMissionRecoveryTarget = nil
-        }
-    }
-
-    func deleteMission(id: MissionID) async {
-        guard missionsEnabled else { return }
-        await missions.delete(id)
-        guard missions.aggregate(id: id) == nil else { return }
-        discardMissionUI(id: id)
-    }
-
-    func deleteCompletedMissions(ids: [MissionID]) async {
-        guard missionsEnabled else { return }
-        for id in await missions.deleteCompleted(ids: ids) {
-            discardMissionUI(id: id)
-        }
-    }
-
-    private func discardMissionUI(id: MissionID) {
-        if let tab = globalTabs.tabs.first(where: { tab in
-            guard case .mission(let state) = tab else { return false }
-            return state.missionID == id
-        }) {
-            // Deliberately not requestCloseGlobalTab: a deleted Mission must not
-            // land in closed-tab history where Reopen could resurrect it.
-            closeGlobalTab(tabId: tab.id)
-        }
-        if missingMissionTab?.missionID == id {
-            missingMissionTab = nil
-            missingMissionRecoveryTarget = nil
-        }
-        closedTabHistory.purge(missionID: id)
-    }
-
-    func requestCloseGlobalTab(tabID: TabID) {
-        guard missionsEnabled else { return }
-        guard let tab = globalTabs.tabs.first(where: { $0.id == tabID }) else { return }
-        closedTabHistory.record(ClosedTabEntry(
-            snapshot: .global(tab),
-            placement: .init(tabID: tabID, orderedIDs: globalTabs.tabs.map(\.id))
-        ))
-        closeGlobalTab(tabId: tabID)
     }
 
     @discardableResult
@@ -5166,11 +3839,8 @@ final class AppState {
         guard number > 0 else { return nil }
         let worktreeTabs = worktreeId.map { tabs.tabs(forWorktree: $0) } ?? []
         let composition = CenterTabComposition(
-            globalTabs: globalTabs.tabs,
             worktreeTabs: worktreeTabs,
-            activeGlobalMissionTab: globalTabs.activeMissionTab(),
-            activeWorktreeTabId: worktreeId.flatMap { tabs.activeTabId(forWorktree: $0) },
-            missionsEnabled: missionsEnabled
+            activeWorktreeTabId: worktreeId.flatMap { tabs.activeTabId(forWorktree: $0) }
         )
         let index = number - 1
         guard composition.tabs.indices.contains(index) else { return nil }
@@ -5184,24 +3854,16 @@ final class AppState {
     ) -> TabID? {
         let worktreeTabs = worktreeId.map { tabs.tabs(forWorktree: $0) } ?? []
         let composition = CenterTabComposition(
-            globalTabs: globalTabs.tabs,
             worktreeTabs: worktreeTabs,
-            activeGlobalMissionTab: globalTabs.activeMissionTab(),
-            activeWorktreeTabId: worktreeId.flatMap { tabs.activeTabId(forWorktree: $0) },
-            missionsEnabled: missionsEnabled
+            activeWorktreeTabId: worktreeId.flatMap { tabs.activeTabId(forWorktree: $0) }
         )
         guard let tabID = composition.adjacentTabID(in: direction) else { return nil }
         return activateCenterTab(tabID, worktreeId: worktreeId)
     }
 
     private func activateCenterTab(_ tabID: TabID, worktreeId: String?) -> TabID? {
-        if globalTabs.tabs.contains(where: { $0.id == tabID }) {
-            globalTabs.activate(tabId: tabID)
-        } else if let worktreeId {
-            activateWorktreeCenterTab(worktreeId: worktreeId, tabId: tabID)
-        } else {
-            return nil
-        }
+        guard let worktreeId else { return nil }
+        activateWorktreeCenterTab(worktreeId: worktreeId, tabId: tabID)
         return tabID
     }
 
@@ -5696,10 +4358,6 @@ final class AppState {
     }
 
     func closeTab(worktreeId: String, tabId: TabID, cancelRunScriptMonitors: Bool = true) {
-        if globalTabs.tabs.contains(where: { $0.id == tabId }) {
-            closeGlobalTab(tabId: tabId)
-            return
-        }
         let allTabs = tabs.tabs(forWorktree: worktreeId)
         let projectPath = projectPath(forWorktreeId: worktreeId)
         if let tab = allTabs.first(where: { $0.id == tabId }) {
@@ -5857,10 +4515,6 @@ final class AppState {
         let ids = Set(tabIds)
         guard !ids.isEmpty else { return }
         closedTabHistory.record(contentsOf: closedTabEntries(worktreeID: worktreeId, tabIDs: tabIds))
-        for id in stateGlobalTabIDs().intersection(ids) {
-            closeGlobalTab(tabId: id)
-        }
-
         let allTabs = tabs.tabs(forWorktree: worktreeId)
         let closed = allTabs.map(\.id).filter(ids.contains)
         invalidateFollowRevisionRequests(allTabs: allTabs, closedIds: closed)
@@ -5872,25 +4526,11 @@ final class AppState {
         cleanupACPSessions(worktreeId: worktreeId, allTabs: allTabs, closedIds: closed)
     }
 
-    private func stateGlobalTabIDs() -> Set<TabID> {
-        Set(globalTabs.tabs.map(\.id))
-    }
-
     private func closedTabEntries(worktreeID: String, tabIDs: [TabID]) -> [ClosedTabEntry] {
-        let global = globalTabs.tabs
         let local = tabs.tabs(forWorktree: worktreeID)
         return tabIDs.compactMap { tabID in
-            if let tab = global.first(where: { $0.id == tabID }) {
-                return ClosedTabEntry(
-                    snapshot: .global(tab),
-                    placement: .init(tabID: tabID, orderedIDs: global.map(\.id))
-                )
-            }
             guard let tab = local.first(where: { $0.id == tabID }) else { return nil }
-            return ClosedTabEntry(
-                snapshot: .worktree(worktreeID: worktreeID, tab: tab),
-                placement: .init(tabID: tabID, orderedIDs: local.map(\.id))
-            )
+            return ClosedTabEntry(snapshot: .worktree(worktreeID: worktreeID, tab: tab), placement: .init(tabID: tabID, orderedIDs: local.map(\.id)))
         }
     }
 
@@ -5901,15 +4541,6 @@ final class AppState {
 
         while let entry = closedTabHistory.last {
             switch entry.snapshot {
-            case .global(let tab):
-                guard missionsEnabled else {
-                    closedTabHistory.remove(id: entry.id)
-                    continue
-                }
-                _ = globalTabs.restore(tab: tab, placement: entry.placement)
-                closedTabHistory.remove(id: entry.id)
-                return
-
             case .worktree(let worktreeID, let tab):
                 guard worktree(withId: worktreeID) != nil else {
                     closedTabHistory.remove(id: entry.id)
@@ -6307,12 +4938,10 @@ final class AppState {
         if ImageFileType.isSupported(relativePath: relativePath),
            !hasRevealTarget || !ImageFileType.isTextBacked(relativePath: relativePath) {
             _ = tabs.openImagePreview(worktreeId: worktree.id, relativePath: relativePath)
-            activateWorktreeTabPresentation()
             return
         }
         if BinaryFileType.isKnownBinary(relativePath: relativePath) {
             _ = tabs.openBinaryPreview(worktreeId: worktree.id, relativePath: relativePath)
-            activateWorktreeTabPresentation()
             return
         }
 
@@ -6323,7 +4952,6 @@ final class AppState {
             revealCharacter: revealCharacter,
             revealEndLine: revealEndLine
         )
-        activateWorktreeTabPresentation()
     }
 
     func revealInFiles(worktreeId: String, path: String) {
@@ -6976,17 +5604,11 @@ final class AppState {
         force: Bool,
         removedIndex: Int
     ) async {
-        let missionAllowsBranchDeletion: Bool
-        if missionsEnabled {
-            missionAllowsBranchDeletion = await missions.refreshReviewBeforeWorktreeRemoval(worktree.id)
-        } else {
-            missionAllowsBranchDeletion = true
-        }
         do {
             try await Self.performRemoveWorktree(
                 repoPath: repoPath,
                 worktree: worktree,
-                deleteBranchIfMerged: deleteBranchIfMerged && missionAllowsBranchDeletion,
+                deleteBranchIfMerged: deleteBranchIfMerged,
                 force: force
             )
         } catch let WorktreeService.WorktreeError.gitFailed(stderr) {
@@ -7017,7 +5639,6 @@ final class AppState {
             return
         }
 
-        await reconcileDeletedMissionWorktree(worktree.id)
         cleanupWorktreeState(worktreeId: worktree.id)
         // Always clear the deleting state after a successful remove,
         // even if the subsequent refresh fails.
@@ -7738,7 +6359,6 @@ final class AppState {
         }
         let state = ACPSessionTabState(sessionId: session.id, title: session.title)
         tabs.append(acpSession: state, to: worktree.id)
-        activateWorktreeTabPresentation()
     }
 
     func startACPSession(
@@ -8490,8 +7110,6 @@ extension AppState: RemoteSessionsProvider {
     private func remoteSessionSummary(
         session: ACPSession,
         manager: ACPSessionManager,
-        projectId: String,
-        updatedAt: Int64,
         worktreeSummary: RemoteWorktreeSummary?
     ) -> RemoteSessionSummary {
         let streamingState = manager.runners[session.id]?.session.transcript.streamingState
@@ -8502,8 +7120,8 @@ extension AppState: RemoteSessionsProvider {
             agentId: session.agentId,
             status: RemoteSessionGateway.stateString(streamingState),
             canDrive: manager.isWriter(for: session.id),
-            projectId: projectId,
-            updatedAt: updatedAt,
+            projectId: projectAndWorktree(withWorktreeId: manager.worktreeId)?.project.id,
+            updatedAt: manager.sessionRows.first(where: { $0.id == session.id })?.updatedAt ?? 0,
             worktree: worktreeSummary
         )
     }
@@ -8516,11 +7134,11 @@ extension AppState: RemoteSessionsProvider {
             let worktreeSummary: RemoteWorktreeSummary?
             let projectId: String?
             if let resolved = projectAndWorktree(withWorktreeId: mgr.worktreeId) {
-                worktreeSummary = await remoteWorktreeSummary(project: resolved.project, worktree: resolved.worktree)
                 projectId = resolved.project.id
+                worktreeSummary = await remoteWorktreeSummary(project: resolved.project, worktree: resolved.worktree)
             } else {
-                worktreeSummary = nil
                 projectId = nil
+                worktreeSummary = nil
             }
 
             for row in mgr.sessionRows where !row.archived {
@@ -8538,7 +7156,6 @@ extension AppState: RemoteSessionsProvider {
                     isActive: hasOpenACPSessionTab(worktreeId: mgr.worktreeId, sessionId: row.id),
                     canDrive: mgr.isWriter(for: row.id),
                     projectId: projectId,
-                    updatedAt: row.updatedAt,
                     worktree: worktreeSummary
                 )
                 let identity = remoteSessionListIdentity(worktreeId: mgr.worktreeId, row: effectiveRow)
@@ -8577,8 +7194,7 @@ extension AppState: RemoteSessionsProvider {
         var hasRunner: Bool
         var isActive: Bool
         var canDrive: Bool
-        var projectId: String?
-        var updatedAt: Int64
+        let projectId: String?
         let worktree: RemoteWorktreeSummary?
 
         init(
@@ -8588,7 +7204,6 @@ extension AppState: RemoteSessionsProvider {
             isActive: Bool,
             canDrive: Bool,
             projectId: String?,
-            updatedAt: Int64,
             worktree: RemoteWorktreeSummary?
         ) {
             self.operationalRow = row
@@ -8598,7 +7213,6 @@ extension AppState: RemoteSessionsProvider {
             self.isActive = isActive
             self.canDrive = canDrive
             self.projectId = projectId
-            self.updatedAt = updatedAt
             self.worktree = worktree
         }
 
@@ -8611,15 +7225,13 @@ extension AppState: RemoteSessionsProvider {
                 canDrive: canDrive,
                 isActive: isActive,
                 projectId: projectId,
-                updatedAt: updatedAt,
+                updatedAt: displayRow.updatedAt,
                 worktree: worktree
             )
         }
 
         func merging(_ other: RemoteSessionSummaryCandidate) -> RemoteSessionSummaryCandidate {
             var merged = self
-            merged.updatedAt = max(merged.updatedAt, other.updatedAt)
-            merged.projectId = merged.projectId ?? other.projectId
             if other.isBetterOperationalRow(than: merged) {
                 merged.operationalRow = other.operationalRow
                 merged.status = other.status
@@ -8723,14 +7335,7 @@ extension AppState: RemoteSessionsProvider {
         }
 
         let worktreeSummary = remoteWorktreeSummaryWithoutMetrics(project: resolved.project, worktree: resolved.worktree)
-        let updatedAt = manager.sessionRows.first(where: { $0.id == session.id })?.updatedAt ?? 0
-        return .success(remoteSessionSummary(
-            session: session,
-            manager: manager,
-            projectId: resolved.project.id,
-            updatedAt: updatedAt,
-            worktreeSummary: worktreeSummary
-        ))
+        return .success(remoteSessionSummary(session: session, manager: manager, worktreeSummary: worktreeSummary))
     }
 
     func session(for id: String) -> ACPSession? {

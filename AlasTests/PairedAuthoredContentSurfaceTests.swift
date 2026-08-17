@@ -7,23 +7,6 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct PairedAuthoredContentSurfaceTests {
-    @Test func missionSourceBodyBindingWrapsSelectedCommand() async throws {
-        let model = EditMissionSourceDialogModel(source: missionSource(body: "mission command")) { _, _ in true }
-        let controller = NSHostingController(rootView: EditMissionSourceDialog(
-            presented: .constant(true),
-            model: model,
-            sourceURL: URL(string: "https://example.com/issues/42")!
-        )
-        .environment(\.theme, try! ThemeStore().current))
-        let window = attach(controller)
-        await drain(controller.view)
-
-        wrapSelection(in: try #require(textView(containing: "mission command", in: controller.view)))
-
-        #expect(model.body == "`mission command`")
-        window.orderOut(nil)
-    }
-
     @Test func promptEditorDraftBindingWrapsSelectedCommand() async throws {
         let model = PromptDraftCapture(text: "prompt command")
         let controller = NSHostingController(rootView: PromptEditorHarness(model: model))
@@ -60,27 +43,6 @@ struct PairedAuthoredContentSurfaceTests {
 
         #expect(model.text == "`project command`")
         window.orderOut(nil)
-    }
-
-    private func missionSource(body: String) -> IssueSnapshot {
-        IssueSnapshot(
-            identity: IssueIdentity(providerID: .manual, stableID: "manual:42"),
-            canonicalURL: URL(string: "https://example.com/issues/42")!,
-            providerLabel: "Manual",
-            displayReference: nil,
-            repositoryLocator: nil,
-            title: "Mission source",
-            body: body,
-            state: .open,
-            labels: [],
-            assignees: [],
-            providerUpdatedAt: nil,
-            capturedAt: .now,
-            refreshError: nil,
-            contentOrigin: .manual,
-            isEditable: true,
-            isRefreshable: false
-        )
     }
 
     private func attach<Content: View>(
