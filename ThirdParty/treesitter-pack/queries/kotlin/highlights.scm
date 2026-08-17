@@ -37,6 +37,7 @@
 (type_alias type: (identifier) @type.definition)
 (function_declaration name: (identifier) @function)
 (secondary_constructor "constructor" @keyword)
+(enum_entry (identifier) @constant)
 
 ; Types
 (user_type (identifier) @type)
