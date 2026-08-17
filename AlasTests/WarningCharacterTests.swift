@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import Alas
 
@@ -35,5 +36,15 @@ struct WarningCharacterTests {
         #expect(WarningCharacter.defaults.contains { $0.scalarValue == 0x202E })
         #expect(WarningCharacter.defaults.contains { $0.scalarValue == 0x2069 })
         #expect(WarningCharacter.defaults.map(\.scalarValue).count == Set(WarningCharacter.defaults.map(\.scalarValue)).count)
+    }
+
+    @Test func findsWarningsWithinComposedCharacterSequences() {
+        let text = "a\u{034F}"
+
+        #expect(CodeEditorLayoutManager.warningCharacterRanges(
+            in: text as NSString,
+            composedRange: NSRange(location: 0, length: 2),
+            warningScalars: [0x034F]
+        ) == [(0x034F, NSRange(location: 1, length: 1))])
     }
 }

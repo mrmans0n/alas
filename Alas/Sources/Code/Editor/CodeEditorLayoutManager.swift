@@ -41,10 +41,11 @@ final class CodeEditorLayoutManager: NSLayoutManager {
         let string = textView.string as NSString
         let containerPoint = NSPoint(x: point.x - textView.textContainerInset.width, y: point.y - textView.textContainerInset.height)
         for location in [index, index - 1] where location >= 0 && location < string.length {
-            let range = string.rangeOfComposedCharacterSequence(at: location)
-            let value = string.substring(with: range).unicodeScalars.first?.value
-            guard let value, let warning = scalars[value], decorationRect(forCharacterRange: range).contains(containerPoint) else { continue }
-            return warning.note.isEmpty ? warning.code : "\(warning.code) — \(warning.note)"
+            let composedRange = string.rangeOfComposedCharacterSequence(at: location)
+            for (value, range) in Self.warningCharacterRanges(in: string, composedRange: composedRange, warningScalars: Set(scalars.keys)) {
+                guard let warning = scalars[value], decorationRect(forCharacterRange: range).contains(containerPoint) else { continue }
+                return warning.note.isEmpty ? warning.code : "\(warning.code) — \(warning.note)"
+            }
         }
         return nil
     }
@@ -58,23 +59,38 @@ final class CodeEditorLayoutManager: NSLayoutManager {
         })
         let start = String.Index(utf16Offset: characters.location, in: text)
         let end = String.Index(utf16Offset: NSMaxRange(characters), in: text)
-        for index in text.unicodeScalars.indices where index >= start && index < end {
+        var index = start
+        while index < end {
             let scalar = text.unicodeScalars[index]
-            let range = NSRange(index..<text.unicodeScalars.index(after: index), in: text)
-            guard NSIntersectionRange(range, characters).length > 0 else { continue }
-            let rect = decorationRect(forCharacterRange: range).offsetBy(dx: origin.x, dy: origin.y)
-            if configuration.showWarningCharacters, let warning = warnings[scalar.value] {
-                NSColor.systemRed.withAlphaComponent(0.28).setFill()
-                rect.insetBy(dx: 1, dy: 1).fill()
-                _ = warning
-            } else if configuration.showInvisibleCharacters {
-                let marker: String?
-                switch scalar.value { case 0x20 where configuration.showSpaces: marker = "·"
-                case 0x09 where configuration.showTabs: marker = "→"
-                case 0x0A where configuration.showLineEndings: marker = "↵"
-                default: marker = nil }
-                if let marker { marker.draw(at: NSPoint(x: rect.minX, y: rect.minY), withAttributes: [.font: textStorage?.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont ?? .monospacedSystemFont(ofSize: 13, weight: .regular), .foregroundColor: markerColor]) }
+            let next = text.unicodeScalars.index(after: index)
+            let range = NSRange(index..<next, in: text)
+            if NSIntersectionRange(range, characters).length > 0 {
+                let rect = decorationRect(forCharacterRange: range).offsetBy(dx: origin.x, dy: origin.y)
+                if configuration.showWarningCharacters, let warning = warnings[scalar.value] {
+                    NSColor.systemRed.withAlphaComponent(0.28).setFill()
+                    rect.insetBy(dx: 1, dy: 1).fill()
+                    _ = warning
+                } else if configuration.showInvisibleCharacters {
+                    let marker: String?
+                    switch scalar.value { case 0x20 where configuration.showSpaces: marker = "·"
+                    case 0x09 where configuration.showTabs: marker = "→"
+                    case 0x0A where configuration.showLineEndings: marker = "↵"
+                    default: marker = nil }
+                    if let marker { marker.draw(at: NSPoint(x: rect.minX, y: rect.minY), withAttributes: [.font: textStorage?.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont ?? .monospacedSystemFont(ofSize: 13, weight: .regular), .foregroundColor: markerColor]) }
+                }
             }
+            index = next
+        }
+    }
+
+    static func warningCharacterRanges(in text: NSString, composedRange: NSRange, warningScalars: Set<UInt32>) -> [(UInt32, NSRange)] {
+        let substring = text.substring(with: composedRange)
+        return substring.unicodeScalars.indices.compactMap { index in
+            let scalar = substring.unicodeScalars[index]
+            guard warningScalars.contains(scalar.value) else { return nil }
+            let next = substring.unicodeScalars.index(after: index)
+            let range = NSRange(index..<next, in: substring)
+            return (scalar.value, NSRange(location: composedRange.location + range.location, length: range.length))
         }
     }
 
