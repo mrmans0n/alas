@@ -52,6 +52,17 @@ struct AppConfigCodeTextRenderingTests {
         #expect(decoded.code.warningCharacters == [WarningCharacter(scalarValue: 0x200B, note: "First")])
     }
 
+    @Test func malformedWarningDoesNotDiscardValidEntries() throws {
+        let decoded = try decode { code in
+            code["warningCharacters"] = [
+                ["scalarValue": 0x200B, "note": "Valid"],
+                ["scalarValue": "not a number", "note": "Invalid"],
+            ]
+        }
+
+        #expect(decoded.code.warningCharacters == [WarningCharacter(scalarValue: 0x200B, note: "Valid")])
+    }
+
     @Test func settingsRoundTrip() throws {
         var config = AppConfig.defaults
         config.code.showInvisibleCharacters = true

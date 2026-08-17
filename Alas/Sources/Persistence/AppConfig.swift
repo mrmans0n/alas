@@ -668,9 +668,18 @@ extension AppConfig {
             let showTabs = (try? codeContainer.decode(Bool.self, forKey: .showTabs)) ?? true
             let showLineEndings = (try? codeContainer.decode(Bool.self, forKey: .showLineEndings)) ?? true
             let showWarningCharacters = (try? codeContainer.decode(Bool.self, forKey: .showWarningCharacters)) ?? true
-            let warningCharacters = WarningCharacter.sanitized(
-                (try? codeContainer.decode([WarningCharacter].self, forKey: .warningCharacters)) ?? WarningCharacter.defaults
-            )
+            let warningCharacters: [WarningCharacter]
+            if var warnings = try? codeContainer.nestedUnkeyedContainer(forKey: .warningCharacters) {
+                var decoded: [WarningCharacter] = []
+                while !warnings.isAtEnd {
+                    if let decoder = try? warnings.superDecoder(), let warning = try? WarningCharacter(from: decoder) {
+                        decoded.append(warning)
+                    }
+                }
+                warningCharacters = WarningCharacter.sanitized(decoded)
+            } else {
+                warningCharacters = WarningCharacter.defaults
+            }
             code = Code(
                 fontFamily: fontFamily,
                 fontSize: fontSize,
