@@ -12,7 +12,10 @@ struct WarningCharacter: Codable, Equatable, Identifiable, Sendable {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         let value: UInt32?
         if trimmed.lowercased().hasPrefix("u+") {
-            value = UInt32(trimmed.dropFirst(2), radix: 16)
+            let digits = trimmed.dropFirst(2)
+            value = (4...6).contains(digits.count) && digits.allSatisfy(\.isHexDigit)
+                ? UInt32(digits, radix: 16)
+                : nil
         } else if input.unicodeScalars.count == 1 {
             value = input.unicodeScalars.first?.value
         } else if trimmed.unicodeScalars.count == 1 {

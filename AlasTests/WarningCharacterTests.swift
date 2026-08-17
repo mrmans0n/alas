@@ -15,6 +15,8 @@ struct WarningCharacterTests {
         #expect(WarningCharacter.parse("ab", note: "") == nil)
         #expect(WarningCharacter.parse("U+D800", note: "") == nil)
         #expect(WarningCharacter.parse("U+110000", note: "") == nil)
+        #expect(WarningCharacter.parse("U+1", note: "") == nil)
+        #expect(WarningCharacter.parse("U+00000041", note: "") == nil)
     }
 
     @Test func sanitizesEntries() {

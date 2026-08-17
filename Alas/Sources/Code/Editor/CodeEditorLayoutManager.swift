@@ -39,9 +39,12 @@ final class CodeEditorLayoutManager: NSLayoutManager {
             warning.scalar.map { ($0.value, warning) }
         })
         let string = textView.string as NSString
+        let containerPoint = NSPoint(x: point.x - textView.textContainerInset.width, y: point.y - textView.textContainerInset.height)
         for location in [index, index - 1] where location >= 0 && location < string.length {
-            let value = string.substring(with: NSRange(location: location, length: 1)).unicodeScalars.first?.value
-            if let value, let warning = scalars[value] { return warning.note.isEmpty ? warning.code : "\(warning.code) — \(warning.note)" }
+            let range = string.rangeOfComposedCharacterSequence(at: location)
+            let value = string.substring(with: range).unicodeScalars.first?.value
+            guard let value, let warning = scalars[value], decorationRect(forCharacterRange: range).contains(containerPoint) else { continue }
+            return warning.note.isEmpty ? warning.code : "\(warning.code) — \(warning.note)"
         }
         return nil
     }
@@ -53,12 +56,13 @@ final class CodeEditorLayoutManager: NSLayoutManager {
         let warnings = Dictionary(uniqueKeysWithValues: configuration.warningCharacters.compactMap { warning in
             warning.scalar.map { ($0.value, warning) }
         })
-        for index in text.unicodeScalars.indices {
+        let start = String.Index(utf16Offset: characters.location, in: text)
+        let end = String.Index(utf16Offset: NSMaxRange(characters), in: text)
+        for index in text.unicodeScalars.indices where index >= start && index < end {
             let scalar = text.unicodeScalars[index]
             let range = NSRange(index..<text.unicodeScalars.index(after: index), in: text)
             guard NSIntersectionRange(range, characters).length > 0 else { continue }
-            let glyph = glyphIndexForCharacter(at: range.location)
-            let rect = boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: textContainers.first!).offsetBy(dx: origin.x, dy: origin.y)
+            let rect = decorationRect(forCharacterRange: range).offsetBy(dx: origin.x, dy: origin.y)
             if configuration.showWarningCharacters, let warning = warnings[scalar.value] {
                 NSColor.systemRed.withAlphaComponent(0.28).setFill()
                 rect.insetBy(dx: 1, dy: 1).fill()
@@ -72,5 +76,16 @@ final class CodeEditorLayoutManager: NSLayoutManager {
                 if let marker { marker.draw(at: NSPoint(x: rect.minX, y: rect.minY), withAttributes: [.font: textStorage?.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont ?? .monospacedSystemFont(ofSize: 13, weight: .regular), .foregroundColor: markerColor]) }
             }
         }
+    }
+
+    private func decorationRect(forCharacterRange range: NSRange) -> NSRect {
+        guard let container = textContainers.first else { return .zero }
+        let glyph = glyphIndexForCharacter(at: range.location)
+        var rect = boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: container)
+        if rect.width <= 1 {
+            let line = lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+            rect = NSRect(x: location(forGlyphAt: glyph).x, y: line.minY, width: 8, height: line.height)
+        }
+        return rect
     }
 }
