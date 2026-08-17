@@ -84,7 +84,9 @@ final class CodeEditorLayoutManager: NSLayoutManager {
             let scalar = text.unicodeScalars[index]
             let next = text.unicodeScalars.index(after: index)
             let range = NSRange(index..<next, in: text)
-            if NSIntersectionRange(range, characters).length > 0 {
+            if NSIntersectionRange(range, characters).length > 0,
+               !(configuration.showWarningCharacters && warnings[scalar.value] != nil)
+            {
                 let rect = decorationRect(forCharacterRange: range).offsetBy(dx: origin.x, dy: origin.y)
                     let marker: String?
                     switch scalar.value { case 0x20 where configuration.showSpaces: marker = "·"
