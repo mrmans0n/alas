@@ -3805,7 +3805,7 @@ final class AppState {
         let worktreeTabs = worktreeId.map { tabs.tabs(forWorktree: $0) } ?? []
         let composition = CenterTabComposition(
             worktreeTabs: worktreeTabs,
-            activeWorktreeTabId: worktreeId.flatMap { tabs.activeTabId(forWorktree: -e) }
+            activeWorktreeTabId: worktreeId.flatMap { tabs.activeTabId(forWorktree: $0) }
         )
         let index = number - 1
         guard composition.tabs.indices.contains(index) else { return nil }
@@ -3820,7 +3820,7 @@ final class AppState {
         let worktreeTabs = worktreeId.map { tabs.tabs(forWorktree: $0) } ?? []
         let composition = CenterTabComposition(
             worktreeTabs: worktreeTabs,
-            activeWorktreeTabId: worktreeId.flatMap { tabs.activeTabId(forWorktree: -e) }
+            activeWorktreeTabId: worktreeId.flatMap { tabs.activeTabId(forWorktree: $0) }
         )
         guard let tabID = composition.adjacentTabID(in: direction) else { return nil }
         return activateCenterTab(tabID, worktreeId: worktreeId)

@@ -103,6 +103,40 @@ struct ClosedTabAppStateTests {
         #expect(!fixture.state.canReopenClosedTab)
     }
 
+    @Test func centerTabNavigationUsesTheWorktreeActiveTab() {
+        let fixture = makeFixture()
+        let first = fixture.state.tabs.appendEditor(
+            worktreeId: fixture.first.id,
+            title: "one",
+            relativePath: "one.md"
+        )
+        let second = fixture.state.tabs.appendEditor(
+            worktreeId: fixture.first.id,
+            title: "two",
+            relativePath: "two.md"
+        )
+        let third = fixture.state.tabs.appendEditor(
+            worktreeId: fixture.first.id,
+            title: "three",
+            relativePath: "three.md"
+        )
+        _ = fixture.state.tabs.appendEditor(
+            worktreeId: fixture.second.id,
+            title: "other",
+            relativePath: "other.md"
+        )
+
+        fixture.state.activateWorktreeCenterTab(worktreeId: fixture.first.id, tabId: second.id)
+
+        #expect(fixture.state.activateCenterTabNumber(1, worktreeId: fixture.first.id) == first.id)
+        #expect(fixture.state.tabs.activeTabId(forWorktree: fixture.first.id) == first.id)
+
+        fixture.state.activateWorktreeCenterTab(worktreeId: fixture.first.id, tabId: second.id)
+
+        #expect(fixture.state.activateAdjacentCenterTab(.next, worktreeId: fixture.first.id) == third.id)
+        #expect(fixture.state.tabs.activeTabId(forWorktree: fixture.first.id) == third.id)
+    }
+
     @Test func automaticCloseDoesNotRecordHistory() {
         let fixture = makeFixture()
         let tab = fixture.state.tabs.appendEditor(

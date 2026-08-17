@@ -1091,108 +1091,6 @@ struct GitLabCLIProviderTests {
         ))
     }
 
-    @Test func missionReviewRequestIncludesCompletedMergeRequests() async throws {
-        let runner = FakeRunner(results: [
-            ProcessResult(exitCode: 0, stdout: Self.mrListOutput, stderr: ""),
-            ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
-            ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
-            ProcessResult(exitCode: 0, stdout: #"{"username":"viewer"}"#, stderr: ""),
-            ProcessResult(exitCode: 0, stdout: Self.pipelineWithJobsOutput, stderr: ""),
-        ])
-
-        let request = try await GitLabCLIProvider(runner: runner).missionReviewRequest(
-            remote: Self.remote,
-            branch: "feature/gitlab-provider",
-            headOwner: nil,
-            baseBranch: "origin/main",
-            cwd: Self.cwd
-        )
-
-        #expect(request?.number == 42)
-        #expect(await runner.commands.first?.args.contains("--all") == true)
-    }
-
-    @Test func missionReviewRequestPreservesAnUnqualifiedSlashBaseMatchingTheRemoteName() async throws {
-        let remote = CodeHostRemote(
-            kind: .gitlab,
-            host: Self.remote.host,
-            owner: Self.remote.owner,
-            repository: Self.remote.repository,
-            remoteName: "release",
-            webURL: Self.remote.webURL
-        )
-        let runner = FakeRunner(results: [
-            ProcessResult(exitCode: 0, stdout: "[]", stderr: ""),
-        ])
-
-        _ = try await GitLabCLIProvider(runner: runner).missionReviewRequest(
-            remote: remote,
-            branch: "feature/gitlab-provider",
-            headOwner: nil,
-            baseBranch: "release/1.0",
-            cwd: Self.cwd
-        )
-
-        let args = try #require(await runner.commands.first?.args)
-        let baseIndex = try #require(args.firstIndex(of: "--target-branch"))
-        #expect(args[baseIndex + 1] == "release/1.0")
-    }
-
-    @Test func missionReviewRequestPrefersMergedMergeRequestOverClosedMatch() async throws {
-        let listOutput = """
-        [
-          {
-            "iid": 43,
-            "title": "Closed replacement",
-            "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/43",
-            "state": "closed",
-            "draft": false,
-            "source_branch": "feature/gitlab-provider",
-            "target_branch": "main",
-            "sha": "head123",
-            "merge_status": "cannot_be_merged",
-            "detailed_merge_status": "not_open"
-          },
-          {
-            "iid": 42,
-            "title": "Merged change",
-            "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42",
-            "state": "merged",
-            "draft": false,
-            "source_branch": "feature/gitlab-provider",
-            "target_branch": "main",
-            "sha": "head123",
-            "merge_status": "can_be_merged",
-            "detailed_merge_status": "mergeable"
-          }
-        ]
-        """
-        let mergedViewOutput = Self.mrViewOutput.replacingOccurrences(
-            of: #""state": "opened""#,
-            with: #""state": "merged""#
-        )
-        let runner = FakeRunner(results: [
-            ProcessResult(exitCode: 0, stdout: listOutput, stderr: ""),
-            ProcessResult(exitCode: 0, stdout: mergedViewOutput, stderr: ""),
-            ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
-            ProcessResult(exitCode: 0, stdout: #"{"username":"viewer"}"#, stderr: ""),
-            ProcessResult(exitCode: 0, stdout: Self.pipelineWithJobsOutput, stderr: ""),
-        ])
-
-        let request = try await GitLabCLIProvider(runner: runner).missionReviewRequest(
-            remote: Self.remote,
-            branch: "feature/gitlab-provider",
-            headOwner: nil,
-            baseBranch: "origin/main",
-            headSHA: "head123",
-            cwd: Self.cwd
-        )
-
-        #expect(request?.number == 42)
-        #expect(request?.state == .merged)
-        #expect(await runner.commands[1].args.contains("42"))
-    }
-
     @Test func reviewDiffUsesMRDiffCommand() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: "diff --git a/A.swift b/A.swift\n", stderr: ""),
@@ -1831,25 +1729,6 @@ struct GitLabCLIProviderTests {
             args: ["mr", "view", "43", "--output", "json", "-R", "platform/mobile/alas"],
             cwd: Self.cwd
         ))
-    }
-
-    @Test func missionReviewRequestSkipsInaccessibleSameSHASourceProjects() async throws {
-        let runner = SHAFilteringRunner()
-
-        let request = try? await GitLabCLIProvider(runner: runner).missionReviewRequest(
-            remote: Self.remote,
-            branch: "feature/gitlab-provider",
-            headOwner: "nacho",
-            baseBranch: "origin/main",
-            headSHA: "matching-sha",
-            cwd: Self.cwd
-        )
-        let commands = await runner.commands
-
-        #expect(request?.number == 43)
-        #expect(request?.headSHA == "matching-sha")
-        #expect(commands.contains { $0.starts(with: ["api", "projects/1001"]) })
-        #expect(commands.contains { $0.starts(with: ["api", "projects/1002"]) })
     }
 
     @Test func currentReviewRequestResolvesSingleSourceProjectIDBeforeFiltering() async throws {

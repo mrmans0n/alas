@@ -324,26 +324,6 @@ struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         )
     }
 
-    func missionReviewRequest(
-        remote: CodeHostRemote,
-        branch: String,
-        headOwner: String?,
-        baseBranch: String,
-        headSHA: String? = nil,
-        cwd: URL
-    ) async throws -> ReviewRequest? {
-        try await reviewRequest(
-            remote: remote,
-            branch: branch,
-            headOwner: headOwner,
-            baseBranch: baseBranch,
-            headSHA: headSHA,
-            state: "all",
-            normalizeBaseBranch: false,
-            cwd: cwd
-        )
-    }
-
     private func reviewRequest(
         remote: CodeHostRemote,
         branch: String,
