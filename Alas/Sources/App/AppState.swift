@@ -679,6 +679,33 @@ final class AppState {
         }
     }
 
+    func makeIssueResolver(selectedProjectID: String?) -> IssueResolver {
+        let issueProviders = CodeHostIssueProviderRegistry.live()
+        return IssueResolver(environment: .init(
+            projects: { [weak self] in self?.projects ?? [] },
+            selectedProjectID: { selectedProjectID },
+            remotes: { project in
+                try await GitService().remotes(worktreePath: URL(fileURLWithPath: project.path))
+            },
+            providers: IssueProviderRegistry([
+                CodeHostIssueSourceProvider(kind: .github, providers: issueProviders),
+                CodeHostIssueSourceProvider(kind: .gitlab, providers: issueProviders),
+                ManualIssueProvider(metadataFetcher: .live),
+            ])
+        ))
+    }
+
+    func makeIssueSuggestionLoader() -> IssueSuggestionLoader {
+        let projects = projects
+        return IssueSuggestionLoader(environment: .init(
+            projects: { projects },
+            remotes: { project in
+                try await GitService().remotes(worktreePath: URL(fileURLWithPath: project.path))
+            },
+            providers: .live()
+        ))
+    }
+
     /// All worktree IDs currently known to the projects manager (including
     /// hidden/archived ones).
     func allWorktreeIds() -> Set<String> {
@@ -1095,7 +1122,17 @@ final class AppState {
     }
 
     func selectWorktree(id: String?) {
+        guard selectedWorktreeId != id || spacesManager.activeSpace?.lastSelectedWorktreeId != id else { return }
         selectedWorktreeId = id
+        spacesManager.setLastSelectedWorktree(id)
+        scheduleSpacesSave()
+        if let id,
+           let resolved = projectAndWorktree(withWorktreeId: id),
+           resolved.project.host != nil {
+            Task { @MainActor [weak self] in
+                await self?.prepareRemoteAccelerationIfNeeded(for: resolved.project)
+            }
+        }
     }
 
     func selectInitialWorktree(id: String?) {
@@ -1197,6 +1234,9 @@ final class AppState {
             guard spacesManager.space(id: spaceId) != nil else { return }
             spacesManager.addProject(projectId, toSpace: spaceId)
             guard spacesManager.space(id: spaceId)?.projectIds.contains(projectId) == true else { return }
+        }
+        if removedFromActiveSpace, wasSelectedProject {
+            selectWorktree(id: resolvedSelectionForActiveSpace())
         }
         saveSpaces()
     }
@@ -3154,7 +3194,6 @@ final class AppState {
                 guard let self else { return }
                 if BinaryFileType.isKnownBinary(relativePath: url.path) {
                     _ = self.tabs.openBinaryPreview(worktreeId: worktreeId, relativePath: url.path)
-                    self.activateWorktreeTabPresentation()
                     if self.selectedWorktreeId != worktreeId,
                        let worktree = self.worktree(withId: worktreeId) {
                         self.focusGlobalWorktree(id: worktreeId, projectId: worktree.projectId)
@@ -3168,7 +3207,6 @@ final class AppState {
                     revealCharacter: nil,
                     originatingRelativePath: nil
                 )
-                self.activateWorktreeTabPresentation()
                 if self.selectedWorktreeId != worktreeId,
                    let worktree = self.worktree(withId: worktreeId) {
                     self.focusGlobalWorktree(id: worktreeId, projectId: worktree.projectId)
@@ -3192,7 +3230,6 @@ final class AppState {
                     revealCharacter: 0,
                     revealEndLine: lines.upperBound
                 )
-                self.activateWorktreeTabPresentation()
                 if self.selectedWorktreeId != worktreeId,
                    let worktree = self.worktree(withId: worktreeId) {
                     self.focusGlobalWorktree(id: worktreeId, projectId: worktree.projectId)
@@ -3447,7 +3484,6 @@ final class AppState {
         // `terminalSessionOpener` (test-only) generates its own id and we
         // honor it for backward-compat with existing tests.
         let tab = tabs.appendTerminal(worktreeId: worktree.id, title: title, sessionId: opened.id, runScriptKey: runScriptKey)
-        activateWorktreeTabPresentation()
         return tab
     }
 
@@ -4493,7 +4529,7 @@ final class AppState {
     private func closedTabEntries(worktreeID: String, tabIDs: [TabID]) -> [ClosedTabEntry] {
         let local = tabs.tabs(forWorktree: worktreeID)
         return tabIDs.compactMap { tabID in
-            guard let tab = local.first(where: { -e.id == tabID }) else { return nil }
+            guard let tab = local.first(where: { $0.id == tabID }) else { return nil }
             return ClosedTabEntry(snapshot: .worktree(worktreeID: worktreeID, tab: tab), placement: .init(tabID: tabID, orderedIDs: local.map(\.id)))
         }
     }
@@ -4902,12 +4938,10 @@ final class AppState {
         if ImageFileType.isSupported(relativePath: relativePath),
            !hasRevealTarget || !ImageFileType.isTextBacked(relativePath: relativePath) {
             _ = tabs.openImagePreview(worktreeId: worktree.id, relativePath: relativePath)
-            activateWorktreeTabPresentation()
             return
         }
         if BinaryFileType.isKnownBinary(relativePath: relativePath) {
             _ = tabs.openBinaryPreview(worktreeId: worktree.id, relativePath: relativePath)
-            activateWorktreeTabPresentation()
             return
         }
 
@@ -4918,7 +4952,6 @@ final class AppState {
             revealCharacter: revealCharacter,
             revealEndLine: revealEndLine
         )
-        activateWorktreeTabPresentation()
     }
 
     func revealInFiles(worktreeId: String, path: String) {
@@ -6326,7 +6359,6 @@ final class AppState {
         }
         let state = ACPSessionTabState(sessionId: session.id, title: session.title)
         tabs.append(acpSession: state, to: worktree.id)
-        activateWorktreeTabPresentation()
     }
 
     func startACPSession(
@@ -7088,6 +7120,8 @@ extension AppState: RemoteSessionsProvider {
             agentId: session.agentId,
             status: RemoteSessionGateway.stateString(streamingState),
             canDrive: manager.isWriter(for: session.id),
+            projectId: projectAndWorktree(withWorktreeId: manager.worktreeId)?.project.id,
+            updatedAt: manager.sessionRows.first(where: { $0.id == session.id })?.updatedAt ?? 0,
             worktree: worktreeSummary
         )
     }
@@ -7098,9 +7132,12 @@ extension AppState: RemoteSessionsProvider {
 
         for mgr in acpManagers.values {
             let worktreeSummary: RemoteWorktreeSummary?
+            let projectId: String?
             if let resolved = projectAndWorktree(withWorktreeId: mgr.worktreeId) {
+                projectId = resolved.project.id
                 worktreeSummary = await remoteWorktreeSummary(project: resolved.project, worktree: resolved.worktree)
             } else {
+                projectId = nil
                 worktreeSummary = nil
             }
 
@@ -7118,6 +7155,7 @@ extension AppState: RemoteSessionsProvider {
                     hasRunner: state != nil,
                     isActive: hasOpenACPSessionTab(worktreeId: mgr.worktreeId, sessionId: row.id),
                     canDrive: mgr.isWriter(for: row.id),
+                    projectId: projectId,
                     worktree: worktreeSummary
                 )
                 let identity = remoteSessionListIdentity(worktreeId: mgr.worktreeId, row: effectiveRow)
@@ -7156,6 +7194,7 @@ extension AppState: RemoteSessionsProvider {
         var hasRunner: Bool
         var isActive: Bool
         var canDrive: Bool
+        let projectId: String?
         let worktree: RemoteWorktreeSummary?
 
         init(
@@ -7164,6 +7203,7 @@ extension AppState: RemoteSessionsProvider {
             hasRunner: Bool,
             isActive: Bool,
             canDrive: Bool,
+            projectId: String?,
             worktree: RemoteWorktreeSummary?
         ) {
             self.operationalRow = row
@@ -7172,6 +7212,7 @@ extension AppState: RemoteSessionsProvider {
             self.hasRunner = hasRunner
             self.isActive = isActive
             self.canDrive = canDrive
+            self.projectId = projectId
             self.worktree = worktree
         }
 
@@ -7183,6 +7224,8 @@ extension AppState: RemoteSessionsProvider {
                 status: status,
                 canDrive: canDrive,
                 isActive: isActive,
+                projectId: projectId,
+                updatedAt: displayRow.updatedAt,
                 worktree: worktree
             )
         }

@@ -22,6 +22,9 @@ final class RightPaneStore {
     /// retain the app.
     weak var appState: AppState?
 
+    @ObservationIgnored
+    var reviewSnapshotDidChange: ((String, String, ReviewLoopSnapshot) -> Void)?
+
     private let git: GitService
 
     init(git: GitService = GitService()) {
@@ -288,6 +291,13 @@ final class RightPaneStore {
 
     func invalidateSnapshot(worktreeId: String) {
         states[worktreeId]?.markSnapshotUnknown()
+    }
+
+    func observeCompletedRemoteReviewRefresh(
+        worktreeId: String,
+        snapshot: ReviewLoopSnapshot
+    ) {
+        reviewSnapshotDidChange?(worktreeId, snapshot.local.baseBranch, snapshot)
     }
 
     func reviewSnapshot(worktreeId: String, baseBranch: String) -> ReviewLoopSnapshot? {
