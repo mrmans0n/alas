@@ -3418,6 +3418,13 @@ extension ACPSessionManager {
                             )
                         )
                     }
+                    func suppressFailedLoadReplayIfNeeded() {
+                        guard !shouldSuppressLoadReplay else { return }
+                        let target = connection.client.yieldedUpdateCount
+                        guard target > 0 else { return }
+                        runner.suppressLoadReplay(throughYieldedUpdateCount: target)
+                        startRunnerIfNeeded()
+                    }
                     func restoreStrictly() async throws -> (ACPSessionNewResult, resumed: Bool) {
                         do {
                             return (try await connection.loadSession(
@@ -3427,6 +3434,7 @@ extension ACPSessionManager {
                                 brokerOperationKey: loadOperationKey
                             ), false)
                         } catch {
+                            suppressFailedLoadReplayIfNeeded()
                             guard error is ACPBrokerDurableCompletionReplayError else {
                                 return (try await resumeAfterLoadFailure(error), true)
                             }
@@ -3444,6 +3452,7 @@ extension ACPSessionManager {
                             guard !(error is ACPBrokerDurableCompletionReplayError) else {
                                 throw error
                             }
+                            suppressFailedLoadReplayIfNeeded()
                             return (try await resumeAfterLoadFailure(error), true)
                         }
                     }
@@ -3455,9 +3464,11 @@ extension ACPSessionManager {
                             canSendTranscript: false
                         )
                     }
-                    runner.finishSuppressingLoadReplay(
-                        throughYieldedUpdateCount: connection.client.yieldedUpdateCount
-                    )
+                    if shouldSuppressLoadReplay {
+                        runner.finishSuppressingLoadReplay(
+                            throughYieldedUpdateCount: connection.client.yieldedUpdateCount
+                        )
+                    }
                     if !pendingRecovery {
                         session.contextRecoveryStatus = nil
                     }

@@ -190,6 +190,40 @@ struct ACPSessionManagerRemoteRestoreTests {
         await manager.detach(sessionId: session.id)
     }
 
+    @Test("strict load fallback discards partial load replay before resume")
+    func importedSessionLoadFallbackDiscardsPartialLoadReplay() async throws {
+        let (manager, store, client, session) = try fixture(origin: .agentImported)
+        scriptInitialize(client, canLoad: true, canResume: true)
+        client.scriptAsync(method: "session/load") { _ in
+            client.emit(.init(
+                sessionId: "remote-id",
+                update: .agentMessageChunk(.text("partial failed load"))
+            ))
+            throw JSONRPCError(code: -32603, message: "Internal error", data: nil)
+        }
+        client.scriptAsync(method: "session/resume") { _ in
+            client.emit(.init(
+                sessionId: "remote-id",
+                update: .agentMessageChunk(.text("resumed history"))
+            ))
+            return Data("{}".utf8)
+        }
+
+        await manager.attach(to: session.id, freshlyCreated: false)
+        try await waitUntil { session.transcript.messages.count == 1 }
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        #expect(client.sent.map(\.method) == ["initialize", "session/load", "session/resume"])
+        #expect(session.transcript.messages.count == 1)
+        #expect(try store.messageCount(sessionId: session.id) == 1)
+        guard case .agent(_, _, let text) = session.transcript.messages[0] else {
+            Issue.record("Expected resumed history")
+            return
+        }
+        #expect(text.value == "resumed history")
+        await manager.detach(sessionId: session.id)
+    }
+
     @Test("imported sessions resume after their history has been persisted locally")
     func importedSessionWithLocalHistoryUsesResume() async throws {
         let (manager, store, client, session) = try fixture(
