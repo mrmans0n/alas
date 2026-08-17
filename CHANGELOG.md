@@ -6,6 +6,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.15] - 2026-08-18
+
+### ✨ Features
+
+- Render invisible and warning characters in the code editor (#1041).
+
+### 🐛 Fixes
+
+- Resume imported ACP sessions when loading the original session fails (#1039).
+- Keep the remote address picker compact (#1038).
+- Restore Kotlin syntax highlighting (#1037).
+
+### 🏗️ Internal
+
+- Remove the hidden Missions feature and its supporting runtime (#1040).
+- Update Ghostty cache guidance.
+
 ## [0.14.14] - 2026-08-15
 
 ### ✨ Features
