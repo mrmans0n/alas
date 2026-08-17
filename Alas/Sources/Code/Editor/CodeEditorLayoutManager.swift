@@ -30,6 +30,12 @@ final class CodeEditorLayoutManager: NSLayoutManager {
         invalidateDisplay(forCharacterRange: NSRange(location: 0, length: textStorage?.length ?? 0))
     }
 
+    func disableRendering() {
+        guard configuration != nil else { return }
+        configuration = nil
+        invalidateDisplay(forCharacterRange: NSRange(location: 0, length: textStorage?.length ?? 0))
+    }
+
     @MainActor func warningToolTip(at point: NSPoint, in textView: NSTextView) -> String? {
         guard let configuration, configuration.showWarningCharacters,
               let container = textView.textContainer else { return nil }
