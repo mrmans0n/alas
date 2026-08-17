@@ -52,7 +52,8 @@ struct CodePane: View {
                     SettingsRow(name: "Tabs") { AlasToggle(on: state.bind(\.code.showTabs)).disabled(!state.config.code.showInvisibleCharacters) }
                     SettingsRow(name: "Line Endings") { AlasToggle(on: state.bind(\.code.showLineEndings)).disabled(!state.config.code.showInvisibleCharacters) }
                     SettingsRow(name: "Show Warning Characters") {
-                        HStack { AlasToggle(on: state.bind(\.code.showWarningCharacters)); AlasButton(title: "Configure…", style: .subtle) { warningCharactersVisible = true }.disabled(!state.config.code.showWarningCharacters) }
+                        HStack { AlasToggle(on: state.bind(\.code.showWarningCharacters))
+                        AlasButton(title: "Configure…", style: .subtle) { warningCharactersVisible = true }.disabled(!state.config.code.showWarningCharacters) }
                     }
                 }
 

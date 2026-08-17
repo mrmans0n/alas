@@ -60,11 +60,15 @@ final class CodeEditorLayoutManager: NSLayoutManager {
             let glyph = glyphIndexForCharacter(at: range.location)
             let rect = boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: textContainers.first!).offsetBy(dx: origin.x, dy: origin.y)
             if configuration.showWarningCharacters, let warning = warnings[scalar.value] {
-                NSColor.systemRed.withAlphaComponent(0.28).setFill(); rect.insetBy(dx: 1, dy: 1).fill()
+                NSColor.systemRed.withAlphaComponent(0.28).setFill()
+                rect.insetBy(dx: 1, dy: 1).fill()
                 _ = warning
             } else if configuration.showInvisibleCharacters {
                 let marker: String?
-                switch scalar.value { case 0x20 where configuration.showSpaces: marker = "·"; case 0x09 where configuration.showTabs: marker = "→"; case 0x0A where configuration.showLineEndings: marker = "↵"; default: marker = nil }
+                switch scalar.value { case 0x20 where configuration.showSpaces: marker = "·"
+                case 0x09 where configuration.showTabs: marker = "→"
+                case 0x0A where configuration.showLineEndings: marker = "↵"
+                default: marker = nil }
                 if let marker { marker.draw(at: NSPoint(x: rect.minX, y: rect.minY), withAttributes: [.font: textStorage?.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont ?? .monospacedSystemFont(ofSize: 13, weight: .regular), .foregroundColor: markerColor]) }
             }
         }
