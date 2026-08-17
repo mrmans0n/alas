@@ -156,6 +156,7 @@ struct EditorTabView: View {
                     fontFamily: appState.config.code.fontFamily,
                     fontSize: appState.config.code.fontSize,
                     showLineNumbers: appState.config.code.showLineNumbers,
+                    textRendering: CodeEditorTextRenderingConfiguration(code: appState.config.code),
                     onTextViewAttached: { attachFindController(to: $0) },
                     onTextViewDetached: { detachFindController(from: $0) }
                 )

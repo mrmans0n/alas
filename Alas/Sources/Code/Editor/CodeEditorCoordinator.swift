@@ -22,6 +22,7 @@ final class CodeEditorCoordinator {
     private var currentWorktreeId: String?
 
     var tabId: TabID? { currentTabId }
+    var currentBufferReadOnly: Bool { buffer?.readOnly ?? true }
     private var currentRoot: URL?
     private var currentRelativePath: String?
     private var currentLanguage: String?

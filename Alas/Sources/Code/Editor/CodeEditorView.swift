@@ -127,6 +127,7 @@ struct CodeEditorView: NSViewRepresentable {
     let fontFamily: String
     let fontSize: Int
     let showLineNumbers: Bool
+    let textRendering: CodeEditorTextRenderingConfiguration
     var onTextViewAttached: (CodeTextView) -> Void = { _ in }
     var onTextViewDetached: (CodeTextView?) -> Void = { _ in }
     @Environment(\.theme) var theme
@@ -182,7 +183,7 @@ struct CodeEditorView: NSViewRepresentable {
         // storage<->layoutManager binding (see `bindBuffer`) so that swapping
         // buffers across tab switches can rebind onto the new storage; we
         // pass an unattached layout manager here.
-        let layoutManager = NSLayoutManager()
+        let layoutManager = CodeEditorLayoutManager()
         let containerSize = NSSize(
             width: CGFloat.greatestFiniteMagnitude,
             height: CGFloat.greatestFiniteMagnitude
@@ -205,6 +206,7 @@ struct CodeEditorView: NSViewRepresentable {
         textView.isHorizontallyResizable = true
         textView.isVerticallyResizable = true
         textView.autoresizingMask = []
+        configureTextRendering(on: textView, layoutManager: layoutManager, theme: theme, rendersTextDecorations: !buffer.readOnly)
 
         scroll.documentView = textView
         configureLineNumberRuler(for: scroll, textView: textView)
@@ -248,6 +250,12 @@ struct CodeEditorView: NSViewRepresentable {
 
         if let textView = nsView.documentView as? CodeTextView {
             configureLineNumberRuler(for: nsView, textView: textView)
+            configureTextRendering(
+                on: textView,
+                layoutManager: textView.layoutManager,
+                theme: theme,
+                rendersTextDecorations: !context.coordinator.currentBufferReadOnly
+            )
         }
     }
 
@@ -270,6 +278,25 @@ struct CodeEditorView: NSViewRepresentable {
             DispatchQueue.main.async {
                 onTextViewDetached(textView)
             }
+        }
+    }
+
+    private func configureTextRendering(on textView: CodeTextView, layoutManager: NSLayoutManager?, theme: Theme, rendersTextDecorations: Bool) {
+        guard let layoutManager = layoutManager as? CodeEditorLayoutManager else {
+            textView.warningToolTipProvider = nil
+            return
+        }
+
+        guard rendersTextDecorations else {
+            layoutManager.disableRendering()
+            textView.warningToolTipProvider = nil
+            return
+        }
+
+        layoutManager.update(configuration: textRendering, theme: theme)
+        textView.warningToolTipProvider = { [weak layoutManager, weak textView] point in
+            guard let layoutManager, let textView else { return nil }
+            return layoutManager.warningToolTip(at: point, in: textView)
         }
     }
 

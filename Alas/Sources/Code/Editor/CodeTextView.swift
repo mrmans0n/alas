@@ -25,6 +25,8 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     var escapeHandler: (() -> Bool)?
     var completionKeyHandler: ((CompletionKeyAction) -> Bool)?
     var indentationMode: IndentationMode = .plain
+    var warningToolTipProvider: ((NSPoint) -> String?)? { didSet { refreshWarningToolTip() } }
+    private var warningToolTipTag: NSView.ToolTipTag?
 
     var autoPairDisabled: Bool = false
 
@@ -78,6 +80,20 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        refreshWarningToolTip()
+    }
+
+    private func refreshWarningToolTip() {
+        if let warningToolTipTag { removeToolTip(warningToolTipTag) }
+        warningToolTipTag = warningToolTipProvider == nil ? nil : addToolTip(bounds, owner: self, userData: nil)
+    }
+
+    func view(_ view: NSView, stringForToolTip tag: NSView.ToolTipTag, point: NSPoint, userData data: UnsafeMutableRawPointer?) -> String {
+        warningToolTipProvider?(point) ?? ""
+    }
 
     // MARK: - Multi-cursor editing
 
@@ -692,6 +708,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
+        refreshWarningToolTip()
         for area in trackingAreas { removeTrackingArea(area) }
         let area = NSTrackingArea(
             rect: bounds,

@@ -297,10 +297,18 @@ struct AppConfig: Codable, Equatable {
         var languageServers: [LanguageServerConfig]
         var dismissedInstallNudges: [String]
         var userDefinedRecipes: [String: [InstallRecipe]]
+        var showInvisibleCharacters: Bool = false
+        var showSpaces: Bool = true
+        var showTabs: Bool = true
+        var showLineEndings: Bool = true
+        var showWarningCharacters: Bool = true
+        var warningCharacters: [WarningCharacter] = WarningCharacter.defaults
 
         enum CodingKeys: String, CodingKey {
             case fontFamily, fontSize, formatOnSave, showLineNumbers,
-                 languageServers, dismissedInstallNudges, userDefinedRecipes
+                 languageServers, dismissedInstallNudges, userDefinedRecipes,
+                 showInvisibleCharacters, showSpaces, showTabs, showLineEndings,
+                 showWarningCharacters, warningCharacters
         }
     }
 
@@ -655,6 +663,23 @@ extension AppConfig {
             let servers = (try? codeContainer.decode([LanguageServerConfig].self, forKey: .languageServers)) ?? []
             let dismissed = (try? codeContainer.decode([String].self, forKey: .dismissedInstallNudges)) ?? []
             let userRecipes = (try? codeContainer.decode([String: [InstallRecipe]].self, forKey: .userDefinedRecipes)) ?? [:]
+            let showInvisibleCharacters = (try? codeContainer.decode(Bool.self, forKey: .showInvisibleCharacters)) ?? false
+            let showSpaces = (try? codeContainer.decode(Bool.self, forKey: .showSpaces)) ?? true
+            let showTabs = (try? codeContainer.decode(Bool.self, forKey: .showTabs)) ?? true
+            let showLineEndings = (try? codeContainer.decode(Bool.self, forKey: .showLineEndings)) ?? true
+            let showWarningCharacters = (try? codeContainer.decode(Bool.self, forKey: .showWarningCharacters)) ?? true
+            let warningCharacters: [WarningCharacter]
+            if var warnings = try? codeContainer.nestedUnkeyedContainer(forKey: .warningCharacters) {
+                var decoded: [WarningCharacter] = []
+                while !warnings.isAtEnd {
+                    if let decoder = try? warnings.superDecoder(), let warning = try? WarningCharacter(from: decoder) {
+                        decoded.append(warning)
+                    }
+                }
+                warningCharacters = WarningCharacter.sanitized(decoded)
+            } else {
+                warningCharacters = WarningCharacter.defaults
+            }
             code = Code(
                 fontFamily: fontFamily,
                 fontSize: fontSize,
@@ -662,7 +687,13 @@ extension AppConfig {
                 showLineNumbers: showLineNumbers,
                 languageServers: servers,
                 dismissedInstallNudges: dismissed,
-                userDefinedRecipes: userRecipes
+                userDefinedRecipes: userRecipes,
+                showInvisibleCharacters: showInvisibleCharacters,
+                showSpaces: showSpaces,
+                showTabs: showTabs,
+                showLineEndings: showLineEndings,
+                showWarningCharacters: showWarningCharacters,
+                warningCharacters: warningCharacters
             )
         } else {
             code = Code(

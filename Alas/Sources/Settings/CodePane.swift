@@ -7,6 +7,7 @@ struct CodePane: View {
     @State private var selected: LanguageServerConfig?
     @State private var creatingNew = false
     @State private var installSheetVisible = false
+    @State private var warningCharactersVisible = false
 
     var body: some View {
         ScrollView {
@@ -40,6 +41,19 @@ struct CodePane: View {
                     SettingsRow(name: "Format on save",
                                 desc: "Request document formatting from the language server before writing to disk.") {
                         AlasToggle(on: state.bind(\.code.formatOnSave))
+                    }
+                }
+
+                SettingsGroup(title: "Text Rendering") {
+                    SettingsRow(name: "Show Invisible Characters") {
+                        AlasToggle(on: state.bind(\.code.showInvisibleCharacters))
+                    }
+                    SettingsRow(name: "Spaces") { AlasToggle(on: state.bind(\.code.showSpaces)).disabled(!state.config.code.showInvisibleCharacters) }
+                    SettingsRow(name: "Tabs") { AlasToggle(on: state.bind(\.code.showTabs)).disabled(!state.config.code.showInvisibleCharacters) }
+                    SettingsRow(name: "Line Endings") { AlasToggle(on: state.bind(\.code.showLineEndings)).disabled(!state.config.code.showInvisibleCharacters) }
+                    SettingsRow(name: "Show Warning Characters") {
+                        HStack { AlasToggle(on: state.bind(\.code.showWarningCharacters))
+                        AlasButton(title: "Configure…", style: .subtle) { warningCharactersVisible = true }.disabled(!state.config.code.showWarningCharacters) }
                     }
                 }
 
@@ -89,6 +103,9 @@ struct CodePane: View {
                 onSave: { saved, recipes in save(originalLanguage: nil, saved, recipes: recipes) },
                 onCancel: { creatingNew = false }
             )
+        }
+        .sheet(isPresented: $warningCharactersVisible) {
+            WarningCharactersSheet(warnings: state.bind(\.code.warningCharacters))
         }
         .sheet(isPresented: $installSheetVisible, onDismiss: {
             // Interactive dismiss (Escape, click-out) bypasses the sheet's
