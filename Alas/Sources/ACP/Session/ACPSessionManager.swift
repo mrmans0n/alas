@@ -3397,25 +3397,77 @@ extension ACPSessionManager {
                         }
                     }
                 case .loadStrict:
-                    do {
-                        result = try await connection.loadSession(
+                    let loadOperationKey = Self.brokerStartupOperationKey(
+                        sessionId: sessionId,
+                        method: "session/load",
+                        remoteSessionId: remoteId
+                    )
+                    func resumeAfterLoadFailure(_ error: any Error) async throws
+                        -> ACPSessionNewResult {
+                        guard initialized.sessionCapabilities.supportsResume,
+                              ACPAuthFailure.message(from: error) == nil
+                        else { throw error }
+                        return try await connection.resumeSession(
                             cwd: worktreePath,
                             sessionId: remoteId,
                             mcpServers: wireMCPServers,
                             brokerOperationKey: Self.brokerStartupOperationKey(
                                 sessionId: sessionId,
-                                method: "session/load",
+                                method: "session/resume",
                                 remoteSessionId: remoteId
                             )
                         )
+                    }
+                    func suppressFailedLoadReplayIfNeeded() {
+                        guard !shouldSuppressLoadReplay else { return }
+                        let target = connection.client.yieldedUpdateCount
+                        guard target > 0 else { return }
+                        runner.suppressLoadReplay(throughYieldedUpdateCount: target)
+                        startRunnerIfNeeded()
+                    }
+                    func restoreStrictly() async throws -> (ACPSessionNewResult, resumed: Bool) {
+                        do {
+                            return (try await connection.loadSession(
+                                cwd: worktreePath,
+                                sessionId: remoteId,
+                                mcpServers: wireMCPServers,
+                                brokerOperationKey: loadOperationKey
+                            ), false)
+                        } catch {
+                            suppressFailedLoadReplayIfNeeded()
+                            guard error is ACPBrokerDurableCompletionReplayError else {
+                                return (try await resumeAfterLoadFailure(error), true)
+                            }
+                        }
+                        do {
+                            // Reusing the stable key recovers successful results and lets
+                            // ACPBrokerClient consume terminal completion cursors.
+                            return (try await connection.loadSession(
+                                cwd: worktreePath,
+                                sessionId: remoteId,
+                                mcpServers: wireMCPServers,
+                                brokerOperationKey: loadOperationKey
+                            ), false)
+                        } catch {
+                            guard !(error is ACPBrokerDurableCompletionReplayError) else {
+                                throw error
+                            }
+                            suppressFailedLoadReplayIfNeeded()
+                            return (try await resumeAfterLoadFailure(error), true)
+                        }
+                    }
+                    let restored = try await restoreStrictly()
+                    result = restored.0
+                    if restored.resumed {
+                        restoreWarning = .init(
+                            message: "Earlier messages remain in the agent and are not available in Alas.",
+                            canSendTranscript: false
+                        )
+                    }
+                    if shouldSuppressLoadReplay {
                         runner.finishSuppressingLoadReplay(
                             throughYieldedUpdateCount: connection.client.yieldedUpdateCount
                         )
-                    } catch {
-                        runner.finishSuppressingLoadReplay(
-                            throughYieldedUpdateCount: connection.client.yieldedUpdateCount
-                        )
-                        throw error
                     }
                     if !pendingRecovery {
                         session.contextRecoveryStatus = nil

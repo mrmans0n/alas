@@ -638,6 +638,15 @@ final class ACPSessionRunner {
     }
     #endif
 
+    func suppressLoadReplay(throughYieldedUpdateCount target: Int) {
+        guard target > observedUpdateCount else { return }
+        if !suppressingLoadReplay {
+            suppressingLoadReplay = true
+            session.beginSuppressedReplaySideEffects()
+        }
+        loadReplaySuppressionTarget = max(loadReplaySuppressionTarget ?? 0, target)
+    }
+
     func finishSuppressingLoadReplay(throughYieldedUpdateCount target: Int) {
         guard suppressingLoadReplay else { return }
         loadReplaySuppressionTarget = target
