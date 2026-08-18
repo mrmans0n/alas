@@ -218,15 +218,18 @@ struct StartupRecoveryTests {
 
         #expect(!CenterPaneView.shouldCompleteStartupRecoveryForCenterPane(
             activeTab: terminal,
-            readyTabID: nil
+            readyKey: nil,
+            currentKey: "terminal\u{0}snapshot-1"
         ))
         #expect(CenterPaneView.shouldCompleteStartupRecoveryForCenterPane(
             activeTab: terminal,
-            readyTabID: "terminal"
+            readyKey: "terminal\u{0}snapshot-1",
+            currentKey: "terminal\u{0}snapshot-1"
         ))
         #expect(!CenterPaneView.shouldCompleteStartupRecoveryForCenterPane(
             activeTab: terminal,
-            readyTabID: "other"
+            readyKey: "terminal\u{0}snapshot-1",
+            currentKey: "terminal\u{0}snapshot-2"
         ))
     }
 

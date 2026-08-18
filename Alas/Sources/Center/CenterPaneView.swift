@@ -84,7 +84,7 @@ struct CenterPaneView: View {
     let worktree: Worktree
     var allowsPaneFocus: Bool = true
     @Environment(\.theme) var theme
-    @State private var startupRecoveryReadyTabID: TabID?
+    @State private var startupRecoveryReadyKey: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -621,7 +621,11 @@ struct CenterPaneView: View {
             completeStartupRecoveryIfPaneIsStable()
         }
         .onChange(of: state.tabs.activeTabId(forWorktree: worktree.id)) { _, _ in
-            startupRecoveryReadyTabID = nil
+            startupRecoveryReadyKey = nil
+            completeStartupRecoveryIfPaneIsStable()
+        }
+        .onChange(of: startupRecoveryActiveKey) { _, _ in
+            startupRecoveryReadyKey = nil
             completeStartupRecoveryIfPaneIsStable()
         }
         .onChange(of: rightPaneStartupRecoveryReady) { _, _ in
@@ -641,7 +645,8 @@ struct CenterPaneView: View {
         )
         guard Self.shouldCompleteStartupRecoveryForCenterPane(
             activeTab: composition.activeTab,
-            readyTabID: startupRecoveryReadyTabID
+            readyKey: startupRecoveryReadyKey,
+            currentKey: startupRecoveryActiveKey
         ) else { return }
         guard rightPaneStartupRecoveryReady else { return }
         state.completeStartupRecovery()
@@ -666,9 +671,10 @@ struct CenterPaneView: View {
 
     static func shouldCompleteStartupRecoveryForCenterPane(
         activeTab: Tab?,
-        readyTabID: TabID?
+        readyKey: String?,
+        currentKey: String?
     ) -> Bool {
-        StartupRecoveryPaneCompletionPolicy.shouldComplete(activeTab: activeTab) || activeTab?.id == readyTabID
+        StartupRecoveryPaneCompletionPolicy.shouldComplete(activeTab: activeTab) || (readyKey != nil && readyKey == currentKey)
     }
 
     static func shouldCompleteGGSplitStartupRecoveryWhenUnavailable(
@@ -686,9 +692,18 @@ struct CenterPaneView: View {
             activeWorktreeTabId: state.tabs.activeTabId(forWorktree: worktree.id)
         )
         guard composition.activeId == tabID else { return }
-        startupRecoveryReadyTabID = tabID
+        startupRecoveryReadyKey = startupRecoveryActiveKey
         guard rightPaneStartupRecoveryReady else { return }
         state.completeStartupRecovery()
+    }
+
+    private var startupRecoveryActiveKey: String? {
+        guard let tabID = state.tabs.activeTabId(forWorktree: worktree.id) else { return nil }
+        return [
+            tabID,
+            state.rightPaneStore.activeState(worktreeId: worktree.id)
+                .map(ReviewChangesLoadKey.fingerprint) ?? "no-right-pane-state",
+        ].joined(separator: "\u{0}")
     }
 
     private var rightPaneActivationKey: String {
