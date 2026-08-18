@@ -66,6 +66,12 @@ struct EditorBufferExternalEditableTests {
         ))
     }
 
+    @Test func editorBinaryPlaceholderCoversStartupRecoveryReadiness() {
+        #expect(EditorTabView.isBinary(loadKind: .notUTF8))
+        #expect(!EditorTabView.isBinary(loadKind: .loaded))
+        #expect(!EditorTabView.isBinary(loadKind: nil))
+    }
+
     /// Regression test for the Task-9 critical fix: `CodeEditorCoordinator`
     /// computes `textView.isEditable` as `!buffer.isExternal || !buffer.readOnly`
     /// so that non-external buffers (e.g. remote in-worktree files whose
