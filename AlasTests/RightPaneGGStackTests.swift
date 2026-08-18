@@ -777,6 +777,10 @@ struct RightPaneGGStackTests {
         first.cancel()
         await first.value
 
+        #expect(state.ggStackLoadState == .loaded)
+        #expect(state.ggStackDisplayCommits.count == 3)
+        #expect(state.ggStackRemoteEnrichmentPending)
+
         await state.refreshGGStack()
 
         #expect(runner.calls == [
@@ -788,6 +792,34 @@ struct RightPaneGGStackTests {
         #expect(state.ggStackDisplayCommits.count == 3)
         #expect(state.ggStackRemoteError == "remote unavailable")
         #expect(!state.ggStackRemoteEnrichmentPending)
+    }
+
+    @Test func cancelledRemoteEnrichmentKeepsPublishedEmptyStack() async throws {
+        let runner = LocalFirstGGRunner()
+        runner.delaysRemote = true
+        runner.localJSON = GGStackClassificationFixture.nilStack.json
+        let state = makeState()
+        state.ggService = GGService(runner: runner)
+        state.ggCapabilities = {
+            GGCapabilities(
+                structuredSplit: false,
+                keepCurrentUnstack: false,
+                localStackSnapshot: true
+            )
+        }
+        state.ggContextProvider = { _ in .active(stackName: "agent-inbox") }
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "a", count: 40), stackShaped: true)]
+
+        let refresh = Task { @MainActor in await state.refreshGGStack() }
+        for _ in 0..<500 where runner.calls.count < 2 {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        refresh.cancel()
+        await refresh.value
+
+        #expect(state.ggStackLoadState == .empty)
+        #expect(state.ggStackDisplayCommits.isEmpty)
+        #expect(state.ggStackRemoteEnrichmentPending)
     }
 
     @Test func manualRetryPreservesCachedMetadataWhenRemoteFailsAgain() async {
@@ -2146,7 +2178,9 @@ struct RightPaneGGStackTests {
             await state.refreshGGStack(forceRemote: true)
         }
         await runner.waitUntilCall(2)
-        #expect(state.ggStackLoadState == .loading)
+        #expect(state.ggStackLoadState == .loaded)
+        #expect(state.ggStack?.name == "agent-inbox")
+        #expect(state.ggStackDisplayCommits == stableDisplayCommits)
 
         refresh.cancel()
         await runner.complete(call: 2)
@@ -2160,6 +2194,53 @@ struct RightPaneGGStackTests {
         #expect(state.ggStackDisplayCommits.allSatisfy { $0.subject == "stable hydration" })
         #expect(hydrationInvocation == 2)
         #expect(GGStackSummaryStore.shared.summaries[worktree.path.path] == stableSummary)
+    }
+
+    @Test func successfulSameKeyRetryClearsRemoteError() async {
+        let worktree = makeWorktree()
+        let result = ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
+        let runner = ControlledStackGGRunner(
+            stackResults: [
+                ("agent-inbox", result),
+                ("agent-inbox", ProcessResult(exitCode: 1, stdout: "", stderr: "remote unavailable")),
+                ("agent-inbox", result),
+            ],
+            suspendedCalls: []
+        )
+        let state = makeState(worktree: worktree)
+        state.ggService = GGService(runner: runner)
+        state.ggContextProvider = { _ in .active(stackName: "agent-inbox") }
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "q", count: 40), stackShaped: true)]
+
+        await state.refreshGGStack()
+        await state.refreshGGStack(forceRemote: true)
+        #expect(state.ggStackRemoteError == "remote unavailable")
+
+        await state.refreshGGStack(forceRemote: true)
+        #expect(state.ggStackRemoteError == nil)
+    }
+
+    @Test func sameKeyEmptyRefreshFailureBecomesRetryableFailure() async {
+        let worktree = makeWorktree()
+        let emptyResult = ProcessResult(exitCode: 0, stdout: GGStackClassificationFixture.nilStack.json, stderr: "")
+        let runner = ControlledStackGGRunner(
+            stackResults: [
+                ("agent-inbox", emptyResult),
+                ("agent-inbox", ProcessResult(exitCode: 1, stdout: "", stderr: "remote unavailable")),
+            ],
+            suspendedCalls: []
+        )
+        let state = makeState(worktree: worktree)
+        state.ggService = GGService(runner: runner)
+        state.ggContextProvider = { _ in .active(stackName: "agent-inbox") }
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "q", count: 40), stackShaped: true)]
+
+        await state.refreshGGStack()
+        #expect(state.ggStackLoadState == .empty)
+
+        await state.refreshGGStack(forceRemote: true)
+        #expect(state.ggStackLoadState == .failed("remote unavailable"))
+        #expect(state.ggStackRemoteError == nil)
     }
 
     @Test func cancelledRefreshWithChangedLiveKeyDoesNotRestorePreviousStack() async {

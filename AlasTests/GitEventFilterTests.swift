@@ -148,7 +148,6 @@ struct GitEventFilterTests {
 
     @Test func pseudoRefsAcceptedByRevisionResolverAreRevisionChanges() {
         let cases = [
-            "FETCH_HEAD",
             "REBASE_HEAD",
             "MERGE_HEAD",
             "CHERRY_PICK_HEAD",
@@ -163,6 +162,16 @@ struct GitEventFilterTests {
                 worktreeRoot: worktreeRoot
             ) == .revisionChange)
         }
+    }
+
+    @Test func fetchHeadIsATransientRevisionChange() {
+        let gitDir = URL(fileURLWithPath: "/repo/.git")
+        let worktreeRoot = URL(fileURLWithPath: "/repo")
+        #expect(GitEventFilter.classify(
+            eventPath: gitDir.appendingPathComponent("FETCH_HEAD").path,
+            gitDir: gitDir,
+            worktreeRoot: worktreeRoot
+        ) == .transientRevisionChange)
     }
 
     @Test func topLevelSymbolicRevisionIsRevisionChange() throws {
@@ -216,7 +225,7 @@ struct GitEventFilterTests {
             eventPath: "/repo/.git/worktrees/feat/FETCH_HEAD",
             gitDir: gitDir,
             worktreeRoot: worktreeRoot
-        ) == .revisionChange)
+        ) == .transientRevisionChange)
     }
 
     @Test func linkedWorktreeConfigAndReflogsAreRevisionChanges() {
