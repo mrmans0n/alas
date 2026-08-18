@@ -466,13 +466,13 @@ final class EditorBuffer {
             checkForConflictOnRestore()
         }
         onEdit { [weak self] in self?.scheduleSnapshot() }
+        initialLoadFinished = true
         // Notify any already-attached coordinator that content has arrived
         // so it can re-apply base style (font/color) to the freshly loaded
         // storage. Without this, bindBuffer's applyBaseStyle ran against
         // empty storage and the loadFromDisk setAttributedString wiped
         // everything, leaving the text view unstyled.
         handleEdit(edit: nil)
-        initialLoadFinished = true
         openLSPDocumentIfReady()
         onInitialLoadFinished?()
     }
@@ -651,11 +651,11 @@ final class EditorBuffer {
         if let edit, markUserEditDuringLoadIfNeeded(edit) {
             return
         }
-        // Read-only external buffers suppress all observer notifications so
-        // didChange is never propagated to LSP or snapshot scheduling. The
-        // explicitly editable external buffers used by run scripts still need
-        // this invalidation path for their dirty indicator and Save All state.
-        guard !isExternal || externalEditable else { return }
+        // Read-only external buffers suppress real edit notifications so
+        // didChange is never propagated to LSP or snapshot scheduling. Nil
+        // notifications are load/reload signals; views still need those to
+        // render and mark startup recovery complete after disk content arrives.
+        guard !isExternal || externalEditable || edit == nil else { return }
         editGeneration &+= 1
         let snapshot = Array(editObservers.values)
         for block in snapshot { block(edit) }

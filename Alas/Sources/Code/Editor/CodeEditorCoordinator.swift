@@ -691,6 +691,7 @@ final class CodeEditorCoordinator {
 
     private func makeLSPDidChangePayload(edits: [EditorTextEdit]? = nil) -> LSPDidChangePayload? {
         guard let buffer, let language = currentLanguage else { return nil }
+        guard !buffer.isExternal else { return nil }
         let url = buffer.worktreeRoot.appendingPathComponent(buffer.relativePath)
         return LSPDidChangePayload(
             worktreeRoot: buffer.worktreeRoot,
