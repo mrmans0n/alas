@@ -386,6 +386,7 @@ struct CenterPaneView: View {
                             appState: state,
                             codeFontFamily: state.config.code.fontFamily,
                             codeFontSize: CGFloat(state.config.code.fontSize),
+                            onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) },
                             onOpenFile: openAvailable
                                 ? { state.openFile(relativePath: s.relativePath, worktreeId: worktree.id) }
                                 : nil,
