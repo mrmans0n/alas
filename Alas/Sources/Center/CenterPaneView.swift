@@ -556,8 +556,12 @@ struct CenterPaneView: View {
                                 capabilities: capabilities,
                                 workflowAvailable: workflowAvailable,
                                 hasBlockingGitOperation: hasBlockingGitOperation,
-                                completesStartupRecoveryWhenUnavailable: rightPaneState.hasLoadedSnapshot
-                                    && rightPaneState.ggStackLoadState != .loading,
+                                completesStartupRecoveryWhenUnavailable: Self
+                                    .shouldCompleteGGSplitStartupRecoveryWhenUnavailable(
+                                        hasLoadedSnapshot: rightPaneState.hasLoadedSnapshot,
+                                        ggStackLoadState: rightPaneState.ggStackLoadState,
+                                        ggAvailabilityHasProbed: GGAvailability.shared.hasProbed
+                                    ),
                                 initialDraft: state.tabs.ggSplitCommitDraft(worktreeId: worktree.id, tabId: s.id),
                                 codeFontFamily: state.config.code.fontFamily,
                                 codeFontSize: CGFloat(state.config.code.fontSize),
@@ -632,6 +636,14 @@ struct CenterPaneView: View {
         )
         guard StartupRecoveryPaneCompletionPolicy.shouldComplete(activeTab: composition.activeTab) else { return }
         state.completeStartupRecovery()
+    }
+
+    static func shouldCompleteGGSplitStartupRecoveryWhenUnavailable(
+        hasLoadedSnapshot: Bool,
+        ggStackLoadState: GGStackLoadState,
+        ggAvailabilityHasProbed: Bool
+    ) -> Bool {
+        hasLoadedSnapshot && ggAvailabilityHasProbed && ggStackLoadState != .loading
     }
 
     private func completeStartupRecoveryIfActive(_ tabID: TabID) {

@@ -171,4 +171,22 @@ struct StartupRecoveryTests {
         #expect(!StartupRecoveryPaneCompletionPolicy.shouldComplete(activeTab: ggInbox))
         #expect(StartupRecoveryPaneCompletionPolicy.shouldComplete(activeTab: nil))
     }
+
+    @Test func ggSplitUnavailableRecoveryWaitsForAvailabilityProbe() {
+        #expect(!CenterPaneView.shouldCompleteGGSplitStartupRecoveryWhenUnavailable(
+            hasLoadedSnapshot: true,
+            ggStackLoadState: .inactive,
+            ggAvailabilityHasProbed: false
+        ))
+        #expect(CenterPaneView.shouldCompleteGGSplitStartupRecoveryWhenUnavailable(
+            hasLoadedSnapshot: true,
+            ggStackLoadState: .inactive,
+            ggAvailabilityHasProbed: true
+        ))
+        #expect(!CenterPaneView.shouldCompleteGGSplitStartupRecoveryWhenUnavailable(
+            hasLoadedSnapshot: true,
+            ggStackLoadState: .loading,
+            ggAvailabilityHasProbed: true
+        ))
+    }
 }
