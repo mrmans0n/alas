@@ -60,6 +60,17 @@ struct CenterTabClosurePlan {
     }
 }
 
+enum StartupRecoveryPaneCompletionPolicy {
+    static func shouldComplete(activeTab: Tab?) -> Bool {
+        switch activeTab {
+        case .terminal, .acpSession:
+            false
+        default:
+            true
+        }
+    }
+}
+
 struct CenterPaneView: View {
     @Bindable var state: AppState
     let worktree: Worktree
@@ -563,19 +574,22 @@ struct CenterPaneView: View {
             }
         }
         .onAppear {
-            if state.tabs.hasLoaded {
-                state.completeStartupRecovery()
-            }
+            completeStartupRecoveryIfPaneIsStable()
         }
-        .onChange(of: state.tabs.hasLoaded) { _, hasLoaded in
-            if hasLoaded {
-                state.completeStartupRecovery()
-            }
+        .onChange(of: state.tabs.hasLoaded) { _, _ in
+            completeStartupRecoveryIfPaneIsStable()
         }
         .background(theme.color("bg-1"))
         .sheet(item: $state.selectedRunScriptFailure) { failure in
             RunScriptFailureDetailView(failure: failure)
         }
+    }
+
+    private func completeStartupRecoveryIfPaneIsStable() {
+        guard state.tabs.hasLoaded else { return }
+        let activeTab = state.tabs.activeTab(forWorktree: worktree.id)
+        guard StartupRecoveryPaneCompletionPolicy.shouldComplete(activeTab: activeTab) else { return }
+        state.completeStartupRecovery()
     }
 
     private var rightPaneActivationKey: String {

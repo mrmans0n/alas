@@ -32,6 +32,7 @@ struct TerminalTabView: View {
         }
         .task(id: tabId) {
             _ = try? await state.restoreTerminalTabIfNeededAsync(worktreeId: worktreeId, tabId: tabId)
+            state.completeStartupRecovery()
         }
         .background(theme.color("bg-0"))
     }

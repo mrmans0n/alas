@@ -156,6 +156,7 @@ private struct ACPSessionView: View {
         }
         .task(id: sessionId) {
             await hydrateAndAttach()
+            state.completeStartupRecovery()
         }
         .onExitCommand {
             handleEscape()

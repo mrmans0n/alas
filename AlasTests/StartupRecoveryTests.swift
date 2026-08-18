@@ -135,4 +135,15 @@ struct StartupRecoveryTests {
 
         #expect(didFinish)
     }
+
+    @Test func asyncRestoredTabsDoNotCompleteRecoveryFromCenterPane() {
+        let terminal = Tab.terminal(.init(id: "terminal", title: "Terminal", sessionId: "terminal"))
+        let acp = Tab.acpSession(.init(sessionId: "acp", title: "ACP"))
+        let editor = Tab.editor(.init(id: "editor", title: "README.md", relativePath: "README.md"))
+
+        #expect(!StartupRecoveryPaneCompletionPolicy.shouldComplete(activeTab: terminal))
+        #expect(!StartupRecoveryPaneCompletionPolicy.shouldComplete(activeTab: acp))
+        #expect(StartupRecoveryPaneCompletionPolicy.shouldComplete(activeTab: editor))
+        #expect(StartupRecoveryPaneCompletionPolicy.shouldComplete(activeTab: nil))
+    }
 }
