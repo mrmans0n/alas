@@ -190,6 +190,29 @@ struct StartupRecoveryTests {
         ))
     }
 
+    @Test func startupRecoveryWaitsForVisibleRightPaneSnapshot() {
+        #expect(CenterPaneView.shouldCompleteStartupRecoveryForRightPane(
+            isRightPaneVisible: false,
+            hasLoadedSnapshot: false,
+            isLoading: true
+        ))
+        #expect(!CenterPaneView.shouldCompleteStartupRecoveryForRightPane(
+            isRightPaneVisible: true,
+            hasLoadedSnapshot: false,
+            isLoading: false
+        ))
+        #expect(!CenterPaneView.shouldCompleteStartupRecoveryForRightPane(
+            isRightPaneVisible: true,
+            hasLoadedSnapshot: true,
+            isLoading: true
+        ))
+        #expect(CenterPaneView.shouldCompleteStartupRecoveryForRightPane(
+            isRightPaneVisible: true,
+            hasLoadedSnapshot: true,
+            isLoading: false
+        ))
+    }
+
     @Test func commitEditorDiffTaskRerunsAfterDetailsSettle() {
         #expect(CommitEditorTabView.diffTaskKey(
             currentSha: "abc",

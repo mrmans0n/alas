@@ -622,6 +622,9 @@ struct CenterPaneView: View {
         .onChange(of: state.tabs.activeTabId(forWorktree: worktree.id)) { _, _ in
             completeStartupRecoveryIfPaneIsStable()
         }
+        .onChange(of: rightPaneStartupRecoveryReady) { _, _ in
+            completeStartupRecoveryIfPaneIsStable()
+        }
         .background(theme.color("bg-1"))
         .sheet(item: $state.selectedRunScriptFailure) { failure in
             RunScriptFailureDetailView(failure: failure)
@@ -635,7 +638,25 @@ struct CenterPaneView: View {
             activeWorktreeTabId: state.tabs.activeTabId(forWorktree: worktree.id)
         )
         guard StartupRecoveryPaneCompletionPolicy.shouldComplete(activeTab: composition.activeTab) else { return }
+        guard rightPaneStartupRecoveryReady else { return }
         state.completeStartupRecovery()
+    }
+
+    private var rightPaneStartupRecoveryReady: Bool {
+        let rightPaneState = state.rightPaneStore.activeState(worktreeId: worktree.id)
+        return Self.shouldCompleteStartupRecoveryForRightPane(
+            isRightPaneVisible: state.config.rightPaneVisible,
+            hasLoadedSnapshot: rightPaneState?.hasLoadedSnapshot ?? false,
+            isLoading: rightPaneState?.loading ?? false
+        )
+    }
+
+    static func shouldCompleteStartupRecoveryForRightPane(
+        isRightPaneVisible: Bool,
+        hasLoadedSnapshot: Bool,
+        isLoading: Bool
+    ) -> Bool {
+        !isRightPaneVisible || (hasLoadedSnapshot && !isLoading)
     }
 
     static func shouldCompleteGGSplitStartupRecoveryWhenUnavailable(
@@ -653,6 +674,7 @@ struct CenterPaneView: View {
             activeWorktreeTabId: state.tabs.activeTabId(forWorktree: worktree.id)
         )
         guard composition.activeId == tabID else { return }
+        guard rightPaneStartupRecoveryReady else { return }
         state.completeStartupRecovery()
     }
 
