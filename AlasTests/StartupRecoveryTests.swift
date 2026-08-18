@@ -271,4 +271,22 @@ struct StartupRecoveryTests {
             loadingDetails: false
         ))
     }
+
+    @Test func commitEditorReportsReadinessOnlyForCurrentDiffTask() {
+        #expect(CommitEditorTabView.shouldReportStartupRecoveryReady(
+            requestedDiffTaskKey: "sha:file:false",
+            currentDiffTaskKey: "sha:file:false",
+            isCancelled: false
+        ))
+        #expect(!CommitEditorTabView.shouldReportStartupRecoveryReady(
+            requestedDiffTaskKey: "sha:file:false",
+            currentDiffTaskKey: "next:file:false",
+            isCancelled: false
+        ))
+        #expect(!CommitEditorTabView.shouldReportStartupRecoveryReady(
+            requestedDiffTaskKey: "sha:file:false",
+            currentDiffTaskKey: "sha:file:false",
+            isCancelled: true
+        ))
+    }
 }

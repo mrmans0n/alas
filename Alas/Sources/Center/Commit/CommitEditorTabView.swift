@@ -62,6 +62,14 @@ struct CommitEditorTabView: View {
         "\(currentSha):\(selectedPath ?? ""):\(loadingDetails)"
     }
 
+    static func shouldReportStartupRecoveryReady(
+        requestedDiffTaskKey: String,
+        currentDiffTaskKey: String,
+        isCancelled: Bool
+    ) -> Bool {
+        !isCancelled && requestedDiffTaskKey == currentDiffTaskKey
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             if let details {
@@ -109,7 +117,13 @@ struct CommitEditorTabView: View {
         }
         .task(id: diffTaskKey) {
             guard !loadingDetails else { return }
+            let requestedDiffTaskKey = diffTaskKey
             await loadDiffIfNeeded()
+            guard Self.shouldReportStartupRecoveryReady(
+                requestedDiffTaskKey: requestedDiffTaskKey,
+                currentDiffTaskKey: diffTaskKey,
+                isCancelled: Task.isCancelled
+            ) else { return }
             onStartupRecoveryReady()
         }
         .confirmationDialog("Drop file from commit?", isPresented: Binding(
