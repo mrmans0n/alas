@@ -336,7 +336,8 @@ struct CenterPaneView: View {
                         TerminalTabView(state: state,
                                         worktreeId: worktree.id,
                                         tabId: tab.id,
-                                        allowsPaneFocus: allowsPaneFocus)
+                                        allowsPaneFocus: allowsPaneFocus,
+                                        onStartupRecoveryReady: { completeStartupRecoveryIfActive(tab.id) })
                     case .editor(let s):
                         if MarkdownFileType.supportsRichPreview(relativePath: s.isExternal
                                                                  ? (s.externalAbsolutePath ?? "")
@@ -353,7 +354,8 @@ struct CenterPaneView: View {
                                             revealCharacter: s.revealCharacter,
                                             revealRevision: s.revealRevision,
                                             appState: state,
-                                            onRevealInFiles: { path in state.revealInFiles(worktreeId: worktree.id, path: path) })
+                                            onRevealInFiles: { path in state.revealInFiles(worktreeId: worktree.id, path: path) },
+                                            onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) })
                         } else {
                             EditorTabView(worktree: worktree,
                                           worktreePath: worktree.path,
@@ -403,7 +405,7 @@ struct CenterPaneView: View {
                             state: s,
                             codeFontFamily: state.config.code.fontFamily,
                             codeFontSize: CGFloat(state.config.code.fontSize),
-                            onStartupRecoveryReady: { state.completeStartupRecovery() }
+                            onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) }
                         )
                         .id(s.id)
                     case .commit(let s):
@@ -472,7 +474,7 @@ struct CenterPaneView: View {
                         ImagePreviewTabView(worktreePath: worktree.path,
                                              relativePath: s.relativePath,
                                              onRevealInFiles: { path in state.revealInFiles(worktreeId: worktree.id, path: path) },
-                                             onStartupRecoveryReady: { state.completeStartupRecovery() })
+                                             onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) })
                     case .binaryPreview(let s):
                         BinaryPreviewTabView(worktreePath: worktree.path,
                                              relativePath: s.relativePath,
@@ -490,7 +492,7 @@ struct CenterPaneView: View {
                             state: s,
                             codeFontFamily: state.config.code.fontFamily,
                             codeFontSize: CGFloat(state.config.code.fontSize),
-                            onStartupRecoveryReady: { state.completeStartupRecovery() }
+                            onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) }
                         )
                     case .fileHistory(let s):
                         FileHistoryTabView(
@@ -498,7 +500,7 @@ struct CenterPaneView: View {
                             state: s,
                             onSelectCommit: { state.openCommitTab(worktreeId: worktree.id, commit: $0) },
                             onCopySHA: { Clipboard.copy($0.sha) },
-                            onStartupRecoveryReady: { state.completeStartupRecovery() }
+                            onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) }
                         )
                     case .acpSession(let s):
                         ACPTabView(sessionId: s.sessionId, state: state, worktree: worktree)
@@ -507,7 +509,7 @@ struct CenterPaneView: View {
                         GGInboxTabView(
                             state: state,
                             tabState: s,
-                            onStartupRecoveryReady: { state.completeStartupRecovery() }
+                            onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) }
                         )
                             .id(s.id)
                     case .ggSplitCommit(let s):
@@ -554,7 +556,7 @@ struct CenterPaneView: View {
                                         draft: draft
                                     )
                                 },
-                                onStartupRecoveryReady: { state.completeStartupRecovery() }
+                                onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) }
                             )
                             .id("\(s.id):\(capabilities.structuredSplit):\(workflowAvailable):\(hasBlockingGitOperation)")
                             .task(id: rightPaneActivationKey) {
@@ -614,6 +616,15 @@ struct CenterPaneView: View {
             activeWorktreeTabId: state.tabs.activeTabId(forWorktree: worktree.id)
         )
         guard StartupRecoveryPaneCompletionPolicy.shouldComplete(activeTab: composition.activeTab) else { return }
+        state.completeStartupRecovery()
+    }
+
+    private func completeStartupRecoveryIfActive(_ tabID: TabID) {
+        let composition = CenterTabComposition(
+            worktreeTabs: state.tabs.tabs(forWorktree: worktree.id),
+            activeWorktreeTabId: state.tabs.activeTabId(forWorktree: worktree.id)
+        )
+        guard composition.activeId == tabID else { return }
         state.completeStartupRecovery()
     }
 

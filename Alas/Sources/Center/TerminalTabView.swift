@@ -6,6 +6,7 @@ struct TerminalTabView: View {
     let worktreeId: String
     let tabId: TabID
     var allowsPaneFocus: Bool = true
+    var onStartupRecoveryReady: () -> Void = {}
 
     @Environment(\.theme) var theme
 
@@ -32,7 +33,7 @@ struct TerminalTabView: View {
         }
         .task(id: tabId) {
             _ = try? await state.restoreTerminalTabIfNeededAsync(worktreeId: worktreeId, tabId: tabId)
-            state.completeStartupRecovery()
+            onStartupRecoveryReady()
         }
         .background(theme.color("bg-0"))
     }

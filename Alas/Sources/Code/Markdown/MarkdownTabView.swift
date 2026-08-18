@@ -15,11 +15,13 @@ struct MarkdownTabView: View {
     let revealRevision: Int?
     @Bindable var appState: AppState
     let onRevealInFiles: (String) -> Void
+    var onStartupRecoveryReady: () -> Void = {}
     @Environment(\.theme) var theme
 
     @State private var renderCache = MarkdownPreviewCache<MarkdownRenderResult>()
     @State private var debounceTask: Task<Void, Never>?
     @State private var mermaidPreviewSource = ""
+    @State private var hasMermaidPreviewSource = false
 
     // Editor/preview divider drag: transient during the drag, committed to
     // the tab store (and disk) once on drag end.
@@ -192,7 +194,7 @@ struct MarkdownTabView: View {
             textRendering: CodeEditorTextRenderingConfiguration(code: appState.config.code),
             onInitialHighlightReady: {
                 if resolvedMode == .editor {
-                    appState.completeStartupRecovery()
+                    onStartupRecoveryReady()
                 }
             }
         )
@@ -201,7 +203,14 @@ struct MarkdownTabView: View {
     @ViewBuilder
     private var preview: some View {
         if isStandaloneMermaid {
-            StandaloneMermaidPreviewView(source: mermaidPreviewSource)
+            if hasMermaidPreviewSource {
+                StandaloneMermaidPreviewView(
+                    source: mermaidPreviewSource,
+                    onRenderComplete: onStartupRecoveryReady
+                )
+            } else {
+                Color.clear.onAppear { scheduleRender(immediate: true) }
+            }
         } else if let renderResult = renderCache.value(for: renderIdentity) {
             MarkdownPreviewView(result: renderResult, onLinkClick: handleLinkClick)
         } else {
@@ -286,7 +295,7 @@ struct MarkdownTabView: View {
             let source = buffer.storage.string
             if isStandaloneMermaid {
                 mermaidPreviewSource = source
-                appState.completeStartupRecovery()
+                hasMermaidPreviewSource = true
                 return
             }
             let parsed = MarkdownParser.parse(source)
@@ -301,12 +310,13 @@ struct MarkdownTabView: View {
             )
             if Task.isCancelled { return }
             renderCache.storeCompletedRender(result, for: renderIdentity)
-            appState.completeStartupRecovery()
+            onStartupRecoveryReady()
         }
     }
 
     private func invalidateRender() {
         debounceTask?.cancel()
+        hasMermaidPreviewSource = false
         renderCache.invalidate()
     }
 
@@ -372,12 +382,17 @@ struct MarkdownTabView: View {
 
 private struct StandaloneMermaidPreviewView: View {
     let source: String
+    var onRenderComplete: () -> Void = {}
 
     @Environment(\.theme) private var theme
 
     var body: some View {
         ScrollView(.vertical) {
-            MermaidDiagramBlockView(source: source, profile: .full)
+            MermaidDiagramBlockView(
+                source: source,
+                profile: .full,
+                onRenderComplete: onRenderComplete
+            )
                 .padding(16)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
         }
