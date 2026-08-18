@@ -922,10 +922,11 @@ final class AppState {
         let allWorktreeIds = projectsManager.projects.flatMap {
             projectsManager.worktrees(projectId: $0.id).map(\.id)
         }
-        tabs.loadAll(
-            worktreeIds: allWorktreeIds,
-            restoringActiveTabs: restoreActiveTabsOnNextReload
-        )
+        if restoreActiveTabsOnNextReload {
+            tabs.loadAll(worktreeIds: allWorktreeIds)
+        } else {
+            tabs.loadAllPersisted(restoringActiveTabs: false)
+        }
         restoreActiveTabsOnNextReload = true
         // When cross-quit persistence is disabled, drop every persisted
         // terminal tab right after load — across all worktrees, before

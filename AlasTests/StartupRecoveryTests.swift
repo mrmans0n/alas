@@ -8,10 +8,13 @@ struct StartupRecoveryTests {
     @Test func detectsAnUnfinishedPreviousLaunch() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-startup-recovery-\(UUID().uuidString)")
-        let marker = directory.appendingPathComponent("launching")
         defer { try? FileManager.default.removeItem(at: directory) }
 
-        let recovery = StartupRecovery(markerURL: marker)
+        let recovery = StartupRecovery(
+            markerDirectory: directory,
+            processID: 42,
+            isProcessAlive: { _ in false }
+        )
 
         #expect(recovery.begin() == false)
         #expect(recovery.begin() == true)
@@ -19,6 +22,24 @@ struct StartupRecoveryTests {
         recovery.finish()
 
         #expect(recovery.begin() == false)
+    }
+
+    @Test func ignoresMarkersOwnedByLiveInstances() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-startup-recovery-live-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let liveMarker = directory.appendingPathComponent("launching-7-live")
+        _ = FileManager.default.createFile(atPath: liveMarker.path, contents: Data())
+
+        let recovery = StartupRecovery(
+            markerDirectory: directory,
+            processID: 42,
+            isProcessAlive: { $0 == 7 }
+        )
+
+        #expect(recovery.begin() == false)
+        #expect(FileManager.default.fileExists(atPath: liveMarker.path))
     }
 
     @Test func recoveryLoadKeepsTabsWithoutActivatingOne() throws {
@@ -41,6 +62,19 @@ struct StartupRecoveryTests {
         #expect(reloaded.activeTabId(forWorktree: worktreeID) == nil)
     }
 
+    @Test func recoveryLoadAlsoClearsUndiscoveredWorktrees() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-tabs-recovery-all-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let original = TabsManager(store: PersistenceStore(), tabsDirectory: directory)
+        _ = original.appendTerminal(worktreeId: "undiscovered", title: "Terminal", sessionId: "terminal")
+
+        let recovered = TabsManager(store: PersistenceStore(), tabsDirectory: directory)
+        recovered.loadAllPersisted(restoringActiveTabs: false)
+
+        #expect(recovered.activeTabId(forWorktree: "undiscovered") == nil)
+    }
+
     @Test func missingSelectionDoesNotFallBackToRenderingTheFirstTab() {
         let tab = Tab.terminal(.init(id: "first", title: "First", sessionId: "first"))
 
@@ -50,5 +84,16 @@ struct StartupRecoveryTests {
         )
 
         #expect(composition.activeId == nil)
+    }
+
+    @Test func staleSelectionFallsBackToTheFirstAvailableTab() {
+        let tab = Tab.terminal(.init(id: "first", title: "First", sessionId: "first"))
+
+        let composition = CenterTabComposition(
+            worktreeTabs: [tab],
+            activeWorktreeTabId: "removed-tab"
+        )
+
+        #expect(composition.activeId == tab.id)
     }
 }

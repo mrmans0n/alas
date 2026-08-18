@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 
 @MainActor
 final class AlasTerminationCoordinator {
@@ -35,20 +36,59 @@ final class AlasApplicationDelegate: NSObject, NSApplicationDelegate {
 }
 
 struct StartupRecovery {
+    let markerDirectory: URL
     let markerURL: URL
+    private let processID: Int32
+    private let isProcessAlive: (Int32) -> Bool
 
-    init(markerURL: URL = Paths.appSupportRoot.appendingPathComponent("launching")) {
-        self.markerURL = markerURL
+    init(
+        markerDirectory: URL = Paths.appSupportRoot,
+        processID: Int32 = getpid(),
+        isProcessAlive: @escaping (Int32) -> Bool = StartupRecovery.processIsAlive
+    ) {
+        self.markerDirectory = markerDirectory
+        self.processID = processID
+        self.isProcessAlive = isProcessAlive
+        markerURL = markerDirectory.appendingPathComponent("launching-\(processID)-\(UUID().uuidString)")
     }
 
     func begin() -> Bool {
-        let previousLaunchDidNotFinish = FileManager.default.fileExists(atPath: markerURL.path)
-        try? Paths.ensureDirectoryExists(markerURL.deletingLastPathComponent())
+        try? Paths.ensureDirectoryExists(markerDirectory)
+        let previousLaunchDidNotFinish = removeAbandonedMarkers()
         _ = FileManager.default.createFile(atPath: markerURL.path, contents: Data())
         return previousLaunchDidNotFinish
     }
 
     func finish() {
         try? FileManager.default.removeItem(at: markerURL)
+    }
+
+    private func removeAbandonedMarkers() -> Bool {
+        guard let markerNames = try? FileManager.default.contentsOfDirectory(atPath: markerDirectory.path) else {
+            return false
+        }
+        var foundAbandonedMarker = false
+        for markerName in markerNames {
+            let marker = markerDirectory.appendingPathComponent(markerName)
+            if markerName == "launching" {
+                try? FileManager.default.removeItem(at: marker)
+                foundAbandonedMarker = true
+                continue
+            }
+            let components = markerName.split(separator: "-", maxSplits: 2)
+            guard components.count == 3,
+                  components[0] == "launching",
+                  let markerPID = Int32(components[1]),
+                  !isProcessAlive(markerPID) else { continue }
+            try? FileManager.default.removeItem(at: marker)
+            foundAbandonedMarker = true
+        }
+        return foundAbandonedMarker
+    }
+
+    private static func processIsAlive(_ pid: Int32) -> Bool {
+        guard pid > 0 else { return false }
+        if Darwin.kill(pid, 0) == 0 { return true }
+        return errno == EPERM
     }
 }

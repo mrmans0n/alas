@@ -168,7 +168,7 @@ final class TabsManager {
 
     /// Loads every persisted tab file, including files whose worktree is not
     /// currently discoverable. `TabsFile` skips unsupported tab cases.
-    func loadAllPersisted() {
+    func loadAllPersisted(restoringActiveTabs: Bool = true) {
         guard let relativeFiles = try? FileManager.default.subpathsOfDirectory(
             atPath: tabsDirectory.path
         ) else { return }
@@ -181,7 +181,7 @@ final class TabsManager {
             guard !relativePath.isEmpty else { return nil }
             return relativePath.contains("/") ? "/\(relativePath)" : relativePath
         }
-        loadAll(worktreeIds: worktreeIDs)
+        loadAll(worktreeIds: worktreeIDs, restoringActiveTabs: restoringActiveTabs)
     }
 
     @discardableResult

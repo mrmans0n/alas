@@ -17,6 +17,8 @@ struct CenterTabComposition {
         tabs = worktreeTabs
         if worktreeTabs.contains(where: { $0.id == activeWorktreeTabId }) {
             activeId = activeWorktreeTabId
+        } else if activeWorktreeTabId != nil {
+            activeId = worktreeTabs.first?.id
         } else {
             activeId = nil
         }
