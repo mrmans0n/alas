@@ -953,6 +953,9 @@ final class AppState {
         Task { [weak self] in
             await self?.reconcileInterruptedDelegations()
         }
+    }
+
+    func completeStartupRecovery() {
         AlasTerminationCoordinator.shared.finish?()
     }
 

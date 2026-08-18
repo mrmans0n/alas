@@ -535,7 +535,7 @@ struct CenterPaneView: View {
                                 .task(id: rightPaneActivationKey) {
                                     activateRightPaneStateForCenterTab()
                                 }
-                        }
+                            }
                     }
                 } else {
                     ContentUnavailableView(
@@ -560,6 +560,16 @@ struct CenterPaneView: View {
                     }
                     .padding(12)
                 }
+            }
+        }
+        .onAppear {
+            if state.tabs.hasLoaded {
+                state.completeStartupRecovery()
+            }
+        }
+        .onChange(of: state.tabs.hasLoaded) { _, hasLoaded in
+            if hasLoaded {
+                state.completeStartupRecovery()
             }
         }
         .background(theme.color("bg-1"))

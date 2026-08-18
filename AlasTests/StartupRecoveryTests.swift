@@ -97,7 +97,7 @@ struct StartupRecoveryTests {
         #expect(composition.activeId == tab.id)
     }
 
-    @Test func reloadTabsMarksStartupRecoveryComplete() {
+    @Test func recoveryCompletesOnlyAfterTheCenterPaneAppears() {
         let coordinator = AlasTerminationCoordinator.shared
         let originalFinish = coordinator.finish
         defer { coordinator.finish = originalFinish }
@@ -105,6 +105,10 @@ struct StartupRecoveryTests {
         coordinator.finish = { didFinish = true }
 
         AppState().reloadTabs()
+
+        #expect(!didFinish)
+
+        AppState().completeStartupRecovery()
 
         #expect(didFinish)
     }
