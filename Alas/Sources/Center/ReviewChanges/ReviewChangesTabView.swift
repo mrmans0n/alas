@@ -74,6 +74,7 @@ struct ReviewChangesTabView: View {
     let worktree: Worktree
     let tabState: ReviewChangesTabState
     let appState: AppState
+    var onStartupRecoveryReady: () -> Void = {}
     var loader: ReviewChangesLoader = ReviewChangesLoader()
 
     @Environment(\.theme) private var theme
@@ -104,7 +105,7 @@ struct ReviewChangesTabView: View {
         .background(theme.color("bg-1"))
         .task(id: loadKey) {
             await loadSession()
-            appState.completeStartupRecovery()
+            onStartupRecoveryReady()
         }
         .task(id: reviewDraftSessionID.rawValue) {
             loadDraftCommentController()

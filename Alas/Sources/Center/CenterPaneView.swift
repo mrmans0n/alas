@@ -431,7 +431,8 @@ struct CenterPaneView: View {
                             worktreePath: worktree.path,
                             worktreeId: worktree.id,
                             tabState: draftState,
-                            appState: state
+                            appState: state,
+                            onStartupRecoveryReady: { completeStartupRecoveryIfActive(draftState.id) }
                         )
                         .id(draftState.presentationID)
                         .task(id: rightPaneActivationKey) {
@@ -449,7 +450,8 @@ struct CenterPaneView: View {
                         ReviewChangesTabView(
                             worktree: worktree,
                             tabState: reviewState,
-                            appState: state
+                            appState: state,
+                            onStartupRecoveryReady: { completeStartupRecoveryIfActive(reviewState.id) }
                         )
                         .id(reviewState.id)
                         .task(id: rightPaneActivationKey) {
@@ -469,7 +471,8 @@ struct CenterPaneView: View {
                         ReviewSessionTabView(
                             worktree: worktree,
                             tabState: sessionState,
-                            appState: state
+                            appState: state,
+                            onStartupRecoveryReady: { completeStartupRecoveryIfActive(sessionState.id) }
                         )
                         .id(sessionState.viewID)
                     case .imagePreview(let s):

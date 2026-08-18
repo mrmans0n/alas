@@ -5,6 +5,7 @@ struct DraftCommitTabView: View {
     let worktreeId: String
     let tabState: DraftCommitTabState
     @Bindable var appState: AppState
+    var onStartupRecoveryReady: () -> Void = {}
 
     @State private var subject: String = ""
     @State private var bodyText: String = ""
@@ -176,7 +177,7 @@ struct DraftCommitTabView: View {
         .onChange(of: busy) { _, _ in refreshActionsOverlay() }
         .task(id: stagedKey) {
             await loadStagedSession()
-            appState.completeStartupRecovery()
+            onStartupRecoveryReady()
         }
     }
 

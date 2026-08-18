@@ -61,6 +61,7 @@ struct ReviewSessionTabView: View {
     let worktree: Worktree?
     let tabState: ReviewSessionTabState
     let appState: AppState?
+    var onStartupRecoveryReady: () -> Void = {}
     var sessionStore: ReviewSessionStore
     var draftCommentStore: ReviewDraftCommentStore
     var loader: ReviewSessionLoader
@@ -98,10 +99,16 @@ struct ReviewSessionTabView: View {
     @State private var isProviderPublishing = false
     @State private var providerPublishError: String?
 
-    init(worktree: Worktree, tabState: ReviewSessionTabState, appState: AppState) {
+    init(
+        worktree: Worktree,
+        tabState: ReviewSessionTabState,
+        appState: AppState,
+        onStartupRecoveryReady: @escaping () -> Void = {}
+    ) {
         self.worktree = worktree
         self.tabState = tabState
         self.appState = appState
+        self.onStartupRecoveryReady = onStartupRecoveryReady
         self.sessionStore = ReviewSessionStore()
         self.draftCommentStore = ReviewDraftCommentStore()
         self.loader = ReviewSessionLoader.production(appState: appState, worktree: worktree)
@@ -198,7 +205,7 @@ struct ReviewSessionTabView: View {
             guard loadsOnAppear else { return }
             let token = beginLoadReviewSession()
             await loadReviewSession(token: token)
-            appState?.completeStartupRecovery()
+            onStartupRecoveryReady()
         }
         .onReceive(NotificationCenter.default.publisher(for: .alasReviewDraftCommentsDidChangeExternally)) { _ in
             try? draftCommentController?.load()
