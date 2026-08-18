@@ -204,22 +204,32 @@ struct StartupRecoveryTests {
         #expect(CenterPaneView.shouldCompleteStartupRecoveryForRightPane(
             isRightPaneVisible: false,
             hasLoadedSnapshot: false,
-            isLoading: true
+            isLoading: true,
+            ggStackLoadState: .loading
         ))
         #expect(!CenterPaneView.shouldCompleteStartupRecoveryForRightPane(
             isRightPaneVisible: true,
             hasLoadedSnapshot: false,
-            isLoading: false
+            isLoading: false,
+            ggStackLoadState: .inactive
         ))
         #expect(!CenterPaneView.shouldCompleteStartupRecoveryForRightPane(
             isRightPaneVisible: true,
             hasLoadedSnapshot: true,
-            isLoading: true
+            isLoading: true,
+            ggStackLoadState: .inactive
+        ))
+        #expect(!CenterPaneView.shouldCompleteStartupRecoveryForRightPane(
+            isRightPaneVisible: true,
+            hasLoadedSnapshot: true,
+            isLoading: false,
+            ggStackLoadState: .loading
         ))
         #expect(CenterPaneView.shouldCompleteStartupRecoveryForRightPane(
             isRightPaneVisible: true,
             hasLoadedSnapshot: true,
-            isLoading: false
+            isLoading: false,
+            ggStackLoadState: .loaded
         ))
     }
 
