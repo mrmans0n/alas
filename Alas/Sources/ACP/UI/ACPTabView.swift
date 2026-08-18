@@ -76,6 +76,9 @@ private struct ACPManagedTabView: View {
                     Spacer()
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .task {
+                    onStartupRecoveryReady()
+                }
             } else {
                 ProgressView()
                     .controlSize(.small)
