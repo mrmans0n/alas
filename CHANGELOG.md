@@ -6,6 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.16] - 2026-08-18
+
+### 🐛 Fixes
+
+- Recover cleanly from interrupted startup before reopening projects (#1042).
+- Prevent the `gg` changes sidebar from flashing during stack updates (#1043).
+
 ## [0.14.15] - 2026-08-18
 
 ### ✨ Features
