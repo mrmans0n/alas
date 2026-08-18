@@ -99,7 +99,10 @@ struct DraftReviewRequestTabView: View {
             guard selectedPath != path else { return }
             selectedPath = path
         }
-        .task(id: contextKey) { await loadContext() }
+        .task(id: contextKey) {
+            await loadContext()
+            appState.completeStartupRecovery()
+        }
         .task(id: reviewDraftSessionID.rawValue) {
             loadDraftCommentController()
         }

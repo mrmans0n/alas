@@ -63,7 +63,10 @@ struct CenterTabClosurePlan {
 enum StartupRecoveryPaneCompletionPolicy {
     static func shouldComplete(activeTab: Tab?) -> Bool {
         switch activeTab {
-        case .terminal, .acpSession:
+        case .terminal, .diff, .stashDiff, .commit, .commitEditor, .draftCommit,
+             .draftReviewRequest, .reviewChanges, .reviewSession, .imagePreview,
+             .mergeConflict, .acpSession, .reviewPR, .fileSnapshot, .fileHistory,
+             .ggSplitCommit:
             false
         default:
             true
@@ -394,7 +397,8 @@ struct CenterPaneView: View {
                             worktreePath: worktree.path,
                             state: s,
                             codeFontFamily: state.config.code.fontFamily,
-                            codeFontSize: CGFloat(state.config.code.fontSize)
+                            codeFontSize: CGFloat(state.config.code.fontSize),
+                            onStartupRecoveryReady: { state.completeStartupRecovery() }
                         )
                         .id(s.id)
                     case .commit(let s):
@@ -462,7 +466,8 @@ struct CenterPaneView: View {
                     case .imagePreview(let s):
                         ImagePreviewTabView(worktreePath: worktree.path,
                                              relativePath: s.relativePath,
-                                             onRevealInFiles: { path in state.revealInFiles(worktreeId: worktree.id, path: path) })
+                                             onRevealInFiles: { path in state.revealInFiles(worktreeId: worktree.id, path: path) },
+                                             onStartupRecoveryReady: { state.completeStartupRecovery() })
                     case .binaryPreview(let s):
                         BinaryPreviewTabView(worktreePath: worktree.path,
                                              relativePath: s.relativePath,
@@ -479,14 +484,16 @@ struct CenterPaneView: View {
                             worktreePath: worktree.path,
                             state: s,
                             codeFontFamily: state.config.code.fontFamily,
-                            codeFontSize: CGFloat(state.config.code.fontSize)
+                            codeFontSize: CGFloat(state.config.code.fontSize),
+                            onStartupRecoveryReady: { state.completeStartupRecovery() }
                         )
                     case .fileHistory(let s):
                         FileHistoryTabView(
                             worktreePath: worktree.path,
                             state: s,
                             onSelectCommit: { state.openCommitTab(worktreeId: worktree.id, commit: $0) },
-                            onCopySHA: { Clipboard.copy($0.sha) }
+                            onCopySHA: { Clipboard.copy($0.sha) },
+                            onStartupRecoveryReady: { state.completeStartupRecovery() }
                         )
                     case .acpSession(let s):
                         ACPTabView(sessionId: s.sessionId, state: state, worktree: worktree)
@@ -540,11 +547,13 @@ struct CenterPaneView: View {
                             .id("\(s.id):\(capabilities.structuredSplit):\(workflowAvailable):\(hasBlockingGitOperation)")
                             .task(id: rightPaneActivationKey) {
                                 activateRightPaneStateForCenterTab()
+                                state.completeStartupRecovery()
                             }
                         } else {
                             ProgressView()
                                 .task(id: rightPaneActivationKey) {
                                     activateRightPaneStateForCenterTab()
+                                    state.completeStartupRecovery()
                                 }
                             }
                     }

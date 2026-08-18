@@ -130,6 +130,7 @@ struct MergeConflictTabView: View {
             // (where currentConflictIndex stays at 0 forever) would never
             // get auto-explained.
             triggerExplainIfNeeded()
+            state.completeStartupRecovery()
         }
     }
 

@@ -6,6 +6,7 @@ struct FileSnapshotTabView: View {
     let state: FileSnapshotTabState
     var codeFontFamily: String = ""
     var codeFontSize: CGFloat = 13
+    var onStartupRecoveryReady: () -> Void = {}
 
     @Environment(\.theme) private var theme
     @State private var result: HeadBlobTextResult?
@@ -19,7 +20,10 @@ struct FileSnapshotTabView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(theme.color("bg-1"))
-        .task(id: loadKey) { await load() }
+        .task(id: loadKey) {
+            await load()
+            onStartupRecoveryReady()
+        }
     }
 
     private var loadKey: String { "\(worktreePath.path)\u{0}\(state.ref)\u{0}\(state.relativePath)" }

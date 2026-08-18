@@ -104,6 +104,7 @@ struct ReviewChangesTabView: View {
         .background(theme.color("bg-1"))
         .task(id: loadKey) {
             await loadSession()
+            appState.completeStartupRecovery()
         }
         .task(id: reviewDraftSessionID.rawValue) {
             loadDraftCommentController()

@@ -174,7 +174,10 @@ struct DraftCommitTabView: View {
         }
         .onChange(of: selectedFileID) { _, new in persist(selectedPath: new?.path) }
         .onChange(of: busy) { _, _ in refreshActionsOverlay() }
-        .task(id: stagedKey) { await loadStagedSession() }
+        .task(id: stagedKey) {
+            await loadStagedSession()
+            appState.completeStartupRecovery()
+        }
     }
 
     @ViewBuilder

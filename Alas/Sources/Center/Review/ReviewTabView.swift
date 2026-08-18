@@ -95,6 +95,7 @@ struct ReviewTabView: View {
             pendingReview = PendingReview(worktreePath: worktree.path, prNumber: reviewRequest?.number)
             await loadSession()
             localThreads = reviewRequest?.threads ?? []
+            appState.completeStartupRecovery()
         }
         .task(id: reviewRequest?.number) {
             // Re-scope PendingReview and reload when the PR number first arrives (snapshot
@@ -102,6 +103,7 @@ struct ReviewTabView: View {
             pendingReview = PendingReview(worktreePath: worktree.path, prNumber: reviewRequest?.number)
             await loadSession()
             localThreads = reviewRequest?.threads ?? []
+            appState.completeStartupRecovery()
         }
         .onChange(of: reviewRequest) { _, newValue in
             guard !isWriting else { return }

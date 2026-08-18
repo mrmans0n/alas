@@ -5,6 +5,7 @@ struct ImagePreviewTabView: View {
     let worktreePath: URL
     let relativePath: String
     let onRevealInFiles: (String) -> Void
+    var onStartupRecoveryReady: () -> Void = {}
     @Environment(\.theme) private var theme
     @State private var loadState: LoadState = .idle
 
@@ -36,6 +37,7 @@ struct ImagePreviewTabView: View {
         .background(theme.color("bg-1"))
         .task(id: absoluteURL) {
             await loadImage()
+            onStartupRecoveryReady()
         }
     }
 

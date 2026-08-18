@@ -29,17 +29,37 @@ struct StartupRecoveryTests {
             .appendingPathComponent("alas-startup-recovery-live-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let liveMarker = directory.appendingPathComponent("launching-7-live")
+        let liveMarker = directory.appendingPathComponent("launching-7-7000000-live")
         _ = FileManager.default.createFile(atPath: liveMarker.path, contents: Data())
 
         let recovery = StartupRecovery(
             markerDirectory: directory,
             processID: 42,
-            isProcessAlive: { $0 == 7 }
+            isProcessAlive: { $0 == 7 },
+            processStartTime: { $0 == 7 ? 7 : 42 }
         )
 
         #expect(recovery.begin() == false)
         #expect(FileManager.default.fileExists(atPath: liveMarker.path))
+    }
+
+    @Test func treatsReusedPIDMarkerAsAbandoned() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-startup-recovery-reused-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let staleMarker = directory.appendingPathComponent("launching-7-7000000-stale")
+        _ = FileManager.default.createFile(atPath: staleMarker.path, contents: Data())
+
+        let recovery = StartupRecovery(
+            markerDirectory: directory,
+            processID: 42,
+            isProcessAlive: { $0 == 7 },
+            processStartTime: { $0 == 7 ? 8 : 42 }
+        )
+
+        #expect(recovery.begin())
+        #expect(!FileManager.default.fileExists(atPath: staleMarker.path))
     }
 
     @Test func recoveryLoadKeepsTabsWithoutActivatingOne() throws {
@@ -139,10 +159,12 @@ struct StartupRecoveryTests {
     @Test func asyncRestoredTabsDoNotCompleteRecoveryFromCenterPane() {
         let terminal = Tab.terminal(.init(id: "terminal", title: "Terminal", sessionId: "terminal"))
         let acp = Tab.acpSession(.init(sessionId: "acp", title: "ACP"))
+        let history = Tab.fileHistory(.init(worktreeId: "wt", relativePath: "README.md"))
         let editor = Tab.editor(.init(id: "editor", title: "README.md", relativePath: "README.md"))
 
         #expect(!StartupRecoveryPaneCompletionPolicy.shouldComplete(activeTab: terminal))
         #expect(!StartupRecoveryPaneCompletionPolicy.shouldComplete(activeTab: acp))
+        #expect(!StartupRecoveryPaneCompletionPolicy.shouldComplete(activeTab: history))
         #expect(StartupRecoveryPaneCompletionPolicy.shouldComplete(activeTab: editor))
         #expect(StartupRecoveryPaneCompletionPolicy.shouldComplete(activeTab: nil))
     }

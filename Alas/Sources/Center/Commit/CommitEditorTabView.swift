@@ -95,8 +95,14 @@ struct CommitEditorTabView: View {
                 Color.clear
             }
         }
-        .task(id: tabState.currentSha) { await loadDetails() }
-        .task(id: diffTaskKey) { await loadDiffIfNeeded() }
+        .task(id: tabState.currentSha) {
+            await loadDetails()
+            appState.completeStartupRecovery()
+        }
+        .task(id: diffTaskKey) {
+            await loadDiffIfNeeded()
+            appState.completeStartupRecovery()
+        }
         .confirmationDialog("Drop file from commit?", isPresented: Binding(
             get: { pendingDropFile != nil },
             set: { if !$0 { pendingDropFile = nil } }

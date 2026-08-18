@@ -5,6 +5,7 @@ struct FileHistoryTabView: View {
     let state: FileHistoryTabState
     let onSelectCommit: (CommitInfo) -> Void
     let onCopySHA: (CommitInfo) -> Void
+    var onStartupRecoveryReady: () -> Void = {}
 
     @Environment(\.theme) private var theme
     @State private var commits: [CommitInfo] = []
@@ -19,7 +20,10 @@ struct FileHistoryTabView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(theme.color("bg-1"))
-        .task(id: loadKey) { await load() }
+        .task(id: loadKey) {
+            await load()
+            onStartupRecoveryReady()
+        }
     }
 
     private var loadKey: String {

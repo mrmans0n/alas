@@ -102,7 +102,10 @@ struct CommitTabView: View {
                 Color.clear
             }
         }
-        .task(id: loadTaskID) { await loadDetails() }
+        .task(id: loadTaskID) {
+            await loadDetails()
+            appState.completeStartupRecovery()
+        }
     }
 
     @ViewBuilder
