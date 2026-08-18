@@ -101,7 +101,13 @@ struct DraftReviewRequestTabView: View {
             selectedPath = path
         }
         .task(id: contextKey) {
+            let requestedContextKey = contextKey
             await loadContext()
+            guard Self.shouldReportStartupRecoveryReady(
+                requestedContextKey: requestedContextKey,
+                currentContextKey: contextKey,
+                isCancelled: Task.isCancelled
+            ) else { return }
             onStartupRecoveryReady()
         }
         .task(id: reviewDraftSessionID.rawValue) {
@@ -144,6 +150,14 @@ struct DraftReviewRequestTabView: View {
 
     static func canLaunchReviewSession(targetMismatchMessage: String?) -> Bool {
         targetMismatchMessage == nil
+    }
+
+    static func shouldReportStartupRecoveryReady(
+        requestedContextKey: String,
+        currentContextKey: String,
+        isCancelled: Bool
+    ) -> Bool {
+        !isCancelled && requestedContextKey == currentContextKey
     }
 
     private var reviewDraftSessionID: ReviewDraftSessionID {

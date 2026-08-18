@@ -205,31 +205,43 @@ struct StartupRecoveryTests {
             isRightPaneVisible: false,
             hasLoadedSnapshot: false,
             isLoading: true,
-            ggStackLoadState: .loading
+            ggStackLoadState: .loading,
+            ggAvailabilityHasProbed: false
         ))
         #expect(!CenterPaneView.shouldCompleteStartupRecoveryForRightPane(
             isRightPaneVisible: true,
             hasLoadedSnapshot: false,
             isLoading: false,
-            ggStackLoadState: .inactive
+            ggStackLoadState: .inactive,
+            ggAvailabilityHasProbed: true
         ))
         #expect(!CenterPaneView.shouldCompleteStartupRecoveryForRightPane(
             isRightPaneVisible: true,
             hasLoadedSnapshot: true,
             isLoading: true,
-            ggStackLoadState: .inactive
+            ggStackLoadState: .inactive,
+            ggAvailabilityHasProbed: true
         ))
         #expect(!CenterPaneView.shouldCompleteStartupRecoveryForRightPane(
             isRightPaneVisible: true,
             hasLoadedSnapshot: true,
             isLoading: false,
-            ggStackLoadState: .loading
+            ggStackLoadState: .loading,
+            ggAvailabilityHasProbed: true
+        ))
+        #expect(!CenterPaneView.shouldCompleteStartupRecoveryForRightPane(
+            isRightPaneVisible: true,
+            hasLoadedSnapshot: true,
+            isLoading: false,
+            ggStackLoadState: .inactive,
+            ggAvailabilityHasProbed: false
         ))
         #expect(CenterPaneView.shouldCompleteStartupRecoveryForRightPane(
             isRightPaneVisible: true,
             hasLoadedSnapshot: true,
             isLoading: false,
-            ggStackLoadState: .loaded
+            ggStackLoadState: .loaded,
+            ggAvailabilityHasProbed: true
         ))
     }
 
