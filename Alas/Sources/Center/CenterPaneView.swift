@@ -18,7 +18,7 @@ struct CenterTabComposition {
         if worktreeTabs.contains(where: { $0.id == activeWorktreeTabId }) {
             activeId = activeWorktreeTabId
         } else {
-            activeId = worktreeTabs.first?.id
+            activeId = nil
         }
     }
 
@@ -535,6 +535,12 @@ struct CenterPaneView: View {
                                 }
                         }
                     }
+                } else {
+                    ContentUnavailableView(
+                        "Choose a Tab",
+                        systemImage: "rectangle.stack",
+                        description: Text("No tab was reopened after the previous session ended unexpectedly.")
+                    )
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

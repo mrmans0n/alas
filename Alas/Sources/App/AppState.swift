@@ -554,6 +554,8 @@ final class AppState {
     @ObservationIgnored
     private let store: any PersistenceStoreProtocol
     @ObservationIgnored
+    private var restoreActiveTabsOnNextReload: Bool
+    @ObservationIgnored
     private let persistenceErrorHandler: (String, String) -> Void
     @ObservationIgnored
     private let fileActionErrorHandler: (String, String) -> Void
@@ -585,9 +587,11 @@ final class AppState {
         remoteAccelerationPreparer: RemoteAccelerationPreparer? = nil,
         projectGitWatcherFactory: @escaping @MainActor (URL) -> ProjectGitWatcher = { ProjectGitWatcher(repoPath: $0) },
         runScriptCompletionWaiter: @escaping RunScriptCompletionWaiter = RunScriptCompletionMonitor.wait(for:),
-        tabsManager: TabsManager? = nil
+        tabsManager: TabsManager? = nil,
+        restoreActiveTabsOnStartup: Bool = true
     ) {
         self.store = store
+        restoreActiveTabsOnNextReload = restoreActiveTabsOnStartup
         _tabs = tabsManager
         self.persistenceErrorHandler = persistenceErrorHandler ?? { title, message in
             AppState.showWarningAlert(title: title, message: message)
@@ -918,7 +922,11 @@ final class AppState {
         let allWorktreeIds = projectsManager.projects.flatMap {
             projectsManager.worktrees(projectId: $0.id).map(\.id)
         }
-        tabs.loadAll(worktreeIds: allWorktreeIds)
+        tabs.loadAll(
+            worktreeIds: allWorktreeIds,
+            restoringActiveTabs: restoreActiveTabsOnNextReload
+        )
+        restoreActiveTabsOnNextReload = true
         // When cross-quit persistence is disabled, drop every persisted
         // terminal tab right after load — across all worktrees, before
         // any lazy-display path could observe them — so orphan zmx

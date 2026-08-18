@@ -151,10 +151,16 @@ final class TabsManager {
         return tabId
     }
 
-    func loadAll(worktreeIds: [String]) {
+    func loadAll(worktreeIds: [String], restoringActiveTabs: Bool = true) {
         for id in worktreeIds {
-            if let file = try? store.readIfExists(TabsFile.self, from: tabsFile(forWorktreeId: id)) {
+            if var file = try? store.readIfExists(TabsFile.self, from: tabsFile(forWorktreeId: id)) {
+                if !restoringActiveTabs {
+                    file.activeTabId = nil
+                }
                 byWorktree[id] = file
+                if !restoringActiveTabs {
+                    persist(id)
+                }
             }
         }
         hasLoaded = true
