@@ -189,7 +189,12 @@ struct MarkdownTabView: View {
             fontFamily: appState.config.code.fontFamily,
             fontSize: appState.config.code.fontSize,
             showLineNumbers: appState.config.code.showLineNumbers,
-            textRendering: CodeEditorTextRenderingConfiguration(code: appState.config.code)
+            textRendering: CodeEditorTextRenderingConfiguration(code: appState.config.code),
+            onInitialHighlightReady: {
+                if resolvedMode == .editor {
+                    appState.completeStartupRecovery()
+                }
+            }
         )
     }
 
@@ -250,12 +255,14 @@ struct MarkdownTabView: View {
     }
 
     private func scheduleRender(immediate: Bool) {
+        let buffer = self.buffer
+        guard buffer.initialLoadFinished else { return }
+
         // No preview is visible in editor-only mode, so skip parsing and
         // rendering entirely. Switching out of editor mode triggers
         // scheduleRender via .onChange(of: resolvedMode).
         guard resolvedMode != .editor else {
             debounceTask?.cancel()
-            appState.completeStartupRecovery()
             return
         }
         debounceTask?.cancel()
@@ -264,7 +271,6 @@ struct MarkdownTabView: View {
         if !isStandaloneMermaid {
             renderCache.beginRender(for: renderIdentity)
         }
-        let buffer = self.buffer
         let theme = self.theme
         let fontFamily = appState.config.code.fontFamily
         let fontSize = appState.config.code.fontSize
