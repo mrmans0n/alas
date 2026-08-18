@@ -161,11 +161,13 @@ struct StartupRecoveryTests {
         let acp = Tab.acpSession(.init(sessionId: "acp", title: "ACP"))
         let history = Tab.fileHistory(.init(worktreeId: "wt", relativePath: "README.md"))
         let editor = Tab.editor(.init(id: "editor", title: "README.md", relativePath: "README.md"))
+        let ggInbox = Tab.ggInbox(.init(projectId: "project", projectName: "Project"))
 
         #expect(!StartupRecoveryPaneCompletionPolicy.shouldComplete(activeTab: terminal))
         #expect(!StartupRecoveryPaneCompletionPolicy.shouldComplete(activeTab: acp))
         #expect(!StartupRecoveryPaneCompletionPolicy.shouldComplete(activeTab: history))
         #expect(!StartupRecoveryPaneCompletionPolicy.shouldComplete(activeTab: editor))
+        #expect(!StartupRecoveryPaneCompletionPolicy.shouldComplete(activeTab: ggInbox))
         #expect(StartupRecoveryPaneCompletionPolicy.shouldComplete(activeTab: nil))
     }
 }

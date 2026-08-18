@@ -66,7 +66,7 @@ enum StartupRecoveryPaneCompletionPolicy {
         case .terminal, .editor, .diff, .stashDiff, .commit, .commitEditor, .draftCommit,
              .draftReviewRequest, .reviewChanges, .reviewSession, .imagePreview,
              .mergeConflict, .acpSession, .reviewPR, .fileSnapshot, .fileHistory,
-             .ggSplitCommit:
+             .ggInbox, .ggSplitCommit:
             false
         default:
             true
@@ -499,7 +499,11 @@ struct CenterPaneView: View {
                         ACPTabView(sessionId: s.sessionId, state: state, worktree: worktree)
                             .id(s.id)
                     case .ggInbox(let s):
-                        GGInboxTabView(state: state, tabState: s)
+                        GGInboxTabView(
+                            state: state,
+                            tabState: s,
+                            onStartupRecoveryReady: { state.completeStartupRecovery() }
+                        )
                             .id(s.id)
                     case .ggSplitCommit(let s):
                         let capabilities = GGAvailability.shared.capabilities
