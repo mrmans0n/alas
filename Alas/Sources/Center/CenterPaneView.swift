@@ -413,7 +413,8 @@ struct CenterPaneView: View {
                             worktreePath: worktree.path,
                             tabState: s,
                             worktreeId: worktree.id,
-                            appState: state
+                            appState: state,
+                            onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) }
                         )
                         .id(s.viewID)
                     case .commitEditor(let s):

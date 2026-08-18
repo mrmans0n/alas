@@ -6,6 +6,7 @@ struct CommitTabView: View {
     let tabState: CommitTabState
     let worktreeId: String
     @Bindable var appState: AppState
+    var onStartupRecoveryReady: () -> Void = {}
 
     @State private var details: CommitDetails?
     @State private var loadingDetails = true
@@ -104,7 +105,7 @@ struct CommitTabView: View {
         }
         .task(id: loadTaskID) {
             await loadDetails()
-            appState.completeStartupRecovery()
+            onStartupRecoveryReady()
         }
     }
 
