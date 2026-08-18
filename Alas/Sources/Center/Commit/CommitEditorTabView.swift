@@ -5,6 +5,7 @@ struct CommitEditorTabView: View {
     let worktreeId: String
     let tabState: CommitEditorTabState
     @Bindable var appState: AppState
+    var onStartupRecoveryReady: () -> Void = {}
 
     @State private var details: CommitDetails?
     @State private var loadingDetails = true
@@ -98,7 +99,7 @@ struct CommitEditorTabView: View {
         .task(id: tabState.currentSha) {
             await loadDetails()
             await loadDiffIfNeeded()
-            appState.completeStartupRecovery()
+            onStartupRecoveryReady()
         }
         .task(id: diffTaskKey) {
             await loadDiffIfNeeded()

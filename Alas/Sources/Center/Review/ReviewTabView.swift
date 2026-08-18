@@ -25,6 +25,7 @@ struct ReviewTabView: View {
     let worktree: Worktree
     let tabState: ReviewPRTabState
     let appState: AppState
+    var onStartupRecoveryReady: () -> Void = {}
     // Loads the working-tree diff (same as ReviewChangesTabView). To show PR base..head diff
     // instead, inject a PR-diff loader here when that loader exists.
     var loader: ReviewChangesLoader = ReviewChangesLoader()
@@ -115,7 +116,7 @@ struct ReviewTabView: View {
         await loadSession()
         localThreads = reviewRequest?.threads ?? []
         if completingStartupRecovery {
-            appState.completeStartupRecovery()
+            onStartupRecoveryReady()
         }
     }
 

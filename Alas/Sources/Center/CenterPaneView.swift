@@ -423,7 +423,8 @@ struct CenterPaneView: View {
                             worktreePath: worktree.path,
                             worktreeId: worktree.id,
                             tabState: s,
-                            appState: state
+                            appState: state,
+                            onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) }
                         )
                         .id(s.id)
                     case .draftCommit(let draftState):
@@ -462,7 +463,8 @@ struct CenterPaneView: View {
                         ReviewTabView(
                             worktree: worktree,
                             tabState: prState,
-                            appState: state
+                            appState: state,
+                            onStartupRecoveryReady: { completeStartupRecoveryIfActive(prState.id) }
                         )
                         .id(prState.id)
                         .task(id: rightPaneActivationKey) {
@@ -632,6 +634,7 @@ struct CenterPaneView: View {
     }
 
     private func completeStartupRecoveryIfActive(_ tabID: TabID) {
+        guard state.selectedWorktreeId == worktree.id else { return }
         let composition = CenterTabComposition(
             worktreeTabs: state.tabs.tabs(forWorktree: worktree.id),
             activeWorktreeTabId: state.tabs.activeTabId(forWorktree: worktree.id)
