@@ -953,6 +953,7 @@ final class AppState {
         Task { [weak self] in
             await self?.reconcileInterruptedDelegations()
         }
+        AlasTerminationCoordinator.shared.finish?()
     }
 
     /// Compute (knownWorktreeIds, knownLeafIds) from in-memory state and
