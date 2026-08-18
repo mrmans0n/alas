@@ -158,14 +158,12 @@ struct EditorTabView: View {
                     showLineNumbers: appState.config.code.showLineNumbers,
                     textRendering: CodeEditorTextRenderingConfiguration(code: appState.config.code),
                     onTextViewAttached: { attachFindController(to: $0) },
-                    onTextViewDetached: { detachFindController(from: $0) }
+                    onTextViewDetached: { detachFindController(from: $0) },
+                    onInitialHighlightReady: { appState.completeStartupRecovery() }
                 )
             }
         }
         .background(theme.color("bg-1"))
-        .onAppear {
-            appState.completeStartupRecovery()
-        }
         .onDisappear {
             clearFindHighlights()
             activeTextView?.escapeHandler = nil

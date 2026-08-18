@@ -130,6 +130,7 @@ struct CodeEditorView: NSViewRepresentable {
     let textRendering: CodeEditorTextRenderingConfiguration
     var onTextViewAttached: (CodeTextView) -> Void = { _ in }
     var onTextViewDetached: (CodeTextView?) -> Void = { _ in }
+    var onInitialHighlightReady: () -> Void = {}
     @Environment(\.theme) var theme
 
     func makeCoordinator() -> CodeEditorCoordinator {
@@ -277,6 +278,12 @@ struct CodeEditorView: NSViewRepresentable {
             guard detachedTabId == nil || detachedTabId == expectedTabId else { return }
             DispatchQueue.main.async {
                 onTextViewDetached(textView)
+            }
+        }
+        coordinator.onInitialHighlightReady = { readyTabId in
+            guard readyTabId == expectedTabId else { return }
+            DispatchQueue.main.async {
+                onInitialHighlightReady()
             }
         }
     }
