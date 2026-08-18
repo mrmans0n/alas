@@ -542,20 +542,19 @@ struct CenterPaneView: View {
                                         tabId: s.id,
                                         draft: draft
                                     )
-                                }
+                                },
+                                onStartupRecoveryReady: { state.completeStartupRecovery() }
                             )
                             .id("\(s.id):\(capabilities.structuredSplit):\(workflowAvailable):\(hasBlockingGitOperation)")
                             .task(id: rightPaneActivationKey) {
                                 activateRightPaneStateForCenterTab()
-                                state.completeStartupRecovery()
                             }
                         } else {
                             ProgressView()
                                 .task(id: rightPaneActivationKey) {
                                     activateRightPaneStateForCenterTab()
-                                    state.completeStartupRecovery()
                                 }
-                            }
+                        }
                     }
                 } else {
                     ContentUnavailableView(

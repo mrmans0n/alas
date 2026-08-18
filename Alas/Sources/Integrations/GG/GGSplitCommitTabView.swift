@@ -11,6 +11,7 @@ struct GGSplitCommitTabView: View {
     let codeFontSize: CGFloat
     let onCancel: () -> Void
     let onDraftChange: (GGSplitCommitDraft) -> Void
+    let onStartupRecoveryReady: () -> Void
     let loadsOnAppear: Bool
 
     @Environment(\.theme) private var theme
@@ -41,7 +42,8 @@ struct GGSplitCommitTabView: View {
         codeFontFamily: String,
         codeFontSize: CGFloat,
         onCancel: @escaping () -> Void,
-        onDraftChange: @escaping (GGSplitCommitDraft) -> Void
+        onDraftChange: @escaping (GGSplitCommitDraft) -> Void,
+        onStartupRecoveryReady: @escaping () -> Void = {}
     ) {
         self.tabState = tabState
         self.worktreePath = worktreePath
@@ -52,6 +54,7 @@ struct GGSplitCommitTabView: View {
         self.codeFontSize = codeFontSize
         self.onCancel = onCancel
         self.onDraftChange = onDraftChange
+        self.onStartupRecoveryReady = onStartupRecoveryReady
         self.loadsOnAppear = true
         _model = State(initialValue: GGSplitCommitModel(
             service: rightPaneState,
@@ -76,7 +79,8 @@ struct GGSplitCommitTabView: View {
         codeFontFamily: String,
         codeFontSize: CGFloat,
         onCancel: @escaping () -> Void,
-        onDraftChange: @escaping (GGSplitCommitDraft) -> Void
+        onDraftChange: @escaping (GGSplitCommitDraft) -> Void,
+        onStartupRecoveryReady: @escaping () -> Void = {}
     ) {
         self.tabState = tabState
         self.worktreePath = worktreePath
@@ -87,6 +91,7 @@ struct GGSplitCommitTabView: View {
         self.codeFontSize = codeFontSize
         self.onCancel = onCancel
         self.onDraftChange = onDraftChange
+        self.onStartupRecoveryReady = onStartupRecoveryReady
         self.loadsOnAppear = false
         _model = State(initialValue: model)
         _isLoading = State(initialValue: false)
@@ -110,6 +115,7 @@ struct GGSplitCommitTabView: View {
         .task(id: tabState.id) {
             if loadsOnAppear {
                 await load()
+                onStartupRecoveryReady()
             }
         }
     }
