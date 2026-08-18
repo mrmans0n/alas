@@ -255,6 +255,7 @@ struct MarkdownTabView: View {
         // scheduleRender via .onChange(of: resolvedMode).
         guard resolvedMode != .editor else {
             debounceTask?.cancel()
+            appState.completeStartupRecovery()
             return
         }
         debounceTask?.cancel()
@@ -279,6 +280,7 @@ struct MarkdownTabView: View {
             let source = buffer.storage.string
             if isStandaloneMermaid {
                 mermaidPreviewSource = source
+                appState.completeStartupRecovery()
                 return
             }
             let parsed = MarkdownParser.parse(source)
@@ -293,6 +295,7 @@ struct MarkdownTabView: View {
             )
             if Task.isCancelled { return }
             renderCache.storeCompletedRender(result, for: renderIdentity)
+            appState.completeStartupRecovery()
         }
     }
 

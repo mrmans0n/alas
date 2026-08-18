@@ -165,7 +165,7 @@ struct StartupRecoveryTests {
         #expect(!StartupRecoveryPaneCompletionPolicy.shouldComplete(activeTab: terminal))
         #expect(!StartupRecoveryPaneCompletionPolicy.shouldComplete(activeTab: acp))
         #expect(!StartupRecoveryPaneCompletionPolicy.shouldComplete(activeTab: history))
-        #expect(StartupRecoveryPaneCompletionPolicy.shouldComplete(activeTab: editor))
+        #expect(!StartupRecoveryPaneCompletionPolicy.shouldComplete(activeTab: editor))
         #expect(StartupRecoveryPaneCompletionPolicy.shouldComplete(activeTab: nil))
     }
 }

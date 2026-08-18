@@ -163,6 +163,9 @@ struct EditorTabView: View {
             }
         }
         .background(theme.color("bg-1"))
+        .onAppear {
+            appState.completeStartupRecovery()
+        }
         .onDisappear {
             clearFindHighlights()
             activeTextView?.escapeHandler = nil

@@ -63,7 +63,7 @@ struct CenterTabClosurePlan {
 enum StartupRecoveryPaneCompletionPolicy {
     static func shouldComplete(activeTab: Tab?) -> Bool {
         switch activeTab {
-        case .terminal, .diff, .stashDiff, .commit, .commitEditor, .draftCommit,
+        case .terminal, .editor, .diff, .stashDiff, .commit, .commitEditor, .draftCommit,
              .draftReviewRequest, .reviewChanges, .reviewSession, .imagePreview,
              .mergeConflict, .acpSession, .reviewPR, .fileSnapshot, .fileHistory,
              .ggSplitCommit:
