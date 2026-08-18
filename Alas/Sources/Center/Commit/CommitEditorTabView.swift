@@ -5,6 +5,7 @@ struct CommitEditorTabView: View {
     let worktreeId: String
     let tabState: CommitEditorTabState
     @Bindable var appState: AppState
+    var onStartupRecoveryReady: () -> Void = {}
 
     @State private var details: CommitDetails?
     @State private var loadingDetails = true
@@ -50,7 +51,23 @@ struct CommitEditorTabView: View {
     }
 
     private var diffTaskKey: String {
-        "\(tabState.currentSha):\(selectedPath ?? "")"
+        Self.diffTaskKey(
+            currentSha: tabState.currentSha,
+            selectedPath: selectedPath,
+            loadingDetails: loadingDetails
+        )
+    }
+
+    static func diffTaskKey(currentSha: String, selectedPath: String?, loadingDetails: Bool) -> String {
+        "\(currentSha):\(selectedPath ?? ""):\(loadingDetails)"
+    }
+
+    static func shouldReportStartupRecoveryReady(
+        requestedDiffTaskKey: String,
+        currentDiffTaskKey: String,
+        isCancelled: Bool
+    ) -> Bool {
+        !isCancelled && requestedDiffTaskKey == currentDiffTaskKey
     }
 
     var body: some View {
@@ -95,8 +112,20 @@ struct CommitEditorTabView: View {
                 Color.clear
             }
         }
-        .task(id: tabState.currentSha) { await loadDetails() }
-        .task(id: diffTaskKey) { await loadDiffIfNeeded() }
+        .task(id: tabState.currentSha) {
+            await loadDetails()
+        }
+        .task(id: diffTaskKey) {
+            guard !loadingDetails else { return }
+            let requestedDiffTaskKey = diffTaskKey
+            await loadDiffIfNeeded()
+            guard Self.shouldReportStartupRecoveryReady(
+                requestedDiffTaskKey: requestedDiffTaskKey,
+                currentDiffTaskKey: diffTaskKey,
+                isCancelled: Task.isCancelled
+            ) else { return }
+            onStartupRecoveryReady()
+        }
         .confirmationDialog("Drop file from commit?", isPresented: Binding(
             get: { pendingDropFile != nil },
             set: { if !$0 { pendingDropFile = nil } }

@@ -4,6 +4,7 @@ import AppKit
 struct MarkdownPreviewView: NSViewRepresentable {
     let result: MarkdownRenderResult
     let onLinkClick: (URL) -> Void
+    var onReady: () -> Void = {}
     @Environment(\.theme) var theme
 
     func makeCoordinator() -> MarkdownPreviewController {
@@ -13,7 +14,7 @@ struct MarkdownPreviewView: NSViewRepresentable {
     func makeNSView(context: Context) -> NSScrollView {
         context.coordinator.onLinkClick = onLinkClick
         context.coordinator.reapplyTheme(theme)
-        context.coordinator.apply(result: result)
+        context.coordinator.apply(result: result, onReady: onReady)
         return context.coordinator.scrollView
     }
 
@@ -26,7 +27,7 @@ struct MarkdownPreviewView: NSViewRepresentable {
         // SwiftUI may call this repeatedly with the same value. The result's
         // revision lets the controller preserve attachment tasks and source
         // disclosure across those duplicate updates.
-        context.coordinator.apply(result: result)
+        context.coordinator.apply(result: result, onReady: onReady)
     }
 
     static func dismantleNSView(

@@ -4,6 +4,7 @@ struct MergeConflictTabView: View {
     @Bindable var state: AppState
     let worktree: Worktree
     let tabState: MergeConflictTabState
+    let onStartupRecoveryReady: () -> Void
 
     @State private var model: MergeConflictTabModel
     /// Conflict keys dismissed from the annotation strip. Lifted out of
@@ -13,10 +14,16 @@ struct MergeConflictTabView: View {
     @State private var dismissedAnnotationKeys: Set<String> = []
     @Environment(\.theme) var theme
 
-    init(state: AppState, worktree: Worktree, tabState: MergeConflictTabState) {
+    init(
+        state: AppState,
+        worktree: Worktree,
+        tabState: MergeConflictTabState,
+        onStartupRecoveryReady: @escaping () -> Void = {}
+    ) {
         self.state = state
         self.worktree = worktree
         self.tabState = tabState
+        self.onStartupRecoveryReady = onStartupRecoveryReady
         self._model = State(
             initialValue: MergeConflictTabModel(
                 worktreePath: worktree.path,
@@ -130,6 +137,7 @@ struct MergeConflictTabView: View {
             // (where currentConflictIndex stays at 0 forever) would never
             // get auto-explained.
             triggerExplainIfNeeded()
+            onStartupRecoveryReady()
         }
     }
 

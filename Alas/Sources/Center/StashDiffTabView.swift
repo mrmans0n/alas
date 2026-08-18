@@ -5,6 +5,7 @@ struct StashDiffTabView: View {
     let state: StashDiffTabState
     var codeFontFamily: String = ""
     var codeFontSize: CGFloat = 13
+    var onStartupRecoveryReady: () -> Void = {}
 
     @Environment(\.theme) private var theme
     @State private var loaded = false
@@ -51,7 +52,10 @@ struct StashDiffTabView: View {
             }
         }
         .background(theme.color("bg-1"))
-        .task(id: imageLoadKey) { await loadImagePair() }
+        .task(id: imageLoadKey) {
+            await loadImagePair()
+            onStartupRecoveryReady()
+        }
     }
 
     private var imageLoadKey: String {
@@ -114,7 +118,10 @@ struct StashDiffTabView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(theme.color("bg-1"))
-        .task(id: "\(state.stash.ref)\u{0}\(state.file.path)") { await load() }
+        .task(id: "\(state.stash.ref)\u{0}\(state.file.path)") {
+            await load()
+            onStartupRecoveryReady()
+        }
     }
 
     private var header: some View {

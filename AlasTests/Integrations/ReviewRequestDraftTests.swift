@@ -77,6 +77,24 @@ struct ReviewRequestDraftTests {
         ))
     }
 
+    @Test func draftReviewRequestReportsReadinessOnlyForCurrentContext() {
+        #expect(DraftReviewRequestTabView.shouldReportStartupRecoveryReady(
+            requestedContextKey: "head:base",
+            currentContextKey: "head:base",
+            isCancelled: false
+        ))
+        #expect(!DraftReviewRequestTabView.shouldReportStartupRecoveryReady(
+            requestedContextKey: "head:base",
+            currentContextKey: "next:base",
+            isCancelled: false
+        ))
+        #expect(!DraftReviewRequestTabView.shouldReportStartupRecoveryReady(
+            requestedContextKey: "head:base",
+            currentContextKey: "head:base",
+            isCancelled: true
+        ))
+    }
+
     @Test @MainActor func selectingDraftSummaryCommentFocusesAndSelectsFile() async throws {
         let path = "Sources/A.swift"
         let context = ReviewRequestDraftContext(

@@ -376,6 +376,84 @@ struct MermaidAttachmentCoordinatorTests {
         #expect(await backend.waitForCancellation(source: reference.source))
     }
 
+    @Test("preview readiness waits for embedded Mermaid outcomes")
+    func previewReadinessWaitsForEmbeddedMermaidOutcomes() async throws {
+        let backend = ControlledMermaidBackend()
+        let service = MermaidRenderService(backend: backend)
+        let attachment = MermaidTextAttachment(
+            id: "mermaid-0",
+            source: "graph TD; A-->B",
+            profile: .full
+        )
+        let reference = try makeReference(attachment: attachment)
+        let controller = MarkdownPreviewController(
+            theme: try Theme.loadBundled(id: "cool-slate"),
+            mermaidService: service
+        )
+        defer { controller.dismantle() }
+        var readyCount = 0
+
+        controller.apply(result: MarkdownRenderResult(
+            revision: UUID(),
+            attributedString: makeContents(attachment: attachment),
+            anchorRanges: [:],
+            remoteImages: [],
+            mermaidAttachments: [reference]
+        ), onReady: {
+            readyCount += 1
+        })
+
+        #expect(await backend.waitForRequest(source: reference.source))
+        #expect(readyCount == 0)
+
+        await backend.resume(source: reference.source, outcome: renderedOutcome())
+        #expect(await waitForOutcome(in: attachment))
+        #expect(readyCount == 1)
+    }
+
+    @Test("empty Mermaid readiness is deferred")
+    func emptyMermaidReadinessIsDeferred() async {
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 640, height: 480))
+        let coordinator = MermaidAttachmentCoordinator()
+        defer { coordinator.cancelAll() }
+        var readyCount = 0
+
+        coordinator.apply(
+            [],
+            revision: UUID(),
+            to: textView,
+            onTextStorageDelta: nil,
+            onReady: {
+                readyCount += 1
+            }
+        )
+
+        #expect(readyCount == 0)
+        await Task.yield()
+        #expect(readyCount == 1)
+    }
+
+    @Test("cancelled empty Mermaid readiness is skipped")
+    func cancelledEmptyMermaidReadinessIsSkipped() async {
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 640, height: 480))
+        let coordinator = MermaidAttachmentCoordinator()
+        var readyCount = 0
+
+        coordinator.apply(
+            [],
+            revision: UUID(),
+            to: textView,
+            onTextStorageDelta: nil,
+            onReady: {
+                readyCount += 1
+            }
+        )
+        coordinator.cancelAll()
+
+        await Task.yield()
+        #expect(readyCount == 0)
+    }
+
     @Test("failure-disclosed source clears after a successful rerender")
     func failureDisclosedSourceClearsAfterSuccess() async throws {
         let backend = ControlledMermaidBackend()

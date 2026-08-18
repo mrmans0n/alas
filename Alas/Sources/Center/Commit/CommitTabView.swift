@@ -6,6 +6,7 @@ struct CommitTabView: View {
     let tabState: CommitTabState
     let worktreeId: String
     @Bindable var appState: AppState
+    var onStartupRecoveryReady: () -> Void = {}
 
     @State private var details: CommitDetails?
     @State private var loadingDetails = true
@@ -102,7 +103,11 @@ struct CommitTabView: View {
                 Color.clear
             }
         }
-        .task(id: loadTaskID) { await loadDetails() }
+        .task(id: loadTaskID) {
+            if await loadDetails() {
+                onStartupRecoveryReady()
+            }
+        }
     }
 
     @ViewBuilder
@@ -200,7 +205,8 @@ struct CommitTabView: View {
         .background(theme.color("bg-2"))
     }
 
-    private func loadDetails() async {
+    @discardableResult
+    private func loadDetails() async -> Bool {
         let requestedToken = CommitReviewLoadToken.next(key: loadTaskID)
         activeDetailsKey = requestedToken.key
         activeDetailsID = requestedToken.id
@@ -245,23 +251,23 @@ struct CommitTabView: View {
                 resolved = (tracked.resolvedSHA, nil, false)
                 refreshError = error.localizedDescription
             }
-            guard !Task.isCancelled, requestedToken.isActive(activeKey: activeDetailsKey, activeID: activeDetailsID) else { return }
+            guard !Task.isCancelled, requestedToken.isActive(activeKey: activeDetailsKey, activeID: activeDetailsID) else { return false }
             if resolved.reusesCurrentSnapshot {
                 if let tracked = resolved.trackedRevision {
                     appState.tabs.updateCommit(worktreeId: worktreeId, tabId: tabState.id) {
                         $0.revision = .following(tracked)
                     }
                 }
-                return
+                return true
             }
             let d = try await git.commitDetails(at: worktreePath, sha: resolved.sha)
-            guard !Task.isCancelled, requestedToken.isActive(activeKey: activeDetailsKey, activeID: activeDetailsID) else { return }
+            guard !Task.isCancelled, requestedToken.isActive(activeKey: activeDetailsKey, activeID: activeDetailsID) else { return false }
             let loaded = try await loadReviewSession(
                 details: d,
                 sha: resolved.sha,
                 preservesPublishedSession: isTrackedRefresh
             )
-            guard !Task.isCancelled, requestedToken.isActive(activeKey: activeDetailsKey, activeID: activeDetailsID) else { return }
+            guard !Task.isCancelled, requestedToken.isActive(activeKey: activeDetailsKey, activeID: activeDetailsID) else { return false }
             self.details = d
             detailsError = refreshError
             publishReviewSession(loaded, preservingSelectionByPathFrom: selectedReviewFileID)
@@ -271,9 +277,11 @@ struct CommitTabView: View {
                     $0.title = d.info.subject
                 }
             }
+            return true
         } catch {
-            guard !Task.isCancelled, requestedToken.isActive(activeKey: activeDetailsKey, activeID: activeDetailsID) else { return }
+            guard !Task.isCancelled, requestedToken.isActive(activeKey: activeDetailsKey, activeID: activeDetailsID) else { return false }
             self.detailsError = (error as NSError).localizedDescription
+            return true
         }
     }
 

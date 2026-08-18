@@ -13,6 +13,7 @@ final class CodeEditorCoordinator {
     let appState: AppState
     var onTextViewAttached: ((CodeTextView, TabID) -> Void)?
     var onTextViewDetached: ((CodeTextView?, TabID?) -> Void)?
+    var onInitialHighlightReady: ((TabID) -> Void)?
 
     private weak var textView: CodeTextView?
     private weak var buffer: EditorBuffer?
@@ -54,6 +55,7 @@ final class CodeEditorCoordinator {
     private var definition: DefinitionFeature?
     private var hoverHighlight: HoverHighlightFeature?
     private var completion: CompletionFeature?
+    private var reportedInitialHighlightReady = false
 
     private var editObserverToken: EditorBuffer.EditObserverToken?
     private var didChangeTask: Task<Void, Never>?
@@ -339,6 +341,7 @@ final class CodeEditorCoordinator {
             clearRevealHighlight()
             hoverHighlight?.cancelAndClear()
             completion?.cancelAndDismiss()
+            reportedInitialHighlightReady = false
             didChangeTask?.cancel()
             hasPendingDidChange = false
             pendingTextEdits.removeAll()
@@ -688,6 +691,7 @@ final class CodeEditorCoordinator {
 
     private func makeLSPDidChangePayload(edits: [EditorTextEdit]? = nil) -> LSPDidChangePayload? {
         guard let buffer, let language = currentLanguage else { return nil }
+        guard !buffer.isExternal || buffer.externalEditable else { return nil }
         let url = buffer.worktreeRoot.appendingPathComponent(buffer.relativePath)
         return LSPDidChangePayload(
             worktreeRoot: buffer.worktreeRoot,
@@ -787,6 +791,10 @@ final class CodeEditorCoordinator {
             storage.endEditing()
             if !cachedDiagnostics.isEmpty {
                 self.diagnosticsFeature.apply(cachedDiagnostics, to: storage, theme: theme)
+            }
+            if b.initialLoadFinished, !self.reportedInitialHighlightReady, let tabId = stableTabId {
+                self.reportedInitialHighlightReady = true
+                self.onInitialHighlightReady?(tabId)
             }
         }
     }

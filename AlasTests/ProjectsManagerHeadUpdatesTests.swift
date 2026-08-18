@@ -68,6 +68,28 @@ struct ProjectsManagerHeadUpdatesTests {
         #expect(trees.first { $0.path.path == "/wts/feat" }?.name == "feat/bar")
     }
 
+    @Test func updatesCachedBranchForMatchingPath() {
+        let cached = wt(path: "/repo", branch: "old")
+        let project = ProjectConfig(
+            id: "p1",
+            name: "p1",
+            path: "/repo",
+            color: "blue",
+            addedAt: Date(),
+            cachedWorktrees: [cached]
+        )
+        let mgr = ProjectsManager(persistedProjects: [project])
+        seed(mgr, projectId: project.id, [cached])
+
+        mgr.applyHeadUpdates(
+            projectId: project.id,
+            branchByWorktreePath: [URL(fileURLWithPath: "/repo"): "main"]
+        )
+
+        #expect(mgr.projects[0].cachedWorktrees.first?.branch == "main")
+        #expect(mgr.projects[0].cachedWorktrees.first?.name == "main")
+    }
+
     @Test func ignoresUnknownPaths() {
         let (mgr, project) = makeManager()
         seed(mgr, projectId: project.id, [wt(path: "/repo", branch: "main")])

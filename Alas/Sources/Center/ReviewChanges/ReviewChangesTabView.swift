@@ -74,6 +74,7 @@ struct ReviewChangesTabView: View {
     let worktree: Worktree
     let tabState: ReviewChangesTabState
     let appState: AppState
+    var onStartupRecoveryReady: () -> Void = {}
     var loader: ReviewChangesLoader = ReviewChangesLoader()
 
     @Environment(\.theme) private var theme
@@ -103,7 +104,9 @@ struct ReviewChangesTabView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(theme.color("bg-1"))
         .task(id: loadKey) {
-            await loadSession()
+            if await loadSession() {
+                onStartupRecoveryReady()
+            }
         }
         .task(id: reviewDraftSessionID.rawValue) {
             loadDraftCommentController()
@@ -424,7 +427,8 @@ struct ReviewChangesTabView: View {
     }
 
     @MainActor
-    private func loadSession() async {
+    @discardableResult
+    private func loadSession() async -> Bool {
         let requestedLoadToken = ReviewChangesLoadToken.next(key: loadKey)
         activeLoadKey = requestedLoadToken.key
         activeLoadID = requestedLoadToken.id
@@ -442,19 +446,22 @@ struct ReviewChangesTabView: View {
             guard
                 requestedLoadToken.isActive(activeKey: activeLoadKey, activeID: activeLoadID),
                 !Task.isCancelled
-            else { return }
+            else { return false }
             session = loaded
             selectedFileID = selectedFileID.flatMap { selected in
                 loaded.summary.files.contains { $0.id == selected } ? selected : loaded.summary.files.first?.id
             } ?? loaded.summary.files.first?.id
             loadDraftCommentController()
+            return true
         } catch is CancellationError {
+            return false
         } catch {
             guard
                 requestedLoadToken.isActive(activeKey: activeLoadKey, activeID: activeLoadID),
                 !Task.isCancelled
-            else { return }
+            else { return false }
             loadError = error.localizedDescription
+            return true
         }
     }
 

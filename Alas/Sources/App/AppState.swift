@@ -60,6 +60,7 @@ final class AppState {
     private var unpersistedGGWorktreeModes: [String: [String: GGWorktreeMode]] = [:]
     var spacesManager: SpacesManager
     var selectedWorktreeId: String?
+    let suppressesRestoredRightPaneAfterAbandonedStartup: Bool
     private(set) var isRefreshingProjectTopologies = false
     var pendingSettingsSection: SettingsSection?
     @ObservationIgnored
@@ -554,6 +555,8 @@ final class AppState {
     @ObservationIgnored
     private let store: any PersistenceStoreProtocol
     @ObservationIgnored
+    private var restoreActiveTabsOnNextReload: Bool
+    @ObservationIgnored
     private let persistenceErrorHandler: (String, String) -> Void
     @ObservationIgnored
     private let fileActionErrorHandler: (String, String) -> Void
@@ -585,9 +588,12 @@ final class AppState {
         remoteAccelerationPreparer: RemoteAccelerationPreparer? = nil,
         projectGitWatcherFactory: @escaping @MainActor (URL) -> ProjectGitWatcher = { ProjectGitWatcher(repoPath: $0) },
         runScriptCompletionWaiter: @escaping RunScriptCompletionWaiter = RunScriptCompletionMonitor.wait(for:),
-        tabsManager: TabsManager? = nil
+        tabsManager: TabsManager? = nil,
+        restoreActiveTabsOnStartup: Bool = true
     ) {
         self.store = store
+        restoreActiveTabsOnNextReload = restoreActiveTabsOnStartup
+        suppressesRestoredRightPaneAfterAbandonedStartup = !restoreActiveTabsOnStartup
         _tabs = tabsManager
         self.persistenceErrorHandler = persistenceErrorHandler ?? { title, message in
             AppState.showWarningAlert(title: title, message: message)
@@ -918,7 +924,12 @@ final class AppState {
         let allWorktreeIds = projectsManager.projects.flatMap {
             projectsManager.worktrees(projectId: $0.id).map(\.id)
         }
-        tabs.loadAll(worktreeIds: allWorktreeIds)
+        if restoreActiveTabsOnNextReload {
+            tabs.loadAll(worktreeIds: allWorktreeIds)
+        } else {
+            tabs.loadAllPersisted(restoringActiveTabs: false)
+        }
+        restoreActiveTabsOnNextReload = true
         // When cross-quit persistence is disabled, drop every persisted
         // terminal tab right after load — across all worktrees, before
         // any lazy-display path could observe them — so orphan zmx
@@ -944,6 +955,21 @@ final class AppState {
         Task { [weak self] in
             await self?.reconcileInterruptedDelegations()
         }
+    }
+
+    func completeStartupRecovery() {
+        AlasTerminationCoordinator.shared.finish?()
+    }
+
+    func completeStartupRecoveryIfCenterPaneWillNotAppear() {
+        let resolver = CenterSelectionStateResolver(
+            selectedWorktreeId: selectedWorktreeId,
+            projects: activeSpaceProjects,
+            projectsManager: projectsManager,
+            isRefreshingProjectTopologies: isRefreshingProjectTopologies
+        )
+        if case .worktree = resolver.resolve() { return }
+        completeStartupRecovery()
     }
 
     /// Compute (knownWorktreeIds, knownLeafIds) from in-memory state and
@@ -2110,8 +2136,9 @@ final class AppState {
         remoteProjectWatchers.removeValue(forKey: projectId)?.stop()
     }
 
-    func startAllProjectGitWatchers() {
+    func startAllProjectGitWatchers(includeRemoteProjects: Bool = true) {
         for project in projectsManager.projects {
+            if !includeRemoteProjects, project.host != nil { continue }
             startProjectGitWatcher(for: project)
         }
     }
@@ -2128,10 +2155,11 @@ final class AppState {
         let reportedPaths = Set(branchByWorktreePath.keys.map {
             Self.canonicalWorktreePath($0.path)
         })
-        projectsManager.applyHeadUpdates(
+        let changedPaths = projectsManager.applyHeadUpdates(
             projectId: projectId,
             branchByWorktreePath: branchByWorktreePath
         )
+        if !changedPaths.isEmpty { saveProjects() }
         for worktree in projectsManager.worktrees(projectId: projectId)
             where reportedPaths.contains(Self.canonicalWorktreePath(worktree.path.path))
         {

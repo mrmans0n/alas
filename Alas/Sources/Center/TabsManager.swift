@@ -151,10 +151,16 @@ final class TabsManager {
         return tabId
     }
 
-    func loadAll(worktreeIds: [String]) {
+    func loadAll(worktreeIds: [String], restoringActiveTabs: Bool = true) {
         for id in worktreeIds {
-            if let file = try? store.readIfExists(TabsFile.self, from: tabsFile(forWorktreeId: id)) {
+            if var file = try? store.readIfExists(TabsFile.self, from: tabsFile(forWorktreeId: id)) {
+                if !restoringActiveTabs {
+                    file.activeTabId = nil
+                }
                 byWorktree[id] = file
+                if !restoringActiveTabs {
+                    persist(id)
+                }
             }
         }
         hasLoaded = true
@@ -162,10 +168,13 @@ final class TabsManager {
 
     /// Loads every persisted tab file, including files whose worktree is not
     /// currently discoverable. `TabsFile` skips unsupported tab cases.
-    func loadAllPersisted() {
+    func loadAllPersisted(restoringActiveTabs: Bool = true) {
         guard let relativeFiles = try? FileManager.default.subpathsOfDirectory(
             atPath: tabsDirectory.path
-        ) else { return }
+        ) else {
+            loadAll(worktreeIds: [], restoringActiveTabs: restoringActiveTabs)
+            return
+        }
         let worktreeIDs = relativeFiles.compactMap { relativeFile -> String? in
             guard relativeFile.hasSuffix(".json") else { return nil }
             let file = tabsDirectory.appendingPathComponent(relativeFile)
@@ -175,7 +184,7 @@ final class TabsManager {
             guard !relativePath.isEmpty else { return nil }
             return relativePath.contains("/") ? "/\(relativePath)" : relativePath
         }
-        loadAll(worktreeIds: worktreeIDs)
+        loadAll(worktreeIds: worktreeIDs, restoringActiveTabs: restoringActiveTabs)
     }
 
     @discardableResult

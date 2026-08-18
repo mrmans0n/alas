@@ -1,0 +1,483 @@
+import Foundation
+import Testing
+@testable import Alas
+
+@Suite(.serialized)
+@MainActor
+struct StartupRecoveryTests {
+    private struct MemoryStore: PersistenceStoreProtocol {
+        var projectsFile: ProjectsFile
+
+        func write<T: Encodable>(_ value: T, to url: URL) throws {}
+
+        func readIfExists<T: Decodable>(_ type: T.Type, from url: URL) throws -> T? {
+            if type == ProjectsFile.self { return projectsFile as? T }
+            if type == AppConfig.self { return AppConfig.defaults as? T }
+            return nil
+        }
+    }
+
+    @Test func detectsAnUnfinishedPreviousLaunch() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-startup-recovery-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let recovery = StartupRecovery(
+            markerDirectory: directory,
+            processID: 42,
+            isProcessAlive: { _ in false }
+        )
+
+        #expect(recovery.begin() == false)
+        #expect(recovery.begin() == true)
+
+        recovery.finish()
+
+        #expect(recovery.begin() == false)
+    }
+
+    @Test func ignoresMarkersOwnedByLiveInstances() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-startup-recovery-live-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let liveMarker = directory.appendingPathComponent("launching-7-7000000-live")
+        _ = FileManager.default.createFile(atPath: liveMarker.path, contents: Data())
+
+        let recovery = StartupRecovery(
+            markerDirectory: directory,
+            processID: 42,
+            isProcessAlive: { $0 == 7 },
+            processStartTime: { $0 == 7 ? 7 : 42 }
+        )
+
+        #expect(recovery.begin() == false)
+        #expect(FileManager.default.fileExists(atPath: liveMarker.path))
+    }
+
+    @Test func treatsReusedPIDMarkerAsAbandoned() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-startup-recovery-reused-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let staleMarker = directory.appendingPathComponent("launching-7-7000000-stale")
+        _ = FileManager.default.createFile(atPath: staleMarker.path, contents: Data())
+
+        let recovery = StartupRecovery(
+            markerDirectory: directory,
+            processID: 42,
+            isProcessAlive: { $0 == 7 },
+            processStartTime: { $0 == 7 ? 8 : 42 }
+        )
+
+        #expect(recovery.begin())
+        #expect(!FileManager.default.fileExists(atPath: staleMarker.path))
+    }
+
+    @Test func recoveryLoadKeepsTabsWithoutActivatingOne() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-tabs-recovery-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let worktreeID = "worktree"
+        let original = TabsManager(store: PersistenceStore(), tabsDirectory: directory)
+        let first = original.appendTerminal(worktreeId: worktreeID, title: "First", sessionId: "first")
+        let second = original.appendTerminal(worktreeId: worktreeID, title: "Second", sessionId: "second")
+
+        let recovered = TabsManager(store: PersistenceStore(), tabsDirectory: directory)
+        recovered.loadAll(worktreeIds: [worktreeID], restoringActiveTabs: false)
+
+        #expect(recovered.tabs(forWorktree: worktreeID).map(\.id) == [first.id, second.id])
+        #expect(recovered.activeTabId(forWorktree: worktreeID) == nil)
+
+        let reloaded = TabsManager(store: PersistenceStore(), tabsDirectory: directory)
+        reloaded.loadAll(worktreeIds: [worktreeID])
+        #expect(reloaded.activeTabId(forWorktree: worktreeID) == nil)
+    }
+
+    @Test func recoveryLoadAlsoClearsUndiscoveredWorktrees() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-tabs-recovery-all-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let original = TabsManager(store: PersistenceStore(), tabsDirectory: directory)
+        _ = original.appendTerminal(worktreeId: "undiscovered", title: "Terminal", sessionId: "terminal")
+
+        let recovered = TabsManager(store: PersistenceStore(), tabsDirectory: directory)
+        recovered.loadAllPersisted(restoringActiveTabs: false)
+
+        #expect(recovered.activeTabId(forWorktree: "undiscovered") == nil)
+    }
+
+    @Test func recoveryLoadMarksMissingTabsDirectoryAsLoaded() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-tabs-recovery-missing-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let recovered = TabsManager(store: PersistenceStore(), tabsDirectory: directory)
+        recovered.loadAllPersisted(restoringActiveTabs: false)
+
+        #expect(recovered.hasLoaded)
+    }
+
+    @Test func missingSelectionDoesNotFallBackToRenderingTheFirstTab() {
+        let tab = Tab.terminal(.init(id: "first", title: "First", sessionId: "first"))
+
+        let composition = CenterTabComposition(
+            worktreeTabs: [tab],
+            activeWorktreeTabId: nil
+        )
+
+        #expect(composition.activeId == nil)
+    }
+
+    @Test func staleSelectionFallsBackToTheFirstAvailableTab() {
+        let tab = Tab.terminal(.init(id: "first", title: "First", sessionId: "first"))
+
+        let composition = CenterTabComposition(
+            worktreeTabs: [tab],
+            activeWorktreeTabId: "removed-tab"
+        )
+
+        #expect(composition.activeId == tab.id)
+        #expect(composition.activeTab == tab)
+    }
+
+    @Test func recoveryCompletesOnlyAfterTheCenterPaneAppears() {
+        let coordinator = AlasTerminationCoordinator.shared
+        let originalFinish = coordinator.finish
+        defer { coordinator.finish = originalFinish }
+        var didFinish = false
+        coordinator.finish = { didFinish = true }
+
+        AppState().reloadTabs()
+
+        #expect(!didFinish)
+
+        AppState().completeStartupRecovery()
+
+        #expect(didFinish)
+    }
+
+    @Test func recoveryCompletesWhenStartupHasNoCenterPane() {
+        let coordinator = AlasTerminationCoordinator.shared
+        let originalFinish = coordinator.finish
+        defer { coordinator.finish = originalFinish }
+        var didFinish = false
+        coordinator.finish = { didFinish = true }
+
+        AppState().completeStartupRecoveryIfCenterPaneWillNotAppear()
+
+        #expect(didFinish)
+    }
+
+    @Test func recoverySuppressesRestoredRightPaneForTheLaunch() {
+        let state = AppState(restoreActiveTabsOnStartup: false)
+
+        #expect(state.suppressesRestoredRightPaneAfterAbandonedStartup)
+
+        state.completeStartupRecovery()
+
+        #expect(state.suppressesRestoredRightPaneAfterAbandonedStartup)
+    }
+
+    @Test func recoveryLaunchSkipsProjectTopologyRefresh() {
+        #expect(!RootView.shouldRefreshProjectTopologiesOnStartup(
+            isRecoveringFromAbandonedStartup: true
+        ))
+        #expect(RootView.shouldRefreshProjectTopologiesOnStartup(
+            isRecoveringFromAbandonedStartup: false
+        ))
+    }
+
+    @Test func recoveryLaunchSkipsRemoteProjectGitWatchers() {
+        let localProject = ProjectConfig(
+            id: "local",
+            name: "Local",
+            path: "/local",
+            color: "#5fb7c4",
+            addedAt: Date()
+        )
+        let remoteProject = ProjectConfig(
+            id: "remote",
+            name: "Remote",
+            path: "/remote",
+            color: "#5fb7c4",
+            addedAt: Date(),
+            host: "devbox"
+        )
+        var watchedPaths: [String] = []
+        let state = AppState(
+            store: MemoryStore(projectsFile: ProjectsFile(projects: [localProject, remoteProject])),
+            projectGitWatcherFactory: { path in
+                watchedPaths.append(path.path)
+                return ProjectGitWatcher(
+                    repoPath: path,
+                    resolvedGitDir: URL(fileURLWithPath: "/git"),
+                    resolvedWorktreeRoot: path,
+                    headDebounceInterval: 0.01,
+                    headDebounceMaxWait: 0.02,
+                    topologyDebounceInterval: 0.01,
+                    topologyDebounceMaxWait: 0.02,
+                    startStreamOverride: { _, _ in }
+                )
+            }
+        )
+
+        state.startAllProjectGitWatchers(includeRemoteProjects: false)
+
+        #expect(watchedPaths == ["/local"])
+    }
+
+    @Test func recoveryLaunchPopulatesConfiguredProjectWorktrees() {
+        let root = "/srv/alas-recovery-\(UUID().uuidString)"
+        let linked = "/srv/alas-linked-\(UUID().uuidString)"
+        defer {
+            RemoteHostRegistry.shared.unregister(root: root)
+            RemoteHostRegistry.shared.unregister(root: linked)
+        }
+        let cached = Worktree(
+            id: linked,
+            projectId: "project",
+            name: "linked",
+            branch: "linked",
+            path: URL(fileURLWithPath: linked),
+            status: .clean,
+            lastActivity: Date(timeIntervalSince1970: 1)
+        )
+        let project = ProjectConfig(
+            id: "project",
+            name: "Project",
+            path: root,
+            color: "#5fb7c4",
+            addedAt: Date(),
+            cachedWorktrees: [cached],
+            host: "devbox"
+        )
+        let manager = ProjectsManager(persistedProjects: [project])
+
+        manager.populateConfiguredProjectWorktreesForRecovery()
+
+        let rows = manager.worktrees(projectId: project.id)
+        #expect(rows.count == 1)
+        #expect(rows.first?.id == cached.id)
+        #expect(RemoteHostRegistry.shared.host(forPath: linked) == "devbox")
+    }
+
+    @Test func recoveryLaunchSkipsMissingLocalCachedWorktrees() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-recovery-\(UUID().uuidString)")
+        let missing = root.appendingPathComponent("missing")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        let project = ProjectConfig(
+            id: "project",
+            name: "Project",
+            path: root.path,
+            color: "#5fb7c4",
+            addedAt: Date(),
+            cachedWorktrees: [
+                Worktree(
+                    id: Worktree.makeId(path: missing),
+                    projectId: "project",
+                    name: "missing",
+                    branch: "missing",
+                    path: missing,
+                    status: .clean,
+                    lastActivity: Date(timeIntervalSince1970: 1)
+                ),
+            ]
+        )
+        let manager = ProjectsManager(persistedProjects: [project])
+
+        manager.populateConfiguredProjectWorktreesForRecovery()
+
+        let rows = manager.worktrees(projectId: project.id)
+        #expect(rows.count == 1)
+        #expect(rows.first?.id == Worktree.makeId(path: root))
+        #expect(rows.first?.branch == "")
+        #expect(rows.first?.name == project.name)
+    }
+
+    @Test func recoveryLaunchReadsSyntheticLocalBranchFromHead() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-recovery-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent(".git"),
+            withIntermediateDirectories: true
+        )
+        try "ref: refs/heads/main\n".write(
+            to: root.appendingPathComponent(".git/HEAD"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let project = ProjectConfig(
+            id: "project",
+            name: "Display Name",
+            path: root.path,
+            color: "#5fb7c4",
+            addedAt: Date()
+        )
+        let manager = ProjectsManager(persistedProjects: [project])
+
+        manager.populateConfiguredProjectWorktreesForRecovery()
+
+        let row = try #require(manager.worktrees(projectId: project.id).first)
+        #expect(row.branch == "main")
+        #expect(row.name == "main")
+    }
+
+    @Test func gracefulTerminationCompletesStartupRecovery() {
+        let coordinator = AlasTerminationCoordinator.shared
+        let originalFinish = coordinator.finish
+        let originalFlush = coordinator.flush
+        defer {
+            coordinator.finish = originalFinish
+            coordinator.flush = originalFlush
+        }
+        coordinator.flush = nil
+        var finishCount = 0
+        coordinator.finish = { finishCount += 1 }
+
+        let reply = AlasApplicationDelegate().applicationShouldTerminate(.shared)
+
+        #expect(reply == .terminateNow)
+        #expect(finishCount == 1)
+    }
+
+    @Test func asyncRestoredTabsDoNotCompleteRecoveryFromCenterPane() {
+        let terminal = Tab.terminal(.init(id: "terminal", title: "Terminal", sessionId: "terminal"))
+        let acp = Tab.acpSession(.init(sessionId: "acp", title: "ACP"))
+        let history = Tab.fileHistory(.init(worktreeId: "wt", relativePath: "README.md"))
+        let editor = Tab.editor(.init(id: "editor", title: "README.md", relativePath: "README.md"))
+        let ggInbox = Tab.ggInbox(.init(projectId: "project", projectName: "Project"))
+
+        #expect(!StartupRecoveryPaneCompletionPolicy.shouldComplete(activeTab: terminal))
+        #expect(!StartupRecoveryPaneCompletionPolicy.shouldComplete(activeTab: acp))
+        #expect(!StartupRecoveryPaneCompletionPolicy.shouldComplete(activeTab: history))
+        #expect(!StartupRecoveryPaneCompletionPolicy.shouldComplete(activeTab: editor))
+        #expect(!StartupRecoveryPaneCompletionPolicy.shouldComplete(activeTab: ggInbox))
+        #expect(StartupRecoveryPaneCompletionPolicy.shouldComplete(activeTab: nil))
+    }
+
+    @Test func ggSplitUnavailableRecoveryWaitsForAvailabilityProbe() {
+        #expect(!CenterPaneView.shouldCompleteGGSplitStartupRecoveryWhenUnavailable(
+            hasLoadedSnapshot: true,
+            ggStackLoadState: .inactive,
+            ggAvailabilityHasProbed: false
+        ))
+        #expect(CenterPaneView.shouldCompleteGGSplitStartupRecoveryWhenUnavailable(
+            hasLoadedSnapshot: true,
+            ggStackLoadState: .inactive,
+            ggAvailabilityHasProbed: true
+        ))
+        #expect(!CenterPaneView.shouldCompleteGGSplitStartupRecoveryWhenUnavailable(
+            hasLoadedSnapshot: true,
+            ggStackLoadState: .loading,
+            ggAvailabilityHasProbed: true
+        ))
+    }
+
+    @Test func startupRecoveryWaitsForVisibleRightPaneSnapshot() {
+        #expect(CenterPaneView.shouldCompleteStartupRecoveryForRightPane(
+            isRightPaneVisible: false,
+            hasLoadedSnapshot: false,
+            isLoading: true,
+            ggStackLoadState: .loading,
+            ggAvailabilityHasProbed: false
+        ))
+        #expect(!CenterPaneView.shouldCompleteStartupRecoveryForRightPane(
+            isRightPaneVisible: true,
+            hasLoadedSnapshot: false,
+            isLoading: false,
+            ggStackLoadState: .inactive,
+            ggAvailabilityHasProbed: true
+        ))
+        #expect(!CenterPaneView.shouldCompleteStartupRecoveryForRightPane(
+            isRightPaneVisible: true,
+            hasLoadedSnapshot: true,
+            isLoading: true,
+            ggStackLoadState: .inactive,
+            ggAvailabilityHasProbed: true
+        ))
+        #expect(!CenterPaneView.shouldCompleteStartupRecoveryForRightPane(
+            isRightPaneVisible: true,
+            hasLoadedSnapshot: true,
+            isLoading: false,
+            ggStackLoadState: .loading,
+            ggAvailabilityHasProbed: true
+        ))
+        #expect(!CenterPaneView.shouldCompleteStartupRecoveryForRightPane(
+            isRightPaneVisible: true,
+            hasLoadedSnapshot: true,
+            isLoading: false,
+            ggStackLoadState: .inactive,
+            ggAvailabilityHasProbed: false
+        ))
+        #expect(CenterPaneView.shouldCompleteStartupRecoveryForRightPane(
+            isRightPaneVisible: true,
+            hasLoadedSnapshot: true,
+            isLoading: false,
+            ggStackLoadState: .loaded,
+            ggAvailabilityHasProbed: true
+        ))
+    }
+
+    @Test func asyncTabReadinessCanCompleteAfterRightPaneSettles() {
+        let terminal = Tab.terminal(.init(id: "terminal", title: "Terminal", sessionId: "terminal"))
+
+        #expect(!CenterPaneView.shouldCompleteStartupRecoveryForCenterPane(
+            activeTab: terminal,
+            readyKey: nil,
+            currentKey: "terminal\u{0}snapshot-1"
+        ))
+        #expect(CenterPaneView.shouldCompleteStartupRecoveryForCenterPane(
+            activeTab: terminal,
+            readyKey: "terminal\u{0}snapshot-1",
+            currentKey: "terminal\u{0}snapshot-1"
+        ))
+        #expect(!CenterPaneView.shouldCompleteStartupRecoveryForCenterPane(
+            activeTab: terminal,
+            readyKey: "terminal\u{0}snapshot-1",
+            currentKey: "terminal\u{0}snapshot-2"
+        ))
+    }
+
+    @Test func independentAsyncTabReadinessIgnoresRightPaneFingerprintChanges() {
+        let terminal = Tab.terminal(.init(id: "terminal", title: "Terminal", sessionId: "terminal"))
+
+        #expect(CenterPaneView.startupRecoveryActiveKey(activeTab: terminal, rightPaneState: nil) ==
+            "terminal\u{0}tab")
+    }
+
+    @Test func commitEditorDiffTaskRerunsAfterDetailsSettle() {
+        #expect(CommitEditorTabView.diffTaskKey(
+            currentSha: "abc",
+            selectedPath: "file.swift",
+            loadingDetails: true
+        ) != CommitEditorTabView.diffTaskKey(
+            currentSha: "abc",
+            selectedPath: "file.swift",
+            loadingDetails: false
+        ))
+    }
+
+    @Test func commitEditorReportsReadinessOnlyForCurrentDiffTask() {
+        #expect(CommitEditorTabView.shouldReportStartupRecoveryReady(
+            requestedDiffTaskKey: "sha:file:false",
+            currentDiffTaskKey: "sha:file:false",
+            isCancelled: false
+        ))
+        #expect(!CommitEditorTabView.shouldReportStartupRecoveryReady(
+            requestedDiffTaskKey: "sha:file:false",
+            currentDiffTaskKey: "next:file:false",
+            isCancelled: false
+        ))
+        #expect(!CommitEditorTabView.shouldReportStartupRecoveryReady(
+            requestedDiffTaskKey: "sha:file:false",
+            currentDiffTaskKey: "sha:file:false",
+            isCancelled: true
+        ))
+    }
+}

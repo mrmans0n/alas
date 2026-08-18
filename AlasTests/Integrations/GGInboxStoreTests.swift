@@ -98,7 +98,8 @@ struct GGInboxStoreTests {
         }
         try await waitUntil { runner.lastArgs == ["inbox", "--jsonl"] }
 
-        await store.refresh(projectId: "p1", repoPath: "/repo", service: GGService(runner: runner))
+        let didStartDuplicate = await store.refresh(projectId: "p1", repoPath: "/repo", service: GGService(runner: runner))
+        #expect(!didStartDuplicate)
         #expect(store.states["p1"]?.isRefreshing == true)
         #expect(store.states["p1"]?.snapshot == nil)
 
@@ -106,7 +107,7 @@ struct GGInboxStoreTests {
         try await waitUntil { store.states["p1"]?.refreshProgress?.total == 0 }
         runner.yield(Self.emptySummary)
         runner.finish()
-        await task.value
+        _ = await task.value
     }
 
     @Test func staleness() {
@@ -147,7 +148,7 @@ struct GGInboxStoreTests {
         runner.yield(#"{"event":"start","total_candidates":0,"total_stack_errors":0,"version":1,"command":"inbox"}"#)
         runner.yield(Self.emptySummary)
         runner.finish()
-        await refresh.value
+        _ = await refresh.value
 
         let state = try #require(store.states["p1"])
         #expect(state.snapshot == nil)
@@ -182,7 +183,7 @@ struct GGInboxStoreTests {
         runner.yield(#"{"event":"start","total_candidates":0,"total_stack_errors":0,"version":1,"command":"inbox"}"#)
         runner.yield(replacementSummary)
         runner.finish()
-        await refresh.value
+        _ = await refresh.value
 
         let state = try #require(store.states["p1"])
         #expect(state.snapshot == previousSnapshot)
@@ -211,7 +212,7 @@ struct GGInboxStoreTests {
 
         runner.yield(Self.emptySummary)
         runner.finish()
-        await task.value
+        _ = await task.value
         #expect(store.states["p1"]?.snapshot?.totalItems == 0)
         #expect(store.states["p1"]?.fetchedAt == Date(timeIntervalSince1970: 200))
         #expect(store.states["p1"]?.refreshProgress == nil)
@@ -235,7 +236,7 @@ struct GGInboxStoreTests {
 
         runner.yield(Self.emptySummary)
         runner.finish()
-        await task.value
+        _ = await task.value
     }
 
     @Test func excludedEntryPublishesEmptyPartialStateAndAdvancesProgress() async throws {
@@ -257,7 +258,7 @@ struct GGInboxStoreTests {
 
         runner.yield(Self.emptySummary)
         runner.finish()
-        await task.value
+        _ = await task.value
     }
 
     @Test func partialEntriesRemainInStableDisplayOrderWhenCompletionOrderDiffers() async throws {
@@ -278,7 +279,7 @@ struct GGInboxStoreTests {
 
         runner.yield(Self.emptySummary)
         runner.finish()
-        await task.value
+        _ = await task.value
     }
 
     @Test func stackErrorsPublishWithFirstPartialSnapshot() async throws {
@@ -298,7 +299,7 @@ struct GGInboxStoreTests {
 
         runner.yield(Self.emptySummary)
         runner.finish()
-        await task.value
+        _ = await task.value
     }
 
     @Test func fatalEOFBeforeSummaryRestoresOldSnapshotAndFetchedAt() async throws {
@@ -317,7 +318,7 @@ struct GGInboxStoreTests {
         runner.yield(Self.readyEntryEvent(completed: 1, total: 1))
         try await waitUntil { store.states["p1"]?.snapshot?.totalItems == 1 }
         runner.finish()
-        await task.value
+        _ = await task.value
 
         let state = try #require(store.states["p1"])
         #expect(state.snapshot == old)
@@ -343,7 +344,7 @@ struct GGInboxStoreTests {
         store.invalidate(projectId: "p1")
         runner.yield(Self.emptySummary)
         runner.finish()
-        await task.value
+        _ = await task.value
 
         let state = try #require(store.states["p1"])
         #expect(state.snapshot == old)

@@ -31,6 +31,7 @@ struct MermaidDiagramBlockView: View {
     let source: String
     let profile: MermaidPresentationProfile
     var service: MermaidRenderService = .shared
+    var onRenderComplete: () -> Void = {}
 
     @Environment(\.displayScale) private var displayScale
     @Environment(\.theme) private var theme
@@ -81,6 +82,7 @@ struct MermaidDiagramBlockView: View {
             guard renderState.currentKey == requestedKey else { return }
             renderState.apply(rendered, for: requestedKey)
             sourceDisclosure.apply(rendered)
+            onRenderComplete()
         }
     }
 

@@ -51,6 +51,7 @@ struct EditorTabView: View {
     var externalEditable: Bool = false
     let originatingRelativePath: String?
     let onRevealInFiles: (String) -> Void
+    var onStartupRecoveryReady: () -> Void = {}
     @Environment(\.theme) var theme
     @Environment(\.openWindow) private var openWindow
 
@@ -158,7 +159,8 @@ struct EditorTabView: View {
                     showLineNumbers: appState.config.code.showLineNumbers,
                     textRendering: CodeEditorTextRenderingConfiguration(code: appState.config.code),
                     onTextViewAttached: { attachFindController(to: $0) },
-                    onTextViewDetached: { detachFindController(from: $0) }
+                    onTextViewDetached: { detachFindController(from: $0) },
+                    onInitialHighlightReady: onStartupRecoveryReady
                 )
             }
         }
@@ -462,6 +464,10 @@ struct EditorTabView: View {
         externalAbsolutePath == nil || externalEditable
     }
 
+    static func isBinary(loadKind: EditorBuffer.LoadKind?) -> Bool {
+        loadKind == .notUTF8
+    }
+
     private var conflictBannerBuffer: EditorBuffer {
         if let externalAbsolutePath {
             return appState.tabs.externalBuffer(
@@ -496,9 +502,9 @@ struct EditorTabView: View {
 
     private var isBinary: Bool {
         if externalAbsolutePath != nil {
-            return appState.tabs.peekExternalBuffer(tabId: tabId)?.loadKind == .notUTF8
+            return Self.isBinary(loadKind: appState.tabs.peekExternalBuffer(tabId: tabId)?.loadKind)
         }
-        return appState.tabs.peekBuffer(tabId: tabId)?.loadKind == .notUTF8
+        return Self.isBinary(loadKind: appState.tabs.peekBuffer(tabId: tabId)?.loadKind)
     }
 
     private var binaryPlaceholder: some View {
@@ -522,6 +528,9 @@ struct EditorTabView: View {
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear {
+            onStartupRecoveryReady()
+        }
     }
 
     private var statusBadge: some View {

@@ -63,6 +63,7 @@ enum GGInboxWorktreeResolver {
 struct GGInboxTabView: View {
     let state: AppState
     let tabState: GGInboxTabState
+    var onStartupRecoveryReady: () -> Void = {}
 
     @Environment(\.theme) private var theme
     @State private var ggUpgrade = GGInstallController()
@@ -160,10 +161,14 @@ struct GGInboxTabView: View {
             content
         }
         .background(theme.color("bg-1"))
-        .onAppear { refreshIfStale() }
+        .onAppear { refreshIfStale(onComplete: onStartupRecoveryReady) }
         .onChange(of: ggUpgrade.phase) { _, phase in
             guard phase == .succeeded, supportsStreamingInbox else { return }
             refresh()
+        }
+        .onChange(of: GGAvailability.shared.hasProbed) { _, hasProbed in
+            guard hasProbed else { return }
+            refreshIfStale(onComplete: onStartupRecoveryReady)
         }
         .onChange(of: supportsStreamingInbox) { wasSupported, isSupported in
             guard Self.shouldRefreshAfterSupportTransition(
@@ -173,7 +178,11 @@ struct GGInboxTabView: View {
                 fetchedAt: inboxState.fetchedAt,
                 now: Date()
             ) else { return }
-            refresh()
+            refreshIfStale(onComplete: onStartupRecoveryReady)
+        }
+        .onChange(of: inboxState.isRefreshing) { wasRefreshing, isRefreshing in
+            guard wasRefreshing, !isRefreshing else { return }
+            onStartupRecoveryReady()
         }
     }
 
@@ -495,17 +504,30 @@ struct GGInboxTabView: View {
         )
     }
 
-    private func refreshIfStale() {
-        guard supportsStreamingInbox else { return }
+    private func refreshIfStale(onComplete: (() -> Void)? = nil) {
+        guard GGAvailability.shared.hasProbed else { return }
+        guard supportsStreamingInbox else {
+            onComplete?()
+            return
+        }
         guard inboxState.snapshot == nil
-            || GGInboxStore.isStale(fetchedAt: inboxState.fetchedAt, now: Date()) else { return }
-        refresh()
+            || GGInboxStore.isStale(fetchedAt: inboxState.fetchedAt, now: Date()) else {
+            onComplete?()
+            return
+        }
+        guard !inboxState.isRefreshing else { return }
+        refresh(onComplete: onComplete)
     }
 
-    private func refresh() {
-        guard supportsStreamingInbox, let project, state.ggInboxAvailable(projectId: project.id) else { return }
+    private func refresh(onComplete: (() -> Void)? = nil) {
+        guard supportsStreamingInbox, let project, state.ggInboxAvailable(projectId: project.id) else {
+            onComplete?()
+            return
+        }
         Task { @MainActor in
-            await store.refresh(projectId: project.id, repoPath: project.path, service: service)
+            if await store.refresh(projectId: project.id, repoPath: project.path, service: service) {
+                onComplete?()
+            }
         }
     }
 }

@@ -165,6 +165,16 @@ struct WorktreeService {
         return normalizedLineageID(stored)
     }
 
+    static func localBranchName(forWorktreeAt path: URL) -> String? {
+        guard let gitDirectory = localGitDirectory(forWorktreeAt: path),
+              let head = HeadReader.read(headFile: gitDirectory.appendingPathComponent("HEAD"))
+        else { return nil }
+        switch head {
+        case .branch(let name): return name
+        case .detached: return "(detached)"
+        }
+    }
+
     private static func localGitDirectory(forWorktreeAt path: URL) -> URL? {
         let dotGit = path.appendingPathComponent(".git")
         var isDirectory = ObjCBool(false)

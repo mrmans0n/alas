@@ -23,6 +23,7 @@ struct DiffTabView: View {
     let appState: AppState
     var codeFontFamily: String = ""
     var codeFontSize: CGFloat = 13
+    var onStartupRecoveryReady: () -> Void = {}
     let onOpenFile: (() -> Void)?
     let onRequestDiscardFile: (() -> Void)?
     @Environment(\.theme) var theme
@@ -89,7 +90,10 @@ struct DiffTabView: View {
             }
         }
         .background(theme.color("bg-1"))
-        .task(id: imageLoadKey) { await loadImagePair() }
+        .task(id: imageLoadKey) {
+            await loadImagePair()
+            onStartupRecoveryReady()
+        }
     }
 
     private var imageLoadKey: String {
@@ -152,7 +156,10 @@ struct DiffTabView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(theme.color("bg-1"))
         .onChange(of: loadKey, initial: true) { _, _ in loadDraftCommentController() }
-        .task(id: loadKey) { await load() }
+        .task(id: loadKey) {
+            await load()
+            onStartupRecoveryReady()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .alasReviewDraftCommentsDidChangeExternally)) { _ in
             try? draftCommentController?.load()
         }

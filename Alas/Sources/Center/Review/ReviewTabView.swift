@@ -21,10 +21,35 @@ enum ReviewTabPendingReviewPresentation {
     }
 }
 
+enum ReviewTabStartupRecoveryReadiness {
+    static func reviewRefreshSettled(
+        hasSnapshot: Bool,
+        isRefreshing: Bool,
+        hasError: Bool
+    ) -> Bool {
+        !isRefreshing && (hasSnapshot || hasError)
+    }
+
+    static func shouldComplete(hasReviewRequest: Bool, reviewRefreshSettled: Bool) -> Bool {
+        hasReviewRequest || reviewRefreshSettled
+    }
+}
+
+enum ReviewTabLoadKey {
+    static func build(baseLoadKey: String, reviewRequestNumber: Int?, reviewRefreshSettled: Bool) -> String {
+        [
+            baseLoadKey,
+            "prNumber:\(reviewRequestNumber.map(String.init) ?? "none")",
+            "reviewRefreshSettled:\(reviewRefreshSettled)"
+        ].joined(separator: "\u{0}")
+    }
+}
+
 struct ReviewTabView: View {
     let worktree: Worktree
     let tabState: ReviewPRTabState
     let appState: AppState
+    var onStartupRecoveryReady: () -> Void = {}
     // Loads the working-tree diff (same as ReviewChangesTabView). To show PR base..head diff
     // instead, inject a PR-diff loader here when that loader exists.
     var loader: ReviewChangesLoader = ReviewChangesLoader()
@@ -92,16 +117,13 @@ struct ReviewTabView: View {
             )
         }
         .task(id: loadKey) {
-            pendingReview = PendingReview(worktreePath: worktree.path, prNumber: reviewRequest?.number)
-            await loadSession()
-            localThreads = reviewRequest?.threads ?? []
-        }
-        .task(id: reviewRequest?.number) {
-            // Re-scope PendingReview and reload when the PR number first arrives (snapshot
-            // may populate after the loadKey task has already run with prNumber: nil).
-            pendingReview = PendingReview(worktreePath: worktree.path, prNumber: reviewRequest?.number)
-            await loadSession()
-            localThreads = reviewRequest?.threads ?? []
+            let completesStartupRecovery = ReviewTabStartupRecoveryReadiness.shouldComplete(
+                hasReviewRequest: reviewRequest != nil,
+                reviewRefreshSettled: reviewRefreshSettled
+            )
+            if await reload(completingStartupRecovery: completesStartupRecovery) {
+                onStartupRecoveryReady()
+            }
         }
         .onChange(of: reviewRequest) { _, newValue in
             guard !isWriting else { return }
@@ -111,10 +133,30 @@ struct ReviewTabView: View {
         }
     }
 
+    @MainActor
+    private func reload(completingStartupRecovery: Bool) async -> Bool {
+        pendingReview = PendingReview(worktreePath: worktree.path, prNumber: reviewRequest?.number)
+        guard await loadSession() else { return false }
+        localThreads = reviewRequest?.threads ?? []
+        return completingStartupRecovery
+    }
+
     // MARK: - Derived state from snapshot
 
     private var activeSnapshot: ReviewLoopSnapshot? {
         appState.rightPaneStore.activeState(worktreeId: tabState.worktreeId)?.reviewLoop.snapshot
+    }
+
+    private var reviewRefreshSettled: Bool {
+        guard let reviewLoop = appState.rightPaneStore
+            .activeState(worktreeId: tabState.worktreeId)?
+            .reviewLoop
+        else { return false }
+        return ReviewTabStartupRecoveryReadiness.reviewRefreshSettled(
+            hasSnapshot: reviewLoop.snapshot != nil,
+            isRefreshing: reviewLoop.isRefreshing,
+            hasError: reviewLoop.lastError != nil
+        )
     }
 
     private var matchedSnapshot: ReviewLoopSnapshot? {
@@ -147,10 +189,14 @@ struct ReviewTabView: View {
     // MARK: - Load key (mirrors ReviewChangesTabView)
 
     private var loadKey: String {
-        ReviewChangesLoadKey.build(
-            tabID: tabState.id,
-            worktreePath: worktree.path,
-            rightPaneState: appState.rightPaneStore.activeState(worktreeId: worktree.id)
+        ReviewTabLoadKey.build(
+            baseLoadKey: ReviewChangesLoadKey.build(
+                tabID: tabState.id,
+                worktreePath: worktree.path,
+                rightPaneState: appState.rightPaneStore.activeState(worktreeId: worktree.id)
+            ),
+            reviewRequestNumber: reviewRequest?.number,
+            reviewRefreshSettled: reviewRefreshSettled
         )
     }
 
@@ -600,7 +646,7 @@ struct ReviewTabView: View {
     // MARK: - Loading
 
     @MainActor
-    private func loadSession() async {
+    private func loadSession() async -> Bool {
         let requestedLoadToken = ReviewChangesLoadToken.next(key: loadKey)
         activeLoadKey = requestedLoadToken.key
         activeLoadID = requestedLoadToken.id
@@ -621,27 +667,30 @@ struct ReviewTabView: View {
                 guard
                     requestedLoadToken.isActive(activeKey: activeLoadKey, activeID: activeLoadID),
                     !Task.isCancelled
-                else { return }
+                else { return false }
                 loaded = prSession
             } else {
                 loaded = try await loader.load(worktreePath: worktree.path)
                 guard
                     requestedLoadToken.isActive(activeKey: activeLoadKey, activeID: activeLoadID),
                     !Task.isCancelled
-                else { return }
+                else { return false }
             }
 
             session = loaded
             selectedFileID = selectedFileID.flatMap { selected in
                 loaded.summary.files.contains { $0.id == selected } ? selected : loaded.summary.files.first?.id
             } ?? loaded.summary.files.first?.id
+            return true
         } catch is CancellationError {
+            return false
         } catch {
             guard
                 requestedLoadToken.isActive(activeKey: activeLoadKey, activeID: activeLoadID),
                 !Task.isCancelled
-            else { return }
+            else { return false }
             loadError = error.localizedDescription
+            return true
         }
     }
 

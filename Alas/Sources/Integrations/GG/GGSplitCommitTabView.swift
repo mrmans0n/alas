@@ -7,10 +7,12 @@ struct GGSplitCommitTabView: View {
     let capabilities: GGCapabilities
     let workflowAvailable: Bool
     let hasBlockingGitOperation: Bool
+    let completesStartupRecoveryWhenUnavailable: Bool
     let codeFontFamily: String
     let codeFontSize: CGFloat
     let onCancel: () -> Void
     let onDraftChange: (GGSplitCommitDraft) -> Void
+    let onStartupRecoveryReady: () -> Void
     let loadsOnAppear: Bool
 
     @Environment(\.theme) private var theme
@@ -37,21 +39,25 @@ struct GGSplitCommitTabView: View {
         capabilities: GGCapabilities,
         workflowAvailable: Bool,
         hasBlockingGitOperation: Bool,
+        completesStartupRecoveryWhenUnavailable: Bool = false,
         initialDraft: GGSplitCommitDraft?,
         codeFontFamily: String,
         codeFontSize: CGFloat,
         onCancel: @escaping () -> Void,
-        onDraftChange: @escaping (GGSplitCommitDraft) -> Void
+        onDraftChange: @escaping (GGSplitCommitDraft) -> Void,
+        onStartupRecoveryReady: @escaping () -> Void = {}
     ) {
         self.tabState = tabState
         self.worktreePath = worktreePath
         self.capabilities = capabilities
         self.workflowAvailable = workflowAvailable
         self.hasBlockingGitOperation = hasBlockingGitOperation
+        self.completesStartupRecoveryWhenUnavailable = completesStartupRecoveryWhenUnavailable
         self.codeFontFamily = codeFontFamily
         self.codeFontSize = codeFontSize
         self.onCancel = onCancel
         self.onDraftChange = onDraftChange
+        self.onStartupRecoveryReady = onStartupRecoveryReady
         self.loadsOnAppear = true
         _model = State(initialValue: GGSplitCommitModel(
             service: rightPaneState,
@@ -72,21 +78,25 @@ struct GGSplitCommitTabView: View {
         capabilities: GGCapabilities,
         workflowAvailable: Bool,
         hasBlockingGitOperation: Bool,
+        completesStartupRecoveryWhenUnavailable: Bool = false,
         model: GGSplitCommitModel,
         codeFontFamily: String,
         codeFontSize: CGFloat,
         onCancel: @escaping () -> Void,
-        onDraftChange: @escaping (GGSplitCommitDraft) -> Void
+        onDraftChange: @escaping (GGSplitCommitDraft) -> Void,
+        onStartupRecoveryReady: @escaping () -> Void = {}
     ) {
         self.tabState = tabState
         self.worktreePath = worktreePath
         self.capabilities = capabilities
         self.workflowAvailable = workflowAvailable
         self.hasBlockingGitOperation = hasBlockingGitOperation
+        self.completesStartupRecoveryWhenUnavailable = completesStartupRecoveryWhenUnavailable
         self.codeFontFamily = codeFontFamily
         self.codeFontSize = codeFontSize
         self.onCancel = onCancel
         self.onDraftChange = onDraftChange
+        self.onStartupRecoveryReady = onStartupRecoveryReady
         self.loadsOnAppear = false
         _model = State(initialValue: model)
         _isLoading = State(initialValue: false)
@@ -107,9 +117,13 @@ struct GGSplitCommitTabView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(theme.color("bg-1"))
-        .task(id: tabState.id) {
+        .task(id: "\(tabState.id):\(completesStartupRecoveryWhenUnavailable)") {
             if loadsOnAppear {
-                await load()
+                if await load() {
+                    onStartupRecoveryReady()
+                } else if completesStartupRecoveryWhenUnavailable {
+                    onStartupRecoveryReady()
+                }
             }
         }
     }
@@ -577,10 +591,10 @@ struct GGSplitCommitTabView: View {
         .padding(24)
     }
 
-    private func load() async {
+    private func load() async -> Bool {
         guard model.isAvailable else {
             isLoading = false
-            return
+            return false
         }
         isLoading = true
         errorMessage = nil
@@ -591,6 +605,7 @@ struct GGSplitCommitTabView: View {
             errorMessage = GGErrorPresentation.message(for: error)
         }
         isLoading = false
+        return true
     }
 
     private func apply() {

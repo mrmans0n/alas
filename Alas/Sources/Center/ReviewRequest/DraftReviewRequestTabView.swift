@@ -6,6 +6,7 @@ struct DraftReviewRequestTabView: View {
     let worktreeId: String
     let tabState: DraftReviewRequestTabState
     @Bindable var appState: AppState
+    var onStartupRecoveryReady: () -> Void = {}
 
     @State private var title: String = ""
     @State private var bodyText: String = ""
@@ -99,7 +100,16 @@ struct DraftReviewRequestTabView: View {
             guard selectedPath != path else { return }
             selectedPath = path
         }
-        .task(id: contextKey) { await loadContext() }
+        .task(id: contextKey) {
+            let requestedContextKey = contextKey
+            await loadContext()
+            guard Self.shouldReportStartupRecoveryReady(
+                requestedContextKey: requestedContextKey,
+                currentContextKey: contextKey,
+                isCancelled: Task.isCancelled
+            ) else { return }
+            onStartupRecoveryReady()
+        }
         .task(id: reviewDraftSessionID.rawValue) {
             loadDraftCommentController()
         }
@@ -140,6 +150,14 @@ struct DraftReviewRequestTabView: View {
 
     static func canLaunchReviewSession(targetMismatchMessage: String?) -> Bool {
         targetMismatchMessage == nil
+    }
+
+    static func shouldReportStartupRecoveryReady(
+        requestedContextKey: String,
+        currentContextKey: String,
+        isCancelled: Bool
+    ) -> Bool {
+        !isCancelled && requestedContextKey == currentContextKey
     }
 
     private var reviewDraftSessionID: ReviewDraftSessionID {

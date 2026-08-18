@@ -17,9 +17,16 @@ struct CenterTabComposition {
         tabs = worktreeTabs
         if worktreeTabs.contains(where: { $0.id == activeWorktreeTabId }) {
             activeId = activeWorktreeTabId
-        } else {
+        } else if activeWorktreeTabId != nil {
             activeId = worktreeTabs.first?.id
+        } else {
+            activeId = nil
         }
+    }
+
+    var activeTab: Tab? {
+        guard let activeId else { return nil }
+        return tabs.first { $0.id == activeId }
     }
 
     func adjacentTabID(in direction: CenterTabNavigationDirection) -> TabID? {
@@ -58,11 +65,27 @@ struct CenterTabClosurePlan {
     }
 }
 
+enum StartupRecoveryPaneCompletionPolicy {
+    static func shouldComplete(activeTab: Tab?) -> Bool {
+        switch activeTab {
+        case .terminal, .editor, .diff, .stashDiff, .commit, .commitEditor, .draftCommit,
+             .draftReviewRequest, .reviewChanges, .reviewSession, .imagePreview,
+             .mergeConflict, .acpSession, .reviewPR, .fileSnapshot, .fileHistory,
+             .ggInbox, .ggSplitCommit:
+            false
+        default:
+            true
+        }
+    }
+}
+
 struct CenterPaneView: View {
     @Bindable var state: AppState
     let worktree: Worktree
     var allowsPaneFocus: Bool = true
+    var effectiveRightPaneVisible: Bool = true
     @Environment(\.theme) var theme
+    @State private var startupRecoveryReadyKey: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -315,7 +338,8 @@ struct CenterPaneView: View {
                         TerminalTabView(state: state,
                                         worktreeId: worktree.id,
                                         tabId: tab.id,
-                                        allowsPaneFocus: allowsPaneFocus)
+                                        allowsPaneFocus: allowsPaneFocus,
+                                        onStartupRecoveryReady: { completeStartupRecoveryIfActive(tab.id) })
                     case .editor(let s):
                         if MarkdownFileType.supportsRichPreview(relativePath: s.isExternal
                                                                  ? (s.externalAbsolutePath ?? "")
@@ -332,7 +356,8 @@ struct CenterPaneView: View {
                                             revealCharacter: s.revealCharacter,
                                             revealRevision: s.revealRevision,
                                             appState: state,
-                                            onRevealInFiles: { path in state.revealInFiles(worktreeId: worktree.id, path: path) })
+                                            onRevealInFiles: { path in state.revealInFiles(worktreeId: worktree.id, path: path) },
+                                            onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) })
                         } else {
                             EditorTabView(worktree: worktree,
                                           worktreePath: worktree.path,
@@ -347,7 +372,8 @@ struct CenterPaneView: View {
                                           externalAbsolutePath: s.externalAbsolutePath,
                                           externalEditable: s.isExternalEditable,
                                           originatingRelativePath: s.originatingRelativePath,
-                                          onRevealInFiles: { path in state.revealInFiles(worktreeId: worktree.id, path: path) })
+                                          onRevealInFiles: { path in state.revealInFiles(worktreeId: worktree.id, path: path) },
+                                          onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) })
                         }
                     case .diff(let s):
                         let openAvailable = DiffOpenFileAvailability.isAvailable(
@@ -363,6 +389,7 @@ struct CenterPaneView: View {
                             appState: state,
                             codeFontFamily: state.config.code.fontFamily,
                             codeFontSize: CGFloat(state.config.code.fontSize),
+                            onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) },
                             onOpenFile: openAvailable
                                 ? { state.openFile(relativePath: s.relativePath, worktreeId: worktree.id) }
                                 : nil,
@@ -381,7 +408,8 @@ struct CenterPaneView: View {
                             worktreePath: worktree.path,
                             state: s,
                             codeFontFamily: state.config.code.fontFamily,
-                            codeFontSize: CGFloat(state.config.code.fontSize)
+                            codeFontSize: CGFloat(state.config.code.fontSize),
+                            onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) }
                         )
                         .id(s.id)
                     case .commit(let s):
@@ -389,7 +417,8 @@ struct CenterPaneView: View {
                             worktreePath: worktree.path,
                             tabState: s,
                             worktreeId: worktree.id,
-                            appState: state
+                            appState: state,
+                            onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) }
                         )
                         .id(s.viewID)
                     case .commitEditor(let s):
@@ -397,7 +426,8 @@ struct CenterPaneView: View {
                             worktreePath: worktree.path,
                             worktreeId: worktree.id,
                             tabState: s,
-                            appState: state
+                            appState: state,
+                            onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) }
                         )
                         .id(s.id)
                     case .draftCommit(let draftState):
@@ -405,7 +435,8 @@ struct CenterPaneView: View {
                             worktreePath: worktree.path,
                             worktreeId: worktree.id,
                             tabState: draftState,
-                            appState: state
+                            appState: state,
+                            onStartupRecoveryReady: { completeStartupRecoveryIfActive(draftState.id) }
                         )
                         .id(draftState.presentationID)
                         .task(id: rightPaneActivationKey) {
@@ -416,14 +447,16 @@ struct CenterPaneView: View {
                             worktreePath: worktree.path,
                             worktreeId: worktree.id,
                             tabState: draftState,
-                            appState: state
+                            appState: state,
+                            onStartupRecoveryReady: { completeStartupRecoveryIfActive(draftState.id) }
                         )
                         .id(draftState.id)
                     case .reviewChanges(let reviewState):
                         ReviewChangesTabView(
                             worktree: worktree,
                             tabState: reviewState,
-                            appState: state
+                            appState: state,
+                            onStartupRecoveryReady: { completeStartupRecoveryIfActive(reviewState.id) }
                         )
                         .id(reviewState.id)
                         .task(id: rightPaneActivationKey) {
@@ -433,7 +466,8 @@ struct CenterPaneView: View {
                         ReviewTabView(
                             worktree: worktree,
                             tabState: prState,
-                            appState: state
+                            appState: state,
+                            onStartupRecoveryReady: { completeStartupRecoveryIfActive(prState.id) }
                         )
                         .id(prState.id)
                         .task(id: rightPaneActivationKey) {
@@ -443,13 +477,15 @@ struct CenterPaneView: View {
                         ReviewSessionTabView(
                             worktree: worktree,
                             tabState: sessionState,
-                            appState: state
+                            appState: state,
+                            onStartupRecoveryReady: { completeStartupRecoveryIfActive(sessionState.id) }
                         )
                         .id(sessionState.viewID)
                     case .imagePreview(let s):
                         ImagePreviewTabView(worktreePath: worktree.path,
                                              relativePath: s.relativePath,
-                                             onRevealInFiles: { path in state.revealInFiles(worktreeId: worktree.id, path: path) })
+                                             onRevealInFiles: { path in state.revealInFiles(worktreeId: worktree.id, path: path) },
+                                             onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) })
                     case .binaryPreview(let s):
                         BinaryPreviewTabView(worktreePath: worktree.path,
                                              relativePath: s.relativePath,
@@ -458,7 +494,8 @@ struct CenterPaneView: View {
                         MergeConflictTabView(
                             state: state,
                             worktree: worktree,
-                            tabState: s
+                            tabState: s,
+                            onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) }
                         )
                         .id(s.id)
                     case .fileSnapshot(let s):
@@ -466,20 +503,31 @@ struct CenterPaneView: View {
                             worktreePath: worktree.path,
                             state: s,
                             codeFontFamily: state.config.code.fontFamily,
-                            codeFontSize: CGFloat(state.config.code.fontSize)
+                            codeFontSize: CGFloat(state.config.code.fontSize),
+                            onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) }
                         )
                     case .fileHistory(let s):
                         FileHistoryTabView(
                             worktreePath: worktree.path,
                             state: s,
                             onSelectCommit: { state.openCommitTab(worktreeId: worktree.id, commit: $0) },
-                            onCopySHA: { Clipboard.copy($0.sha) }
+                            onCopySHA: { Clipboard.copy($0.sha) },
+                            onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) }
                         )
                     case .acpSession(let s):
-                        ACPTabView(sessionId: s.sessionId, state: state, worktree: worktree)
+                        ACPTabView(
+                            sessionId: s.sessionId,
+                            state: state,
+                            worktree: worktree,
+                            onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) }
+                        )
                             .id(s.id)
                     case .ggInbox(let s):
-                        GGInboxTabView(state: state, tabState: s)
+                        GGInboxTabView(
+                            state: state,
+                            tabState: s,
+                            onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) }
+                        )
                             .id(s.id)
                     case .ggSplitCommit(let s):
                         let capabilities = GGAvailability.shared.capabilities
@@ -510,6 +558,12 @@ struct CenterPaneView: View {
                                 capabilities: capabilities,
                                 workflowAvailable: workflowAvailable,
                                 hasBlockingGitOperation: hasBlockingGitOperation,
+                                completesStartupRecoveryWhenUnavailable: Self
+                                    .shouldCompleteGGSplitStartupRecoveryWhenUnavailable(
+                                        hasLoadedSnapshot: rightPaneState.hasLoadedSnapshot,
+                                        ggStackLoadState: rightPaneState.ggStackLoadState,
+                                        ggAvailabilityHasProbed: GGAvailability.shared.hasProbed
+                                    ),
                                 initialDraft: state.tabs.ggSplitCommitDraft(worktreeId: worktree.id, tabId: s.id),
                                 codeFontFamily: state.config.code.fontFamily,
                                 codeFontSize: CGFloat(state.config.code.fontSize),
@@ -522,7 +576,8 @@ struct CenterPaneView: View {
                                         tabId: s.id,
                                         draft: draft
                                     )
-                                }
+                                },
+                                onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) }
                             )
                             .id("\(s.id):\(capabilities.structuredSplit):\(workflowAvailable):\(hasBlockingGitOperation)")
                             .task(id: rightPaneActivationKey) {
@@ -535,6 +590,12 @@ struct CenterPaneView: View {
                                 }
                         }
                     }
+                } else {
+                    ContentUnavailableView(
+                        "Choose a Tab",
+                        systemImage: "rectangle.stack",
+                        description: Text("No tab was reopened after the previous session ended unexpectedly.")
+                    )
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -554,10 +615,114 @@ struct CenterPaneView: View {
                 }
             }
         }
+        .onAppear {
+            completeStartupRecoveryIfPaneIsStable()
+        }
+        .onChange(of: state.tabs.hasLoaded) { _, _ in
+            completeStartupRecoveryIfPaneIsStable()
+        }
+        .onChange(of: state.tabs.activeTabId(forWorktree: worktree.id)) { _, _ in
+            startupRecoveryReadyKey = nil
+            completeStartupRecoveryIfPaneIsStable()
+        }
+        .onChange(of: startupRecoveryActiveKey) { _, _ in
+            startupRecoveryReadyKey = nil
+            completeStartupRecoveryIfPaneIsStable()
+        }
+        .onChange(of: rightPaneStartupRecoveryReady) { _, _ in
+            completeStartupRecoveryIfPaneIsStable()
+        }
         .background(theme.color("bg-1"))
         .sheet(item: $state.selectedRunScriptFailure) { failure in
             RunScriptFailureDetailView(failure: failure)
         }
+    }
+
+    private func completeStartupRecoveryIfPaneIsStable() {
+        guard state.tabs.hasLoaded else { return }
+        let composition = CenterTabComposition(
+            worktreeTabs: state.tabs.tabs(forWorktree: worktree.id),
+            activeWorktreeTabId: state.tabs.activeTabId(forWorktree: worktree.id)
+        )
+        guard Self.shouldCompleteStartupRecoveryForCenterPane(
+            activeTab: composition.activeTab,
+            readyKey: startupRecoveryReadyKey,
+            currentKey: startupRecoveryActiveKey
+        ) else { return }
+        guard rightPaneStartupRecoveryReady else { return }
+        state.completeStartupRecovery()
+    }
+
+    private var rightPaneStartupRecoveryReady: Bool {
+        let rightPaneState = state.rightPaneStore.activeState(worktreeId: worktree.id)
+        return Self.shouldCompleteStartupRecoveryForRightPane(
+            isRightPaneVisible: effectiveRightPaneVisible,
+            hasLoadedSnapshot: rightPaneState?.hasLoadedSnapshot ?? false,
+            isLoading: rightPaneState?.loading ?? false,
+            ggStackLoadState: rightPaneState?.ggStackLoadState ?? .inactive,
+            ggAvailabilityHasProbed: GGAvailability.shared.hasProbed
+        )
+    }
+
+    static func shouldCompleteStartupRecoveryForRightPane(
+        isRightPaneVisible: Bool,
+        hasLoadedSnapshot: Bool,
+        isLoading: Bool,
+        ggStackLoadState: GGStackLoadState,
+        ggAvailabilityHasProbed: Bool
+    ) -> Bool {
+        !isRightPaneVisible || (hasLoadedSnapshot && !isLoading && ggAvailabilityHasProbed && ggStackLoadState != .loading)
+    }
+
+    static func shouldCompleteStartupRecoveryForCenterPane(
+        activeTab: Tab?,
+        readyKey: String?,
+        currentKey: String?
+    ) -> Bool {
+        StartupRecoveryPaneCompletionPolicy.shouldComplete(activeTab: activeTab) || (readyKey != nil && readyKey == currentKey)
+    }
+
+    static func shouldCompleteGGSplitStartupRecoveryWhenUnavailable(
+        hasLoadedSnapshot: Bool,
+        ggStackLoadState: GGStackLoadState,
+        ggAvailabilityHasProbed: Bool
+    ) -> Bool {
+        hasLoadedSnapshot && ggAvailabilityHasProbed && ggStackLoadState != .loading
+    }
+
+    private func completeStartupRecoveryIfActive(_ tabID: TabID) {
+        guard state.selectedWorktreeId == worktree.id else { return }
+        let composition = CenterTabComposition(
+            worktreeTabs: state.tabs.tabs(forWorktree: worktree.id),
+            activeWorktreeTabId: state.tabs.activeTabId(forWorktree: worktree.id)
+        )
+        guard composition.activeId == tabID else { return }
+        startupRecoveryReadyKey = startupRecoveryActiveKey
+        guard rightPaneStartupRecoveryReady else { return }
+        state.completeStartupRecovery()
+    }
+
+    private var startupRecoveryActiveKey: String? {
+        let composition = CenterTabComposition(
+            worktreeTabs: state.tabs.tabs(forWorktree: worktree.id),
+            activeWorktreeTabId: state.tabs.activeTabId(forWorktree: worktree.id)
+        )
+        return Self.startupRecoveryActiveKey(
+            activeTab: composition.activeTab,
+            rightPaneState: state.rightPaneStore.activeState(worktreeId: worktree.id)
+        )
+    }
+
+    static func startupRecoveryActiveKey(activeTab: Tab?, rightPaneState: RightPaneState?) -> String? {
+        guard let activeTab else { return nil }
+        let loadKey: String
+        switch activeTab {
+        case .draftCommit, .reviewChanges, .reviewPR, .ggSplitCommit:
+            loadKey = rightPaneState.map(ReviewChangesLoadKey.fingerprint) ?? "no-right-pane-state"
+        default:
+            loadKey = "tab"
+        }
+        return [activeTab.id, loadKey].joined(separator: "\u{0}")
     }
 
     private var rightPaneActivationKey: String {

@@ -262,6 +262,33 @@ final class ProjectsManager {
         applyWorktreeOrdering(projectId: projectId)
     }
 
+    func populateConfiguredProjectWorktreesForRecovery() {
+        for project in projects where worktreesByProject[project.id, default: []].isEmpty {
+            let cachedWorktrees = project.cachedWorktrees.filter {
+                project.host != nil || FileManager.default.fileExists(atPath: $0.path.path)
+            }
+            if !cachedWorktrees.isEmpty {
+                reconcileRemoteHostRegistrations(project: project, previous: [], reconciled: cachedWorktrees)
+                worktreesByProject[project.id] = cachedWorktrees
+                applyWorktreeOrdering(projectId: project.id)
+                continue
+            }
+            let path = URL(fileURLWithPath: project.path)
+            guard project.host != nil || FileManager.default.fileExists(atPath: path.path) else { continue }
+            let branch = WorktreeService.localBranchName(forWorktreeAt: path) ?? ""
+            insertOptimisticWorktree(Worktree(
+                id: Worktree.makeId(path: path),
+                projectId: project.id,
+                name: branch.isEmpty ? project.name : branch,
+                branch: branch,
+                path: path,
+                isMainWorktree: true,
+                status: .clean,
+                lastActivity: WorktreeService.lastActivity(forWorktreeAt: path) ?? Date()
+            ))
+        }
+    }
+
     func removeOptimisticWorktree(id: String, projectId: String) {
         worktreesByProject[projectId]?.removeAll { $0.id == id }
         worktreeOperationStates.removeValue(forKey: id)
@@ -464,6 +491,8 @@ final class ProjectsManager {
         let reconciledIds = Set(reconciled.map(\.id))
         let previousGGWorktreeModes = projects[idx].ggWorktreeModes
         let previousIssueAttachments = projects[idx].issueAttachments
+        let previousCachedWorktrees = projects[idx].cachedWorktrees
+        projects[idx].cachedWorktrees = reconciled
         for (id, mode) in resolvedCreateModes {
             if mode == .inherit {
                 projects[idx].ggWorktreeModes.removeValue(forKey: id)
@@ -479,6 +508,7 @@ final class ProjectsManager {
         }
         return anchorChanged
             || orderChanged
+            || projects[idx].cachedWorktrees != previousCachedWorktrees
             || projects[idx].hiddenWorktreePaths.count != before
             || projects[idx].ggWorktreeModes != previousGGWorktreeModes
             || projects[idx].issueAttachments != previousIssueAttachments
@@ -547,31 +577,53 @@ final class ProjectsManager {
     /// correspond to real git worktrees, so git's branch is still the truth.
     @discardableResult
     func applyHeadUpdates(projectId: String, branchByWorktreePath: [URL: String]) -> Set<String> {
-        guard var rows = worktreesByProject[projectId], !rows.isEmpty else { return [] }
+        guard let projectIndex = projects.firstIndex(where: { $0.id == projectId }),
+              !branchByWorktreePath.isEmpty
+        else { return [] }
         let lookup: [String: String] = Dictionary(uniqueKeysWithValues:
             branchByWorktreePath.map { (canonical($0.key), $0.value) }
         )
         var changed = false
         var changedPaths: Set<String> = []
-        for i in rows.indices {
-            let key = canonical(rows[i].path)
-            guard let newBranch = lookup[key] else { continue }
-            if let op = worktreeOperationStates[rows[i].id] {
+        func canUpdate(_ worktree: Worktree) -> Bool {
+            if let op = worktreeOperationStates[worktree.id] {
                 switch op {
-                case .creating, .createFailed: continue
-                case .preparingDelete, .deleting, .deleteFailed: break
+                case .creating, .createFailed: return false
+                case .preparingDelete, .deleting, .deleteFailed: return true
                 }
             }
-            if rows[i].branch != newBranch || rows[i].name != newBranch {
-                rows[i].branch = newBranch
-                rows[i].name = newBranch
-                changed = true
-                changedPaths.insert(rows[i].path.path)
+            return true
+        }
+        if var rows = worktreesByProject[projectId], !rows.isEmpty {
+            for i in rows.indices {
+                let key = canonical(rows[i].path)
+                guard let newBranch = lookup[key], canUpdate(rows[i]) else { continue }
+                if rows[i].branch != newBranch || rows[i].name != newBranch {
+                    rows[i].branch = newBranch
+                    rows[i].name = newBranch
+                    changed = true
+                    changedPaths.insert(rows[i].path.path)
+                }
+            }
+            if changed {
+                worktreesByProject[projectId] = rows
+                applyWorktreeOrdering(projectId: projectId)
             }
         }
-        if changed {
-            worktreesByProject[projectId] = rows
-            applyWorktreeOrdering(projectId: projectId)
+        var cachedRows = projects[projectIndex].cachedWorktrees
+        var cachedChanged = false
+        for i in cachedRows.indices {
+            let key = canonical(cachedRows[i].path)
+            guard let newBranch = lookup[key], canUpdate(cachedRows[i]) else { continue }
+            if cachedRows[i].branch != newBranch || cachedRows[i].name != newBranch {
+                cachedRows[i].branch = newBranch
+                cachedRows[i].name = newBranch
+                cachedChanged = true
+                changedPaths.insert(cachedRows[i].path.path)
+            }
+        }
+        if cachedChanged {
+            projects[projectIndex].cachedWorktrees = cachedRows
         }
         return changedPaths
     }

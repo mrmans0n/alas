@@ -4,7 +4,7 @@ import SwiftUI
 @main
 struct AlasApp: App {
     @NSApplicationDelegateAdaptor(AlasApplicationDelegate.self) private var appDelegate
-    @State private var state = AppState()
+    @State private var state: AppState
 
     private static var isRunningUnitTests: Bool {
         let environment = ProcessInfo.processInfo.environment
@@ -20,6 +20,15 @@ struct AlasApp: App {
     }
 
     init() {
+        if Self.isRunningUnitTests {
+            _state = State(initialValue: AppState())
+        } else {
+            let recovery = StartupRecovery()
+            _state = State(initialValue: AppState(
+                restoreActiveTabsOnStartup: !recovery.begin()
+            ))
+            AlasTerminationCoordinator.shared.finish = recovery.finish
+        }
         BundledFontRegistrar.registerFonts()
         // Refresh Gatekeeper cache when the user returns from System Settings
         // after granting permission to a blocked LSP binary.

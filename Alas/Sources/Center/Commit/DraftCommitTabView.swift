@@ -5,6 +5,7 @@ struct DraftCommitTabView: View {
     let worktreeId: String
     let tabState: DraftCommitTabState
     @Bindable var appState: AppState
+    var onStartupRecoveryReady: () -> Void = {}
 
     @State private var subject: String = ""
     @State private var bodyText: String = ""
@@ -174,7 +175,11 @@ struct DraftCommitTabView: View {
         }
         .onChange(of: selectedFileID) { _, new in persist(selectedPath: new?.path) }
         .onChange(of: busy) { _, _ in refreshActionsOverlay() }
-        .task(id: stagedKey) { await loadStagedSession() }
+        .task(id: stagedKey) {
+            if await loadStagedSession() {
+                onStartupRecoveryReady()
+            }
+        }
     }
 
     @ViewBuilder
@@ -337,7 +342,8 @@ struct DraftCommitTabView: View {
     }
 
     @MainActor
-    private func loadStagedSession() async {
+    @discardableResult
+    private func loadStagedSession() async -> Bool {
         let token = stagedKey
         loadingSession = true
         error = nil
@@ -346,16 +352,18 @@ struct DraftCommitTabView: View {
         }
         do {
             let session = try await StagedDiffLoader().load(worktreePath: worktreePath)
-            guard !Task.isCancelled, stagedKey == token else { return }
+            guard !Task.isCancelled, stagedKey == token else { return false }
             publishLoadedSession(session)
             synchronizeSelection(with: session)
+            return true
         } catch is CancellationError {
-            // ignore
+            return false
         } catch {
-            guard stagedKey == token else { return }
+            guard stagedKey == token else { return false }
             stagedSession = nil
             sessionWithActions = nil
             self.error = (error as NSError).localizedDescription
+            return true
         }
     }
 

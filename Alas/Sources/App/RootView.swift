@@ -71,18 +71,27 @@ struct RootView: View {
             }
             .task {
                 state.startHarness()
-                _ = await state.refreshAllProjectTopologies()
+                let isRecovering = state.suppressesRestoredRightPaneAfterAbandonedStartup
+                if Self.shouldRefreshProjectTopologiesOnStartup(isRecoveringFromAbandonedStartup: isRecovering) {
+                    _ = await state.refreshAllProjectTopologies()
+                } else {
+                    state.projectsManager.populateConfiguredProjectWorktreesForRecovery()
+                }
                 guard !Task.isCancelled else { return }
-                // Worktrees now exist — load any persisted tab files for them. Init
-                // can't do this because refreshAll runs async after init.
+                // Recovery launch avoids replaying the failed refresh, but still
+                // seeds project roots so tab and selection resolution can recover.
                 state.reloadTabs()
                 if state.selectedWorktreeId == nil {
                     state.selectInitialWorktree(
                         id: state.resolvedSelectionForActiveSpaceForStartup()
                     )
                 }
-                state.startAllProjectGitWatchers()
+                state.completeStartupRecoveryIfCenterPaneWillNotAppear()
+                state.startAllProjectGitWatchers(includeRemoteProjects: !isRecovering)
                 state.rescanAgents()
+            }
+            .onChange(of: state.selectedWorktreeId) { _, _ in
+                state.completeStartupRecoveryIfCenterPaneWillNotAppear()
             }
     }
 
@@ -95,6 +104,12 @@ struct RootView: View {
             ReviewTargetDialog(appState: state)
             RunScriptDialog(appState: state, selectedWorktree: selectedWorktree)
         }
+    }
+
+    static func shouldRefreshProjectTopologiesOnStartup(
+        isRecoveringFromAbandonedStartup: Bool
+    ) -> Bool {
+        !isRecoveringFromAbandonedStartup
     }
 
     @ViewBuilder
@@ -117,10 +132,14 @@ struct RootView: View {
                     set: { state.config.rightPaneWidth = $0 }
                 ),
                 sidebarVisible: state.config.sidebarVisible,
-                rightVisible: state.config.rightPaneVisible && rightPaneSelection.showsRightPane,
+                rightVisible: state.config.rightPaneVisible
+                    && rightPaneSelection.showsRightPane
+                    && !state.suppressesRestoredRightPaneAfterAbandonedStartup,
                 onWidthsChanged: { state.saveConfig() },
                 sidebar: { sidebarContent },
-                center: { centerContent() },
+                center: { effectiveRightPaneVisible in
+                    centerContent(effectiveRightPaneVisible: effectiveRightPaneVisible)
+                },
                 right: { rightContent(selection: rightPaneSelection) }
             )
         }
@@ -206,7 +225,7 @@ struct RootView: View {
     }
 
     @ViewBuilder
-    private func centerContent() -> some View {
+    private func centerContent(effectiveRightPaneVisible: Bool) -> some View {
         let resolver = CenterSelectionStateResolver(
             selectedWorktreeId: state.selectedWorktreeId,
             projects: state.activeSpaceProjects,
@@ -218,7 +237,8 @@ struct RootView: View {
             CenterPaneView(
                 state: state,
                 worktree: wt,
-                allowsPaneFocus: !state.isKeyboardOverlayOpen
+                allowsPaneFocus: !state.isKeyboardOverlayOpen,
+                effectiveRightPaneVisible: effectiveRightPaneVisible
             )
         case .deleting(let wt):
             DeletingWorktreeView(worktree: wt)

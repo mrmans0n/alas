@@ -40,6 +40,7 @@ final class MermaidAttachmentCoordinator {
     private var failureDisclosedSourceIDs: Set<String> = []
     private var viewerTheme: Theme?
     private let onWillPresentViewer: (() -> Void)?
+    private var onReady: (() -> Void)?
 
     init(
         mode: MermaidPresentationProfile = .full,
@@ -150,7 +151,8 @@ final class MermaidAttachmentCoordinator {
         _ references: [MermaidAttachmentReference],
         revision: UUID,
         to textView: NSTextView,
-        onTextStorageDelta: ((_ location: Int, _ delta: Int) -> Void)?
+        onTextStorageDelta: ((_ location: Int, _ delta: Int) -> Void)?,
+        onReady: (() -> Void)? = nil
     ) {
         let scale = textView.window?.backingScaleFactor
             ?? NSScreen.main?.backingScaleFactor
@@ -167,8 +169,18 @@ final class MermaidAttachmentCoordinator {
         self.textView = textView
         self.references = Dictionary(uniqueKeysWithValues: references.map { ($0.id, $0) })
         self.onTextStorageDelta = onTextStorageDelta
+        self.onReady = onReady
         self.backingScale = scale
         observeBackingPropertiesIfNeeded(of: textView.window)
+        if references.isEmpty {
+            finishIfReady { [weak self, weak textView] in
+                guard let self, self.revision == revision, self.textView === textView else {
+                    return false
+                }
+                return true
+            }
+            return
+        }
         for reference in references {
             let cell = reference.attachment.mermaidCell
             cell.delegate = self
@@ -213,6 +225,7 @@ final class MermaidAttachmentCoordinator {
         revision = nil
         textView = nil
         onTextStorageDelta = nil
+        onReady = nil
         backingScale = nil
         if let backingPropertiesObserver {
             NotificationCenter.default.removeObserver(backingPropertiesObserver)
@@ -249,7 +262,8 @@ final class MermaidAttachmentCoordinator {
                     Array(self.references.values),
                     revision: revision,
                     to: textView,
-                    onTextStorageDelta: self.onTextStorageDelta
+                    onTextStorageDelta: self.onTextStorageDelta,
+                    onReady: self.onReady
                 )
             }
         }
@@ -361,6 +375,21 @@ final class MermaidAttachmentCoordinator {
             hideSource(id: id, in: textView)
         }
         invalidate(reference.attachment, in: textView)
+        finishIfReady()
+    }
+
+    private func finishIfReady(afterDeferralShouldRun: (() -> Bool)? = nil) {
+        guard tasks.isEmpty else { return }
+        let callback = onReady
+        onReady = nil
+        if let afterDeferralShouldRun {
+            Task { @MainActor in
+                guard afterDeferralShouldRun() else { return }
+                callback?()
+            }
+        } else {
+            callback?()
+        }
     }
 
     private func sourceRange(
