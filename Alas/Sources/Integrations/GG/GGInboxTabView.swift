@@ -182,7 +182,7 @@ struct GGInboxTabView: View {
         }
         .onChange(of: inboxState.isRefreshing) { wasRefreshing, isRefreshing in
             guard wasRefreshing, !isRefreshing else { return }
-            refreshIfStale(onComplete: onStartupRecoveryReady)
+            onStartupRecoveryReady()
         }
     }
 
