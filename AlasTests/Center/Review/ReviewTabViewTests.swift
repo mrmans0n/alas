@@ -73,6 +73,18 @@ struct ReviewTabViewTests {
         ))
     }
 
+    @Test func reviewTabLoadKeyChangesWhenReviewRequestArrives() {
+        #expect(ReviewTabLoadKey.build(
+            baseLoadKey: "base",
+            reviewRequestNumber: nil,
+            reviewRefreshSettled: false
+        ) != ReviewTabLoadKey.build(
+            baseLoadKey: "base",
+            reviewRequestNumber: 1042,
+            reviewRefreshSettled: false
+        ))
+    }
+
     @Test func outdatedDrawerCapsExpandedListHeightToProtectReviewContent() {
         #expect(OutdatedThreadsDrawerPresentation.expandedListMaxHeight(availableHeight: 1_200) == 280)
         #expect(OutdatedThreadsDrawerPresentation.expandedListMaxHeight(availableHeight: 600) == 210)

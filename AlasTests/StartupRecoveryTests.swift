@@ -213,6 +213,23 @@ struct StartupRecoveryTests {
         ))
     }
 
+    @Test func asyncTabReadinessCanCompleteAfterRightPaneSettles() {
+        let terminal = Tab.terminal(.init(id: "terminal", title: "Terminal", sessionId: "terminal"))
+
+        #expect(!CenterPaneView.shouldCompleteStartupRecoveryForCenterPane(
+            activeTab: terminal,
+            readyTabID: nil
+        ))
+        #expect(CenterPaneView.shouldCompleteStartupRecoveryForCenterPane(
+            activeTab: terminal,
+            readyTabID: "terminal"
+        ))
+        #expect(!CenterPaneView.shouldCompleteStartupRecoveryForCenterPane(
+            activeTab: terminal,
+            readyTabID: "other"
+        ))
+    }
+
     @Test func commitEditorDiffTaskRerunsAfterDetailsSettle() {
         #expect(CommitEditorTabView.diffTaskKey(
             currentSha: "abc",

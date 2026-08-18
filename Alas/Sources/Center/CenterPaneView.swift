@@ -84,6 +84,7 @@ struct CenterPaneView: View {
     let worktree: Worktree
     var allowsPaneFocus: Bool = true
     @Environment(\.theme) var theme
+    @State private var startupRecoveryReadyTabID: TabID?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -620,6 +621,7 @@ struct CenterPaneView: View {
             completeStartupRecoveryIfPaneIsStable()
         }
         .onChange(of: state.tabs.activeTabId(forWorktree: worktree.id)) { _, _ in
+            startupRecoveryReadyTabID = nil
             completeStartupRecoveryIfPaneIsStable()
         }
         .onChange(of: rightPaneStartupRecoveryReady) { _, _ in
@@ -637,7 +639,10 @@ struct CenterPaneView: View {
             worktreeTabs: state.tabs.tabs(forWorktree: worktree.id),
             activeWorktreeTabId: state.tabs.activeTabId(forWorktree: worktree.id)
         )
-        guard StartupRecoveryPaneCompletionPolicy.shouldComplete(activeTab: composition.activeTab) else { return }
+        guard Self.shouldCompleteStartupRecoveryForCenterPane(
+            activeTab: composition.activeTab,
+            readyTabID: startupRecoveryReadyTabID
+        ) else { return }
         guard rightPaneStartupRecoveryReady else { return }
         state.completeStartupRecovery()
     }
@@ -659,6 +664,13 @@ struct CenterPaneView: View {
         !isRightPaneVisible || (hasLoadedSnapshot && !isLoading)
     }
 
+    static func shouldCompleteStartupRecoveryForCenterPane(
+        activeTab: Tab?,
+        readyTabID: TabID?
+    ) -> Bool {
+        StartupRecoveryPaneCompletionPolicy.shouldComplete(activeTab: activeTab) || activeTab?.id == readyTabID
+    }
+
     static func shouldCompleteGGSplitStartupRecoveryWhenUnavailable(
         hasLoadedSnapshot: Bool,
         ggStackLoadState: GGStackLoadState,
@@ -674,6 +686,7 @@ struct CenterPaneView: View {
             activeWorktreeTabId: state.tabs.activeTabId(forWorktree: worktree.id)
         )
         guard composition.activeId == tabID else { return }
+        startupRecoveryReadyTabID = tabID
         guard rightPaneStartupRecoveryReady else { return }
         state.completeStartupRecovery()
     }

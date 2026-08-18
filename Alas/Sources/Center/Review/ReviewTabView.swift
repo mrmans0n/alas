@@ -35,6 +35,16 @@ enum ReviewTabStartupRecoveryReadiness {
     }
 }
 
+enum ReviewTabLoadKey {
+    static func build(baseLoadKey: String, reviewRequestNumber: Int?, reviewRefreshSettled: Bool) -> String {
+        [
+            baseLoadKey,
+            "prNumber:\(reviewRequestNumber.map(String.init) ?? "none")",
+            "reviewRefreshSettled:\(reviewRefreshSettled)"
+        ].joined(separator: "\u{0}")
+    }
+}
+
 struct ReviewTabView: View {
     let worktree: Worktree
     let tabState: ReviewPRTabState
@@ -111,13 +121,9 @@ struct ReviewTabView: View {
                 hasReviewRequest: reviewRequest != nil,
                 reviewRefreshSettled: reviewRefreshSettled
             )
-            await reload(completingStartupRecovery: completesStartupRecovery)
-        }
-        .task(id: reviewRequest?.number) {
-            // Re-scope PendingReview and reload when the PR number first arrives (snapshot
-            // may populate after the loadKey task has already run with prNumber: nil).
-            guard reviewRequest != nil else { return }
-            await reload(completingStartupRecovery: true)
+            if await reload(completingStartupRecovery: completesStartupRecovery) {
+                onStartupRecoveryReady()
+            }
         }
         .onChange(of: reviewRequest) { _, newValue in
             guard !isWriting else { return }
@@ -128,13 +134,11 @@ struct ReviewTabView: View {
     }
 
     @MainActor
-    private func reload(completingStartupRecovery: Bool) async {
+    private func reload(completingStartupRecovery: Bool) async -> Bool {
         pendingReview = PendingReview(worktreePath: worktree.path, prNumber: reviewRequest?.number)
-        await loadSession()
+        guard await loadSession() else { return false }
         localThreads = reviewRequest?.threads ?? []
-        if completingStartupRecovery {
-            onStartupRecoveryReady()
-        }
+        return completingStartupRecovery
     }
 
     // MARK: - Derived state from snapshot
@@ -185,14 +189,15 @@ struct ReviewTabView: View {
     // MARK: - Load key (mirrors ReviewChangesTabView)
 
     private var loadKey: String {
-        [
-            ReviewChangesLoadKey.build(
+        ReviewTabLoadKey.build(
+            baseLoadKey: ReviewChangesLoadKey.build(
                 tabID: tabState.id,
                 worktreePath: worktree.path,
                 rightPaneState: appState.rightPaneStore.activeState(worktreeId: worktree.id)
             ),
-            "reviewRefreshSettled:\(reviewRefreshSettled)"
-        ].joined(separator: "\u{0}")
+            reviewRequestNumber: reviewRequest?.number,
+            reviewRefreshSettled: reviewRefreshSettled
+        )
     }
 
     // MARK: - Content
@@ -641,7 +646,7 @@ struct ReviewTabView: View {
     // MARK: - Loading
 
     @MainActor
-    private func loadSession() async {
+    private func loadSession() async -> Bool {
         let requestedLoadToken = ReviewChangesLoadToken.next(key: loadKey)
         activeLoadKey = requestedLoadToken.key
         activeLoadID = requestedLoadToken.id
@@ -662,27 +667,30 @@ struct ReviewTabView: View {
                 guard
                     requestedLoadToken.isActive(activeKey: activeLoadKey, activeID: activeLoadID),
                     !Task.isCancelled
-                else { return }
+                else { return false }
                 loaded = prSession
             } else {
                 loaded = try await loader.load(worktreePath: worktree.path)
                 guard
                     requestedLoadToken.isActive(activeKey: activeLoadKey, activeID: activeLoadID),
                     !Task.isCancelled
-                else { return }
+                else { return false }
             }
 
             session = loaded
             selectedFileID = selectedFileID.flatMap { selected in
                 loaded.summary.files.contains { $0.id == selected } ? selected : loaded.summary.files.first?.id
             } ?? loaded.summary.files.first?.id
+            return true
         } catch is CancellationError {
+            return false
         } catch {
             guard
                 requestedLoadToken.isActive(activeKey: activeLoadKey, activeID: activeLoadID),
                 !Task.isCancelled
-            else { return }
+            else { return false }
             loadError = error.localizedDescription
+            return true
         }
     }
 
