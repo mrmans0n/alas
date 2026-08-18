@@ -204,8 +204,9 @@ struct ReviewSessionTabView: View {
         .task(id: loadTaskID) {
             guard loadsOnAppear else { return }
             let token = beginLoadReviewSession()
-            await loadReviewSession(token: token)
-            onStartupRecoveryReady()
+            if await loadReviewSession(token: token) {
+                onStartupRecoveryReady()
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .alasReviewDraftCommentsDidChangeExternally)) { _ in
             try? draftCommentController?.load()
@@ -554,7 +555,7 @@ struct ReviewSessionTabView: View {
         return token
     }
 
-    private func loadReviewSession(token: ReviewSessionTabLoadToken) async {
+    private func loadReviewSession(token: ReviewSessionTabLoadToken) async -> Bool {
         do {
             guard let storedRecord = try sessionStore.load(id: tabState.sessionID) else {
                 throw ReviewSessionTabError.missingSession(tabState.sessionID)
@@ -570,7 +571,7 @@ struct ReviewSessionTabView: View {
                 resolvedRecord = (storedRecord, false)
                 refreshError = error.localizedDescription
             }
-            guard loadCoordinator.canPublish(token) else { return }
+            guard loadCoordinator.canPublish(token) else { return false }
             var refreshedRecord = mergeLatestMutableFields(into: resolvedRecord.record, fallback: storedRecord)
             if let loaded,
                Self.canReuseLoadedTrackedDiff(
@@ -587,14 +588,14 @@ struct ReviewSessionTabView: View {
                 loadDraftCommentController(for: refreshedRecord)
                 isLoading = false
                 loadCoordinator.finish(token)
-                return
+                return true
             }
             if resolvedRecord.paused, refreshedRecord.target != storedRecord.target {
                 try sessionStore.save(refreshedRecord)
             }
 
             let loadedContext = try await loader.load(target: refreshedRecord.target)
-            guard loadCoordinator.canPublish(token) else { return }
+            guard loadCoordinator.canPublish(token) else { return false }
             refreshedRecord = mergeLatestMutableFields(into: refreshedRecord, fallback: storedRecord)
             if !resolvedRecord.paused, refreshedRecord.target != storedRecord.target {
                 try sessionStore.save(refreshedRecord)
@@ -610,15 +611,18 @@ struct ReviewSessionTabView: View {
             loadDraftCommentController(for: refreshedRecord)
             isLoading = false
             loadCoordinator.finish(token)
+            return true
         } catch is CancellationError {
-            guard loadCoordinator.canPublish(token) else { return }
+            guard loadCoordinator.canPublish(token) else { return false }
             isLoading = false
             loadCoordinator.finish(token)
+            return false
         } catch {
-            guard loadCoordinator.canPublish(token) else { return }
+            guard loadCoordinator.canPublish(token) else { return false }
             loadError = error.localizedDescription
             isLoading = false
             loadCoordinator.finish(token)
+            return true
         }
     }
 

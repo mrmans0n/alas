@@ -7,7 +7,7 @@ struct ThreePaneLayout<Sidebar: View, Center: View, Right: View>: View {
     let rightVisible: Bool
     let onWidthsChanged: () -> Void
     @ViewBuilder let sidebar: () -> Sidebar
-    @ViewBuilder let center: () -> Center
+    @ViewBuilder let center: (_ rightVisible: Bool) -> Center
     @ViewBuilder let right: () -> Right
 
     // Gutter drags mutate only this transient state, so the drag invalidates
@@ -89,7 +89,7 @@ struct ThreePaneLayout<Sidebar: View, Center: View, Right: View>: View {
                         }
                     )
                 }
-                center()
+                center(sizing.rightVisible)
                     .frame(width: CGFloat(alignedCenterWidth))
                     .frame(maxHeight: .infinity)
                 if sizing.rightVisible {

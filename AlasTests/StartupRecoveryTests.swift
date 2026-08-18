@@ -233,6 +233,13 @@ struct StartupRecoveryTests {
         ))
     }
 
+    @Test func independentAsyncTabReadinessIgnoresRightPaneFingerprintChanges() {
+        let terminal = Tab.terminal(.init(id: "terminal", title: "Terminal", sessionId: "terminal"))
+
+        #expect(CenterPaneView.startupRecoveryActiveKey(activeTab: terminal, rightPaneState: nil) ==
+            "terminal\u{0}tab")
+    }
+
     @Test func commitEditorDiffTaskRerunsAfterDetailsSettle() {
         #expect(CommitEditorTabView.diffTaskKey(
             currentSha: "abc",

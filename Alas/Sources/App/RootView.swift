@@ -124,7 +124,9 @@ struct RootView: View {
                 rightVisible: state.config.rightPaneVisible && rightPaneSelection.showsRightPane,
                 onWidthsChanged: { state.saveConfig() },
                 sidebar: { sidebarContent },
-                center: { centerContent() },
+                center: { effectiveRightPaneVisible in
+                    centerContent(effectiveRightPaneVisible: effectiveRightPaneVisible)
+                },
                 right: { rightContent(selection: rightPaneSelection) }
             )
         }
@@ -210,7 +212,7 @@ struct RootView: View {
     }
 
     @ViewBuilder
-    private func centerContent() -> some View {
+    private func centerContent(effectiveRightPaneVisible: Bool) -> some View {
         let resolver = CenterSelectionStateResolver(
             selectedWorktreeId: state.selectedWorktreeId,
             projects: state.activeSpaceProjects,
@@ -222,7 +224,8 @@ struct RootView: View {
             CenterPaneView(
                 state: state,
                 worktree: wt,
-                allowsPaneFocus: !state.isKeyboardOverlayOpen
+                allowsPaneFocus: !state.isKeyboardOverlayOpen,
+                effectiveRightPaneVisible: effectiveRightPaneVisible
             )
         case .deleting(let wt):
             DeletingWorktreeView(worktree: wt)

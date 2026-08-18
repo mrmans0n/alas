@@ -83,6 +83,7 @@ struct CenterPaneView: View {
     @Bindable var state: AppState
     let worktree: Worktree
     var allowsPaneFocus: Bool = true
+    var effectiveRightPaneVisible: Bool = true
     @Environment(\.theme) var theme
     @State private var startupRecoveryReadyKey: String?
 
@@ -655,7 +656,7 @@ struct CenterPaneView: View {
     private var rightPaneStartupRecoveryReady: Bool {
         let rightPaneState = state.rightPaneStore.activeState(worktreeId: worktree.id)
         return Self.shouldCompleteStartupRecoveryForRightPane(
-            isRightPaneVisible: state.config.rightPaneVisible,
+            isRightPaneVisible: effectiveRightPaneVisible,
             hasLoadedSnapshot: rightPaneState?.hasLoadedSnapshot ?? false,
             isLoading: rightPaneState?.loading ?? false
         )
@@ -698,12 +699,26 @@ struct CenterPaneView: View {
     }
 
     private var startupRecoveryActiveKey: String? {
-        guard let tabID = state.tabs.activeTabId(forWorktree: worktree.id) else { return nil }
-        return [
-            tabID,
-            state.rightPaneStore.activeState(worktreeId: worktree.id)
-                .map(ReviewChangesLoadKey.fingerprint) ?? "no-right-pane-state",
-        ].joined(separator: "\u{0}")
+        let composition = CenterTabComposition(
+            worktreeTabs: state.tabs.tabs(forWorktree: worktree.id),
+            activeWorktreeTabId: state.tabs.activeTabId(forWorktree: worktree.id)
+        )
+        return Self.startupRecoveryActiveKey(
+            activeTab: composition.activeTab,
+            rightPaneState: state.rightPaneStore.activeState(worktreeId: worktree.id)
+        )
+    }
+
+    static func startupRecoveryActiveKey(activeTab: Tab?, rightPaneState: RightPaneState?) -> String? {
+        guard let activeTab else { return nil }
+        let loadKey: String
+        switch activeTab {
+        case .draftCommit, .reviewChanges, .reviewPR, .ggSplitCommit:
+            loadKey = rightPaneState.map(ReviewChangesLoadKey.fingerprint) ?? "no-right-pane-state"
+        default:
+            loadKey = "tab"
+        }
+        return [activeTab.id, loadKey].joined(separator: "\u{0}")
     }
 
     private var rightPaneActivationKey: String {
