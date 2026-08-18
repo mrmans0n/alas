@@ -433,6 +433,27 @@ struct MermaidAttachmentCoordinatorTests {
         #expect(readyCount == 1)
     }
 
+    @Test("cancelled empty Mermaid readiness is skipped")
+    func cancelledEmptyMermaidReadinessIsSkipped() async {
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 640, height: 480))
+        let coordinator = MermaidAttachmentCoordinator()
+        var readyCount = 0
+
+        coordinator.apply(
+            [],
+            revision: UUID(),
+            to: textView,
+            onTextStorageDelta: nil,
+            onReady: {
+                readyCount += 1
+            }
+        )
+        coordinator.cancelAll()
+
+        await Task.yield()
+        #expect(readyCount == 0)
+    }
+
     @Test("failure-disclosed source clears after a successful rerender")
     func failureDisclosedSourceClearsAfterSuccess() async throws {
         let backend = ControlledMermaidBackend()
