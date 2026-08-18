@@ -173,7 +173,7 @@ final class MermaidAttachmentCoordinator {
         self.backingScale = scale
         observeBackingPropertiesIfNeeded(of: textView.window)
         if references.isEmpty {
-            finishIfReady()
+            finishIfReady(deferCallback: true)
             return
         }
         for reference in references {
@@ -370,14 +370,20 @@ final class MermaidAttachmentCoordinator {
             hideSource(id: id, in: textView)
         }
         invalidate(reference.attachment, in: textView)
-        finishIfReady()
+        finishIfReady(deferCallback: false)
     }
 
-    private func finishIfReady() {
+    private func finishIfReady(deferCallback: Bool) {
         guard tasks.isEmpty else { return }
         let callback = onReady
         onReady = nil
-        callback?()
+        if deferCallback {
+            Task { @MainActor in
+                callback?()
+            }
+        } else {
+            callback?()
+        }
     }
 
     private func sourceRange(
