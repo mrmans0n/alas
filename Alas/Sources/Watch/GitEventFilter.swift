@@ -8,6 +8,7 @@ enum GitEventCategory: Equatable {
     case ignored                  // *.lock under .git/ — mid-write, never react
     case headChange(URL)          // worktree root whose HEAD just changed
     case revisionChange           // shared refs moved; tracked revisions may resolve differently
+    case transientRevisionChange  // FETCH_HEAD changed; refs did not move
     case revisionAndTopologyChange
     case topologyChange           // .git/worktrees/ contents changed
     case other                    // unrelated event, caller decides
@@ -61,6 +62,9 @@ enum GitEventFilter {
                 let worktreeRoot = URL(fileURLWithPath: gitlink).deletingLastPathComponent()
                 return .headChange(worktreeRoot.standardizedFileURL)
             }
+            if parts.count == 3 && parts[2] == "FETCH_HEAD" {
+                return .transientRevisionChange
+            }
             if parts.count == 3 && Self.revisionPseudoRefs.contains(parts[2]) {
                 return .revisionChange
             }
@@ -96,6 +100,9 @@ enum GitEventFilter {
         if rel == "logs/HEAD" || rel.hasPrefix("logs/refs/") {
             return .revisionChange
         }
+        if rel == "FETCH_HEAD" {
+            return .transientRevisionChange
+        }
         if Self.revisionPseudoRefs.contains(rel) {
             return .revisionChange
         }
@@ -115,7 +122,6 @@ enum GitEventFilter {
     private static let revisionPseudoRefs: Set<String> = [
         "AUTO_MERGE",
         "CHERRY_PICK_HEAD",
-        "FETCH_HEAD",
         "MERGE_HEAD",
         "ORIG_HEAD",
         "REBASE_HEAD",

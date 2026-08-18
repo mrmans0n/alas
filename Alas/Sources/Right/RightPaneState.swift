@@ -1024,11 +1024,13 @@ final class RightPaneState: GGSplitCommitServicing {
         let previousKey = ggStackCommitsKey
         let previousLoadState = ggStackLoadState
         let previousSummary = GGStackSummaryStore.shared.summaries[worktree.path.path]
+        let keepsPreviousPresentation = previousKey == key
+            && previousLoadState == .loaded
         defer {
             if Task.isCancelled,
                snapshotGeneration == snapshotInvalidationGeneration,
                refreshGeneration == ggStackRefreshGeneration,
-               ggStackLoadState == .loading {
+               !((ggStackLoadState == .loaded || ggStackLoadState == .empty) && ggStackCommitsKey == key) {
                 let canRestorePreviousSnapshot = previousKey == key
                     && key == currentGGStackCommitsKey
                     && (previousLoadState == .loaded || previousLoadState == .empty)
@@ -1050,17 +1052,19 @@ final class RightPaneState: GGSplitCommitServicing {
                 }
             }
         }
-        invalidateOlderHistoryForDisplaySourceChange()
-        ggStackLoadState = .loading
-        ggStackRemoteError = nil
-        ggStackRemoteEnrichmentPending = false
-        ggStackCommitsKey = nil
-        if ggStack != nil { ggStack = nil }
-        if !ggStackDisplayCommits.isEmpty { ggStackDisplayCommits = [] }
-        if GGStackSummaryStore.shared.summaries[worktree.path.path] != nil {
-            GGStackSummaryStore.shared.summaries[worktree.path.path] = nil
+        if !keepsPreviousPresentation {
+            invalidateOlderHistoryForDisplaySourceChange()
+            ggStackLoadState = .loading
+            ggStackRemoteError = nil
+            ggStackRemoteEnrichmentPending = false
+            ggStackCommitsKey = nil
+            if ggStack != nil { ggStack = nil }
+            if !ggStackDisplayCommits.isEmpty { ggStackDisplayCommits = [] }
+            if GGStackSummaryStore.shared.summaries[worktree.path.path] != nil {
+                GGStackSummaryStore.shared.summaries[worktree.path.path] = nil
+            }
+            ggMutationCoordinator.suspendUndoCandidate()
         }
-        ggMutationCoordinator.suspendUndoCandidate()
         do {
             let usesLocalSnapshot = ggCapabilities().localStackSnapshot
             var stack = try await ggService.currentStack(
@@ -1096,6 +1100,7 @@ final class RightPaneState: GGSplitCommitServicing {
                 resolvedContext = branchContext
             }
             if ggContext != resolvedContext { ggContext = resolvedContext }
+            ggStackRemoteError = nil
             ggStackCommitsKey = currentGGStackCommitsKey
             if ggStack != stack { ggStack = stack }
             ggStackDisplayCommits = displayCommits
@@ -1117,26 +1122,17 @@ final class RightPaneState: GGSplitCommitServicing {
                 refreshGeneration: refreshGeneration
             )
         } catch {
-            // A transient gg/provider failure (gh/glab auth hiccup, network
-            // blip, etc.) must not cache the *failed* key `key` — it stays
-            // unset so the next refresh for it retries instead of being
-            // skipped by the unchanged-key guard above. But whatever
-            // `ggStack` currently holds was loaded for the *previous*
-            // cached key (the guard above only lets us reach this point
-            // when `key` differs from it) — e.g. the previous branch's
-            // stack, if the user just checked out a different stack-shaped
-            // branch and this fetch for it failed. Rendering it against the
-            // now-different `commits` would misattribute its header, PR
-            // chips, and sidebar badge to the wrong branch, so clear it and
-            // degrade to plain commits. Clearing `ggStackCommitsKey` too
-            // (not just leaving it at the previous key) matters just as
-            // much: leaving it would make the guard above wrongly treat a
-            // later return to that same branch/commit set as "already
-            // cached" and skip re-fetching the now-cleared stack.
+            // Keep a same-key stack visible on a transient remote failure.
+            // A failed refresh for a different key cannot be rendered safely,
+            // so drop it and retry on the next refresh.
             if Task.isCancelled { return }
             guard snapshotGeneration == snapshotInvalidationGeneration,
                   refreshGeneration == ggStackRefreshGeneration
             else { return }
+            if keepsPreviousPresentation, key == currentGGStackCommitsKey {
+                ggStackRemoteError = (error as? GGServiceError)?.userMessage ?? error.localizedDescription
+                return
+            }
             if ggContext != branchContext { ggContext = branchContext }
             ggStackCommitsKey = nil
             if ggStack != nil { ggStack = nil }

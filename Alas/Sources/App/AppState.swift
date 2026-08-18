@@ -2095,7 +2095,8 @@ final class AppState {
         let watcher = projectGitWatcherFactory(URL(fileURLWithPath: project.path))
         let projectId = project.id
         watcher.onHeadChanged = { [weak self] map in self?.handleProjectHeadUpdates(projectId: projectId, branchByWorktreePath: map) }
-        watcher.onRevisionChanged = { [weak self] in self?.handleProjectRevisionChange(projectId: projectId) }
+        watcher.onRevisionChanged = { [weak self] in self?.bumpRevisionGenerationForProject(projectId: projectId) }
+        watcher.onStackRevisionChanged = { [weak self] in self?.handleProjectStackRevisionChange(projectId: projectId) }
         watcher.onTopologyChanged = { [weak self] in
             self?.handleProjectRevisionChange(projectId: projectId)
             self?.handleProjectTopologyChange(projectId: projectId)
@@ -2145,6 +2146,10 @@ final class AppState {
 
     private func handleProjectRevisionChange(projectId: String) {
         bumpRevisionGenerationForProject(projectId: projectId)
+        handleProjectStackRevisionChange(projectId: projectId)
+    }
+
+    private func handleProjectStackRevisionChange(projectId: String) {
         invalidateGGStackCacheAndRebumpGeneration(projectId: projectId)
         rightPaneStore.refreshActiveGGPresentationForProjectRevision(projectId: projectId)
     }
