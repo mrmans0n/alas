@@ -87,7 +87,7 @@ final class MarkdownPreviewController: NSObject {
     }
 
     /// Replace the rendered content. Must be called on the main thread.
-    func apply(result: MarkdownRenderResult) {
+    func apply(result: MarkdownRenderResult, onReady: (() -> Void)? = nil) {
         guard result.revision != lastAppliedRevision else { return }
         let sourceDisclosureSnapshot = mermaidCoordinator
             .explicitSourceDisclosureSnapshot(in: textView)
@@ -112,7 +112,8 @@ final class MarkdownPreviewController: NSObject {
             to: textView,
             onTextStorageDelta: { [weak self] location, delta in
                 self?.shiftAnchors(startingAt: location, by: delta)
-            }
+            },
+            onReady: onReady
         )
         mermaidCoordinator.restoreExplicitSourceDisclosures(
             sourceDisclosureSnapshot,

@@ -51,6 +51,7 @@ struct EditorTabView: View {
     var externalEditable: Bool = false
     let originatingRelativePath: String?
     let onRevealInFiles: (String) -> Void
+    var onStartupRecoveryReady: () -> Void = {}
     @Environment(\.theme) var theme
     @Environment(\.openWindow) private var openWindow
 
@@ -159,7 +160,7 @@ struct EditorTabView: View {
                     textRendering: CodeEditorTextRenderingConfiguration(code: appState.config.code),
                     onTextViewAttached: { attachFindController(to: $0) },
                     onTextViewDetached: { detachFindController(from: $0) },
-                    onInitialHighlightReady: { appState.completeStartupRecovery() }
+                    onInitialHighlightReady: onStartupRecoveryReady
                 )
             }
         }

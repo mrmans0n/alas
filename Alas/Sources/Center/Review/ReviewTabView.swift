@@ -21,6 +21,12 @@ enum ReviewTabPendingReviewPresentation {
     }
 }
 
+enum ReviewTabStartupRecoveryReadiness {
+    static func shouldComplete(hasReviewRequest: Bool, hasLoadedSnapshot: Bool) -> Bool {
+        hasReviewRequest || hasLoadedSnapshot
+    }
+}
+
 struct ReviewTabView: View {
     let worktree: Worktree
     let tabState: ReviewPRTabState
@@ -93,7 +99,10 @@ struct ReviewTabView: View {
             )
         }
         .task(id: loadKey) {
-            let completesStartupRecovery = reviewRequest != nil
+            let completesStartupRecovery = ReviewTabStartupRecoveryReadiness.shouldComplete(
+                hasReviewRequest: reviewRequest != nil,
+                hasLoadedSnapshot: hasLoadedSnapshot
+            )
             await reload(completingStartupRecovery: completesStartupRecovery)
         }
         .task(id: reviewRequest?.number) {
@@ -124,6 +133,10 @@ struct ReviewTabView: View {
 
     private var activeSnapshot: ReviewLoopSnapshot? {
         appState.rightPaneStore.activeState(worktreeId: tabState.worktreeId)?.reviewLoop.snapshot
+    }
+
+    private var hasLoadedSnapshot: Bool {
+        appState.rightPaneStore.activeState(worktreeId: tabState.worktreeId)?.hasLoadedSnapshot == true
     }
 
     private var matchedSnapshot: ReviewLoopSnapshot? {

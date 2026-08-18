@@ -370,7 +370,8 @@ struct CenterPaneView: View {
                                           externalAbsolutePath: s.externalAbsolutePath,
                                           externalEditable: s.isExternalEditable,
                                           originatingRelativePath: s.originatingRelativePath,
-                                          onRevealInFiles: { path in state.revealInFiles(worktreeId: worktree.id, path: path) })
+                                          onRevealInFiles: { path in state.revealInFiles(worktreeId: worktree.id, path: path) },
+                                          onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) })
                         }
                     case .diff(let s):
                         let openAvailable = DiffOpenFileAvailability.isAvailable(

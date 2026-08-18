@@ -48,6 +48,21 @@ struct ReviewTabViewTests {
         ))
     }
 
+    @Test func startupRecoveryCompletesAfterMatchedOrSettledReviewLoad() {
+        #expect(ReviewTabStartupRecoveryReadiness.shouldComplete(
+            hasReviewRequest: true,
+            hasLoadedSnapshot: false
+        ))
+        #expect(ReviewTabStartupRecoveryReadiness.shouldComplete(
+            hasReviewRequest: false,
+            hasLoadedSnapshot: true
+        ))
+        #expect(!ReviewTabStartupRecoveryReadiness.shouldComplete(
+            hasReviewRequest: false,
+            hasLoadedSnapshot: false
+        ))
+    }
+
     @Test func outdatedDrawerCapsExpandedListHeightToProtectReviewContent() {
         #expect(OutdatedThreadsDrawerPresentation.expandedListMaxHeight(availableHeight: 1_200) == 280)
         #expect(OutdatedThreadsDrawerPresentation.expandedListMaxHeight(availableHeight: 600) == 210)

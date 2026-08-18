@@ -212,7 +212,11 @@ struct MarkdownTabView: View {
                 Color.clear.onAppear { scheduleRender(immediate: true) }
             }
         } else if let renderResult = renderCache.value(for: renderIdentity) {
-            MarkdownPreviewView(result: renderResult, onLinkClick: handleLinkClick)
+            MarkdownPreviewView(
+                result: renderResult,
+                onLinkClick: handleLinkClick,
+                onReady: onStartupRecoveryReady
+            )
         } else {
             Color.clear.onAppear { scheduleRender(immediate: true) }
         }
@@ -310,7 +314,6 @@ struct MarkdownTabView: View {
             )
             if Task.isCancelled { return }
             renderCache.storeCompletedRender(result, for: renderIdentity)
-            onStartupRecoveryReady()
         }
     }
 

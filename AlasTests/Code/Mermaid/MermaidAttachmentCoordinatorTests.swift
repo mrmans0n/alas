@@ -376,6 +376,41 @@ struct MermaidAttachmentCoordinatorTests {
         #expect(await backend.waitForCancellation(source: reference.source))
     }
 
+    @Test("preview readiness waits for embedded Mermaid outcomes")
+    func previewReadinessWaitsForEmbeddedMermaidOutcomes() async throws {
+        let backend = ControlledMermaidBackend()
+        let service = MermaidRenderService(backend: backend)
+        let attachment = MermaidTextAttachment(
+            id: "mermaid-0",
+            source: "graph TD; A-->B",
+            profile: .full
+        )
+        let reference = try makeReference(attachment: attachment)
+        let controller = MarkdownPreviewController(
+            theme: try Theme.loadBundled(id: "cool-slate"),
+            mermaidService: service
+        )
+        defer { controller.dismantle() }
+        var readyCount = 0
+
+        controller.apply(result: MarkdownRenderResult(
+            revision: UUID(),
+            attributedString: makeContents(attachment: attachment),
+            anchorRanges: [:],
+            remoteImages: [],
+            mermaidAttachments: [reference]
+        ), onReady: {
+            readyCount += 1
+        })
+
+        #expect(await backend.waitForRequest(source: reference.source))
+        #expect(readyCount == 0)
+
+        await backend.resume(source: reference.source, outcome: renderedOutcome())
+        #expect(await waitForOutcome(in: attachment))
+        #expect(readyCount == 1)
+    }
+
     @Test("failure-disclosed source clears after a successful rerender")
     func failureDisclosedSourceClearsAfterSuccess() async throws {
         let backend = ControlledMermaidBackend()
