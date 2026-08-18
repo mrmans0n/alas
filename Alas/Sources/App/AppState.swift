@@ -2135,8 +2135,9 @@ final class AppState {
         remoteProjectWatchers.removeValue(forKey: projectId)?.stop()
     }
 
-    func startAllProjectGitWatchers() {
+    func startAllProjectGitWatchers(includeRemoteProjects: Bool = true) {
         for project in projectsManager.projects {
+            if !includeRemoteProjects, project.host != nil { continue }
             startProjectGitWatcher(for: project)
         }
     }
@@ -2153,10 +2154,11 @@ final class AppState {
         let reportedPaths = Set(branchByWorktreePath.keys.map {
             Self.canonicalWorktreePath($0.path)
         })
-        projectsManager.applyHeadUpdates(
+        let changedPaths = projectsManager.applyHeadUpdates(
             projectId: projectId,
             branchByWorktreePath: branchByWorktreePath
         )
+        if !changedPaths.isEmpty { saveProjects() }
         for worktree in projectsManager.worktrees(projectId: projectId)
             where reportedPaths.contains(Self.canonicalWorktreePath(worktree.path.path))
         {

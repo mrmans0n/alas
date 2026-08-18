@@ -5,6 +5,18 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct StartupRecoveryTests {
+    private struct MemoryStore: PersistenceStoreProtocol {
+        var projectsFile: ProjectsFile
+
+        func write<T: Encodable>(_ value: T, to url: URL) throws {}
+
+        func readIfExists<T: Decodable>(_ type: T.Type, from url: URL) throws -> T? {
+            if type == ProjectsFile.self { return projectsFile as? T }
+            if type == AppConfig.self { return AppConfig.defaults as? T }
+            return nil
+        }
+    }
+
     @Test func detectsAnUnfinishedPreviousLaunch() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-startup-recovery-\(UUID().uuidString)")
@@ -174,6 +186,146 @@ struct StartupRecoveryTests {
         #expect(RootView.shouldRefreshProjectTopologiesOnStartup(
             isRecoveringFromAbandonedStartup: false
         ))
+    }
+
+    @Test func recoveryLaunchSkipsRemoteProjectGitWatchers() {
+        let localProject = ProjectConfig(
+            id: "local",
+            name: "Local",
+            path: "/local",
+            color: "#5fb7c4",
+            addedAt: Date()
+        )
+        let remoteProject = ProjectConfig(
+            id: "remote",
+            name: "Remote",
+            path: "/remote",
+            color: "#5fb7c4",
+            addedAt: Date(),
+            host: "devbox"
+        )
+        var watchedPaths: [String] = []
+        let state = AppState(
+            store: MemoryStore(projectsFile: ProjectsFile(projects: [localProject, remoteProject])),
+            projectGitWatcherFactory: { path in
+                watchedPaths.append(path.path)
+                return ProjectGitWatcher(
+                    repoPath: path,
+                    resolvedGitDir: URL(fileURLWithPath: "/git"),
+                    resolvedWorktreeRoot: path,
+                    headDebounceInterval: 0.01,
+                    headDebounceMaxWait: 0.02,
+                    topologyDebounceInterval: 0.01,
+                    topologyDebounceMaxWait: 0.02,
+                    startStreamOverride: { _, _ in }
+                )
+            }
+        )
+
+        state.startAllProjectGitWatchers(includeRemoteProjects: false)
+
+        #expect(watchedPaths == ["/local"])
+    }
+
+    @Test func recoveryLaunchPopulatesConfiguredProjectWorktrees() {
+        let root = "/srv/alas-recovery-\(UUID().uuidString)"
+        let linked = "/srv/alas-linked-\(UUID().uuidString)"
+        defer {
+            RemoteHostRegistry.shared.unregister(root: root)
+            RemoteHostRegistry.shared.unregister(root: linked)
+        }
+        let cached = Worktree(
+            id: linked,
+            projectId: "project",
+            name: "linked",
+            branch: "linked",
+            path: URL(fileURLWithPath: linked),
+            status: .clean,
+            lastActivity: Date(timeIntervalSince1970: 1)
+        )
+        let project = ProjectConfig(
+            id: "project",
+            name: "Project",
+            path: root,
+            color: "#5fb7c4",
+            addedAt: Date(),
+            cachedWorktrees: [cached],
+            host: "devbox"
+        )
+        let manager = ProjectsManager(persistedProjects: [project])
+
+        manager.populateConfiguredProjectWorktreesForRecovery()
+
+        let rows = manager.worktrees(projectId: project.id)
+        #expect(rows.count == 1)
+        #expect(rows.first?.id == cached.id)
+        #expect(RemoteHostRegistry.shared.host(forPath: linked) == "devbox")
+    }
+
+    @Test func recoveryLaunchSkipsMissingLocalCachedWorktrees() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-recovery-\(UUID().uuidString)")
+        let missing = root.appendingPathComponent("missing")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        let project = ProjectConfig(
+            id: "project",
+            name: "Project",
+            path: root.path,
+            color: "#5fb7c4",
+            addedAt: Date(),
+            cachedWorktrees: [
+                Worktree(
+                    id: Worktree.makeId(path: missing),
+                    projectId: "project",
+                    name: "missing",
+                    branch: "missing",
+                    path: missing,
+                    status: .clean,
+                    lastActivity: Date(timeIntervalSince1970: 1)
+                ),
+            ]
+        )
+        let manager = ProjectsManager(persistedProjects: [project])
+
+        manager.populateConfiguredProjectWorktreesForRecovery()
+
+        let rows = manager.worktrees(projectId: project.id)
+        #expect(rows.count == 1)
+        #expect(rows.first?.id == Worktree.makeId(path: root))
+        #expect(rows.first?.branch == "")
+        #expect(rows.first?.name == project.name)
+    }
+
+    @Test func recoveryLaunchReadsSyntheticLocalBranchFromHead() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-recovery-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent(".git"),
+            withIntermediateDirectories: true
+        )
+        try "ref: refs/heads/main\n".write(
+            to: root.appendingPathComponent(".git/HEAD"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let project = ProjectConfig(
+            id: "project",
+            name: "Display Name",
+            path: root.path,
+            color: "#5fb7c4",
+            addedAt: Date()
+        )
+        let manager = ProjectsManager(persistedProjects: [project])
+
+        manager.populateConfiguredProjectWorktreesForRecovery()
+
+        let row = try #require(manager.worktrees(projectId: project.id).first)
+        #expect(row.branch == "main")
+        #expect(row.name == "main")
     }
 
     @Test func gracefulTerminationCompletesStartupRecovery() {

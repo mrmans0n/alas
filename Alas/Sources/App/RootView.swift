@@ -71,14 +71,15 @@ struct RootView: View {
             }
             .task {
                 state.startHarness()
-                if Self.shouldRefreshProjectTopologiesOnStartup(
-                    isRecoveringFromAbandonedStartup: state.suppressesRestoredRightPaneAfterAbandonedStartup
-                ) {
+                let isRecovering = state.suppressesRestoredRightPaneAfterAbandonedStartup
+                if Self.shouldRefreshProjectTopologiesOnStartup(isRecoveringFromAbandonedStartup: isRecovering) {
                     _ = await state.refreshAllProjectTopologies()
+                } else {
+                    state.projectsManager.populateConfiguredProjectWorktreesForRecovery()
                 }
                 guard !Task.isCancelled else { return }
-                // Normal launch refreshes worktrees first; recovery launch uses
-                // persisted topology so it does not replay the failed refresh.
+                // Recovery launch avoids replaying the failed refresh, but still
+                // seeds project roots so tab and selection resolution can recover.
                 state.reloadTabs()
                 if state.selectedWorktreeId == nil {
                     state.selectInitialWorktree(
@@ -86,7 +87,7 @@ struct RootView: View {
                     )
                 }
                 state.completeStartupRecoveryIfCenterPaneWillNotAppear()
-                state.startAllProjectGitWatchers()
+                state.startAllProjectGitWatchers(includeRemoteProjects: !isRecovering)
                 state.rescanAgents()
             }
             .onChange(of: state.selectedWorktreeId) { _, _ in

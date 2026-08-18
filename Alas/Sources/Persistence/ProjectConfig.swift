@@ -85,6 +85,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
     var addedAt: Date
     var hiddenWorktreePaths: [String] = []
     var worktreeOrder: [String] = []
+    var cachedWorktrees: [Worktree] = []
     /// Explicit signal that the user dragged worktrees into a custom order.
     /// When `false`, the global default sort mode applies regardless of any
     /// legacy `worktreeOrder` left on disk. Set to `true` by drag reorders;
@@ -107,7 +108,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
 
     enum CodingKeys: String, CodingKey {
         case id, name, path, color, icon, addedAt, hiddenWorktreePaths, worktreeOrder,
-             worktreeOrderIsManual, startupScripts,
+             cachedWorktrees, worktreeOrderIsManual, startupScripts,
              mcpServers, worktreeOpenAfterCreate, worktreeDefaultLauncherMode, host, ggMode,
              ggWorktreeModes, issueAttachments
     }
@@ -121,6 +122,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         icon: ProjectIcon? = nil,
         hiddenWorktreePaths: [String] = [],
         worktreeOrder: [String] = [],
+        cachedWorktrees: [Worktree] = [],
         worktreeOrderIsManual: Bool = false,
         startupScripts: ProjectStartupScripts = .defaults,
         mcpServers: [ProjectMCPServer] = [],
@@ -138,6 +140,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         self.addedAt = addedAt
         self.hiddenWorktreePaths = hiddenWorktreePaths
         self.worktreeOrder = worktreeOrder
+        self.cachedWorktrees = cachedWorktrees
         self.worktreeOrderIsManual = worktreeOrderIsManual
         self.startupScripts = startupScripts
         self.mcpServers = mcpServers
@@ -166,6 +169,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         addedAt = try c.decode(Date.self, forKey: .addedAt)
         hiddenWorktreePaths = (try? c.decode([String].self, forKey: .hiddenWorktreePaths)) ?? []
         worktreeOrder = (try? c.decode([String].self, forKey: .worktreeOrder)) ?? []
+        cachedWorktrees = (try? c.decode([Worktree].self, forKey: .cachedWorktrees)) ?? []
         worktreeOrderIsManual = (try? c.decode(Bool.self, forKey: .worktreeOrderIsManual)) ?? false
         startupScripts = (try? c.decode(ProjectStartupScripts.self, forKey: .startupScripts))
             ?? .defaults
@@ -188,6 +192,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         try c.encode(addedAt, forKey: .addedAt)
         try c.encode(hiddenWorktreePaths, forKey: .hiddenWorktreePaths)
         try c.encode(worktreeOrder, forKey: .worktreeOrder)
+        try c.encode(cachedWorktrees, forKey: .cachedWorktrees)
         try c.encode(worktreeOrderIsManual, forKey: .worktreeOrderIsManual)
         try c.encode(startupScripts, forKey: .startupScripts)
         try c.encode(mcpServers, forKey: .mcpServers)

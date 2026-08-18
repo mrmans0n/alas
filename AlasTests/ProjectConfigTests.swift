@@ -27,10 +27,20 @@ struct ProjectConfigTests {
     }
 
     @Test func roundTripPreservesHiddenPaths() throws {
+        let cachedWorktree = Worktree(
+            id: "/tmp/alpha/wt-a",
+            projectId: "abc",
+            name: "wt-a",
+            branch: "wt-a",
+            path: URL(fileURLWithPath: "/tmp/alpha/wt-a"),
+            status: .clean,
+            lastActivity: Date(timeIntervalSince1970: 1)
+        )
         let project = ProjectConfig(
             id: "abc", name: "alpha", path: "/tmp/alpha",
             color: "#5fb7c4", addedAt: Date(timeIntervalSince1970: 0),
-            hiddenWorktreePaths: ["/tmp/alpha/wt-a", "/tmp/alpha/wt-b"]
+            hiddenWorktreePaths: ["/tmp/alpha/wt-a", "/tmp/alpha/wt-b"],
+            cachedWorktrees: [cachedWorktree]
         )
         let file = ProjectsFile(projects: [project])
         let encoder = JSONEncoder()
@@ -40,6 +50,7 @@ struct ProjectConfigTests {
         decoder.dateDecodingStrategy = .secondsSince1970
         let decoded = try decoder.decode(ProjectsFile.self, from: data)
         #expect(decoded.projects[0].hiddenWorktreePaths == ["/tmp/alpha/wt-a", "/tmp/alpha/wt-b"])
+        #expect(decoded.projects[0].cachedWorktrees == [cachedWorktree])
     }
 
     @Test func roundTripPreservesStartupScripts() throws {
