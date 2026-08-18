@@ -71,10 +71,14 @@ struct RootView: View {
             }
             .task {
                 state.startHarness()
-                _ = await state.refreshAllProjectTopologies()
+                if Self.shouldRefreshProjectTopologiesOnStartup(
+                    isRecoveringFromAbandonedStartup: state.suppressesRestoredRightPaneAfterAbandonedStartup
+                ) {
+                    _ = await state.refreshAllProjectTopologies()
+                }
                 guard !Task.isCancelled else { return }
-                // Worktrees now exist — load any persisted tab files for them. Init
-                // can't do this because refreshAll runs async after init.
+                // Normal launch refreshes worktrees first; recovery launch uses
+                // persisted topology so it does not replay the failed refresh.
                 state.reloadTabs()
                 if state.selectedWorktreeId == nil {
                     state.selectInitialWorktree(
@@ -99,6 +103,12 @@ struct RootView: View {
             ReviewTargetDialog(appState: state)
             RunScriptDialog(appState: state, selectedWorktree: selectedWorktree)
         }
+    }
+
+    static func shouldRefreshProjectTopologiesOnStartup(
+        isRecoveringFromAbandonedStartup: Bool
+    ) -> Bool {
+        !isRecoveringFromAbandonedStartup
     }
 
     @ViewBuilder

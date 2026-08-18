@@ -167,6 +167,33 @@ struct StartupRecoveryTests {
         #expect(state.suppressesRestoredRightPaneAfterAbandonedStartup)
     }
 
+    @Test func recoveryLaunchSkipsProjectTopologyRefresh() {
+        #expect(!RootView.shouldRefreshProjectTopologiesOnStartup(
+            isRecoveringFromAbandonedStartup: true
+        ))
+        #expect(RootView.shouldRefreshProjectTopologiesOnStartup(
+            isRecoveringFromAbandonedStartup: false
+        ))
+    }
+
+    @Test func gracefulTerminationCompletesStartupRecovery() {
+        let coordinator = AlasTerminationCoordinator.shared
+        let originalFinish = coordinator.finish
+        let originalFlush = coordinator.flush
+        defer {
+            coordinator.finish = originalFinish
+            coordinator.flush = originalFlush
+        }
+        coordinator.flush = nil
+        var finishCount = 0
+        coordinator.finish = { finishCount += 1 }
+
+        let reply = AlasApplicationDelegate().applicationShouldTerminate(.shared)
+
+        #expect(reply == .terminateNow)
+        #expect(finishCount == 1)
+    }
+
     @Test func asyncRestoredTabsDoNotCompleteRecoveryFromCenterPane() {
         let terminal = Tab.terminal(.init(id: "terminal", title: "Terminal", sessionId: "terminal"))
         let acp = Tab.acpSession(.init(sessionId: "acp", title: "ACP"))

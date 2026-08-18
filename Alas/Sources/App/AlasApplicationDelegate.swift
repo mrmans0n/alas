@@ -16,6 +16,7 @@ final class AlasApplicationDelegate: NSObject, NSApplicationDelegate {
     private var terminationInProgress = false
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        AlasTerminationCoordinator.shared.finish?()
         guard !terminationInProgress, let flush = AlasTerminationCoordinator.shared.flush else {
             return .terminateNow
         }
@@ -28,6 +29,7 @@ final class AlasApplicationDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        AlasTerminationCoordinator.shared.finish?()
         // Synchronous and non-isolated: a detached Task would need to hop onto
         // the actor before running, and the process exits before that happens.
         try? FileManager.default.removeItem(at: RevisionSnapshotCache.shared.sessionDirectory)
