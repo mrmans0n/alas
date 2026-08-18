@@ -171,7 +171,10 @@ final class TabsManager {
     func loadAllPersisted(restoringActiveTabs: Bool = true) {
         guard let relativeFiles = try? FileManager.default.subpathsOfDirectory(
             atPath: tabsDirectory.path
-        ) else { return }
+        ) else {
+            loadAll(worktreeIds: [], restoringActiveTabs: restoringActiveTabs)
+            return
+        }
         let worktreeIDs = relativeFiles.compactMap { relativeFile -> String? in
             guard relativeFile.hasSuffix(".json") else { return nil }
             let file = tabsDirectory.appendingPathComponent(relativeFile)

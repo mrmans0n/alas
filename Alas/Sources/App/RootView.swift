@@ -81,6 +81,7 @@ struct RootView: View {
                         id: state.resolvedSelectionForActiveSpaceForStartup()
                     )
                 }
+                state.completeStartupRecoveryIfCenterPaneWillNotAppear()
                 state.startAllProjectGitWatchers()
                 state.rescanAgents()
             }

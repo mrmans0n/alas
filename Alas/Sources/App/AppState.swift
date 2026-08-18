@@ -959,6 +959,17 @@ final class AppState {
         AlasTerminationCoordinator.shared.finish?()
     }
 
+    func completeStartupRecoveryIfCenterPaneWillNotAppear() {
+        let resolver = CenterSelectionStateResolver(
+            selectedWorktreeId: selectedWorktreeId,
+            projects: activeSpaceProjects,
+            projectsManager: projectsManager,
+            isRefreshingProjectTopologies: isRefreshingProjectTopologies
+        )
+        if case .worktree = resolver.resolve() { return }
+        completeStartupRecovery()
+    }
+
     /// Compute (knownWorktreeIds, knownLeafIds) from in-memory state and
     /// hand them to `TerminalService.sweepOrphans`. Run after `reloadTabs`
     /// so persisted leaves are visible; without this, sessions leaked by

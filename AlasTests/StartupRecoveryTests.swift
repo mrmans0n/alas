@@ -75,6 +75,17 @@ struct StartupRecoveryTests {
         #expect(recovered.activeTabId(forWorktree: "undiscovered") == nil)
     }
 
+    @Test func recoveryLoadMarksMissingTabsDirectoryAsLoaded() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-tabs-recovery-missing-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let recovered = TabsManager(store: PersistenceStore(), tabsDirectory: directory)
+        recovered.loadAllPersisted(restoringActiveTabs: false)
+
+        #expect(recovered.hasLoaded)
+    }
+
     @Test func missingSelectionDoesNotFallBackToRenderingTheFirstTab() {
         let tab = Tab.terminal(.init(id: "first", title: "First", sessionId: "first"))
 
@@ -109,6 +120,18 @@ struct StartupRecoveryTests {
         #expect(!didFinish)
 
         AppState().completeStartupRecovery()
+
+        #expect(didFinish)
+    }
+
+    @Test func recoveryCompletesWhenStartupHasNoCenterPane() {
+        let coordinator = AlasTerminationCoordinator.shared
+        let originalFinish = coordinator.finish
+        defer { coordinator.finish = originalFinish }
+        var didFinish = false
+        coordinator.finish = { didFinish = true }
+
+        AppState().completeStartupRecoveryIfCenterPaneWillNotAppear()
 
         #expect(didFinish)
     }
