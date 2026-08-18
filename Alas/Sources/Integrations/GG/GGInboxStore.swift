@@ -32,13 +32,14 @@ final class GGInboxStore {
         return now.timeIntervalSince(fetchedAt) >= threshold
     }
 
+    @discardableResult
     func refresh(
         projectId: String,
         repoPath: String,
         service: GGService,
         now: () -> Date = Date.init
-    ) async {
-        if states[projectId]?.isRefreshing == true { return }
+    ) async -> Bool {
+        if states[projectId]?.isRefreshing == true { return false }
         let generation = invalidationGenerations[projectId, default: 0]
         var state = states[projectId] ?? State()
         let rollbackSnapshot = state.snapshot
@@ -96,7 +97,7 @@ final class GGInboxStore {
         } catch let error as GGServiceError {
             guard invalidationGenerations[projectId, default: 0] == generation else {
                 finishInvalidatedRefresh(projectId: projectId, rollbackSnapshot: rollbackSnapshot)
-                return
+                return true
             }
             state.snapshot = rollbackSnapshot
             state.fetchedAt = rollbackFetchedAt
@@ -105,7 +106,7 @@ final class GGInboxStore {
         } catch {
             guard invalidationGenerations[projectId, default: 0] == generation else {
                 finishInvalidatedRefresh(projectId: projectId, rollbackSnapshot: rollbackSnapshot)
-                return
+                return true
             }
             state.snapshot = rollbackSnapshot
             state.fetchedAt = rollbackFetchedAt
@@ -114,7 +115,7 @@ final class GGInboxStore {
         }
         guard invalidationGenerations[projectId, default: 0] == generation else {
             finishInvalidatedRefresh(projectId: projectId, rollbackSnapshot: rollbackSnapshot)
-            return
+            return true
         }
         if !sawSummary && state.lastError == nil {
             state.snapshot = rollbackSnapshot
@@ -124,6 +125,7 @@ final class GGInboxStore {
         }
         state.isRefreshing = false
         write(projectId, state)
+        return true
     }
 
     /// Expires cached freshness while retaining the last visible result.

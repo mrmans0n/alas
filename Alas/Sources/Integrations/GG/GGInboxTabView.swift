@@ -525,8 +525,9 @@ struct GGInboxTabView: View {
             return
         }
         Task { @MainActor in
-            await store.refresh(projectId: project.id, repoPath: project.path, service: service)
-            onComplete?()
+            if await store.refresh(projectId: project.id, repoPath: project.path, service: service) {
+                onComplete?()
+            }
         }
     }
 }
