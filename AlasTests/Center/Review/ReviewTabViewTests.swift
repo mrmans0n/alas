@@ -51,15 +51,15 @@ struct ReviewTabViewTests {
     @Test func startupRecoveryCompletesAfterMatchedOrSettledReviewLoad() {
         #expect(ReviewTabStartupRecoveryReadiness.shouldComplete(
             hasReviewRequest: true,
-            hasLoadedSnapshot: false
+            reviewRefreshSettled: false
         ))
         #expect(ReviewTabStartupRecoveryReadiness.shouldComplete(
             hasReviewRequest: false,
-            hasLoadedSnapshot: true
+            reviewRefreshSettled: true
         ))
         #expect(!ReviewTabStartupRecoveryReadiness.shouldComplete(
             hasReviewRequest: false,
-            hasLoadedSnapshot: false
+            reviewRefreshSettled: false
         ))
     }
 

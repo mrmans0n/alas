@@ -22,8 +22,8 @@ enum ReviewTabPendingReviewPresentation {
 }
 
 enum ReviewTabStartupRecoveryReadiness {
-    static func shouldComplete(hasReviewRequest: Bool, hasLoadedSnapshot: Bool) -> Bool {
-        hasReviewRequest || hasLoadedSnapshot
+    static func shouldComplete(hasReviewRequest: Bool, reviewRefreshSettled: Bool) -> Bool {
+        hasReviewRequest || reviewRefreshSettled
     }
 }
 
@@ -101,7 +101,7 @@ struct ReviewTabView: View {
         .task(id: loadKey) {
             let completesStartupRecovery = ReviewTabStartupRecoveryReadiness.shouldComplete(
                 hasReviewRequest: reviewRequest != nil,
-                hasLoadedSnapshot: hasLoadedSnapshot
+                reviewRefreshSettled: reviewRefreshSettled
             )
             await reload(completingStartupRecovery: completesStartupRecovery)
         }
@@ -135,8 +135,12 @@ struct ReviewTabView: View {
         appState.rightPaneStore.activeState(worktreeId: tabState.worktreeId)?.reviewLoop.snapshot
     }
 
-    private var hasLoadedSnapshot: Bool {
-        appState.rightPaneStore.activeState(worktreeId: tabState.worktreeId)?.hasLoadedSnapshot == true
+    private var reviewRefreshSettled: Bool {
+        guard let reviewLoop = appState.rightPaneStore
+            .activeState(worktreeId: tabState.worktreeId)?
+            .reviewLoop
+        else { return false }
+        return reviewLoop.snapshot != nil && !reviewLoop.isRefreshing
     }
 
     private var matchedSnapshot: ReviewLoopSnapshot? {
@@ -169,11 +173,14 @@ struct ReviewTabView: View {
     // MARK: - Load key (mirrors ReviewChangesTabView)
 
     private var loadKey: String {
-        ReviewChangesLoadKey.build(
-            tabID: tabState.id,
-            worktreePath: worktree.path,
-            rightPaneState: appState.rightPaneStore.activeState(worktreeId: worktree.id)
-        )
+        [
+            ReviewChangesLoadKey.build(
+                tabID: tabState.id,
+                worktreePath: worktree.path,
+                rightPaneState: appState.rightPaneStore.activeState(worktreeId: worktree.id)
+            ),
+            "reviewRefreshSettled:\(reviewRefreshSettled)"
+        ].joined(separator: "\u{0}")
     }
 
     // MARK: - Content
