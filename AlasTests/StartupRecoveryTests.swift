@@ -157,6 +157,16 @@ struct StartupRecoveryTests {
         #expect(didFinish)
     }
 
+    @Test func recoverySuppressesRestoredSurfacesUntilStartupCompletes() {
+        let state = AppState(restoreActiveTabsOnStartup: false)
+
+        #expect(state.isRecoveringFromAbandonedStartup)
+
+        state.completeStartupRecovery()
+
+        #expect(!state.isRecoveringFromAbandonedStartup)
+    }
+
     @Test func asyncRestoredTabsDoNotCompleteRecoveryFromCenterPane() {
         let terminal = Tab.terminal(.init(id: "terminal", title: "Terminal", sessionId: "terminal"))
         let acp = Tab.acpSession(.init(sessionId: "acp", title: "ACP"))
