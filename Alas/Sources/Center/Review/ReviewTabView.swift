@@ -22,6 +22,14 @@ enum ReviewTabPendingReviewPresentation {
 }
 
 enum ReviewTabStartupRecoveryReadiness {
+    static func reviewRefreshSettled(
+        hasSnapshot: Bool,
+        isRefreshing: Bool,
+        hasError: Bool
+    ) -> Bool {
+        !isRefreshing && (hasSnapshot || hasError)
+    }
+
     static func shouldComplete(hasReviewRequest: Bool, reviewRefreshSettled: Bool) -> Bool {
         hasReviewRequest || reviewRefreshSettled
     }
@@ -140,7 +148,11 @@ struct ReviewTabView: View {
             .activeState(worktreeId: tabState.worktreeId)?
             .reviewLoop
         else { return false }
-        return reviewLoop.snapshot != nil && !reviewLoop.isRefreshing
+        return ReviewTabStartupRecoveryReadiness.reviewRefreshSettled(
+            hasSnapshot: reviewLoop.snapshot != nil,
+            isRefreshing: reviewLoop.isRefreshing,
+            hasError: reviewLoop.lastError != nil
+        )
     }
 
     private var matchedSnapshot: ReviewLoopSnapshot? {

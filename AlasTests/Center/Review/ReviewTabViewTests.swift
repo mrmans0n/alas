@@ -61,6 +61,16 @@ struct ReviewTabViewTests {
             hasReviewRequest: false,
             reviewRefreshSettled: false
         ))
+        #expect(ReviewTabStartupRecoveryReadiness.reviewRefreshSettled(
+            hasSnapshot: false,
+            isRefreshing: false,
+            hasError: true
+        ))
+        #expect(!ReviewTabStartupRecoveryReadiness.reviewRefreshSettled(
+            hasSnapshot: true,
+            isRefreshing: true,
+            hasError: false
+        ))
     }
 
     @Test func outdatedDrawerCapsExpandedListHeightToProtectReviewContent() {
