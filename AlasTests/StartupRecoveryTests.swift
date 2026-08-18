@@ -126,6 +126,7 @@ struct StartupRecoveryTests {
         )
 
         #expect(composition.activeId == tab.id)
+        #expect(composition.activeTab == tab)
     }
 
     @Test func recoveryCompletesOnlyAfterTheCenterPaneAppears() {

@@ -92,24 +92,30 @@ struct ReviewTabView: View {
             )
         }
         .task(id: loadKey) {
-            pendingReview = PendingReview(worktreePath: worktree.path, prNumber: reviewRequest?.number)
-            await loadSession()
-            localThreads = reviewRequest?.threads ?? []
-            appState.completeStartupRecovery()
+            let completesStartupRecovery = reviewRequest != nil
+            await reload(completingStartupRecovery: completesStartupRecovery)
         }
         .task(id: reviewRequest?.number) {
             // Re-scope PendingReview and reload when the PR number first arrives (snapshot
             // may populate after the loadKey task has already run with prNumber: nil).
-            pendingReview = PendingReview(worktreePath: worktree.path, prNumber: reviewRequest?.number)
-            await loadSession()
-            localThreads = reviewRequest?.threads ?? []
-            appState.completeStartupRecovery()
+            guard reviewRequest != nil else { return }
+            await reload(completingStartupRecovery: true)
         }
         .onChange(of: reviewRequest) { _, newValue in
             guard !isWriting else { return }
             localThreads = newValue?.threads ?? []
             let currentCheckIDs = Set(newValue?.checks.map { $0.id } ?? [])
             annotations = annotations.filter { currentCheckIDs.contains($0.checkRunID) }
+        }
+    }
+
+    @MainActor
+    private func reload(completingStartupRecovery: Bool) async {
+        pendingReview = PendingReview(worktreePath: worktree.path, prNumber: reviewRequest?.number)
+        await loadSession()
+        localThreads = reviewRequest?.threads ?? []
+        if completingStartupRecovery {
+            appState.completeStartupRecovery()
         }
     }
 

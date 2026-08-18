@@ -24,6 +24,11 @@ struct CenterTabComposition {
         }
     }
 
+    var activeTab: Tab? {
+        guard let activeId else { return nil }
+        return tabs.first { $0.id == activeId }
+    }
+
     func adjacentTabID(in direction: CenterTabNavigationDirection) -> TabID? {
         guard tabs.count > 1,
               let activeId,
@@ -534,6 +539,8 @@ struct CenterPaneView: View {
                                 capabilities: capabilities,
                                 workflowAvailable: workflowAvailable,
                                 hasBlockingGitOperation: hasBlockingGitOperation,
+                                completesStartupRecoveryWhenUnavailable: rightPaneState.hasLoadedSnapshot
+                                    && rightPaneState.ggStackLoadState != .loading,
                                 initialDraft: state.tabs.ggSplitCommitDraft(worktreeId: worktree.id, tabId: s.id),
                                 codeFontFamily: state.config.code.fontFamily,
                                 codeFontSize: CGFloat(state.config.code.fontSize),
@@ -599,8 +606,11 @@ struct CenterPaneView: View {
 
     private func completeStartupRecoveryIfPaneIsStable() {
         guard state.tabs.hasLoaded else { return }
-        let activeTab = state.tabs.activeTab(forWorktree: worktree.id)
-        guard StartupRecoveryPaneCompletionPolicy.shouldComplete(activeTab: activeTab) else { return }
+        let composition = CenterTabComposition(
+            worktreeTabs: state.tabs.tabs(forWorktree: worktree.id),
+            activeWorktreeTabId: state.tabs.activeTabId(forWorktree: worktree.id)
+        )
+        guard StartupRecoveryPaneCompletionPolicy.shouldComplete(activeTab: composition.activeTab) else { return }
         state.completeStartupRecovery()
     }
 
