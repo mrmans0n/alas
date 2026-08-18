@@ -157,14 +157,14 @@ struct StartupRecoveryTests {
         #expect(didFinish)
     }
 
-    @Test func recoverySuppressesRestoredSurfacesUntilStartupCompletes() {
+    @Test func recoverySuppressesRestoredRightPaneForTheLaunch() {
         let state = AppState(restoreActiveTabsOnStartup: false)
 
-        #expect(state.isRecoveringFromAbandonedStartup)
+        #expect(state.suppressesRestoredRightPaneAfterAbandonedStartup)
 
         state.completeStartupRecovery()
 
-        #expect(!state.isRecoveringFromAbandonedStartup)
+        #expect(state.suppressesRestoredRightPaneAfterAbandonedStartup)
     }
 
     @Test func asyncRestoredTabsDoNotCompleteRecoveryFromCenterPane() {

@@ -60,7 +60,7 @@ final class AppState {
     private var unpersistedGGWorktreeModes: [String: [String: GGWorktreeMode]] = [:]
     var spacesManager: SpacesManager
     var selectedWorktreeId: String?
-    private(set) var isRecoveringFromAbandonedStartup: Bool
+    let suppressesRestoredRightPaneAfterAbandonedStartup: Bool
     private(set) var isRefreshingProjectTopologies = false
     var pendingSettingsSection: SettingsSection?
     @ObservationIgnored
@@ -593,7 +593,7 @@ final class AppState {
     ) {
         self.store = store
         restoreActiveTabsOnNextReload = restoreActiveTabsOnStartup
-        isRecoveringFromAbandonedStartup = !restoreActiveTabsOnStartup
+        suppressesRestoredRightPaneAfterAbandonedStartup = !restoreActiveTabsOnStartup
         _tabs = tabsManager
         self.persistenceErrorHandler = persistenceErrorHandler ?? { title, message in
             AppState.showWarningAlert(title: title, message: message)
@@ -958,7 +958,6 @@ final class AppState {
     }
 
     func completeStartupRecovery() {
-        isRecoveringFromAbandonedStartup = false
         AlasTerminationCoordinator.shared.finish?()
     }
 

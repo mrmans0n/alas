@@ -123,7 +123,7 @@ struct RootView: View {
                 sidebarVisible: state.config.sidebarVisible,
                 rightVisible: state.config.rightPaneVisible
                     && rightPaneSelection.showsRightPane
-                    && !state.isRecoveringFromAbandonedStartup,
+                    && !state.suppressesRestoredRightPaneAfterAbandonedStartup,
                 onWidthsChanged: { state.saveConfig() },
                 sidebar: { sidebarContent },
                 center: { effectiveRightPaneVisible in
