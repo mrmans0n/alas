@@ -189,4 +189,16 @@ struct StartupRecoveryTests {
             ggAvailabilityHasProbed: true
         ))
     }
+
+    @Test func commitEditorDiffTaskRerunsAfterDetailsSettle() {
+        #expect(CommitEditorTabView.diffTaskKey(
+            currentSha: "abc",
+            selectedPath: "file.swift",
+            loadingDetails: true
+        ) != CommitEditorTabView.diffTaskKey(
+            currentSha: "abc",
+            selectedPath: "file.swift",
+            loadingDetails: false
+        ))
+    }
 }

@@ -85,6 +85,9 @@ struct RootView: View {
                 state.startAllProjectGitWatchers()
                 state.rescanAgents()
             }
+            .onChange(of: state.selectedWorktreeId) { _, _ in
+                state.completeStartupRecoveryIfCenterPaneWillNotAppear()
+            }
     }
 
     private var rootContent: some View {

@@ -51,7 +51,15 @@ struct CommitEditorTabView: View {
     }
 
     private var diffTaskKey: String {
-        "\(tabState.currentSha):\(selectedPath ?? "")"
+        Self.diffTaskKey(
+            currentSha: tabState.currentSha,
+            selectedPath: selectedPath,
+            loadingDetails: loadingDetails
+        )
+    }
+
+    static func diffTaskKey(currentSha: String, selectedPath: String?, loadingDetails: Bool) -> String {
+        "\(currentSha):\(selectedPath ?? ""):\(loadingDetails)"
     }
 
     var body: some View {
@@ -98,10 +106,11 @@ struct CommitEditorTabView: View {
         }
         .task(id: tabState.currentSha) {
             await loadDetails()
-            onStartupRecoveryReady()
         }
         .task(id: diffTaskKey) {
+            guard !loadingDetails else { return }
             await loadDiffIfNeeded()
+            onStartupRecoveryReady()
         }
         .confirmationDialog("Drop file from commit?", isPresented: Binding(
             get: { pendingDropFile != nil },
