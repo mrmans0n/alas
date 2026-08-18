@@ -6,6 +6,7 @@ struct DraftReviewRequestTabView: View {
     let worktreeId: String
     let tabState: DraftReviewRequestTabState
     @Bindable var appState: AppState
+    var onStartupRecoveryReady: () -> Void = {}
 
     @State private var title: String = ""
     @State private var bodyText: String = ""
@@ -101,7 +102,7 @@ struct DraftReviewRequestTabView: View {
         }
         .task(id: contextKey) {
             await loadContext()
-            appState.completeStartupRecovery()
+            onStartupRecoveryReady()
         }
         .task(id: reviewDraftSessionID.rawValue) {
             loadDraftCommentController()

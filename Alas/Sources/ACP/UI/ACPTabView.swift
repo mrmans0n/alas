@@ -11,6 +11,7 @@ struct ACPTabView: View {
     let sessionId: ACPSession.ID
     let state: AppState
     let worktree: Worktree
+    var onStartupRecoveryReady: () -> Void = {}
 
     var body: some View {
         if let manager = state.acpManager(for: worktree) {
@@ -18,6 +19,7 @@ struct ACPTabView: View {
                 sessionId: sessionId,
                 state: state,
                 worktree: worktree,
+                onStartupRecoveryReady: onStartupRecoveryReady,
                 manager: manager
             )
         } else {
@@ -39,6 +41,7 @@ private struct ACPManagedTabView: View {
     let sessionId: ACPSession.ID
     let state: AppState
     let worktree: Worktree
+    let onStartupRecoveryReady: () -> Void
     @ObservedObject var manager: ACPSessionManager
 
     var body: some View {
@@ -49,6 +52,7 @@ private struct ACPManagedTabView: View {
                 worktree: worktree,
                 manager: manager,
                 session: session,
+                onStartupRecoveryReady: onStartupRecoveryReady,
                 transcript: session.transcript
             )
             // Refcount this tab's hold on the cached `ACPSession`. When the
@@ -93,6 +97,7 @@ private struct ACPSessionView: View {
     let worktree: Worktree
     let manager: ACPSessionManager
     @ObservedObject var session: ACPSession
+    let onStartupRecoveryReady: () -> Void
     /// Observed so the body re-evaluates when pending user action arrives.
     /// `scopeKey(for:)` reads the permission value through this and passes
     /// it down to `ACPMessageList`; otherwise the message list gets a stale
@@ -156,7 +161,7 @@ private struct ACPSessionView: View {
         }
         .task(id: sessionId) {
             await hydrateAndAttach()
-            state.completeStartupRecovery()
+            onStartupRecoveryReady()
         }
         .onExitCommand {
             handleEscape()

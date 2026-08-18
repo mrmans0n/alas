@@ -443,7 +443,8 @@ struct CenterPaneView: View {
                             worktreePath: worktree.path,
                             worktreeId: worktree.id,
                             tabState: draftState,
-                            appState: state
+                            appState: state,
+                            onStartupRecoveryReady: { completeStartupRecoveryIfActive(draftState.id) }
                         )
                         .id(draftState.id)
                     case .reviewChanges(let reviewState):
@@ -488,7 +489,8 @@ struct CenterPaneView: View {
                         MergeConflictTabView(
                             state: state,
                             worktree: worktree,
-                            tabState: s
+                            tabState: s,
+                            onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) }
                         )
                         .id(s.id)
                     case .fileSnapshot(let s):
@@ -508,7 +510,12 @@ struct CenterPaneView: View {
                             onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) }
                         )
                     case .acpSession(let s):
-                        ACPTabView(sessionId: s.sessionId, state: state, worktree: worktree)
+                        ACPTabView(
+                            sessionId: s.sessionId,
+                            state: state,
+                            worktree: worktree,
+                            onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) }
+                        )
                             .id(s.id)
                     case .ggInbox(let s):
                         GGInboxTabView(
