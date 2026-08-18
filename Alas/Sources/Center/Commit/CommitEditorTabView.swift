@@ -98,7 +98,6 @@ struct CommitEditorTabView: View {
         }
         .task(id: tabState.currentSha) {
             await loadDetails()
-            await loadDiffIfNeeded()
             onStartupRecoveryReady()
         }
         .task(id: diffTaskKey) {
