@@ -598,6 +598,9 @@ struct CenterPaneView: View {
         .onChange(of: state.tabs.hasLoaded) { _, _ in
             completeStartupRecoveryIfPaneIsStable()
         }
+        .onChange(of: state.tabs.activeTabId(forWorktree: worktree.id)) { _, _ in
+            completeStartupRecoveryIfPaneIsStable()
+        }
         .background(theme.color("bg-1"))
         .sheet(item: $state.selectedRunScriptFailure) { failure in
             RunScriptFailureDetailView(failure: failure)

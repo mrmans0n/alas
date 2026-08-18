@@ -166,6 +166,10 @@ struct GGInboxTabView: View {
             guard phase == .succeeded, supportsStreamingInbox else { return }
             refresh()
         }
+        .onChange(of: GGAvailability.shared.hasProbed) { _, hasProbed in
+            guard hasProbed else { return }
+            refreshIfStale(onComplete: onStartupRecoveryReady)
+        }
         .onChange(of: supportsStreamingInbox) { wasSupported, isSupported in
             guard Self.shouldRefreshAfterSupportTransition(
                 wasSupported: wasSupported,
@@ -174,7 +178,11 @@ struct GGInboxTabView: View {
                 fetchedAt: inboxState.fetchedAt,
                 now: Date()
             ) else { return }
-            refresh()
+            refreshIfStale(onComplete: onStartupRecoveryReady)
+        }
+        .onChange(of: inboxState.isRefreshing) { wasRefreshing, isRefreshing in
+            guard wasRefreshing, !isRefreshing else { return }
+            refreshIfStale(onComplete: onStartupRecoveryReady)
         }
     }
 
@@ -497,6 +505,7 @@ struct GGInboxTabView: View {
     }
 
     private func refreshIfStale(onComplete: (() -> Void)? = nil) {
+        guard GGAvailability.shared.hasProbed else { return }
         guard supportsStreamingInbox else {
             onComplete?()
             return
@@ -506,6 +515,7 @@ struct GGInboxTabView: View {
             onComplete?()
             return
         }
+        guard !inboxState.isRefreshing else { return }
         refresh(onComplete: onComplete)
     }
 
