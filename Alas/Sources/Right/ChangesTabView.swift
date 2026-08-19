@@ -565,6 +565,7 @@ struct ChangesTabView: View {
     private var commitRowsStateToken: String {
         Self.commitRowsStateToken(
             ggStack: rps.ggStack,
+            ggModeActive: rps.ggContext.isActive,
             inFlightAction: rps.ggActionState.inFlightAction,
             pausedOperation: rps.ggActionState.pausedOperation,
             mergeOperation: rps.mergeOp.current,
@@ -577,6 +578,7 @@ struct ChangesTabView: View {
 
     static func commitRowsStateToken(
         ggStack: GGStack?,
+        ggModeActive: Bool,
         inFlightAction: GGStackActionKind?,
         pausedOperation: GGPausedOperation?,
         mergeOperation: MergeOperation?,
@@ -586,6 +588,7 @@ struct ChangesTabView: View {
         primaryCommitRemote: CodeHostRemote?
     ) -> String {
         String(reflecting: ggStack)
+            + String(ggModeActive)
             + String(reflecting: inFlightAction)
             + String(reflecting: pausedOperation)
             + String(reflecting: mergeOperation)

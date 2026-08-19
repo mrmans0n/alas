@@ -25,6 +25,7 @@ struct ChangesTabViewTests {
         )
         let withoutRemote = ChangesTabView.commitRowsStateToken(
             ggStack: nil,
+            ggModeActive: false,
             inFlightAction: nil,
             pausedOperation: nil,
             mergeOperation: nil,
@@ -35,6 +36,7 @@ struct ChangesTabViewTests {
         )
         let withRemote = ChangesTabView.commitRowsStateToken(
             ggStack: nil,
+            ggModeActive: false,
             inFlightAction: nil,
             pausedOperation: nil,
             mergeOperation: nil,
@@ -45,6 +47,33 @@ struct ChangesTabViewTests {
         )
 
         #expect(withoutRemote != withRemote)
+    }
+
+    @Test func appKitCommitRowsTrackGGMode() {
+        let withoutGGMode = ChangesTabView.commitRowsStateToken(
+            ggStack: nil,
+            ggModeActive: false,
+            inFlightAction: nil,
+            pausedOperation: nil,
+            mergeOperation: nil,
+            selectionIsStale: false,
+            commitsNeedPush: false,
+            commitRemote: nil,
+            primaryCommitRemote: nil
+        )
+        let withGGMode = ChangesTabView.commitRowsStateToken(
+            ggStack: nil,
+            ggModeActive: true,
+            inFlightAction: nil,
+            pausedOperation: nil,
+            mergeOperation: nil,
+            selectionIsStale: false,
+            commitsNeedPush: false,
+            commitRemote: nil,
+            primaryCommitRemote: nil
+        )
+
+        #expect(withoutGGMode != withGGMode)
     }
 
     @Test func appKitRowsUseLatestActionsWithoutRebuilding() {
