@@ -9,6 +9,11 @@ struct ChangesTabViewTests {
             != ChangesTabView.commitHeaderCountsToken(primary: 12, older: 3))
     }
 
+    @Test func appKitCommitRowsTrackTerminalPosition() {
+        #expect(ChangesTabView.commitRowTerminalToken(isLast: true)
+            != ChangesTabView.commitRowTerminalToken(isLast: false))
+    }
+
     @Test func appKitCommitRowsTrackPrimaryRemote() {
         let primaryRemote = CodeHostRemote(
             kind: .github,

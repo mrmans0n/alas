@@ -490,9 +490,10 @@ struct ChangesTabView: View {
         guard rps.commitsExpanded else { return }
 
         for commit in commits {
+            let isLast = commit.id == commits.last?.id && older.isEmpty
             rows.append(appKitRow(
                 id: "commit-primary-\(commit.sha)",
-                token: String(reflecting: commit) + rowStateToken,
+                token: String(reflecting: commit) + rowStateToken + Self.commitRowTerminalToken(isLast: isLast),
                 estimatedHeight: 64
             ) { section.primaryCommitRow(commit) })
         }
@@ -508,9 +509,10 @@ struct ChangesTabView: View {
             })
         }
         for commit in older {
+            let isLast = commit.id == older.last?.id
             rows.append(appKitRow(
                 id: "commit-older-\(commit.sha)",
-                token: String(reflecting: commit) + rowStateToken,
+                token: String(reflecting: commit) + rowStateToken + Self.commitRowTerminalToken(isLast: isLast),
                 estimatedHeight: 64
             ) { section.historicalCommitRow(commit) })
         }
@@ -554,6 +556,10 @@ struct ChangesTabView: View {
 
     static func commitHeaderCountsToken(primary: Int, older: Int) -> String {
         "\(primary):\(older)"
+    }
+
+    static func commitRowTerminalToken(isLast: Bool) -> String {
+        String(isLast)
     }
 
     private var commitRowsStateToken: String {
