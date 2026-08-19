@@ -150,4 +150,19 @@ struct AppKitDiffTilingControllerTests {
 
         #expect(indexByID == ["a": 2, "b": 1])
     }
+
+    @Test("sticky header follows the viewport and yields to the next header")
+    func stickyHeaderLayout() {
+        let tiling = controller()
+        tiling.replaceAll(rows: [
+            .init(id: "working", ownerID: nil, height: 30),
+            .init(id: "file", ownerID: nil, height: 100),
+            .init(id: "commits", ownerID: nil, height: 30),
+            .init(id: "commit", ownerID: nil, height: 100),
+        ])
+
+        #expect(tiling.stickyRowLayout(ids: ["working", "commits"], viewportMinY: 50) == .init(id: "working", minY: 50))
+        #expect(tiling.stickyRowLayout(ids: ["working", "commits"], viewportMinY: 120) == .init(id: "working", minY: 100))
+        #expect(tiling.stickyRowLayout(ids: ["working", "commits"], viewportMinY: 150) == .init(id: "commits", minY: 150))
+    }
 }

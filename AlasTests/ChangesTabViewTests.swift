@@ -1,8 +1,160 @@
+import Foundation
 import Testing
 @testable import Alas
 
 @MainActor
 struct ChangesTabViewTests {
+    @Test func appKitCommitHeaderTracksCommitCounts() {
+        #expect(ChangesTabView.commitHeaderCountsToken(primary: 1, older: 23)
+            != ChangesTabView.commitHeaderCountsToken(primary: 12, older: 3))
+    }
+
+    @Test func appKitCommitRowsTrackTerminalPosition() {
+        #expect(ChangesTabView.commitRowTerminalToken(isLast: true)
+            != ChangesTabView.commitRowTerminalToken(isLast: false))
+    }
+
+    @Test func appKitCommitRowsTrackPrimaryRemote() {
+        let primaryRemote = CodeHostRemote(
+            kind: .github,
+            host: "github.com",
+            owner: "owner",
+            repository: "repo",
+            remoteName: "origin",
+            webURL: URL(string: "https://github.com/owner/repo")!
+        )
+        let withoutRemote = ChangesTabView.commitRowsStateToken(
+            ggStack: nil,
+            ggModeActive: false,
+            inFlightAction: nil,
+            pausedOperation: nil,
+            mergeOperation: nil,
+            selectionIsStale: false,
+            commitsNeedPush: false,
+            commitRemote: nil,
+            primaryCommitRemote: nil
+        )
+        let withRemote = ChangesTabView.commitRowsStateToken(
+            ggStack: nil,
+            ggModeActive: false,
+            inFlightAction: nil,
+            pausedOperation: nil,
+            mergeOperation: nil,
+            selectionIsStale: false,
+            commitsNeedPush: false,
+            commitRemote: nil,
+            primaryCommitRemote: primaryRemote
+        )
+
+        #expect(withoutRemote != withRemote)
+    }
+
+    @Test func appKitCommitRowsTrackGGMode() {
+        let withoutGGMode = ChangesTabView.commitRowsStateToken(
+            ggStack: nil,
+            ggModeActive: false,
+            inFlightAction: nil,
+            pausedOperation: nil,
+            mergeOperation: nil,
+            selectionIsStale: false,
+            commitsNeedPush: false,
+            commitRemote: nil,
+            primaryCommitRemote: nil
+        )
+        let withGGMode = ChangesTabView.commitRowsStateToken(
+            ggStack: nil,
+            ggModeActive: true,
+            inFlightAction: nil,
+            pausedOperation: nil,
+            mergeOperation: nil,
+            selectionIsStale: false,
+            commitsNeedPush: false,
+            commitRemote: nil,
+            primaryCommitRemote: nil
+        )
+
+        #expect(withoutGGMode != withGGMode)
+    }
+
+    @Test func appKitCommitRowsTrackGGCapabilities() {
+        let unsupported = GGCapabilities(structuredSplit: false, keepCurrentUnstack: false)
+        let supported = GGCapabilities(structuredSplit: true, keepCurrentUnstack: false)
+
+        #expect(ChangesTabView.commitRowsStateToken(
+            ggStack: nil,
+            ggModeActive: false,
+            ggCapabilities: unsupported,
+            inFlightAction: nil,
+            pausedOperation: nil,
+            mergeOperation: nil,
+            selectionIsStale: false,
+            commitsNeedPush: false,
+            commitRemote: nil,
+            primaryCommitRemote: nil
+        ) != ChangesTabView.commitRowsStateToken(
+            ggStack: nil,
+            ggModeActive: false,
+            ggCapabilities: supported,
+            inFlightAction: nil,
+            pausedOperation: nil,
+            mergeOperation: nil,
+            selectionIsStale: false,
+            commitsNeedPush: false,
+            commitRemote: nil,
+            primaryCommitRemote: nil
+        ))
+    }
+
+    @Test func appKitCommitRowsTrackComparisonState() {
+        #expect(ChangesTabView.commitRowsStateToken(
+            ggStack: nil,
+            ggModeActive: false,
+            comparisonRef: nil,
+            inFlightAction: nil,
+            pausedOperation: nil,
+            mergeOperation: nil,
+            selectionIsStale: false,
+            commitsNeedPush: false,
+            commitRemote: nil,
+            primaryCommitRemote: nil
+        ) != ChangesTabView.commitRowsStateToken(
+            ggStack: nil,
+            ggModeActive: false,
+            comparisonRef: "main",
+            inFlightAction: nil,
+            pausedOperation: nil,
+            mergeOperation: nil,
+            selectionIsStale: false,
+            commitsNeedPush: false,
+            commitRemote: nil,
+            primaryCommitRemote: nil
+        ))
+    }
+
+    @Test func appKitRowsUseLatestActionsWithoutRebuilding() {
+        let relay = ChangesAppKitActionRelay()
+        var selections: [String] = []
+        relay.update(
+            onSelectFile: { selections.append("first:\($0.path)") },
+            onSelectCommit: { _ in },
+            onEditCommit: { _, _ in },
+            onReviewCommit: { _ in }
+        )
+        relay.update(
+            onSelectFile: { selections.append("second:\($0.path)") },
+            onSelectCommit: { _ in },
+            onEditCommit: { _, _ in },
+            onReviewCommit: { _ in }
+        )
+
+        relay.onSelectFile(ChangedFile(
+            path: "App.swift", status: "M", stage: .unstaged,
+            add: 1, del: 0, renameFrom: nil
+        ))
+
+        #expect(selections == ["second:App.swift"])
+    }
+
     @Test func genericOperationCardHiddenDuringPausedGGOperation() {
         let operation = MergeOperation.merge(sourceBranch: "main")
 

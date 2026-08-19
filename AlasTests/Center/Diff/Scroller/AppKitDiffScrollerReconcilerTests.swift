@@ -311,6 +311,20 @@ struct AppKitDiffScrollerReconcilerTests {
         #expect(stack.pool.mountedIDs.contains("row-0"))
     }
 
+    @Test("sticky rows remain mounted at the viewport top")
+    func stickyRowsFollowViewport() throws {
+        let stack = makeStack()
+        let rows = [spec("header", height: 30, retention: .sticky)]
+            + (0..<100).map { spec("row-\($0)", height: 40) }
+        stack.reconciler.apply(plan: .init(rows: rows), contentWidth: stack.scrollView.contentWidth)
+        stack.reconciler.scroll(to: .init(
+            targetID: "row-50", fallbackID: nil, alignment: .top, animated: false, generation: 1
+        ))
+
+        let header = try #require(stack.pool.mountedView(id: "header"))
+        #expect(abs(header.frame.minY - stack.scrollView.scrollY) < 0.5)
+    }
+
     @Test("retention and owner-only updates are not treated as no-ops")
     func retentionAndOwnerOnlyUpdatesApply() {
         let stack = makeStack()

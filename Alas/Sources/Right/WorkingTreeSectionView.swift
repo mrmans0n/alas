@@ -1,8 +1,38 @@
 import SwiftUI
 
+struct WorkingTreeFlatRow: Identifiable, Equatable {
+    let node: FileTreeNode
+    let depth: Int
+
+    var id: String { node.id }
+
+    static func make(
+        groups: [WorkingTreeChangeGroup],
+        collapsedPaths: Set<String>
+    ) -> [WorkingTreeFlatRow] {
+        let roots = ChangesTreeBuilder.build(files: groups.map(\.primaryEntry))
+        return roots.flatMap { flatten($0, depth: 0, collapsedPaths: collapsedPaths) }
+    }
+
+    private static func flatten(
+        _ node: FileTreeNode,
+        depth: Int,
+        collapsedPaths: Set<String>
+    ) -> [WorkingTreeFlatRow] {
+        let row = WorkingTreeFlatRow(node: node, depth: depth)
+        guard node.kind == .dir,
+              !collapsedPaths.contains("working-tree:\(node.path)")
+        else { return [row] }
+        return [row] + (node.children ?? []).flatMap {
+            flatten($0, depth: depth + 1, collapsedPaths: collapsedPaths)
+        }
+    }
+}
+
 struct WorkingTreeSectionView: View {
     let changes: [ChangedFile]
     @Binding var expanded: Bool
+    @Binding var collapsedChangePaths: Set<String>
     let onSelect: (ChangedFile) -> Void
     let fileContextTarget: (ChangedFile) -> FileContextMenuTarget
     var onStageAll: (([ChangedFile]) -> Void)? = nil
@@ -24,8 +54,6 @@ struct WorkingTreeSectionView: View {
     var dragPayload: ((ChangedFile) -> DragOutPayload?)? = nil
 
     @Environment(\.theme) private var theme
-
-    @State private var collapsedChangePaths: Set<String> = []
 
     private var staged:   [ChangedFile] { changes.filter { $0.stage == .staged   } }
     private var unstaged: [ChangedFile] { changes.filter { $0.stage == .unstaged } }
@@ -54,7 +82,12 @@ struct WorkingTreeSectionView: View {
                 }
             }
         } header: {
-            SectionHeader(
+            headerRow
+        }
+    }
+
+    var headerRow: some View {
+        SectionHeader(
                 role: .workingTree,
                 title: "Working tree",
                 count: changeGroups.count,
@@ -62,7 +95,7 @@ struct WorkingTreeSectionView: View {
                 onToggle: { expanded.toggle() },
                 stats: (add: totalAdd, del: totalDel)
             ) { }
-            .contextMenu {
+        .contextMenu {
                 if !unstaged.isEmpty {
                     Button("Stage All Changes") {
                         onStageAll?(unstaged)
@@ -84,207 +117,218 @@ struct WorkingTreeSectionView: View {
                     onDiscardAll?()
                 }
                 .disabled(changes.isEmpty)
-            }
         }
     }
 
     @ViewBuilder
     private func flatFileTree(groups: [WorkingTreeChangeGroup]) -> some View {
         let groupsByPath = Dictionary(uniqueKeysWithValues: groups.map { ($0.path, $0) })
-        let files = groups.map(\.primaryEntry)
-        ForEach(ChangesTreeBuilder.build(files: files)) { node in
-            renderNode(node, groups: groups, groupsByPath: groupsByPath, depth: 0)
+        ForEach(WorkingTreeFlatRow.make(groups: groups, collapsedPaths: collapsedChangePaths)) { row in
+            WorkingTreeFlatRowView(
+                row: row,
+                groups: groups,
+                groupsByPath: groupsByPath,
+                collapsedPaths: $collapsedChangePaths,
+                actions: rowActions
+            )
         }
     }
 
-    /// A ChangedFile is "untracked" when status parser produced ("A",
-    /// .unstaged). Staged adds parse to ("A", .staged) so the stage check
-    /// is required.
-    private func isUntracked(_ file: ChangedFile) -> Bool {
-        file.status == "A" && file.stage == .unstaged
+    var rowActions: WorkingTreeRowActions {
+        WorkingTreeRowActions(
+            onSelect: onSelect,
+            fileContextTarget: fileContextTarget,
+            onStageAll: onStageAll,
+            onUnstageAll: onUnstageAll,
+            onIgnore: onIgnore,
+            onDiscardFolder: onDiscardFolder,
+            onOpenFile: onOpenFile,
+            onCopyRelative: onCopyRelative,
+            onCopyFull: onCopyFull,
+            onCopyDiff: onCopyDiff,
+            onViewAtHEAD: onViewAtHEAD,
+            onCompareWithHEAD: onCompareWithHEAD,
+            onFileHistory: onFileHistory,
+            onDiscardFile: onDiscardFile,
+            isOpenFileEnabled: isOpenFileEnabled,
+            dragPayload: dragPayload
+        )
     }
+}
 
-    private func hasHeadVersion(_ group: WorkingTreeChangeGroup) -> Bool {
-        if group.entries.contains(where: { $0.status == "D" || $0.status == "R" }) {
-            return true
-        }
-        return !group.entries.contains { $0.status == "A" }
-    }
+struct WorkingTreeRowActions {
+    let onSelect: (ChangedFile) -> Void
+    let fileContextTarget: (ChangedFile) -> FileContextMenuTarget
+    let onStageAll: (([ChangedFile]) -> Void)?
+    let onUnstageAll: (([ChangedFile]) -> Void)?
+    let onIgnore: ((_ path: String, _ isDirectory: Bool, _ destination: IgnoreDestination) -> Void)?
+    let onDiscardFolder: ((String) -> Void)?
+    let onOpenFile: ((ChangedFile) -> Void)?
+    let onCopyRelative: ((ChangedFile) -> Void)?
+    let onCopyFull: ((ChangedFile) -> Void)?
+    let onCopyDiff: ((ChangedFile) -> Void)?
+    let onViewAtHEAD: ((ChangedFile) -> Void)?
+    let onCompareWithHEAD: ((ChangedFile) -> Void)?
+    let onFileHistory: ((ChangedFile) -> Void)?
+    let onDiscardFile: ((ChangedFile) -> Void)?
+    let isOpenFileEnabled: ((ChangedFile) -> Bool)?
+    let dragPayload: ((ChangedFile) -> DragOutPayload?)?
+}
 
-    /// True when every ChangedFile reachable through `node` is untracked.
-    /// Folders that contain any tracked entry get no Ignore menu.
-    private func isUntrackedSubtree(
-        _ node: FileTreeNode,
-        groupsByPath: [String: WorkingTreeChangeGroup]
-    ) -> Bool {
-        if node.kind == .file {
-            return groupsByPath[node.path]?.entries.allSatisfy(isUntracked) ?? false
-        }
-        guard let kids = node.children, !kids.isEmpty else { return false }
-        return kids.allSatisfy { isUntrackedSubtree($0, groupsByPath: groupsByPath) }
-    }
+struct WorkingTreeFlatRowView: View {
+    let row: WorkingTreeFlatRow
+    let groups: [WorkingTreeChangeGroup]
+    let groupsByPath: [String: WorkingTreeChangeGroup]
+    @Binding var collapsedPaths: Set<String>
+    let actions: WorkingTreeRowActions
+
+    @Environment(\.theme) private var theme
 
     @ViewBuilder
-    private func ignoreMenu(path: String, isDirectory: Bool) -> some View {
-        Menu("Ignore") {
-            Button("Add to .gitignore (repo root)") {
-                onIgnore?(path, isDirectory, .repoRoot)
-            }
-            Button("Add to nearest .gitignore") {
-                onIgnore?(path, isDirectory, .nearest)
-            }
-            Button("Add to .git/info/exclude") {
-                onIgnore?(path, isDirectory, .infoExclude)
-            }
+    var body: some View {
+        if row.node.kind == .dir {
+            folderRow
+        } else if let group = groupsByPath[row.node.path] {
+            fileRow(group)
         }
     }
 
-    private func renderNode(
-        _ node: FileTreeNode,
-        groups: [WorkingTreeChangeGroup],
-        groupsByPath: [String: WorkingTreeChangeGroup],
-        depth: Int
-    ) -> AnyView {
-        if node.kind == .dir {
-            let collapseKey = "working-tree:\(node.path)"
-            let open = !collapsedChangePaths.contains(collapseKey)
-            let folderGroups = groups.groups(under: node.path)
-            let stagedEntries = folderGroups.flatMap(\.stagedEntries)
-            let unstagedEntries = folderGroups.flatMap(\.unstagedEntries)
-            let folderState = folderStageState(staged: stagedEntries, unstaged: unstagedEntries)
-            let folderUntracked = isUntrackedSubtree(node, groupsByPath: groupsByPath)
-            return AnyView(
-                Group {
-                    Button {
-                        if open {
-                            collapsedChangePaths.insert(collapseKey)
-                        } else {
-                            collapsedChangePaths.remove(collapseKey)
-                        }
-                    } label: {
-                        HStack(spacing: 6) {
-                            StageChip(state: stageChipState(for: folderState)) {
-                                switch folderState {
-                                case .staged:           onUnstageAll?(stagedEntries)
-                                case .mixed, .unstaged: onStageAll?(unstagedEntries)
-                                }
-                            }
-                            FolderIconView(
-                                name: node.name,
-                                path: node.path,
-                                open: open,
-                                fallbackColor: open ? theme.color("accent") : theme.color("fg-dim")
-                            )
-                            Text(node.name)
-                                .font(.system(size: 11.5, design: .monospaced))
-                                .foregroundColor(theme.color("fg"))
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                            Spacer()
-                        }
-                        .padding(.leading, Self.directoryRowLeadingPadding(depth: depth))
-                        .padding(.trailing, 12)
-                        .padding(.vertical, 4)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .contextMenu {
-                        if !unstagedEntries.isEmpty {
-                            Button("Stage Changes") {
-                                onStageAll?(unstagedEntries)
-                            }
-                        }
-                        if !stagedEntries.isEmpty {
-                            Button("Unstage Changes") {
-                                onUnstageAll?(stagedEntries)
-                            }
-                        }
-                        if !stagedEntries.isEmpty || !unstagedEntries.isEmpty {
-                            Divider()
-                        }
-                        Button("Discard Changes…", role: .destructive) {
-                            onDiscardFolder?(node.path)
-                        }
-                        if folderUntracked {
-                            ignoreMenu(path: node.path, isDirectory: true)
-                        }
-                    }
-                    if open, let kids = node.children {
-                        ForEach(kids) {
-                            renderNode(
-                                $0,
-                                groups: groups,
-                                groupsByPath: groupsByPath,
-                                depth: depth + 1
-                            )
-                        }
+    private var folderRow: some View {
+        let node = row.node
+        let collapseKey = "working-tree:\(node.path)"
+        let open = !collapsedPaths.contains(collapseKey)
+        let folderGroups = groups.groups(under: node.path)
+        let stagedEntries = folderGroups.flatMap(\.stagedEntries)
+        let unstagedEntries = folderGroups.flatMap(\.unstagedEntries)
+        let folderState = Self.folderStageState(staged: stagedEntries, unstaged: unstagedEntries)
+        let folderUntracked = isUntrackedSubtree(node)
+        return Button {
+            if open { collapsedPaths.insert(collapseKey) }
+            else { collapsedPaths.remove(collapseKey) }
+        } label: {
+            HStack(spacing: 6) {
+                StageChip(state: Self.stageChipState(for: folderState)) {
+                    switch folderState {
+                    case .staged: actions.onUnstageAll?(stagedEntries)
+                    case .mixed, .unstaged: actions.onStageAll?(unstagedEntries)
                     }
                 }
-            )
-        } else if let group = groupsByPath[node.path] {
-            let file = group.primaryEntry
-            let fileUntracked = isUntracked(file)
-            let ignore: AnyView? = fileUntracked
-                ? AnyView(ignoreMenu(path: file.path, isDirectory: false))
-                : nil
-            let canStage = !group.unstagedEntries.isEmpty
-            let canUnstage = !group.stagedEntries.isEmpty
-            let headPathEntry = group.entries.first { $0.renameFrom != nil } ?? file
-            return AnyView(
-                ChangedRow(
-                    file: file,
-                    fileContextTarget: fileContextTarget(file),
-                    depth: depth,
-                    onSelect: { onSelect(file) },
-                    onStage: primaryStageAction(for: group),
-                    stageState: stageChipState(for: group.stageState),
-                    displayAdd: group.add,
-                    displayDel: group.del,
-                    onStageEntries: canStage ? { onStageAll?(group.unstagedEntries) } : nil,
-                    onUnstageEntries: canUnstage ? { onUnstageAll?(group.stagedEntries) } : nil,
-                    onOpenFile: onOpenFile.map { fn in { fn(file) } },
-                    onCopyRelative: onCopyRelative.map { fn in { fn(file) } },
-                    onCopyFull: onCopyFull.map { fn in { fn(file) } },
-                    onCopyDiff: onCopyDiff.map { fn in { fn(file) } },
-                    onViewAtHEAD: onViewAtHEAD.map { fn in { fn(headPathEntry) } },
-                    onCompareWithHEAD: onCompareWithHEAD.map { fn in { fn(headPathEntry) } },
-                    onFileHistory: onFileHistory.map { fn in { fn(headPathEntry) } },
-                    onDiscard: onDiscardFile.map { fn in { fn(file) } },
-                    openFileEnabled: isOpenFileEnabled?(file) ?? true,
-                    viewAtHEADEnabled: hasHeadVersion(group),
-                    ignoreMenu: ignore,
-                    dragPayload: dragPayload.map { fn in { fn(file) } }
+                FolderIconView(
+                    name: node.name,
+                    path: node.path,
+                    open: open,
+                    fallbackColor: open ? theme.color("accent") : theme.color("fg-dim")
                 )
-            )
-        } else {
-            return AnyView(EmptyView())
+                Text(node.name)
+                    .font(.system(size: 11.5, design: .monospaced))
+                    .foregroundColor(theme.color("fg"))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer()
+            }
+            .padding(.leading, WorkingTreeSectionView.directoryRowLeadingPadding(depth: row.depth))
+            .padding(.trailing, 12)
+            .padding(.vertical, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .contextMenu {
+            if !unstagedEntries.isEmpty {
+                Button("Stage Changes") { actions.onStageAll?(unstagedEntries) }
+            }
+            if !stagedEntries.isEmpty {
+                Button("Unstage Changes") { actions.onUnstageAll?(stagedEntries) }
+            }
+            if !stagedEntries.isEmpty || !unstagedEntries.isEmpty { Divider() }
+            Button("Discard Changes…", role: .destructive) {
+                actions.onDiscardFolder?(node.path)
+            }
+            if folderUntracked { ignoreMenu(path: node.path, isDirectory: true) }
+        }
+    }
+
+    private func fileRow(_ group: WorkingTreeChangeGroup) -> some View {
+        let file = group.primaryEntry
+        let canStage = !group.unstagedEntries.isEmpty
+        let canUnstage = !group.stagedEntries.isEmpty
+        let headPathEntry = group.entries.first { $0.renameFrom != nil } ?? file
+        let ignore = Self.isUntracked(file)
+            ? AnyView(ignoreMenu(path: file.path, isDirectory: false))
+            : nil
+        return ChangedRow(
+            file: file,
+            fileContextTarget: actions.fileContextTarget(file),
+            depth: row.depth,
+            onSelect: { actions.onSelect(file) },
+            onStage: primaryStageAction(for: group),
+            stageState: Self.stageChipState(for: group.stageState),
+            displayAdd: group.add,
+            displayDel: group.del,
+            onStageEntries: canStage ? { actions.onStageAll?(group.unstagedEntries) } : nil,
+            onUnstageEntries: canUnstage ? { actions.onUnstageAll?(group.stagedEntries) } : nil,
+            onOpenFile: actions.onOpenFile.map { fn in { fn(file) } },
+            onCopyRelative: actions.onCopyRelative.map { fn in { fn(file) } },
+            onCopyFull: actions.onCopyFull.map { fn in { fn(file) } },
+            onCopyDiff: actions.onCopyDiff.map { fn in { fn(file) } },
+            onViewAtHEAD: actions.onViewAtHEAD.map { fn in { fn(headPathEntry) } },
+            onCompareWithHEAD: actions.onCompareWithHEAD.map { fn in { fn(headPathEntry) } },
+            onFileHistory: actions.onFileHistory.map { fn in { fn(headPathEntry) } },
+            onDiscard: actions.onDiscardFile.map { fn in { fn(file) } },
+            openFileEnabled: actions.isOpenFileEnabled?(file) ?? true,
+            viewAtHEADEnabled: Self.hasHeadVersion(group),
+            ignoreMenu: ignore,
+            dragPayload: actions.dragPayload.map { fn in { fn(file) } }
+        )
     }
 
     private func primaryStageAction(for group: WorkingTreeChangeGroup) -> (() -> Void)? {
         switch group.stageState {
         case .staged:
-            guard !group.stagedEntries.isEmpty else { return nil }
-            return { onUnstageAll?(group.stagedEntries) }
+            return group.stagedEntries.isEmpty ? nil : { actions.onUnstageAll?(group.stagedEntries) }
         case .mixed, .unstaged:
-            guard !group.unstagedEntries.isEmpty else { return nil }
-            return { onStageAll?(group.unstagedEntries) }
+            return group.unstagedEntries.isEmpty ? nil : { actions.onStageAll?(group.unstagedEntries) }
         }
     }
 
-    private func folderStageState(
+    @ViewBuilder
+    private func ignoreMenu(path: String, isDirectory: Bool) -> some View {
+        Menu("Ignore") {
+            Button("Add to .gitignore (repo root)") { actions.onIgnore?(path, isDirectory, .repoRoot) }
+            Button("Add to nearest .gitignore") { actions.onIgnore?(path, isDirectory, .nearest) }
+            Button("Add to .git/info/exclude") { actions.onIgnore?(path, isDirectory, .infoExclude) }
+        }
+    }
+
+    private func isUntrackedSubtree(_ node: FileTreeNode) -> Bool {
+        if node.kind == .file {
+            return groupsByPath[node.path]?.entries.allSatisfy { Self.isUntracked($0) } ?? false
+        }
+        guard let children = node.children, !children.isEmpty else { return false }
+        return children.allSatisfy { isUntrackedSubtree($0) }
+    }
+
+    private static func isUntracked(_ file: ChangedFile) -> Bool {
+        file.status == "A" && file.stage == .unstaged
+    }
+
+    private static func hasHeadVersion(_ group: WorkingTreeChangeGroup) -> Bool {
+        group.entries.contains(where: { $0.status == "D" || $0.status == "R" })
+            || !group.entries.contains { $0.status == "A" }
+    }
+
+    private static func folderStageState(
         staged: [ChangedFile],
         unstaged: [ChangedFile]
     ) -> WorkingTreeStageState {
         switch (staged.isEmpty, unstaged.isEmpty) {
         case (false, false): return .mixed
-        case (false, true):  return .staged
-        default:             return .unstaged
+        case (false, true): return .staged
+        default: return .unstaged
         }
     }
 
-    private func stageChipState(for state: WorkingTreeStageState) -> StageChip.DisplayState {
+    private static func stageChipState(for state: WorkingTreeStageState) -> StageChip.DisplayState {
         switch state {
         case .staged: return .staged
         case .mixed: return .mixed

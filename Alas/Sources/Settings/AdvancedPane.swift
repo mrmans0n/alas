@@ -6,6 +6,7 @@ struct AdvancedPane: View {
     @State private var pendingAction: CleanupAction?
     @State private var cleanupMessage: String?
     @State private var isCleaningStaleProjects = false
+    @State private var usesAppKitChangesScroller = AppKitChangesScrollerFlag.isEnabled
 
     var body: some View {
         ScrollView {
@@ -14,6 +15,21 @@ struct AdvancedPane: View {
                 Text("Experimental features and destructive maintenance actions.")
                     .font(.system(size: 12.5)).foregroundColor(theme.color("fg-dim"))
                     .padding(.bottom, 12)
+
+                SettingsGroup(title: "Experimental") {
+                    SettingsRow(
+                        name: "AppKit Changes scroller",
+                        desc: "Uses the virtualized native scroller for working tree files, stashes, and commits."
+                    ) {
+                        AlasToggle(on: Binding(
+                            get: { usesAppKitChangesScroller },
+                            set: { enabled in
+                                usesAppKitChangesScroller = enabled
+                                AppKitChangesScrollerFlag.setOverride(enabled)
+                            }
+                        ))
+                    }
+                }
 
                 SettingsGroup(title: "Cleanup") {
                     SettingsRow(

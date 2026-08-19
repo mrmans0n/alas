@@ -8,6 +8,11 @@ struct ChangesTabView: View {
     let onEditCommit: (CommitInfo, String) -> Void
     let onReviewCommit: (CommitInfo) -> Void
 
+    @State private var appKitScrollerEnabled = AppKitChangesScrollerFlag.isEnabled
+    @State private var collapsedChangePaths: Set<String> = []
+    @State private var appKitActionRelay = ChangesAppKitActionRelay()
+    @Environment(\.theme) private var theme
+
     private var conflicts: [ChangedFile] {
         rps.changes.filter { $0.conflict != nil }
     }
@@ -50,9 +55,24 @@ struct ChangesTabView: View {
     }
 
     var body: some View {
+        let _ = appKitActionRelay.update(
+            onSelectFile: onSelect,
+            onSelectCommit: onSelectCommit,
+            onEditCommit: onEditCommit,
+            onReviewCommit: onReviewCommit
+        )
         VStack(spacing: 0) {
-            ScrollView {
-                scrollContent
+            if appKitScrollerEnabled {
+                AppKitDiffScroller(
+                    plan: appKitScrollPlan,
+                    scrollRequest: nil,
+                    onActiveOwnerChange: { _ in },
+                    onScrollRequestCompletion: { _ in }
+                )
+            } else {
+                ScrollView {
+                    scrollContent
+                }
             }
             if isGGDrawerActive {
                 GGStackDrawer(rps: rps, appState: appState)
@@ -63,6 +83,9 @@ struct ChangesTabView: View {
                     onAction: { action in rps.handleReviewReadinessAction(action, appState: appState) }
                 )
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AppKitChangesScrollerFlag.overrideDidChangeNotification)) { _ in
+            appKitScrollerEnabled = AppKitChangesScrollerFlag.isEnabled
         }
     }
 
@@ -229,70 +252,7 @@ struct ChangesTabView: View {
                     }
                 )
             }
-            WorkingTreeSectionView(
-                changes: nonConflictChanges,
-                expanded: $rps.workingTreeExpanded,
-                onSelect: onSelect,
-                fileContextTarget: { file in
-                    FileContextMenuTarget.resolve(
-                        kind: .file,
-                        worktreePath: rps.worktree.path,
-                        relativePath: file.path
-                    )
-                },
-                onStageAll: { rps.stageAll($0) },
-                onUnstageAll: { rps.unstageAll($0) },
-                onIgnore: { path, isDir, dest in
-                    rps.ignore(path: path, isDirectory: isDir, destination: dest)
-                },
-                onDiscardAll: { rps.requestDiscardAll() },
-                onDiscardFolder: { path in rps.requestDiscardFolder(path: path) },
-                onOpenFile: { file in
-                    appState.openFile(relativePath: file.path, worktreeId: rps.worktree.id)
-                },
-                onCopyRelative: { file in
-                    Clipboard.copy(file.path)
-                },
-                onCopyFull: { file in
-                    let absolute = rps.worktree.path.appendingPathComponent(file.path).path
-                    Clipboard.copy(absolute)
-                },
-                onCopyDiff: { file in
-                    rps.copyDiff(for: file.path, renameFrom: file.renameFrom)
-                },
-                onViewAtHEAD: { file in
-                    appState.openFileSnapshotAtHEAD(
-                        relativePath: file.renameFrom ?? file.path,
-                        worktreeId: rps.worktree.id
-                    )
-                },
-                onCompareWithHEAD: { file in
-                    appState.openDiffTab(
-                        forFileInWorktree: rps.worktree,
-                        relativePath: file.path,
-                        originalPath: file.renameFrom,
-                        compareWithHEAD: true
-                    )
-                },
-                onFileHistory: { file in
-                    appState.openFileHistory(
-                        relativePath: file.renameFrom ?? file.path,
-                        worktreeId: rps.worktree.id
-                    )
-                },
-                onDiscardFile: { file in rps.requestDiscardFile(path: file.path) },
-                onStashChanges: { rps.requestStashChanges() },
-                stashChangesDisabled: rps.mergeOp.current != nil || rps.stashOperationInFlight,
-                isOpenFileEnabled: { file in
-                    DiffOpenFileAvailability.isAvailable(
-                        worktreePath: rps.worktree.path,
-                        relativePath: file.path
-                    )
-                },
-                dragPayload: { file in
-                    .workingTreeFile(worktreePath: rps.worktree.path, relativePath: file.path)
-                }
-            )
+            workingTreeSection
             StashesSectionView(
                 stashes: rps.stashes,
                 filesByRef: rps.stashFilesByRef,
@@ -312,45 +272,457 @@ struct ChangesTabView: View {
                 }
             )
             Divider().opacity(0.4)
-            CommitsSectionView(
-                commits: rps.commitsForDisplay,
-                olderCommits: rps.olderCommits,
-                comparisonRef: rps.comparisonRef,
-                hasMoreOlder: rps.hasMoreOlder && rps.ggStackLoadState != .loading,
-                isLoadingOlder: rps.isLoadingOlder,
-                behindBase: rps.showBehindBaseChip ? rps.behindBase : nil,
-                behindUpstream: rps.showBehindUpstreamChip ? rps.behindUpstream : nil,
-                expanded: $rps.commitsExpanded,
-                baseBranch: $rps.baseBranch,
-                branches: BaseBranchSelector.smartList(
-                    branches: rps.availableBranches,
-                    currentRef: rps.comparisonRef,
-                    upstream: rps.upstreamRef,
-                    recent: rps.recentBaseBranches
-                ),
-                isLoadingBranches: rps.isFetchingBranches,
-                hasLoadedBranches: rps.hasFetchedBranches,
-                onSelect: onSelectCommit,
-                onCopySHA: copyCommitSHA,
-                onEdit: { commit in
-                    if let ref = rps.comparisonRef {
-                        onEditCommit(commit, ref)
-                    }
-                },
-                onReview: onReviewCommit,
-                onLoadOlder: { Task { @MainActor in await rps.loadOlder() } },
-                onSelectBaseBranch: { branch in
-                    rps.selectBaseBranch(branch)
-                },
-                onOpenBaseBranchSelector: { Task { @MainActor in await rps.fetchBranches() } },
-                rps: rps,
-                ggStack: rps.ggStack,
-                stackCodeHostKind: rps.commitRemote?.kind,
-                onGGAction: { action, commit in
-                    rps.handleGGCommitAction(action, commit: commit, appState: appState)
-                }
-            )
+            commitsSection
         }
+    }
+
+    private var appKitScrollPlan: AppKitDiffRowPlan {
+        let preparation = preparationModel
+        let workingTree = workingTreeSection
+        let workingGroups = WorkingTreeChangeGroup.group(files: nonConflictChanges)
+        let workingGroupsSignature = String(reflecting: workingGroups).hashValue
+        let groupsByPath = Dictionary(uniqueKeysWithValues: workingGroups.map { ($0.path, $0) })
+        let commits = commitsSection
+        var rows: [AppKitDiffRowSpec] = []
+
+        if let error = rps.sidebarError {
+            rows.append(appKitRow(id: "changes-error", token: error, estimatedHeight: 38) {
+                InlineErrorStrip(message: error, onDismiss: { rps.sidebarError = nil })
+                    .padding(.horizontal, 12)
+                    .padding(.top, 6)
+            })
+        }
+
+        if let operation = rps.mergeOp.current,
+           Self.shouldShowGenericOperationCard(
+            mergeOperation: operation,
+            pausedGGOperation: rps.ggActionState.pausedOperation
+           ) {
+            rows.append(appKitRow(
+                id: "changes-operation",
+                token: String(reflecting: operation) + String(!conflicts.isEmpty),
+                estimatedHeight: 110
+            ) {
+                OperationCard(
+                    operation: operation,
+                    hasUnresolvedConflicts: !conflicts.isEmpty,
+                    onContinue: { rps.continueOperation() },
+                    onSkip: { rps.skipOperation() },
+                    onAbort: { rps.abortOperation() }
+                )
+            })
+        }
+
+        if !conflicts.isEmpty || rps.bulkResolveInFlight || rps.bulkResolveReport != nil {
+            let token = String(reflecting: conflicts)
+                + String(reflecting: rps.bulkResolveInFlight)
+                + String(reflecting: rps.bulkResolveReport)
+                + String(reflecting: resolvedBulkAgent)
+                + appState.config.changes.mergeBulkResolvePrompt
+            rows.append(appKitRow(id: "changes-conflicts", token: token, estimatedHeight: 120) {
+                ConflictsSection(
+                    conflicts: conflicts,
+                    bulkInFlight: rps.bulkResolveInFlight,
+                    bulkReport: rps.bulkResolveReport,
+                    hasAgent: resolvedBulkAgent != nil,
+                    onSelect: { file in rps.openConflict?(file.path) },
+                    onUseOurs: { rps.useOurs(file: $0) },
+                    onUseTheirs: { rps.useTheirs(file: $0) },
+                    onKeepDeleted: { rps.keepDeleted(file: $0) },
+                    onMarkResolved: { rps.markResolved(file: $0) },
+                    onResolveAllWithAgent: {
+                        guard let agent = resolvedBulkAgent else { return }
+                        rps.resolveAllConflicts(
+                            using: agent,
+                            prompt: appState.config.changes.mergeBulkResolvePrompt
+                        )
+                    },
+                    onCancelBulkResolve: { rps.cancelBulkResolve() },
+                    onDismissBulkReport: { rps.dismissBulkResolveReport() },
+                    dragPayload: { file in
+                        .workingTreeFile(worktreePath: rps.worktree.path, relativePath: file.path)
+                    }
+                )
+            })
+        }
+
+        if Self.shouldShowChangesPreparationCard(preparationIsVisible: preparation.isVisible) {
+            rows.append(appKitRow(
+                id: "changes-preparation",
+                token: String(reflecting: preparation),
+                estimatedHeight: 92
+            ) {
+                ChangesPreparationCard(
+                    model: preparation,
+                    onReviewChanges: openReviewChangesTab,
+                    onDraftCommit: openDraftTab,
+                    onGGAction: handleGGPreparationAction,
+                    onGGStackAction: { rps.onGGStackAction($0, appState: appState) },
+                    onReviewRequestAction: { rps.handleReviewReadinessAction($0, appState: appState) }
+                )
+            })
+        }
+
+        rows.append(appKitRow(
+            id: "working-tree-header",
+            token: "\(workingGroupsSignature)-\(rps.workingTreeExpanded)-\(rps.mergeOp.current != nil)-\(rps.stashOperationInFlight)",
+            estimatedHeight: 32,
+            retention: .sticky
+        ) { workingTree.headerRow })
+
+        if rps.workingTreeExpanded {
+            if workingGroups.isEmpty {
+                rows.append(appKitRow(id: "working-tree-empty", token: 0, estimatedHeight: 32) {
+                    ChangesEmptyRow(text: "no changes")
+                })
+            } else {
+                for row in WorkingTreeFlatRow.make(
+                    groups: workingGroups,
+                    collapsedPaths: collapsedChangePaths
+                ) {
+                    rows.append(appKitRow(
+                        id: "working-tree-\(row.id)",
+                        token: String(reflecting: row)
+                            + (row.node.kind == .dir
+                                ? String(workingGroupsSignature)
+                                : String(reflecting: groupsByPath[row.node.path])),
+                        estimatedHeight: 28
+                    ) {
+                        WorkingTreeFlatRowView(
+                            row: row,
+                            groups: workingGroups,
+                            groupsByPath: groupsByPath,
+                            collapsedPaths: $collapsedChangePaths,
+                            actions: workingTree.rowActions
+                        )
+                    })
+                }
+            }
+        }
+
+        appendStashRows(to: &rows)
+        rows.append(appKitRow(id: "changes-commit-divider", token: 0, estimatedHeight: 1) {
+            Divider().opacity(0.4)
+        })
+        appendCommitRows(commits, to: &rows)
+        return AppKitDiffRowPlan(rows: rows)
+    }
+
+    private func appendStashRows(to rows: inout [AppKitDiffRowSpec]) {
+        guard !rps.stashes.isEmpty else { return }
+        rows.append(appKitRow(
+            id: "stashes-header",
+            token: String(reflecting: rps.stashes) + String(rps.stashesExpanded),
+            estimatedHeight: 32,
+            retention: .sticky
+        ) {
+            SectionHeader(
+                role: .stashes,
+                title: "Stashes",
+                count: rps.stashes.count,
+                expanded: rps.stashesExpanded,
+                onToggle: { rps.stashesExpanded.toggle() }
+            )
+        })
+        guard rps.stashesExpanded else { return }
+
+        for stash in rps.stashes {
+            let isOpen = rps.expandedStashRefs.contains(stash.ref)
+            let isLoading = rps.loadingStashRefs.contains(stash.ref)
+            rows.append(appKitRow(
+                id: "stash-\(stash.ref)",
+                token: String(reflecting: stash) + String(isOpen) + String(isLoading),
+                estimatedHeight: 32
+            ) {
+                StashSummaryRow(
+                    stash: stash,
+                    open: isOpen,
+                    loading: isLoading,
+                    onToggle: { rps.toggleStashExpanded(stash) },
+                    onApply: { rps.applyStash(stash) },
+                    onPop: { rps.popStash(stash) },
+                    onDrop: { rps.requestDropStash(stash) }
+                )
+            })
+            guard isOpen else { continue }
+            let files = rps.stashFilesByRef[stash.ref] ?? []
+            if files.isEmpty {
+                rows.append(appKitRow(
+                    id: "stash-\(stash.ref)-empty",
+                    token: isLoading,
+                    estimatedHeight: 32
+                ) { StashEmptyRow(loading: isLoading) })
+            } else {
+                for file in files {
+                    rows.append(appKitRow(
+                        id: "stash-\(stash.ref)-file-\(file.id)",
+                        token: file,
+                        estimatedHeight: 30
+                    ) {
+                        StashFileRow(
+                            file: file,
+                            onSelect: {
+                                appState.openStashDiffTab(worktree: rps.worktree, stash: stash, file: file)
+                            },
+                            dragPayload: {
+                                .stashFile(worktreePath: rps.worktree.path, stash: stash, file: file)
+                            }
+                        )
+                    })
+                }
+            }
+        }
+    }
+
+    private func appendCommitRows(
+        _ section: CommitsSectionView,
+        to rows: inout [AppKitDiffRowSpec]
+    ) {
+        let commits = rps.commitsForDisplay
+        let older = rps.olderCommits
+        let rowStateToken = commitRowsStateToken
+        rows.append(appKitRow(
+            id: "commits-header",
+            token: commitHeaderToken,
+            estimatedHeight: 32,
+            retention: .sticky
+        ) { section.headerRow })
+        guard rps.commitsExpanded else { return }
+
+        for commit in commits {
+            let isLast = commit.id == commits.last?.id && older.isEmpty
+            rows.append(appKitRow(
+                id: "commit-primary-\(commit.sha)",
+                token: String(reflecting: commit) + rowStateToken + Self.commitRowTerminalToken(isLast: isLast),
+                estimatedHeight: 64
+            ) { section.primaryCommitRow(commit) })
+        }
+        if commits.isEmpty && older.isEmpty {
+            let text = rps.comparisonRef.map { "up to date with \($0)" } ?? "no comparison branch"
+            rows.append(appKitRow(id: "commits-empty", token: text, estimatedHeight: 32) {
+                CommitHistoryEmptyRow(text: text)
+            })
+        }
+        if !older.isEmpty, let comparisonRef = rps.comparisonRef {
+            rows.append(appKitRow(id: "commits-boundary", token: comparisonRef, estimatedHeight: 32) {
+                CommitHistoryDividerRow(label: comparisonRef)
+            })
+        }
+        for commit in older {
+            let isLast = commit.id == older.last?.id
+            rows.append(appKitRow(
+                id: "commit-older-\(commit.sha)",
+                token: String(reflecting: commit) + rowStateToken + Self.commitRowTerminalToken(isLast: isLast),
+                estimatedHeight: 64
+            ) { section.historicalCommitRow(commit) })
+        }
+        if rps.isLoadingOlder || (rps.hasMoreOlder && rps.ggStackLoadState != .loading) || !older.isEmpty {
+            rows.append(appKitRow(
+                id: "commits-footer",
+                token: "\(rps.isLoadingOlder)-\(rps.hasMoreOlder)-\(rps.ggStackLoadState)-\(older.isEmpty)",
+                estimatedHeight: 32
+            ) {
+                CommitHistoryFooterRow(
+                    isLoading: rps.isLoadingOlder,
+                    canLoadMore: rps.hasMoreOlder && rps.ggStackLoadState != .loading,
+                    hasOlderCommits: !older.isEmpty,
+                    onLoadOlder: { Task { @MainActor in await rps.loadOlder() } }
+                )
+            })
+        }
+    }
+
+    private var commitHeaderToken: String {
+        String(rps.commitsExpanded)
+            + String(reflecting: rps.ggStack)
+            + String(rps.showBehindBaseChip)
+            + String(rps.showBehindUpstreamChip)
+            + String(reflecting: rps.behindBase)
+            + String(reflecting: rps.behindUpstream)
+            + rps.baseBranch
+            + String(reflecting: rps.availableBranches)
+            + String(reflecting: rps.comparisonRef)
+            + String(reflecting: rps.upstreamRef)
+            + String(reflecting: rps.recentBaseBranches)
+            + String(rps.isFetchingBranches)
+            + String(rps.hasFetchedBranches)
+            + String(rps.pullInFlight)
+            + String(reflecting: rps.mergeOp.current)
+            + Self.commitHeaderCountsToken(
+                primary: rps.commitsForDisplay.count,
+                older: rps.olderCommits.count
+            )
+    }
+
+    static func commitHeaderCountsToken(primary: Int, older: Int) -> String {
+        "\(primary):\(older)"
+    }
+
+    static func commitRowTerminalToken(isLast: Bool) -> String {
+        String(isLast)
+    }
+
+    private var commitRowsStateToken: String {
+        Self.commitRowsStateToken(
+            ggStack: rps.ggStack,
+            ggModeActive: rps.ggContext.isActive,
+            comparisonRef: rps.comparisonRef,
+            ggCapabilities: GGAvailability.shared.capabilities,
+            inFlightAction: rps.ggActionState.inFlightAction,
+            pausedOperation: rps.ggActionState.pausedOperation,
+            mergeOperation: rps.mergeOp.current,
+            selectionIsStale: rps.ggCommitSelectionIsStale,
+            commitsNeedPush: rps.commitsNeedPush,
+            commitRemote: rps.commitRemote,
+            primaryCommitRemote: rps.primaryCommitRemote
+        )
+    }
+
+    static func commitRowsStateToken(
+        ggStack: GGStack?,
+        ggModeActive: Bool,
+        comparisonRef: String? = nil,
+        ggCapabilities: GGCapabilities = GGCapabilities(structuredSplit: false, keepCurrentUnstack: false),
+        inFlightAction: GGStackActionKind?,
+        pausedOperation: GGPausedOperation?,
+        mergeOperation: MergeOperation?,
+        selectionIsStale: Bool,
+        commitsNeedPush: Bool,
+        commitRemote: CodeHostRemote?,
+        primaryCommitRemote: CodeHostRemote?
+    ) -> String {
+        String(reflecting: ggStack)
+            + String(ggModeActive)
+            + String(reflecting: comparisonRef)
+            + String(reflecting: ggCapabilities)
+            + String(reflecting: inFlightAction)
+            + String(reflecting: pausedOperation)
+            + String(reflecting: mergeOperation)
+            + String(selectionIsStale)
+            + String(commitsNeedPush)
+            + String(reflecting: commitRemote)
+            + String(reflecting: primaryCommitRemote)
+    }
+
+    private func appKitRow<Token: Equatable, Content: View>(
+        id: String,
+        token: Token,
+        estimatedHeight: CGFloat,
+        retention: AppKitDiffRowRetention = .recyclable,
+        @ViewBuilder content: @escaping () -> Content
+    ) -> AppKitDiffRowSpec {
+        AppKitDiffRowSpec(
+            id: id,
+            ownerID: nil,
+            equalityToken: .init(ChangesAppKitRowToken(value: token, theme: theme)),
+            contentSignature: id.hashValue,
+            estimatedHeight: estimatedHeight,
+            retention: retention
+        ) {
+            AnyView(content().environment(\.theme, theme))
+        }
+    }
+
+    private var workingTreeSection: WorkingTreeSectionView {
+        WorkingTreeSectionView(
+            changes: nonConflictChanges,
+            expanded: $rps.workingTreeExpanded,
+            collapsedChangePaths: $collapsedChangePaths,
+            onSelect: { appKitActionRelay.onSelectFile($0) },
+            fileContextTarget: { file in
+                FileContextMenuTarget.resolve(
+                    kind: .file,
+                    worktreePath: rps.worktree.path,
+                    relativePath: file.path
+                )
+            },
+            onStageAll: { rps.stageAll($0) },
+            onUnstageAll: { rps.unstageAll($0) },
+            onIgnore: { path, isDir, destination in
+                rps.ignore(path: path, isDirectory: isDir, destination: destination)
+            },
+            onDiscardAll: { rps.requestDiscardAll() },
+            onDiscardFolder: { rps.requestDiscardFolder(path: $0) },
+            onOpenFile: { file in
+                appState.openFile(relativePath: file.path, worktreeId: rps.worktree.id)
+            },
+            onCopyRelative: { Clipboard.copy($0.path) },
+            onCopyFull: { file in
+                Clipboard.copy(rps.worktree.path.appendingPathComponent(file.path).path)
+            },
+            onCopyDiff: { rps.copyDiff(for: $0.path, renameFrom: $0.renameFrom) },
+            onViewAtHEAD: { file in
+                appState.openFileSnapshotAtHEAD(
+                    relativePath: file.renameFrom ?? file.path,
+                    worktreeId: rps.worktree.id
+                )
+            },
+            onCompareWithHEAD: { file in
+                appState.openDiffTab(
+                    forFileInWorktree: rps.worktree,
+                    relativePath: file.path,
+                    originalPath: file.renameFrom,
+                    compareWithHEAD: true
+                )
+            },
+            onFileHistory: { file in
+                appState.openFileHistory(
+                    relativePath: file.renameFrom ?? file.path,
+                    worktreeId: rps.worktree.id
+                )
+            },
+            onDiscardFile: { rps.requestDiscardFile(path: $0.path) },
+            onStashChanges: { rps.requestStashChanges() },
+            stashChangesDisabled: rps.mergeOp.current != nil || rps.stashOperationInFlight,
+            isOpenFileEnabled: { file in
+                DiffOpenFileAvailability.isAvailable(
+                    worktreePath: rps.worktree.path,
+                    relativePath: file.path
+                )
+            },
+            dragPayload: { file in
+                .workingTreeFile(worktreePath: rps.worktree.path, relativePath: file.path)
+            }
+        )
+    }
+
+    private var commitsSection: CommitsSectionView {
+        CommitsSectionView(
+            commits: rps.commitsForDisplay,
+            olderCommits: rps.olderCommits,
+            comparisonRef: rps.comparisonRef,
+            hasMoreOlder: rps.hasMoreOlder && rps.ggStackLoadState != .loading,
+            isLoadingOlder: rps.isLoadingOlder,
+            behindBase: rps.showBehindBaseChip ? rps.behindBase : nil,
+            behindUpstream: rps.showBehindUpstreamChip ? rps.behindUpstream : nil,
+            expanded: $rps.commitsExpanded,
+            baseBranch: $rps.baseBranch,
+            branches: BaseBranchSelector.smartList(
+                branches: rps.availableBranches,
+                currentRef: rps.comparisonRef,
+                upstream: rps.upstreamRef,
+                recent: rps.recentBaseBranches
+            ),
+            isLoadingBranches: rps.isFetchingBranches,
+            hasLoadedBranches: rps.hasFetchedBranches,
+            onSelect: { appKitActionRelay.onSelectCommit($0) },
+            onCopySHA: copyCommitSHA,
+            onEdit: { commit in
+                if let comparisonRef = rps.comparisonRef {
+                    appKitActionRelay.onEditCommit(commit, comparisonRef)
+                }
+            },
+            onReview: { appKitActionRelay.onReviewCommit($0) },
+            onLoadOlder: { Task { @MainActor in await rps.loadOlder() } },
+            onSelectBaseBranch: { rps.selectBaseBranch($0) },
+            onOpenBaseBranchSelector: { Task { @MainActor in await rps.fetchBranches() } },
+            rps: rps,
+            ggStack: rps.ggStack,
+            stackCodeHostKind: rps.commitRemote?.kind,
+            onGGAction: { action, commit in
+                rps.handleGGCommitAction(action, commit: commit, appState: appState)
+            }
+        )
     }
 
     static func shouldShowGenericOperationCard(
@@ -453,6 +825,45 @@ struct ChangesTabView: View {
         // available.
         return appState.agentRegistry.enabled()
             .first(where: { $0.bypassPermissionsFlag != nil })
+    }
+}
+
+@MainActor
+final class ChangesAppKitActionRelay {
+    var onSelectFile: (ChangedFile) -> Void = { _ in }
+    var onSelectCommit: (CommitInfo) -> Void = { _ in }
+    var onEditCommit: (CommitInfo, String) -> Void = { _, _ in }
+    var onReviewCommit: (CommitInfo) -> Void = { _ in }
+
+    func update(
+        onSelectFile: @escaping (ChangedFile) -> Void,
+        onSelectCommit: @escaping (CommitInfo) -> Void,
+        onEditCommit: @escaping (CommitInfo, String) -> Void,
+        onReviewCommit: @escaping (CommitInfo) -> Void
+    ) {
+        self.onSelectFile = onSelectFile
+        self.onSelectCommit = onSelectCommit
+        self.onEditCommit = onEditCommit
+        self.onReviewCommit = onReviewCommit
+    }
+}
+
+private struct ChangesAppKitRowToken<Value: Equatable>: Equatable {
+    let value: Value
+    let theme: Theme
+}
+
+private struct ChangesEmptyRow: View {
+    let text: String
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 11))
+            .foregroundColor(theme.color("fg-faint"))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

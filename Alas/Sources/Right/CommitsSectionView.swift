@@ -112,22 +112,25 @@ struct CommitsSectionView: View {
     let stackCodeHostKind: CodeHostKind?
     let onGGAction: (GGCommitAction, CommitInfo) -> Void
 
-    @Environment(\.theme) private var theme
-
     var body: some View {
         Section {
             if expanded {
                 expandedBody
             }
         } header: {
-            SectionHeader(
+            headerRow
+        }
+    }
+
+    var headerRow: some View {
+        SectionHeader(
                 role: ggStack == nil ? .commits : .stack,
                 title: Self.sectionTitle(ggStack: ggStack),
                 count: Self.sectionCount(primary: commits, older: olderCommits),
                 expanded: expanded,
                 onToggle: { expanded.toggle() }
-            ) {
-                HStack(spacing: 6) {
+        ) {
+            HStack(spacing: 6) {
                     if let s = behindBase {
                         BehindChip(count: s.count, label: baseBranch, role: .base)
                             .help("\(s.count) behind \(s.ref)")
@@ -153,7 +156,6 @@ struct CommitsSectionView: View {
                         onOpen: onOpenBaseBranchSelector
                     )
                     BranchOpsMenu(rps: rps)
-                }
             }
         }
     }
@@ -217,32 +219,7 @@ struct CommitsSectionView: View {
             ForEach(Self.rowBatches(for: commits)) { batch in
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(commits[batch.range]) { commit in
-                        let entry = ggStack?.entry(matchingCommitSHA: commit.sha)
-                        let allowsGenericGitActions = Self.genericGitActionsAllowed(for: entry, in: ggStack)
-                        let remote = entry == nil
-                            ? (rps.commitsNeedPush ? nil : rps.primaryCommitRemote)
-                            : rps.commitRemote
-                        CommitRow(
-                            commit: commit,
-                            isLast: commit.id == commits.last?.id && olderCommits.isEmpty,
-                            onSelect: { onSelect(commit) },
-                            onCopySHA: { onCopySHA(commit) },
-                            onCopyMessage: { Clipboard.copy(commit.fullMessage) },
-                            ggID: Self.contextMenuGGID(for: commit, ggModeEnabled: rps.ggContext.isActive),
-                            onOpenRemote: openRemoteAction(for: commit, remote: remote),
-                            onEdit: allowsGenericGitActions ? { onEdit(commit) } : nil,
-                            onReview: { onReview(commit) },
-                            onCherryPick: allowsGenericGitActions ? { rps.requestCherryPick(sha: commit.sha) } : nil,
-                            onRevert: allowsGenericGitActions ? { rps.runRevert(sha: commit.sha) } : nil,
-                            ggMenu: ggMenu(for: commit),
-                            onGGAction: { action in onGGAction(action, commit) },
-                            onGGOpenPR: ggOpenReviewRequestAction(for: commit).map { action in
-                                { onGGAction(action, commit) }
-                            },
-                            stackEntry: entry,
-                            currentPositionIndicator: entry.flatMap { ggStack?.currentPositionIndicator(for: $0) },
-                            codeHostKind: stackCodeHostKind
-                        )
+                        primaryCommitRow(commit)
                     }
                 }
             }
@@ -261,19 +238,7 @@ struct CommitsSectionView: View {
             ForEach(Self.rowBatches(for: olderCommits)) { batch in
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(olderCommits[batch.range]) { commit in
-                        CommitRow(
-                            commit: commit,
-                            isLast: commit.id == olderCommits.last?.id,
-                            isHistorical: comparisonRef != nil,
-                            onSelect: { onSelect(commit) },
-                            onCopySHA: { onCopySHA(commit) },
-                            onCopyMessage: { Clipboard.copy(commit.fullMessage) },
-                            ggID: Self.contextMenuGGID(for: commit, ggModeEnabled: rps.ggContext.isActive),
-                            onOpenRemote: openRemoteAction(for: commit, remote: rps.commitRemote),
-                            onReview: { onReview(commit) },
-                            onCherryPick: { rps.requestCherryPick(sha: commit.sha) },
-                            onRevert: { rps.runRevert(sha: commit.sha) }
-                        )
+                        historicalCommitRow(commit)
                     }
                 }
             }
@@ -283,30 +248,57 @@ struct CommitsSectionView: View {
         footer
     }
 
+    func primaryCommitRow(_ commit: CommitInfo) -> AnyView {
+        let entry = ggStack?.entry(matchingCommitSHA: commit.sha)
+        let allowsGenericGitActions = Self.genericGitActionsAllowed(for: entry, in: ggStack)
+        let remote = entry == nil
+            ? (rps.commitsNeedPush ? nil : rps.primaryCommitRemote)
+            : rps.commitRemote
+        return AnyView(CommitRow(
+            commit: commit,
+            isLast: commit.id == commits.last?.id && olderCommits.isEmpty,
+            onSelect: { onSelect(commit) },
+            onCopySHA: { onCopySHA(commit) },
+            onCopyMessage: { Clipboard.copy(commit.fullMessage) },
+            ggID: Self.contextMenuGGID(for: commit, ggModeEnabled: rps.ggContext.isActive),
+            onOpenRemote: openRemoteAction(for: commit, remote: remote),
+            onEdit: allowsGenericGitActions ? { onEdit(commit) } : nil,
+            onReview: { onReview(commit) },
+            onCherryPick: allowsGenericGitActions ? { rps.requestCherryPick(sha: commit.sha) } : nil,
+            onRevert: allowsGenericGitActions ? { rps.runRevert(sha: commit.sha) } : nil,
+            ggMenu: ggMenu(for: commit),
+            onGGAction: { action in onGGAction(action, commit) },
+            onGGOpenPR: ggOpenReviewRequestAction(for: commit).map { action in
+                { onGGAction(action, commit) }
+            },
+            stackEntry: entry,
+            currentPositionIndicator: entry.flatMap { ggStack?.currentPositionIndicator(for: $0) },
+            codeHostKind: stackCodeHostKind
+        ))
+    }
+
+    func historicalCommitRow(_ commit: CommitInfo) -> AnyView {
+        AnyView(CommitRow(
+            commit: commit,
+            isLast: commit.id == olderCommits.last?.id,
+            isHistorical: comparisonRef != nil,
+            onSelect: { onSelect(commit) },
+            onCopySHA: { onCopySHA(commit) },
+            onCopyMessage: { Clipboard.copy(commit.fullMessage) },
+            ggID: Self.contextMenuGGID(for: commit, ggModeEnabled: rps.ggContext.isActive),
+            onOpenRemote: openRemoteAction(for: commit, remote: rps.commitRemote),
+            onReview: { onReview(commit) },
+            onCherryPick: { rps.requestCherryPick(sha: commit.sha) },
+            onRevert: { rps.runRevert(sha: commit.sha) }
+        ))
+    }
+
     private var emptyPlaceholder: some View {
-        Text(comparisonRef.map { "up to date with \($0)" } ?? "no comparison branch")
-            .font(.system(size: 11))
-            .foregroundColor(theme.color("fg-faint"))
-            .padding(.horizontal, 12).padding(.vertical, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        CommitHistoryEmptyRow(text: comparisonRef.map { "up to date with \($0)" } ?? "no comparison branch")
     }
 
     private func dividerRow(label: String) -> some View {
-        HStack(spacing: 8) {
-            Rectangle()
-                .fill(theme.color("line"))
-                .frame(height: 1)
-            Text(label)
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundColor(theme.color("fg-faint"))
-                .textCase(.uppercase)
-                .tracking(0.4)
-            Rectangle()
-                .fill(theme.color("line"))
-                .frame(height: 1)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        CommitHistoryDividerRow(label: label)
     }
 
     private func ggMenu(for commit: CommitInfo) -> GGCommitMenuModel? {
@@ -350,17 +342,64 @@ struct CommitsSectionView: View {
 
     @ViewBuilder
     private var footer: some View {
-        if isLoadingOlder {
+        CommitHistoryFooterRow(
+            isLoading: isLoadingOlder,
+            canLoadMore: hasMoreOlder,
+            hasOlderCommits: !olderCommits.isEmpty,
+            onLoadOlder: onLoadOlder
+        )
+    }
+}
+
+struct CommitHistoryEmptyRow: View {
+    let text: String
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 11))
+            .foregroundColor(theme.color("fg-faint"))
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct CommitHistoryDividerRow: View {
+    let label: String
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Rectangle().fill(theme.color("line")).frame(height: 1)
+            Text(label)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundColor(theme.color("fg-faint"))
+                .textCase(.uppercase)
+                .tracking(0.4)
+            Rectangle().fill(theme.color("line")).frame(height: 1)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+    }
+}
+
+struct CommitHistoryFooterRow: View {
+    let isLoading: Bool
+    let canLoadMore: Bool
+    let hasOlderCommits: Bool
+    let onLoadOlder: () -> Void
+    @Environment(\.theme) private var theme
+
+    @ViewBuilder
+    var body: some View {
+        if isLoading {
             HStack(spacing: 6) {
-                Spinner(lineWidth: 1.5, duration: 0.7)
-                    .frame(width: 10, height: 10)
-                Text("Loading…")
-                    .font(.system(size: 11))
-                    .foregroundColor(theme.color("fg-faint"))
+                Spinner(lineWidth: 1.5, duration: 0.7).frame(width: 10, height: 10)
+                Text("Loading…").font(.system(size: 11)).foregroundColor(theme.color("fg-faint"))
             }
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.vertical, 8)
-        } else if hasMoreOlder {
+        } else if canLoadMore {
             Button(action: onLoadOlder) {
                 Text("↓ Load older commits")
                     .font(.system(size: 11))
@@ -370,7 +409,7 @@ struct CommitsSectionView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-        } else if !olderCommits.isEmpty {
+        } else if hasOlderCommits {
             Text("End of history")
                 .font(.system(size: 11))
                 .foregroundColor(theme.color("fg-faint"))
