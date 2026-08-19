@@ -6,6 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.17] - 2026-08-19
+
+### ✨ Features
+
+- Virtualize the Changes tab scrolling for large working trees, commit lists, and stashes (#1044).
+- Improve AppKit diff scrolling and row highlighting behavior (#1045).
+
 ## [0.14.16] - 2026-08-18
 
 ### 🐛 Fixes
