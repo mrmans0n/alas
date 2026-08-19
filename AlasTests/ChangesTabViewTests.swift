@@ -4,6 +4,11 @@ import Testing
 
 @MainActor
 struct ChangesTabViewTests {
+    @Test func appKitCommitHeaderTracksCommitCounts() {
+        #expect(ChangesTabView.commitHeaderCountsToken(primary: 1, older: 23)
+            != ChangesTabView.commitHeaderCountsToken(primary: 12, older: 3))
+    }
+
     @Test func appKitCommitRowsTrackPrimaryRemote() {
         let primaryRemote = CodeHostRemote(
             kind: .github,

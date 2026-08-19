@@ -546,6 +546,14 @@ struct ChangesTabView: View {
             + String(rps.hasFetchedBranches)
             + String(rps.pullInFlight)
             + String(reflecting: rps.mergeOp.current)
+            + Self.commitHeaderCountsToken(
+                primary: rps.commitsForDisplay.count,
+                older: rps.olderCommits.count
+            )
+    }
+
+    static func commitHeaderCountsToken(primary: Int, older: Int) -> String {
+        "\(primary):\(older)"
     }
 
     private var commitRowsStateToken: String {
