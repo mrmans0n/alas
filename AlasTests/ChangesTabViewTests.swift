@@ -76,6 +76,35 @@ struct ChangesTabViewTests {
         #expect(withoutGGMode != withGGMode)
     }
 
+    @Test func appKitCommitRowsTrackGGCapabilities() {
+        let unsupported = GGCapabilities(structuredSplit: false, keepCurrentUnstack: false)
+        let supported = GGCapabilities(structuredSplit: true, keepCurrentUnstack: false)
+
+        #expect(ChangesTabView.commitRowsStateToken(
+            ggStack: nil,
+            ggModeActive: false,
+            ggCapabilities: unsupported,
+            inFlightAction: nil,
+            pausedOperation: nil,
+            mergeOperation: nil,
+            selectionIsStale: false,
+            commitsNeedPush: false,
+            commitRemote: nil,
+            primaryCommitRemote: nil
+        ) != ChangesTabView.commitRowsStateToken(
+            ggStack: nil,
+            ggModeActive: false,
+            ggCapabilities: supported,
+            inFlightAction: nil,
+            pausedOperation: nil,
+            mergeOperation: nil,
+            selectionIsStale: false,
+            commitsNeedPush: false,
+            commitRemote: nil,
+            primaryCommitRemote: nil
+        ))
+    }
+
     @Test func appKitRowsUseLatestActionsWithoutRebuilding() {
         let relay = ChangesAppKitActionRelay()
         var selections: [String] = []
