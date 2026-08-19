@@ -6,6 +6,18 @@ import Testing
 @MainActor
 @Suite("AppKit diff scroller stress and accessibility")
 struct AppKitDiffScrollerStressTests {
+    @Test("measuring a viewport batches row geometry corrections")
+    func measuredRowsRetileOnce() {
+        let stack = makeStack()
+        let rows = (0..<200).map { index in
+            row(id: "row-\(index)", estimatedHeight: 20, actualHeight: 40)
+        }
+
+        stack.reconciler.apply(plan: AppKitDiffRowPlan(rows: rows), contentWidth: stack.scrollView.contentWidth)
+
+        #expect(stack.tiling.retilePassCountForTests == 2)
+    }
+
     @Test("twenty thousand rows keep a bounded mount band and preserve anchors")
     func twentyThousandRows() throws {
         let stack = makeStack()
@@ -140,12 +152,18 @@ struct AppKitDiffScrollerStressTests {
         id: String,
         ownerID: String? = nil,
         token: Int = 0,
-        height: CGFloat = 40
+        height: CGFloat = 40,
+        estimatedHeight: CGFloat? = nil,
+        actualHeight: CGFloat? = nil
     ) -> AppKitDiffRowSpec {
         .init(
-            id: id, ownerID: ownerID, equalityToken: .init(token), contentSignature: token, estimatedHeight: height
+            id: id,
+            ownerID: ownerID,
+            equalityToken: .init(token),
+            contentSignature: token,
+            estimatedHeight: estimatedHeight ?? height
         ) {
-            AnyView(Color.clear.frame(height: height))
+            AnyView(Color.clear.frame(height: actualHeight ?? height))
         }
     }
 

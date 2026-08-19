@@ -35,6 +35,10 @@ final class AppKitDiffTilingController {
 
     private(set) var documentHeight: CGFloat = 0
 
+    #if DEBUG
+    private(set) var retilePassCountForTests = 0
+    #endif
+
     init(metrics: Metrics = Metrics()) {
         self.metrics = metrics
     }
@@ -59,12 +63,23 @@ final class AppKitDiffTilingController {
     }
 
     func updateHeight(id: String, to height: CGFloat, viewportMinY: CGFloat) -> CGFloat {
-        guard let index = index(ofID: id), rows[index].height != height else { return 0 }
-        let old = rows[index]
-        let delta = height - old.height
-        rows[index].height = height
-        retile()
-        return old.maxY <= viewportMinY ? delta : 0
+        updateHeights([id: height], viewportMinY: viewportMinY)
+    }
+
+    func updateHeights(_ heightsByID: [String: CGFloat], viewportMinY: CGFloat) -> CGFloat {
+        var compensation: CGFloat = 0
+        var changed = false
+        for (id, height) in heightsByID {
+            guard let index = index(ofID: id), rows[index].height != height else { continue }
+            let old = rows[index]
+            if old.maxY <= viewportMinY {
+                compensation += height - old.height
+            }
+            rows[index].height = height
+            changed = true
+        }
+        if changed { retile() }
+        return compensation
     }
 
     func anchor(viewportMinY: CGFloat) -> AppKitDiffScrollAnchor? {
@@ -153,6 +168,9 @@ final class AppKitDiffTilingController {
     }
 
     private func retile() {
+        #if DEBUG
+        retilePassCountForTests += 1
+        #endif
         var y = metrics.topPadding
         for index in rows.indices {
             rows[index].minY = y
