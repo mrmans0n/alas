@@ -1,8 +1,42 @@
+import Foundation
 import Testing
 @testable import Alas
 
 @MainActor
 struct ChangesTabViewTests {
+    @Test func appKitCommitRowsTrackPrimaryRemote() {
+        let primaryRemote = CodeHostRemote(
+            kind: .github,
+            host: "github.com",
+            owner: "owner",
+            repository: "repo",
+            remoteName: "origin",
+            webURL: URL(string: "https://github.com/owner/repo")!
+        )
+        let withoutRemote = ChangesTabView.commitRowsStateToken(
+            ggStack: nil,
+            inFlightAction: nil,
+            pausedOperation: nil,
+            mergeOperation: nil,
+            selectionIsStale: false,
+            commitsNeedPush: false,
+            commitRemote: nil,
+            primaryCommitRemote: nil
+        )
+        let withRemote = ChangesTabView.commitRowsStateToken(
+            ggStack: nil,
+            inFlightAction: nil,
+            pausedOperation: nil,
+            mergeOperation: nil,
+            selectionIsStale: false,
+            commitsNeedPush: false,
+            commitRemote: nil,
+            primaryCommitRemote: primaryRemote
+        )
+
+        #expect(withoutRemote != withRemote)
+    }
+
     @Test func appKitRowsUseLatestActionsWithoutRebuilding() {
         let relay = ChangesAppKitActionRelay()
         var selections: [String] = []

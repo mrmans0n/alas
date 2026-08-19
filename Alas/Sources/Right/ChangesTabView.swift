@@ -549,13 +549,36 @@ struct ChangesTabView: View {
     }
 
     private var commitRowsStateToken: String {
-        String(reflecting: rps.ggStack)
-            + String(reflecting: rps.ggActionState.inFlightAction)
-            + String(reflecting: rps.ggActionState.pausedOperation)
-            + String(reflecting: rps.mergeOp.current)
-            + String(rps.ggCommitSelectionIsStale)
-            + String(rps.commitsNeedPush)
-            + String(reflecting: rps.commitRemote)
+        Self.commitRowsStateToken(
+            ggStack: rps.ggStack,
+            inFlightAction: rps.ggActionState.inFlightAction,
+            pausedOperation: rps.ggActionState.pausedOperation,
+            mergeOperation: rps.mergeOp.current,
+            selectionIsStale: rps.ggCommitSelectionIsStale,
+            commitsNeedPush: rps.commitsNeedPush,
+            commitRemote: rps.commitRemote,
+            primaryCommitRemote: rps.primaryCommitRemote
+        )
+    }
+
+    static func commitRowsStateToken(
+        ggStack: GGStack?,
+        inFlightAction: GGStackActionKind?,
+        pausedOperation: GGPausedOperation?,
+        mergeOperation: MergeOperation?,
+        selectionIsStale: Bool,
+        commitsNeedPush: Bool,
+        commitRemote: CodeHostRemote?,
+        primaryCommitRemote: CodeHostRemote?
+    ) -> String {
+        String(reflecting: ggStack)
+            + String(reflecting: inFlightAction)
+            + String(reflecting: pausedOperation)
+            + String(reflecting: mergeOperation)
+            + String(selectionIsStale)
+            + String(commitsNeedPush)
+            + String(reflecting: commitRemote)
+            + String(reflecting: primaryCommitRemote)
     }
 
     private func appKitRow<Token: Equatable, Content: View>(
