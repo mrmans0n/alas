@@ -105,6 +105,32 @@ struct ChangesTabViewTests {
         ))
     }
 
+    @Test func appKitCommitRowsTrackComparisonState() {
+        #expect(ChangesTabView.commitRowsStateToken(
+            ggStack: nil,
+            ggModeActive: false,
+            comparisonRef: nil,
+            inFlightAction: nil,
+            pausedOperation: nil,
+            mergeOperation: nil,
+            selectionIsStale: false,
+            commitsNeedPush: false,
+            commitRemote: nil,
+            primaryCommitRemote: nil
+        ) != ChangesTabView.commitRowsStateToken(
+            ggStack: nil,
+            ggModeActive: false,
+            comparisonRef: "main",
+            inFlightAction: nil,
+            pausedOperation: nil,
+            mergeOperation: nil,
+            selectionIsStale: false,
+            commitsNeedPush: false,
+            commitRemote: nil,
+            primaryCommitRemote: nil
+        ))
+    }
+
     @Test func appKitRowsUseLatestActionsWithoutRebuilding() {
         let relay = ChangesAppKitActionRelay()
         var selections: [String] = []
