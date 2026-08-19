@@ -725,6 +725,7 @@ struct DiffPaneTextDocumentBuilder {
                 lines: document.lines,
                 startIndex: segment.startIndex,
                 endIndex: segment.endIndex,
+                fileExtension: fileExtension,
                 theme: theme
             )
         }
@@ -776,6 +777,7 @@ struct DiffPaneTextDocumentBuilder {
         lines: [LineMetadata],
         startIndex: Int,
         endIndex: Int,
+        fileExtension: String,
         theme: Theme
     ) {
         var spansByLine = Array(repeating: [HighlightSpan](), count: endIndex - startIndex + 1)
@@ -815,9 +817,28 @@ struct DiffPaneTextDocumentBuilder {
             }
         }
 
-        for (offset, lineSpans) in spansByLine.enumerated() where !lineSpans.isEmpty {
+        for offset in spansByLine.indices {
             let line = lines[startIndex + offset]
             guard let sourceRange = line.sourceRange else { continue }
+            var lineSpans = spansByLine[offset]
+            if line.tone == .add || line.tone == .delete,
+               let sourceLine = line.sourceLine {
+                for fallback in TreeSitterHighlighter.tokenize(
+                    line: sourceLine.text,
+                    fileExtension: fileExtension
+                ) {
+                    let overlapsStructuralSpan = lineSpans.contains {
+                        ($0.capture == .comment || $0.capture == .string)
+                            && NSIntersectionRange($0.range, fallback.range).length > 0
+                    }
+                    guard !overlapsStructuralSpan else { continue }
+                    lineSpans.removeAll {
+                        NSIntersectionRange($0.range, fallback.range).length > 0
+                    }
+                    lineSpans.append(fallback)
+                }
+            }
+            guard !lineSpans.isEmpty else { continue }
             DiffCodeText.applySyntaxSpans(
                 to: output,
                 spans: lineSpans,

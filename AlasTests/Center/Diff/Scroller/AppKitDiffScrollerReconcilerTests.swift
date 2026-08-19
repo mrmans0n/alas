@@ -392,6 +392,36 @@ struct AppKitDiffScrollerReconcilerTests {
         #expect(stack.reconciler.layoutPassCountForTests > layoutCount)
     }
 
+    @Test("steady-state layout does not rewrite stable mounted host frames")
+    func steadyStateLayoutDoesNotRewriteStableMountedHostFrames() {
+        let stack = makeStack()
+        stack.reconciler.apply(plan: plan(), contentWidth: stack.scrollView.contentWidth)
+        let assignmentsAfterApply = stack.reconciler.frameAssignmentCountForTests
+
+        stack.reconciler.layoutVisibleRows()
+
+        #expect(stack.reconciler.frameAssignmentCountForTests == assignmentsAfterApply)
+    }
+
+    @Test("pure scrolling does not relayout stable mounted hosts")
+    func pureScrollingDoesNotRelayoutStableMountedHosts() {
+        let stack = makeStack()
+        stack.reconciler.apply(plan: plan(), contentWidth: stack.scrollView.contentWidth)
+        stack.window.layoutIfNeeded()
+        let hosts = stack.pool.mountedIDs.compactMap(stack.pool.mountedView(id:))
+        let layoutPasses = hosts.map(\.layoutPassCountForTests)
+        #expect(layoutPasses.allSatisfy { $0 > 0 })
+
+        for y in stride(from: CGFloat(10), through: 200, by: 10) {
+            stack.scrollView.contentView.scroll(to: NSPoint(x: 0, y: y))
+            stack.scrollView.reflectScrolledClipView(stack.scrollView.contentView)
+            stack.reconciler.layoutVisibleRows()
+            stack.window.layoutIfNeeded()
+        }
+
+        #expect(hosts.map(\.layoutPassCountForTests) == layoutPasses)
+    }
+
     @Test("scroll requests use requested alignment and a fallback target")
     func scrollRequestAlignmentAndFallback() {
         let stack = makeStack()

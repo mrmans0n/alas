@@ -3886,6 +3886,40 @@ let second = true
         #expect(result.newCode.lines[0].syntaxGroup == result.newCode.lines[1].syntaxGroup)
     }
 
+    @Test func changedLineSyntaxOverridesPartialFileParseErrors() throws {
+        let theme = theme()
+        let diff = ParsedDiff(hunks: [
+            ParsedDiff.Hunk(
+                header: "@@ -40,2 +40,3 @@",
+                oldStart: 40,
+                newStart: 40,
+                lines: [
+                    .init(kind: .context, text: "    someCall(", oldNumber: 40, newNumber: 40),
+                    .init(kind: .add, text: "        let changed = 2", oldNumber: nil, newNumber: 41),
+                    .init(kind: .context, text: "    )", oldNumber: 41, newNumber: 42),
+                ]
+            ),
+        ])
+        let model = DiffDisplayModelBuilder.build(diff: diff, filePath: "Sources/App.swift")
+        let result = DiffPaneTextDocumentBuilder.buildSplit(
+            group: try #require(model.groups.first),
+            expandedCollapsedRowIDs: [],
+            fileExtension: "swift",
+            font: CenterTypography.resolveCodeFont(family: "", size: 13),
+            showWhitespace: false,
+            theme: theme
+        )
+        let rendered = result.newCode.attributedString.string as NSString
+        let keywordStart = rendered.range(of: "let changed").location
+        let foreground = try #require(result.newCode.attributedString.attribute(
+            .foregroundColor,
+            at: keywordStart,
+            effectiveRange: nil
+        ) as? NSColor)
+
+        #expect(colorComponents(foreground).isClose(to: colorComponents(NSColor(theme.color("syntax-keyword")))))
+    }
+
     @Test func stackedDocumentDoesNotCarrySyntaxFromDeletedLinesIntoAddedLines() throws {
         let theme = theme()
         let diff = ParsedDiff(hunks: [

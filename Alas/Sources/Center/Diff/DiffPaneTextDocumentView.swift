@@ -961,7 +961,6 @@ final class DiffPaneTextScrollView: NSScrollView {
         }
 
         super.layout()
-        tile()
         let configuration = desiredTextLayoutConfiguration()
         let configurationChanged = !textLayoutConfigurationMatches(configuration)
         if configurationChanged, configuration.wraps {

@@ -24,6 +24,7 @@ final class AppKitDiffScrollerReconciler {
     #if DEBUG
     private(set) var fullPlanApplyCountForTests = 0
     private(set) var layoutPassCountForTests = 0
+    private(set) var frameAssignmentCountForTests = 0
     private(set) var retentionInspectionCountForTests = 0
     var pinnedRowIDsForTests: Set<String> { pinnedRowIDs }
     #endif
@@ -265,6 +266,8 @@ final class AppKitDiffScrollerReconciler {
             pool.releaseAll(except: keep)
 
             var geometryChanged = false
+            var mountedViews: [(id: String, view: AppKitDiffRowHostingView, isStable: Bool)] = []
+            var measuredHeightUpdates: [String: CGFloat] = [:]
             for id in keep {
                 guard let spec = specsByID[id], let row = tiling.row(withID: id) else { continue }
                 let result = pool.view(for: spec)
@@ -275,27 +278,43 @@ final class AppKitDiffScrollerReconciler {
                 let shouldMeasure = result.contentChanged
                     || view.lastMeasuredWidth != contentWidth
                     || invalidatedRowIDs.remove(id) != nil
+                mountedViews.append((id, view, !shouldMeasure))
                 if shouldMeasure {
                     let height = max(0, view.measuredHeight(forWidth: contentWidth))
                     measuredHeights[id] = height
-                    let compensation = tiling.updateHeight(
-                        id: id,
-                        to: height,
-                        viewportMinY: scrollView.scrollY
-                    )
-                    if compensation != 0 {
-                        scrollView.setDocumentHeight(tiling.documentHeight)
-                        scrollView.setScrollY(scrollView.scrollY + compensation, animated: false)
+                    if row.height != height {
+                        measuredHeightUpdates[id] = height
                     }
                     geometryChanged = geometryChanged || abs(row.height - height) > 0.01
                 }
+            }
+
+            let compensation = tiling.updateHeights(
+                measuredHeightUpdates,
+                viewportMinY: scrollView.scrollY
+            )
+            if compensation != 0 {
+                scrollView.setDocumentHeight(tiling.documentHeight)
+                scrollView.setScrollY(scrollView.scrollY + compensation, animated: false)
+            }
+            for (id, view, isStable) in mountedViews {
                 if let updatedRow = tiling.row(withID: id) {
-                    view.frame = NSRect(
+                    let frame = NSRect(
                         x: contentInsets.left,
                         y: updatedRow.minY,
                         width: contentWidth,
                         height: updatedRow.height
                     )
+                    guard view.frame != frame else {
+                        if isStable {
+                            view.suppressNextLayoutForStableScroll()
+                        }
+                        continue
+                    }
+                    #if DEBUG
+                    frameAssignmentCountForTests += 1
+                    #endif
+                    view.frame = frame
                 }
             }
             scrollView.setDocumentHeight(tiling.documentHeight)
