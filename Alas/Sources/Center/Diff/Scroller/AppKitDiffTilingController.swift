@@ -24,6 +24,11 @@ final class AppKitDiffTilingController {
         var maxY: CGFloat { minY + height }
     }
 
+    struct StickyRowLayout: Equatable {
+        let id: String
+        let minY: CGFloat
+    }
+
     private var metrics: Metrics
     private var rows: [RowLayout] = []
     private var indexByID: [String: Int] = [:]
@@ -105,6 +110,14 @@ final class AppKitDiffTilingController {
             desired = row.minY - (viewportHeight - row.height) / 2
         }
         return min(max(0, desired), max(0, documentHeight - viewportHeight))
+    }
+
+    func stickyRowLayout(ids: [String], viewportMinY: CGFloat) -> StickyRowLayout? {
+        let stickyRows: [RowLayout] = ids.compactMap { id in self.row(withID: id) }
+        guard let index = stickyRows.lastIndex(where: { $0.minY <= viewportMinY }) else { return nil }
+        let currentRow = stickyRows[index]
+        let nextMinY = stickyRows.indices.contains(index + 1) ? stickyRows[index + 1].minY : .greatestFiniteMagnitude
+        return .init(id: currentRow.id, minY: min(viewportMinY, nextMinY - currentRow.height))
     }
 
     /// Returns the row containing `y` under the half-open interval convention.

@@ -3,6 +3,30 @@ import Testing
 
 @MainActor
 struct ChangesTabViewTests {
+    @Test func appKitRowsUseLatestActionsWithoutRebuilding() {
+        let relay = ChangesAppKitActionRelay()
+        var selections: [String] = []
+        relay.update(
+            onSelectFile: { selections.append("first:\($0.path)") },
+            onSelectCommit: { _ in },
+            onEditCommit: { _, _ in },
+            onReviewCommit: { _ in }
+        )
+        relay.update(
+            onSelectFile: { selections.append("second:\($0.path)") },
+            onSelectCommit: { _ in },
+            onEditCommit: { _, _ in },
+            onReviewCommit: { _ in }
+        )
+
+        relay.onSelectFile(ChangedFile(
+            path: "App.swift", status: "M", stage: .unstaged,
+            add: 1, del: 0, renameFrom: nil
+        ))
+
+        #expect(selections == ["second:App.swift"])
+    }
+
     @Test func genericOperationCardHiddenDuringPausedGGOperation() {
         let operation = MergeOperation.merge(sourceBranch: "main")
 

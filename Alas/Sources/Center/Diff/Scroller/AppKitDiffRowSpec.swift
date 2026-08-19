@@ -25,6 +25,7 @@ extension AppKitDiffRowEqualityToken: Equatable {
 enum AppKitDiffRowRetention: Equatable {
     case recyclable
     case pinned
+    case sticky
 }
 
 struct AppKitDiffRowSpec {

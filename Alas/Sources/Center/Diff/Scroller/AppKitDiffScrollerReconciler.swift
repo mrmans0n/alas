@@ -12,6 +12,7 @@ final class AppKitDiffScrollerReconciler {
     private var specsByID: [String: AppKitDiffRowSpec] = [:]
     private var orderedIDs: [String] = []
     private var pinnedRowIDs: Set<String> = []
+    private var stickyRowIDs: [String] = []
     private var measuredHeights: [String: CGFloat] = [:]
     private var contentWidth: CGFloat = 0
     private var contentInsets: AppKitDiffContentInsets = .zero
@@ -69,14 +70,18 @@ final class AppKitDiffScrollerReconciler {
         let previousMeasuredHeights = measuredHeights
         var nextSpecs: [String: AppKitDiffRowSpec] = [:]
         var nextPinnedRowIDs: Set<String> = []
+        var nextStickyRowIDs: [String] = []
         var nextMeasuredHeights: [String: CGFloat] = [:]
         for spec in plan.rows {
             #if DEBUG
             retentionInspectionCountForTests += 1
             #endif
             nextSpecs[spec.id] = spec
-            if spec.retention == .pinned {
+            if spec.retention == .pinned || spec.retention == .sticky {
                 nextPinnedRowIDs.insert(spec.id)
+            }
+            if spec.retention == .sticky {
+                nextStickyRowIDs.append(spec.id)
             }
             if !widthChanged,
                previousSpecs[spec.id]?.equalityToken.isEqual(to: spec.equalityToken) == true,
@@ -108,6 +113,7 @@ final class AppKitDiffScrollerReconciler {
         specsByID = nextSpecs
         orderedIDs = ids
         pinnedRowIDs = nextPinnedRowIDs
+        stickyRowIDs = nextStickyRowIDs
         measuredHeights = nextMeasuredHeights
         contentWidth = rowContentWidth
         contentInsets = plan.contentInsets
@@ -295,6 +301,21 @@ final class AppKitDiffScrollerReconciler {
             scrollView.setDocumentHeight(tiling.documentHeight)
             guard geometryChanged else { break }
         }
+        layoutStickyRow()
+    }
+
+    private func layoutStickyRow() {
+        guard let layout = tiling.stickyRowLayout(ids: stickyRowIDs, viewportMinY: scrollView.scrollY),
+              let row = tiling.row(withID: layout.id),
+              let view = pool.mountedView(id: layout.id)
+        else { return }
+        view.frame = NSRect(
+            x: contentInsets.left,
+            y: layout.minY,
+            width: contentWidth,
+            height: row.height
+        )
+        scrollView.flippedDocumentView.addSubview(view, positioned: .above, relativeTo: nil)
     }
 
     private func intrinsicSizeInvalidated(for id: String) {
