@@ -3722,6 +3722,7 @@ extension ACPSessionManager {
                     && !isDisposed
             }
             guard attachmentStillCurrent else {
+                attachSucceeded = false
                 if runners[sessionId] === runner {
                     runners[sessionId] = nil
                     runner.stop()
