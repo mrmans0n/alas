@@ -3686,6 +3686,23 @@ extension ACPSessionManager {
             keepElicitationCoordinator = true
             attachSucceeded = true
             session.agentState = .ready
+            // Drain a pending model/mode picked during the post-takeover window.
+            // The load result just above overwrote `currentModel`/`currentMode`
+            // with the agent's restored values. Reapply + persist the user's
+            // choice before dispatching queued or transcript-recovery prompts.
+            if let m = pendingModel.removeValue(forKey: sessionId) ?? persistedModel,
+               m != result.currentModel {
+                session.currentModel = m
+                persist(session)
+                let remoteId = session.remoteSessionId ?? sessionId
+                try? await runner.connection.setModel(sessionId: remoteId, modelId: m)
+            }
+            if let m = pendingMode.removeValue(forKey: sessionId) {
+                session.currentMode = m
+                persist(session)
+                let remoteId = session.remoteSessionId ?? sessionId
+                try? await runner.connection.setMode(sessionId: remoteId, modeId: m)
+            }
             if let remoteMCPNotice {
                 runner.appendAndPersistSystemNotice(remoteMCPNotice)
             }
@@ -3693,25 +3710,6 @@ extension ACPSessionManager {
                 sendTranscriptAsContext(sessionId: sessionId, agentName: nil)
             } else {
                 runner.flushQueueIfIdle()
-            }
-            // Drain a pending model/mode picked during the post-takeover window.
-            // The load result just above overwrote `currentModel`/`currentMode`
-            // with the agent's restored values, so reapply + persist the user's
-            // choice before firing the RPC — `session/set_model` returns nothing
-            // and not every agent emits a follow-up update, so the local config
-            // and stored row would otherwise drift off the agent's actual state.
-            if let m = pendingModel.removeValue(forKey: sessionId) ?? persistedModel,
-               m != result.currentModel {
-                session.currentModel = m
-                persist(session)
-                let remoteId = session.remoteSessionId ?? sessionId
-                Task { try? await runner.connection.setModel(sessionId: remoteId, modelId: m) }
-            }
-            if let m = pendingMode.removeValue(forKey: sessionId) {
-                session.currentMode = m
-                persist(session)
-                let remoteId = session.remoteSessionId ?? sessionId
-                Task { try? await runner.connection.setMode(sessionId: remoteId, modeId: m) }
             }
             stderrTask.cancel()
         } catch {
