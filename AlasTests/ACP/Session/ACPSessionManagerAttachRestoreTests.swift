@@ -525,6 +525,46 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(session.currentModel == "sonnet")
     }
 
+    @Test("reopened session keeps the loaded model when restoration fails")
+    func reopenedSessionKeepsLoadedModelWhenRestorationFails() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            agentId: "codex",
+            currentModel: "sonnet"
+        ))
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [
+                    .init(id: "opus", name: "Opus"),
+                ],
+                availableModes: [],
+                currentModel: "opus",
+                currentMode: nil,
+                promptSuggestions: []
+            ))
+        }
+        client.script(method: "session/set_model") { _ in
+            throw ACPClientError.noScript(method: "session/set_model")
+        }
+        let manager = manager(store: store, client: client)
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        await manager.attach(to: session.id, freshlyCreated: false)
+
+        try await waitUntil {
+            client.sent.map(\.method) == ["initialize", "session/load", "session/set_model"]
+        }
+        #expect(session.currentModel == "opus")
+        try await waitUntil {
+            (try? store.loadSession(id: "local"))?.currentModel == "opus"
+        }
+    }
+
     @Test("reopened session restores its model before flushing queued prompts")
     func reopenedSessionRestoresModelBeforeFlushingQueuedPrompts() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())

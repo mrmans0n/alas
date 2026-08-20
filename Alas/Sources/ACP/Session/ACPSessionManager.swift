@@ -3692,10 +3692,14 @@ extension ACPSessionManager {
             // choice before dispatching queued or transcript-recovery prompts.
             if let m = pendingModel.removeValue(forKey: sessionId) ?? persistedModel,
                m != result.currentModel {
-                session.currentModel = m
-                persist(session)
                 let remoteId = session.remoteSessionId ?? sessionId
-                try? await runner.connection.setModel(sessionId: remoteId, modelId: m)
+                do {
+                    try await runner.connection.setModel(sessionId: remoteId, modelId: m)
+                    session.currentModel = m
+                    persist(session)
+                } catch {
+                    persist(session)
+                }
             }
             if let m = pendingMode.removeValue(forKey: sessionId) {
                 session.currentMode = m
