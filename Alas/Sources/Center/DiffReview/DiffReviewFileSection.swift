@@ -27,6 +27,7 @@ struct DiffReviewFilePresentationSignature: Equatable {
     let pendingDraftAnchor: DiffReviewLineAnchor?
     let pendingDraftBody: String
     let draftComposerFocusRequestGeneration: Int
+    let quoteInsertionGeneration: Int
     let expandedCollapsedRowIDs: Set<String>
     let contextSnapshot: DiffReviewFileContextSnapshot?
     let contextExpansion: DiffContextExpansionState
@@ -45,6 +46,7 @@ struct DiffReviewFilePresentationSignature: Equatable {
         pendingDraftAnchor = state.pendingDraftAnchor
         pendingDraftBody = state.pendingDraftBody
         draftComposerFocusRequestGeneration = state.draftComposerFocusRequestGeneration
+        quoteInsertionGeneration = state.quoteInsertionGeneration
         expandedCollapsedRowIDs = state.expandedCollapsedRowIDs
         contextSnapshot = state.contextSnapshot
         contextExpansion = state.contextExpansion
@@ -1063,11 +1065,41 @@ enum ReviewDraftComposerKeyboardAction: Equatable {
     }
 }
 
+enum ReviewDraftQuote {
+    static func markdown(path: String, selectedText: String) -> String {
+        let code = selectedText.trimmingCharacters(in: .newlines)
+        var longestBacktickRun = 0
+        var currentBacktickRun = 0
+        for character in code {
+            if character == "`" {
+                currentBacktickRun += 1
+                longestBacktickRun = max(longestBacktickRun, currentBacktickRun)
+            } else {
+                currentBacktickRun = 0
+            }
+        }
+        let fence = String(repeating: "`", count: max(3, longestBacktickRun + 1))
+        let language = LanguageRegistry.highlighterExtension(forPath: path)
+        return "\(fence)\(language)\n\(code)\n\(fence)"
+    }
+
+    static func insertion(markdown: String, in text: String, replacing range: NSRange) -> String {
+        let text = text as NSString
+        let before = text.substring(to: range.location)
+        let after = text.substring(from: NSMaxRange(range))
+        let prefix = before.isEmpty || before.hasSuffix("\n") ? "" : "\n\n"
+        let suffix = after.isEmpty || after.hasPrefix("\n") ? "" : "\n\n"
+        return prefix + markdown + suffix
+    }
+}
+
 struct ReviewDraftComposerTextEditor: NSViewRepresentable {
     @Binding var text: String
     let theme: Theme
     let isFocused: FocusState<Bool>.Binding
     let focusRequestGeneration: Int
+    let quoteMarkdown: String?
+    let quoteInsertionGeneration: Int
     let onSave: () -> Void
     let onCancel: () -> Void
 
@@ -1076,6 +1108,8 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
         theme: Theme,
         isFocused: FocusState<Bool>.Binding,
         focusRequestGeneration: Int = 0,
+        quoteMarkdown: String? = nil,
+        quoteInsertionGeneration: Int = 0,
         onSave: @escaping () -> Void,
         onCancel: @escaping () -> Void
     ) {
@@ -1083,6 +1117,8 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
         self.theme = theme
         self.isFocused = isFocused
         self.focusRequestGeneration = focusRequestGeneration
+        self.quoteMarkdown = quoteMarkdown
+        self.quoteInsertionGeneration = quoteInsertionGeneration
         self.onSave = onSave
         self.onCancel = onCancel
     }
@@ -1143,11 +1179,13 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
             coordinator?.requestFocusIfNeeded()
         }
         applyTheme(to: scrollView, textView: textView)
+        context.coordinator.requestQuoteInsertionIfNeeded()
         context.coordinator.requestFocusIfNeeded()
     }
 
     static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
         coordinator.cancelScheduledFocusRequest()
+        coordinator.cancelScheduledQuoteInsertion()
         guard let textView = scrollView.documentView as? ReviewDraftComposerNSTextView else { return }
         textView.onKeyboardAction = nil
         textView.onWindowChanged = nil
@@ -1169,6 +1207,8 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
         var parent: ReviewDraftComposerTextEditor
         weak var textView: NSTextView?
         private var latestFulfilledFocusRequestGeneration = 0
+        private var latestQuoteInsertionGeneration = 0
+        private var scheduledQuoteInsertionTask: Task<Void, Never>?
 
         func undoManager(for view: NSTextView) -> UndoManager? { editorUndoManager }
         private var scheduledFocusRequestGeneration: Int?
@@ -1180,6 +1220,7 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
 
         deinit {
             scheduledFocusTask?.cancel()
+            scheduledQuoteInsertionTask?.cancel()
         }
 
         func textDidChange(_ notification: Notification) {
@@ -1193,6 +1234,37 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
 
         func textDidEndEditing(_ notification: Notification) {
             parent.isFocused.wrappedValue = false
+        }
+
+        func requestQuoteInsertionIfNeeded() {
+            let generation = parent.quoteInsertionGeneration
+            if generation == 0 {
+                latestQuoteInsertionGeneration = 0
+                scheduledQuoteInsertionTask?.cancel()
+                return
+            }
+            guard generation != latestQuoteInsertionGeneration else { return }
+            latestQuoteInsertionGeneration = generation
+            scheduledQuoteInsertionTask?.cancel()
+            scheduledQuoteInsertionTask = Task { @MainActor [weak self] in
+                await Task.yield()
+                guard !Task.isCancelled,
+                      let self,
+                      self.parent.quoteInsertionGeneration == generation,
+                      let markdown = self.parent.quoteMarkdown,
+                      let textView = self.textView as? PairedDelimiterTextView
+                else { return }
+                let range = textView.selectedRange()
+                let insertion = ReviewDraftQuote.insertion(markdown: markdown, in: textView.string, replacing: range)
+                textView.performNativeTextInsertion {
+                    textView.insertText(insertion, replacementRange: range)
+                }
+            }
+        }
+
+        func cancelScheduledQuoteInsertion() {
+            scheduledQuoteInsertionTask?.cancel()
+            scheduledQuoteInsertionTask = nil
         }
 
         func requestFocusIfNeeded() {

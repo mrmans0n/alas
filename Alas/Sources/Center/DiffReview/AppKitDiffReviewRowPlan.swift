@@ -161,12 +161,14 @@ struct AppKitDiffReviewRowInput {
     func beginPendingDraft(at anchor: DiffReviewLineAnchor) {
         state.pendingDraftAnchor = anchor
         state.pendingDraftBody = ""
+        state.quoteInsertionGeneration = 0
         state.draftComposerFocusRequestGeneration &+= 1
     }
 
     func clearPendingDraft() {
         state.pendingDraftAnchor = nil
         state.pendingDraftBody = ""
+        state.quoteInsertionGeneration = 0
         state.isDraftComposerFocused = false
     }
 
@@ -530,7 +532,9 @@ enum AppKitDiffReviewRowPlanBuilder {
                         &rows,
                         id: composerID,
                         input: input,
-                        signature: input.state.draftComposerFocusRequestGeneration,
+                        signature: String(
+                            "\(input.state.draftComposerFocusRequestGeneration):\(input.state.quoteInsertionGeneration)"
+                        ).hashValue,
                         height: 132,
                         retention: input.state.isDraftComposerFocused ? .pinned : .recyclable
                     ) {
@@ -1454,6 +1458,10 @@ struct AppKitDiffReviewComposerRowBody: View {
                     theme: input.theme,
                     isFocused: $isFocused,
                     focusRequestGeneration: input.state.draftComposerFocusRequestGeneration,
+                    quoteMarkdown: input.state.pendingDraftAnchor.map {
+                        ReviewDraftQuote.markdown(path: $0.path, selectedText: $0.selectedText)
+                    },
+                    quoteInsertionGeneration: input.state.quoteInsertionGeneration,
                     onSave: input.savePendingDraft,
                     onCancel: input.clearPendingDraft
                 )
@@ -1471,6 +1479,13 @@ struct AppKitDiffReviewComposerRowBody: View {
                         .stroke(input.theme.color("accent").opacity(0.65), lineWidth: 0.75))
                     .accessibilityIdentifier("diff-review-draft-composer")
                 HStack {
+                    Button("Quote lines") { input.state.quoteInsertionGeneration &+= 1 }
+                        .buttonStyle(.plain).font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(input.theme.color("fg-muted"))
+                        .padding(.horizontal, 8).frame(height: 24)
+                        .background(input.theme.color("bg-3"))
+                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                        .accessibilityIdentifier("diff-review-draft-composer-quote")
                     Spacer()
                     Button("Cancel", action: input.clearPendingDraft)
                         .buttonStyle(.plain).font(.system(size: 10, weight: .semibold))

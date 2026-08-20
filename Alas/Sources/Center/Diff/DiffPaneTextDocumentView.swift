@@ -677,7 +677,6 @@ final class DiffPaneTextScrollView: NSScrollView {
     }
     var allowsReviewLineSelection: Bool = true {
         didSet {
-            textView.allowsReviewLineSelection = allowsReviewLineSelection
             (verticalRulerView as? DiffPaneLineNumberRulerView)?.allowsReviewLineSelection = allowsReviewLineSelection
         }
     }
@@ -739,7 +738,6 @@ final class DiffPaneTextScrollView: NSScrollView {
             self?.onReviewLineSelected(anchor)
         }
         verticalRulerView = ruler
-        textView.allowsReviewLineSelection = allowsReviewLineSelection
         textView.onReviewLineSelected = onReviewLineSelected
 
         textView.isEditable = false
@@ -1286,7 +1284,6 @@ final class DiffPaneCodeTextView: NSTextView {
     var flagsChangedHandler: ((NSEvent) -> Void)?
     var mouseExitedHandler: (() -> Void)?
     var contextExpansionHandler: DiffContextExpansionHandler = { _, _, _ in }
-    var allowsReviewLineSelection = true
     var onReviewLineSelected: (DiffReviewLineAnchor) -> Void = { _ in }
     var lspContext: DiffPaneLSPContext?
     var allowedLSPSide: DiffLineSide = .new
@@ -1383,6 +1380,7 @@ final class DiffPaneCodeTextView: NSTextView {
             NSCursor.pointingHand.set()
             didSetPointerCursor = true
         } else {
+            NSCursor.iBeam.set()
             didSetPointerCursor = false
         }
     }
@@ -1397,13 +1395,6 @@ final class DiffPaneCodeTextView: NSTextView {
         }
         if event.modifierFlags.contains(.command), let commandClickHandler {
             commandClickHandler(point)
-            return
-        }
-        if allowsReviewLineSelection,
-           event.clickCount == 1,
-           let anchor = reviewLineAnchor(at: point)
-        {
-            onReviewLineSelected(anchor)
             return
         }
         super.mouseDown(with: event)
@@ -1442,7 +1433,7 @@ final class DiffPaneCodeTextView: NSTextView {
         super.mouseExited(with: event)
         hoverExpansionTarget = nil
         // Restore the default cursor when leaving the view, otherwise a pointing
-        // hand set over an expandable/source row can linger over the surrounding
+        // hand set over an expandable row can linger over the surrounding
         // non-interactive chrome until the next cursor update.
         if didSetPointerCursor {
             NSCursor.arrow.set()
@@ -1722,7 +1713,7 @@ final class DiffPaneCodeTextView: NSTextView {
         // A selectable NSTextView asserts its I-beam through `cursorUpdate(with:)`
         // on its own cursor-update tracking areas, which overrides the legacy
         // `addCursorRect`/`resetCursorRects` mechanism. Override it here so
-        // expandable-context and reviewable source rows show the pointer instead.
+        // expandable-context controls show the pointer instead.
         let point = convert(event.locationInWindow, from: nil)
         if shouldUsePointingHandCursor(at: point) {
             NSCursor.pointingHand.set()
@@ -1734,17 +1725,7 @@ final class DiffPaneCodeTextView: NSTextView {
     }
 
     private func shouldUsePointingHandCursor(at point: NSPoint) -> Bool {
-        if expansionTarget(at: point) != nil {
-            return true
-        }
-        guard let row = reviewLineRow(at: point) else { return false }
-        return rowShouldUsePointingHandCursor(row)
-    }
-
-    private func rowShouldUsePointingHandCursor(_ row: Int) -> Bool {
-        guard lineMetadata.indices.contains(row) else { return false }
-        let metadata = lineMetadata[row]
-        return metadata.sourceLine != nil
+        expansionTarget(at: point) != nil
     }
 
     func invokeExpansionForTesting(row: Int, optionKey: Bool) {
