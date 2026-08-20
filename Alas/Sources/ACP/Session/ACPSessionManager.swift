@@ -3680,6 +3680,7 @@ extension ACPSessionManager {
                 await releaseWriterLease(sessionId: sessionId)
                 return
             }
+            let localModelAfterRemoteIdPersist = session.currentModel
             connection.acknowledgeDurableSessionResponses()
             startRunnerIfNeeded()
             runners[sessionId] = runner
@@ -3690,7 +3691,9 @@ extension ACPSessionManager {
             // with the agent's restored values. Reapply + persist the user's
             // choice before dispatching queued or transcript-recovery prompts.
             let loadedMode = session.currentMode
-            if let m = pendingModel.removeValue(forKey: sessionId) ?? persistedModel,
+            let modelToRestore = pendingModel.removeValue(forKey: sessionId)
+                ?? (localModelAfterRemoteIdPersist != result.currentModel ? localModelAfterRemoteIdPersist : persistedModel)
+            if let m = modelToRestore,
                m != result.currentModel {
                 let loadedModel = session.currentModel
                 let remoteId = session.remoteSessionId ?? sessionId
