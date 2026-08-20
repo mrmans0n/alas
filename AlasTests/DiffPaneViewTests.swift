@@ -3411,7 +3411,7 @@ let second = true
         #expect(selectedAnchor == anchor)
     }
 
-    @Test @MainActor func codeTextViewInvokesReviewSelectionForContextRows() throws {
+    @Test @MainActor func codeTextViewLeavesReviewSelectionToTheGutter() throws {
         let theme = theme()
         let font = CenterTypography.resolveCodeFont(family: "", size: 13)
         let text = "let value = 1"
@@ -3475,13 +3475,22 @@ let second = true
             clickCount: 1,
             pressure: 1
         ))
+        let upEvent = try #require(NSEvent.mouseEvent(
+            with: .leftMouseUp,
+            location: windowPoint,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 1,
+            pressure: 1
+        ))
+        NSApp.postEvent(upEvent, atStart: false)
 
         textView.mouseDown(with: event)
 
-        #expect(selectedAnchor?.path == "Sources/App.swift")
-        #expect(selectedAnchor?.side == .new)
-        #expect(selectedAnchor?.line == 12)
-        #expect(selectedAnchor?.selectedText == text)
+        #expect(selectedAnchor == nil)
     }
 
     @Test func splitDocumentBuildsSeparateCodeAndGutterColumns() throws {
@@ -4824,7 +4833,7 @@ let second = true
         #expect(NSCursor.current == NSCursor.pointingHand)
     }
 
-    @Test func diffPaneCodeTextViewShowsPointingHandOverSourceCodeRow() throws {
+    @Test func diffPaneCodeTextViewShowsIBeamOverSelectableSourceCode() throws {
         let sourceLine = DiffDisplayLine(
             id: "a.swift:new:0:0",
             anchor: DiffLineAnchor(filePath: "a.swift", hunkIndex: 0, rowIndex: 0, side: .new, oldLine: nil, newLine: 1),
@@ -4852,7 +4861,7 @@ let second = true
         NSCursor.arrow.set()
         textView.mouseMoved(with: event)
 
-        #expect(NSCursor.current == NSCursor.pointingHand)
+        #expect(NSCursor.current == NSCursor.iBeam)
     }
 
     @Test func diffPaneCodeTextViewDoesNotShowPointingHandOverNonInteractiveRow() throws {

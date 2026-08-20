@@ -6,6 +6,37 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct PairedReviewComposerSurfaceTests {
+    @Test func reviewDraftQuoteUsesTheFileLanguageAndAConflictFreeFence() {
+        #expect(ReviewDraftQuote.markdown(path: "Sources/App.swift", selectedText: "let value = 1") == """
+        ```swift
+        let value = 1
+        ```
+        """)
+        #expect(ReviewDraftQuote.markdown(path: "README", selectedText: "contains ``` here") == """
+        ````
+        contains ``` here
+        ````
+        """)
+    }
+
+    @Test func reviewDraftComposerInsertsRequestedQuoteAtTheSelection() async throws {
+        let quote = ReviewDraftQuote.markdown(path: "Sources/App.swift", selectedText: "let value = 1")
+        let model = ReviewDraftComposerCapture(text: "beforeafter", quoteMarkdown: quote)
+        let controller = NSHostingController(
+            rootView: ReviewDraftComposerCaptureHarness(model: model, theme: try! ThemeStore().current)
+        )
+        let window = attach(controller)
+        await drain(controller.view)
+
+        let composer = try #require(textView(containing: model.text, in: controller.view))
+        composer.setSelectedRange(NSRange(location: 6, length: 0))
+        model.quoteInsertionGeneration += 1
+        await drain(controller.view)
+
+        #expect(model.text == "before\n\n\(quote)\n\nafter")
+        window.orderOut(nil)
+    }
+
     @Test func reviewDraftComposerWrapsSelectionAndRoutesKeyboardActions() async throws {
         let model = ReviewDraftComposerCapture(text: "review body")
         let controller = NSHostingController(
@@ -212,11 +243,14 @@ struct PairedReviewComposerSurfaceTests {
 @MainActor
 private final class ReviewDraftComposerCapture: ObservableObject {
     @Published var text: String
+    @Published var quoteInsertionGeneration = 0
+    let quoteMarkdown: String?
     var saveCount = 0
     var cancelCount = 0
 
-    init(text: String) {
+    init(text: String, quoteMarkdown: String? = nil) {
         self.text = text
+        self.quoteMarkdown = quoteMarkdown
     }
 }
 
@@ -231,6 +265,8 @@ private struct ReviewDraftComposerCaptureHarness: View {
             text: $model.text,
             theme: theme,
             isFocused: $isFocused,
+            quoteMarkdown: model.quoteMarkdown,
+            quoteInsertionGeneration: model.quoteInsertionGeneration,
             onSave: { model.saveCount += 1 },
             onCancel: { model.cancelCount += 1 }
         )
