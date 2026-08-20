@@ -103,6 +103,18 @@ struct ChangesPreparationModelTests {
         #expect(model.ggAction(.absorbIntoStack)?.stats == .init(files: 2, insertions: 8, deletions: 3))
     }
 
+    @Test func ggPreparationCarriesMutationError() {
+        let model = ChangesPreparationModel.makeGG(
+            staged: .zero,
+            hasDraft: false,
+            capabilities: stagedOnlyCapabilities,
+            mutationError: "Unstaged changes detected."
+        )
+
+        #expect(model.mutationError == "Unstaged changes detected.")
+        #expect(model.isVisible)
+    }
+
     @Test func emptyGGPreparationIsHiddenButKeepsStableDestinations() {
         let model = ChangesPreparationModel.makeGG(
             staged: .zero,
