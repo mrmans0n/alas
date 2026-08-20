@@ -486,6 +486,45 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(try store.loadSession(id: "local")?.remoteSessionId == "remote-old")
     }
 
+    @Test("reopened session reapplies its persisted model after load")
+    func reopenedSessionReappliesPersistedModel() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            agentId: "codex",
+            currentModel: "sonnet"
+        ))
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [
+                    .init(id: "sonnet", name: "Sonnet"),
+                    .init(id: "opus", name: "Opus"),
+                ],
+                availableModes: [],
+                currentModel: "opus",
+                currentMode: nil,
+                promptSuggestions: []
+            ))
+        }
+        client.script(method: "session/set_model") { _ in Data("{}".utf8) }
+        let manager = manager(store: store, client: client)
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        await manager.attach(to: session.id, freshlyCreated: false)
+
+        try await waitUntil {
+            client.sent.map(\.method) == ["initialize", "session/load", "session/set_model"]
+        }
+        let params = try #require(client.sent.last?.params as? ACPSessionSetModelParams)
+        #expect(params.sessionId == "remote-old")
+        #expect(params.modelId == "sonnet")
+        #expect(session.currentModel == "sonnet")
+    }
+
     @Test("replayed load history is ignored when a session is already hydrated")
     func replayedLoadHistoryIgnoredWhenHydrated() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
@@ -1827,14 +1866,18 @@ struct ACPSessionManagerAttachRestoreTests {
         }
     }
 
-    private func row(remoteSessionId: String?) -> ACPSessionRow {
+    private func row(
+        remoteSessionId: String?,
+        agentId: String = "claude",
+        currentModel: String? = nil
+    ) -> ACPSessionRow {
         ACPSessionRow(
             id: "local",
-            agentId: "claude",
+            agentId: agentId,
             title: "Stored session",
             titleSource: .placeholder,
             remoteSessionId: remoteSessionId,
-            currentModel: nil,
+            currentModel: currentModel,
             currentMode: nil,
             autoRun: false,
             createdAt: 0,

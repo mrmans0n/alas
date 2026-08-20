@@ -2860,6 +2860,7 @@ extension ACPSessionManager {
         case .spawning, .ready: return
         case .idle, .disconnected, .failed: break
         }
+        let persistedModel = freshlyCreated ? nil : session.currentModel
         let firstRunAttach = freshlyCreated
             && !session.restoredFromPersistence
             && session.transcript.messages.isEmpty
@@ -3699,7 +3700,8 @@ extension ACPSessionManager {
             // choice before firing the RPC — `session/set_model` returns nothing
             // and not every agent emits a follow-up update, so the local config
             // and stored row would otherwise drift off the agent's actual state.
-            if let m = pendingModel.removeValue(forKey: sessionId) {
+            if let m = pendingModel.removeValue(forKey: sessionId) ?? persistedModel,
+               m != result.currentModel {
                 session.currentModel = m
                 persist(session)
                 let remoteId = session.remoteSessionId ?? sessionId
