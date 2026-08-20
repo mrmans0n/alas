@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.18] - 2026-08-20
+
+### ✨ Features
+
+- Restore the selected ACP model after restarting an attached session (#1046).
+
+### 🐛 Fixes
+
+- Show `gg` amend failures directly in the Changes preparation flow (#1047).
+
 ## [0.14.17] - 2026-08-19
 
 ### ✨ Features
