@@ -35,6 +35,7 @@ struct ChangesTabView: View {
                     stack: rps.ggStack,
                     currentHeadSHA: rps.currentHeadSHA
                 ),
+                mutationError: rps.ggActionState.lastError,
                 reconciliationAction: Self.reconciliationAction(from: ggReadinessModel)
             )
         }

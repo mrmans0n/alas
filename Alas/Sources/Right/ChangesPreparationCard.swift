@@ -53,6 +53,13 @@ struct ChangesPreparationCard: View {
                         ggDestinationButton(action)
                     }
                 }
+                if let error = model.mutationError {
+                    Text(error)
+                        .font(.system(size: 11))
+                        .foregroundStyle(theme.color("warn"))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("changes-preparation-gg-error")
+                }
             } else if model.draftAction != nil || !model.reviewRequestActions.isEmpty {
                 ViewThatFits(in: .horizontal) {
                     secondaryActionsHorizontal
