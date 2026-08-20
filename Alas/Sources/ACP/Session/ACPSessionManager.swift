@@ -3711,6 +3711,7 @@ extension ACPSessionManager {
                 let remoteId = session.remoteSessionId ?? sessionId
                 try? await runner.connection.setMode(sessionId: remoteId, modeId: m)
             }
+            guard session.agentState == .spawning else { return }
             let attachmentStillCurrent: Bool
             if isDisposed || sessions[sessionId] !== session || runners[sessionId] !== runner {
                 attachmentStillCurrent = false

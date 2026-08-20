@@ -660,6 +660,53 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(manager.runners[session.id] == nil)
     }
 
+    @Test("reopened session stays disconnected when stream ends during model restoration")
+    func reopenedSessionStaysDisconnectedWhenStreamEndsDuringModelRestoration() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            agentId: "codex",
+            currentModel: "sonnet"
+        ))
+        let client = ACPMockClient()
+        let modelGate = PromptGate()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [
+                    .init(id: "sonnet", name: "Sonnet"),
+                    .init(id: "opus", name: "Opus"),
+                ],
+                availableModes: [],
+                currentModel: "opus",
+                currentMode: nil,
+                promptSuggestions: []
+            ))
+        }
+        client.scriptAsync(method: "session/set_model") { _ in
+            await modelGate.waitInPrompt()
+            return Data("{}".utf8)
+        }
+        let manager = manager(store: store, client: client)
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        let attachTask = Task {
+            await manager.attach(to: session.id, freshlyCreated: false)
+        }
+
+        try await waitUntilAsync { await modelGate.hasEntered }
+        await client.shutdown()
+        try await waitUntil {
+            session.agentState == .disconnected
+        }
+        await modelGate.release()
+        await attachTask.value
+
+        #expect(session.agentState == .disconnected)
+    }
+
     @Test("replayed load history is ignored when a session is already hydrated")
     func replayedLoadHistoryIgnoredWhenHydrated() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
