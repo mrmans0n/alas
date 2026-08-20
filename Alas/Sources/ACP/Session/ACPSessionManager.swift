@@ -3685,20 +3685,24 @@ extension ACPSessionManager {
             runners[sessionId] = runner
             keepElicitationCoordinator = true
             attachSucceeded = true
-            session.agentState = .ready
             // Drain a pending model/mode picked during the post-takeover window.
             // The load result just above overwrote `currentModel`/`currentMode`
             // with the agent's restored values. Reapply + persist the user's
             // choice before dispatching queued or transcript-recovery prompts.
             if let m = pendingModel.removeValue(forKey: sessionId) ?? persistedModel,
                m != result.currentModel {
+                let loadedModel = session.currentModel
                 let remoteId = session.remoteSessionId ?? sessionId
                 do {
                     try await runner.connection.setModel(sessionId: remoteId, modelId: m)
-                    session.currentModel = m
-                    persist(session)
+                    if session.currentModel == loadedModel {
+                        session.currentModel = m
+                        persist(session)
+                    }
                 } catch {
-                    persist(session)
+                    if session.currentModel == loadedModel {
+                        persist(session)
+                    }
                 }
             }
             if let m = pendingMode.removeValue(forKey: sessionId) {
@@ -3707,6 +3711,7 @@ extension ACPSessionManager {
                 let remoteId = session.remoteSessionId ?? sessionId
                 try? await runner.connection.setMode(sessionId: remoteId, modeId: m)
             }
+            session.agentState = .ready
             if let remoteMCPNotice {
                 runner.appendAndPersistSystemNotice(remoteMCPNotice)
             }
