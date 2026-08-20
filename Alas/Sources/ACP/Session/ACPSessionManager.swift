@@ -3689,6 +3689,7 @@ extension ACPSessionManager {
             // The load result just above overwrote `currentModel`/`currentMode`
             // with the agent's restored values. Reapply + persist the user's
             // choice before dispatching queued or transcript-recovery prompts.
+            let loadedMode = session.currentMode
             if let m = pendingModel.removeValue(forKey: sessionId) ?? persistedModel,
                m != result.currentModel {
                 let loadedModel = session.currentModel
@@ -3705,7 +3706,8 @@ extension ACPSessionManager {
                     }
                 }
             }
-            if let m = pendingMode.removeValue(forKey: sessionId) {
+            if let m = pendingMode.removeValue(forKey: sessionId),
+               session.currentMode == loadedMode {
                 session.currentMode = m
                 persist(session)
                 let remoteId = session.remoteSessionId ?? sessionId

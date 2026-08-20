@@ -707,6 +707,58 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(session.agentState == .disconnected)
     }
 
+    @Test("reopened session preserves newer mode selected during model restoration")
+    func reopenedSessionPreservesNewerModeSelectedDuringModelRestoration() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            agentId: "codex",
+            currentModel: "sonnet"
+        ))
+        let client = ACPMockClient()
+        let modelGate = PromptGate()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [
+                    .init(id: "sonnet", name: "Sonnet"),
+                    .init(id: "opus", name: "Opus"),
+                ],
+                availableModes: [
+                    .init(id: "default", name: "Default"),
+                    .init(id: "plan", name: "Plan"),
+                    .init(id: "act", name: "Act"),
+                ],
+                currentModel: "opus",
+                currentMode: "default",
+                promptSuggestions: []
+            ))
+        }
+        client.scriptAsync(method: "session/set_model") { _ in
+            await modelGate.waitInPrompt()
+            return Data("{}".utf8)
+        }
+        client.script(method: "session/set_mode") { _ in Data("{}".utf8) }
+        let manager = manager(store: store, client: client)
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        manager.pendingMode[session.id] = "plan"
+        let attachTask = Task {
+            await manager.attach(to: session.id, freshlyCreated: false)
+        }
+
+        try await waitUntilAsync { await modelGate.hasEntered }
+        await manager.setMode(for: session.id, modeId: "act")
+        await modelGate.release()
+        await attachTask.value
+
+        #expect(session.currentMode == "act")
+        let modeParams = client.sent.compactMap { $0.params as? ACPSessionSetModeParams }
+        #expect(modeParams.map(\.modeId) == ["act"])
+    }
+
     @Test("replayed load history is ignored when a session is already hydrated")
     func replayedLoadHistoryIgnoredWhenHydrated() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
