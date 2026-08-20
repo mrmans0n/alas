@@ -486,6 +486,279 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(try store.loadSession(id: "local")?.remoteSessionId == "remote-old")
     }
 
+    @Test("reopened session reapplies its persisted model after load")
+    func reopenedSessionReappliesPersistedModel() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            agentId: "codex",
+            currentModel: "sonnet"
+        ))
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [
+                    .init(id: "sonnet", name: "Sonnet"),
+                    .init(id: "opus", name: "Opus"),
+                ],
+                availableModes: [],
+                currentModel: "opus",
+                currentMode: nil,
+                promptSuggestions: []
+            ))
+        }
+        client.script(method: "session/set_model") { _ in Data("{}".utf8) }
+        let manager = manager(store: store, client: client)
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        await manager.attach(to: session.id, freshlyCreated: false)
+
+        try await waitUntil {
+            client.sent.map(\.method) == ["initialize", "session/load", "session/set_model"]
+        }
+        let params = try #require(client.sent.last?.params as? ACPSessionSetModelParams)
+        #expect(params.sessionId == "remote-old")
+        #expect(params.modelId == "sonnet")
+        #expect(session.currentModel == "sonnet")
+    }
+
+    @Test("reopened session keeps the loaded model when restoration fails")
+    func reopenedSessionKeepsLoadedModelWhenRestorationFails() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            agentId: "codex",
+            currentModel: "sonnet"
+        ))
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [
+                    .init(id: "opus", name: "Opus"),
+                ],
+                availableModes: [],
+                currentModel: "opus",
+                currentMode: nil,
+                promptSuggestions: []
+            ))
+        }
+        client.script(method: "session/set_model") { _ in
+            throw ACPClientError.noScript(method: "session/set_model")
+        }
+        let manager = manager(store: store, client: client)
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        await manager.attach(to: session.id, freshlyCreated: false)
+
+        try await waitUntil {
+            client.sent.map(\.method) == ["initialize", "session/load", "session/set_model"]
+        }
+        #expect(session.currentModel == "opus")
+        try await waitUntil {
+            (try? store.loadSession(id: "local"))?.currentModel == "opus"
+        }
+    }
+
+    @Test("reopened session restores its model before flushing queued prompts")
+    func reopenedSessionRestoresModelBeforeFlushingQueuedPrompts() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            agentId: "codex",
+            currentModel: "sonnet"
+        ))
+        try store.upsertQueue(sessionId: "local", items: [
+            QueuedPrompt(blocks: [.text("queued prompt")])
+        ])
+        let client = ACPMockClient()
+        let modelGate = PromptGate()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [
+                    .init(id: "sonnet", name: "Sonnet"),
+                    .init(id: "opus", name: "Opus"),
+                ],
+                availableModes: [],
+                currentModel: "opus",
+                currentMode: nil,
+                promptSuggestions: []
+            ))
+        }
+        client.scriptAsync(method: "session/set_model") { _ in
+            await modelGate.waitInPrompt()
+            return Data("{}".utf8)
+        }
+        client.script(method: "session/prompt") { _ in Data("null".utf8) }
+        let manager = manager(store: store, client: client)
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        let attachTask = Task {
+            await manager.attach(to: session.id, freshlyCreated: false)
+        }
+
+        try await waitUntilAsync { await modelGate.hasEntered }
+        #expect(client.sent.filter { $0.method == "session/prompt" }.isEmpty)
+        await modelGate.release()
+        await attachTask.value
+
+        try await waitUntil {
+            client.sent.map(\.method) == ["initialize", "session/load", "session/set_model", "session/prompt"]
+        }
+    }
+
+    @Test("reopened session stays detached when closed during model restoration")
+    func reopenedSessionStaysDetachedWhenClosedDuringModelRestoration() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            agentId: "codex",
+            currentModel: "sonnet"
+        ))
+        let client = ACPMockClient()
+        let modelGate = PromptGate()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [
+                    .init(id: "sonnet", name: "Sonnet"),
+                    .init(id: "opus", name: "Opus"),
+                ],
+                availableModes: [],
+                currentModel: "opus",
+                currentMode: nil,
+                promptSuggestions: []
+            ))
+        }
+        client.scriptAsync(method: "session/set_model") { _ in
+            await modelGate.waitInPrompt()
+            return Data("{}".utf8)
+        }
+        let manager = manager(store: store, client: client)
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        let attachTask = Task {
+            await manager.attach(to: session.id, freshlyCreated: false)
+        }
+
+        try await waitUntilAsync { await modelGate.hasEntered }
+        await manager.detach(sessionId: session.id)
+        await modelGate.release()
+        await attachTask.value
+
+        #expect(session.agentState == .idle)
+        #expect(manager.runners[session.id] == nil)
+    }
+
+    @Test("reopened session stays disconnected when stream ends during model restoration")
+    func reopenedSessionStaysDisconnectedWhenStreamEndsDuringModelRestoration() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            agentId: "codex",
+            currentModel: "sonnet"
+        ))
+        let client = ACPMockClient()
+        let modelGate = PromptGate()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [
+                    .init(id: "sonnet", name: "Sonnet"),
+                    .init(id: "opus", name: "Opus"),
+                ],
+                availableModes: [],
+                currentModel: "opus",
+                currentMode: nil,
+                promptSuggestions: []
+            ))
+        }
+        client.scriptAsync(method: "session/set_model") { _ in
+            await modelGate.waitInPrompt()
+            return Data("{}".utf8)
+        }
+        let manager = manager(store: store, client: client)
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        let attachTask = Task {
+            await manager.attach(to: session.id, freshlyCreated: false)
+        }
+
+        try await waitUntilAsync { await modelGate.hasEntered }
+        await client.shutdown()
+        try await waitUntil {
+            session.agentState == .disconnected
+        }
+        await modelGate.release()
+        await attachTask.value
+
+        #expect(session.agentState == .disconnected)
+    }
+
+    @Test("reopened session preserves newer mode selected during model restoration")
+    func reopenedSessionPreservesNewerModeSelectedDuringModelRestoration() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            agentId: "codex",
+            currentModel: "sonnet"
+        ))
+        let client = ACPMockClient()
+        let modelGate = PromptGate()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [
+                    .init(id: "sonnet", name: "Sonnet"),
+                    .init(id: "opus", name: "Opus"),
+                ],
+                availableModes: [
+                    .init(id: "default", name: "Default"),
+                    .init(id: "plan", name: "Plan"),
+                    .init(id: "act", name: "Act"),
+                ],
+                currentModel: "opus",
+                currentMode: "default",
+                promptSuggestions: []
+            ))
+        }
+        client.scriptAsync(method: "session/set_model") { _ in
+            await modelGate.waitInPrompt()
+            return Data("{}".utf8)
+        }
+        client.script(method: "session/set_mode") { _ in Data("{}".utf8) }
+        let manager = manager(store: store, client: client)
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        manager.pendingMode[session.id] = "plan"
+        let attachTask = Task {
+            await manager.attach(to: session.id, freshlyCreated: false)
+        }
+
+        try await waitUntilAsync { await modelGate.hasEntered }
+        await manager.setMode(for: session.id, modeId: "act")
+        await modelGate.release()
+        await attachTask.value
+
+        #expect(session.currentMode == "act")
+        let modeParams = client.sent.compactMap { $0.params as? ACPSessionSetModeParams }
+        #expect(modeParams.map(\.modeId) == ["act"])
+    }
+
     @Test("replayed load history is ignored when a session is already hydrated")
     func replayedLoadHistoryIgnoredWhenHydrated() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
@@ -1827,14 +2100,18 @@ struct ACPSessionManagerAttachRestoreTests {
         }
     }
 
-    private func row(remoteSessionId: String?) -> ACPSessionRow {
+    private func row(
+        remoteSessionId: String?,
+        agentId: String = "claude",
+        currentModel: String? = nil
+    ) -> ACPSessionRow {
         ACPSessionRow(
             id: "local",
-            agentId: "claude",
+            agentId: agentId,
             title: "Stored session",
             titleSource: .placeholder,
             remoteSessionId: remoteSessionId,
-            currentModel: nil,
+            currentModel: currentModel,
             currentMode: nil,
             autoRun: false,
             createdAt: 0,

@@ -2860,6 +2860,7 @@ extension ACPSessionManager {
         case .spawning, .ready: return
         case .idle, .disconnected, .failed: break
         }
+        let persistedModel = freshlyCreated ? nil : session.currentModel
         let firstRunAttach = freshlyCreated
             && !session.restoredFromPersistence
             && session.transcript.messages.isEmpty
@@ -3679,11 +3680,69 @@ extension ACPSessionManager {
                 await releaseWriterLease(sessionId: sessionId)
                 return
             }
+            let localModelAfterRemoteIdPersist = session.currentModel
             connection.acknowledgeDurableSessionResponses()
             startRunnerIfNeeded()
             runners[sessionId] = runner
             keepElicitationCoordinator = true
             attachSucceeded = true
+            // Drain a pending model/mode picked during the post-takeover window.
+            // The load result just above overwrote `currentModel`/`currentMode`
+            // with the agent's restored values. Reapply + persist the user's
+            // choice before dispatching queued or transcript-recovery prompts.
+            let loadedMode = session.currentMode
+            let modelToRestore = pendingModel.removeValue(forKey: sessionId)
+                ?? (localModelAfterRemoteIdPersist != result.currentModel ? localModelAfterRemoteIdPersist : persistedModel)
+            if let m = modelToRestore,
+               m != result.currentModel {
+                let loadedModel = session.currentModel
+                let remoteId = session.remoteSessionId ?? sessionId
+                do {
+                    try await runner.connection.setModel(sessionId: remoteId, modelId: m)
+                    if session.currentModel == loadedModel {
+                        session.currentModel = m
+                        persist(session)
+                    }
+                } catch {
+                    if session.currentModel == loadedModel {
+                        persist(session)
+                    }
+                }
+            }
+            if let m = pendingMode.removeValue(forKey: sessionId),
+               session.currentMode == loadedMode {
+                session.currentMode = m
+                persist(session)
+                let remoteId = session.remoteSessionId ?? sessionId
+                try? await runner.connection.setMode(sessionId: remoteId, modeId: m)
+            }
+            guard session.agentState == .spawning else { return }
+            let attachmentStillCurrent: Bool
+            if isDisposed || sessions[sessionId] !== session || runners[sessionId] !== runner {
+                attachmentStillCurrent = false
+            } else {
+                attachmentStillCurrent = await confirmedWriterLease(for: sessionId)
+                    && sessions[sessionId] === session
+                    && runners[sessionId] === runner
+                    && !isDisposed
+            }
+            guard attachmentStillCurrent else {
+                attachSucceeded = false
+                if runners[sessionId] === runner {
+                    runners[sessionId] = nil
+                    runner.stop()
+                    await runner.flushPersistence()
+                    if isDisposed {
+                        await runner.connection.shutdown()
+                    } else {
+                        await runner.connection.detach()
+                        session.agentState = .idle
+                        beginMirroring(sessionId: sessionId)
+                    }
+                    await releaseWriterLease(sessionId: sessionId)
+                }
+                return
+            }
             session.agentState = .ready
             if let remoteMCPNotice {
                 runner.appendAndPersistSystemNotice(remoteMCPNotice)
@@ -3692,24 +3751,6 @@ extension ACPSessionManager {
                 sendTranscriptAsContext(sessionId: sessionId, agentName: nil)
             } else {
                 runner.flushQueueIfIdle()
-            }
-            // Drain a pending model/mode picked during the post-takeover window.
-            // The load result just above overwrote `currentModel`/`currentMode`
-            // with the agent's restored values, so reapply + persist the user's
-            // choice before firing the RPC — `session/set_model` returns nothing
-            // and not every agent emits a follow-up update, so the local config
-            // and stored row would otherwise drift off the agent's actual state.
-            if let m = pendingModel.removeValue(forKey: sessionId) {
-                session.currentModel = m
-                persist(session)
-                let remoteId = session.remoteSessionId ?? sessionId
-                Task { try? await runner.connection.setModel(sessionId: remoteId, modelId: m) }
-            }
-            if let m = pendingMode.removeValue(forKey: sessionId) {
-                session.currentMode = m
-                persist(session)
-                let remoteId = session.remoteSessionId ?? sessionId
-                Task { try? await runner.connection.setMode(sessionId: remoteId, modeId: m) }
             }
             stderrTask.cancel()
         } catch {

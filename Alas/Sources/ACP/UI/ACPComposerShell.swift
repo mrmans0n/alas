@@ -678,7 +678,14 @@ struct ACPComposer: View {
         manager.persist(session)
 
         Task { @MainActor in
-            guard let runner = manager.runners[sid] else { return }
+            guard let runner = manager.runners[sid] else {
+                switch spec.source {
+                case .mode: manager.pendingMode[sid] = selectedId
+                case .model: manager.pendingModel[sid] = selectedId
+                case .configOption: break
+                }
+                return
+            }
             switch spec.source {
             case .mode:
                 try? await runner.connection.setMode(sessionId: remoteId, modeId: selectedId)
