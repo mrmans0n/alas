@@ -615,6 +615,51 @@ struct ACPSessionManagerAttachRestoreTests {
         }
     }
 
+    @Test("reopened session stays detached when closed during model restoration")
+    func reopenedSessionStaysDetachedWhenClosedDuringModelRestoration() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            agentId: "codex",
+            currentModel: "sonnet"
+        ))
+        let client = ACPMockClient()
+        let modelGate = PromptGate()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [
+                    .init(id: "sonnet", name: "Sonnet"),
+                    .init(id: "opus", name: "Opus"),
+                ],
+                availableModes: [],
+                currentModel: "opus",
+                currentMode: nil,
+                promptSuggestions: []
+            ))
+        }
+        client.scriptAsync(method: "session/set_model") { _ in
+            await modelGate.waitInPrompt()
+            return Data("{}".utf8)
+        }
+        let manager = manager(store: store, client: client)
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        let attachTask = Task {
+            await manager.attach(to: session.id, freshlyCreated: false)
+        }
+
+        try await waitUntilAsync { await modelGate.hasEntered }
+        await manager.detach(sessionId: session.id)
+        await modelGate.release()
+        await attachTask.value
+
+        #expect(session.agentState == .idle)
+        #expect(manager.runners[session.id] == nil)
+    }
+
     @Test("replayed load history is ignored when a session is already hydrated")
     func replayedLoadHistoryIgnoredWhenHydrated() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
