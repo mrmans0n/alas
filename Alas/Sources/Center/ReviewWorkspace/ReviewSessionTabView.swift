@@ -1234,20 +1234,39 @@ struct ReviewSessionTabView: View {
         guard persistsState else { return }
         // Scroll-spy selection changes arrive on every file boundary crossed
         // during a fling; a synchronous write here (snapshot decode + two
-        // JSON encodes + two atomic replaces) stalls the scroll. The write
-        // reads `record` at flush time so it never clobbers newer state
-        // persisted by an interleaved immediate write.
+        // JSON encodes + two atomic replaces) stalls the scroll.
+        //
+        // The write must not save the in-memory `record` wholesale: another
+        // path (e.g. AppState.persistReviewRetargeting) can replace this
+        // session's stored record — even under a new id — while our write is
+        // still pending, and `record` won't reflect that until this view's
+        // own load cycle runs. Saving it as-is would either clobber the
+        // fresher target/handoffs or, if the id changed, resurrect the
+        // record `replace` just removed. Reload the latest stored record at
+        // flush time and merge only the selection onto it instead.
+        let sessionID = current.id
         selectionPersister.schedule {
-            guard let latest = record else { return }
+            guard let latest = try? sessionStore.load(id: sessionID) else { return }
+            let pendingFileID = record?.selectedFileID
+            let merged = Self.mergingSelectedFile(into: latest, fileID: pendingFileID, now: now())
             do {
-                try sessionStore.save(latest)
+                try sessionStore.save(merged)
             } catch {
                 loadError = error.localizedDescription
             }
             updateTabState { state in
-                state.selectedFileID = latest.selectedFileID
+                state.selectedFileID = merged.selectedFileID
             }
         }
+    }
+
+    static func mergingSelectedFile(
+        into latest: ReviewSessionRecord,
+        fileID: DiffReviewFileID?,
+        now: Date
+    ) -> ReviewSessionRecord {
+        guard latest.selectedFileID != fileID else { return latest }
+        return latest.selectingFile(fileID, now: now)
     }
 
     private func persistFocusedComment(_ commentID: String?) {
