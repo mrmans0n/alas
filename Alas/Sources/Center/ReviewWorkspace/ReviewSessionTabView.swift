@@ -231,7 +231,7 @@ struct ReviewSessionTabView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
                 Image(systemName: "text.badge.checkmark")
                     .font(.system(size: 13, weight: .medium))
@@ -258,7 +258,7 @@ struct ReviewSessionTabView: View {
                 }
             }
             if showsTrackedRevisionRow {
-                trackedRevisionRow
+                trackedRevisionRow.padding(.top, 8)
             }
         }
         .padding(.horizontal, 14)
