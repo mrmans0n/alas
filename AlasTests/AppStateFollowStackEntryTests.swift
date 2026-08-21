@@ -4,6 +4,16 @@ import Testing
 
 @MainActor
 struct AppStateFollowStackEntryTests {
+    private struct MemoryStore: PersistenceStoreProtocol {
+        let projects: ProjectsFile
+
+        func write<T: Encodable>(_: T, to _: URL) throws {}
+
+        func readIfExists<T: Decodable>(_ type: T.Type, from _: URL) throws -> T? {
+            type == ProjectsFile.self ? projects as? T : nil
+        }
+    }
+
     @Test func noPrefillRoutesToTheExpressionPrompt() {
         #expect(FollowRevisionPromptRoute.route(prefill: nil, stackEntrySupported: true)
             == .expressionPrompt(prefill: nil, isEditing: false))
@@ -77,5 +87,56 @@ struct AppStateFollowStackEntryTests {
 
         rightPaneState.ggContext = .inactive(reason: .policyOff)
         #expect(!state.ggFollowSupported(worktreeID: worktree.id))
+    }
+
+    @Test func pickerUsesTheLoadedChangesStackImmediately() throws {
+        let path = URL(fileURLWithPath: "/tmp/alas-follow-stack")
+        let project = ProjectConfig(
+            id: "project", name: "Alas", path: path.path, color: "blue", addedAt: .distantPast
+        )
+        let worktree = Worktree(
+            id: Worktree.makeId(path: path),
+            projectId: project.id,
+            name: "feature",
+            branch: "feature",
+            path: path,
+            status: .clean,
+            lastActivity: .distantPast
+        )
+        let state = AppState(store: MemoryStore(projects: .init(projects: [project])))
+        state.projectsManager.insertOptimisticWorktree(worktree)
+        let rightPaneState = state.rightPaneStore.state(
+            for: worktree,
+            baseBranch: "main",
+            comparisonMode: .manual
+        )
+        rightPaneState.currentBranch = worktree.branch
+        rightPaneState.ggContext = .active(stackName: "stack")
+        rightPaneState.ggStack = GGStack(
+            name: "stack",
+            base: "main",
+            totalCommits: 1,
+            syncedCommits: 0,
+            currentPosition: 1,
+            behindBase: 0,
+            entries: [GGStackEntry(
+                position: 1,
+                sha: "abc1234",
+                title: "Fast picker",
+                ggId: "c-abc1234"
+            )]
+        )
+        rightPaneState.ggStackLoadState = .loaded
+        rightPaneState.ggStackCommitsKey = rightPaneState.currentGGStackCommitsKey
+        let tab = state.tabs.appendCommit(worktreeId: worktree.id, sha: "abc1234", title: "Fast picker")
+
+        state.promptFollowStackEntry(worktreeID: worktree.id, tabID: tab.id)
+
+        let presentation = try #require(state.pendingFollowStackEntry)
+        guard case .loaded(let model) = presentation.state else {
+            Issue.record("Expected the picker to reuse the loaded Changes stack")
+            return
+        }
+        #expect(model.candidates.map(\.ggID) == ["c-abc1234"])
     }
 }

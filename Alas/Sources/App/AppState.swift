@@ -2263,6 +2263,17 @@ final class AppState {
         guard let worktree = worktree(withId: worktreeID) else { return }
         let currentGGID = followedStackEntryGGID(worktreeID: worktreeID, tabID: tabID)
         let displayedSHA = displayedCommitSHA(worktreeID: worktreeID, tabID: tabID)
+        if let rightPaneState = rightPaneStore.activeState(worktreeId: worktreeID),
+           rightPaneState.ggStackLoadState == .loaded,
+           rightPaneState.ggStackCommitsKey == rightPaneState.currentGGStackCommitsKey,
+           let stack = rightPaneState.ggStack {
+            pendingFollowStackEntry?.state = .loaded(GGFollowEntryModel.make(
+                entries: stack.entries,
+                currentGGID: currentGGID,
+                displayedSHA: displayedSHA
+            ))
+            return
+        }
         Task { @MainActor in
             let state: GGFollowEntryLoadState
             do {
