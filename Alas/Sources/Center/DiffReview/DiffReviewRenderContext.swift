@@ -183,8 +183,18 @@ enum DiffReviewRenderContextBuilder {
 @MainActor
 final class DiffReviewRenderContextCache: ObservableObject {
     private let maximumEntryCount: Int
-    private var storage: [DiffReviewRenderContextKey: DiffReviewRenderContext] = [:]
-    private var recency: [DiffReviewRenderContextKey] = []
+    private var storage: [DiffReviewRenderContextKey: Entry] = [:]
+    /// Monotonic stamp handed out on every access, so recency is tracked
+    /// without comparing keys. These keys carry per-comment and per-boundary
+    /// signatures, and the cache is consulted once per file on every row-plan
+    /// rebuild — scanning a recency array meant a deep comparison against
+    /// every retained key just to record a hit.
+    private var accessStamp: UInt64 = 0
+
+    private struct Entry {
+        let context: DiffReviewRenderContext
+        var lastAccess: UInt64
+    }
 
     #if DEBUG
     private(set) var missCount = 0
@@ -204,9 +214,10 @@ final class DiffReviewRenderContextCache: ObservableObject {
         key: DiffReviewRenderContextKey,
         build: () -> DiffReviewRenderContext
     ) -> DiffReviewRenderContext {
+        accessStamp &+= 1
         if let cached = storage[key] {
-            markRecentlyUsed(key)
-            return cached
+            storage[key]?.lastAccess = accessStamp
+            return cached.context
         }
 
         #if DEBUG
@@ -214,8 +225,7 @@ final class DiffReviewRenderContextCache: ObservableObject {
         #endif
 
         let context = build()
-        storage[key] = context
-        markRecentlyUsed(key)
+        storage[key] = Entry(context: context, lastAccess: accessStamp)
         pruneIfNeeded()
         return context
     }
@@ -268,21 +278,16 @@ final class DiffReviewRenderContextCache: ObservableObject {
 
     func removeAll() {
         storage.removeAll()
-        recency.removeAll()
+        accessStamp = 0
         #if DEBUG
         missCount = 0
         #endif
     }
 
-    private func markRecentlyUsed(_ key: DiffReviewRenderContextKey) {
-        recency.removeAll { $0 == key }
-        recency.append(key)
-    }
-
     private func pruneIfNeeded() {
-        while recency.count > maximumEntryCount {
-            let key = recency.removeFirst()
-            storage.removeValue(forKey: key)
+        while storage.count > maximumEntryCount {
+            guard let oldest = storage.min(by: { $0.value.lastAccess < $1.value.lastAccess })?.key else { return }
+            storage.removeValue(forKey: oldest)
         }
     }
 }
