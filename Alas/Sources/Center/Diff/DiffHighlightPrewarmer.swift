@@ -55,15 +55,20 @@ enum DiffHighlightPrewarmer {
         )
     }
 
-    /// Signature over everything that changes which sources get tokenized.
-    /// Font and theme are excluded on purpose: spans depend only on source
-    /// text and language.
+    /// Signature over everything that changes what gets prewarmed. Font and
+    /// theme are included even though tree-sitter spans don't depend on
+    /// them: `warm` also populates `DiffPaneDocumentCache`, whose key does
+    /// include them, so excluding them here would let a font or theme
+    /// change skip re-prewarming while row mounts still miss the document
+    /// cache and rebuild synchronously mid-scroll.
     static func signature(
         groups: [DiffDisplayGroup],
         expandedCollapsedRowIDs: Set<String>,
         layoutMode: DiffLayoutMode,
         fileExtension: String,
-        showWhitespace: Bool
+        font: NSFont,
+        showWhitespace: Bool,
+        theme: Theme
     ) -> Int {
         var hasher = Hasher()
         for group in groups {
@@ -72,7 +77,10 @@ enum DiffHighlightPrewarmer {
         hasher.combine(expandedCollapsedRowIDs)
         hasher.combine(layoutMode)
         hasher.combine(fileExtension)
+        hasher.combine(font.fontName)
+        hasher.combine(font.pointSize)
         hasher.combine(showWhitespace)
+        hasher.combine(theme)
         return hasher.finalize()
     }
 

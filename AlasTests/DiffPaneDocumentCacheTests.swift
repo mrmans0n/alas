@@ -73,6 +73,65 @@ struct DiffPaneDocumentCacheTests {
         #expect(stats.misses == 0)
     }
 
+    /// Regression for a font/theme change leaving the row-mount path cold:
+    /// `DiffPaneRowPlanBuilder.prewarmHighlightsIfNeeded` dedupes on
+    /// `DiffHighlightPrewarmer.signature`, and `warm` populates
+    /// `DiffPaneDocumentCache`, whose key includes font and theme. If the
+    /// signature didn't also vary with font/theme, a font-size or theme
+    /// change would be treated as "already prewarmed" and every row mount
+    /// after that would miss the document cache and rebuild synchronously
+    /// during scroll.
+    @Test func prewarmDedupeSignatureVariesWithFontAndTheme() throws {
+        let theme = try ThemeStore().current
+        var otherTheme = theme
+        otherTheme.accentOverrideHex = "#ff0000"
+        let small = CenterTypography.resolveCodeFont(family: "SF Mono", size: 11)
+        let large = CenterTypography.resolveCodeFont(family: "SF Mono", size: 17)
+        let group = try group()
+
+        func signature(font: NSFont, theme: Theme) -> Int {
+            DiffHighlightPrewarmer.signature(
+                groups: [group], expandedCollapsedRowIDs: [], layoutMode: .split,
+                fileExtension: "swift", font: font, showWhitespace: false, theme: theme
+            )
+        }
+
+        let base = signature(font: small, theme: theme)
+        #expect(signature(font: large, theme: theme) != base)
+        #expect(signature(font: small, theme: otherTheme) != base)
+    }
+
+    /// A font change must both re-trigger the prewarm (the dedupe signature
+    /// differs) and leave the document cache warm for the new font, so the
+    /// subsequent row mount at that font is a cache hit rather than a
+    /// synchronous rebuild.
+    @Test func prewarmingAtANewFontWarmsTheCacheForThatFont() throws {
+        let theme = try ThemeStore().current
+        let originalFont = CenterTypography.resolveCodeFont(family: "SF Mono", size: 11)
+        let newFont = CenterTypography.resolveCodeFont(family: "SF Mono", size: 17)
+        let group = try group()
+
+        DiffPaneDocumentCache.shared.removeAll()
+        DiffHighlightPrewarmer.prewarmSynchronously(
+            groups: [group], expandedCollapsedRowIDs: [], layoutMode: .split,
+            fileExtension: "swift", font: originalFont, showWhitespace: false, theme: theme
+        )
+        DiffHighlightPrewarmer.prewarmSynchronously(
+            groups: [group], expandedCollapsedRowIDs: [], layoutMode: .split,
+            fileExtension: "swift", font: newFont, showWhitespace: false, theme: theme
+        )
+
+        DiffPaneDocumentCache.shared.resetStatisticsForTests()
+        _ = DiffPaneDocumentCache.shared.splitResult(
+            rows: DiffPaneRowProjection.visibleRows(in: group, expandedCollapsedRowIDs: []),
+            fileExtension: "swift", font: newFont, showWhitespace: false, theme: theme
+        )
+
+        let stats = DiffPaneDocumentCache.shared.statisticsForTests
+        #expect(stats.hits == 1)
+        #expect(stats.misses == 0)
+    }
+
     private func rows() throws -> [DiffDisplayRow] {
         try group().rows.filter { $0.kind != .collapsed }
     }

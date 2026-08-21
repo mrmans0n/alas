@@ -207,12 +207,15 @@ enum DiffPaneRowPlanBuilder {
 
     @MainActor
     private static func prewarmHighlightsIfNeeded(input: DiffPaneRowPlanInput, state: DiffPanePresentationState) {
+        let font = CenterTypography.resolveCodeFont(family: input.codeFontFamily, size: input.codeFontSize)
         let signature = DiffHighlightPrewarmer.signature(
             groups: input.model.groups,
             expandedCollapsedRowIDs: state.expandedCollapsedRowIDs,
             layoutMode: input.layoutMode,
             fileExtension: input.fileExtension,
-            showWhitespace: input.showWhitespace
+            font: font,
+            showWhitespace: input.showWhitespace,
+            theme: input.theme
         )
         guard state.registerHighlightPrewarm(signature: signature) else { return }
         DiffHighlightPrewarmer.prewarm(
@@ -220,7 +223,7 @@ enum DiffPaneRowPlanBuilder {
             expandedCollapsedRowIDs: state.expandedCollapsedRowIDs,
             layoutMode: input.layoutMode,
             fileExtension: input.fileExtension,
-            font: CenterTypography.resolveCodeFont(family: input.codeFontFamily, size: input.codeFontSize),
+            font: font,
             showWhitespace: input.showWhitespace,
             theme: input.theme
         )
