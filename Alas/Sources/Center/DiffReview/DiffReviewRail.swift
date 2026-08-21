@@ -7,6 +7,40 @@ enum DiffReviewRailTooltip {
     }
 }
 
+/// Open-thread counts per path plus the rail-wide totals, derived in a single
+/// pass. The rail evaluates on every review-surface body pass — including the
+/// ones a scroll-spy file change triggers mid-fling — so counting per visible
+/// row rescanned every thread each time.
+struct DiffReviewRailThreadCounts: Equatable {
+    private let openByPath: [String: Int]
+    let openTotal: Int
+    let resolvedTotal: Int
+
+    init(threads: [ReviewThread]) {
+        var openByPath: [String: Int] = [:]
+        var openTotal = 0
+        var resolvedTotal = 0
+        for thread in threads {
+            if thread.isResolved {
+                resolvedTotal += 1
+                continue
+            }
+            guard !thread.isOutdated else { continue }
+            openTotal += 1
+            if let path = thread.path {
+                openByPath[path, default: 0] += 1
+            }
+        }
+        self.openByPath = openByPath
+        self.openTotal = openTotal
+        self.resolvedTotal = resolvedTotal
+    }
+
+    func openCount(forPath path: String) -> Int {
+        openByPath[path] ?? 0
+    }
+}
+
 struct DiffReviewRail: View {
     let session: DiffReviewSessionModel
     @Binding var selectedFileID: DiffReviewFileID
@@ -36,20 +70,6 @@ struct DiffReviewRail: View {
         self.onSelectFile = onSelectFile
     }
 
-    // MARK: - Thread counts
-
-    private func openThreadCount(for path: String) -> Int {
-        threads.filter { $0.path == path && !$0.isResolved && !$0.isOutdated }.count
-    }
-
-    private var openThreadTotal: Int {
-        threads.filter { !$0.isResolved && !$0.isOutdated }.count
-    }
-
-    private var resolvedThreadTotal: Int {
-        threads.filter { $0.isResolved }.count
-    }
-
     private var filteredSession: DiffReviewSessionModel {
         DiffReviewRailFilter.session(session, matching: filterQuery)
     }
@@ -70,6 +90,7 @@ struct DiffReviewRail: View {
 
     private var expandedBody: some View {
         let visibleSession = filteredSession
+        let threadCounts = DiffReviewRailThreadCounts(threads: threads)
         return VStack(spacing: 0) {
             expandedHeader
             ScrollViewReader { proxy in
@@ -89,7 +110,7 @@ struct DiffReviewRail: View {
                                 )
                         } else {
                             ForEach(DiffReviewRailRows.rows(for: visibleSession)) { row in
-                                expandedRow(row)
+                                expandedRow(row, threadCounts: threadCounts)
                             }
                         }
                     }
@@ -105,18 +126,18 @@ struct DiffReviewRail: View {
                     }
                 }
             }
-            if openThreadTotal > 0 || resolvedThreadTotal > 0 {
-                threadSummaryStrip
+            if threadCounts.openTotal > 0 || threadCounts.resolvedTotal > 0 {
+                threadSummaryStrip(threadCounts)
             }
         }
     }
 
-    private var threadSummaryStrip: some View {
+    private func threadSummaryStrip(_ counts: DiffReviewRailThreadCounts) -> some View {
         HStack(spacing: 4) {
             Image(systemName: "bubble.left")
                 .font(.system(size: 10, weight: .medium))
                 .foregroundColor(theme.color("fg-faint"))
-            Text(threadSummaryLabel)
+            Text(Self.threadSummaryLabel(counts))
                 .font(.caption)
                 .foregroundColor(theme.color("fg-muted"))
             Spacer(minLength: 0)
@@ -127,8 +148,8 @@ struct DiffReviewRail: View {
         .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .top)
     }
 
-    private var threadSummaryLabel: String {
-        switch (openThreadTotal, resolvedThreadTotal) {
+    private static func threadSummaryLabel(_ counts: DiffReviewRailThreadCounts) -> String {
+        switch (counts.openTotal, counts.resolvedTotal) {
         case (let o, 0):
             return "\(o) open"
         case (0, let r):
@@ -217,14 +238,17 @@ struct DiffReviewRail: View {
     }
 
     @ViewBuilder
-    private func expandedRow(_ row: DiffReviewRailRow) -> some View {
+    private func expandedRow(
+        _ row: DiffReviewRailRow,
+        threadCounts: DiffReviewRailThreadCounts
+    ) -> some View {
         switch row.kind {
         case let .sourceHeader(id, title, fileCount):
             sourceHeader(id: id, title: title, fileCount: fileCount)
         case let .directory(name, depth):
             directoryRow(name: name, depth: depth)
         case let .file(file, depth, name):
-            fileRow(file, depth: depth, name: name)
+            fileRow(file, depth: depth, name: name, threadCounts: threadCounts)
         case .divider:
             Divider()
                 .overlay(theme.color("line"))
@@ -271,7 +295,12 @@ struct DiffReviewRail: View {
         .frame(height: 22)
     }
 
-    private func fileRow(_ file: DiffReviewFileSummary, depth: Int, name: String) -> some View {
+    private func fileRow(
+        _ file: DiffReviewFileSummary,
+        depth: Int,
+        name: String,
+        threadCounts: DiffReviewRailThreadCounts
+    ) -> some View {
         let selected = selectedFileID == file.id
         return Button {
             selectedFileID = file.id
@@ -309,7 +338,7 @@ struct DiffReviewRail: View {
                     }
                 }
                 Spacer(minLength: 4)
-                let openCount = openThreadCount(for: file.path)
+                let openCount = threadCounts.openCount(forPath: file.path)
                 if openCount > 0 {
                     threadBadge(openCount)
                 }
