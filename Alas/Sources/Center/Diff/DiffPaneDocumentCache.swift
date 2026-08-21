@@ -19,9 +19,27 @@ final class DiffPaneDocumentCache: @unchecked Sendable {
     static let shared = DiffPaneDocumentCache()
 
     private let lock = NSLock()
-    private var splitStorage: [Int: DiffPaneTextDocumentBuilder.SplitResult] = [:]
-    private var stackedStorage: [Int: DiffPaneTextDocumentBuilder.StackedResult] = [:]
+    private var splitStorage: [Int: SplitEntry] = [:]
+    private var stackedStorage: [Int: StackedEntry] = [:]
     private let entryLimit: Int
+    /// Monotonic stamp bumped on every read and write, so recency is tracked
+    /// without comparing keys or reordering an array. A full review can
+    /// easily exceed `entryLimit` distinct hunks, and clearing the whole
+    /// storage on overflow would wipe every already-warmed document each
+    /// time a new one arrives — negating the prewarmer for exactly the
+    /// large reviews it matters most for. Evict only the single oldest
+    /// entry instead.
+    private var accessStamp: UInt64 = 0
+
+    private struct SplitEntry {
+        let result: DiffPaneTextDocumentBuilder.SplitResult
+        var lastAccess: UInt64
+    }
+
+    private struct StackedEntry {
+        let result: DiffPaneTextDocumentBuilder.StackedResult
+        var lastAccess: UInt64
+    }
 
     init(entryLimit: Int = 64) {
         self.entryLimit = entryLimit
@@ -105,6 +123,7 @@ final class DiffPaneDocumentCache: @unchecked Sendable {
         defer { lock.unlock() }
         splitStorage.removeAll(keepingCapacity: true)
         stackedStorage.removeAll(keepingCapacity: true)
+        accessStamp = 0
     }
 
     private func key(
@@ -127,34 +146,64 @@ final class DiffPaneDocumentCache: @unchecked Sendable {
     private func cachedSplit(forKey key: Int) -> DiffPaneTextDocumentBuilder.SplitResult? {
         lock.lock()
         defer { lock.unlock() }
-        let value = splitStorage[key]
+        accessStamp &+= 1
+        guard let entry = splitStorage[key] else {
+            #if DEBUG
+            misses += 1
+            #endif
+            return nil
+        }
         #if DEBUG
-        if value == nil { misses += 1 } else { hits += 1 }
+        hits += 1
         #endif
-        return value
+        splitStorage[key]?.lastAccess = accessStamp
+        return entry.result
     }
 
     private func cachedStacked(forKey key: Int) -> DiffPaneTextDocumentBuilder.StackedResult? {
         lock.lock()
         defer { lock.unlock() }
-        let value = stackedStorage[key]
+        accessStamp &+= 1
+        guard let entry = stackedStorage[key] else {
+            #if DEBUG
+            misses += 1
+            #endif
+            return nil
+        }
         #if DEBUG
-        if value == nil { misses += 1 } else { hits += 1 }
+        hits += 1
         #endif
-        return value
+        stackedStorage[key]?.lastAccess = accessStamp
+        return entry.result
     }
 
     private func store(_ result: DiffPaneTextDocumentBuilder.SplitResult, forKey key: Int) {
         lock.lock()
         defer { lock.unlock() }
-        if splitStorage.count >= entryLimit { splitStorage.removeAll(keepingCapacity: true) }
-        splitStorage[key] = result
+        accessStamp &+= 1
+        if splitStorage.count >= entryLimit, splitStorage[key] == nil {
+            evictOldest(from: &splitStorage)
+        }
+        splitStorage[key] = SplitEntry(result: result, lastAccess: accessStamp)
     }
 
     private func store(_ result: DiffPaneTextDocumentBuilder.StackedResult, forKey key: Int) {
         lock.lock()
         defer { lock.unlock() }
-        if stackedStorage.count >= entryLimit { stackedStorage.removeAll(keepingCapacity: true) }
-        stackedStorage[key] = result
+        accessStamp &+= 1
+        if stackedStorage.count >= entryLimit, stackedStorage[key] == nil {
+            evictOldest(from: &stackedStorage)
+        }
+        stackedStorage[key] = StackedEntry(result: result, lastAccess: accessStamp)
+    }
+
+    private func evictOldest(from storage: inout [Int: SplitEntry]) {
+        guard let oldest = storage.min(by: { $0.value.lastAccess < $1.value.lastAccess })?.key else { return }
+        storage.removeValue(forKey: oldest)
+    }
+
+    private func evictOldest(from storage: inout [Int: StackedEntry]) {
+        guard let oldest = storage.min(by: { $0.value.lastAccess < $1.value.lastAccess })?.key else { return }
+        storage.removeValue(forKey: oldest)
     }
 }

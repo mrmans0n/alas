@@ -132,13 +132,43 @@ struct DiffPaneDocumentCacheTests {
         #expect(stats.misses == 0)
     }
 
-    private func rows() throws -> [DiffDisplayRow] {
-        try group().rows.filter { $0.kind != .collapsed }
+    /// A full review can easily exceed `entryLimit` distinct hunks. Filling
+    /// the cache must evict only the single least-recently-used entry, not
+    /// clear the whole storage — clearing on every overflow would wipe every
+    /// already-warmed document each time a new hunk gets prewarmed,
+    /// negating the prewarmer for exactly the large reviews it matters most
+    /// for.
+    @Test func overflowEvictsOnlyTheLeastRecentlyUsedEntry() throws {
+        let cache = DiffPaneDocumentCache(entryLimit: 2)
+        let font = CenterTypography.resolveCodeFont(family: "SF Mono", size: 13)
+        let theme = try ThemeStore().current
+        let a = try rows(salt: "A")
+        let b = try rows(salt: "B")
+        let c = try rows(salt: "C")
+
+        _ = cache.splitResult(rows: a, fileExtension: "swift", font: font, showWhitespace: false, theme: theme)
+        _ = cache.splitResult(rows: b, fileExtension: "swift", font: font, showWhitespace: false, theme: theme)
+        // Touching A makes B the least recently used entry.
+        _ = cache.splitResult(rows: a, fileExtension: "swift", font: font, showWhitespace: false, theme: theme)
+        _ = cache.splitResult(rows: c, fileExtension: "swift", font: font, showWhitespace: false, theme: theme)
+
+        cache.resetStatisticsForTests()
+        _ = cache.splitResult(rows: a, fileExtension: "swift", font: font, showWhitespace: false, theme: theme)
+        _ = cache.splitResult(rows: c, fileExtension: "swift", font: font, showWhitespace: false, theme: theme)
+        #expect(cache.statisticsForTests == (hits: 2, misses: 0))
+
+        // B was evicted, so it has to be rebuilt.
+        _ = cache.splitResult(rows: b, fileExtension: "swift", font: font, showWhitespace: false, theme: theme)
+        #expect(cache.statisticsForTests == (hits: 2, misses: 1))
     }
 
-    private func group() throws -> DiffDisplayGroup {
+    private func rows(salt: String = "") throws -> [DiffDisplayRow] {
+        try group(salt: salt).rows.filter { $0.kind != .collapsed }
+    }
+
+    private func group(salt: String = "") throws -> DiffDisplayGroup {
         let lines = (0..<24).map { index -> ParsedDiff.Hunk.Line in
-            let text = "let value\(index) = compute(\(index))"
+            let text = "let value\(index)\(salt) = compute(\(index))"
             switch index % 3 {
             case 0:
                 return .init(kind: .delete, text: text, oldNumber: index + 1, newNumber: nil)
