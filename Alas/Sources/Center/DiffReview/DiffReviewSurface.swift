@@ -368,7 +368,11 @@ struct DiffReviewSurface: View {
     }
 
     private func appKitRowInputs(for session: DiffReviewLoadedSession) -> [AppKitDiffReviewRowInput] {
-        session.files.map { file in
+        // Computed once per input build: without an override this derives a
+        // sorted source description from every file, which is quadratic when
+        // evaluated inside the per-file map below.
+        let feedbackTarget = effectiveReviewFeedbackTarget
+        return session.files.map { file in
             let state = appKitPresentationStore.state(for: file)
             state.synchronize(file: file, contextSignature: DiffReviewContextStateSignature(
                 fileID: file.id.rawValue,
@@ -441,7 +445,7 @@ struct DiffReviewSurface: View {
                     hunkUnstageEnabled: file.stagedMutationActions?.unstageEnabledBase ?? false
                 ),
                 lspContext: lspContextForFile(file),
-                reviewFeedbackTarget: effectiveReviewFeedbackTarget,
+                reviewFeedbackTarget: feedbackTarget,
                 draftCommentActions: appKitDraftActions,
                 onContextExpansionActivated: { contextExpandedFileIDs.insert(file.id) }
             )

@@ -504,13 +504,13 @@ enum AppKitDiffReviewRowPlanBuilder {
                     switch block {
                     case let .rows(rowBlock):
                         let blockID = AppKitDiffReviewRowID.segment(fileID: input.file.id, segmentID: segment.id, blockID: rowBlock.id)
-                        append(&rows, id: blockID, input: input, signature: String(reflecting: rowBlock.rowsSignature).hashValue, height: segmentHeight(rowBlock.rows.count, input: input), includesActiveHighlight: true) {
+                        append(&rows, id: blockID, input: input, signature: rowBlock.rowsSignature.hashValue, height: segmentHeight(rowBlock.rows.count, input: input), includesActiveHighlight: true) {
                             AnyView(AppKitDiffReviewSegmentRowBody(rows: rowBlock.rows, rowsSignature: rowBlock.rowsSignature, group: group.displayGroup, input: input))
                         }
                     case let .thread(thread):
                         let threadID = AppKitDiffReviewRowID.thread(fileID: input.file.id, threadID: thread.id)
                         append(
-                            &rows, id: threadID, input: input, signature: String(reflecting: thread).hashValue,
+                            &rows, id: threadID, input: input, signature: thread.hashValue,
                             height: 112, retention: input.state.activeThreadID == thread.id ? .pinned : .recyclable,
                             threadEditorState: input.state.threadCommentEditors[thread.id]
                         ) {
@@ -518,7 +518,7 @@ enum AppKitDiffReviewRowPlanBuilder {
                         }
                     case let .annotation(annotation):
                         let annotationID = AppKitDiffReviewRowID.annotation(fileID: input.file.id, annotationID: annotation.id)
-                        append(&rows, id: annotationID, input: input, signature: String(reflecting: annotation).hashValue, height: 52) {
+                        append(&rows, id: annotationID, input: input, signature: annotation.hashValue, height: 52) {
                             AnyView(AppKitDiffReviewAnnotationRowBody(annotation: annotation, rows: segment.rows, input: input))
                         }
                     }
@@ -532,9 +532,7 @@ enum AppKitDiffReviewRowPlanBuilder {
                         &rows,
                         id: composerID,
                         input: input,
-                        signature: String(
-                            "\(input.state.draftComposerFocusRequestGeneration):\(input.state.quoteInsertionGeneration)"
-                        ).hashValue,
+                        signature: composerSignature(input.state),
                         height: 132,
                         retention: input.state.isDraftComposerFocused ? .pinned : .recyclable
                     ) {
@@ -586,7 +584,7 @@ enum AppKitDiffReviewRowPlanBuilder {
                 &rows,
                 id: AppKitDiffReviewRowID.thread(fileID: input.file.id, threadID: thread.id),
                 input: input,
-                signature: String(reflecting: thread).hashValue,
+                signature: thread.hashValue,
                 height: 112,
                 retention: input.state.activeThreadID == thread.id ? .pinned : .recyclable,
                 threadEditorState: input.state.threadCommentEditors[thread.id]
@@ -599,7 +597,7 @@ enum AppKitDiffReviewRowPlanBuilder {
                 &rows,
                 id: AppKitDiffReviewRowID.annotation(fileID: input.file.id, annotationID: annotation.id),
                 input: input,
-                signature: String(reflecting: annotation).hashValue,
+                signature: annotation.hashValue,
                 height: 52
             ) {
                 AnyView(AppKitDiffReviewImageAnnotationRowBody(annotation: annotation, input: input))
@@ -676,12 +674,19 @@ enum AppKitDiffReviewRowPlanBuilder {
         fallbacks[id] = id
     }
 
-    private static func accessorySignature(_ value: some Any, contextRows: [DiffDisplayRow]?) -> Int {
+    private static func accessorySignature(_ value: some Hashable, contextRows: [DiffDisplayRow]?) -> Int {
         var hasher = Hasher()
-        hasher.combine(String(reflecting: value))
+        hasher.combine(value)
         if let contextRows {
             hasher.combine(DiffDisplayRowsSignature(contextRows))
         }
+        return hasher.finalize()
+    }
+
+    private static func composerSignature(_ state: AppKitDiffReviewFileState) -> Int {
+        var hasher = Hasher()
+        hasher.combine(state.draftComposerFocusRequestGeneration)
+        hasher.combine(state.quoteInsertionGeneration)
         return hasher.finalize()
     }
 

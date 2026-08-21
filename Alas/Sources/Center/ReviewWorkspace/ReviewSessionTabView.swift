@@ -93,6 +93,7 @@ struct ReviewSessionTabView: View {
     @State private var inlineFeedbackScrollController = DiffReviewInlineFeedbackScrollController()
     @State private var loadCoordinator = ReviewSessionTabLoadCoordinator()
     @State private var loadGeneration = 0
+    @State private var selectionPersister = ReviewSessionSelectionPersister()
     @State private var providerPublishConfirmation: ProviderReviewPublishConfirmationState?
     @State private var selectedProviderDecision = ProviderReviewDecision.comment
     @State private var providerReviewSummaryBody = ""
@@ -209,6 +210,7 @@ struct ReviewSessionTabView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .alasReviewDraftCommentsDidChangeExternally)) { _ in
+            selectionPersister.flush()
             try? draftCommentController?.load()
             if let refreshed = try? sessionStore.load(id: tabState.sessionID) {
                 record = refreshed
@@ -216,6 +218,9 @@ struct ReviewSessionTabView: View {
         }
         .onChange(of: tabState.sessionID) { _, _ in
             rekeyDraftControllerForCurrentSession()
+        }
+        .onDisappear {
+            selectionPersister.flush()
         }
     }
 
@@ -556,6 +561,7 @@ struct ReviewSessionTabView: View {
     }
 
     private func loadReviewSession(token: ReviewSessionTabLoadToken) async -> Bool {
+        selectionPersister.flush()
         do {
             guard let storedRecord = try sessionStore.load(id: tabState.sessionID) else {
                 throw ReviewSessionTabError.missingSession(tabState.sessionID)
@@ -739,6 +745,7 @@ struct ReviewSessionTabView: View {
     }
 
     private func rekeyDraftControllerForCurrentSession() {
+        selectionPersister.flush()
         guard persistsState,
               let refreshed = try? sessionStore.load(id: tabState.sessionID)
         else { return }
@@ -1223,11 +1230,50 @@ struct ReviewSessionTabView: View {
     private func persistSelectedFile(_ fileID: DiffReviewFileID?) {
         guard let current = record else { return }
         guard current.selectedFileID != fileID else { return }
-        let updated = current.selectingFile(fileID, now: now())
-        persist(updated)
-        updateTabState { state in
-            state.selectedFileID = fileID
+        record = current.selectingFile(fileID, now: now())
+        guard persistsState else { return }
+        // Scroll-spy selection changes arrive on every file boundary crossed
+        // during a fling; a synchronous write here (snapshot decode + two
+        // JSON encodes + two atomic replaces) stalls the scroll.
+        //
+        // The write must not save the in-memory `record` wholesale: another
+        // path (e.g. AppState.persistReviewRetargeting) can replace this
+        // session's stored record — even under a new id — while our write is
+        // still pending, and `record` won't reflect that until this view's
+        // own load cycle runs. Saving it as-is would either clobber the
+        // fresher target/handoffs or, if the id changed, resurrect the
+        // record `replace` just removed. Reload the latest stored record at
+        // flush time and merge only the selection onto it instead.
+        //
+        // The selection itself must come from this call's `fileID`
+        // parameter, not from reading `record` at flush time: a handoff or
+        // send failure completing during the debounce window reassigns
+        // `record` from a fresh disk load (`ReviewSessionHandoffPersistence`
+        // prefers disk over the in-memory value), which would revert
+        // `record.selectedFileID` to whatever was on disk before this write
+        // flushes — silently losing the user's latest selection.
+        let sessionID = current.id
+        selectionPersister.schedule {
+            guard let latest = try? sessionStore.load(id: sessionID) else { return }
+            let merged = Self.mergingSelectedFile(into: latest, fileID: fileID, now: now())
+            do {
+                try sessionStore.save(merged)
+            } catch {
+                loadError = error.localizedDescription
+            }
+            updateTabState { state in
+                state.selectedFileID = merged.selectedFileID
+            }
         }
+    }
+
+    static func mergingSelectedFile(
+        into latest: ReviewSessionRecord,
+        fileID: DiffReviewFileID?,
+        now: Date
+    ) -> ReviewSessionRecord {
+        guard latest.selectedFileID != fileID else { return latest }
+        return latest.selectingFile(fileID, now: now)
     }
 
     private func persistFocusedComment(_ commentID: String?) {

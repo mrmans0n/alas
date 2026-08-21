@@ -142,14 +142,14 @@ enum ReviewDraftCommentAuthor: Codable, Equatable, Hashable, Sendable {
     }
 }
 
-struct ReviewCommentReply: Codable, Equatable, Identifiable, Sendable {
+struct ReviewCommentReply: Codable, Equatable, Hashable, Identifiable, Sendable {
     let id: String
     let author: ReviewDraftCommentAuthor
     let bodyMarkdown: String
     let createdAt: Date
 }
 
-struct ReviewDraftProviderPublish: Codable, Equatable, Sendable {
+struct ReviewDraftProviderPublish: Codable, Equatable, Hashable, Sendable {
     let provider: CodeHostKind
     let host: String
     let repositorySlug: String
@@ -160,13 +160,13 @@ struct ReviewDraftProviderPublish: Codable, Equatable, Sendable {
     let publishedAt: Date
 }
 
-struct ReviewDraftProviderError: Codable, Equatable, Sendable {
+struct ReviewDraftProviderError: Codable, Equatable, Hashable, Sendable {
     let provider: CodeHostKind
     let message: String
     let occurredAt: Date
 }
 
-struct ReviewDraftComment: Codable, Equatable, Identifiable, Sendable {
+struct ReviewDraftComment: Codable, Equatable, Hashable, Identifiable, Sendable {
     var id: String
     var sessionID: ReviewDraftSessionID
     var fileID: DiffReviewFileID
