@@ -93,6 +93,7 @@ struct ReviewSessionTabView: View {
     @State private var inlineFeedbackScrollController = DiffReviewInlineFeedbackScrollController()
     @State private var loadCoordinator = ReviewSessionTabLoadCoordinator()
     @State private var loadGeneration = 0
+    @State private var selectionPersister = ReviewSessionSelectionPersister()
     @State private var providerPublishConfirmation: ProviderReviewPublishConfirmationState?
     @State private var selectedProviderDecision = ProviderReviewDecision.comment
     @State private var providerReviewSummaryBody = ""
@@ -209,6 +210,7 @@ struct ReviewSessionTabView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .alasReviewDraftCommentsDidChangeExternally)) { _ in
+            selectionPersister.flush()
             try? draftCommentController?.load()
             if let refreshed = try? sessionStore.load(id: tabState.sessionID) {
                 record = refreshed
@@ -216,6 +218,9 @@ struct ReviewSessionTabView: View {
         }
         .onChange(of: tabState.sessionID) { _, _ in
             rekeyDraftControllerForCurrentSession()
+        }
+        .onDisappear {
+            selectionPersister.flush()
         }
     }
 
@@ -556,6 +561,7 @@ struct ReviewSessionTabView: View {
     }
 
     private func loadReviewSession(token: ReviewSessionTabLoadToken) async -> Bool {
+        selectionPersister.flush()
         do {
             guard let storedRecord = try sessionStore.load(id: tabState.sessionID) else {
                 throw ReviewSessionTabError.missingSession(tabState.sessionID)
@@ -739,6 +745,7 @@ struct ReviewSessionTabView: View {
     }
 
     private func rekeyDraftControllerForCurrentSession() {
+        selectionPersister.flush()
         guard persistsState,
               let refreshed = try? sessionStore.load(id: tabState.sessionID)
         else { return }
@@ -1223,10 +1230,23 @@ struct ReviewSessionTabView: View {
     private func persistSelectedFile(_ fileID: DiffReviewFileID?) {
         guard let current = record else { return }
         guard current.selectedFileID != fileID else { return }
-        let updated = current.selectingFile(fileID, now: now())
-        persist(updated)
-        updateTabState { state in
-            state.selectedFileID = fileID
+        record = current.selectingFile(fileID, now: now())
+        guard persistsState else { return }
+        // Scroll-spy selection changes arrive on every file boundary crossed
+        // during a fling; a synchronous write here (snapshot decode + two
+        // JSON encodes + two atomic replaces) stalls the scroll. The write
+        // reads `record` at flush time so it never clobbers newer state
+        // persisted by an interleaved immediate write.
+        selectionPersister.schedule {
+            guard let latest = record else { return }
+            do {
+                try sessionStore.save(latest)
+            } catch {
+                loadError = error.localizedDescription
+            }
+            updateTabState { state in
+                state.selectedFileID = latest.selectedFileID
+            }
         }
     }
 
