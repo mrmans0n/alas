@@ -91,7 +91,7 @@ struct GGFollowEntrySheet: View {
                 .lineLimit(1)
             Spacer(minLength: 8)
             if let number = candidate.prNumber {
-                Text("#\(number)")
+                Text(verbatim: "#\(number)")
                     .font(.system(size: 10.5, design: .monospaced))
                     .foregroundStyle(theme.color("fg-dim"))
             }
