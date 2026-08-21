@@ -1244,11 +1244,18 @@ struct ReviewSessionTabView: View {
         // fresher target/handoffs or, if the id changed, resurrect the
         // record `replace` just removed. Reload the latest stored record at
         // flush time and merge only the selection onto it instead.
+        //
+        // The selection itself must come from this call's `fileID`
+        // parameter, not from reading `record` at flush time: a handoff or
+        // send failure completing during the debounce window reassigns
+        // `record` from a fresh disk load (`ReviewSessionHandoffPersistence`
+        // prefers disk over the in-memory value), which would revert
+        // `record.selectedFileID` to whatever was on disk before this write
+        // flushes — silently losing the user's latest selection.
         let sessionID = current.id
         selectionPersister.schedule {
             guard let latest = try? sessionStore.load(id: sessionID) else { return }
-            let pendingFileID = record?.selectedFileID
-            let merged = Self.mergingSelectedFile(into: latest, fileID: pendingFileID, now: now())
+            let merged = Self.mergingSelectedFile(into: latest, fileID: fileID, now: now())
             do {
                 try sessionStore.save(merged)
             } catch {

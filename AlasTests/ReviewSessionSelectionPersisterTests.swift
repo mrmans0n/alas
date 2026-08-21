@@ -153,6 +153,76 @@ struct ReviewSessionSelectionPersisterTests {
         #expect(reloaded.selectedFileID == pendingFileID)
     }
 
+    /// Reproduces the other half of the flush race: `recordSessionHandoff`
+    /// reassigns the view's in-memory record from a fresh disk load, which
+    /// reverts `selectedFileID` to whatever was on disk before the pending
+    /// selection write flushes. The flush must persist the selection
+    /// captured when it was scheduled, not read it back off a record that
+    /// may have just been reverted underneath it. Uses the real
+    /// `ReviewSessionHandoffPersistence.record` — the same function
+    /// `recordSessionHandoff` calls — composed with a real store.
+    @Test func flushPersistsTheScheduledSelectionEvenAfterAHandoffRevertsRecord() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("review-sessions.json")
+        let store = ReviewSessionStore(url: url)
+
+        let target = ReviewSessionTarget.commit(
+            worktreeID: "wt-1", repositoryPath: URL(fileURLWithPath: "/repo"), sha: "aaa", title: "Review aaa"
+        )
+        let fileA = DiffReviewFileID(namespace: "commit", path: "A.swift")
+        let fileB = DiffReviewFileID(namespace: "commit", path: "B.swift")
+        let originalRecord = ReviewSessionRecord(
+            id: target.id,
+            target: target,
+            selectedFileID: fileA,
+            createdAt: .init(timeIntervalSince1970: 1),
+            updatedAt: .init(timeIntervalSince1970: 1)
+        )
+        try store.save(originalRecord)
+
+        // The user selects B: in-memory record updates immediately, and the
+        // debounced write captures B — but hasn't flushed to disk yet, so
+        // disk still has A.
+        let recordAfterSelection = originalRecord.selectingFile(fileB, now: .init(timeIntervalSince1970: 2))
+        let scheduledFileID = fileB
+
+        // Before the flush fires, a send completes. recordSessionHandoff's
+        // real code path reloads from disk (still selectedFileID == A) in
+        // preference to the in-memory record, reverting the local snapshot.
+        let handoff = ReviewFeedbackHandoff(
+            id: "handoff-1",
+            sessionID: target.id,
+            commentIDs: ["draft-1"],
+            target: .existingSession(worktreeID: "wt-1", sessionID: "acp-1", title: "Codex"),
+            createdAt: .init(timeIntervalSince1970: 3),
+            promptRevision: "revision-1",
+            status: .sent
+        )
+        let recordAfterHandoff = ReviewSessionHandoffPersistence.record(
+            handoff,
+            currentRecord: recordAfterSelection,
+            sessionStore: store,
+            persistsState: true,
+            now: { .init(timeIntervalSince1970: 3) }
+        )
+        // Confirms the precondition: the handoff path really does revert
+        // the local selection back to what was on disk.
+        #expect(recordAfterHandoff?.selectedFileID == fileA)
+
+        // The flush: merge the selection captured at schedule time onto
+        // whatever is live in the store now (the handoff-updated record).
+        let latest = try #require(try store.load(id: target.id))
+        let merged = ReviewSessionTabView.mergingSelectedFile(
+            into: latest, fileID: scheduledFileID, now: .init(timeIntervalSince1970: 4)
+        )
+        try store.save(merged)
+
+        let reloaded = try #require(try store.load(id: target.id))
+        #expect(reloaded.selectedFileID == fileB)
+        #expect(reloaded.handoffs == [handoff])
+    }
+
     @Test func scheduleAfterFlushStartsFreshDebounce() async throws {
         let persister = ReviewSessionSelectionPersister(debounceNanos: 20_000_000)
         var writes: [String] = []
