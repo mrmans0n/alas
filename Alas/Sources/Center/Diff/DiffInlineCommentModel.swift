@@ -1,6 +1,6 @@
 import Foundation
 
-struct DiffInlineAnnotation: Identifiable, Equatable {
+struct DiffInlineAnnotation: Identifiable, Equatable, Hashable {
     let id: String
     let checkName: String
     let newLine: Int
@@ -22,7 +22,7 @@ extension DiffInlineAnnotation {
     }
 }
 
-struct DiffInlineCommentThread: Identifiable, Equatable {
+struct DiffInlineCommentThread: Identifiable, Equatable, Hashable {
     let id: String
     let filePath: String
     let newLine: Int
@@ -40,7 +40,7 @@ struct DiffInlineCommentThread: Identifiable, Equatable {
     }
 }
 
-struct DiffInlineComment: Identifiable, Equatable {
+struct DiffInlineComment: Identifiable, Equatable, Hashable {
     let id: String
     let author: String
     let body: String

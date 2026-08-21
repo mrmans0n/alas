@@ -22,7 +22,7 @@ struct DiffReviewInlineFeedbackAnchor: Hashable, Codable, Equatable, Sendable {
     var isFileLevel: Bool { line == nil }
 }
 
-struct DiffReviewInlineFeedback: Identifiable, Codable, Equatable, Sendable {
+struct DiffReviewInlineFeedback: Identifiable, Codable, Equatable, Hashable, Sendable {
     let id: String
     let providerName: String
     let author: String?

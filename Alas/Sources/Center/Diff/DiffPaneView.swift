@@ -231,9 +231,13 @@ enum DiffPaneStaticHeightEstimator {
         hasher.combine(codeFont.fontName)
         hasher.combine(codeFont.pointSize)
         hasher.combine(showWhitespace)
-        // Only expansions belonging to this group change its height.
-        for row in group.rows where row.kind == .collapsed && expandedCollapsedRowIDs.contains(row.id) {
-            hasher.combine(row.id)
+        // Only expansions belonging to this group change its height. The
+        // guard matters: with no expansions (the common case) the walk would
+        // combine nothing, so skip the O(rows) scan entirely.
+        if !expandedCollapsedRowIDs.isEmpty {
+            for row in group.rows where row.kind == .collapsed && expandedCollapsedRowIDs.contains(row.id) {
+                hasher.combine(row.id)
+            }
         }
         let key = hasher.finalize()
 
