@@ -1,12 +1,14 @@
 import AppKit
 
-/// Warms `HighlightSpanCache` for a diff's hunks off the scroll path.
+/// Warms `DiffPaneDocumentCache` (and, transitively, `HighlightSpanCache`)
+/// for a diff's hunks off the scroll path.
 ///
-/// Mounting a virtualized diff row tokenizes its hunk synchronously inside
-/// the scroll tick; a cold 80-line hunk costs tens of milliseconds and reads
-/// as a fling hiccup. Prewarming performs the same document build on a
-/// background queue when the row plan is first created, so row mounts hit the
-/// span cache instead of parsing mid-fling.
+/// Mounting a virtualized diff row builds its hunk's attributed documents
+/// synchronously inside the scroll tick; a cold 80-line hunk costs tens of
+/// milliseconds and reads as a fling hiccup. Prewarming performs the same
+/// document build on a background queue when the row plan is first created
+/// and keeps the result in the shared document cache, so row mounts reuse
+/// the finished documents instead of rebuilding mid-fling.
 enum DiffHighlightPrewarmer {
     private static let queue = DispatchQueue(label: "io.nlopez.alas.diff-highlight-prewarm", qos: .utility)
 
@@ -84,20 +86,22 @@ enum DiffHighlightPrewarmer {
         theme: Theme
     ) {
         for group in groups {
+            let rows = DiffPaneRowProjection.visibleRows(
+                in: group,
+                expandedCollapsedRowIDs: expandedCollapsedRowIDs
+            )
             switch layoutMode {
             case .split:
-                _ = DiffPaneTextDocumentBuilder.buildSplit(
-                    group: group,
-                    expandedCollapsedRowIDs: expandedCollapsedRowIDs,
+                _ = DiffPaneDocumentCache.shared.splitResult(
+                    rows: rows,
                     fileExtension: fileExtension,
                     font: font,
                     showWhitespace: showWhitespace,
                     theme: theme
                 )
             case .stacked:
-                _ = DiffPaneTextDocumentBuilder.buildStacked(
-                    group: group,
-                    expandedCollapsedRowIDs: expandedCollapsedRowIDs,
+                _ = DiffPaneDocumentCache.shared.stackedResult(
+                    rows: rows,
                     fileExtension: fileExtension,
                     font: font,
                     showWhitespace: showWhitespace,

@@ -345,11 +345,17 @@ final class DiffPaneTextDocumentContainerView: NSView {
         dividerView.wantsLayer = true
         dividerView.layer?.backgroundColor = NSColor(theme.color("line")).cgColor
 
+        // Mounting happens inside the scroll tick; the shared document cache
+        // (warmed by DiffHighlightPrewarmer, and by earlier mounts of the
+        // same content) keeps the full attributed-string build off this path.
+        let visibleRows = DiffPaneRowProjection.visibleRows(
+            in: group,
+            expandedCollapsedRowIDs: expandedCollapsedRowIDs
+        )
         switch layoutMode {
         case .split:
-            let result = DiffPaneTextDocumentBuilder.buildSplit(
-                group: group,
-                expandedCollapsedRowIDs: expandedCollapsedRowIDs,
+            let result = DiffPaneDocumentCache.shared.splitResult(
+                rows: visibleRows,
                 fileExtension: fileExtension,
                 font: font,
                 showWhitespace: showWhitespace,
@@ -378,9 +384,8 @@ final class DiffPaneTextDocumentContainerView: NSView {
             stackedPane.clearLSPContext()
             measuredHeight = max(oldPane.documentHeight, newPane.documentHeight)
         case .stacked:
-            let result = DiffPaneTextDocumentBuilder.buildStacked(
-                group: group,
-                expandedCollapsedRowIDs: expandedCollapsedRowIDs,
+            let result = DiffPaneDocumentCache.shared.stackedResult(
+                rows: visibleRows,
                 fileExtension: fileExtension,
                 font: font,
                 showWhitespace: showWhitespace,
@@ -547,8 +552,9 @@ final class DiffPaneTextDocumentContainerView: NSView {
 
         switch layoutMode {
         case .split:
-            let result = DiffPaneTextDocumentBuilder.buildSplit(
+            let result = DiffPaneDocumentCache.shared.splitResult(
                 rows: rows,
+                rowsSignature: signature.rowsSignature,
                 fileExtension: fileExtension,
                 font: font,
                 showWhitespace: showWhitespace,
@@ -577,8 +583,9 @@ final class DiffPaneTextDocumentContainerView: NSView {
             stackedPane.clearLSPContext()
             measuredHeight = max(oldPane.documentHeight, newPane.documentHeight)
         case .stacked:
-            let result = DiffPaneTextDocumentBuilder.buildStacked(
+            let result = DiffPaneDocumentCache.shared.stackedResult(
                 rows: rows,
+                rowsSignature: signature.rowsSignature,
                 fileExtension: fileExtension,
                 font: font,
                 showWhitespace: showWhitespace,

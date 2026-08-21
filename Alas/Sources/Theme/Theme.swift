@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 import SwiftUI
 
-struct Theme: Codable, Equatable {
+struct Theme: Codable, Equatable, Hashable {
     let id: String
     let name: String
     let tokens: [String: String]   // raw OKLCH strings
@@ -33,6 +33,16 @@ struct Theme: Codable, Equatable {
             && lhs.tokens == rhs.tokens
             && lhs.accentOverrideHex == rhs.accentOverrideHex
             && lhs.resolvedColorOverrides == rhs.resolvedColorOverrides
+    }
+
+    // Hashes exactly the fields `==` compares; `resolvedColors` stays
+    // excluded from both because it is derived from `tokens`.
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(name)
+        hasher.combine(tokens)
+        hasher.combine(accentOverrideHex)
+        hasher.combine(resolvedColorOverrides)
     }
 
     static let bundledIds = ["cool-slate", "light"]
