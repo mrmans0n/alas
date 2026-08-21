@@ -516,8 +516,8 @@ final class GGMutationCoordinator {
             return
         }
 
-        await context.refreshStack()
         await context.refreshGitChanges()
+        await context.refreshStack()
         if request.touchesRemote {
             await context.refreshProviderReviews()
         }

@@ -629,7 +629,7 @@ struct GGMutationCoordinatorTests {
 
         try await harness.coordinator.apply(.sync, confirmedAgainst: nil)
 
-        #expect(harness.refreshes == [.stack, .gitChanges, .providerReviews, .inbox])
+        #expect(harness.refreshes == [.gitChanges, .stack, .providerReviews, .inbox])
         #expect(harness.actionState.lastActionSummary == "Synced")
         #expect(harness.actionState.syncProgress.isEmpty)
     }
@@ -755,8 +755,22 @@ struct GGMutationCoordinatorTests {
             try await harness.coordinator.apply(.drop(target: "change-2"), confirmedAgainst: nil)
         }
 
-        #expect(harness.refreshes == [.stack, .gitChanges, .inbox])
+        #expect(harness.refreshes == [.gitChanges, .stack, .inbox])
         #expect(harness.actionState.lastError == "partially rewritten")
+    }
+
+    @Test func amendRefreshesGitChangesBeforeWaitingForStackRefresh() async throws {
+        let harness = GGMutationHarness(stacks: [stack(head: "a")])
+        let refresh = FirstRefreshSuspension()
+        harness.onRefreshStack = { await refresh.suspend() }
+
+        let task = try #require(harness.coordinator.startApplying(.amendCurrent, confirmedAgainst: nil))
+        await refresh.waitUntilSuspended()
+
+        #expect(harness.refreshes == [.gitChanges, .stack])
+
+        await refresh.resume()
+        try await task.value
     }
 
     @Test func topologyRefreshRunsOnlyForCleanAndWorktreeCreatingUnstack() async throws {
@@ -787,14 +801,14 @@ struct GGMutationCoordinatorTests {
             .unstack(target: "change-2", name: "upper", createWorktree: true),
             confirmedAgainst: nil
         )
-        #expect(withWorktree.refreshes == [.stack, .gitChanges, .inbox, .topology])
+        #expect(withWorktree.refreshes == [.gitChanges, .stack, .inbox, .topology])
         #expect(withWorktree.selectedPaths == ["/repo/upper"])
     }
 
     @Test func checkoutDoesNotInvalidateProjectInbox() async throws {
         let harness = GGMutationHarness(stacks: [stack(head: "a")])
         try await harness.coordinator.apply(.checkout(target: "change-1"), confirmedAgainst: nil)
-        #expect(harness.refreshes == [.stack, .gitChanges])
+        #expect(harness.refreshes == [.gitChanges, .stack])
     }
 
     @Test func conflictFailurePreservesPausedAction() async {
@@ -1677,7 +1691,7 @@ struct GGMutationCoordinatorTests {
 
         try await harness.coordinator.apply(.land(target: "change-2"), confirmedAgainst: nil)
 
-        #expect(harness.refreshes == [.stack, .gitChanges, .providerReviews, .inbox])
+        #expect(harness.refreshes == [.gitChanges, .stack, .providerReviews, .inbox])
         #expect(harness.actionState.lastError == nil)
     }
 }
