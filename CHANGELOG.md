@@ -6,6 +6,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.19] - 2026-08-22
+
+### ✨ Features
+
+- Enable selectable diff text (#1048).
+- Speed up the stack entry picker (#1051).
+
+### 🐛 Fixes
+
+- Refresh stale Changes state after `gg` mutations (#1050).
+- Space the followed revision row correctly in review views (#1052).
+
+### ⚡ Performance
+
+- Speed up diff review rendering and selection persistence (#1053).
+
+### 🏗️ Internal
+
+- Update Rust toolchains to 1.98.0 (#1049).
+
 ## [0.14.18] - 2026-08-20
 
 ### ✨ Features
