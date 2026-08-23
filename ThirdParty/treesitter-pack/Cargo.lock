@@ -15,7 +15,7 @@ dependencies = [
 name = "alas-treesitter-pack"
 version = "0.1.0"
 dependencies = [
- "tree-sitter 0.26.12",
+ "tree-sitter 0.26.13",
  "tree-sitter-bash",
  "tree-sitter-c",
  "tree-sitter-c-sharp",
@@ -238,9 +238,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter"
-version = "0.26.12"
+version = "0.26.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83c567a8e18ae93f20982c90370b16fd24023aeaf52f6052b96957ab253a0fec"
+checksum = "17ebdd3a5a7e28a1890b876fdbd0c3c0fe0a6336cffaa104f11b9f720c9daa29"
 dependencies = [
  "cc",
  "regex",
@@ -386,7 +386,7 @@ version = "0.0.1"
 source = "git+https://github.com/murtaza64/tree-sitter-groovy?rev=deb0dcf8c4544f07564060f6e9b9f6e4b0bfc27d#deb0dcf8c4544f07564060f6e9b9f6e4b0bfc27d"
 dependencies = [
  "cc",
- "tree-sitter 0.26.12",
+ "tree-sitter 0.26.13",
 ]
 
 [[package]]
@@ -611,7 +611,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "33909a9ca86390ebbf3461e9949c4bbe2767d2d024b486306d27616641d4ba24"
 dependencies = [
  "cc",
- "tree-sitter 0.26.12",
+ "tree-sitter 0.26.13",
 ]
 
 [[package]]
