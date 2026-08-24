@@ -943,6 +943,9 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 update(host: host)
                 return
             }
+            // ponytail: keep the grow-only window while an input form is open;
+            // restore anchor-based compaction if the retained window becomes a memory issue.
+            guard host.transcript.pendingUserInputs.isEmpty else { return }
             guard host.transcript.visibleTailBound - host.transcript.visibleHead
                     > ACPTranscript.maxVisibleRows,
                   let globalIndex = currentTopGlobalMessageIndex(),
