@@ -153,6 +153,46 @@ struct ACPTranscriptScrollerLiveScrollTests {
         withExtendedLifetime(coordinator) {}
     }
 
+    @Test("settling an input-request chat does not compact the reading window")
+    func settlingInputRequestChatDoesNotCompactReadingWindow() async throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.followsTranscriptTail = false
+        let host = makeLiveScrollHost(session: session)
+        host.transcript.messages = (0..<240).map { index in
+            .systemNotice(id: UUID(), text: String(repeating: "message \(index) ", count: 20))
+        }
+        host.transcript.visibleHead = 0
+        host.transcript.visibleTail = nil
+        host.transcript.streamingState = .awaitingInput
+        host.transcript.pendingUserInputs = [
+            ACPUserInputRequest(
+                id: UUID(),
+                source: .cursor(
+                    id: .string("question"),
+                    params: ACPQuestionRequestParams(toolCallId: "tool", title: "Question", questions: [])
+                ),
+                title: "Question",
+                message: "Question",
+                fields: [],
+                mode: .form
+            ),
+        ]
+
+        let scroller = ACPTranscriptScrollerView(frame: NSRect(x: 0, y: 0, width: 600, height: 500))
+        let coordinator = ACPTranscriptScroller.Coordinator()
+        coordinator.attach(scroller: scroller, host: host)
+        scroller.layoutSubtreeIfNeeded()
+        scroller.setScrollY(scroller.contentHeight / 2)
+
+        liveScroll(scroller, to: scroller.scrollY - 80)
+        let expectedMessage = coordinator.topVisibleMessageIdForTesting
+        try await Task.sleep(for: .milliseconds(700))
+
+        #expect(host.transcript.visibleTailBound - host.transcript.visibleHead > ACPTranscript.maxVisibleRows)
+        #expect(coordinator.topVisibleMessageIdForTesting == expectedMessage)
+        withExtendedLifetime(coordinator) {}
+    }
+
     @Test("live-scroll activity lapses after the gesture settles")
     func userScrollActivityLapses() {
         let (_, scroller, coordinator) = tailFollowingHost()
