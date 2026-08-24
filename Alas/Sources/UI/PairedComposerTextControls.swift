@@ -8,6 +8,11 @@ class PairedDelimiterTextView: NSTextView {
     /// delimiter can still wrap the selection the user had before pressing it.
     private var selectionReplacedByMarkedText: NSAttributedString?
 
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        isAutomaticQuoteSubstitutionEnabled = false
+    }
+
     override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
         if !hasMarkedText() {
             let replaced = replacementRange.location == NSNotFound ? self.selectedRange() : replacementRange

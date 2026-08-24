@@ -54,6 +54,19 @@ struct PairedComposerTextControlsTests {
         #expect(textView.selectedRange() == NSRange(location: 2, length: 0))
     }
 
+    @Test func pairedComposerDisablesNativeQuoteRewriting() {
+        let textView = makePairedTextView()
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 120),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = textView
+
+        #expect(!textView.isAutomaticQuoteSubstitutionEnabled)
+    }
+
     @Test func multiCharacterAndMarkedTextUseNativeInsertion() {
         let pastedTextView = makePairedTextView()
 
