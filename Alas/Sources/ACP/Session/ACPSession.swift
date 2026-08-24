@@ -47,6 +47,9 @@ final class ACPSession: ObservableObject, Identifiable {
     @Published var availableModels: [ACPModelInfo] = []
     @Published var availableModes: [ACPModeInfo] = []
     @Published var availableConfigOptions: [ACPConfigOption] = []
+    /// Runtime-only provider state learned from the adapter on each attach.
+    @Published var providerCapabilities: EmptyObject?
+    @Published var availableProviders: [ACPProviderInfo] = []
     @Published var currentModel: String?
     @Published var contextUsage: ACPUsageInfo?
     @Published var currentMode: String?
@@ -183,6 +186,14 @@ final class ACPSession: ObservableObject, Identifiable {
     var currentModelDisplayName: String? {
         guard let id = currentModel else { return nil }
         return availableModels.first { $0.id == id }?.name ?? id
+    }
+
+    var currentProviderDisplayName: String? {
+        guard agentState == .ready, providerCapabilities != nil else { return nil }
+        let names = availableProviders
+            .filter { $0.current != nil }
+            .map { $0.name ?? $0.providerId }
+        return names.isEmpty ? nil : names.joined(separator: ", ")
     }
 
     enum AgentState: Equatable {

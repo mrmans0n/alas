@@ -149,6 +149,36 @@ struct ACPInitializeTests {
         #expect(result.agentCapabilities?.promptCapabilities?.embeddedContext == true)
     }
 
+    @Test("decodes absent, supported, and extended provider capabilities")
+    func decodeProviderCapabilities() throws {
+        let absent = try JSONDecoder().decode(ACPInitializeResult.self, from: Data("""
+        { "protocolVersion": 1, "agentCapabilities": {} }
+        """.utf8))
+        #expect(absent.agentCapabilities?.providerCapabilities == nil)
+
+        let supported = try JSONDecoder().decode(ACPInitializeResult.self, from: Data("""
+        {
+          "protocolVersion": 1,
+          "agentCapabilities": { "providers": {} }
+        }
+        """.utf8))
+        #expect(supported.agentCapabilities?.providerCapabilities != nil)
+
+        let extended = try JSONDecoder().decode(ACPInitializeResult.self, from: Data("""
+        {
+          "protocolVersion": 1,
+          "agentCapabilities": {
+            "providers": {
+              "version": 2,
+              "switchesLoadedSessions": true,
+              "future": { "nested": [1, 2, 3] }
+            }
+          }
+        }
+        """.utf8))
+        #expect(extended.agentCapabilities?.providerCapabilities != nil)
+    }
+
     @Test("decodes agent session lifecycle capabilities with conservative defaults")
     func decodeSessionLifecycleCapabilities() throws {
         let supported = try JSONDecoder().decode(ACPInitializeResult.self, from: Data("""

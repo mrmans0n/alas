@@ -204,17 +204,25 @@ struct ACPInitializeResult: Codable, Equatable {
         let loadSession: Bool
         let sessionCapabilities: ACPAgentSessionCapabilities
         let mcpCapabilities: ACPMCPServerCapabilities
+        let providerCapabilities: EmptyObject?
 
         init(
             promptCapabilities: ACPPromptCapabilities? = nil,
             loadSession: Bool = false,
             sessionCapabilities: ACPAgentSessionCapabilities = .init(),
-            mcpCapabilities: ACPMCPServerCapabilities = .init()
+            mcpCapabilities: ACPMCPServerCapabilities = .init(),
+            providerCapabilities: EmptyObject? = nil
         ) {
             self.promptCapabilities = promptCapabilities
             self.loadSession = loadSession
             self.sessionCapabilities = sessionCapabilities
             self.mcpCapabilities = mcpCapabilities
+            self.providerCapabilities = providerCapabilities
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case promptCapabilities, loadSession, sessionCapabilities, mcpCapabilities
+            case providerCapabilities = "providers"
         }
 
         init(from decoder: Decoder) throws {
@@ -226,6 +234,7 @@ struct ACPInitializeResult: Codable, Equatable {
                 forKey: .sessionCapabilities
             ) ?? .init()
             mcpCapabilities = try c.decodeIfPresent(ACPMCPServerCapabilities.self, forKey: .mcpCapabilities) ?? .init()
+            providerCapabilities = try? c.decodeIfPresent(EmptyObject.self, forKey: .providerCapabilities)
         }
     }
 
@@ -793,6 +802,66 @@ struct ACPSessionSetModeParams: Codable, Equatable {
 struct ACPSessionSetModelParams: Codable, Equatable {
     let sessionId: String
     let modelId: String
+}
+
+// MARK: - providers
+
+struct ACPProvidersListParams: Codable, Equatable {}
+
+struct ACPProviderCurrentConfig: Codable, Equatable, Hashable {
+    let apiType: String
+    let baseUrl: String
+}
+
+struct ACPProviderInfo: Codable, Equatable, Hashable, Identifiable {
+    var id: String { providerId }
+
+    let providerId: String
+    let name: String?
+    let supported: [String]
+    let required: Bool
+    let current: ACPProviderCurrentConfig?
+
+    init(
+        providerId: String,
+        name: String? = nil,
+        supported: [String],
+        required: Bool,
+        current: ACPProviderCurrentConfig?
+    ) {
+        self.providerId = providerId
+        self.name = name
+        self.supported = supported
+        self.required = required
+        self.current = current
+    }
+}
+
+struct ACPProvidersListResult: Codable, Equatable {
+    let providers: [ACPProviderInfo]
+}
+
+struct ACPProviderSetParams: Codable, Equatable {
+    let providerId: String
+    let apiType: String
+    let baseUrl: String
+    let headers: [String: String]?
+
+    init(
+        providerId: String,
+        apiType: String,
+        baseUrl: String,
+        headers: [String: String]? = nil
+    ) {
+        self.providerId = providerId
+        self.apiType = apiType
+        self.baseUrl = baseUrl
+        self.headers = headers
+    }
+}
+
+struct ACPProviderDisableParams: Codable, Equatable {
+    let providerId: String
 }
 
 // MARK: - session/prompt

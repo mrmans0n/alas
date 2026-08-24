@@ -2943,6 +2943,8 @@ extension ACPSessionManager {
         session.lastError = nil
         session.contextRestoreWarning = nil
         session.contextRecoveryStatus = nil
+        session.providerCapabilities = nil
+        session.availableProviders = []
         session.agentState = .spawning
 
         guard let spec = ACPLaunchCatalog.spec(for: session.agentId) else {
@@ -3567,6 +3569,11 @@ extension ACPSessionManager {
                     session.contextRecoveryStatus = .sendingTranscript
                 }
             }
+            let providers: [ACPProviderInfo] = if initialized.providerCapabilities != nil {
+                (try? await connection.listProviders()) ?? []
+            } else {
+                []
+            }
             // Start the built-in MCP registration grace ONLY now — session
             // creation/restoration above has succeeded, which is when the
             // adapter actually received `wireMCPServers` and could spawn or
@@ -3665,6 +3672,8 @@ extension ACPSessionManager {
             session.currentMode = result.currentMode
             session.promptSuggestions = result.promptSuggestions
             session.availableConfigOptions = result.configOptions
+            session.providerCapabilities = initialized.providerCapabilities
+            session.availableProviders = providers
             session.contextRestoreWarning = restoreWarning
             guard await persistSessionRemoteId(session) else {
                 session.remoteSessionId = persistedRows[sessionId]?.remoteSessionId

@@ -349,6 +349,109 @@ struct ACPConnectionTests {
         let result = try await conn.setConfigOption(sessionId: "s", configId: "effort", value: .string("high"))
         #expect(result.isEmpty)
     }
+
+    @Test("listProviders sends an empty providers/list request and decodes non-secret state")
+    func listProvidersRPC() async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "providers/list") { _ in
+            Data("""
+            {
+              "providers": [{
+                "providerId": "main",
+                "name": "Company gateway",
+                "supported": ["anthropic", "future-protocol"],
+                "required": false,
+                "current": {
+                  "apiType": "anthropic",
+                  "baseUrl": "https://gateway.example/v1",
+                  "headers": { "Authorization": "Bearer secret" },
+                  "future": true
+                },
+                "future": { "field": true }
+              }],
+              "future": true
+            }
+            """.utf8)
+        }
+
+        let providers = try await ACPConnection(client: mock).listProviders()
+
+        #expect(mock.sent.last?.method == "providers/list")
+        #expect(mock.sent.last?.params is ACPProvidersListParams)
+        #expect(providers == [ACPProviderInfo(
+            providerId: "main",
+            name: "Company gateway",
+            supported: ["anthropic", "future-protocol"],
+            required: false,
+            current: .init(apiType: "anthropic", baseUrl: "https://gateway.example/v1")
+        )])
+        #expect(String(describing: providers).contains("secret") == false)
+    }
+
+    @Test("setProvider sends the complete providers/set shape then refreshes adapter state")
+    func setProviderRPC() async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "providers/set") { _ in Data("{}".utf8) }
+        mock.script(method: "providers/list") { _ in
+            Data("""
+            {"providers":[{"providerId":"main","supported":["anthropic"],"required":false,
+              "current":{"apiType":"anthropic","baseUrl":"https://gateway.example/v1"}}]}
+            """.utf8)
+        }
+        let connection = ACPConnection(client: mock)
+
+        let providers = try await connection.setProvider(.init(
+            providerId: "main",
+            apiType: "anthropic",
+            baseUrl: "https://gateway.example/v1",
+            headers: ["Authorization": "Bearer secret"]
+        ))
+
+        #expect(mock.sent.map(\.method).suffix(2) == ["providers/set", "providers/list"])
+        let params = try #require(mock.sent.dropLast().last?.params as? ACPProviderSetParams)
+        #expect(params.providerId == "main")
+        #expect(params.apiType == "anthropic")
+        #expect(params.baseUrl == "https://gateway.example/v1")
+        #expect(params.headers == ["Authorization": "Bearer secret"])
+        #expect(providers.first?.current?.baseUrl == "https://gateway.example/v1")
+    }
+
+    @Test("provider mutation errors propagate without listing stale state")
+    func setProviderErrorPropagation() async throws {
+        let mock = ACPMockClient()
+        let expected = JSONRPCError(code: -32602, message: "unsupported provider", data: nil)
+        mock.script(method: "providers/set") { _ in throw expected }
+        let connection = ACPConnection(client: mock)
+
+        do {
+            _ = try await connection.setProvider(.init(
+                providerId: "main",
+                apiType: "anthropic",
+                baseUrl: "https://gateway.example/v1"
+            ))
+            Issue.record("Expected providers/set to fail")
+        } catch let error as JSONRPCError {
+            #expect(error == expected)
+        }
+
+        #expect(mock.sent.map(\.method) == ["providers/set"])
+    }
+
+    @Test("disableProvider sends providers/disable then refreshes adapter state")
+    func disableProviderRPC() async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "providers/disable") { _ in Data("{}".utf8) }
+        mock.script(method: "providers/list") { _ in
+            Data("{\"providers\":[{\"providerId\":\"main\",\"supported\":[\"anthropic\"],\"required\":false,\"current\":null}]}".utf8)
+        }
+
+        let providers = try await ACPConnection(client: mock).disableProvider(providerId: "main")
+
+        #expect(mock.sent.map(\.method).suffix(2) == ["providers/disable", "providers/list"])
+        let params = try #require(mock.sent.dropLast().last?.params as? ACPProviderDisableParams)
+        #expect(params.providerId == "main")
+        #expect(providers.first?.current == nil)
+    }
 }
 
 private final class DurableAcknowledgementRecorder: @unchecked Sendable {

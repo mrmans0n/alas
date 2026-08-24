@@ -5,6 +5,28 @@ import Testing
 @MainActor
 @Suite("ACPSessionManager remote restore")
 struct ACPSessionManagerRemoteRestoreTests {
+    @Test("loaded sessions refresh advertised provider state")
+    func loadedSessionRefreshesProviders() async throws {
+        let (manager, _, client, session) = try fixture(origin: .agentImported)
+        scriptInitialize(client, canLoad: true, canResume: false, providers: true)
+        scriptSessionResult(client, method: "session/load", sessionId: "remote-id")
+        client.script(method: "providers/list") { _ in
+            try JSONEncoder().encode(ACPProvidersListResult(providers: [.init(
+                providerId: "claude",
+                name: "Enterprise Gateway",
+                supported: ["anthropic"],
+                required: true,
+                current: .init(apiType: "anthropic", baseUrl: "https://gateway.example")
+            )]))
+        }
+
+        await manager.attach(to: session.id, freshlyCreated: false)
+
+        #expect(client.sent.map(\.method) == ["initialize", "session/load", "providers/list"])
+        #expect(session.currentProviderDisplayName == "Enterprise Gateway")
+        await manager.detach(sessionId: session.id)
+    }
+
     @Test("Alas-owned sessions use resume when advertised")
     func localSessionUsesResume() async throws {
         let (manager, store, client, session) = try fixture(origin: .alasCreated)
@@ -365,13 +387,19 @@ struct ACPSessionManagerRemoteRestoreTests {
         return (manager, store, client, session)
     }
 
-    private func scriptInitialize(_ client: ACPMockClient, canLoad: Bool, canResume: Bool) {
+    private func scriptInitialize(
+        _ client: ACPMockClient,
+        canLoad: Bool,
+        canResume: Bool,
+        providers: Bool = false
+    ) {
         client.script(method: "initialize") { _ in
             try JSONEncoder().encode(ACPInitializeResult(
                 protocolVersion: 1,
                 agentCapabilities: .init(
                     loadSession: canLoad,
-                    sessionCapabilities: .init(resume: canResume ? .init() : nil)
+                    sessionCapabilities: .init(resume: canResume ? .init() : nil),
+                    providerCapabilities: providers ? .init() : nil
                 ),
                 authMethods: []
             ))
