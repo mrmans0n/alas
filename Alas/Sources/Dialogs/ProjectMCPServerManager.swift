@@ -6,6 +6,7 @@ struct ProjectMCPServerManager: View {
     @State private var draft: [ProjectMCPServer]
     @State private var editor: ProjectMCPServerEditorTarget?
     @State private var deleteTarget: ProjectMCPServer?
+    @State private var didImportClipboard = false
     @Environment(\.dismiss) private var dismiss
     @Environment(\.theme) private var theme
 
@@ -45,6 +46,7 @@ struct ProjectMCPServerManager: View {
                 AlasButton(title: "Add Server", icon: "plus", action: {
                     editor = .new
                 })
+                AlasButton(title: "Import from Clipboard", icon: "doc.on.clipboard", action: importFromClipboard)
                 Spacer()
                 AlasButton(title: "Cancel", style: .subtle, action: { dismiss() })
                 AlasButton(title: "Done", style: .primary, action: commit)
@@ -55,6 +57,11 @@ struct ProjectMCPServerManager: View {
         .padding(24)
         .frame(width: 620)
         .background(theme.color("bg-1"))
+        .onAppear {
+            guard !didImportClipboard else { return }
+            didImportClipboard = true
+            importFromClipboard()
+        }
         .sheet(item: $editor) { target in
             ProjectMCPServerEditor(server: target.server) { saved in
                 save(saved, replacing: target.existingID)
@@ -127,6 +134,11 @@ struct ProjectMCPServerManager: View {
         guard ProjectMCPServerEditorPolicy.canSave(draft) else { return }
         servers = draft
         dismiss()
+    }
+
+    private func importFromClipboard() {
+        guard let text = NSPasteboard.general.string(forType: .string) else { return }
+        draft.append(contentsOf: ProjectMCPConfigImporter.servers(from: text, excluding: draft))
     }
 
     private var deleteConfirmationTitle: String {

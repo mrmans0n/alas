@@ -97,3 +97,86 @@ struct ProjectMCPServerEditorPolicyTests {
         #expect(ProjectMCPServerEditorPolicy.transportLabel(for: .sse(url: "https://example.com/sse", headers: [])) == "Legacy SSE")
     }
 }
+
+@Suite("Project MCP config importer")
+struct ProjectMCPConfigImporterTests {
+    @Test func importsSupportedTransportsFromWrappedConfig() throws {
+        let text = #"""
+        {
+          "mcpServers": {
+            "local": {
+              "command": "npx",
+              "args": ["-y", "server"],
+              "env": { "TOKEN": "${MCP_TOKEN}" }
+            },
+            "remote": {
+              "url": "https://mcp.example.com/mcp",
+              "headers": { "Authorization": "Bearer ${MCP_TOKEN}" }
+            },
+            "events": {
+              "type": "sse",
+              "url": "https://mcp.example.com/sse"
+            }
+          }
+        }
+        """#
+
+        let servers = ProjectMCPConfigImporter.servers(from: text)
+        let local = try #require(servers.first { $0.name == "local" })
+        let remote = try #require(servers.first { $0.name == "remote" })
+        let events = try #require(servers.first { $0.name == "events" })
+
+        #expect(servers.count == 3)
+        guard case let .stdio(command, args, environment) = local.transport else {
+            Issue.record("Expected stdio transport")
+            return
+        }
+        #expect(command == "npx")
+        #expect(args == ["-y", "server"])
+        #expect(environment.count == 1)
+        #expect(environment.first?.name == "TOKEN")
+        #expect(environment.first?.value == "${MCP_TOKEN}")
+        guard case let .http(url, headers) = remote.transport else {
+            Issue.record("Expected HTTP transport")
+            return
+        }
+        #expect(url == "https://mcp.example.com/mcp")
+        #expect(headers.count == 1)
+        #expect(headers.first?.name == "Authorization")
+        #expect(headers.first?.value == "Bearer ${MCP_TOKEN}")
+        #expect(events.transport == .sse(url: "https://mcp.example.com/sse", headers: []))
+    }
+
+    @Test func importsBraceLessConfigWithSmartQuotes() throws {
+        let text = #"“mcpServers”: { “scout”: { “type”: “http”, “url”: “http://localhost:3001/mcp”, “disabled”: false } }"#
+
+        let servers = ProjectMCPConfigImporter.servers(from: text)
+        let scout = try #require(servers.first)
+
+        #expect(servers.count == 1)
+        #expect(scout.name == "scout")
+        #expect(scout.transport == .http(url: "http://localhost:3001/mcp", headers: []))
+    }
+
+    @Test func skipsDisabledMalformedUnsupportedAndExistingServers() {
+        let text = #"""
+        {
+          "mcpServers": {
+            "existing": { "type": "http", "url": "https://replacement.example.com" },
+            "disabled": { "type": "http", "url": "https://disabled.example.com", "disabled": true },
+            "broken": { "type": "http", "url": "not a url" },
+            "unsupported": { "type": "websocket", "url": "wss://example.com" },
+            "usable": { "type": "stdio", "command": "mcp-server" }
+          }
+        }
+        """#
+        let existing = [ProjectMCPServer.stdio(name: " existing ", command: "keep-me")]
+
+        let servers = ProjectMCPConfigImporter.servers(from: text, excluding: existing)
+
+        #expect(servers.count == 1)
+        #expect(servers.first?.name == "usable")
+        #expect(servers.first?.transport == .stdio(command: "mcp-server", args: [], environment: []))
+        #expect(ProjectMCPConfigImporter.servers(from: "not JSON").isEmpty)
+    }
+}
