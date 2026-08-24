@@ -46,6 +46,19 @@ struct AlasFieldTests {
         #expect(Self.firstTextField(in: controller.view)?.isEnabled == false)
     }
 
+    @Test func nativeFieldKeepsLongInputOnOneScrollableLine() {
+        let field = AlasNSTextFieldView()
+        let cell = field.cell as! AlasNSTextFieldCell
+        let editor = cell.setUpFieldEditorAttributes(NSTextView()) as! NSTextView
+
+        #expect(field.lineBreakMode == .byClipping)
+        #expect(editor.isHorizontallyResizable)
+        #expect(!editor.isVerticallyResizable)
+        #expect(editor.textContainer?.widthTracksTextView == false)
+        #expect(editor.textContainer?.lineBreakMode == .byClipping)
+        #expect(editor.textContainer?.maximumNumberOfLines == 1)
+    }
+
     private static func firstTextField(in view: NSView) -> NSTextField? {
         if let field = view as? NSTextField { return field }
         for subview in view.subviews {
