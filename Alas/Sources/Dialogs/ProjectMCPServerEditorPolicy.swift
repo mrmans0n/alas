@@ -149,3 +149,75 @@ enum ProjectMCPServerEditorPolicy {
             + String(value[authorityEnd...])
     }
 }
+
+enum ProjectMCPConfigImporter {
+    static func servers(
+        from text: String,
+        excluding existing: [ProjectMCPServer] = []
+    ) -> [ProjectMCPServer] {
+        guard let rawServers = rawServers(from: text) else { return [] }
+        var names = Set(existing.map { $0.name.trimmingCharacters(in: .whitespacesAndNewlines) })
+
+        return rawServers.compactMap { rawName, value in
+            let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty,
+                  !names.contains(name),
+                  let config = value as? [String: Any],
+                  config["disabled"] as? Bool != true,
+                  let transport = transport(from: config) else { return nil }
+
+            let server = ProjectMCPServer(id: UUID().uuidString, name: name, transport: transport)
+            guard ProjectMCPServerEditorPolicy.canSave([server]) else { return nil }
+            names.insert(name)
+            return server
+        }
+    }
+
+    private static func rawServers(from text: String) -> [String: Any]? {
+        let original = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = original
+            .replacingOccurrences(of: "“", with: "\"")
+            .replacingOccurrences(of: "”", with: "\"")
+
+        for candidate in [original, "{\(original)}", normalized, "{\(normalized)}"] {
+            guard let data = candidate.data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let servers = object["mcpServers"] as? [String: Any] else { continue }
+            return servers
+        }
+        return nil
+    }
+
+    private static func transport(from config: [String: Any]) -> ProjectMCPTransport? {
+        let kind = (config["type"] as? String)?.lowercased()
+            ?? (config["command"] != nil ? "stdio" : config["url"] != nil ? "http" : nil)
+
+        switch kind {
+        case "stdio":
+            guard let command = config["command"] as? String,
+                  let args = stringArray(config["args"]),
+                  let environment = keyValues(config["env"]) else { return nil }
+            return .stdio(command: command, args: args, environment: environment)
+        case "http", "sse":
+            guard let url = config["url"] as? String,
+                  let headers = keyValues(config["headers"]) else { return nil }
+            return kind == "http" ? .http(url: url, headers: headers) : .sse(url: url, headers: headers)
+        default:
+            return nil
+        }
+    }
+
+    private static func stringArray(_ value: Any?) -> [String]? {
+        value == nil ? [] : value as? [String]
+    }
+
+    private static func keyValues(_ value: Any?) -> [MCPKeyValue]? {
+        guard let value else { return [] }
+        guard let dictionary = value as? [String: Any],
+              dictionary.values.allSatisfy({ $0 is String }) else { return nil }
+        return dictionary.keys.sorted().compactMap { key in
+            guard let value = dictionary[key] as? String else { return nil }
+            return MCPKeyValue(id: UUID().uuidString, name: key, value: value)
+        }
+    }
+}
