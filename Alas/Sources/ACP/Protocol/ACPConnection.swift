@@ -6,6 +6,7 @@ struct ACPInitializeOutcome: Equatable {
     let loadSession: Bool
     let sessionCapabilities: ACPInitializeResult.ACPAgentSessionCapabilities
     let mcpCapabilities: ACPMCPServerCapabilities
+    let providerCapabilities: EmptyObject?
 }
 
 /// Higher-level wrapper that owns one `ACPClient` and exposes typed
@@ -36,7 +37,8 @@ final class ACPConnection: @unchecked Sendable {
             authMethods: result.authMethods,
             loadSession: result.agentCapabilities?.loadSession ?? false,
             sessionCapabilities: result.agentCapabilities?.sessionCapabilities ?? .init(),
-            mcpCapabilities: result.agentCapabilities?.mcpCapabilities ?? .init()
+            mcpCapabilities: result.agentCapabilities?.mcpCapabilities ?? .init(),
+            providerCapabilities: result.agentCapabilities?.providerCapabilities
         )
     }
 
@@ -164,6 +166,30 @@ final class ACPConnection: @unchecked Sendable {
         let resp = try await client.send(ACPRequest(method: "session/set_model",
                                                     params: ACPSessionSetModelParams(sessionId: sessionId, modelId: modelId)))
         resp.acknowledgeDurableConsumption()
+    }
+
+    func listProviders() async throws -> [ACPProviderInfo] {
+        let response = try await client.send(ACPRequest(
+            method: "providers/list",
+            params: ACPProvidersListParams()
+        ))
+        defer { response.acknowledgeDurableConsumption() }
+        return try JSONDecoder().decode(ACPProvidersListResult.self, from: response.body).providers
+    }
+
+    func setProvider(_ params: ACPProviderSetParams) async throws -> [ACPProviderInfo] {
+        let response = try await client.send(ACPRequest(method: "providers/set", params: params))
+        response.acknowledgeDurableConsumption()
+        return try await listProviders()
+    }
+
+    func disableProvider(providerId: String) async throws -> [ACPProviderInfo] {
+        let response = try await client.send(ACPRequest(
+            method: "providers/disable",
+            params: ACPProviderDisableParams(providerId: providerId)
+        ))
+        response.acknowledgeDurableConsumption()
+        return try await listProviders()
     }
 
     /// Sends a config-option change and returns the agent's refreshed

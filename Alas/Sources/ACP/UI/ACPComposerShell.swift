@@ -265,6 +265,9 @@ struct ACPComposer: View {
                 ForEach(booleanConfigOptions) { option in
                     booleanConfigToggle(option)
                 }
+                if let providerName = session.currentProviderDisplayName {
+                    providerPill(providerName)
+                }
                 if let mode = session.chipState.mode {
                     modeChip(mode)
                 }
@@ -344,6 +347,18 @@ struct ACPComposer: View {
             .background(theme.color("bg-0").opacity(0.7))
             .clipShape(RoundedRectangle(cornerRadius: 3))
             .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(theme.color("line"), lineWidth: 0.5))
+    }
+
+    private func providerPill(_ name: String) -> some View {
+        Text("Provider: \(name)")
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(theme.color("fg-muted"))
+            .padding(.horizontal, 8)
+            .frame(height: 24)
+            .background(RoundedRectangle(cornerRadius: 6).fill(theme.color("bg-3").opacity(0.7)))
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.75))
+            .accessibilityLabel("Provider, \(name)")
+            .help("Provider selected by the adapter")
     }
 
     private var borderColor: Color {

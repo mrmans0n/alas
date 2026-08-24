@@ -29,6 +29,34 @@ struct ACPSessionAgentStateTests {
         session.agentState = .failed("boom")
         #expect(session.agentState == .failed("boom"))
     }
+
+    @Test("provider state is runtime-only and isolated per session")
+    func providerStateIsIsolated() {
+        let first = ACPSession(id: "s1", agentId: "claude", worktreeId: "wt", title: "one")
+        let second = ACPSession(id: "s2", agentId: "codex", worktreeId: "wt", title: "two")
+        first.providerCapabilities = .init()
+        first.availableProviders = [.init(
+            providerId: "claude",
+            name: "Enterprise Gateway",
+            supported: ["anthropic"],
+            required: true,
+            current: .init(apiType: "anthropic", baseUrl: "https://gateway.example")
+        ), .init(
+            providerId: "fallback",
+            name: nil,
+            supported: ["openai"],
+            required: false,
+            current: .init(apiType: "openai", baseUrl: "https://fallback.example")
+        )]
+
+        #expect(first.currentProviderDisplayName == nil)
+        first.agentState = .ready
+        #expect(first.currentProviderDisplayName == "Enterprise Gateway, fallback")
+        first.agentState = .disconnected
+        #expect(first.currentProviderDisplayName == nil)
+        #expect(second.currentProviderDisplayName == nil)
+        #expect(second.availableProviders.isEmpty)
+    }
 }
 
 @MainActor
@@ -108,6 +136,13 @@ struct ACPSessionManagerAttachStateTests {
         // the top of attach should happen first).
         let session = mgr.createSession(agentId: "no-such-agent-\(UUID().uuidString)")
         session.lastError = "previous failure that should not leak"
+        session.providerCapabilities = .init()
+        session.availableProviders = [.init(
+            providerId: "stale",
+            supported: ["anthropic"],
+            required: false,
+            current: .init(apiType: "anthropic", baseUrl: "https://stale.example")
+        )]
         session.agentState = .disconnected
 
         await mgr.attach(to: session.id, freshlyCreated: false)
@@ -116,6 +151,8 @@ struct ACPSessionManagerAttachStateTests {
         // stale one. (The spec-missing branch doesn't set lastError, so
         // it should now be nil — only the agentState carries the failure.)
         #expect(session.lastError == nil || session.lastError?.contains("previous failure") == false)
+        #expect(session.providerCapabilities == nil)
+        #expect(session.availableProviders.isEmpty)
     }
 }
 
