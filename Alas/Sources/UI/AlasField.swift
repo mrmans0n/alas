@@ -173,6 +173,38 @@ private struct AlasNSTextField: NSViewRepresentable {
     }
 }
 
-private class AlasNSTextFieldView: NSTextField {
+class AlasNSTextFieldView: NSTextField {
     var focusOnAppear = false
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        configureCell()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        configureCell()
+    }
+
+    private func configureCell() {
+        cell = AlasNSTextFieldCell(textCell: "")
+        lineBreakMode = .byClipping
+        cell?.usesSingleLineMode = true
+        cell?.isScrollable = true
+        cell?.wraps = false
+    }
+}
+
+final class AlasNSTextFieldCell: NSTextFieldCell {
+    override func setUpFieldEditorAttributes(_ textObj: NSText) -> NSText {
+        let editor = super.setUpFieldEditorAttributes(textObj)
+        guard let textView = editor as? NSTextView else { return editor }
+
+        textView.isHorizontallyResizable = true
+        textView.isVerticallyResizable = false
+        textView.textContainer?.widthTracksTextView = false
+        textView.textContainer?.lineBreakMode = .byClipping
+        textView.textContainer?.maximumNumberOfLines = 1
+        return textView
+    }
 }
