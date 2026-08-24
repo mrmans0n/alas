@@ -158,6 +158,24 @@ struct ProjectMCPConfigImporterTests {
         #expect(scout.transport == .http(url: "http://localhost:3001/mcp", headers: []))
     }
 
+    @Test func preservesCurlyQuotesInValidJSONValues() throws {
+        let text = #"""
+        {
+          "mcpServers": {
+            "echo": { "command": "node", "args": ["Say “hello”"] }
+          }
+        }
+        """#
+
+        let server = try #require(ProjectMCPConfigImporter.servers(from: text).first)
+
+        guard case let .stdio(_, args, _) = server.transport else {
+            Issue.record("Expected stdio transport")
+            return
+        }
+        #expect(args == ["Say “hello”"])
+    }
+
     @Test func skipsDisabledMalformedUnsupportedAndExistingServers() {
         let text = #"""
         {

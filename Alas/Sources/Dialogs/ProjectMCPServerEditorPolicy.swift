@@ -174,12 +174,12 @@ enum ProjectMCPConfigImporter {
     }
 
     private static func rawServers(from text: String) -> [String: Any]? {
-        let normalized = text
+        let original = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = original
             .replacingOccurrences(of: "“", with: "\"")
             .replacingOccurrences(of: "”", with: "\"")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        for candidate in [normalized, "{\(normalized)}"] {
+        for candidate in [original, "{\(original)}", normalized, "{\(normalized)}"] {
             guard let data = candidate.data(using: .utf8),
                   let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let servers = object["mcpServers"] as? [String: Any] else { continue }
