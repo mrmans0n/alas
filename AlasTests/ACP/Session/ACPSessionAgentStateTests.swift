@@ -57,6 +57,21 @@ struct ACPSessionAgentStateTests {
         #expect(second.currentProviderDisplayName == nil)
         #expect(second.availableProviders.isEmpty)
     }
+
+    @Test("lone required provider is hidden")
+    func loneRequiredProviderIsHidden() {
+        let session = ACPSession(id: "s1", agentId: "codex", worktreeId: "wt", title: "one")
+        session.providerCapabilities = .init()
+        session.availableProviders = [.init(
+            providerId: "openai",
+            supported: ["openai"],
+            required: true,
+            current: .init(apiType: "openai", baseUrl: "https://api.openai.com")
+        )]
+        session.agentState = .ready
+
+        #expect(session.currentProviderDisplayName == nil)
+    }
 }
 
 @MainActor
