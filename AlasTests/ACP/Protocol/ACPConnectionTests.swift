@@ -4,6 +4,29 @@ import Testing
 
 @Suite("ACPConnection")
 struct ACPConnectionTests {
+    @Test("deleteSession sends session/delete with the wire id and accepts an empty result")
+    func deleteSessionRPC() async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "session/delete") { _ in Data("{}".utf8) }
+        let connection = ACPConnection(client: mock)
+
+        try await connection.deleteSession(sessionId: "remote-42")
+
+        let request = try #require(mock.sent.last)
+        #expect(request.method == "session/delete")
+        #expect(request.params as? ACPSessionDeleteParams == .init(sessionId: "remote-42"))
+    }
+
+    @Test("deleteSession accepts an unknown session")
+    func deleteUnknownSession() async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "session/delete") { _ in Data("{}".utf8) }
+
+        try await ACPConnection(client: mock).deleteSession(sessionId: "already-missing")
+
+        #expect(mock.sent.map(\.method) == ["session/delete"])
+    }
+
     @Test("initialize + new session populates sessionId, models, modes")
     func newSession() async throws {
         let mock = ACPMockClient()

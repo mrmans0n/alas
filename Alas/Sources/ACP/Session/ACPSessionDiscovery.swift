@@ -5,6 +5,7 @@ struct ACPSessionDiscoveryCapabilities: Equatable {
     let canLoad: Bool
     let canResume: Bool
     let canFork: Bool
+    let canDelete: Bool
 
     var canOpenRemoteSession: Bool { canLoad || canResume }
 }
@@ -55,6 +56,7 @@ enum ACPSessionDiscoveryError: LocalizedError, Equatable {
     case noLaunchSpec(String)
     case setupRequired(String)
     case listingUnsupported
+    case deletionUnsupported
 
     var errorDescription: String? {
         switch self {
@@ -64,6 +66,8 @@ enum ACPSessionDiscoveryError: LocalizedError, Equatable {
             return reason
         case .listingUnsupported:
             return "This agent does not support session browsing."
+        case .deletionUnsupported:
+            return "This agent does not support deleting session history."
         }
     }
 }
@@ -142,6 +146,16 @@ final class ACPSessionDiscoveryHandle {
         return discovered
     }
 
+    func refresh() {
+        nextCursor = nil
+        hasLoadedPage = false
+    }
+
+    func deleteSession(remoteSessionId: String) async throws {
+        guard capabilities.canDelete else { throw ACPSessionDiscoveryError.deletionUnsupported }
+        try await connection.deleteSession(sessionId: remoteSessionId)
+    }
+
     func close() async {
         guard !closed else { return }
         closed = true
@@ -164,10 +178,75 @@ final class ACPSessionDiscoveryModel {
     private(set) var sessions: [ACPDiscoveredSession] = []
     private(set) var capabilities: ACPSessionDiscoveryCapabilities?
     private(set) var paginationError: String?
+    private(set) var deletingSessionIds: Set<String> = []
+    private(set) var remotelyDeletedSessionIds: Set<String> = []
     private var handle: ACPSessionDiscoveryHandle?
     private var stopped = false
+    private var replaceSessionsOnNextLoad = false
+    private var deletionActive = false
+    private var deletionQueue: [CheckedContinuation<Void, Never>] = []
+    private var deletionWaiters: [CheckedContinuation<Void, Never>] = []
 
     var canLoadMore: Bool { handle?.canLoadMore == true }
+
+    func deleteAgentHistory(
+        for session: ACPDiscoveredSession,
+        removeLocalHistory: Bool,
+        manager: ACPSessionManager
+    ) async throws {
+        guard capabilities?.canDelete == true, let handle else {
+            throw ACPSessionDiscoveryError.deletionUnsupported
+        }
+        guard await beginDeletion(session.remoteSessionId) else { return }
+        defer { finishDeletion(session.remoteSessionId) }
+
+        if !remotelyDeletedSessionIds.contains(session.remoteSessionId) {
+            try await manager.closeActiveSessionForDeletion(
+                localSessionId: session.localSessionId,
+                agentId: session.agentId,
+                remoteSessionId: session.remoteSessionId
+            )
+            try await handle.deleteSession(remoteSessionId: session.remoteSessionId)
+            remotelyDeletedSessionIds.insert(session.remoteSessionId)
+        }
+
+        try await refreshAfterDeletion()
+        if removeLocalHistory, let localSessionId = session.localSessionId {
+            do {
+                try await manager.deletePersistedSession(id: localSessionId)
+            } catch {
+                if !sessions.contains(where: { $0.remoteSessionId == session.remoteSessionId }) {
+                    sessions.append(session)
+                }
+                throw error
+            }
+        }
+    }
+
+    func removeLocalHistory(
+        for session: ACPDiscoveredSession,
+        manager: ACPSessionManager
+    ) async throws {
+        guard let localSessionId = session.localSessionId else { return }
+        guard await beginDeletion(session.remoteSessionId) else { return }
+        defer { finishDeletion(session.remoteSessionId) }
+        try await manager.deletePersistedSession(id: localSessionId)
+        try await refreshAfterDeletion()
+    }
+
+    private func refreshAfterDeletion() async throws {
+        guard let handle else { return }
+        let previous = sessions
+        handle.refresh()
+        replaceSessionsOnNextLoad = true
+        sessions = []
+        do {
+            try await loadMore()
+        } catch {
+            sessions = previous
+            throw error
+        }
+    }
 
     func start(manager: ACPSessionManager, agentId: String) async {
         guard phase == .idle, !stopped else { return }
@@ -193,6 +272,12 @@ final class ACPSessionDiscoveryModel {
         guard let handle else { return }
         do {
             let page = try await handle.loadNextPage()
+            if replaceSessionsOnNextLoad {
+                sessions = page
+                replaceSessionsOnNextLoad = false
+                paginationError = nil
+                return
+            }
             var known = Set(sessions.map(\.remoteSessionId))
             sessions.append(contentsOf: page.filter { known.insert($0.remoteSessionId).inserted })
             paginationError = nil
@@ -204,7 +289,32 @@ final class ACPSessionDiscoveryModel {
 
     func stop() async {
         stopped = true
+        if !deletingSessionIds.isEmpty {
+            await withCheckedContinuation { deletionWaiters.append($0) }
+        }
         await handle?.close()
         handle = nil
+    }
+
+    private func beginDeletion(_ remoteSessionId: String) async -> Bool {
+        guard deletingSessionIds.insert(remoteSessionId).inserted else { return false }
+        if deletionActive {
+            await withCheckedContinuation { deletionQueue.append($0) }
+        }
+        deletionActive = true
+        return true
+    }
+
+    private func finishDeletion(_ remoteSessionId: String) {
+        deletingSessionIds.remove(remoteSessionId)
+        if !deletionQueue.isEmpty {
+            deletionQueue.removeFirst().resume()
+        } else {
+            deletionActive = false
+        }
+        guard deletingSessionIds.isEmpty else { return }
+        let waiters = deletionWaiters
+        deletionWaiters = []
+        waiters.forEach { $0.resume() }
     }
 }

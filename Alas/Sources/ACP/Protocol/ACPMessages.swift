@@ -247,16 +247,24 @@ struct ACPInitializeResult: Codable, Equatable {
         let list: EmptyObject?
         let resume: EmptyObject?
         let fork: EmptyObject?
+        let delete: EmptyObject?
 
-        init(list: EmptyObject? = nil, resume: EmptyObject? = nil, fork: EmptyObject? = nil) {
+        init(
+            list: EmptyObject? = nil,
+            resume: EmptyObject? = nil,
+            fork: EmptyObject? = nil,
+            delete: EmptyObject? = nil
+        ) {
             self.list = list
             self.resume = resume
             self.fork = fork
+            self.delete = delete
         }
 
         var supportsList: Bool { list != nil }
         var supportsResume: Bool { resume != nil }
         var supportsFork: Bool { fork != nil }
+        var supportsDelete: Bool { delete != nil }
     }
     struct ACPPromptCapabilities: Codable, Equatable {
         let image: Bool
@@ -788,6 +796,12 @@ typealias ACPSessionForkParams = ACPSessionLoadParams
 // MARK: - session/close
 
 struct ACPSessionCloseParams: Codable, Equatable {
+    let sessionId: String
+}
+
+// MARK: - session/delete
+
+struct ACPSessionDeleteParams: Codable, Equatable {
     let sessionId: String
 }
 

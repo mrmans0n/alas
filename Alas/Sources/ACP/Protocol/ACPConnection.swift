@@ -143,6 +143,15 @@ final class ACPConnection: @unchecked Sendable {
         response.acknowledgeDurableConsumption()
     }
 
+    func deleteSession(sessionId: String) async throws {
+        let response = try await client.send(ACPRequest(
+            method: "session/delete",
+            params: ACPSessionDeleteParams(sessionId: sessionId)
+        ))
+        defer { response.acknowledgeDurableConsumption() }
+        _ = try JSONDecoder().decode(EmptyObject.self, from: response.body)
+    }
+
     func cancel(sessionId: String) async throws {
         // ACP defines `session/cancel` as a JSON-RPC NOTIFICATION
         // (no `id`, no reply). Sending it as a request and awaiting a

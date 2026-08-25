@@ -1073,6 +1073,32 @@ final class ACPSessionManager: ObservableObject {
     }
 
     func deleteSession(id: ACPSession.ID) {
+        forgetSession(id: id)
+        enqueuePersistence { persistence in
+            try await persistence.deleteSession(id: id)
+        }
+    }
+
+    func deletePersistedSession(id: ACPSession.ID) async throws {
+        await detach(sessionId: id)
+        try await persistence.deleteSession(id: id)
+        forgetSession(id: id)
+    }
+
+    func closeActiveSessionForDeletion(
+        localSessionId: ACPSession.ID?,
+        agentId: String,
+        remoteSessionId: String
+    ) async throws {
+        let localSessionId = localSessionId ?? runners.keys.first {
+            sessions[$0]?.agentId == agentId && sessions[$0]?.remoteSessionId == remoteSessionId
+        }
+        guard let localSessionId, let runner = runners[localSessionId] else { return }
+        try await runner.connection.closeSession(sessionId: remoteSessionId)
+        await detach(sessionId: localSessionId)
+    }
+
+    private func forgetSession(id: ACPSession.ID) {
         killRemoteHelperACPProcIfPossible(sessionId: id)
         onSessionEnded?(id)
         autoReconnectTasks.removeValue(forKey: id)?.cancel()
@@ -1089,9 +1115,6 @@ final class ACPSessionManager: ObservableObject {
         pendingMode.removeValue(forKey: id)
         persistedRows.removeValue(forKey: id)
         recent.removeAll { $0.id == id }
-        enqueuePersistence { persistence in
-            try await persistence.deleteSession(id: id)
-        }
     }
 
     /// Increment the UI refcount for `id`. No-op if the session isn't
@@ -1718,7 +1741,8 @@ final class ACPSessionManager: ObservableObject {
                 capabilities: .init(
                     canLoad: initialized.loadSession,
                     canResume: initialized.sessionCapabilities.supportsResume,
-                    canFork: initialized.sessionCapabilities.supportsFork
+                    canFork: initialized.sessionCapabilities.supportsFork,
+                    canDelete: initialized.sessionCapabilities.supportsDelete
                 )
             )
         } catch {
