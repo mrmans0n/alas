@@ -1081,7 +1081,22 @@ final class ACPSessionManager: ObservableObject {
 
     func deletePersistedSession(id: ACPSession.ID) async throws {
         await detach(sessionId: id)
-        try await persistence.deleteSession(id: id)
+        let previous = persistenceTail
+        let persistence = persistence
+        persistenceGeneration += 1
+        let deletion = Task { @MainActor [weak self] in
+            await previous?.value
+            do {
+                try await persistence.deleteSession(id: id)
+            } catch {
+                self?.persistenceError = error.localizedDescription
+                throw error
+            }
+        }
+        persistenceTail = Task { @MainActor in
+            _ = try? await deletion.value
+        }
+        try await deletion.value
         forgetSession(id: id)
     }
 

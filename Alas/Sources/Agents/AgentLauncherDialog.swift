@@ -580,6 +580,7 @@ struct AgentLauncherDialog: View {
                     )
                 }
             } catch {
+                guard self.discoveryModel === discoveryModel else { return }
                 deletionError = error.localizedDescription
             }
         }

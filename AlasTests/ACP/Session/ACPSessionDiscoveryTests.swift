@@ -97,6 +97,20 @@ struct ACPSessionDiscoveryTests {
     }
 
     @MainActor
+    @Test("local deletion runs after already queued session upserts")
+    func localDeletionRunsLastOnPersistenceQueue() async throws {
+        let store = try temporaryStore()
+        let manager = manager(store: store, client: ACPMockClient())
+        let session = manager.createSession(id: "local-1", agentId: "claude")
+        manager.renameSession(id: session.id, title: "Queued rename", source: .manual)
+
+        try await manager.deletePersistedSession(id: session.id)
+        await manager.flushPersistence()
+
+        #expect(try store.loadSession(id: session.id) == nil)
+    }
+
+    @MainActor
     @Test("duplicate deletion is ignored while the first request is in flight")
     func duplicateDeletionIsIgnored() async throws {
         let client = discoveryClient(deleteCapability: true)
