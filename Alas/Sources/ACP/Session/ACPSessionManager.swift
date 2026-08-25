@@ -954,7 +954,7 @@ final class ACPSessionManager: ObservableObject {
             switch wire {
             case let .user(_, text, _, _):
                 return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            case let .agent(_, text):
+            case let .agent(_, text, _, _):
                 return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             default:
                 return false

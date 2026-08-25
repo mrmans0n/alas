@@ -39,6 +39,55 @@ struct ACPSessionUpdateTests {
         }
     }
 
+    @Test("preserves chunk metadata and recognizes Codex phases")
+    func chunkMetadataAndPhase() throws {
+        let json = """
+        {
+          "sessionUpdate": "agent_message_chunk",
+          "messageId": "commentary-1",
+          "content": { "type": "text", "text": "Working" },
+          "_meta": {
+            "codex": { "phase": "commentary", "future": true },
+            "adapter": { "trace": "kept" }
+          }
+        }
+        """
+        let update = try JSONDecoder().decode(ACPSessionUpdate.self, from: Data(json.utf8))
+        guard case .agentMessageChunk(let chunk) = update else {
+            Issue.record("expected agentMessageChunk")
+            return
+        }
+
+        #expect(chunk.phase == .commentary)
+        let metadata = try #require(chunk.metadata?.value as? [String: AnyCodable])
+        #expect((metadata["adapter"]?.value as? [String: AnyCodable])?["trace"]?.value as? String == "kept")
+        let encoded = try JSONEncoder().encode(update)
+        let decoded = try JSONDecoder().decode(ACPSessionUpdate.self, from: encoded)
+        #expect(decoded == update)
+
+        let chunks: [ACPSessionUpdate] = [
+            .userMessageChunk(.init(messageId: "user-1", content: .text("prompt"), metadata: chunk.metadata)),
+            .agentMessageChunk(chunk),
+            .agentThoughtChunk(.init(messageId: "thought-1", content: .text("thinking"), metadata: chunk.metadata))
+        ]
+        for chunkUpdate in chunks {
+            let roundTripped = try JSONDecoder().decode(
+                ACPSessionUpdate.self,
+                from: JSONEncoder().encode(chunkUpdate))
+            #expect(roundTripped == chunkUpdate)
+        }
+    }
+
+    @Test("unknown and missing chunk phases use the compatibility fallback")
+    func unknownChunkPhase() throws {
+        let unknown = ACPTextChunk(
+            messageId: "agent-1",
+            content: .text("answer"),
+            metadata: AnyCodable(["codex": AnyCodable(["phase": AnyCodable("future_phase")])]))
+        #expect(unknown.phase == nil)
+        #expect(ACPTextChunk(content: .text("answer")).phase == nil)
+    }
+
     @Test("decodes tool call (initial)")
     func toolCall() throws {
         let env = try decode("session-update-tool-call")

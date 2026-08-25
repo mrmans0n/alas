@@ -142,6 +142,9 @@ private struct ACPSessionView: View {
                 )
                 adapterBanner()
                 contextRestoreBanner()
+                if let retry = session.retryStatus {
+                    retryBanner(retry)
+                }
                 if isMirror {
                     mirrorBanner()
                 }
@@ -907,6 +910,23 @@ private struct ACPSessionView: View {
         .background(theme.color("del").opacity(0.10))
         .overlay(alignment: .bottom) {
             Rectangle().fill(theme.color("del").opacity(0.3)).frame(height: 0.5)
+        }
+    }
+
+    private func retryBanner(_ retry: ACPRetryStatus) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90")
+                .foregroundStyle(theme.color("warn"))
+            Text(retry.detail.map { "Retrying — \($0)" } ?? "Retrying")
+                .font(.system(size: 12))
+                .textSelection(.enabled)
+                .foregroundStyle(theme.color("fg"))
+            Spacer()
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(theme.color("warn").opacity(0.10))
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(theme.color("warn").opacity(0.3)).frame(height: 0.5)
         }
     }
 }

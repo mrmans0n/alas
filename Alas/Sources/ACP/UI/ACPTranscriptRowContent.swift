@@ -14,6 +14,7 @@ struct ACPTranscriptRowContent: View, Equatable {
     let stableId: String
     let messageIndex: Int
     let message: ACPMessage
+    let messagePhase: ACPMessagePhase?
     let contentMaxWidth: CGFloat
     let typography: ACPChatTypography
     let trustedImageRoot: URL?
@@ -51,14 +52,17 @@ struct ACPTranscriptRowContent: View, Equatable {
     let onFork: (ACPForkMessageBoundary, String) -> Void
 
     static func == (lhs: Self, rhs: Self) -> Bool {
-        equalityKey(
+        guard lhs.messagePhase == rhs.messagePhase else { return false }
+        return equalityKey(
             stableId: lhs.stableId, message: lhs.message,
+            messagePhase: lhs.messagePhase,
             contentMaxWidth: lhs.contentMaxWidth, typography: lhs.typography,
             trustedImageRoot: lhs.trustedImageRoot,
             isForkEligible: lhs.isForkEligible, forkTargets: lhs.forkTargets
         )
         == equalityKey(
             stableId: rhs.stableId, message: rhs.message,
+            messagePhase: rhs.messagePhase,
             contentMaxWidth: rhs.contentMaxWidth, typography: rhs.typography,
             trustedImageRoot: rhs.trustedImageRoot,
             isForkEligible: rhs.isForkEligible, forkTargets: rhs.forkTargets
@@ -70,6 +74,7 @@ struct ACPTranscriptRowContent: View, Equatable {
     static func equalityKey(
         stableId: String,
         message: ACPMessage,
+        messagePhase: ACPMessagePhase? = nil,
         contentMaxWidth: CGFloat,
         typography: ACPChatTypography,
         trustedImageRoot: URL?,
@@ -77,7 +82,9 @@ struct ACPTranscriptRowContent: View, Equatable {
         forkTargets: [ACPSessionForkTarget] = []
     ) -> EqualityKey {
         EqualityKey(
-            stableId: stableId, message: message, contentMaxWidth: contentMaxWidth,
+            stableId: stableId, message: message,
+            messagePhase: messagePhase ?? presentationPhase(of: message),
+            contentMaxWidth: contentMaxWidth,
             typography: typography, trustedImageRoot: trustedImageRoot,
             isForkEligible: isForkEligible, forkTargets: forkTargets
         )
@@ -86,11 +93,17 @@ struct ACPTranscriptRowContent: View, Equatable {
     struct EqualityKey: Equatable {
         let stableId: String
         let message: ACPMessage
+        let messagePhase: ACPMessagePhase?
         let contentMaxWidth: CGFloat
         let typography: ACPChatTypography
         let trustedImageRoot: URL?
         let isForkEligible: Bool
         let forkTargets: [ACPSessionForkTarget]
+    }
+
+    static func presentationPhase(of message: ACPMessage) -> ACPMessagePhase? {
+        guard case .agent(_, _, let buffer) = message else { return nil }
+        return buffer.phase
     }
 
     var body: some View {
@@ -119,12 +132,16 @@ struct ACPTranscriptRowContent: View, Equatable {
                 onQuote: onQuote,
                 onFork: onFork
             ) {
-                AgentMessageRow(
-                    messageId: stableId,
-                    transcript: transcript,
-                    buffer: buf,
-                    typography: typography
-                )
+                if buf.phase == .commentary {
+                    ACPCommentaryRow(buffer: buf)
+                } else {
+                    AgentMessageRow(
+                        messageId: stableId,
+                        transcript: transcript,
+                        buffer: buf,
+                        typography: typography
+                    )
+                }
             }
         case .thought(_, _, let buf):
             ACPThoughtView(buffer: buf)
