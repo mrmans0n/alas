@@ -59,6 +59,22 @@ struct AlasFieldTests {
         #expect(editor.textContainer?.maximumNumberOfLines == 1)
     }
 
+    @Test func nativeFieldCanBecomeEditable() {
+        let field = AlasNSTextFieldView(frame: NSRect(x: 0, y: 0, width: 200, height: 28))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 200, height: 28),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = field
+
+        #expect(field.isEditable)
+        #expect(field.isSelectable)
+        #expect(window.makeFirstResponder(field))
+        #expect(field.currentEditor() != nil)
+    }
+
     private static func firstTextField(in view: NSView) -> NSTextField? {
         if let field = view as? NSTextField { return field }
         for subview in view.subviews {

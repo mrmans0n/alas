@@ -188,6 +188,8 @@ class AlasNSTextFieldView: NSTextField {
 
     private func configureCell() {
         cell = AlasNSTextFieldCell(textCell: "")
+        isEditable = true
+        isSelectable = true
         lineBreakMode = .byClipping
         cell?.usesSingleLineMode = true
         cell?.isScrollable = true
