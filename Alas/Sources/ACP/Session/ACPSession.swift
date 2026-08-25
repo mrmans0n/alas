@@ -199,8 +199,9 @@ final class ACPSession: ObservableObject, Identifiable {
 
     var currentProviderDisplayName: String? {
         guard agentState == .ready, providerCapabilities != nil else { return nil }
-        let names = availableProviders
-            .filter { $0.current != nil }
+        let currentProviders = availableProviders.filter { $0.current != nil }
+        guard currentProviders.count != 1 || !currentProviders[0].required else { return nil }
+        let names = currentProviders
             .map { $0.name ?? $0.providerId }
         return names.isEmpty ? nil : names.joined(separator: ", ")
     }

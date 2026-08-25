@@ -23,7 +23,8 @@ struct ACPSessionManagerRemoteRestoreTests {
         await manager.attach(to: session.id, freshlyCreated: false)
 
         #expect(client.sent.map(\.method) == ["initialize", "session/load", "providers/list"])
-        #expect(session.currentProviderDisplayName == "Enterprise Gateway")
+        #expect(session.availableProviders.first?.name == "Enterprise Gateway")
+        #expect(session.currentProviderDisplayName == nil)
         await manager.detach(sessionId: session.id)
     }
 
