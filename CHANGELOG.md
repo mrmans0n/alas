@@ -6,6 +6,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.21] - 2026-08-25
+
+### ✨ Features
+
+- Preserve Codex phases and retries in ACP transcripts (#1065).
+
+### 🐛 Fixes
+
+- Keep focus stable in the worktree branch name field (#1066).
+
+### 🏗️ Internal
+
+- Update the Rust `tree-sitter-proto` crate to 0.5.0 (#1067).
+
 ## [0.14.20] - 2026-08-25
 
 ### ✨ Features
