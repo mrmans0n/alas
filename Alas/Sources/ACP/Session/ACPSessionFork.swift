@@ -179,7 +179,7 @@ enum ACPSessionForkSnapshotResolver {
             switch wire {
             case .user(_, let text, _, _):
                 text.isEmpty ? nil : .init(role: .user, text: text)
-            case .agent(_, let text):
+            case .agent(_, let text, _, _):
                 text.isEmpty ? nil : .init(role: .agent, text: text)
             case .thought, .toolCall, .fileEdit, .plan, .systemNotice:
                 nil
@@ -197,9 +197,9 @@ enum ACPSessionForkSnapshotResolver {
         switch (live, stored) {
         case let (.user(_, liveMessageID, liveText, _, _), .user(storedMessageID, storedText, _, _)):
             liveMessageID == storedMessageID && liveText == storedText
-        case let (.agent(_, liveMessageID, liveText), .agent(storedMessageID, storedText)):
+        case let (.agent(_, liveMessageID, liveText), .agent(storedMessageID, storedText, _, _)):
             liveMessageID == storedMessageID && liveText.value == storedText
-        case let (.thought(_, liveMessageID, liveText), .thought(storedMessageID, storedText)):
+        case let (.thought(_, liveMessageID, liveText), .thought(storedMessageID, storedText, _, _)):
             liveMessageID == storedMessageID && liveText.value == storedText
         case let (.toolCall(liveCall), .toolCall(storedCall)):
             liveCall.toolCallId == storedCall.toolCallId

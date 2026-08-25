@@ -91,3 +91,24 @@ struct AgentMessageRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
+
+struct ACPCommentaryRow: View {
+    @ObservedObject var buffer: StreamingText
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("Working", systemImage: "ellipsis.circle")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(theme.color("fg-faint"))
+            Text(buffer.value)
+                .font(.system(size: 12))
+                .foregroundStyle(theme.color("fg-dim"))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 9)
+        .background(theme.color("bg-2"), in: RoundedRectangle(cornerRadius: 6))
+    }
+}

@@ -42,13 +42,48 @@ struct ACPMessageWireTests {
         let original: ACPMessage = .agent(id: UUID(), messageId: "agent-1", StreamingText("agent prose"))
         let payload = try ACPMessageCodec.encode(original)
         let wire = try ACPMessageWire.decode(kind: "agent", payload: payload)
-        guard case let .agent(messageId, text) = wire else {
+        guard case let .agent(messageId, text, _, _) = wire else {
             #expect(Bool(false), "expected .agent, got \(wire)")
             return
         }
         #expect(messageId == "agent-1")
         #expect(text == "agent prose")
         #expect(wire.toMessage().stableId == "acp-agent:agent-1")
+    }
+
+    @Test("agent phase and metadata survive persistence")
+    func agentPhaseRoundTrip() throws {
+        let metadata = AnyCodable(["codex": AnyCodable(["phase": AnyCodable("commentary")]), "future": AnyCodable(true)])
+        let original: ACPMessage = .agent(
+            id: UUID(), messageId: "commentary-1",
+            StreamingText("working", phase: .commentary, metadata: metadata))
+
+        let wire = try ACPMessageWire.decode(kind: "agent", payload: ACPMessageCodec.encode(original))
+        guard case .agent(let messageId, let text, let phase, let decodedMetadata) = wire else {
+            Issue.record("expected agent wire payload")
+            return
+        }
+        #expect(messageId == "commentary-1")
+        #expect(text == "working")
+        #expect(phase == .commentary)
+        #expect(decodedMetadata == metadata)
+        guard case .agent(_, _, let buffer) = wire.toMessage() else {
+            Issue.record("expected agent message")
+            return
+        }
+        #expect(buffer.phase == .commentary)
+        #expect(buffer.metadata == metadata)
+    }
+
+    @Test("legacy agent payload still decodes without a phase")
+    func legacyAgentPayload() throws {
+        let wire = try ACPMessageWire.decode(kind: "agent", payload: Data(#"{"messageId":"agent-1","text":"answer"}"#.utf8))
+        guard case .agent(_, _, let phase, let metadata) = wire else {
+            Issue.record("expected agent wire payload")
+            return
+        }
+        #expect(phase == nil)
+        #expect(metadata == nil)
     }
 
     @Test("decode round-trips tool call")
@@ -161,7 +196,7 @@ struct ACPMessageWireTests {
 
     @Test("toMessage produces ACPMessage with fresh ids")
     func toMessage() throws {
-        let wire: ACPMessageWire = .agent(messageId: nil, text: "x")
+        let wire: ACPMessageWire = .agent(messageId: nil, text: "x", phase: nil, metadata: nil)
         let m1 = wire.toMessage()
         let m2 = wire.toMessage()
         // Same wire, different UUIDs each call (matches existing decode behavior).

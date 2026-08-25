@@ -70,6 +70,105 @@ struct ACPSessionTests {
         else { Issue.record("expected single agent message") }
     }
 
+    @Test("interleaved commentary and final chunks keep their own phase and message rows")
+    func interleavedPhasedChunks() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        let commentary = AnyCodable(["codex": AnyCodable(["phase": AnyCodable("commentary")])])
+        let final = AnyCodable(["codex": AnyCodable(["phase": AnyCodable("final_answer")])])
+
+        session.apply(.agentMessageChunk(.init(messageId: "commentary-1", content: .text("Checking"), metadata: commentary)))
+        session.apply(.agentMessageChunk(.init(messageId: "final-1", content: .text("Done"), metadata: final)))
+        session.apply(.agentMessageChunk(.init(messageId: "commentary-1", content: .text(" files"), metadata: commentary)))
+
+        #expect(session.transcript.messages.count == 2)
+        guard case .agent(_, let commentaryID, let commentaryBuffer) = session.transcript.messages[0],
+              case .agent(_, let finalID, let finalBuffer) = session.transcript.messages[1] else {
+            Issue.record("expected phased agent messages")
+            return
+        }
+        #expect(commentaryID == "commentary-1")
+        #expect(commentaryBuffer.value == "Checking files")
+        #expect(commentaryBuffer.phase == .commentary)
+        #expect(finalID == "final-1")
+        #expect(finalBuffer.value == "Done")
+        #expect(finalBuffer.phase == .finalAnswer)
+    }
+
+    @Test("id-less phase transition starts a new agent row")
+    func idlessPhaseTransitionStartsNewRow() {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        let commentary = AnyCodable(["codex": AnyCodable(["phase": AnyCodable("commentary")])])
+        let final = AnyCodable(["codex": AnyCodable(["phase": AnyCodable("final_answer")])])
+
+        session.apply(.agentMessageChunk(.init(content: .text("Checking files"), metadata: commentary)))
+        session.apply(.agentMessageChunk(.init(content: .text("Done"), metadata: final)))
+
+        guard session.transcript.messages.count == 2,
+              case .agent(_, _, let commentaryBuffer) = session.transcript.messages[0],
+              case .agent(_, _, let finalBuffer) = session.transcript.messages[1] else {
+            Issue.record("expected separate commentary and final rows")
+            return
+        }
+        #expect(commentaryBuffer.value == "Checking files")
+        #expect(commentaryBuffer.phase == .commentary)
+        #expect(finalBuffer.value == "Done")
+        #expect(finalBuffer.phase == .finalAnswer)
+    }
+
+    @Test("a phase introduced by a later chunk survives persistence")
+    func laterChunkPhaseSurvivesPersistence() throws {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        let firstMetadata = AnyCodable(["future": AnyCodable("kept")])
+        let commentary = AnyCodable(["codex": AnyCodable(["phase": AnyCodable("commentary")])])
+
+        session.apply(.agentMessageChunk(.init(
+            messageId: "message-1", content: .text("Checking"), metadata: firstMetadata)))
+        session.apply(.agentMessageChunk(.init(
+            messageId: "message-1", content: .text(" files"), metadata: commentary)))
+
+        guard case .agent(_, _, let buffer) = session.transcript.messages.first else {
+            Issue.record("expected agent message")
+            return
+        }
+        #expect(buffer.phase == .commentary)
+        let metadata = try #require(buffer.metadata?.value as? [String: AnyCodable])
+        #expect(metadata["future"]?.value as? String == "kept")
+        #expect(metadata["codex"] != nil)
+
+        let wire = try ACPMessageWire.decode(
+            kind: "agent", payload: ACPMessageCodec.encode(session.transcript.messages[0]))
+        guard case .agent(_, _, let phase, let persistedMetadata) = wire else {
+            Issue.record("expected persisted agent message")
+            return
+        }
+        #expect(phase == .commentary)
+        #expect(persistedMetadata == buffer.metadata)
+    }
+
+    @Test("phased replay does not duplicate or change hydrated output")
+    func phasedReplayPreservesHydratedMessage() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        let metadata = AnyCodable(["codex": AnyCodable(["phase": AnyCodable("commentary")])])
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "commentary-1", StreamingText("Checking files", phase: .commentary, metadata: metadata)),
+            .user(id: UUID(), messageId: "user-1", text: "next", attachments: [])
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        let changed = session.apply(.agentMessageChunk(.init(
+            messageId: "commentary-1", content: .text(" replay"), metadata: metadata)))
+
+        #expect(changed == [0])
+        #expect(session.transcript.messages.count == 2)
+        guard case .agent(_, _, let buffer) = session.transcript.messages[0] else {
+            Issue.record("expected agent message")
+            return
+        }
+        #expect(buffer.value == "Checking files")
+        #expect(buffer.phase == .commentary)
+        #expect(buffer.metadata == metadata)
+    }
+
     @Test("agent chunks split at a sentence boundary get a newline separator")
     func chunksSplitAtSentenceGetNewline() async {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
@@ -688,6 +787,61 @@ struct ACPSessionTests {
         #expect(after == ["hello world!"])
     }
 
+    @Test("regenerated replay continuation keeps the accumulated phase metadata")
+    func replayContinuationKeepsAccumulatedPhaseMetadata() throws {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        let commentary = AnyCodable(["codex": AnyCodable(["phase": AnyCodable("commentary")])])
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("hello"))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        session.apply(.agentMessageChunk(.init(
+            messageId: "regen-1", content: .text("hello"), metadata: commentary)))
+        session.apply(.agentMessageChunk(.init(
+            messageId: "regen-1", content: .text(" world"))))
+
+        guard case .agent(_, _, let buffer) = session.transcript.messages.first else {
+            Issue.record("expected agent message")
+            return
+        }
+        #expect(buffer.value == "hello world")
+        #expect(buffer.phase == .commentary)
+        #expect(buffer.metadata == commentary)
+        let wire = try ACPMessageWire.decode(
+            kind: "agent", payload: ACPMessageCodec.encode(session.transcript.messages[0]))
+        guard case .agent(_, _, let phase, let metadata) = wire else {
+            Issue.record("expected persisted agent message")
+            return
+        }
+        #expect(phase == .commentary)
+        #expect(metadata == commentary)
+    }
+
+    @Test("a diverged replay candidate materializes with its accumulated phase metadata")
+    func divergedReplayCandidateKeepsAccumulatedPhaseMetadata() {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        let commentary = AnyCodable(["codex": AnyCodable(["phase": AnyCodable("commentary")])])
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("hello there"))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        session.apply(.agentMessageChunk(.init(
+            messageId: "regen-1", content: .text("hello"), metadata: commentary)))
+        session.apply(.agentMessageChunk(.init(
+            messageId: "regen-1", content: .text("!"))))
+
+        guard session.transcript.messages.count == 2,
+              case .agent(_, _, let buffer) = session.transcript.messages[1] else {
+            Issue.record("expected materialized agent message")
+            return
+        }
+        #expect(buffer.value == "hello!")
+        #expect(buffer.phase == .commentary)
+        #expect(buffer.metadata == commentary)
+    }
+
     @Test("replay continuation is still adopted across a trailing plan row")
     func replayContinuationAdoptedAcrossTrailingPlan() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
@@ -1240,6 +1394,64 @@ struct ACPSessionTests {
         #expect(goal.objective == "Surface richer ACP events")
         #expect(goal.status == "in_progress")
         #expect(goal.tokenBudget == 12_000)
+    }
+
+    @Test("retryable Codex session error exposes only its safe message")
+    func retryableCodexErrorUsesSafeMessage() async throws {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.streamingState = .streaming
+
+        session.apply(.sessionInfoUpdate(.init(
+            title: nil,
+            metadata: AnyCodable([
+                "codex": AnyCodable([
+                    "error": AnyCodable([
+                        "willRetry": AnyCodable(true),
+                        "turnId": AnyCodable("turn-42"),
+                        "message": AnyCodable("Temporary service issue\nplease wait"),
+                        "codexErrorInfo": AnyCodable("internal-stack-trace"),
+                        "additionalDetails": AnyCodable("unsafe diagnostic")
+                    ])
+                ])
+            ]))))
+
+        let retry = try #require(session.retryStatus)
+        #expect(retry.turnId == "turn-42")
+        #expect(retry.detail == "Temporary service issue please wait")
+        #expect(session.lastError == nil)
+        #expect(session.transcript.streamingState == .streaming)
+    }
+
+    @Test("agent progress and completion clear retryable Codex status")
+    func retryStatusClearsOnProgressAndCompletion() {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        let retry = AnyCodable(["codex": AnyCodable(["error": AnyCodable([
+            "willRetry": AnyCodable(true), "message": AnyCodable("Retrying")
+        ])])])
+
+        session.apply(.sessionInfoUpdate(.init(title: nil, metadata: retry)))
+        session.apply(.agentMessageChunk(.text("resumed output")))
+        #expect(session.retryStatus == nil)
+
+        session.apply(.sessionInfoUpdate(.init(title: nil, metadata: retry)))
+        session.markCompletedOutputBoundary()
+        #expect(session.retryStatus == nil)
+    }
+
+    @Test("permanent Codex error clears retryable status")
+    func permanentCodexErrorClearsRetryStatus() {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        let retry = AnyCodable(["codex": AnyCodable(["error": AnyCodable([
+            "willRetry": AnyCodable(true), "message": AnyCodable("Retrying")
+        ])])])
+        let permanent = AnyCodable(["codex": AnyCodable(["error": AnyCodable([
+            "willRetry": AnyCodable(false), "message": AnyCodable("Permanent failure")
+        ])])])
+
+        session.apply(.sessionInfoUpdate(.init(title: nil, metadata: retry)))
+        session.apply(.sessionInfoUpdate(.init(title: nil, metadata: permanent)))
+
+        #expect(session.retryStatus == nil)
     }
 
     @Test("session info applies top-level goal metadata")

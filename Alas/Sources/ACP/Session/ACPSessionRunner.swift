@@ -239,6 +239,7 @@ final class ACPSessionRunner {
     }
 
     func start() {
+        session.clearRetryStatus()
         updatesTask = Task { [weak self] in
             guard let self else { return }
             for await u in self.connection.client.incomingUpdates {
@@ -252,6 +253,7 @@ final class ACPSessionRunner {
             if Task.isCancelled { return }
             self.flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
             await MainActor.run {
+                self.session.clearRetryStatus()
                 self.session.agentState = .disconnected
                 self.session.transcript.streamingState = .idle
                 // No flushQueueIfIdle() here: the connection is dead, so
@@ -550,7 +552,10 @@ final class ACPSessionRunner {
         let preAppliedSessionInfoDirty: Set<Int>?
         if case .sessionInfoUpdate(let info) = params.update {
             flushStreamingPersist()
-            preAppliedSessionInfoDirty = session.apply(params.update)
+            preAppliedSessionInfoDirty = session.apply(
+                params.update,
+                tracksRetryStatus: !suppressingLoadReplay
+            )
             applySessionInfoTitle(info)
         } else {
             preAppliedSessionInfoDirty = nil
@@ -672,6 +677,7 @@ final class ACPSessionRunner {
             flushQueueWhenBoundaryReady: false,
             treatBufferedUpdatesAsPromptOwned: true
         )
+        session.clearRetryStatus()
         flushStreamingPersistOnStop()
         incomingUpdateFlushTask?.cancel()
         incomingUpdateFlushTask = nil
@@ -1059,6 +1065,7 @@ final class ACPSessionRunner {
     /// to `.idle`. Persists all mutations so they survive a reload.
     func userCancel(confirmingLease: Bool = true) async {
         flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
+        session.clearRetryStatus()
         // Capture the prompt + queue head the user INTENDED to stop
         // BEFORE awaiting `connection.cancel`. Without this snapshot, a
         // natural completion of the in-flight prompt during the cancel
@@ -1666,6 +1673,7 @@ extension ACPSessionRunner {
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
     ) {
         flushPendingIncomingUpdates()
+        session.clearRetryStatus()
         let promptID = nextPromptID
         nextPromptID += 1
         // Register ownership SYNCHRONOUSLY, before the Task spawn. Without
@@ -1815,6 +1823,7 @@ extension ACPSessionRunner {
                         }
                     }
                     if isActivePrompt {
+                        self.session.clearRetryStatus()
                         if queuedItemId != nil {
                             _ = self.session.popQueueHead()
                             if deliveredForkContext {
@@ -1841,6 +1850,7 @@ extension ACPSessionRunner {
                     let isActivePrompt = self.activePromptID == promptID
                     let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt
                     if isActivePrompt {
+                        self.session.clearRetryStatus()
                         self.flushStreamingPersist()
                         let authReason = wasCancelled ? nil : ACPAuthFailure.message(from: error)
                         let errorMessage = authReason ?? error.localizedDescription

@@ -57,6 +57,10 @@ struct ACPSessionRunnerTests {
     func sendReportsSuccessfulCompletionWhenPromptSucceeds() async throws {
         let (runner, mock) = try makeRunner()
         mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        let retry = AnyCodable(["codex": AnyCodable(["error": AnyCodable([
+            "willRetry": AnyCodable(true), "message": AnyCodable("Retrying")
+        ])])])
+        runner.session.apply(.sessionInfoUpdate(.init(title: nil, metadata: retry)))
 
         let succeeded = await withCheckedContinuation { continuation in
             runner.send(text: "hello", attachments: []) { succeeded in
@@ -66,7 +70,39 @@ struct ACPSessionRunnerTests {
 
         #expect(succeeded == true)
         #expect(runner.session.lastError == nil)
+        #expect(runner.session.retryStatus == nil)
         #expect(runner.session.transcript.streamingState == .idle)
+    }
+
+    @Test("user cancellation clears retryable Codex status")
+    func userCancellationClearsRetryStatus() async throws {
+        let (runner, _) = try makeRunner()
+        let retry = AnyCodable(["codex": AnyCodable(["error": AnyCodable([
+            "willRetry": AnyCodable(true), "message": AnyCodable("Retrying")
+        ])])])
+        runner.session.apply(.sessionInfoUpdate(.init(title: nil, metadata: retry)))
+
+        await runner.userCancel()
+
+        #expect(runner.session.retryStatus == nil)
+    }
+
+    @Test("permanent prompt failure clears retryable Codex status")
+    func promptFailureClearsRetryStatus() async throws {
+        let (runner, _) = try makeRunner()
+        let retry = AnyCodable(["codex": AnyCodable(["error": AnyCodable([
+            "willRetry": AnyCodable(true), "message": AnyCodable("Retrying")
+        ])])])
+        runner.session.apply(.sessionInfoUpdate(.init(title: nil, metadata: retry)))
+
+        let succeeded = await withCheckedContinuation { continuation in
+            runner.send(text: "hello", attachments: []) { succeeded in
+                continuation.resume(returning: succeeded)
+            }
+        }
+
+        #expect(succeeded == false)
+        #expect(runner.session.retryStatus == nil)
     }
 
     @Test("recording a submitted prompt keeps the suspended composer draft until prompt completion")
@@ -812,6 +848,45 @@ struct ACPSessionRunnerTests {
         #expect(row.title == "Replayed Adapter Title")
         #expect(row.titleSource == .generated)
         #expect(session.transcript.messages.isEmpty)
+    }
+
+    @Test("suppressed retry history does not affect live retry status")
+    func suppressedRetryHistoryDoesNotAffectLiveStatus() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-retry-replay-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(
+            id: "s", agentId: "codex", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 1, updatedAt: 2, lastOpenedAt: 3, archived: false
+        ))
+        let retry = AnyCodable(["codex": AnyCodable(["error": AnyCodable([
+            "willRetry": AnyCodable(true), "message": AnyCodable("Temporary")
+        ])])])
+        let mock = ACPMockClient()
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            suppressingLoadReplay: true
+        )
+        runner.start()
+        defer { runner.stop() }
+
+        mock.emit(.init(sessionId: "s", update: .sessionInfoUpdate(.init(
+            title: "Replayed title", metadata: retry))))
+        mock.emit(.init(sessionId: "s", update: .agentMessageChunk(.text("replayed"))))
+        try await waitUntil { session.title == "Replayed title" }
+        #expect(session.retryStatus == nil)
+
+        runner.finishSuppressingLoadReplay(throughYieldedUpdateCount: mock.yieldedUpdateCount)
+        mock.emit(.init(sessionId: "s", update: .sessionInfoUpdate(.init(title: nil, metadata: retry))))
+        try await waitUntil { session.retryStatus != nil }
+        mock.emit(.init(sessionId: "s", update: .agentMessageChunk(.text("resumed"))))
+        try await waitUntil { session.retryStatus == nil }
     }
 
     @Test("delayed load replay finish keeps active prompt boundary crossing")

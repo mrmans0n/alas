@@ -444,8 +444,8 @@ enum ACPMessageCodec {
     static func encode(_ m: ACPMessage) throws -> Data {
         switch m {
         case .user(_, let messageId, let text, let atts, let delegatedSource): return try encoder.encode(UserPayload(messageId: messageId, text: text, attachments: atts, delegatedSource: delegatedSource))
-        case .agent(_, let messageId, let buf):            return try encoder.encode(TextPayload(messageId: messageId, text: buf.value))
-        case .thought(_, let messageId, let buf):          return try encoder.encode(TextPayload(messageId: messageId, text: buf.value))
+        case .agent(_, let messageId, let buf):            return try encoder.encode(TextPayload(messageId: messageId, text: buf.value, metadata: buf.metadata))
+        case .thought(_, let messageId, let buf):          return try encoder.encode(TextPayload(messageId: messageId, text: buf.value, metadata: buf.metadata))
         case .toolCall(let tc):             return try encoder.encode(tc)
         case .fileEdit(_, let fe):          return try encoder.encode(fe)
         case .plan(_, let items):           return try encoder.encode(PlanPayload(items: items))
@@ -461,10 +461,10 @@ enum ACPMessageCodec {
             return .user(id: UUID(), messageId: p.messageId, text: p.text, attachments: p.attachments, delegatedSource: p.delegatedSource)
         case "agent":
             let p = try JSONDecoder().decode(TextPayload.self, from: payload)
-            return .agent(id: UUID(), messageId: p.messageId, StreamingText(p.text))
+            return .agent(id: UUID(), messageId: p.messageId, StreamingText(p.text, phase: ACPMessagePhase.codexPhase(in: p.metadata), metadata: p.metadata))
         case "thought":
             let p = try JSONDecoder().decode(TextPayload.self, from: payload)
-            return .thought(id: UUID(), messageId: p.messageId, StreamingText(p.text))
+            return .thought(id: UUID(), messageId: p.messageId, StreamingText(p.text, phase: ACPMessagePhase.codexPhase(in: p.metadata), metadata: p.metadata))
         case "tool_call":
             return .toolCall(try JSONDecoder().decode(ACPMessage.ToolCall.self, from: payload))
         case "file_edit":
@@ -481,10 +481,12 @@ enum ACPMessageCodec {
     private struct TextPayload: Codable {
         let messageId: String?
         let text: String
+        let metadata: AnyCodable?
 
-        init(messageId: String? = nil, text: String) {
+        init(messageId: String? = nil, text: String, metadata: AnyCodable? = nil) {
             self.messageId = messageId
             self.text = text
+            self.metadata = metadata
         }
     }
     private struct UserPayload: Codable {

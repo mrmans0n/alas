@@ -29,6 +29,8 @@ final class StreamingText: ObservableObject {
     private(set) var utf8Length: Int
     private(set) var revision: UInt64 = 0
     private(set) var lastAppendedSuffix: String?
+    private(set) var phase: ACPMessagePhase?
+    private(set) var metadata: AnyCodable?
 
     /// Wall-clock time (`ProcessInfo.systemUptime`) of the last publish.
     private var lastPublish: TimeInterval = 0
@@ -40,9 +42,11 @@ final class StreamingText: ObservableObject {
     private(set) var publishCountForTests = 0
     #endif
 
-    init(_ initial: String = "") {
+    init(_ initial: String = "", phase: ACPMessagePhase? = nil, metadata: AnyCodable? = nil) {
         self.value = initial
         self.utf8Length = initial.utf8.count
+        self.phase = phase
+        self.metadata = metadata
     }
 
     deinit {
@@ -55,6 +59,11 @@ final class StreamingText: ObservableObject {
         revision &+= 1
         lastAppendedSuffix = s
         scheduleThrottledPublish()
+    }
+
+    func adopt(phase: ACPMessagePhase?, metadata: AnyCodable?) {
+        if self.phase == nil { self.phase = phase }
+        self.metadata = AnyCodable.mergingMetadata(self.metadata, metadata)
     }
 
     private func scheduleThrottledPublish() {
@@ -88,4 +97,25 @@ final class StreamingText: ObservableObject {
 
 extension StreamingText: Equatable {
     nonisolated static func == (lhs: StreamingText, rhs: StreamingText) -> Bool { lhs === rhs }
+}
+
+extension AnyCodable {
+    static func mergingMetadata(_ existing: AnyCodable?, _ update: AnyCodable?) -> AnyCodable? {
+        guard let update else { return existing }
+        guard var merged = metadataObject(existing), let incoming = metadataObject(update) else {
+            return update
+        }
+        for (key, value) in incoming {
+            merged[key] = mergingMetadata(merged[key], value)
+        }
+        return AnyCodable(merged)
+    }
+
+    private static func metadataObject(_ value: AnyCodable?) -> [String: AnyCodable]? {
+        if let object = value?.value as? [String: AnyCodable] { return object }
+        if let object = value?.value as? [String: Any] {
+            return object.mapValues { $0 as? AnyCodable ?? AnyCodable($0) }
+        }
+        return nil
+    }
 }

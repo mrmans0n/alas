@@ -28,6 +28,11 @@ struct ACPGoalState: Equatable, Hashable, Sendable {
     let tokenBudget: Int?
 }
 
+struct ACPRetryStatus: Equatable {
+    let turnId: String?
+    let detail: String?
+}
+
 @MainActor
 final class ACPSession: ObservableObject, Identifiable {
     typealias ID = String
@@ -58,6 +63,8 @@ final class ACPSession: ObservableObject, Identifiable {
     @Published var autoRunEnabled: Bool = false
     @Published var setupState: SetupState = .checking
     @Published var lastError: String?
+    /// Runtime-only state reported by Codex while its current turn retries.
+    @Published private(set) var retryStatus: ACPRetryStatus?
     @Published var contextRestoreWarning: ContextRestoreWarning?
     @Published var contextRecoveryStatus: ContextRecoveryStatus?
     /// Runtime-only transcript scroll intent. When true, the ACP message
@@ -165,6 +172,8 @@ final class ACPSession: ObservableObject, Identifiable {
         var display: String
         var raw: String
         var arrivalOrder: Int
+        var phase: ACPMessagePhase?
+        var metadata: AnyCodable?
     }
 
     private var reconciledLocalUserPromptMessageIds: Set<String> = []
@@ -379,7 +388,15 @@ final class ACPSession: ObservableObject, Identifiable {
     /// `.plan` or `.toolCallUpdate` can mutate a message anywhere in the
     /// transcript, not just the trailing row.
     @discardableResult
-    func apply(_ update: ACPSessionUpdate) -> Set<Int> {
+    func apply(_ update: ACPSessionUpdate, tracksRetryStatus: Bool = true) -> Set<Int> {
+        if tracksRetryStatus {
+            switch update {
+            case .agentMessageChunk, .agentThoughtChunk, .toolCall, .toolCallUpdate, .plan:
+                clearRetryStatus()
+            default:
+                break
+            }
+        }
         // Materialise held replay candidates in order before an update that
         // closes their message, so a suppressed short fragment (e.g. "I",
         // buffered because it is a substring of prior output) is emitted in
@@ -420,11 +437,19 @@ final class ACPSession: ObservableObject, Identifiable {
                 locateByMessageId: { id in transcript.messageIndex(messageId: id, kind: .agent) },
                 locateLegacy: { lastAgent() },
                 replayCandidateMatches: { text in existingMessageContains(kind: .agent, text) },
-                adoptContinuation: { candidate in
-                    chunk.messageId.flatMap { adoptReplayContinuation(kind: .agent, candidate: candidate, messageId: $0) }
+                adoptContinuation: { candidate, phase, metadata in
+                    chunk.messageId.flatMap {
+                        adoptReplayContinuation(
+                            kind: .agent, candidate: candidate, messageId: $0,
+                            phase: phase, metadata: metadata)
+                    }
                 },
                 flushedReplayIndices: &flushedForAgent,
-                makeNew: { text in .agent(id: UUID(), messageId: chunk.messageId, StreamingText(text)) }) else {
+                phase: chunk.phase,
+                metadata: chunk.metadata,
+                makeNew: { text, phase, metadata in
+                    .agent(id: UUID(), messageId: chunk.messageId, StreamingText(text, phase: phase, metadata: metadata))
+                }) else {
                 return flushedForAgent
             }
             return flushedForAgent.union([i])
@@ -450,11 +475,19 @@ final class ACPSession: ObservableObject, Identifiable {
                 locateByMessageId: { id in transcript.messageIndex(messageId: id, kind: .thought) },
                 locateLegacy: { lastThought() },
                 replayCandidateMatches: { text in existingMessageContains(kind: .thought, text) },
-                adoptContinuation: { candidate in
-                    chunk.messageId.flatMap { adoptReplayContinuation(kind: .thought, candidate: candidate, messageId: $0) }
+                adoptContinuation: { candidate, phase, metadata in
+                    chunk.messageId.flatMap {
+                        adoptReplayContinuation(
+                            kind: .thought, candidate: candidate, messageId: $0,
+                            phase: phase, metadata: metadata)
+                    }
                 },
                 flushedReplayIndices: &flushedForThought,
-                makeNew: { text in .thought(id: UUID(), messageId: chunk.messageId, StreamingText(text)) }) else {
+                phase: chunk.phase,
+                metadata: chunk.metadata,
+                makeNew: { text, phase, metadata in
+                    .thought(id: UUID(), messageId: chunk.messageId, StreamingText(text, phase: phase, metadata: metadata))
+                }) else {
                 return flushedForThought
             }
             return flushedForThought.union([i])
@@ -496,7 +529,7 @@ final class ACPSession: ObservableObject, Identifiable {
             }
             return touched.map { [$0] } ?? []
         case .sessionInfoUpdate(let info):
-            applySessionInfoUpdate(info)
+            applySessionInfoUpdate(info, tracksRetryStatus: tracksRetryStatus)
             return []
         case .plan(let entries):
             clearRestoredContextRecoveryStatus()
@@ -576,9 +609,9 @@ final class ACPSession: ObservableObject, Identifiable {
             let message: ACPMessage
             switch key.kind {
             case .agent:
-                message = .agent(id: UUID(), messageId: key.messageId, StreamingText(candidate.display))
+                message = .agent(id: UUID(), messageId: key.messageId, StreamingText(candidate.display, phase: candidate.phase, metadata: candidate.metadata))
             case .thought:
-                message = .thought(id: UUID(), messageId: key.messageId, StreamingText(candidate.display))
+                message = .thought(id: UUID(), messageId: key.messageId, StreamingText(candidate.display, phase: candidate.phase, metadata: candidate.metadata))
             case .user:
                 continue
             }
@@ -1252,6 +1285,7 @@ final class ACPSession: ObservableObject, Identifiable {
     }
 
     func markCompletedOutputBoundary() {
+        clearRetryStatus()
         // The turn's output is complete; materialise any held replay
         // candidate now (before marking boundaries so the flushed final
         // message is itself recorded as a completed boundary). Otherwise a
@@ -1685,6 +1719,11 @@ final class ACPSession: ObservableObject, Identifiable {
         return raw as? String
     }
 
+    private static func metadataBool(_ value: AnyCodable?) -> Bool? {
+        guard let raw = value?.value, !(raw is NSNull) else { return nil }
+        return raw as? Bool
+    }
+
     private static func metadataInt(_ value: AnyCodable?) -> Int? {
         guard let raw = value?.value, !(raw is NSNull) else { return nil }
         if let int = raw as? Int { return int }
@@ -1885,7 +1924,10 @@ final class ACPSession: ObservableObject, Identifiable {
             ?? URL(fileURLWithPath: uri).lastPathComponent
     }
 
-    private func applySessionInfoUpdate(_ info: ACPSessionInfoUpdate) {
+    private func applySessionInfoUpdate(
+        _ info: ACPSessionInfoUpdate,
+        tracksRetryStatus: Bool
+    ) {
         switch info.title {
         case .absent:
             break
@@ -1902,6 +1944,35 @@ final class ACPSession: ObservableObject, Identifiable {
             }
         }
         applyGoalMetadata(info.metadata)
+        if tracksRetryStatus { applyRetryMetadata(info.metadata) }
+    }
+
+    func clearRetryStatus() {
+        retryStatus = nil
+    }
+
+    private func applyRetryMetadata(_ metadata: AnyCodable?) {
+        guard let root = Self.metadataObject(metadata),
+              let codex = Self.metadataObject(root["codex"]),
+              codex.keys.contains("error")
+        else { return }
+        guard let error = Self.metadataObject(codex["error"]),
+              Self.metadataBool(error["willRetry"]) == true
+        else {
+            clearRetryStatus()
+            return
+        }
+        retryStatus = ACPRetryStatus(
+            turnId: Self.metadataScalarString(error["turnId"]),
+            detail: Self.retryDetail(error["message"])
+        )
+    }
+
+    private static func retryDetail(_ value: AnyCodable?) -> String? {
+        guard let message = metadataScalarString(value) else { return nil }
+        let compact = message.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        guard !compact.isEmpty else { return nil }
+        return String(compact.prefix(240))
     }
 
     private func applyGoalMetadata(_ metadata: AnyCodable?) {
@@ -2231,7 +2302,13 @@ final class ACPSession: ObservableObject, Identifiable {
     /// boundary rules (a user prompt, tool call, or file edit closes the
     /// run; an agent row closes a thought; plans are skipped) stay
     /// consistent with the rest of streaming instead of being re-derived.
-    private func adoptReplayContinuation(kind: TextMessageKind, candidate: String, messageId: String) -> Int? {
+    private func adoptReplayContinuation(
+        kind: TextMessageKind,
+        candidate: String,
+        messageId: String,
+        phase: ACPMessagePhase?,
+        metadata: AnyCodable?
+    ) -> Int? {
         let trailingIndex: Int?
         switch kind {
         case .agent: trailingIndex = lastAgent()
@@ -2251,9 +2328,11 @@ final class ACPSession: ObservableObject, Identifiable {
         guard !suffix.isEmpty else { return nil }
         switch transcript.messages[i] {
         case .agent(let id, _, let buf):
+            buf.adopt(phase: phase, metadata: metadata)
             buf.append(suffix)
             transcript.replaceMessage(at: i, with: .agent(id: id, messageId: messageId, buf))
         case .thought(let id, _, let buf):
+            buf.adopt(phase: phase, metadata: metadata)
             buf.append(suffix)
             transcript.replaceMessage(at: i, with: .thought(id: id, messageId: messageId, buf))
         default:
@@ -2281,9 +2360,11 @@ final class ACPSession: ObservableObject, Identifiable {
                                  locateByMessageId: (String) -> Int?,
                                  locateLegacy: () -> Int?,
                                  replayCandidateMatches: (String) -> Bool,
-                                 adoptContinuation: (String) -> Int?,
+                                 adoptContinuation: (String, ACPMessagePhase?, AnyCodable?) -> Int?,
                                  flushedReplayIndices: inout Set<Int>,
-                                 makeNew: (String) -> ACPMessage) -> Int? {
+                                 phase: ACPMessagePhase?,
+                                 metadata: AnyCodable?,
+                                 makeNew: (String, ACPMessagePhase?, AnyCodable?) -> ACPMessage) -> Int? {
         // Any held candidates from a prior window are flushed (materialised)
         // by `apply` before this runs — once `allowsStreamingBoundaryCrossing`
         // is true, or on the closing non-text update — so they are never
@@ -2311,9 +2392,16 @@ final class ACPSession: ObservableObject, Identifiable {
             if !crossesCompletedBoundary || messageId != nil {
                 switch transcript.messages[i] {
                 case .agent(_, _, let buf), .thought(_, _, let buf):
-                    buf.append(Self.streamingSeparator(between: buf.value, and: addition) + addition)
-                    transcript.noteStreamingChange(at: i)
-                    return i
+                    let startsNewPhasedRow = messageId == nil
+                        && buf.phase != nil
+                        && phase != nil
+                        && buf.phase != phase
+                    if !startsNewPhasedRow {
+                        buf.adopt(phase: phase, metadata: metadata)
+                        buf.append(Self.streamingSeparator(between: buf.value, and: addition) + addition)
+                        transcript.noteStreamingChange(at: i)
+                        return i
+                    }
                 default:
                     break
                 }
@@ -2336,6 +2424,8 @@ final class ACPSession: ObservableObject, Identifiable {
         // — adopt it (append only the divergent suffix) instead of
         // materialising a new row that duplicates the hydrated prefix.
         var newMessageText = addition
+        var newMessagePhase = phase
+        var newMessageMetadata = metadata
         if let messageId, !allowsStreamingBoundaryCrossing {
             let candidateKey = ReplayCandidateKey(kind: replayKind, messageId: messageId)
             let previous = pendingReplayCandidates[candidateKey]
@@ -2343,6 +2433,8 @@ final class ACPSession: ObservableObject, Identifiable {
             let previousRaw = previous?.raw ?? ""
             let display = previousDisplay + Self.streamingSeparator(between: previousDisplay, and: addition) + addition
             let raw = previousRaw + addition
+            let candidatePhase = previous?.phase ?? phase
+            let candidateMetadata = AnyCodable.mergingMetadata(previous?.metadata, metadata)
             // Match on both forms: the display form (as a live stream would
             // build it) and the raw concatenation, so a replay that splits
             // at a sentence boundary the original stream did not is still
@@ -2356,14 +2448,22 @@ final class ACPSession: ObservableObject, Identifiable {
                     arrivalOrder = replayCandidateArrivalCounter
                     replayCandidateArrivalCounter += 1
                 }
-                pendingReplayCandidates[candidateKey] = ReplayCandidate(display: display, raw: raw, arrivalOrder: arrivalOrder)
+                pendingReplayCandidates[candidateKey] = ReplayCandidate(
+                    display: display,
+                    raw: raw,
+                    arrivalOrder: arrivalOrder,
+                    phase: candidatePhase,
+                    metadata: candidateMetadata)
                 return nil
             }
             pendingReplayCandidates.removeValue(forKey: candidateKey)
-            if let adopted = adoptContinuation(display) ?? adoptContinuation(raw) {
+            if let adopted = adoptContinuation(display, candidatePhase, candidateMetadata)
+                ?? adoptContinuation(raw, candidatePhase, candidateMetadata) {
                 return adopted
             }
             newMessageText = display
+            newMessagePhase = candidatePhase
+            newMessageMetadata = candidateMetadata
         }
         // A new agent row is live output that closes an in-progress thought
         // (`lastThought()` stops at `.agent`); flush pending thoughts ahead of
@@ -2373,7 +2473,7 @@ final class ACPSession: ObservableObject, Identifiable {
         if replayKind == .agent {
             flushedReplayIndices.formUnion(flushPendingReplayCandidates(kinds: [.thought]))
         }
-        transcript.appendMessage(makeNew(newMessageText))
+        transcript.appendMessage(makeNew(newMessageText, newMessagePhase, newMessageMetadata))
         didAppendTranscriptMessage()
         return transcript.messages.count - 1
     }

@@ -47,6 +47,7 @@ struct ACPTranscriptRowContentTests {
                 stableId: message.stableId,
                 messageIndex: 0,
                 message: message,
+                messagePhase: ACPTranscriptRowContent.presentationPhase(of: message),
                 contentMaxWidth: 800,
                 typography: .default,
                 trustedImageRoot: nil,
@@ -92,6 +93,41 @@ struct ACPTranscriptRowContentTests {
             stableId: "s1", message: msgB, contentMaxWidth: 800,
             typography: .default, trustedImageRoot: nil)
         #expect(a != b)
+    }
+
+    @Test("row equality detects a phase adopted by its streaming buffer")
+    @MainActor
+    func rowContentEqualityDetectsAdoptedPhase() {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        let buffer = StreamingText("working")
+        let message = ACPMessage.agent(id: UUID(), messageId: "agent-1", buffer)
+
+        func row() -> ACPTranscriptRowContent {
+            ACPTranscriptRowContent(
+                stableId: message.stableId,
+                messageIndex: 0,
+                message: message,
+                messagePhase: ACPTranscriptRowContent.presentationPhase(of: message),
+                contentMaxWidth: 800,
+                typography: .default,
+                trustedImageRoot: nil,
+                transcript: session.transcript,
+                session: session,
+                onOpenDiff: { _ in },
+                onLoadFullToolCallContent: { _ in nil },
+                isForkEligible: false,
+                forkTargets: [],
+                onFork: { _, _ in }
+            )
+        }
+
+        let before = row()
+        buffer.adopt(
+            phase: .commentary,
+            metadata: AnyCodable(["codex": AnyCodable(["phase": AnyCodable("commentary")])]))
+        let after = row()
+
+        #expect(before != after)
     }
 
     @Test("equality detects a content-width change")

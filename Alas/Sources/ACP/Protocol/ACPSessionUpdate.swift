@@ -171,23 +171,44 @@ enum ACPSessionUpdate: Codable, Equatable {
     }
 }
 
+enum ACPMessagePhase: String, Codable, Equatable, Sendable {
+    case commentary
+    case finalAnswer = "final_answer"
+
+    static func codexPhase(in metadata: AnyCodable?) -> ACPMessagePhase? {
+        guard let metadata = metadata?.value as? [String: AnyCodable],
+              let codex = metadata["codex"]?.value as? [String: AnyCodable],
+              let value = codex["phase"]?.value as? String
+        else { return nil }
+        return ACPMessagePhase(rawValue: value)
+    }
+}
+
 struct ACPTextChunk: Codable, Equatable {
     let messageId: String?
     let content: ACPContentBlock
+    let metadata: AnyCodable?
 
-    init(messageId: String? = nil, content: ACPContentBlock) {
+    var phase: ACPMessagePhase? {
+        ACPMessagePhase.codexPhase(in: metadata)
+    }
+
+    init(messageId: String? = nil, content: ACPContentBlock, metadata: AnyCodable? = nil) {
         self.messageId = messageId
         self.content = content
+        self.metadata = metadata
     }
 
     private enum CodingKeys: String, CodingKey {
         case messageId, content
+        case metadata = "_meta"
     }
 
     func encodeFields(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encodeIfPresent(messageId, forKey: .messageId)
         try c.encode(content, forKey: .content)
+        try c.encodeIfPresent(metadata, forKey: .metadata)
     }
 }
 
