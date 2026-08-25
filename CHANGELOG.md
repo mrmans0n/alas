@@ -6,6 +6,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.20] - 2026-08-25
+
+### ✨ Features
+
+- Support configurable ACP adapter providers (#1064).
+- Import MCP configs from the clipboard (#1063).
+
+### 🐛 Fixes
+
+- Wrap long branch names in worktree inputs (#1062).
+- Place the cursor correctly after paired quotes (#1061).
+- Prevent input-request scroll jumps in chat (#1060).
+
+### 🏗️ Internal
+
+- Update the Rust `tree-sitter` crate to 0.26.13 (#1054).
+
 ## [0.14.19] - 2026-08-22
 
 ### ✨ Features
