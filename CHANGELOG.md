@@ -6,6 +6,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.22] - 2026-08-25
+
+### ✨ Features
+
+- Delete persisted ACP agent sessions through `session/delete` (#1072).
+- Render ACP context compaction events in transcripts (#1070).
+
+### 🐛 Fixes
+
+- Fall back to stable glyph diff row heights (#1069).
+- Hide the required default ACP provider from provider choices (#1068).
+
+### 🏗️ Internal
+
+- Restyle ACP working entries (#1071).
+
 ## [0.14.21] - 2026-08-25
 
 ### ✨ Features
