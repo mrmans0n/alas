@@ -108,6 +108,34 @@ struct ACPMessageTests {
         #expect(back == m)
     }
 
+    @Test("context compaction facts persist with a tool call")
+    func contextCompactionRoundtrip() throws {
+        let message = ACPMessage.toolCall(.init(
+            toolCallId: "context-compaction:compact-1",
+            title: "Compacting context",
+            kind: "context_compaction",
+            status: "completed",
+            metadata: AnyCodable([
+                "contextCompaction": [
+                    "version": 1,
+                    "trigger": "automatic",
+                    "preTokens": 128_000,
+                    "postTokens": 16_000,
+                    "durationMs": 950
+                ]
+            ])))
+
+        let payload = try ACPMessageCodec.encode(message)
+        guard case .toolCall(let restored) = try ACPMessageCodec.decode(kind: message.kind, payload: payload),
+              let compaction = ACPContextCompaction(toolCall: restored) else {
+            Issue.record("expected persisted context compaction")
+            return
+        }
+        #expect(compaction.tokensBefore == 128_000)
+        #expect(compaction.tokensAfter == 16_000)
+        #expect(compaction.durationMs == 950)
+    }
+
     @Test("legacy contentSummary decode keeps backward-compatible preview")
     func toolCallLegacyContentSummary() throws {
         let payload = """

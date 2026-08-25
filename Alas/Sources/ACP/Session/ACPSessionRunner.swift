@@ -513,7 +513,8 @@ final class ACPSessionRunner {
             }.map { [$0] } ?? []
         case .toolCallUpdate(let update):
             return session.transcript.toolCallIndex(toolCallId: update.toolCallId).map { [$0] } ?? []
-        case .toolCall, .userMessageChunk, .plan, .availableModelsUpdate,
+        case .toolCall, .compactionUpdate, .compactionSummaryChunk,
+             .userMessageChunk, .plan, .availableModelsUpdate,
              .currentModeUpdate, .currentModelUpdate, .sessionInfoUpdate,
              .sessionConfigOptionsUpdate, .availableCommandsUpdate,
              .usageUpdate, .unknown:
@@ -2078,7 +2079,8 @@ extension ACPSessionRunner {
         switch update {
         case .agentMessageChunk, .agentThoughtChunk, .toolCallUpdate:
             return true
-        case .userMessageChunk, .toolCall, .plan, .availableModelsUpdate,
+        case .userMessageChunk, .toolCall, .compactionUpdate, .compactionSummaryChunk,
+             .plan, .availableModelsUpdate,
              .currentModeUpdate, .currentModelUpdate, .sessionInfoUpdate,
              .sessionConfigOptionsUpdate, .availableCommandsUpdate,
              .usageUpdate, .unknown:

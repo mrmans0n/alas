@@ -5,6 +5,83 @@ import Testing
 @MainActor
 @Suite("ACPSession")
 struct ACPSessionTests {
+    @Test("compaction updates with the same ID replace one transcript row")
+    func compactionUpdatesMergeInPlace() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+
+        session.apply(.compactionUpdate(.init(
+            compactionId: "compact-1", status: "in_progress")))
+        session.apply(.compactionUpdate(.init(
+            compactionId: "compact-1", status: "completed",
+            summary: [.text("Kept decisions.")])))
+
+        #expect(session.transcript.messages.count == 1)
+        guard case .toolCall(let toolCall) = session.transcript.messages[0],
+              let compaction = ACPContextCompaction(toolCall: toolCall) else {
+            Issue.record("expected a normalized compaction tool call")
+            return
+        }
+        #expect(compaction.id == "compact-1")
+        #expect(compaction.status == .completed)
+        #expect(toolCall.content == "Kept decisions.")
+    }
+
+    @Test("Codex compaction updates retain previously supplied facts")
+    func codexCompactionUpdatesMergeFacts() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+
+        session.apply(.toolCall(.init(
+            toolCallId: "compact-1", title: "Compact conversation", kind: "think", status: "in_progress",
+            metadata: AnyCodable(["contextCompaction": ["version": 1, "trigger": "automatic", "preTokens": 100_000]]))))
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "compact-1", status: "completed",
+            metadata: AnyCodable(["contextCompaction": ["version": 1, "postTokens": 12_000, "durationMs": 300]]))))
+
+        guard case .toolCall(let toolCall) = session.transcript.messages.first,
+              let compaction = ACPContextCompaction(toolCall: toolCall) else {
+            Issue.record("expected a normalized context compaction")
+            return
+        }
+        #expect(compaction.trigger == "automatic")
+        #expect(compaction.tokensBefore == 100_000)
+        #expect(compaction.tokensAfter == 12_000)
+        #expect(compaction.durationMs == 300)
+    }
+
+    @Test("compaction summary chunks append to the normalized row")
+    func compactionSummaryChunksAppend() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+
+        session.apply(.compactionUpdate(.init(
+            compactionId: "compact-chunks", status: "in_progress")))
+        session.apply(.compactionSummaryChunk(.init(
+            compactionId: "compact-chunks", content: .text("Kept "))))
+        session.apply(.compactionSummaryChunk(.init(
+            compactionId: "compact-chunks", content: .text("decisions."))))
+
+        guard case .toolCall(let toolCall) = session.transcript.messages.first else {
+            Issue.record("expected a normalized compaction tool call")
+            return
+        }
+        #expect(toolCall.content == "Kept decisions.")
+    }
+
+    @Test("usage update remains authoritative over compaction counts")
+    func usageUpdateRemainsAuthoritative() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+
+        session.apply(.compactionUpdate(.init(
+            compactionId: "compact-usage", status: "completed",
+            metadata: AnyCodable([
+                "preTokens": 99_000,
+                "postTokens": 12_000,
+                "durationMs": 400
+            ]))))
+        #expect(session.contextUsage == nil)
+
+        session.apply(.usageUpdate(.init(used: 3_000, size: 8_000, cost: nil)))
+        #expect(session.contextUsage == .init(used: 3_000, size: 8_000, cost: nil))
+    }
     @Test("replacement transcript preserves tool call content revision when content is unchanged")
     func replaceTranscriptPreservesToolCallContentRevisionForSameContent() {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")

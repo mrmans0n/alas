@@ -1,0 +1,12 @@
+{
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+    "sessionId": "s1",
+    "update": {
+      "sessionUpdate": "compaction_update",
+      "compactionId": "standard-compact-1",
+      "status": "in_progress"
+    }
+  }
+}

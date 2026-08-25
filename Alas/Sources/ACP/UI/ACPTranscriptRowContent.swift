@@ -146,11 +146,15 @@ struct ACPTranscriptRowContent: View, Equatable {
         case .thought(_, _, let buf):
             ACPThoughtView(buffer: buf)
         case .toolCall(let tc):
-            ACPToolCallCard(
-                toolCall: tc,
-                trustedImageRoot: trustedImageRoot,
-                loadFullContent: tc.isContentTruncated ? onLoadFullToolCallContent : nil)
-                .environment(\.acpTerminalHost, session.terminalHost)
+            if let compaction = ACPContextCompaction(toolCall: tc) {
+                ACPContextCompactionView(compaction: compaction)
+            } else {
+                ACPToolCallCard(
+                    toolCall: tc,
+                    trustedImageRoot: trustedImageRoot,
+                    loadFullContent: tc.isContentTruncated ? onLoadFullToolCallContent : nil)
+                    .environment(\.acpTerminalHost, session.terminalHost)
+            }
         case .fileEdit(_, let edit):
             ACPFileEditCard(edit: edit, onOpenDiff: onOpenDiff)
         case .plan:

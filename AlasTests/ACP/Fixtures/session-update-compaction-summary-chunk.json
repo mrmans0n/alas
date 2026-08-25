@@ -1,0 +1,12 @@
+{
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+    "sessionId": "s1",
+    "update": {
+      "sessionUpdate": "compaction_summary_chunk",
+      "compactionId": "standard-compact-1",
+      "content": { "type": "text", "text": "Kept decisions." }
+    }
+  }
+}

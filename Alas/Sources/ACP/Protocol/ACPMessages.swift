@@ -104,22 +104,27 @@ struct ACPClientCapabilities: Codable, Equatable {
 
 struct ACPSessionCapabilities: Codable, Equatable {
     static let booleanConfigOptions = ACPSessionCapabilities(
-        configOptions: .init(boolean: .init()))
+        configOptions: .init(boolean: .init()),
+        compaction: .init())
 
     let configOptions: ConfigOptions
+    /// Experimental ACP context-compaction updates. `{}` advertises support.
+    let compaction: EmptyObject?
 
-    init(configOptions: ConfigOptions = .init(boolean: nil)) {
+    init(configOptions: ConfigOptions = .init(boolean: nil), compaction: EmptyObject? = nil) {
         self.configOptions = configOptions
+        self.compaction = compaction
     }
 
     enum CodingKeys: String, CodingKey {
-        case configOptions
+        case configOptions, compaction
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         configOptions = try c.decodeIfPresent(ConfigOptions.self, forKey: .configOptions)
             ?? .init(boolean: nil)
+        compaction = try? c.decodeIfPresent(EmptyObject.self, forKey: .compaction)
     }
 
     struct ConfigOptions: Codable, Equatable {
