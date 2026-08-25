@@ -584,6 +584,7 @@ final class ACPSession: ObservableObject, Identifiable {
         let toolCallId = Self.contextCompactionToolCallId(update.compactionId)
         let content = update.summary.map { $0.map(ACPToolCallContent.content) }
         let metadata = Self.contextCompactionMetadata(
+            id: update.compactionId,
             trigger: nil,
             error: update.errorWasNull ? AnyCodable(NSNull()) : update.error.map { AnyCodable($0) },
             metadata: update.metadata
@@ -634,16 +635,18 @@ final class ACPSession: ObservableObject, Identifiable {
         return [index]
     }
 
-    private static func contextCompactionToolCallId(_ id: String) -> String {
+    static func contextCompactionToolCallId(_ id: String) -> String {
         "context-compaction:\(id)"
     }
 
     private static func contextCompactionMetadata(
+        id: String,
         trigger: String?,
         error: AnyCodable?,
         metadata: AnyCodable?
     ) -> AnyCodable {
         var facts: [String: AnyCodable] = ["version": AnyCodable(1)]
+        facts["id"] = AnyCodable(id)
         if let trigger { facts["trigger"] = AnyCodable(trigger) }
         if let error { facts["error"] = error }
         if let metadata = metadata?.value as? [String: AnyCodable] {

@@ -459,7 +459,7 @@ struct ACPContextCompaction: Equatable, Sendable {
               Self.int(compaction["version"]) == 1 else {
             return nil
         }
-        id = toolCall.toolCallId
+        id = Self.string(compaction["id"]) ?? toolCall.toolCallId
         status = Self.status(toolCall.status)
         trigger = Self.string(compaction["trigger"])
         tokensBefore = Self.int(compaction["preTokens"])
