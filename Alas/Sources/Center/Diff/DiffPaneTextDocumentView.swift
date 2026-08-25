@@ -871,9 +871,16 @@ final class DiffPaneTextScrollView: NSScrollView {
             var candidateLineHeight: CGFloat?
             var lineCount = 1
             if let targetHeight {
-                let lineCountHeight = previousLineHeight ?? lineHeight()
-                lineCount = max(1, Int(round(currentRows[index].height / max(lineCountHeight, 1))))
-                let computed = targetHeight / CGFloat(lineCount)
+                let appliedLineHeight = previousLineHeight ?? lineHeight()
+                lineCount = max(1, Int(round(currentRows[index].height / max(appliedLineHeight, 1))))
+                // A fallback glyph can make the measured row taller than its
+                // paragraph line height. Correct existing padding by the
+                // measured delta so that extra height is not added again.
+                let computed = if previousLineHeight != nil {
+                    appliedLineHeight + (targetHeight - currentRows[index].height) / CGFloat(lineCount)
+                } else {
+                    targetHeight / CGFloat(lineCount)
+                }
                 if computed > lineHeight() + 0.5 {
                     candidateLineHeight = computed
                 }
