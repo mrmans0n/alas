@@ -62,7 +62,6 @@ struct ACPContextCompactionView: View {
                 .foregroundStyle(theme.color("fg-faint"))
         }
     }
-
 }
 
 extension ACPContextCompaction {
