@@ -1,0 +1,12 @@
+{
+  "jsonrpc": "2.0", "method": "session/update", "params": {
+    "sessionId": "s1", "update": {
+      "sessionUpdate": "tool_call", "toolCallId": "codex-compact-3",
+      "title": "Compact conversation", "kind": "think", "status": "failed",
+      "_meta": { "contextCompaction": {
+        "version": 1,
+        "error": "Context limit exceeded"
+      }}
+    }
+  }
+}

@@ -296,11 +296,149 @@ struct ACPSessionUpdateTests {
         #expect(cmds.allSatisfy { $0.hint == nil })
     }
 
+    @Test("decodes Codex version 1 context compaction metadata")
+    func codexContextCompactionMetadata() throws {
+        let env = try decode("session-update-context-compaction-running")
+        guard case .toolCall(let toolCall) = env.params?.update,
+              let compaction = ACPContextCompaction(toolCall: .init(
+                toolCallId: toolCall.toolCallId,
+                title: toolCall.title,
+                kind: toolCall.kind,
+                status: toolCall.status,
+                metadata: toolCall.metadata
+              )) else {
+            Issue.record("expected a normalized context compaction")
+            return
+        }
+
+        #expect(compaction.id == "codex-compact-1")
+        #expect(compaction.status == .inProgress)
+        #expect(compaction.trigger == "automatic")
+        #expect(compaction.tokensBefore == nil)
+        #expect(compaction.tokensAfter == nil)
+        #expect(compaction.durationMs == nil)
+    }
+
+    @Test("decodes completed and failed Codex compaction metadata without fabricated values")
+    func codexCompactionCompletionStates() throws {
+        let completed = try toolCallCompaction(
+            id: "compact-completed",
+            status: "completed",
+            facts: "\"trigger\": \"manual\", \"preTokens\": 120000, \"postTokens\": 18000, \"durationMs\": 840")
+        let failed = try toolCallCompaction(
+            id: "compact-failed",
+            status: "failed",
+            facts: "\"error\": \"compaction timed out\"")
+
+        #expect(completed.status == .completed)
+        #expect(completed.trigger == "manual")
+        #expect(completed.tokensBefore == 120_000)
+        #expect(completed.tokensAfter == 18_000)
+        #expect(completed.durationMs == 840)
+        #expect(failed.status == .failed)
+        #expect(failed.error == "compaction timed out")
+        #expect(failed.tokensBefore == nil)
+        #expect(failed.tokensAfter == nil)
+        #expect(failed.durationMs == nil)
+    }
+
+    @Test("decodes documented context compaction metadata variants")
+    func codexContextCompactionMetadataVariants() throws {
+        let expectations: [(String, ACPContextCompaction.Status, Int?, Int?, Int?, String?)] = [
+            ("session-update-context-compaction-completed", .completed, 128_000, 16_000, 950, nil),
+            ("session-update-context-compaction-failed", .failed, nil, nil, nil, "Context limit exceeded"),
+            ("session-update-context-compaction-partial", .completed, 128_000, nil, nil, nil),
+            ("session-update-context-compaction-unknown", .completed, nil, nil, nil, nil)
+        ]
+
+        for (fixture, status, before, after, duration, error) in expectations {
+            let env = try decode(fixture)
+            guard case .toolCall(let toolCall) = env.params?.update,
+                  let compaction = ACPContextCompaction(toolCall: .init(
+                    toolCallId: toolCall.toolCallId,
+                    title: toolCall.title,
+                    kind: toolCall.kind,
+                    status: toolCall.status,
+                    metadata: toolCall.metadata
+                  )) else {
+                Issue.record("expected a normalized context compaction from \(fixture)")
+                continue
+            }
+            #expect(compaction.status == status)
+            #expect(compaction.tokensBefore == before)
+            #expect(compaction.tokensAfter == after)
+            #expect(compaction.durationMs == duration)
+            #expect(compaction.error == error)
+        }
+    }
+
+    @Test("decodes experimental compaction updates")
+    func compactionUpdates() throws {
+        let running = try decode("session-update-compaction-update")
+        guard case .compactionUpdate(let update) = running.params?.update else {
+            Issue.record("expected compactionUpdate")
+            return
+        }
+        #expect(update.compactionId == "standard-compact-1")
+        #expect(update.status == "in_progress")
+        #expect(update.summary == nil)
+
+        let patch = try JSONDecoder().decode(ACPSessionUpdateParams.self, from: Data("""
+        { "sessionId": "s", "update": { "sessionUpdate": "compaction_update", "compactionId": "standard-compact-1", "status": "failed", "summary": null, "error": null, "future": true } }
+        """.utf8))
+        guard case .compactionUpdate(let nullPatch) = patch.update else {
+            Issue.record("expected compactionUpdate")
+            return
+        }
+        #expect(nullPatch.summaryWasProvided)
+        #expect(nullPatch.summaryWasNull)
+        #expect(nullPatch.errorWasProvided)
+        #expect(nullPatch.errorWasNull)
+
+        let chunk = try decode("session-update-compaction-summary-chunk")
+        guard case .compactionSummaryChunk(let summaryChunk) = chunk.params?.update else {
+            Issue.record("expected compactionSummaryChunk")
+            return
+        }
+        #expect(summaryChunk.compactionId == "standard-compact-1")
+        #expect(summaryChunk.content == .text("Kept decisions."))
+    }
+
+    @Test("initialize advertises compaction support")
+    func compactionCapability() throws {
+        let data = try JSONEncoder().encode(ACPInitializeParams(
+            protocolVersion: 1,
+            clientCapabilities: .init(
+                fs: .init(readTextFile: true, writeTextFile: true), terminal: true)))
+        let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let capabilities = try #require(json["clientCapabilities"] as? [String: Any])
+        let session = try #require(capabilities["session"] as? [String: Any])
+        #expect(session["compaction"] as? [String: Any] != nil)
+    }
+
     private func decode(_ name: String) throws -> JSONRPCEnvelope<ACPSessionUpdateParams> {
         let bundle = Bundle(for: ACPSessionUpdateFixtureMarker.self)
         let url = try #require(bundle.url(forResource: name, withExtension: "json"))
         return try JSONDecoder().decode(JSONRPCEnvelope<ACPSessionUpdateParams>.self,
                                         from: try Data(contentsOf: url))
+    }
+
+    private func toolCallCompaction(
+        id: String,
+        status: String,
+        facts: String
+    ) throws -> ACPContextCompaction {
+        let json = """
+        { "sessionId": "s", "update": { "sessionUpdate": "tool_call", "toolCallId": "\(id)", "title": "Compact conversation", "status": "\(status)", "_meta": { "contextCompaction": { "version": 1, \(facts) } } } }
+        """
+        let params = try JSONDecoder().decode(ACPSessionUpdateParams.self, from: Data(json.utf8))
+        guard case .toolCall(let payload) = params.update,
+              let compaction = ACPContextCompaction(toolCall: .init(
+                toolCallId: payload.toolCallId, title: payload.title, kind: payload.kind,
+                status: payload.status, metadata: payload.metadata)) else {
+            throw DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "missing compaction"))
+        }
+        return compaction
     }
 }
 

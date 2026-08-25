@@ -1,0 +1,11 @@
+{
+  "jsonrpc": "2.0", "method": "session/update", "params": {
+    "sessionId": "s1", "update": {
+      "sessionUpdate": "tool_call", "toolCallId": "codex-compact-4",
+      "title": "Compact conversation", "kind": "think", "status": "completed",
+      "_meta": { "contextCompaction": {
+        "version": 1, "preTokens": 128000
+      }}
+    }
+  }
+}

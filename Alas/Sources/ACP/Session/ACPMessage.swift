@@ -433,6 +433,72 @@ enum ACPMessage: Equatable {
     }
 }
 
+/// The documented, versioned context-compaction facts carried on a synthetic
+/// tool call. Unknown metadata is intentionally not projected into the UI.
+struct ACPContextCompaction: Equatable, Sendable {
+    enum Status: Equatable, Sendable {
+        case inProgress
+        case completed
+        case failed
+        case cancelled
+        case other(String)
+    }
+
+    let id: String
+    let status: Status
+    let trigger: String?
+    let tokensBefore: Int?
+    let tokensAfter: Int?
+    let durationMs: Int?
+    let error: String?
+
+    init?(toolCall: ACPMessage.ToolCall) {
+        guard let root = Self.object(toolCall.metadata),
+              let raw = root["contextCompaction"],
+              let compaction = Self.object(raw),
+              Self.int(compaction["version"]) == 1 else {
+            return nil
+        }
+        id = Self.string(compaction["id"]) ?? toolCall.toolCallId
+        status = Self.status(toolCall.status)
+        trigger = Self.string(compaction["trigger"])
+        tokensBefore = Self.int(compaction["preTokens"])
+        tokensAfter = Self.int(compaction["postTokens"])
+        durationMs = Self.int(compaction["durationMs"])
+        error = Self.string(compaction["error"])
+    }
+
+    private static func object(_ value: AnyCodable?) -> [String: AnyCodable]? {
+        value.flatMap(object)
+    }
+
+    private static func object(_ value: AnyCodable) -> [String: AnyCodable]? {
+        if let object = value.value as? [String: AnyCodable] { return object }
+        if let object = value.value as? [String: Any] {
+            return object.mapValues { AnyCodable($0) }
+        }
+        return nil
+    }
+
+    private static func string(_ value: AnyCodable?) -> String? {
+        value?.value as? String
+    }
+
+    private static func int(_ value: AnyCodable?) -> Int? {
+        value?.value as? Int
+    }
+
+    private static func status(_ raw: String) -> Status {
+        switch raw {
+        case "in_progress", "running": .inProgress
+        case "completed", "success": .completed
+        case "failed", "error": .failed
+        case "cancelled", "canceled": .cancelled
+        default: .other(raw)
+        }
+    }
+}
+
 enum ACPMessageCodec {
     private static let encoder: JSONEncoder = {
         let e = JSONEncoder()

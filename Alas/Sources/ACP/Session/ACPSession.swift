@@ -418,7 +418,7 @@ final class ACPSession: ObservableObject, Identifiable {
             kindsToFlush = [.agent, .thought]
         } else {
             switch update {
-            case .toolCall, .plan:
+            case .toolCall, .plan, .compactionUpdate, .compactionSummaryChunk:
                 kindsToFlush = [.agent, .thought]
             default:
                 kindsToFlush = []
@@ -529,6 +529,12 @@ final class ACPSession: ObservableObject, Identifiable {
                 applyToolCallMetadata(u.metadata)
             }
             return touched.map { [$0] } ?? []
+        case .compactionUpdate(let update):
+            clearRestoredContextRecoveryStatus()
+            return applyContextCompaction(update)
+        case .compactionSummaryChunk(let chunk):
+            clearRestoredContextRecoveryStatus()
+            return appendContextCompactionSummary(chunk)
         case .sessionInfoUpdate(let info):
             applySessionInfoUpdate(info, tracksRetryStatus: tracksRetryStatus)
             return []
@@ -573,6 +579,83 @@ final class ACPSession: ObservableObject, Identifiable {
         }
         }()
         return flushed.union(result)
+    }
+
+    private func applyContextCompaction(_ update: ACPCompactionUpdate) -> Set<Int> {
+        let toolCallId = Self.contextCompactionToolCallId(update.compactionId)
+        let content = update.summary.map { $0.map(ACPToolCallContent.content) }
+        let metadata = Self.contextCompactionMetadata(
+            id: update.compactionId,
+            trigger: nil,
+            error: update.errorWasNull ? AnyCodable(NSNull()) : update.error.map { AnyCodable($0) },
+            metadata: update.metadata
+        )
+
+        if let existing = transcript.toolCallIndex(toolCallId: toolCallId) {
+            return updateToolCall(id: toolCallId) { toolCall in
+                toolCall.status = update.status
+                toolCall.metadata = Self.mergeMetadata(toolCall.metadata, metadata)
+                if update.summaryWasProvided {
+                    Self.applyToolCallContent(
+                        items: update.summaryWasNull ? [] : (content ?? []),
+                        isFinal: Self.isFinalStatus(toolCall.status),
+                        rawOutputAssets: [],
+                        rawOutputChanged: false,
+                        metadataChanged: true,
+                        to: &toolCall)
+                }
+            }.map { [$0] } ?? [existing]
+        }
+
+        let items = content ?? []
+        let raw = Self.flatten(items)
+        transcript.appendMessage(.toolCall(.init(
+            toolCallId: toolCallId,
+            title: "Compacting context",
+            kind: "context_compaction",
+            status: update.status,
+            content: Self.stripWrappingFence(raw, isFinal: Self.isFinalStatus(update.status)),
+            preview: Self.previewLine(raw),
+            metadata: metadata
+        )))
+        didAppendTranscriptMessage()
+        transcript.completedOutputBoundaryMessageIds.removeAll()
+        return [transcript.messages.count - 1]
+    }
+
+    private func appendContextCompactionSummary(_ chunk: ACPCompactionSummaryChunk) -> Set<Int> {
+        let toolCallId = Self.contextCompactionToolCallId(chunk.compactionId)
+        guard let index = updateToolCall(id: toolCallId, { toolCall in
+            let chunkText = text(of: chunk.content)
+            guard !chunkText.isEmpty else { return }
+            toolCall.replaceContent(toolCall.content + chunkText)
+            toolCall.preview = Self.previewLine(toolCall.content)
+        }) else {
+            return []
+        }
+        return [index]
+    }
+
+    static func contextCompactionToolCallId(_ id: String) -> String {
+        "context-compaction:\(id)"
+    }
+
+    private static func contextCompactionMetadata(
+        id: String,
+        trigger: String?,
+        error: AnyCodable?,
+        metadata: AnyCodable?
+    ) -> AnyCodable {
+        var facts: [String: AnyCodable] = ["version": AnyCodable(1)]
+        facts["id"] = AnyCodable(id)
+        if let trigger { facts["trigger"] = AnyCodable(trigger) }
+        if let error { facts["error"] = error }
+        if let metadata = metadata?.value as? [String: AnyCodable] {
+            for key in ["preTokens", "postTokens", "durationMs"] {
+                if let value = metadata[key] { facts[key] = value }
+            }
+        }
+        return AnyCodable(["contextCompaction": AnyCodable(facts)])
     }
 
     /// Materialise held replay candidates of the given `kinds` as new rows
@@ -1606,7 +1689,13 @@ final class ACPSession: ObservableObject, Identifiable {
             return update
         }
         for (key, value) in updateObject {
-            merged[key] = value
+            if key == "contextCompaction",
+               let existingCompaction = Self.metadataObject(merged[key]),
+               let updatedCompaction = Self.metadataObject(value) {
+                merged[key] = AnyCodable(existingCompaction.merging(updatedCompaction) { _, update in update })
+            } else {
+                merged[key] = value
+            }
         }
         return AnyCodable(merged)
     }

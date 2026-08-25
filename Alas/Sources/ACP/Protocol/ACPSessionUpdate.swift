@@ -51,6 +51,8 @@ enum ACPSessionUpdate: Codable, Equatable {
     case availableCommandsUpdate([ACPPromptSuggestion])
     case usageUpdate(ACPUsageInfo)
     case sessionInfoUpdate(ACPSessionInfoUpdate)
+    case compactionUpdate(ACPCompactionUpdate)
+    case compactionSummaryChunk(ACPCompactionSummaryChunk)
     case unknown(String)
 
     static func userMessageChunk(_ content: ACPContentBlock) -> ACPSessionUpdate {
@@ -110,6 +112,10 @@ enum ACPSessionUpdate: Codable, Equatable {
             self = .usageUpdate(try ACPUsageInfo(from: decoder))
         case "session_info_update":
             self = .sessionInfoUpdate(try ACPSessionInfoUpdate(from: decoder))
+        case "compaction_update":
+            self = .compactionUpdate(try ACPCompactionUpdate(from: decoder))
+        case "compaction_summary_chunk":
+            self = .compactionSummaryChunk(try ACPCompactionSummaryChunk(from: decoder))
         default:
             self = .unknown(kind)
         }
@@ -165,7 +171,8 @@ enum ACPSessionUpdate: Codable, Equatable {
             try info.encodeFields(to: encoder)
         case .availableCommandsUpdate:
             break
-        case .toolCall, .toolCallUpdate, .usageUpdate, .unknown:
+        case .toolCall, .toolCallUpdate, .usageUpdate, .compactionUpdate,
+             .compactionSummaryChunk, .unknown:
             break
         }
     }
@@ -181,6 +188,81 @@ enum ACPMessagePhase: String, Codable, Equatable, Sendable {
               let value = codex["phase"]?.value as? String
         else { return nil }
         return ACPMessagePhase(rawValue: value)
+    }
+}
+
+/// Experimental ACP compaction lifecycle update. Optional fields decode
+/// defensively because this wire format is still evolving.
+struct ACPCompactionUpdate: Codable, Equatable {
+    let compactionId: String
+    let status: String
+    let summary: [ACPContentBlock]?
+    let summaryWasProvided: Bool
+    let summaryWasNull: Bool
+    let error: String?
+    let errorWasProvided: Bool
+    let errorWasNull: Bool
+    let metadata: AnyCodable?
+
+    private enum CodingKeys: String, CodingKey {
+        case compactionId, status, summary, error
+        case metadata = "_meta"
+    }
+
+    init(
+        compactionId: String,
+        status: String,
+        summary: [ACPContentBlock]? = nil,
+        error: String? = nil,
+        metadata: AnyCodable? = nil
+    ) {
+        self.compactionId = compactionId
+        self.status = status
+        self.summary = summary
+        self.summaryWasProvided = summary != nil
+        self.summaryWasNull = false
+        self.error = error
+        self.errorWasProvided = error != nil
+        self.errorWasNull = false
+        self.metadata = metadata
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        compactionId = try c.decode(String.self, forKey: .compactionId)
+        status = try c.decode(String.self, forKey: .status)
+        summaryWasProvided = c.contains(.summary)
+        summaryWasNull = summaryWasProvided ? try c.decodeNil(forKey: .summary) : false
+        summary = summaryWasNull ? nil : try? c.decodeIfPresent([ACPContentBlock].self, forKey: .summary)
+        errorWasProvided = c.contains(.error)
+        errorWasNull = errorWasProvided ? try c.decodeNil(forKey: .error) : false
+        error = errorWasNull ? nil : try? c.decodeIfPresent(String.self, forKey: .error)
+        metadata = try? c.decodeIfPresent(AnyCodable.self, forKey: .metadata)
+    }
+}
+
+/// Experimental ACP chunk appended to an in-progress compaction summary.
+struct ACPCompactionSummaryChunk: Codable, Equatable {
+    let compactionId: String
+    let content: ACPContentBlock
+    let metadata: AnyCodable?
+
+    private enum CodingKeys: String, CodingKey {
+        case compactionId, content
+        case metadata = "_meta"
+    }
+
+    init(compactionId: String, content: ACPContentBlock, metadata: AnyCodable? = nil) {
+        self.compactionId = compactionId
+        self.content = content
+        self.metadata = metadata
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        compactionId = try c.decode(String.self, forKey: .compactionId)
+        content = try c.decode(ACPContentBlock.self, forKey: .content)
+        metadata = try? c.decodeIfPresent(AnyCodable.self, forKey: .metadata)
     }
 }
 
