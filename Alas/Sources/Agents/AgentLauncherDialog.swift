@@ -9,6 +9,8 @@ struct AgentLauncherDialog: View {
     @State private var discoveryModel: ACPSessionDiscoveryModel?
     @State private var selectedSessionIndex = 0
     @State private var loadingMore = false
+    @State private var deletionRequest: ACPSessionDeletionRequest?
+    @State private var deletionError: String?
 
     var body: some View {
         Group {
@@ -65,6 +67,33 @@ struct AgentLauncherDialog: View {
         .onChange(of: appState.agentLauncher.openTick) { _, _ in
             resetSessionBrowser()
             requestInputFocus()
+        }
+        .confirmationDialog(
+            deletionRequest?.title ?? "Delete session history?",
+            isPresented: Binding(
+                get: { deletionRequest != nil },
+                set: { if !$0 { deletionRequest = nil } }
+            ),
+            presenting: deletionRequest
+        ) { request in
+            switch request.kind {
+            case .localOnly:
+                Button("Remove from Alas", role: .destructive) {
+                    performDeletion(request)
+                }
+            case .agentHistory:
+                Button("Delete agent-side history", role: .destructive) {
+                    performDeletion(request)
+                }
+                if request.session.localSessionId != nil {
+                    Button("Delete agent-side history and remove from Alas", role: .destructive) {
+                        performDeletion(request, removeLocalHistory: true)
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { request in
+            Text(request.message)
         }
     }
 
@@ -283,6 +312,28 @@ struct AgentLauncherDialog: View {
                         isEnabled: canOpen,
                         onTap: { openDiscoveredSession(item) }
                     )
+                    .contextMenu {
+                        if item.localSessionId != nil {
+                            Button("Remove from Alas…", role: .destructive) {
+                                deletionRequest = .init(
+                                    kind: .localOnly,
+                                    agentName: agent.displayName,
+                                    session: item
+                                )
+                            }
+                        }
+                        if capabilities?.canDelete == true,
+                           discoveryModel?.remotelyDeletedSessionIds.contains(item.remoteSessionId) != true {
+                            Button("Delete agent-side history…", role: .destructive) {
+                                deletionRequest = .init(
+                                    kind: .agentHistory,
+                                    agentName: agent.displayName,
+                                    session: item
+                                )
+                            }
+                        }
+                    }
+                    .disabled(discoveryModel?.deletingSessionIds.contains(item.remoteSessionId) == true)
                     .onHover { hovering in
                         if hovering { selectedSessionIndex = index + 1 }
                     }
@@ -307,6 +358,9 @@ struct AgentLauncherDialog: View {
             }
             if let paginationError = discoveryModel?.paginationError {
                 launcherStatusRow(paginationError)
+            }
+            if let deletionError {
+                launcherStatusRow(deletionError)
             }
         }
     }
@@ -503,6 +557,35 @@ struct AgentLauncherDialog: View {
         }
     }
 
+    private func performDeletion(
+        _ request: ACPSessionDeletionRequest,
+        removeLocalHistory: Bool = false
+    ) {
+        guard let worktree = selectedWorktree(),
+              let manager = appState.acpManager(for: worktree),
+              let discoveryModel
+        else { return }
+        deletionRequest = nil
+        deletionError = nil
+        Task {
+            do {
+                switch request.kind {
+                case .localOnly:
+                    try await discoveryModel.removeLocalHistory(for: request.session, manager: manager)
+                case .agentHistory:
+                    try await discoveryModel.deleteAgentHistory(
+                        for: request.session,
+                        removeLocalHistory: removeLocalHistory,
+                        manager: manager
+                    )
+                }
+            } catch {
+                guard self.discoveryModel === discoveryModel else { return }
+                deletionError = error.localizedDescription
+            }
+        }
+    }
+
     private func backToAgents() {
         resetSessionBrowser()
         appState.agentLauncher.query = ""
@@ -521,6 +604,8 @@ struct AgentLauncherDialog: View {
         chatAgent = nil
         selectedSessionIndex = 0
         loadingMore = false
+        deletionRequest = nil
+        deletionError = nil
         Task { await prior?.stop() }
     }
 
@@ -531,6 +616,37 @@ struct AgentLauncherDialog: View {
             DispatchQueue.main.async {
                 inputFocused = true
             }
+        }
+    }
+}
+
+struct ACPSessionDeletionRequest: Identifiable {
+    enum Kind { case localOnly, agentHistory }
+
+    let kind: Kind
+    let agentName: String
+    let session: ACPDiscoveredSession
+
+    var id: String { "\(session.remoteSessionId)-\(kind)" }
+
+    var title: String {
+        switch kind {
+        case .localOnly:
+            return "Remove \(agentName) session “\(session.title)” from Alas?"
+        case .agentHistory:
+            return "Delete \(agentName) history for “\(session.title)”?"
+        }
+    }
+
+    var message: String {
+        switch kind {
+        case .localOnly:
+            return "Only Alas’s local record will be removed. The session remains in \(agentName)’s history."
+        case .agentHistory:
+            let localCopy = session.localSessionId == nil
+                ? ""
+                : " Choosing only agent-side history keeps Alas’s local record."
+            return "This asks \(agentName) to delete session “\(session.title)”. The adapter controls whether deletion is soft or permanent, and no undo is available.\(localCopy)"
         }
     }
 }

@@ -150,6 +150,22 @@ struct ACPInitializeTests {
         #expect(result.agentCapabilities?.promptCapabilities?.embeddedContext == true)
     }
 
+    @Test("decodes absent and present session delete capability")
+    func decodeSessionDeleteCapability() throws {
+        let absent = try JSONDecoder().decode(ACPInitializeResult.self, from: Data("""
+        { "protocolVersion": 1, "agentCapabilities": { "sessionCapabilities": {} } }
+        """.utf8))
+        #expect(absent.agentCapabilities?.sessionCapabilities.supportsDelete == false)
+
+        let present = try JSONDecoder().decode(ACPInitializeResult.self, from: Data("""
+        {
+          "protocolVersion": 1,
+          "agentCapabilities": { "sessionCapabilities": { "delete": {} } }
+        }
+        """.utf8))
+        #expect(present.agentCapabilities?.sessionCapabilities.supportsDelete == true)
+    }
+
     @Test("decodes absent, supported, and extended provider capabilities")
     func decodeProviderCapabilities() throws {
         let absent = try JSONDecoder().decode(ACPInitializeResult.self, from: Data("""
