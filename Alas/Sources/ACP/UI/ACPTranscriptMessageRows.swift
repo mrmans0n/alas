@@ -97,18 +97,40 @@ struct ACPCommentaryRow: View {
     @Environment(\.theme) private var theme
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Label("Working", systemImage: "ellipsis.circle")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(theme.color("fg-faint"))
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(theme.color("bg-0").opacity(0.8))
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Color.indigo)
+                }
+                .frame(width: 18, height: 18)
+                Text("Working")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .tracking(0.6)
+                    .textCase(.uppercase)
+                    .foregroundStyle(Color.indigo)
+                Spacer(minLength: 6)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            Divider().background(theme.color("line-soft"))
             Text(buffer.value)
                 .font(.system(size: 12))
                 .foregroundStyle(theme.color("fg-dim"))
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(theme.color("bg-0").opacity(0.55))
         }
-        .padding(.vertical, 6)
-        .padding(.horizontal, 9)
-        .background(theme.color("bg-2"), in: RoundedRectangle(cornerRadius: 6))
+        .background(theme.color("bg-1").opacity(0.5))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(theme.color("line"), lineWidth: 0.5)
+        )
     }
 }
