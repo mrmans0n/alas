@@ -94,6 +94,27 @@ struct ACPSessionTests {
         #expect(finalBuffer.phase == .finalAnswer)
     }
 
+    @Test("id-less phase transition starts a new agent row")
+    func idlessPhaseTransitionStartsNewRow() {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        let commentary = AnyCodable(["codex": AnyCodable(["phase": AnyCodable("commentary")])])
+        let final = AnyCodable(["codex": AnyCodable(["phase": AnyCodable("final_answer")])])
+
+        session.apply(.agentMessageChunk(.init(content: .text("Checking files"), metadata: commentary)))
+        session.apply(.agentMessageChunk(.init(content: .text("Done"), metadata: final)))
+
+        guard session.transcript.messages.count == 2,
+              case .agent(_, _, let commentaryBuffer) = session.transcript.messages[0],
+              case .agent(_, _, let finalBuffer) = session.transcript.messages[1] else {
+            Issue.record("expected separate commentary and final rows")
+            return
+        }
+        #expect(commentaryBuffer.value == "Checking files")
+        #expect(commentaryBuffer.phase == .commentary)
+        #expect(finalBuffer.value == "Done")
+        #expect(finalBuffer.phase == .finalAnswer)
+    }
+
     @Test("a phase introduced by a later chunk survives persistence")
     func laterChunkPhaseSurvivesPersistence() throws {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")

@@ -2392,10 +2392,16 @@ final class ACPSession: ObservableObject, Identifiable {
             if !crossesCompletedBoundary || messageId != nil {
                 switch transcript.messages[i] {
                 case .agent(_, _, let buf), .thought(_, _, let buf):
-                    buf.adopt(phase: phase, metadata: metadata)
-                    buf.append(Self.streamingSeparator(between: buf.value, and: addition) + addition)
-                    transcript.noteStreamingChange(at: i)
-                    return i
+                    let startsNewPhasedRow = messageId == nil
+                        && buf.phase != nil
+                        && phase != nil
+                        && buf.phase != phase
+                    if !startsNewPhasedRow {
+                        buf.adopt(phase: phase, metadata: metadata)
+                        buf.append(Self.streamingSeparator(between: buf.value, and: addition) + addition)
+                        transcript.noteStreamingChange(at: i)
+                        return i
+                    }
                 default:
                     break
                 }
