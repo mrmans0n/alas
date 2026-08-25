@@ -8,6 +8,52 @@ import Testing
 struct DiffPaneViewTests {
     private func theme() -> Theme { try! ThemeStore().current }
 
+    @Test func splitRowHeightSyncConvergesForUnicodeFallbackGlyph() throws {
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+        let text = #"        printProgress("  ⟳ Pressing $label...")"#
+        let line = DiffDisplayLine(
+            id: "ScoutOrchestrator.kt:new:344",
+            anchor: DiffLineAnchor(
+                filePath: "ScoutOrchestrator.kt",
+                hunkIndex: 0,
+                rowIndex: 0,
+                side: .new,
+                oldLine: nil,
+                newLine: 344
+            ),
+            text: text,
+            lineNumber: 344,
+            kind: .add,
+            inlineSpans: [],
+            noTrailingNewline: false
+        )
+        let row = DiffDisplayRow(
+            id: "ScoutOrchestrator.kt:344",
+            kind: .add,
+            old: nil,
+            new: line,
+            collapsedLineCount: 0
+        )
+        let container = DiffPaneTextDocumentContainerView(frame: NSRect(x: 0, y: 0, width: 900, height: 1))
+        container.update(
+            rows: [row],
+            layoutMode: .split,
+            wrapLines: true,
+            showWhitespace: false,
+            fileExtension: "kt",
+            font: font,
+            theme: theme(),
+            lspContext: nil
+        )
+
+        let initialHeight = container.intrinsicContentSize.height
+        for _ in 0..<20 {
+            container.layout()
+        }
+
+        #expect(container.intrinsicContentSize.height <= initialHeight + 1)
+    }
+
     @Test func diffRowRectsReturnOnlyIndicesIntersectingDirtyVerticalRange() {
         let rows = [
             NSRect(x: 0, y: 0, width: 100, height: 10),
