@@ -151,6 +151,62 @@ struct ACPSessionManagerDisposalTests {
         #expect(try store.loadSession(id: session.id) == nil)
     }
 
+    @Test("disposing while attach waits for providers closes the created remote session")
+    func disposalClosesRemoteSessionBeforeRunnerRegistration() async throws {
+        let client = ACPMockClient()
+        let providersStarted = AsyncStream<Void>.makeStream()
+        let releaseProviders = AsyncStream<Void>.makeStream()
+        client.script(method: "initialize") { _ in
+            try JSONEncoder().encode(ACPInitializeResult(
+                protocolVersion: 1,
+                agentCapabilities: .init(
+                    sessionCapabilities: .init(close: .init()),
+                    providerCapabilities: .init()
+                ),
+                authMethods: []
+            ))
+        }
+        client.script(method: "session/new") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote",
+                availableModels: [],
+                availableModes: [],
+                currentModel: nil,
+                currentMode: nil,
+                promptSuggestions: []
+            ))
+        }
+        client.scriptAsync(method: "providers/list") { _ in
+            providersStarted.continuation.yield()
+            for await _ in releaseProviders.stream { break }
+            return Data("{\"providers\":[]}".utf8)
+        }
+        client.script(method: "session/close") { _ in Data("{}".utf8) }
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("acp-disposal-attach-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: path.path)
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) }
+        )
+        let session = manager.createSession(agentId: "claude")
+        let attach = Task { @MainActor in
+            await manager.attach(to: session.id, freshlyCreated: true)
+        }
+        for await _ in providersStarted.stream { break }
+
+        try await manager.disposeSession(id: session.id)
+        releaseProviders.continuation.yield()
+        await attach.value
+
+        #expect(client.sent.map(\.method).filter { $0 == "session/close" }.count == 1)
+        #expect(client.shutdownCount >= 1)
+        #expect(manager.runners[session.id] == nil)
+    }
+
     private func attachedManager(
         client: ACPMockClient,
         supportsClose: Bool,

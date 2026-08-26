@@ -447,6 +447,12 @@ final class ACPSessionManager: ObservableObject {
     /// release the lease after `connection.shutdown` — preserving the
     /// correct shutdown order (connection down before lease freed).
     private var attachingSessions: Set<ACPSession.ID> = []
+    private struct AttachingConnection {
+        let connection: ACPConnection
+        var remoteSessionId: String?
+        var sessionCapabilities: ACPInitializeResult.ACPAgentSessionCapabilities?
+    }
+    private var attachingConnections: [ACPSession.ID: AttachingConnection] = [:]
     private var delegatedMessageWatchTokens: [ACPSession.ID: Int32] = [:]
 
     init(worktreeId: String, worktreePath: String, store: ACPSessionStore? = nil,
@@ -3124,6 +3130,12 @@ extension ACPSessionManager {
         // `cliEnvActive` / `cliParentSessionId` are consumed below, once we
         // know whether this attach created a fresh remote session (the
         // preamble is only sent once, on first prompt).
+        attachingConnections[sessionId] = .init(connection: connection)
+        defer {
+            if attachingConnections[sessionId]?.connection === connection {
+                attachingConnections[sessionId] = nil
+            }
+        }
         // Collect a short tail of stderr so we can surface it when the
         // agent rejects initialize / new for protocol or auth reasons.
         let stderrBuffer = StderrBuffer()
@@ -3165,6 +3177,10 @@ extension ACPSessionManager {
                     method: "initialize"
                 )
             )
+            if var attaching = attachingConnections[sessionId], attaching.connection === connection {
+                attaching.sessionCapabilities = initialized.sessionCapabilities
+                attachingConnections[sessionId] = attaching
+            }
             session.promptCapabilities = initialized.promptCapabilities
             session.sessionCapabilities = initialized.sessionCapabilities
             session.authMethods = initialized.authMethods
@@ -3637,6 +3653,10 @@ extension ACPSessionManager {
                     session.contextRecoveryStatus = .sendingTranscript
                 }
             }
+            if var attaching = attachingConnections[sessionId], attaching.connection === connection {
+                attaching.remoteSessionId = result.sessionId
+                attachingConnections[sessionId] = attaching
+            }
             let providers: [ACPProviderInfo] = if initialized.providerCapabilities != nil {
                 (try? await connection.listProviders()) ?? []
             } else {
@@ -3760,6 +3780,9 @@ extension ACPSessionManager {
             let localModelAfterRemoteIdPersist = session.currentModel
             connection.acknowledgeDurableSessionResponses()
             startRunnerIfNeeded()
+            if attachingConnections[sessionId]?.connection === connection {
+                attachingConnections[sessionId] = nil
+            }
             runners[sessionId] = runner
             keepElicitationCoordinator = true
             attachSucceeded = true
@@ -4315,6 +4338,7 @@ extension ACPSessionManager {
         let shouldCloseRemote = closeRemote && session?.agentState != .disconnected
         let remoteSessionId = session?.remoteSessionId
         let sessionCapabilities = session?.sessionCapabilities
+        let attaching = attachingConnections.removeValue(forKey: sessionId)
         // Reset transient session state SYNCHRONOUSLY before any await.
         // The steer task is unstructured and can resume during the
         // `connection.shutdown()` await below — if `agentState` is still
@@ -4367,6 +4391,28 @@ extension ACPSessionManager {
                 }
             } else {
                 await runner.connection.shutdown()
+            }
+        } else if let attaching {
+            if shouldCloseRemote, let remoteSessionId = attaching.remoteSessionId, !remoteSessionId.isEmpty {
+                do {
+                    try await closeRemoteSession(
+                        id: remoteSessionId,
+                        using: attaching.connection,
+                        sessionCapabilities: attaching.sessionCapabilities
+                    )
+                } catch {
+                    closeError = error
+                }
+            }
+            if closeRemote {
+                let shutdownOutcome = await runBounded(timeout: .seconds(2)) {
+                    await attaching.connection.shutdown()
+                }
+                if case .timedOut = shutdownOutcome, closeError == nil {
+                    closeError = SessionDisposalError.timedOut
+                }
+            } else {
+                await attaching.connection.detach()
             }
         }
         elicitationCoordinators.removeValue(forKey: sessionId)?.stop()
