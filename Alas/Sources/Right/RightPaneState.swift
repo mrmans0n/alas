@@ -2486,6 +2486,7 @@ final class RightPaneState: GGSplitCommitServicing {
         if let worker = stageMutationWorker {
             await worker.value
         }
+        defer { pendingStageMutationsSucceeded = true }
         return pendingStageMutationsSucceeded
     }
 

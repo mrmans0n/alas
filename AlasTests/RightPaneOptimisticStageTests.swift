@@ -66,6 +66,7 @@ struct RightPaneOptimisticStageTests {
         #expect(!(await state.finishPendingStageMutations()))
         #expect(state.sidebarError != nil)
         #expect(state.displayChanges.first { $0.path == "file.txt" }?.stage == .unstaged)
+        #expect(await state.finishPendingStageMutations())
     }
 
     private func makeRepo() async throws -> URL {
