@@ -6,6 +6,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.23] - 2026-08-26
+
+### ✨ Features
+
+- Copy repository-relative diff filenames from regular and review diff headers (#1075).
+
+### 🐛 Fixes
+
+- Wait for queued staging before running `gg` amend and absorb mutations (#1074).
+- Close supported live ACP adapter sessions when tabs are permanently closed or deleted (#1073).
+
 ## [0.14.22] - 2026-08-25
 
 ### ✨ Features
