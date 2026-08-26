@@ -54,7 +54,7 @@ struct ACPSessionManagerRetentionTests {
     }
 
     @Test("onSessionEnded fires on deleteSession but not closeSession")
-    func onSessionEndedFiresOnDeleteOnly() {
+    func onSessionEndedFiresOnDeleteOnly() async throws {
         let path = NSTemporaryDirectory() + "ended-\(UUID()).sqlite"
         let store = try! ACPSessionStore(path: path)
         var ended: [ACPSession.ID] = []
@@ -65,7 +65,7 @@ struct ACPSessionManagerRetentionTests {
         mgr.closeSession(id: closed)
         #expect(ended.isEmpty)
         let deleted = mgr.createSession(agentId: "claude").id
-        mgr.deleteSession(id: deleted)
+        try await mgr.deleteSession(id: deleted)
         #expect(ended == [deleted])
     }
 

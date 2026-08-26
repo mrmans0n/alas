@@ -248,23 +248,27 @@ struct ACPInitializeResult: Codable, Equatable {
         let resume: EmptyObject?
         let fork: EmptyObject?
         let delete: EmptyObject?
+        let close: EmptyObject?
 
         init(
             list: EmptyObject? = nil,
             resume: EmptyObject? = nil,
             fork: EmptyObject? = nil,
-            delete: EmptyObject? = nil
+            delete: EmptyObject? = nil,
+            close: EmptyObject? = nil
         ) {
             self.list = list
             self.resume = resume
             self.fork = fork
             self.delete = delete
+            self.close = close
         }
 
         var supportsList: Bool { list != nil }
         var supportsResume: Bool { resume != nil }
         var supportsFork: Bool { fork != nil }
         var supportsDelete: Bool { delete != nil }
+        var supportsClose: Bool { close != nil }
     }
     struct ACPPromptCapabilities: Codable, Equatable {
         let image: Bool

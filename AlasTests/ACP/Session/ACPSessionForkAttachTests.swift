@@ -595,7 +595,7 @@ struct ACPSessionForkAttachTests {
         try installFinalizeFailure(mechanism: .nativeACP, store: store)
         let client = durableMockClient()
         let acknowledgements = ForkAcknowledgementRecorder()
-        scriptInitialize(client, supportsFork: true)
+        scriptInitialize(client, supportsFork: true, supportsClose: true)
         client.scriptResponse(method: "session/fork") { _ in
             ACPResponse(
                 body: try JSONEncoder().encode(ACPSessionNewResult(
@@ -643,6 +643,26 @@ struct ACPSessionForkAttachTests {
         #expect(fork.mechanism == .transcriptTransfer)
         #expect(fork.contextDeliveryPending == true)
         #expect(acknowledgements.values == ["close", "fork"])
+    }
+
+    @Test("native finalization failure does not close an orphan when close is unsupported")
+    func nativeFinalizationFailureSkipsUnsupportedOrphanClose() async throws {
+        let store = try seededForkStore()
+        try installFinalizeFailure(mechanism: .nativeACP, store: store)
+        let client = durableMockClient()
+        scriptInitialize(client, supportsFork: true)
+        scriptSessionResult(client, method: "session/fork", sessionId: "orphaned-remote")
+        let manager = try await makeManagerWithAttachedSource(
+            store: store,
+            targetClient: client
+        )
+        let target = try await hydratedTarget(manager)
+
+        await manager.attach(to: target.id, freshlyCreated: true)
+
+        #expect(client.sent.map(\.method) == ["initialize", "session/fork"])
+        #expect(target.forkRecord?.phase == .ready)
+        #expect(target.forkRecord?.mechanism == .transcriptTransfer)
     }
 
     @Test("broker pre-send failure durably falls back to transcript transfer")
@@ -960,6 +980,7 @@ struct ACPSessionForkAttachTests {
     private func scriptInitialize(
         _ client: ACPMockClient,
         supportsFork: Bool,
+        supportsClose: Bool = false,
         authMethods: [ACPInitializeResult.ACPAuthMethod] = []
     ) {
         client.script(method: "initialize") { _ in
@@ -967,7 +988,8 @@ struct ACPSessionForkAttachTests {
                 protocolVersion: 1,
                 agentCapabilities: .init(
                     sessionCapabilities: .init(
-                        fork: supportsFork ? .init() : nil
+                        fork: supportsFork ? .init() : nil,
+                        close: supportsClose ? .init() : nil
                     )
                 ),
                 authMethods: authMethods
@@ -1537,7 +1559,8 @@ private actor ForkReplayBrokerService: ACPBrokerServicing {
                 "protocolVersion": .number(1),
                 "agentCapabilities": .object([
                     "sessionCapabilities": .object([
-                        "fork": .object([:])
+                        "fork": .object([:]),
+                        "close": .object([:])
                     ])
                 ]),
                 "authMethods": .array([])

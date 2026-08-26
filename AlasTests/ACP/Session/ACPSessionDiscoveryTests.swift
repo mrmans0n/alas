@@ -267,7 +267,7 @@ struct ACPSessionDiscoveryTests {
                 protocolVersion: 1,
                 agentCapabilities: .init(
                     loadSession: true,
-                    sessionCapabilities: .init(list: .init(), delete: .init())
+                    sessionCapabilities: .init(list: .init(), delete: .init(), close: .init())
                 ),
                 authMethods: []
             ))
@@ -576,7 +576,10 @@ struct ACPSessionDiscoveryTests {
         client.script(method: "initialize") { _ in
             try JSONEncoder().encode(ACPInitializeResult(
                 protocolVersion: 1,
-                agentCapabilities: .init(loadSession: true),
+                agentCapabilities: .init(
+                    loadSession: true,
+                    sessionCapabilities: .init(close: .init())
+                ),
                 authMethods: []
             ))
         }

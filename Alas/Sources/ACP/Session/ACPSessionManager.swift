@@ -141,6 +141,7 @@ final class ACPSessionManager: ObservableObject {
     private(set) var runners: [ACPSession.ID: ACPSessionRunner] = [:]
     private var elicitationCoordinators: [ACPSession.ID: ACPElicitationCoordinator] = [:]
     private var autoReconnectTasks: [ACPSession.ID: Task<Void, Never>] = [:]
+    private var disposalTasks: [ACPSession.ID: Task<Void, Error>] = [:]
     /// Per-session attach counter. The built-in MCP registration grace timer
     /// captures the epoch at attach and only writes the row if it still matches,
     /// so a timer from a superseded attach can never clobber the current state.
@@ -1072,15 +1073,12 @@ final class ACPSessionManager: ObservableObject {
         pendingMode.removeValue(forKey: id)
     }
 
-    func deleteSession(id: ACPSession.ID) {
-        forgetSession(id: id)
-        enqueuePersistence { persistence in
-            try await persistence.deleteSession(id: id)
-        }
+    func deleteSession(id: ACPSession.ID) async throws {
+        try await deletePersistedSession(id: id)
     }
 
     func deletePersistedSession(id: ACPSession.ID) async throws {
-        await detach(sessionId: id)
+        try await disposeSession(id: id)
         let previous = persistenceTail
         let persistence = persistence
         persistenceGeneration += 1
@@ -1108,9 +1106,10 @@ final class ACPSessionManager: ObservableObject {
         let localSessionId = localSessionId ?? runners.keys.first {
             sessions[$0]?.agentId == agentId && sessions[$0]?.remoteSessionId == remoteSessionId
         }
-        guard let localSessionId, let runner = runners[localSessionId] else { return }
-        try await runner.connection.closeSession(sessionId: remoteSessionId)
-        await detach(sessionId: localSessionId)
+        guard let localSessionId,
+              runners[localSessionId] != nil || disposalTasks[localSessionId] != nil
+        else { return }
+        try await disposeSession(id: localSessionId)
     }
 
     private func forgetSession(id: ACPSession.ID) {
@@ -1971,7 +1970,8 @@ final class ACPSessionManager: ObservableObject {
     private func releaseReplayedForkCompletionForTranscriptFallback(
         targetSessionID: ACPSession.ID,
         sourceRemoteSessionID: String,
-        connection: ACPConnection
+        connection: ACPConnection,
+        sessionCapabilities: ACPInitializeResult.ACPAgentSessionCapabilities
     ) async {
         guard let brokerClient = connection.client as? ACPBrokerClient else { return }
         let operationKey = Self.brokerStartupOperationKey(
@@ -1991,7 +1991,11 @@ final class ACPSessionManager: ObservableObject {
                from: result.data
            ),
            !forked.sessionId.isEmpty {
-            try? await connection.closeSession(sessionId: forked.sessionId)
+            try? await closeRemoteSession(
+                id: forked.sessionId,
+                using: connection,
+                sessionCapabilities: sessionCapabilities
+            )
         }
         replayed.acknowledgeDurableConsumption()
     }
@@ -2000,12 +2004,14 @@ final class ACPSessionManager: ObservableObject {
         targetSessionID: ACPSession.ID,
         sourceRemoteSessionID: String,
         connection: ACPConnection,
+        sessionCapabilities: ACPInitializeResult.ACPAgentSessionCapabilities,
         wireMCPServers: [ACPMCPServer]
     ) async throws -> ACPSessionNewResult {
         await releaseReplayedForkCompletionForTranscriptFallback(
             targetSessionID: targetSessionID,
             sourceRemoteSessionID: sourceRemoteSessionID,
-            connection: connection
+            connection: connection,
+            sessionCapabilities: sessionCapabilities
         )
         do {
             let result = try await connection.newSession(
@@ -2019,14 +2025,16 @@ final class ACPSessionManager: ObservableObject {
             await releaseReplayedForkCompletionForTranscriptFallback(
                 targetSessionID: targetSessionID,
                 sourceRemoteSessionID: sourceRemoteSessionID,
-                connection: connection
+                connection: connection,
+                sessionCapabilities: sessionCapabilities
             )
             return result
         } catch {
             await releaseReplayedForkCompletionForTranscriptFallback(
                 targetSessionID: targetSessionID,
                 sourceRemoteSessionID: sourceRemoteSessionID,
-                connection: connection
+                connection: connection,
+                sessionCapabilities: sessionCapabilities
             )
             throw error
         }
@@ -2129,7 +2137,8 @@ final class ACPSessionManager: ObservableObject {
                 await releaseReplayedForkCompletionForTranscriptFallback(
                     targetSessionID: session.id,
                     sourceRemoteSessionID: sourceRemoteSessionID,
-                    connection: connection
+                    connection: connection,
+                    sessionCapabilities: initialized.sessionCapabilities
                 )
                 let fallbackError: any Error
                 if let terminalError = durableReplay?.outcome.error {
@@ -2144,6 +2153,7 @@ final class ACPSessionManager: ObservableObject {
                     targetSessionID: session.id,
                     sourceRemoteSessionID: sourceRemoteSessionID,
                     connection: connection,
+                    sessionCapabilities: initialized.sessionCapabilities,
                     wireMCPServers: wireMCPServers
                 )
                 return (fallback, true)
@@ -2156,7 +2166,11 @@ final class ACPSessionManager: ObservableObject {
                     remoteSessionID: result.sessionId
                 )
             } catch {
-                try? await connection.closeSession(sessionId: result.sessionId)
+                try? await closeRemoteSession(
+                    id: result.sessionId,
+                    using: connection,
+                    sessionCapabilities: initialized.sessionCapabilities
+                )
                 let transcriptFinalized: Bool
                 do {
                     try await persistence.finalizeFork(
@@ -2209,6 +2223,7 @@ final class ACPSessionManager: ObservableObject {
                 targetSessionID: session.id,
                 sourceRemoteSessionID: sourceRemoteSessionID,
                 connection: connection,
+                sessionCapabilities: initialized.sessionCapabilities,
                 wireMCPServers: wireMCPServers
             )
             return (result, true)
@@ -2351,6 +2366,20 @@ final class ACPSessionManager: ObservableObject {
 // MARK: - Writer lease + heartbeat
 
 extension ACPSessionManager {
+    private enum BoundedOperationOutcome {
+        case succeeded
+        case failed(any Error)
+        case timedOut
+    }
+
+    private enum SessionDisposalError: LocalizedError {
+        case timedOut
+
+        var errorDescription: String? {
+            "Timed out while closing the adapter session."
+        }
+    }
+
     /// Seconds after which a lease whose owner stopped heart-beating is
     /// considered abandoned and reclaimable.
     static let leaseStaleAfter: Int64 = 15
@@ -4216,14 +4245,83 @@ extension ACPSessionManager {
         await runner.connection.shutdown()
     }
 
+    func disposeSession(id: ACPSession.ID) async throws {
+        if let task = disposalTasks[id] {
+            try await task.value
+            return
+        }
+        let task = Task<Void, Error> { @MainActor [weak self] in
+            guard let self else { return }
+            try await self.tearDownSession(sessionId: id, closeRemote: true)
+        }
+        disposalTasks[id] = task
+        defer { disposalTasks.removeValue(forKey: id) }
+        try await task.value
+    }
+
     func detach(sessionId: ACPSession.ID) async {
+        try? await tearDownSession(sessionId: sessionId, closeRemote: false)
+    }
+
+    private func closeRemoteSession(
+        id: String,
+        using connection: ACPConnection,
+        sessionCapabilities: ACPInitializeResult.ACPAgentSessionCapabilities?
+    ) async throws {
+        guard sessionCapabilities?.supportsClose == true else { return }
+        let outcome = await runBounded(timeout: .seconds(2)) {
+            try await connection.closeSession(sessionId: id)
+        }
+        switch outcome {
+        case .succeeded:
+            return
+        case .failed(let error):
+            throw error
+        case .timedOut:
+            throw SessionDisposalError.timedOut
+        }
+    }
+
+    private func runBounded(
+        timeout: Duration,
+        operation: @escaping () async throws -> Void
+    ) async -> BoundedOperationOutcome {
+        let (stream, continuation) = AsyncStream<BoundedOperationOutcome>.makeStream()
+        let operationTask = Task {
+            do {
+                try await operation()
+                continuation.yield(.succeeded)
+            } catch {
+                continuation.yield(.failed(error))
+            }
+        }
+        let timeoutTask = Task {
+            do {
+                try await Task.sleep(for: timeout)
+                continuation.yield(.timedOut)
+            } catch {}
+        }
+        var iterator = stream.makeAsyncIterator()
+        let outcome = await iterator.next() ?? .timedOut
+        continuation.finish()
+        operationTask.cancel()
+        timeoutTask.cancel()
+        return outcome
+    }
+
+    private func tearDownSession(sessionId: ACPSession.ID, closeRemote: Bool) async throws {
+        autoReconnectTasks.removeValue(forKey: sessionId)?.cancel()
+        let session = sessions[sessionId]
+        let shouldCloseRemote = closeRemote && session?.agentState != .disconnected
+        let remoteSessionId = session?.remoteSessionId
+        let sessionCapabilities = session?.sessionCapabilities
         // Reset transient session state SYNCHRONOUSLY before any await.
         // The steer task is unstructured and can resume during the
         // `connection.shutdown()` await below — if `agentState` is still
         // `.ready` at that point, its post-`userCancel` liveness
         // check passes and it dispatches `sendNow` against a connection
         // being torn down. Flipping the state here closes that window.
-        if let session = sessions[sessionId] {
+        if let session {
             // .idle (user-initiated teardown), not .disconnected — the latter
             // is reserved for the runner's unexpected stream-end branch.
             session.agentState = .idle
@@ -4238,6 +4336,7 @@ extension ACPSessionManager {
             // full app restart reloads from SQLite.
             session.restoreQueue(session.queue)
         }
+        var closeError: (any Error)?
         if let runner = runners.removeValue(forKey: sessionId) {
             // Invalidate the in-flight prompt BEFORE shutting down the
             // connection. The unstructured `sendNow` task survives stop()
@@ -4248,19 +4347,44 @@ extension ACPSessionManager {
             runner.invalidateActivePrompt()
             runner.stop()
             await runner.flushPersistence()
-            await runner.connection.shutdown()
+            if shouldCloseRemote, let remoteSessionId, !remoteSessionId.isEmpty {
+                do {
+                    try await closeRemoteSession(
+                        id: remoteSessionId,
+                        using: runner.connection,
+                        sessionCapabilities: sessionCapabilities
+                    )
+                } catch {
+                    closeError = error
+                }
+            }
+            if closeRemote {
+                let shutdownOutcome = await runBounded(timeout: .seconds(2)) {
+                    await runner.connection.shutdown()
+                }
+                if case .timedOut = shutdownOutcome, closeError == nil {
+                    closeError = SessionDisposalError.timedOut
+                }
+            } else {
+                await runner.connection.shutdown()
+            }
         }
         elicitationCoordinators.removeValue(forKey: sessionId)?.stop()
         stopHeartbeat(sessionId: sessionId)
         stopWriterWatch(sessionId: sessionId)
         await releaseWriterLease(sessionId: sessionId)
         endMirroring(sessionId: sessionId)
-        // SwiftUI's `.onDisappear` retain release for a closing tab can
-        // arrive BEFORE this async detach starts, so the release runs while
-        // agentState is still `.ready` and short-circuits eviction. Re-check
-        // now that state is `.idle` so a closed-while-attached session
-        // doesn't keep its transcript + caches resident indefinitely.
-        evictIfIdle(id: sessionId)
+        if closeRemote {
+            closeSession(id: sessionId)
+        } else {
+            // SwiftUI's `.onDisappear` retain release for a closing tab can
+            // arrive BEFORE this async detach starts, so the release runs while
+            // agentState is still `.ready` and short-circuits eviction. Re-check
+            // now that state is `.idle` so a closed-while-attached session
+            // doesn't keep its transcript + caches resident indefinitely.
+            evictIfIdle(id: sessionId)
+        }
+        if let closeError { throw closeError }
     }
 }
 
