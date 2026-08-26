@@ -1549,6 +1549,7 @@
 		FCE78F165C46577F64D9B9AD /* CenterSelectionState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 417CDD7CCA0D0A86E9EE281F /* CenterSelectionState.swift */; };
 		FCF61C2ECFE2CC61226F78D5 /* MermaidRenderCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93393A2C5EEEFFDB678FDA78 /* MermaidRenderCacheTests.swift */; };
 		FD4196C9F558CE954D94E060 /* RemoteTerminalScript.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85C6579202DFD8E5FBF26DE5 /* RemoteTerminalScript.swift */; };
+		FD49944FD0777C90C98F990E /* CopyFeedbackStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5ADF2AC196D39DF59097D4A /* CopyFeedbackStateTests.swift */; };
 		FD5AC98DEE4448EB95C49485 /* ACPUserInputFormStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79A6CF0F6BDA59AAE1354EE7 /* ACPUserInputFormStateTests.swift */; };
 		FD5B6E7F566A9D0BACD19267 /* DiffInlineCommentModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 729DDA22CA94FA0DC8810057 /* DiffInlineCommentModelTests.swift */; };
 		FD797B47C5EE0F82796A3733 /* LSPInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 028348C468E45161F567110A /* LSPInstallerTests.swift */; };
@@ -2765,6 +2766,7 @@
 		C5679CA959D40E1682A91F31 /* PendingReview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingReview.swift; sourceTree = "<group>"; };
 		C56EFAFF71ABDBCDECAAA305 /* StartupScriptInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartupScriptInstaller.swift; sourceTree = "<group>"; };
 		C57B57158094E321BD68D224 /* AttachIssueDialogModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachIssueDialogModel.swift; sourceTree = "<group>"; };
+		C5ADF2AC196D39DF59097D4A /* CopyFeedbackStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CopyFeedbackStateTests.swift; sourceTree = "<group>"; };
 		C5E83B4DDF185280E01CA80A /* ContentSearcherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentSearcherTests.swift; sourceTree = "<group>"; };
 		C60A6B7CB83D842FEE2D801C /* ThreePaneSizingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreePaneSizingTests.swift; sourceTree = "<group>"; };
 		C682FF74C86B77BDCF46CF25 /* ChangesTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChangesTabView.swift; sourceTree = "<group>"; };
@@ -3456,6 +3458,7 @@
 				97134381F91B44B46CAFE082 /* ContentResultGroupViewTests.swift */,
 				C5E83B4DDF185280E01CA80A /* ContentSearcherTests.swift */,
 				AA98E1DB8D77DE67918D6B9F /* CopilotInstallerTests.swift */,
+				C5ADF2AC196D39DF59097D4A /* CopyFeedbackStateTests.swift */,
 				BF3F87CE04B7E98606BF76CA /* CursorInstallerTests.swift */,
 				179A74F3A825DA1EC4C4E0FC /* DebounceTimerTests.swift */,
 				40497B428C9395535DF6C146 /* DialogChromeLayoutTests.swift */,
@@ -7120,6 +7123,7 @@
 				5B02C8E213F6EA67BEB7E5BA /* ContentResultGroupViewTests.swift in Sources */,
 				2E1D743806714BE4CD88A240 /* ContentSearcherTests.swift in Sources */,
 				B6713CE9BFA38B7F1D089E5A /* CopilotInstallerTests.swift in Sources */,
+				FD49944FD0777C90C98F990E /* CopyFeedbackStateTests.swift in Sources */,
 				42D8417781E790CA6AA49F7E /* CursorInstallerTests.swift in Sources */,
 				EC2C564EBA85B494489DF323 /* CursorModelVariantsTests.swift in Sources */,
 				25347EFEF1B5F7F4915DB120 /* DebounceTimerTests.swift in Sources */,
