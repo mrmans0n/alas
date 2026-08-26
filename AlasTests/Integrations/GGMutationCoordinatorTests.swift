@@ -211,6 +211,7 @@ private final class GGMutationHarness {
     var selectedPaths: [String] = []
     var worktreeExists = true
     var currentBranch: String? = "feature"
+    var finishPendingStaging: () async -> Bool = { true }
     var onRefreshStack: (() async -> Void)?
     private(set) var coordinator: GGMutationCoordinator!
 
@@ -248,6 +249,7 @@ private final class GGMutationHarness {
                 refreshGitChanges: { [unowned self] in refreshes.append(.gitChanges) },
                 refreshProviderReviews: { [unowned self] in refreshes.append(.providerReviews) },
                 refreshProjectTopology: { [unowned self] in refreshes.append(.topology) },
+                finishPendingStaging: { [unowned self] in await finishPendingStaging() },
                 worktreeExists: { [unowned self] in
                     refreshes.append(.worktreeExistenceCheck)
                     return worktreeExists
@@ -288,6 +290,47 @@ private func stack(
 
 @MainActor
 struct GGMutationCoordinatorTests {
+    @Test func onlyStagedChangeMutationsWaitForStaging() {
+        #expect(GGMutationRequest.amendCurrent.requiresStagedChanges)
+        #expect(GGMutationRequest.absorbStaged.requiresStagedChanges)
+        #expect(!GGMutationRequest.sync.requiresStagedChanges)
+    }
+
+    @Test func amendWaitsForPendingStagingBeforeExecuting() async throws {
+        let harness = GGMutationHarness(stacks: [stack(head: "a")])
+        let staging = FirstRefreshSuspension()
+        harness.finishPendingStaging = {
+            await staging.suspend()
+            return true
+        }
+
+        let task = try #require(
+            harness.coordinator.startApplying(.amendCurrent, confirmedAgainst: nil)
+        )
+        await staging.waitUntilSuspended()
+
+        #expect(harness.actionState.inFlightAction == .amendCurrent)
+        #expect(harness.loadCount == 0)
+        #expect(harness.service.requests.isEmpty)
+
+        await staging.resume()
+        try await task.value
+
+        #expect(harness.service.requests == [.amendCurrent])
+    }
+
+    @Test func failedStagingPreventsAmend() async {
+        let harness = GGMutationHarness(stacks: [stack(head: "a")])
+        harness.finishPendingStaging = { false }
+
+        await #expect(throws: GGMutationError.stagingFailed) {
+            try await harness.coordinator.apply(.amendCurrent, confirmedAgainst: nil)
+        }
+
+        #expect(harness.loadCount == 0)
+        #expect(harness.service.requests.isEmpty)
+    }
+
     @Test func prepareLoadsFreshStackAndReturnsTypedDropConfirmation() async throws {
         let entries = [
             GGStackEntry(position: 1, sha: "a", title: "Drop", ggId: "change-1", prState: .open),

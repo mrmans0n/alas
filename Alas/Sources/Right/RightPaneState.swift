@@ -388,6 +388,9 @@ final class RightPaneState: GGSplitCommitServicing {
     private var stageMutationWorker: Task<Void, Never>? = nil
 
     @ObservationIgnored
+    private var pendingStageMutationsSucceeded = true
+
+    @ObservationIgnored
     private var lastReviewLoopRemoteRefreshAt: Date?
 
     @ObservationIgnored
@@ -462,6 +465,10 @@ final class RightPaneState: GGSplitCommitServicing {
                 refreshGitChanges: { [weak self] in await self?.refresh() },
                 refreshProviderReviews: { [weak self] in await self?.refresh(forceReviewLoopRemote: true) },
                 refreshProjectTopology: { [weak self] in await self?.refreshProjectTopologyAfterGGMutation?() },
+                finishPendingStaging: { [weak self] in
+                    guard let self else { return false }
+                    return await self.finishPendingStageMutations()
+                },
                 worktreeExists: { [weak self] in
                     guard let self else { return false }
                     return FileManager.default.fileExists(atPath: self.worktree.path.path)
@@ -2446,6 +2453,7 @@ final class RightPaneState: GGSplitCommitServicing {
             target: target
         ))
         guard stageMutationWorker == nil else { return }
+        pendingStageMutationsSucceeded = true
         stageMutationWorker = Task { @MainActor [weak self] in
             await self?.runStageMutationQueue()
         }
@@ -2465,12 +2473,20 @@ final class RightPaneState: GGSplitCommitServicing {
                 }
                 await refresh()
             } catch {
+                pendingStageMutationsSucceeded = false
                 pendingStageMutations.removeAll { $0.id == mutation.id }
                 sidebarError = (error as NSError).localizedDescription
                 await refresh()
             }
         }
         stageMutationWorker = nil
+    }
+
+    func finishPendingStageMutations() async -> Bool {
+        if let worker = stageMutationWorker {
+            await worker.value
+        }
+        return pendingStageMutationsSucceeded
     }
 
     func requestDiscardFile(path: String) {

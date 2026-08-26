@@ -8,6 +8,7 @@ struct GGMutationContext {
     var refreshGitChanges: () async -> Void
     var refreshProviderReviews: () async -> Void
     var refreshProjectTopology: () async -> Void
+    var finishPendingStaging: () async -> Bool
     var worktreeExists: () -> Bool
     var invalidateInbox: () -> Void
     var selectWorktreeAtPath: (String) async -> Void
@@ -228,6 +229,11 @@ final class GGMutationCoordinator {
             }
         }
         defer { releaseAction() }
+
+        if request.requiresStagedChanges,
+           !(await context.finishPendingStaging()) {
+            throw GGMutationError.stagingFailed
+        }
 
         let isRecoveryRequest = request == .continueOperation || request == .abortOperation
         let snapshot: GGStackSnapshot?

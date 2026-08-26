@@ -15,9 +15,8 @@ struct RightPaneOptimisticStageTests {
         state.stageAll([unstaged])
         #expect(state.displayChanges.first { $0.path == "file.txt" }?.stage == .staged)
 
-        try await waitUntil {
-            state.changes.first { $0.path == "file.txt" }?.stage == .staged
-        }
+        #expect(await state.finishPendingStageMutations())
+        #expect(state.changes.first { $0.path == "file.txt" }?.stage == .staged)
         let staged = try #require(state.changes.first { $0.path == "file.txt" })
         state.unstageAll([staged])
         #expect(state.displayChanges.first { $0.path == "file.txt" }?.stage == .unstaged)
@@ -64,7 +63,8 @@ struct RightPaneOptimisticStageTests {
         state.stageAll([file])
         #expect(state.displayChanges.first { $0.path == "file.txt" }?.stage == .staged)
 
-        try await waitUntil { state.sidebarError != nil }
+        #expect(!(await state.finishPendingStageMutations()))
+        #expect(state.sidebarError != nil)
         #expect(state.displayChanges.first { $0.path == "file.txt" }?.stage == .unstaged)
     }
 
