@@ -61,6 +61,13 @@ enum GGMutationRequest: Equatable, Sendable {
         case .applySplit: .split
         }
     }
+
+    var requiresStagedChanges: Bool {
+        switch self {
+        case .amendCurrent, .absorbStaged: true
+        default: false
+        }
+    }
 }
 
 struct GGStackIdentity: Equatable, Sendable {
@@ -120,6 +127,7 @@ enum GGMutationError: Error, Equatable {
     case immutableTarget(reason: String)
     case pausedOperation
     case blockingGitOperation
+    case stagingFailed
 }
 
 extension GGMutationError: LocalizedError {
@@ -130,6 +138,7 @@ extension GGMutationError: LocalizedError {
         case .immutableTarget(let reason): reason
         case .pausedOperation: "Continue or abort the paused gg operation first."
         case .blockingGitOperation: "Finish the current Git operation first."
+        case .stagingFailed: "Staging failed. Fix the staging error and try again."
         }
     }
 }
