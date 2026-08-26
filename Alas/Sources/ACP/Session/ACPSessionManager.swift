@@ -447,6 +447,7 @@ final class ACPSessionManager: ObservableObject {
     /// release the lease after `connection.shutdown` — preserving the
     /// correct shutdown order (connection down before lease freed).
     private var attachingSessions: Set<ACPSession.ID> = []
+    private var disposingAttachments: Set<ACPSession.ID> = []
     private struct AttachingConnection {
         let connection: ACPConnection
         var remoteSessionId: String?
@@ -1113,7 +1114,8 @@ final class ACPSessionManager: ObservableObject {
             sessions[$0]?.agentId == agentId && sessions[$0]?.remoteSessionId == remoteSessionId
         }
         guard let localSessionId,
-              runners[localSessionId] != nil || disposalTasks[localSessionId] != nil
+              runners[localSessionId] != nil || attachingSessions.contains(localSessionId)
+                || disposalTasks[localSessionId] != nil
         else { return }
         try await disposeSession(id: localSessionId)
     }
@@ -2973,6 +2975,7 @@ extension ACPSessionManager {
         var attachSucceeded = false
         defer {
             attachingSessions.remove(sessionId)
+            disposingAttachments.remove(sessionId)
             if !attachSucceeded {
                 stopHeartbeat(sessionId: sessionId)
                 stopWriterWatch(sessionId: sessionId)
@@ -3036,6 +3039,10 @@ extension ACPSessionManager {
             return
         }
         let setup = await evaluateSetup(for: spec)
+        guard sessions[sessionId] === session, !disposingAttachments.contains(sessionId), !isDisposed else {
+            await releaseWriterLease(sessionId: sessionId)
+            return
+        }
         guard case .ready = setup else {
             do {
                 try await downgradeNegotiatingForkToTranscript(session: session)
@@ -3136,6 +3143,11 @@ extension ACPSessionManager {
                 attachingConnections[sessionId] = nil
             }
         }
+        guard sessions[sessionId] === session, !disposingAttachments.contains(sessionId), !isDisposed else {
+            await connection.shutdown()
+            await releaseWriterLease(sessionId: sessionId)
+            return
+        }
         // Collect a short tail of stderr so we can surface it when the
         // agent rejects initialize / new for protocol or auth reasons.
         let stderrBuffer = StderrBuffer()
@@ -3177,6 +3189,11 @@ extension ACPSessionManager {
                     method: "initialize"
                 )
             )
+            guard sessions[sessionId] === session, !disposingAttachments.contains(sessionId), !isDisposed else {
+                await connection.shutdown()
+                await releaseWriterLease(sessionId: sessionId)
+                return
+            }
             if var attaching = attachingConnections[sessionId], attaching.connection === connection {
                 attaching.sessionCapabilities = initialized.sessionCapabilities
                 attachingConnections[sessionId] = attaching
@@ -3653,6 +3670,16 @@ extension ACPSessionManager {
                     session.contextRecoveryStatus = .sendingTranscript
                 }
             }
+            if disposingAttachments.contains(sessionId) || sessions[sessionId] !== session || isDisposed {
+                try? await closeRemoteSession(
+                    id: result.sessionId,
+                    using: connection,
+                    sessionCapabilities: initialized.sessionCapabilities
+                )
+                await connection.shutdown()
+                await releaseWriterLease(sessionId: sessionId)
+                return
+            }
             if var attaching = attachingConnections[sessionId], attaching.connection === connection {
                 attaching.remoteSessionId = result.sessionId
                 attachingConnections[sessionId] = attaching
@@ -3741,9 +3768,15 @@ extension ACPSessionManager {
                 shouldAbortAttach = !(await confirmedWriterLease(for: sessionId))
             }
             if shouldAbortAttach {
-                if isDisposed {
+                if attachingConnections[sessionId]?.connection === connection,
+                   (isDisposed || disposingAttachments.contains(sessionId)) {
+                    try? await closeRemoteSession(
+                        id: result.sessionId,
+                        using: connection,
+                        sessionCapabilities: initialized.sessionCapabilities
+                    )
                     await connection.shutdown()
-                } else {
+                } else if attachingConnections[sessionId]?.connection === connection {
                     await connection.detach()
                 }
                 startedRunner?.stop()
@@ -4282,6 +4315,13 @@ extension ACPSessionManager {
         try await task.value
     }
 
+    func disposeAllLiveSessions() async {
+        let ids = Set(runners.keys).union(attachingSessions)
+        for id in ids {
+            try? await disposeSession(id: id)
+        }
+    }
+
     func detach(sessionId: ACPSession.ID) async {
         try? await tearDownSession(sessionId: sessionId, closeRemote: false)
     }
@@ -4338,6 +4378,9 @@ extension ACPSessionManager {
         let shouldCloseRemote = closeRemote && session?.agentState != .disconnected
         let remoteSessionId = session?.remoteSessionId
         let sessionCapabilities = session?.sessionCapabilities
+        if attachingSessions.contains(sessionId) {
+            disposingAttachments.insert(sessionId)
+        }
         let attaching = attachingConnections.removeValue(forKey: sessionId)
         // Reset transient session state SYNCHRONOUSLY before any await.
         // The steer task is unstructured and can resume during the

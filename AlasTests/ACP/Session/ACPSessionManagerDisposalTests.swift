@@ -207,6 +207,52 @@ struct ACPSessionManagerDisposalTests {
         #expect(manager.runners[session.id] == nil)
     }
 
+    @Test("disposing while session creation is in flight closes its late result")
+    func disposalClosesLateRemoteSessionResult() async throws {
+        let client = ACPMockClient()
+        let newStarted = AsyncStream<Void>.makeStream()
+        let releaseNew = AsyncStream<Void>.makeStream()
+        client.script(method: "initialize") { _ in
+            try JSONEncoder().encode(ACPInitializeResult(
+                protocolVersion: 1,
+                agentCapabilities: .init(sessionCapabilities: .init(close: .init())),
+                authMethods: []
+            ))
+        }
+        client.scriptAsync(method: "session/new") { _ in
+            newStarted.continuation.yield()
+            for await _ in releaseNew.stream { break }
+            return try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote",
+                availableModels: [],
+                availableModes: [],
+                currentModel: nil,
+                currentMode: nil,
+                promptSuggestions: []
+            ))
+        }
+        client.script(method: "session/close") { _ in Data("{}".utf8) }
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("acp-disposal-late-new-\(UUID()).sqlite")
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: try ACPSessionStore(path: path.path),
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) }
+        )
+        let session = manager.createSession(agentId: "claude")
+        let attach = Task { @MainActor in await manager.attach(to: session.id, freshlyCreated: true) }
+        for await _ in newStarted.stream { break }
+
+        try await manager.disposeSession(id: session.id)
+        releaseNew.continuation.yield()
+        await attach.value
+
+        #expect(client.sent.map(\.method).filter { $0 == "session/close" }.count == 1)
+        #expect(manager.runners[session.id] == nil)
+    }
+
     private func attachedManager(
         client: ACPMockClient,
         supportsClose: Bool,

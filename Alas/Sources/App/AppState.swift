@@ -6386,7 +6386,7 @@ final class AppState {
         manager.shutdownBackgroundTasks()
         Task { @MainActor in
             await manager.flushAllPersistence()
-            for sid in sessionIds { await manager.detach(sessionId: sid) }
+            await manager.disposeAllLiveSessions()
             // Release any leases this manager still owns AFTER all runner
             // connections are shut down (detach above). A freed lease must
             // not be claimable while an old agent process is still alive.
