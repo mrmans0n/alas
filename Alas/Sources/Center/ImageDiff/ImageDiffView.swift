@@ -9,6 +9,7 @@ struct ImageDiffView: View {
     let onRetry: (() -> Void)?
 
     @State private var presentation = ImageDiffPresentationState()
+    @StateObject private var copyFeedback = CopyFeedbackState()
     @Environment(\.theme) private var theme
 
     init(
@@ -31,6 +32,7 @@ struct ImageDiffView: View {
             content
         }
         .background(theme.color("bg-1"))
+        .copyFeedbackOverlay(message: copyFeedback.message)
         .onAppear {
             presentation.updateDisplayedPair(pair, identity: pairPresentationIdentity)
         }
@@ -51,22 +53,32 @@ struct ImageDiffView: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            Text((relativePath as NSString).lastPathComponent)
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundColor(theme.color("fg"))
-            if let sourceBadge {
-                Text(sourceBadge)
-                    .font(.system(size: 9.5, weight: .semibold))
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1)
-                    .background(theme.color("accent").opacity(0.16))
-                    .foregroundColor(theme.color("accent"))
-                    .clipShape(RoundedRectangle(cornerRadius: 3))
+            Button {
+                copyFeedback.copy(relativePath)
+            } label: {
+                HStack(spacing: 10) {
+                    Text((relativePath as NSString).lastPathComponent)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundColor(theme.color("fg"))
+                    if let sourceBadge {
+                        Text(sourceBadge)
+                            .font(.system(size: 9.5, weight: .semibold))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(theme.color("accent").opacity(0.16))
+                            .foregroundColor(theme.color("accent"))
+                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                    }
+                    Text("·").foregroundColor(theme.color("fg-faint"))
+                    Text((relativePath as NSString).deletingLastPathComponent)
+                        .font(.system(size: 11))
+                        .foregroundColor(theme.color("fg-dim"))
+                }
             }
-            Text("·").foregroundColor(theme.color("fg-faint"))
-            Text((relativePath as NSString).deletingLastPathComponent)
-                .font(.system(size: 11))
-                .foregroundColor(theme.color("fg-dim"))
+            .buttonStyle(.plain)
+            .pointingHandCursor()
+            .help("Copy path")
+            .accessibilityLabel("Copy \(relativePath)")
             if pair.kind == .renamed, let old = pair.oldPath {
                 pathChangeChip(kind: "RENAMED", old: old, new: relativePath)
             }
