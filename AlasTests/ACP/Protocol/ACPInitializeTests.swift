@@ -166,6 +166,22 @@ struct ACPInitializeTests {
         #expect(present.agentCapabilities?.sessionCapabilities.supportsDelete == true)
     }
 
+    @Test("decodes absent and present session close capability")
+    func decodeSessionCloseCapability() throws {
+        let absent = try JSONDecoder().decode(ACPInitializeResult.self, from: Data("""
+        { "protocolVersion": 1, "agentCapabilities": { "sessionCapabilities": {} } }
+        """.utf8))
+        #expect(absent.agentCapabilities?.sessionCapabilities.supportsClose == false)
+
+        let present = try JSONDecoder().decode(ACPInitializeResult.self, from: Data("""
+        {
+          "protocolVersion": 1,
+          "agentCapabilities": { "sessionCapabilities": { "close": {} } }
+        }
+        """.utf8))
+        #expect(present.agentCapabilities?.sessionCapabilities.supportsClose == true)
+    }
+
     @Test("decodes absent, supported, and extended provider capabilities")
     func decodeProviderCapabilities() throws {
         let absent = try JSONDecoder().decode(ACPInitializeResult.self, from: Data("""

@@ -4496,7 +4496,7 @@ final class AppState {
         invalidateFollowRevisionRequests(for: allTabs.filter { closedSet.contains($0.id) })
     }
 
-    /// Detach a single ACP session's runner and remove it from the
+    /// Dispose a single ACP session's runner and remove it from the
     /// worktree's manager. Different from `disposeACPManager`, which
     /// tears down the whole worktree's manager — this leaves the
     /// manager (and any sibling sessions) running.
@@ -4507,11 +4507,11 @@ final class AppState {
         // (other tabs may share it), so the global flush from
         // disposeACPManager wouldn't fire here.
         manager.flushPendingDraftWrite(forSession: sessionId)
-        // Call detach unconditionally — a session can hold a writer lease
+        // Dispose unconditionally — a session can hold a writer lease
         // + heartbeat + writer-watch before its runner is registered (the
         // "attach window"). If we returned early when no runner was present,
         // closing the tab during that window would leak all of those
-        // resources. detach is idempotent: releaseWriterLease is owner-
+        // resources. Disposal is idempotent: releaseWriterLease is owner-
         // scoped, and endMirroring / stopHeartbeat / stopWriterWatch are
         // all no-ops when not active.
         if let runner = manager.runners[sessionId] {
@@ -4522,7 +4522,15 @@ final class AppState {
             if let acpDetachRunner {
                 await acpDetachRunner(manager, sessionId)
             } else {
-                await manager.detach(sessionId: sessionId)
+                do {
+                    try await manager.disposeSession(id: sessionId)
+                } catch {
+                    Self.logger.error("Failed to close ACP session: \(String(describing: error), privacy: .public)")
+                    showFileActionError(
+                        title: "Close Session Failed",
+                        message: error.localizedDescription
+                    )
+                }
             }
         }
         pendingACPDetachTasks[worktreeId, default: [:]][sessionId] = PendingACPDetach(id: pendingID, task: task)
@@ -6378,7 +6386,7 @@ final class AppState {
         manager.shutdownBackgroundTasks()
         Task { @MainActor in
             await manager.flushAllPersistence()
-            for sid in sessionIds { await manager.detach(sessionId: sid) }
+            await manager.disposeAllLiveSessions()
             // Release any leases this manager still owns AFTER all runner
             // connections are shut down (detach above). A freed lease must
             // not be claimable while an old agent process is still alive.
