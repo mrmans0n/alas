@@ -813,19 +813,27 @@ struct AppKitDiffReviewHeaderRowBody: View {
                 .font(.system(size: 12, weight: .semibold, design: .monospaced))
                 .foregroundColor(statusColor)
                 .frame(width: 16)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(input.file.summary.path)
-                    .font(CenterTypography.codeFont(family: input.codeFontFamily, size: input.codeFontSize))
-                    .foregroundColor(input.theme.color("fg"))
-                    .lineLimit(1).truncationMode(.middle)
-                if let originalPath = input.file.summary.originalPath {
-                    Text("from \(originalPath)")
-                        .font(.system(size: 10.5))
-                        .foregroundColor(input.theme.color("fg-faint"))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+            Button {
+                input.state.copyFeedback.copy(input.file.summary.path)
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(input.file.summary.path)
+                        .font(CenterTypography.codeFont(family: input.codeFontFamily, size: input.codeFontSize))
+                        .foregroundColor(input.theme.color("fg"))
+                        .lineLimit(1).truncationMode(.middle)
+                    if let originalPath = input.file.summary.originalPath {
+                        Text("from \(originalPath)")
+                            .font(.system(size: 10.5))
+                            .foregroundColor(input.theme.color("fg-faint"))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
                 }
             }
+            .buttonStyle(.plain)
+            .pointingHandCursor()
+            .help("Copy path")
+            .accessibilityLabel("Copy \(input.file.summary.path)")
             if input.showsSourceBadge, let title = input.file.summary.groupTitle {
                 Text(title.uppercased())
                     .font(.system(size: 9.5, weight: .semibold))

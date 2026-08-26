@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 @MainActor
@@ -33,6 +34,11 @@ final class CopyFeedbackState: ObservableObject {
                 self?.message = nil
             }
         }
+    }
+
+    func copy(_ text: String, to pasteboard: NSPasteboard = .general) {
+        Clipboard.copy(text, to: pasteboard)
+        show("Copied")
     }
 }
 

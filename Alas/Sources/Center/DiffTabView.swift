@@ -51,6 +51,7 @@ struct DiffTabView: View {
     @State private var reviewExpandedCollapsedRowIDs: Set<String> = []
     @State private var wrapLines = false
     @State private var showWhitespace = false
+    @StateObject private var copyFeedback = CopyFeedbackState()
     @StateObject private var renderContextCache = DiffTabRenderContextCache()
     @FocusState private var draftComposerFocused: Bool
 
@@ -156,6 +157,7 @@ struct DiffTabView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(theme.color("bg-1"))
+        .copyFeedbackOverlay(message: copyFeedback.message)
         .onChange(of: loadKey, initial: true) { _, _ in loadDraftCommentController() }
         .task(id: loadKey) {
             await load()
@@ -257,28 +259,38 @@ struct DiffTabView: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            Text((relativePath as NSString).lastPathComponent)
-                .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize))
-                .foregroundColor(theme.color("fg"))
-            if compareWithHEAD {
-                Text("HEAD")
-                    .font(.system(size: 9.5, weight: .semibold))
-                    .padding(.horizontal, 5).padding(.vertical, 1)
-                    .background(theme.color("accent").opacity(0.16))
-                    .foregroundColor(theme.color("accent"))
-                    .clipShape(RoundedRectangle(cornerRadius: 3))
-            } else if staged {
-                Text("STAGED")
-                    .font(.system(size: 9.5, weight: .semibold))
-                    .padding(.horizontal, 5).padding(.vertical, 1)
-                    .background(theme.color("info").opacity(0.18))
-                    .foregroundColor(theme.color("info"))
-                    .clipShape(RoundedRectangle(cornerRadius: 3))
+            Button {
+                copyFeedback.copy(relativePath)
+            } label: {
+                HStack(spacing: 12) {
+                    Text((relativePath as NSString).lastPathComponent)
+                        .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize))
+                        .foregroundColor(theme.color("fg"))
+                    if compareWithHEAD {
+                        Text("HEAD")
+                            .font(.system(size: 9.5, weight: .semibold))
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(theme.color("accent").opacity(0.16))
+                            .foregroundColor(theme.color("accent"))
+                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                    } else if staged {
+                        Text("STAGED")
+                            .font(.system(size: 9.5, weight: .semibold))
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(theme.color("info").opacity(0.18))
+                            .foregroundColor(theme.color("info"))
+                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                    }
+                    Text("·").foregroundColor(theme.color("fg-faint"))
+                    Text((relativePath as NSString).deletingLastPathComponent)
+                        .font(.system(size: codeFontSize - 1.5))
+                        .foregroundColor(theme.color("fg-dim"))
+                }
             }
-            Text("·").foregroundColor(theme.color("fg-faint"))
-            Text((relativePath as NSString).deletingLastPathComponent)
-                .font(.system(size: codeFontSize - 1.5))
-                .foregroundColor(theme.color("fg-dim"))
+            .buttonStyle(.plain)
+            .pointingHandCursor()
+            .help("Copy path")
+            .accessibilityLabel("Copy \(relativePath)")
             Spacer()
             if shouldShowChangeSummary(additions: totalAdd, deletions: totalDel) {
                 HStack(spacing: 10) {
