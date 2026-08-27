@@ -25,16 +25,18 @@ struct CommitHeaderView: View {
                 revisionRow.padding(.top, 8)
             }
             if expanded {
-                ViewThatFits(in: .vertical) {
-                    expandedBlock
-                        .fixedSize(horizontal: false, vertical: true)
-                    ScrollView(.vertical) {
+                CommitDetailsHeightCap(maxHeight: Self.maxExpandedHeight) {
+                    ViewThatFits(in: .vertical) {
                         expandedBlock
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                        ScrollView(.vertical) {
+                            expandedBlock
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxWidth: .infinity, maxHeight: Self.maxExpandedHeight, alignment: .leading)
             }
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
@@ -163,4 +165,34 @@ struct CommitHeaderView: View {
         formatter.dateFormat = "yyyy-MM-dd HH:mm"
         return formatter
     }()
+}
+
+private struct CommitDetailsHeightCap: Layout {
+    let maxHeight: CGFloat
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout Void
+    ) -> CGSize {
+        guard let subview = subviews.first else { return .zero }
+        return subview.sizeThatFits(cappedProposal(for: proposal))
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout Void
+    ) {
+        subviews.first?.place(
+            at: bounds.origin,
+            anchor: .topLeading,
+            proposal: cappedProposal(for: proposal)
+        )
+    }
+
+    private func cappedProposal(for proposal: ProposedViewSize) -> ProposedViewSize {
+        ProposedViewSize(width: proposal.width, height: min(proposal.height ?? maxHeight, maxHeight))
+    }
 }

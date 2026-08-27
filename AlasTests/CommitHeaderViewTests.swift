@@ -95,7 +95,7 @@ struct CommitHeaderViewTests {
             in: NSSize(width: 600, height: CommitHeaderView.maxExpandedHeight + 200)
         )
 
-        #expect(size.height <= CommitHeaderView.maxExpandedHeight + 40)
+        #expect(size.height < 120)
     }
 
     @Test func expandedHeaderOnlyMakesOverflowingDetailsScrollable() {
