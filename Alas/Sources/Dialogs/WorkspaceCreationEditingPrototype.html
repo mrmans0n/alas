@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<!-- PROTOTYPE: throwaway interaction study for GitHub issue 1088. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Workspace creation and editing prototype</title>
+  <style>
+    :root { color-scheme:light; --accent:#6d52c7; --accent-soft:#ede8ff; --line:#d9d9df; --muted:#6d6d75; --bg:#e9e9ed; --panel:#f8f8fa; --good:#287a49; --warn:#9b6212; --bad:#b33636; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:#d9d9de; color:#25252a; font-size:13px; }
+    button,input,select { font:inherit; }
+    button { cursor:pointer; }
+    .prototype-bar { position:fixed; z-index:30; left:50%; bottom:16px; transform:translateX(-50%); display:flex; gap:6px; align-items:center; padding:7px; border-radius:13px; background:#202027; box-shadow:0 10px 35px rgba(0,0,0,.3); color:#fff; }
+    .prototype-bar button { border:0; border-radius:8px; padding:8px 11px; background:transparent; color:#d9d9e1; }
+    .prototype-bar button.active { background:#6650b8; color:#fff; }
+    .prototype-bar .approve { margin-left:8px; background:#fff; color:#24242a; font-weight:700; }
+    .app { width:min(1240px,calc(100vw - 36px)); height:calc(100vh - 86px); min-height:650px; margin:18px auto 68px; display:grid; grid-template-columns:250px 1fr; overflow:hidden; border:1px solid #b8b8be; border-radius:13px; box-shadow:0 20px 60px rgba(0,0,0,.22); background:#fff; }
+    .sidebar { background:linear-gradient(#eeeeF2,#e5e5ea); border-right:1px solid #cacacf; padding:12px 10px; }
+    .traffic { display:flex; gap:8px; padding:2px 4px 14px; }
+    .dot { width:12px; height:12px; border-radius:50%; background:#bbb; }
+    .dot:nth-child(1){background:#ff5f57}.dot:nth-child(2){background:#ffbd2e}.dot:nth-child(3){background:#28c840}
+    .sidebar-title { padding:6px 8px; font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:#777780; font-weight:700; }
+    .tree { padding:7px 9px; border-radius:7px; margin:2px 0; }
+    .tree.selected { background:#d7cff6; color:#382378; font-weight:700; }
+    .tree.child { margin-left:19px; color:#5f5f67; }
+    .tree .status { float:right; width:7px; height:7px; margin-top:5px; border-radius:50%; background:#49a66c; }
+    .content { background:#f4f4f6; position:relative; overflow:auto; }
+    .toolbar { height:46px; display:flex; align-items:center; justify-content:space-between; padding:0 16px; background:#fafafa; border-bottom:1px solid #d7d7dc; }
+    .toolbar strong { font-size:14px; }
+    .toolbar button { border:1px solid #ccc; border-radius:7px; padding:6px 10px; background:#fff; }
+    .canvas { padding:30px; min-height:calc(100% - 46px); display:flex; justify-content:center; align-items:flex-start; }
+    .dialog { width:min(730px,100%); border:1px solid #c5c5cb; border-radius:12px; overflow:hidden; background:#fafafa; box-shadow:0 18px 55px rgba(0,0,0,.22); }
+    .dialog.wide { width:min(860px,100%); }
+    .dialog-head { padding:17px 20px 14px; text-align:center; border-bottom:1px solid #dedee3; background:#f6f6f8; }
+    .dialog-head h1 { margin:0; font-size:17px; }
+    .dialog-head p { margin:5px 0 0; color:var(--muted); }
+    .dialog-body { padding:21px 24px; }
+    .dialog-actions { display:flex; justify-content:flex-end; gap:9px; padding:13px 18px; border-top:1px solid #dcdce1; background:#f1f1f3; }
+    .button { border:1px solid #c7c7cd; border-radius:7px; padding:7px 13px; background:#fff; color:#333; }
+    .button.primary { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+    .button.danger { color:var(--bad); }
+    .form-grid { display:grid; grid-template-columns:145px 1fr; gap:14px 16px; align-items:start; }
+    .form-grid label { padding-top:7px; font-weight:600; text-align:right; }
+    .field, select { width:100%; padding:7px 9px; border:1px solid #c9c9cf; border-radius:7px; background:#fff; }
+    .hint { margin-top:5px; color:var(--muted); font-size:11px; line-height:1.4; }
+    .section-title { display:flex; justify-content:space-between; align-items:center; margin:22px 0 8px; font-weight:700; }
+    .section-title:first-child { margin-top:0; }
+    .member { display:grid; grid-template-columns:24px minmax(170px,1fr) 130px 110px 28px; gap:9px; align-items:center; padding:9px 10px; background:#fff; border:1px solid #d8d8dd; margin-top:-1px; }
+    .member:first-of-type { border-radius:8px 8px 0 0; margin-top:0; }
+    .member:last-of-type { border-radius:0 0 8px 8px; }
+    .grip { color:#999; letter-spacing:-3px; font-size:16px; }
+    .member small { color:var(--muted); display:block; margin-top:2px; }
+    .host { padding:3px 7px; border-radius:999px; background:#eeeef2; text-align:center; font-size:10px; color:#5f5f67; }
+    .icon-button { border:0; background:transparent; color:#8b8b92; font-size:16px; }
+    .callout { border:1px solid #e4ca83; background:#fff8dd; border-radius:8px; padding:11px 12px; color:#654711; line-height:1.45; }
+    .callout.bad { border-color:#e1a1a1; background:#fff0f0; color:#7b2929; }
+    .callout.good { border-color:#9ed0ac; background:#effaf2; color:#245e38; }
+    .stepper { display:flex; padding:0 18px; background:#fff; border-bottom:1px solid #dedee3; }
+    .step { flex:1; text-align:center; padding:12px 4px 10px; color:#8a8a92; border-bottom:2px solid transparent; }
+    .step.active { color:var(--accent); border-color:var(--accent); font-weight:700; }
+    .step.done { color:#3c714e; }
+    .summary { display:grid; grid-template-columns:145px 1fr; gap:9px 14px; padding:14px; background:#fff; border:1px solid #dddde2; border-radius:8px; }
+    .summary dt { color:var(--muted); text-align:right; }
+    .summary dd { margin:0; font-weight:600; }
+    .check { display:grid; grid-template-columns:24px 1fr auto; gap:10px; align-items:center; padding:11px 12px; border:1px solid #dddde2; background:#fff; margin-top:-1px; }
+    .check:first-child { border-radius:8px 8px 0 0; margin-top:0; }
+    .check:last-child { border-radius:0 0 8px 8px; }
+    .check .mark { font-weight:800; font-size:15px; }
+    .check.good .mark,.check.good .result { color:var(--good); }
+    .check.bad .mark,.check.bad .result { color:var(--bad); }
+    .check.wait .mark,.check.wait .result { color:#777; }
+    .check strong { display:block; }
+    .check small { color:var(--muted); }
+    .progress-head { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:18px; }
+    .progress-head h2 { margin:0 0 5px; }
+    .progress-head p { margin:0; color:var(--muted); }
+    .member-progress { display:grid; grid-template-columns:22px 1fr auto; gap:11px; padding:14px; background:#fff; border:1px solid #d9d9df; margin-top:-1px; align-items:start; }
+    .member-progress:first-of-type { border-radius:9px 9px 0 0; margin-top:0; }
+    .member-progress:last-of-type { border-radius:0 0 9px 9px; }
+    .member-progress strong { display:block; margin-bottom:3px; }
+    .member-progress small { color:var(--muted); }
+    .state-pill { padding:4px 8px; border-radius:999px; font-size:10px; font-weight:700; }
+    .state-pill.good { color:var(--good); background:#e4f5e9; }
+    .state-pill.bad { color:var(--bad); background:#fde4e4; }
+    .state-pill.wait { color:#666; background:#eeeef1; }
+    .snapshot-label { display:inline-flex; gap:6px; align-items:center; margin-top:16px; color:#5f5f67; font-size:11px; }
+    .state-view { margin-top:17px; border:1px solid #d7d7dc; border-radius:8px; background:#202027; color:#d7f4de; overflow:hidden; }
+    .state-view summary { cursor:pointer; padding:8px 11px; color:#ddd; font-size:11px; }
+    .state-view pre { margin:0; padding:0 12px 12px; white-space:pre-wrap; font:10px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; }
+    [hidden] { display:none !important; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="traffic"><i class="dot"></i><i class="dot"></i><i class="dot"></i></div>
+      <div class="sidebar-title">Projects and Workspaces</div>
+      <div class="tree">▸ payments-api</div>
+      <div class="tree">▸ payments-web</div>
+      <div class="tree selected">▾ Payments Platform</div>
+      <div class="tree child">▾ refunds <span class="status"></span></div>
+      <div class="tree child" style="padding-left:22px">payments-api</div>
+      <div class="tree child" style="padding-left:22px">payments-web</div>
+      <div class="tree">▸ Developer Tools</div>
+    </aside>
+    <main class="content">
+      <div class="toolbar"><strong id="toolbar-title">Payments Platform</strong><button onclick="showScenario('checkout')">New Checkout…</button></div>
+      <div class="canvas" id="canvas"></div>
+    </main>
+  </div>
+
+  <nav class="prototype-bar" aria-label="Prototype scenarios">
+    <button data-screen="new" onclick="showScenario('new')">New Workspace</button>
+    <button data-screen="edit" onclick="showScenario('edit')">Edit Workspace</button>
+    <button data-screen="checkout" onclick="showScenario('checkout')">Create Checkout</button>
+    <button data-screen="failure" onclick="showScenario('failure')">Preflight Failure</button>
+    <button data-screen="partial" onclick="showScenario('partial')">Partial Creation</button>
+    <button class="approve" data-choice="approve-separate-surfaces-flow" onclick="toggleSelect(this)">Choose this flow</button>
+  </nav>
+
+  <template id="new-template">
+    <section class="dialog">
+      <header class="dialog-head"><h1>New Workspace</h1><p>A reusable, ordered collection of Projects on one execution location.</p></header>
+      <div class="dialog-body">
+        <div class="form-grid">
+          <label>Name</label><div><input class="field" value="Payments Platform"><div class="hint">Existing checkout paths will not follow later renames.</div></div>
+          <label>Execution location</label><div><select><option>Local</option><option>devbox.example.com</option></select><div class="hint">Every member Project must use this exact location.</div></div>
+        </div>
+        <div class="section-title"><span>Projects</span><button class="button">Add Project…</button></div>
+        <div class="member"><span class="grip">⠿</span><div><strong>payments-api</strong><small>~/Code/payments-api</small></div><span class="host">Local</span><span>Setup: inherit</span><button class="icon-button">−</button></div>
+        <div class="member"><span class="grip">⠿</span><div><strong>payments-web</strong><small>~/Code/payments-web</small></div><span class="host">Local</span><span>Setup: inherit</span><button class="icon-button">−</button></div>
+      </div>
+      <footer class="dialog-actions"><button class="button">Cancel</button><button class="button primary" onclick="showScenario('checkout')">Create Workspace</button></footer>
+    </section>
+  </template>
+
+  <template id="edit-template">
+    <section class="dialog">
+      <header class="dialog-head"><h1>Edit Workspace</h1><p>Payments Platform</p></header>
+      <div class="dialog-body">
+        <div class="callout"><strong>Existing checkouts will not change.</strong><br>Membership, order, names, and settings saved here apply only to future Workspace Checkouts. Repair uses each checkout's saved snapshot.</div>
+        <div class="section-title"><span>Projects for future checkouts</span><button class="button">Add Project…</button></div>
+        <div class="member"><span class="grip">⠿</span><div><strong>payments-api</strong><small>Member settings…</small></div><span class="host">Local</span><span>GG: inherit</span><button class="icon-button">−</button></div>
+        <div class="member"><span class="grip">⠿</span><div><strong>payments-web</strong><small>Member settings…</small></div><span class="host">Local</span><span>GG: inherit</span><button class="icon-button">−</button></div>
+        <div class="member"><span class="grip">⠿</span><div><strong>payments-docs</strong><small>New member</small></div><span class="host">Local</span><span>GG: disabled</span><button class="icon-button">−</button></div>
+        <details class="state-view"><summary>Relevant state</summary><pre>{
+  "workspaceMembers": ["payments-api", "payments-web", "payments-docs"],
+  "existingCheckoutMembers": ["payments-api", "payments-web"],
+  "existingCheckoutsMutated": false
+}</pre></details>
+      </div>
+      <footer class="dialog-actions"><button class="button">Cancel</button><button class="button primary">Save for Future Checkouts</button></footer>
+    </section>
+  </template>
+
+  <template id="checkout-template">
+    <section class="dialog wide" data-step="1">
+      <header class="dialog-head"><h1>Create Workspace Checkout</h1><p>Payments Platform</p></header>
+      <div class="stepper"><div class="step active">1 · Details</div><div class="step">2 · Members</div><div class="step">3 · Preflight</div></div>
+      <div class="dialog-body checkout-step step-1">
+        <div class="form-grid">
+          <label>Shared branch</label><div><input class="field" value="feature/refunds"><div class="hint">Used exactly in every member repository. Alas will not generate alternatives.</div></div>
+          <label>Checkout name</label><div><input class="field" value="refunds"><div class="hint">Path: ~/Alas/workspaces/payments-platform/refunds</div></div>
+          <label>Open after create</label><div><select><option>ACP · Codex · Workspace access</option><option>Terminal</option><option>Do not open</option></select><div class="hint">This affects only the new checkout unless saved as the Workspace default.</div></div>
+        </div>
+        <details class="state-view" open><summary>Relevant state</summary><pre>{
+  "workspace": "Payments Platform",
+  "sharedBranch": "feature/refunds",
+  "checkoutRoot": "~/Alas/workspaces/payments-platform/refunds",
+  "snapshotFrozen": false
+}</pre></details>
+      </div>
+      <div class="dialog-body checkout-step step-2" hidden>
+        <div class="callout">These Projects and settings become an immutable checkout snapshot after preflight succeeds.</div>
+        <div class="section-title"><span>Member bases</span><span class="hint">Workspace order</span></div>
+        <div class="member"><span>1</span><div><strong>payments-api</strong><small>Creates feature/refunds</small></div><span class="host">Local</span><select><option>main</option><option>release</option></select><span></span></div>
+        <div class="member"><span>2</span><div><strong>payments-web</strong><small>Creates feature/refunds</small></div><span class="host">Local</span><select><option>develop</option><option>main</option></select><span></span></div>
+        <div class="member"><span>3</span><div><strong>payments-docs</strong><small>Reuses feature/refunds</small></div><span class="host">Local</span><select disabled><option>Existing branch</option></select><span></span></div>
+        <div class="hint" style="margin-top:10px">A base override has no effect when Alas safely reuses an existing branch.</div>
+      </div>
+      <div class="dialog-body checkout-step step-3" hidden>
+        <div class="section-title"><span>Ready to preflight</span><span class="hint">No checkout or Git artifacts exist yet</span></div>
+        <dl class="summary"><dt>Branch</dt><dd>feature/refunds</dd><dt>Root</dt><dd>~/Alas/workspaces/payments-platform/refunds</dd><dt>Members</dt><dd>3 Projects, all Local</dd><dt>Launch</dt><dd>ACP · Codex · Workspace access</dd></dl>
+        <div class="callout" style="margin-top:14px">Preflight checks every Project, base, shared branch, and destination before Alas saves a checkout record or creates a worktree.</div>
+      </div>
+      <footer class="dialog-actions"><button class="button" id="back" onclick="checkoutBack()" disabled>Back</button><button class="button primary" id="next" onclick="checkoutNext()">Continue</button></footer>
+    </section>
+  </template>
+
+  <template id="failure-template">
+    <section class="dialog wide">
+      <header class="dialog-head"><h1>Preflight Failed</h1><p>No Workspace Checkout or worktrees were created.</p></header>
+      <div class="dialog-body">
+        <div class="check good"><span class="mark">✓</span><div><strong>payments-api</strong><small>main resolves to 92d7b6a · destination available</small></div><span class="result">Ready</span></div>
+        <div class="check bad"><span class="mark">!</span><div><strong>payments-web</strong><small>feature/refunds is checked out at ~/Code/payments-web-refunds</small></div><span class="result">Blocked</span></div>
+        <div class="check good"><span class="mark">✓</span><div><strong>payments-docs</strong><small>Existing branch can be reused · destination available</small></div><span class="result">Ready</span></div>
+        <div class="callout bad" style="margin-top:15px"><strong>The shared branch must be available in every Project.</strong><br>Remove the conflicting worktree or choose another shared branch, then run preflight again.</div>
+        <details class="state-view"><summary>Relevant state</summary><pre>{
+  "checkoutPersisted": false,
+  "gitArtifactsCreated": false,
+  "failedMember": "payments-web",
+  "reason": "branchCheckedOutElsewhere"
+}</pre></details>
+      </div>
+      <footer class="dialog-actions"><button class="button">Cancel</button><button class="button primary" onclick="showScenario('checkout')">Edit Checkout Details</button></footer>
+    </section>
+  </template>
+
+  <template id="partial-template">
+    <section class="dialog wide">
+      <header class="dialog-head"><h1>refunds</h1><p>Workspace Checkout · Payments Platform</p></header>
+      <div class="dialog-body">
+        <div class="progress-head"><div><h2>Creation needs attention</h2><p>Successful members remain available. Repair resumes the saved plan.</p></div><span class="state-pill bad">1 of 3 failed</span></div>
+        <div class="member-progress"><span style="color:var(--good)">✓</span><div><strong>payments-api</strong><small>Worktree created · setup completed</small></div><span class="state-pill good">Ready</span></div>
+        <div class="member-progress"><span style="color:var(--bad)">!</span><div><strong>payments-web</strong><small>Git creation failed: branch lock could not be acquired</small><div style="margin-top:9px"><button class="button primary" onclick="repairMember(this)">Resume Creation</button> <button class="button danger">Clean Up Attempt…</button></div></div><span class="state-pill bad">Needs Attention</span></div>
+        <div class="member-progress"><span style="color:var(--good)">✓</span><div><strong>payments-docs</strong><small>Existing branch reused · setup completed</small></div><span class="state-pill good">Ready</span></div>
+        <div class="snapshot-label">▣ Snapshot: payments-api, payments-web, payments-docs · feature/refunds · exact saved bases and paths</div>
+        <details class="state-view" open><summary>Relevant state</summary><pre id="partial-state">{
+  "checkoutPersisted": true,
+  "checkoutState": "needsAttention",
+  "readyMembers": ["payments-api", "payments-docs"],
+  "repairUsesFrozenPlan": true,
+  "currentWorkspaceEditsAffectCheckout": false
+}</pre></details>
+      </div>
+      <footer class="dialog-actions"><button class="button">Archive Checkout…</button><button class="button primary">Open Available Member</button></footer>
+    </section>
+  </template>
+
+  <script>
+    let checkoutStep = 1;
+    const titles = { new:'New Workspace', edit:'Edit Payments Platform', checkout:'Create Checkout', failure:'Preflight', partial:'refunds' };
+    function showScenario(name) {
+      checkoutStep = 1;
+      const tpl = document.getElementById(name + '-template');
+      document.getElementById('canvas').replaceChildren(tpl.content.cloneNode(true));
+      document.getElementById('toolbar-title').textContent = titles[name];
+      document.querySelectorAll('.prototype-bar [data-screen]').forEach(b => b.classList.toggle('active', b.dataset.screen === name));
+    }
+    function checkoutNext() {
+      if (checkoutStep < 3) { checkoutStep += 1; renderCheckoutStep(); return; }
+      showScenario('failure');
+    }
+    function checkoutBack() {
+      if (checkoutStep > 1) { checkoutStep -= 1; renderCheckoutStep(); }
+    }
+    function renderCheckoutStep() {
+      document.querySelectorAll('.checkout-step').forEach((el, i) => el.hidden = i + 1 !== checkoutStep);
+      document.querySelectorAll('.stepper .step').forEach((el, i) => {
+        el.classList.toggle('active', i + 1 === checkoutStep);
+        el.classList.toggle('done', i + 1 < checkoutStep);
+      });
+      document.getElementById('back').disabled = checkoutStep === 1;
+      document.getElementById('next').textContent = checkoutStep === 3 ? 'Run Preflight' : 'Continue';
+    }
+    function repairMember(button) {
+      const row = button.closest('.member-progress');
+      row.querySelector('small').textContent = 'Worktree created · setup completed';
+      row.querySelector('.state-pill').className = 'state-pill good';
+      row.querySelector('.state-pill').textContent = 'Ready';
+      row.firstElementChild.textContent = '✓';
+      row.firstElementChild.style.color = 'var(--good)';
+      button.parentElement.remove();
+      document.querySelector('.progress-head h2').textContent = 'Creation complete';
+      document.querySelector('.progress-head p').textContent = 'All three members are ready from the saved checkout plan.';
+      document.querySelector('.progress-head .state-pill').className = 'state-pill good';
+      document.querySelector('.progress-head .state-pill').textContent = '3 of 3 ready';
+      document.getElementById('partial-state').textContent = '{\n  "checkoutPersisted": true,\n  "checkoutState": "ready",\n  "readyMembers": ["payments-api", "payments-web", "payments-docs"],\n  "repairUsedFrozenPlan": true,\n  "currentWorkspaceEditsAffectCheckout": false\n}';
+    }
+    showScenario('new');
+  </script>
+</body>
+</html>
