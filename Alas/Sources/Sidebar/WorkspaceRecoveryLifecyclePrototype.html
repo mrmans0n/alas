@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<!-- PROTOTYPE: throwaway UI study for GitHub issue 1089.
+     Three recovery and lifecycle layouts, switchable via ?variant=A|B|C. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Workspace recovery and lifecycle prototype</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --accent: #6b4fc5; --accent-soft: #e9e2ff; --bg: #dadade; --panel: #f7f7f9;
+      --line: #d1d1d7; --muted: #6d6d76; --text: #25252b; --good: #267646;
+      --warn: #9a6415; --warn-soft: #fff5d8; --bad: #af3737; --bad-soft: #ffeded;
+      --blue: #2d6596; --blue-soft: #e6f0fa;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    button, select { font: inherit; }
+    button { cursor: pointer; }
+    .app { width: min(1320px, calc(100vw - 32px)); height: calc(100vh - 90px); min-height: 680px; margin: 16px auto 74px; display: grid; grid-template-columns: 258px 1fr; overflow: hidden; border: 1px solid #b6b6bc; border-radius: 13px; background: #fff; box-shadow: 0 18px 55px rgba(0,0,0,.22); }
+    .sidebar { padding: 12px 9px; overflow: auto; border-right: 1px solid #c7c7cd; background: linear-gradient(#eeeeF2,#e4e4e9); }
+    .traffic { display: flex; gap: 8px; padding: 2px 5px 14px; }
+    .dot { width: 12px; height: 12px; border-radius: 50%; background: #bbb; }
+    .dot:nth-child(1) { background:#ff5f57; } .dot:nth-child(2) { background:#ffbd2e; } .dot:nth-child(3) { background:#28c840; }
+    .sidebar-title { padding: 6px 8px; color: #777780; font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+    .tree { min-height: 31px; margin: 2px 0; padding: 6px 8px; border-radius: 7px; }
+    .tree.checkout { margin-left: 16px; } .tree.member { margin-left: 35px; color: #575760; }
+    .tree.selected { background: #d6ccf7; color: #372076; font-weight: 700; }
+    .tree.dim { color: #898990; }
+    .tree .badge { float: right; margin-top: 1px; padding: 1px 6px; border-radius: 999px; background: #f8dede; color: var(--bad); font-size: 9px; font-weight: 700; }
+    .content { min-width: 0; overflow: auto; background: #f3f3f5; }
+    .toolbar { height: 48px; display: flex; align-items: center; justify-content: space-between; padding: 0 17px; border-bottom: 1px solid #d7d7dc; background: #fafafa; }
+    .toolbar-title { display: flex; align-items: center; gap: 9px; }
+    .toolbar-title strong { font-size: 14px; }
+    .status { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border-radius: 999px; font-size: 10px; font-weight: 700; }
+    .status.good { color: var(--good); background: #e3f4e8; } .status.warn { color: var(--warn); background: #faeccb; }
+    .status.bad { color: var(--bad); background: #f8dddd; } .status.blue { color: var(--blue); background: var(--blue-soft); }
+    .button { border: 1px solid #c7c7cd; border-radius: 7px; padding: 7px 11px; background: #fff; color: #34343a; }
+    .button.primary { border-color: var(--accent); background: var(--accent); color: #fff; font-weight: 600; }
+    .button.danger { color: var(--bad); } .button:disabled { opacity: .45; cursor: default; }
+    .button.small { padding: 5px 8px; font-size: 11px; }
+    .canvas { min-height: calc(100% - 48px); padding: 26px; }
+    .page { width: min(920px, 100%); margin: 0 auto; }
+    .page-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; margin-bottom: 18px; }
+    h1, h2, h3, p { margin-top: 0; } h1 { margin-bottom: 4px; font-size: 22px; } h2 { font-size: 16px; } h3 { font-size: 13px; }
+    .muted { color: var(--muted); }
+    .card { border: 1px solid var(--line); border-radius: 10px; background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,.04); }
+    .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 15px 17px; border-bottom: 1px solid #e1e1e5; }
+    .card-body { padding: 16px 17px; }
+    .callout { margin-bottom: 16px; padding: 12px 13px; border: 1px solid #e1bd70; border-radius: 8px; background: var(--warn-soft); color: #67450f; }
+    .callout.bad { border-color: #dfa0a0; background: var(--bad-soft); color: #782a2a; }
+    .callout.blue { border-color: #a9c7e1; background: var(--blue-soft); color: #244e75; }
+    .member-row { display: grid; grid-template-columns: 26px minmax(190px,1fr) 138px auto; gap: 11px; align-items: start; margin-top: -1px; padding: 13px; border: 1px solid #ddddE2; background: #fff; }
+    .member-row:first-child { margin-top: 0; border-radius: 8px 8px 0 0; } .member-row:last-child { border-radius: 0 0 8px 8px; }
+    .member-row strong { display: block; margin-bottom: 2px; } .member-row small { color: var(--muted); }
+    .mark { font-size: 15px; font-weight: 800; } .mark.good { color: var(--good); } .mark.bad { color: var(--bad); } .mark.warn { color: var(--warn); }
+    .row-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+    .summary-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 10px; margin-bottom: 17px; }
+    .summary-item { padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+    .summary-item small { display: block; margin-bottom: 3px; color: var(--muted); } .summary-item strong { font-size: 15px; }
+    .bar { height: 7px; margin-top: 8px; overflow: hidden; border-radius: 999px; background: #e1e1e5; }
+    .bar > i { display: block; width: 67%; height: 100%; background: var(--accent); }
+    .danger-zone { margin-top: 18px; border-color: #dfb1b1; }
+    .danger-zone .card-head { color: var(--bad); }
+    .sheet-backdrop { min-height: calc(100% - 48px); padding: 30px; background: rgba(35,35,40,.22); }
+    .sheet { width: min(780px,100%); margin: 0 auto; overflow: hidden; border: 1px solid #bfc0c6; border-radius: 13px; background: #fafafa; box-shadow: 0 20px 55px rgba(0,0,0,.28); }
+    .sheet-head { padding: 18px 22px 15px; text-align: center; border-bottom: 1px solid var(--line); }
+    .sheet-body { padding: 20px 22px; }
+    .sheet-foot { display: flex; justify-content: space-between; gap: 10px; padding: 13px 18px; border-top: 1px solid var(--line); background: #f0f0f2; }
+    .steps { display: flex; padding: 0 18px; border-bottom: 1px solid var(--line); background: #fff; }
+    .step { flex: 1; padding: 11px 5px 9px; border-bottom: 2px solid transparent; color: #85858d; text-align: center; }
+    .step.active { border-color: var(--accent); color: var(--accent); font-weight: 700; }
+    .choice { display: grid; grid-template-columns: 22px 1fr; gap: 9px; margin: 9px 0; padding: 11px 12px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+    .choice.selected { border-color: var(--accent); background: #f4f0ff; }
+    .choice input { margin-top: 3px; }
+    .split { display: grid; grid-template-columns: minmax(0,1.25fr) minmax(300px,.75fr); min-height: calc(100vh - 164px); border: 1px solid var(--line); border-radius: 10px; background: #fff; overflow: hidden; }
+    .split-main { padding: 18px; border-right: 1px solid var(--line); }
+    .inspector { padding: 18px; background: #f8f8fa; }
+    .timeline { position: relative; margin: 18px 0 0 9px; padding-left: 24px; border-left: 2px solid #d8d8de; }
+    .event { position: relative; margin-bottom: 23px; }
+    .event::before { content: ""; position: absolute; left: -31px; top: 2px; width: 12px; height: 12px; border: 3px solid #fff; border-radius: 50%; background: #aaa; box-shadow: 0 0 0 1px #bbb; }
+    .event.good::before { background: var(--good); } .event.bad::before { background: var(--bad); } .event.active::before { background: var(--accent); }
+    .event time { display: block; color: var(--muted); font-size: 10px; }
+    .inspector-section { padding: 14px 0; border-bottom: 1px solid #dddde2; }
+    .inspector-section:first-child { padding-top: 0; }
+    .kv { display: grid; grid-template-columns: 95px 1fr; gap: 7px; font-size: 11px; } .kv span:nth-child(odd) { color: var(--muted); }
+    details.state { margin-top: 16px; overflow: hidden; border: 1px solid #3d3d45; border-radius: 8px; background: #222229; color: #d8efde; }
+    details.state summary { padding: 8px 10px; color: #ddd; cursor: pointer; font-size: 11px; }
+    details.state pre { margin: 0; padding: 0 11px 11px; white-space: pre-wrap; font: 10px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; }
+    .prototype-bar { position: fixed; z-index: 50; left: 50%; bottom: 14px; transform: translateX(-50%); display: flex; align-items: center; gap: 6px; padding: 7px; border-radius: 13px; background: #202027; color: #fff; box-shadow: 0 10px 35px rgba(0,0,0,.3); }
+    .prototype-bar button, .prototype-bar select { min-height: 33px; border: 0; border-radius: 8px; padding: 7px 10px; background: #34343c; color: #eee; }
+    .prototype-bar .variant-name { min-width: 190px; text-align: center; font-weight: 700; }
+    .prototype-bar .approve { background: #fff; color: #24242a; font-weight: 700; }
+    @media (max-width: 900px) { .app { grid-template-columns: 210px 1fr; } .summary-grid { grid-template-columns: repeat(2,1fr); } .split { grid-template-columns: 1fr; } .split-main { border-right: 0; border-bottom: 1px solid var(--line); } }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="traffic"><i class="dot"></i><i class="dot"></i><i class="dot"></i></div>
+      <div class="sidebar-title">Projects and Workspaces</div>
+      <div class="tree">▸ payments-api</div>
+      <div class="tree">▸ payments-web</div>
+      <div class="tree">▾ Payments Platform</div>
+      <div class="tree checkout selected">▾ refunds <span class="badge" id="sidebar-badge">Incomplete</span></div>
+      <div class="tree member">payments-api</div>
+      <div class="tree member dim" id="web-tree">payments-web · missing</div>
+      <div class="tree member">payments-docs</div>
+      <div class="tree checkout">▸ billing-cleanup</div>
+      <div class="tree">▸ Developer Tools</div>
+      <div class="sidebar-title" style="margin-top:15px">Archived</div>
+      <div class="tree dim">Payments Platform · old-release</div>
+    </aside>
+    <main class="content">
+      <div class="toolbar">
+        <div class="toolbar-title"><strong>refunds</strong><span class="status bad" id="toolbar-status">Incomplete</span></div>
+        <div><button class="button small">Terminal</button> <button class="button small">ACP</button> <button class="button small">•••</button></div>
+      </div>
+      <div id="canvas"></div>
+    </main>
+  </div>
+
+  <nav class="prototype-bar" aria-label="Prototype controls">
+    <button onclick="cycleVariant(-1)" aria-label="Previous variant">←</button>
+    <span class="variant-name" id="variant-name"></span>
+    <button onclick="cycleVariant(1)" aria-label="Next variant">→</button>
+    <select id="scenario" onchange="setScenario(this.value)" aria-label="Scenario">
+      <option value="incomplete">Missing member</option>
+      <option value="creating">Creating</option>
+      <option value="identity">Identity conflict</option>
+      <option value="attention">Needs Attention</option>
+      <option value="deletedMember">Explicitly Deleted member</option>
+      <option value="preflight">Delete preflight</option>
+      <option value="deleting">Deleting</option>
+      <option value="archived">Archived</option>
+      <option value="former">Former Workspace</option>
+    </select>
+    <button class="approve" onclick="chooseVariant()">Choose this direction</button>
+  </nav>
+
+  <script>
+    const variants = {
+      A: "Inline checkout detail",
+      B: "Guided recovery sheet",
+      C: "Operation split inspector"
+    };
+    const scenarioCopy = {
+      incomplete: { status: "Incomplete", tone: "bad", title: "One member is unavailable", detail: "payments-web is missing from its recorded path.", action: "Repair Checkout" },
+      creating: { status: "Creating", tone: "blue", title: "Creating Workspace Checkout", detail: "Two members are ready. payments-web is running setup.", action: "View Progress" },
+      identity: { status: "Incomplete", tone: "bad", title: "Identity conflict", detail: "The recorded payments-web path contains a different Git lineage.", action: "Review Conflict" },
+      attention: { status: "Needs Attention", tone: "warn", title: "Setup needs attention", detail: "payments-web has the expected identity, but its saved setup checkpoint failed.", action: "Repair Checkout" },
+      deletedMember: { status: "Incomplete", tone: "bad", title: "A member was explicitly deleted", detail: "payments-web remains in the frozen checkout snapshot and can be recreated.", action: "Repair Checkout" },
+      preflight: { status: "Incomplete", tone: "bad", title: "Delete Workspace Checkout", detail: "Review every member and shared-root artifact before deletion begins.", action: "Delete Checkout" },
+      deleting: { status: "Deleting", tone: "blue", title: "Deleting Workspace Checkout", detail: "Safe member cleanup continues independently. One checkpoint is running.", action: "View Deletion" },
+      archived: { status: "Archived · Incomplete", tone: "warn", title: "Archived Workspace Checkout", detail: "Member worktrees and session history remain. No processes are running.", action: "Unarchive" },
+      former: { status: "Incomplete", tone: "bad", title: "Former Workspace checkout", detail: "The source Workspace was deleted. This checkout snapshot remains recoverable.", action: "Repair Checkout" }
+    };
+    let variant = new URLSearchParams(location.search).get("variant")?.toUpperCase() || "A";
+    if (!variants[variant]) variant = "A";
+    let scenario = "incomplete";
+
+    function button(label, primary = false, danger = false) {
+      return `<button class="button small ${primary ? "primary" : ""} ${danger ? "danger" : ""}">${label}</button>`;
+    }
+
+    function members(mode = "repair") {
+      const middle = scenario === "identity"
+        ? `<span class="mark bad">!</span><div><strong>payments-web</strong><small>Different Git lineage at the recorded path. Alas will not adopt or overwrite it.</small></div><span class="status bad">Conflict</span><div class="row-actions">${button("Show Diagnosis")}</div>`
+        : scenario === "attention"
+          ? `<span class="mark warn">!</span><div><strong>payments-web</strong><small>Recorded identity verified. Setup script exited with status 1.</small></div><span class="status warn">Needs Attention</span><div class="row-actions">${button("Retry Setup", true)}${button("Show Log")}</div>`
+        : scenario === "deletedMember"
+          ? `<span class="mark bad">−</span><div><strong>payments-web</strong><small>Explicitly Deleted. Frozen branch, commit, destination, and completed checkpoints are retained.</small></div><span class="status bad">Explicitly Deleted</span><div class="row-actions">${button("Recreate", true)}</div>`
+        : scenario === "deleting"
+          ? `<span class="mark warn">…</span><div><strong>payments-web</strong><small>Removing worktree. Current checkpoint will finish before stopping.</small><div class="bar"><i style="width:55%"></i></div></div><span class="status blue">Removing</span><div class="row-actions">${button("Stop After Current Operations")}</div>`
+          : scenario === "creating"
+            ? `<span class="mark warn">…</span><div><strong>payments-web</strong><small>Worktree created. Running saved setup script.</small><div class="bar"><i style="width:78%"></i></div></div><span class="status blue">Setup</span><div class="row-actions">${button("Stop After Current Operations")}</div>`
+            : scenario === "archived"
+              ? `<span class="mark bad">!</span><div><strong>payments-web</strong><small>Missing from its recorded path. Unarchive the checkout before repair.</small></div><span class="status bad">Missing</span><div class="row-actions">${button("Unarchive to Repair", true)}</div>`
+              : `<span class="mark bad">!</span><div><strong>payments-web</strong><small>Missing from ~/Alas/workspaces/payments-platform/refunds/payments-web</small></div><span class="status bad">Missing</span><div class="row-actions">${button("Recreate", true)}${button("Find Existing…")}</div>`;
+      return `<div class="member-row"><span class="mark good">✓</span><div><strong>payments-api</strong><small>Recorded identity verified · setup complete</small></div><span class="status good">Ready</span><div></div></div>
+        <div class="member-row">${middle}</div>
+        <div class="member-row"><span class="mark good">✓</span><div><strong>payments-docs</strong><small>Recorded identity verified · setup complete</small></div><span class="status good">Ready</span><div></div></div>`;
+    }
+
+    function stateView() {
+      return `<details class="state" open><summary>Relevant state</summary><pre>{
+  "checkoutStatus": "${scenarioCopy[scenario].status}",
+  "activeOperation": ${["creating","deleting"].includes(scenario) ? `"${scenario}"` : "null"},
+  "reconciliationMutatedGit": false,
+  "memberOrder": ["payments-api", "payments-web", "payments-docs"],
+  "repairUsesFrozenPlan": true
+}</pre></details>`;
+    }
+
+    function variantA() {
+      const s = scenarioCopy[scenario];
+      if (scenario === "preflight") return deletePreflight();
+      const formerBanner = scenario === "former" ? `<div class="callout blue"><strong>Former Workspace</strong><br>The source Workspace was deleted. This checkout owns its frozen plan and remains recoverable, but it cannot create sibling checkouts or edit Workspace settings.</div>` : "";
+      const operationControl = ["creating","deleting"].includes(scenario) ? button("Stop After Current Operations") : button(s.action, true);
+      return `<div class="canvas"><section class="page">
+        <header class="page-head"><div><h1>refunds</h1><p class="muted">Workspace Checkout · ${scenario === "former" ? "Former Workspace: Payments Platform" : "Payments Platform"} · feature/refunds</p></div><div>${scenario === "archived" ? button("Unarchive", true) : button("Archive…")}${button("Delete…", false, true)}</div></header>
+        <div class="summary-grid"><div class="summary-item"><small>Health</small><strong>${s.status}</strong></div><div class="summary-item"><small>Members</small><strong>2 of 3 ready</strong></div><div class="summary-item"><small>Execution</small><strong>Local</strong></div><div class="summary-item"><small>Last checked</small><strong>Just now</strong></div></div>
+        ${formerBanner}
+        <div class="callout ${s.tone === "bad" ? "bad" : s.tone === "blue" ? "blue" : ""}"><strong>${s.title}</strong><br>${s.detail} Reconciliation only classified the state. No Git data was changed.</div>
+        <section class="card"><div class="card-head"><div><h2>${["creating","deleting"].includes(scenario) ? "Operation progress" : "Checkout members"}</h2><span class="muted">Snapshot order and frozen repair plans</span></div>${operationControl}</div><div class="card-body">${members()}${stateView()}</div></section>
+        <section class="card danger-zone"><div class="card-head"><div><h2>Lifecycle</h2><span class="muted">Archive preserves worktrees. Delete runs a complete safety preflight.</span></div><div>${scenario === "archived" ? "" : button("Archive…")}${`<button class="button danger" onclick="setScenario('preflight')">Delete Checkout…</button>`}</div></div></section>
+      </section></div>`;
+    }
+
+    function deletePreflight() {
+      return `<div class="sheet-backdrop"><section class="sheet">
+        <header class="sheet-head"><h2>Delete Workspace Checkout?</h2><p class="muted">refunds · complete safety preflight</p></header>
+        <div class="sheet-body"><div class="callout bad"><strong>Review the risky member before deletion.</strong><br>Safe members can continue independently. Unknown state blocks only the affected member and never becomes a blanket force operation.</div>
+          <div class="member-row"><span class="mark good">✓</span><div><strong>payments-api</strong><small>Clean worktree · keep branch feature/refunds</small></div><span class="status good">Safe</span><div></div></div>
+          <label class="member-row"><input type="checkbox" onchange="document.getElementById('confirm-delete').disabled = !this.checked"><div><strong>payments-web</strong><small>2 modified files · confirm removal of this member worktree</small></div><span class="status warn">Confirmation Required</span><div></div></label>
+          <div class="member-row"><span class="mark good">✓</span><div><strong>payments-docs</strong><small>Clean worktree · reused branch will never be deleted</small></div><span class="status good">Safe</span><div></div></div>
+          <div class="choice"><span>□</span><span><strong>Shared-root leftovers</strong><br><small class="muted">notes.txt will be preserved, so the checkout root will remain.</small></span></div>
+          <div class="choice selected"><span>✓</span><span><strong>Session handling</strong><br><small class="muted">Stop checkout processes, remove Terminal layouts, and archive ACP transcripts with frozen descriptions.</small></span></div>
+          ${stateView()}
+        </div>
+        <footer class="sheet-foot"><button class="button" onclick="setScenario('incomplete')">Cancel</button><button class="button danger" id="confirm-delete" onclick="setScenario('deleting')" disabled>Delete Checkout</button></footer>
+      </section></div>`;
+    }
+
+    function variantB() {
+      const s = scenarioCopy[scenario];
+      const safety = scenario === "identity"
+        ? `<div class="callout bad"><strong>Alas cannot repair this automatically.</strong><br>A different repository occupies the recorded path. Nothing at that path will be changed.</div>`
+        : `<div class="callout"><strong>Repair is identity-verified.</strong><br>Alas will use the saved branch, commit, destination, and setup checkpoints.</div>`;
+      return `<div class="sheet-backdrop"><section class="sheet">
+        <header class="sheet-head"><h2>${s.title}</h2><p class="muted">refunds · Payments Platform</p></header>
+        <div class="steps"><div class="step active">1 · Diagnose</div><div class="step">2 · Confirm</div><div class="step">3 · Progress</div></div>
+        <div class="sheet-body">${safety}<h3>What Alas found</h3>${members("guided")}
+          <h3 style="margin-top:18px">Choose the next step</h3>
+          <label class="choice selected"><input type="radio" checked><span><strong>${scenario === "identity" ? "Resolve the conflicting path" : "Repair from the frozen plan"}</strong><br><small class="muted">${scenario === "identity" ? "Open the path and recorded identity details. No automatic adoption." : "Resume only the incomplete member from its saved checkpoint."}</small></span></label>
+          <label class="choice"><input type="radio"><span><strong>Clean up the checkout attempt</strong><br><small class="muted">Run safety preflight and remove only identity-verified artifacts owned by this attempt.</small></span></label>
+          <label class="choice"><input type="radio"><span><strong>Forget the remaining record</strong><br><small class="muted">Leave artifacts in place after a separate destructive confirmation.</small></span></label>
+          ${stateView()}
+        </div>
+        <footer class="sheet-foot"><button class="button">Close</button><button class="button primary">Continue</button></footer>
+      </section></div>`;
+    }
+
+    function variantC() {
+      const s = scenarioCopy[scenario];
+      return `<div class="canvas"><section class="page" style="width:min(1040px,100%)">
+        <header class="page-head"><div><h1>${s.title}</h1><p class="muted">refunds · exact saved checkout operation</p></div><span class="status ${s.tone}">${s.status}</span></header>
+        <div class="split"><div class="split-main"><h2>Operation history</h2><p class="muted">Reconciliation and mutations are separate events. Completed checkpoints do not repeat.</p>
+          <div class="timeline"><div class="event good"><strong>Checkout plan persisted</strong><time>10:14:02 · 3 members</time></div><div class="event good"><strong>payments-api ready</strong><time>10:14:07 · worktree and setup verified</time></div><div class="event ${scenario === "identity" ? "bad" : "active"}"><strong>${s.detail}</strong><time>10:14:10 · payments-web</time></div><div class="event"><strong>Awaiting explicit action</strong><time>Alas will not mutate Git automatically</time></div></div>
+          <h2 style="margin-top:26px">Members</h2>${members("inspector")}</div>
+          <aside class="inspector"><div class="inspector-section"><h2>Selected event</h2><p>${s.detail}</p><div class="kv"><span>Recorded path</span><span>…/refunds/payments-web</span><span>Branch</span><span>feature/refunds</span><span>Checkpoint</span><span>${scenario === "deleting" ? "removeWorktree" : "verifyIdentity"}</span><span>Mutation</span><span>None during reconciliation</span></div></div>
+            <div class="inspector-section"><h3>Available actions</h3><div class="row-actions" style="justify-content:flex-start">${button(s.action, true)}${button("Show in Finder")}${button("Clean Up…", false, true)}</div></div>
+            <div class="inspector-section"><h3>Safety</h3><p class="muted">Unknown or conflicting state never becomes a force operation. Cleanup touches only identity-verified artifacts.</p></div>${stateView()}
+          </aside></div>
+      </section></div>`;
+    }
+
+    function render() {
+      const s = scenarioCopy[scenario];
+      document.getElementById("canvas").innerHTML = variant === "A" ? variantA() : variant === "B" ? variantB() : variantC();
+      document.getElementById("variant-name").textContent = `${variant} · ${variants[variant]}`;
+      document.getElementById("scenario").value = scenario;
+      const toolbarStatus = document.getElementById("toolbar-status");
+      toolbarStatus.textContent = s.status;
+      toolbarStatus.className = `status ${s.tone}`;
+      const badge = document.getElementById("sidebar-badge");
+      badge.textContent = s.status.split(" · ")[0];
+      document.getElementById("web-tree").textContent = `payments-web · ${scenario === "identity" ? "conflict" : scenario === "attention" ? "setup failed" : scenario === "deletedMember" ? "explicitly deleted" : scenario === "deleting" ? "removing" : scenario === "creating" ? "setup" : "missing"}`;
+    }
+
+    function cycleVariant(delta) {
+      const keys = Object.keys(variants); const index = keys.indexOf(variant);
+      variant = keys[(index + delta + keys.length) % keys.length];
+      const url = new URL(location.href); url.searchParams.set("variant", variant); history.replaceState({}, "", url); render();
+    }
+    function setScenario(next) { scenario = next; render(); }
+    function chooseVariant() { alert(`Recorded for discussion: ${variant} · ${variants[variant]}`); }
+    document.addEventListener("keydown", event => {
+      if (["INPUT","TEXTAREA","SELECT"].includes(event.target.tagName) || event.target.isContentEditable) return;
+      if (event.key === "ArrowLeft") cycleVariant(-1);
+      if (event.key === "ArrowRight") cycleVariant(1);
+    });
+    render();
+  </script>
+</body>
+</html>
