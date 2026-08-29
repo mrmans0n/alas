@@ -1,0 +1,442 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Workspace navigation prototype</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #11151b;
+      --sidebar: #171c24;
+      --panel: #1c222c;
+      --panel-2: #222a36;
+      --line: #313a48;
+      --text: #e8edf5;
+      --muted: #9ba7b8;
+      --faint: #687486;
+      --accent: #82aaff;
+      --accent-bg: #263753;
+      --warning: #e4ad62;
+      --danger: #ef7886;
+      --good: #72c69b;
+      --sidebar-width: 310px;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font-size: 13px; }
+    button { font: inherit; color: inherit; }
+    .prototype-note {
+      position: fixed;
+      left: 14px;
+      top: 12px;
+      z-index: 20;
+      color: var(--warning);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .window {
+      height: 100vh;
+      min-height: 680px;
+      display: grid;
+      grid-template-columns: var(--sidebar-width) minmax(560px, 1fr) 300px;
+      overflow: hidden;
+    }
+    .sidebar {
+      background: linear-gradient(180deg, rgba(29,36,46,.98), rgba(20,25,33,.98));
+      border-right: 1px solid var(--line);
+      padding: 44px 8px 70px;
+      overflow: auto;
+    }
+    .sidebar-toolbar { display: flex; gap: 7px; padding: 0 6px 12px; }
+    .search {
+      flex: 1;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #12171e;
+      color: var(--muted);
+      padding: 7px 9px;
+    }
+    .icon-button {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--panel);
+      width: 30px;
+      cursor: pointer;
+    }
+    .group { margin: 5px 0 10px; }
+    .group-title,
+    .tree-row {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      min-height: 30px;
+      border: 0;
+      border-radius: 7px;
+      background: transparent;
+      text-align: left;
+      cursor: pointer;
+      padding: 5px 8px;
+    }
+    .group-title { color: var(--muted); font-size: 12px; font-weight: 650; }
+    .tree-row { color: var(--text); }
+    .tree-row:hover, .group-title:hover { background: rgba(255,255,255,.04); }
+    .tree-row.selected { background: var(--accent-bg); box-shadow: inset 3px 0 var(--accent); }
+    .tree-row.disabled { cursor: default; opacity: .55; }
+    .tree-row.member { padding-left: 44px; }
+    .tree-row.checkout { padding-left: 27px; }
+    .tree-row.deep { padding-left: 60px; }
+    .chev { width: 11px; color: var(--faint); }
+    .glyph {
+      display: inline-grid;
+      place-items: center;
+      flex: 0 0 auto;
+      width: 20px;
+      height: 20px;
+      border-radius: 5px;
+      background: #344052;
+      color: #dce6f5;
+      font-size: 10px;
+      font-weight: 750;
+    }
+    .glyph.workspace { background: #594576; }
+    .glyph.checkout { background: #34566d; }
+    .glyph.member { background: #3c4d40; }
+    .row-copy { min-width: 0; flex: 1; }
+    .row-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .row-detail { margin-top: 2px; color: var(--faint); font-size: 10px; }
+    .badge {
+      border-radius: 999px;
+      background: var(--panel-2);
+      color: var(--muted);
+      padding: 2px 6px;
+      font-size: 9px;
+      white-space: nowrap;
+    }
+    .badge.warning { color: var(--warning); background: #413323; }
+    .badge.danger { color: var(--danger); background: #462831; }
+    .badge.good { color: var(--good); background: #213b31; }
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+    .dot.good { background: var(--good); }
+    .dot.warning { background: var(--warning); }
+    .dot.danger { background: var(--danger); }
+    .sidebar-section-label {
+      color: var(--faint);
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      padding: 12px 10px 5px;
+    }
+    .main { min-width: 0; display: grid; grid-template-rows: 42px 1fr; }
+    .tabs {
+      display: flex;
+      align-items: end;
+      gap: 2px;
+      border-bottom: 1px solid var(--line);
+      background: #151a21;
+      padding: 6px 10px 0;
+    }
+    .tab {
+      border: 1px solid transparent;
+      border-bottom: 0;
+      border-radius: 7px 7px 0 0;
+      padding: 8px 12px;
+      color: var(--muted);
+    }
+    .tab.active { color: var(--text); background: var(--panel); border-color: var(--line); }
+    .shared-tag { color: var(--accent); font-size: 9px; margin-left: 5px; }
+    .content { padding: 26px 30px 90px; overflow: auto; background: #131820; }
+    .eyebrow { color: var(--accent); font-size: 10px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; }
+    h1 { margin: 8px 0 4px; font-size: 23px; }
+    .subtitle { color: var(--muted); margin-bottom: 22px; }
+    .focus-strip {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 44px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: var(--panel);
+      padding: 8px 10px;
+      margin-bottom: 18px;
+    }
+    .focus-strip strong { margin-right: auto; }
+    .member-choice {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--panel-2);
+      padding: 5px 9px;
+      cursor: pointer;
+    }
+    .member-choice.active { border-color: var(--accent); color: var(--accent); }
+    .member-choice.missing { color: var(--danger); text-decoration: line-through; }
+    .file-grid { display: grid; grid-template-columns: 220px 1fr; gap: 14px; min-height: 360px; }
+    .card { border: 1px solid var(--line); border-radius: 9px; background: var(--panel); overflow: hidden; }
+    .card-title { border-bottom: 1px solid var(--line); padding: 10px 12px; color: var(--muted); font-weight: 650; }
+    .files { padding: 8px; }
+    .file { padding: 6px 8px; border-radius: 5px; color: var(--muted); }
+    .file.active { background: var(--accent-bg); color: var(--text); }
+    pre { margin: 0; padding: 18px; color: #cbd8e8; font: 12px/1.7 "SFMono-Regular", Consolas, monospace; white-space: pre-wrap; }
+    .inspector { border-left: 1px solid var(--line); background: #171c24; padding: 18px 14px 90px; overflow: auto; }
+    .inspector h2 { font-size: 13px; margin: 14px 0 8px; }
+    .inspector p, .inspector li { color: var(--muted); line-height: 1.45; font-size: 11px; }
+    .state-box { border: 1px solid var(--line); background: #10151c; border-radius: 7px; padding: 10px; font: 10px/1.5 "SFMono-Regular", monospace; color: #aebbd0; white-space: pre-wrap; }
+    .status-banner { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-bottom: 14px; color: var(--muted); }
+    .status-banner.warning { border-color: #59472e; background: #292319; color: var(--warning); }
+    .status-banner.danger { border-color: #60343b; background: #2e1e24; color: #f19aa4; }
+    .status-banner.archived { opacity: .65; }
+    .switcher {
+      position: fixed;
+      z-index: 30;
+      left: 50%;
+      bottom: 18px;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid #53637a;
+      border-radius: 999px;
+      background: rgba(9,12,17,.95);
+      box-shadow: 0 12px 35px rgba(0,0,0,.45);
+      padding: 7px 9px;
+    }
+    .switcher button, .scenario-bar button {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--panel-2);
+      cursor: pointer;
+      padding: 5px 9px;
+    }
+    .switcher .variant-name { min-width: 210px; text-align: center; font-weight: 650; }
+    .scenario-bar { position: fixed; z-index: 30; right: 314px; top: 10px; display: flex; gap: 5px; }
+    .scenario-bar button { font-size: 10px; color: var(--muted); }
+    .scenario-bar button.active { color: var(--text); border-color: var(--accent); }
+    .b-sidebar .workspace-context { border: 1px solid var(--line); border-radius: 9px; margin: 7px 3px 12px; overflow: hidden; }
+    .b-sidebar .workspace-context .tree-row { border-radius: 0; }
+    .b-sidebar .member { padding-left: 25px; }
+    .c-sidebar { padding-left: 0; padding-right: 0; }
+    .c-split { display: grid; grid-template-columns: 116px 1fr; min-height: 100%; }
+    .c-rail { border-right: 1px solid var(--line); padding: 6px; }
+    .c-rail button {
+      width: 100%;
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--muted);
+      padding: 10px 4px;
+      margin-bottom: 4px;
+      cursor: pointer;
+      font-size: 10px;
+    }
+    .c-rail button.active { background: var(--accent-bg); color: var(--text); }
+    .c-rail .glyph { margin: 0 auto 5px; }
+    .c-tree { padding: 0 7px; }
+    @media (max-width: 1050px) {
+      .window { grid-template-columns: 280px 1fr; }
+      .inspector { display: none; }
+      .scenario-bar { right: 12px; }
+    }
+  </style>
+</head>
+<body>
+  <!-- Three variants of mixed-peer Workspace navigation, switchable via ?variant=A|B|C. PROTOTYPE ONLY. -->
+  <div class="prototype-note">Prototype only</div>
+  <div id="app"></div>
+  <script>
+    const variants = [
+      { key: 'A', name: 'Full tree' },
+      { key: 'B', name: 'Checkout first' },
+      { key: 'C', name: 'Context rail' }
+    ];
+    const scenarios = ['ready', 'creating', 'incomplete', 'archived', 'missing'];
+    const params = new URLSearchParams(location.search);
+    let variant = variants.some(v => v.key === params.get('variant')) ? params.get('variant') : 'A';
+    let scenario = scenarios.includes(params.get('scenario')) ? params.get('scenario') : 'ready';
+    let focusedMember = params.get('member') || 'Alas';
+
+    const scenarioData = {
+      ready: { label: 'Ready', tone: 'good', detail: 'All 3 member worktrees are available.', members: ['Alas', 'git-gud', 'Docs'] },
+      creating: { label: 'Creating 2/3', tone: 'warning', detail: 'Alas and git-gud are ready. Docs is still creating.', members: ['Alas', 'git-gud', 'Docs'] },
+      incomplete: { label: 'Incomplete', tone: 'danger', detail: 'The Docs member worktree could not be created. Repair is available.', members: ['Alas', 'git-gud', 'Docs'] },
+      archived: { label: 'Archived', tone: '', detail: 'This checkout is hidden from the active list and cannot own the current focus.', members: ['Alas', 'git-gud', 'Docs'] },
+      missing: { label: 'Incomplete', tone: 'danger', detail: 'The git-gud Project is missing. Its Workspace membership is retained.', members: ['Alas', 'git-gud', 'Docs'] }
+    };
+
+    function setParam(key, value) {
+      const next = new URL(location.href);
+      next.searchParams.set(key, value);
+      history.replaceState({}, '', next);
+    }
+
+    function selectMember(name) {
+      if (scenario === 'archived' || (scenario === 'missing' && name === 'git-gud')) return;
+      if ((scenario === 'creating' || scenario === 'incomplete') && name === 'Docs') return;
+      focusedMember = name;
+      setParam('member', name);
+      render();
+    }
+
+    function memberRow(name, depth = 'member') {
+      const unavailable = (scenario === 'missing' && name === 'git-gud') || ((scenario === 'creating' || scenario === 'incomplete') && name === 'Docs');
+      const detail = scenario === 'missing' && name === 'git-gud' ? 'Project missing' : scenario === 'creating' && name === 'Docs' ? 'Creating…' : scenario === 'incomplete' && name === 'Docs' ? 'Create failed' : 'nacho/workspace-nav';
+      return `<button class="tree-row ${depth} ${focusedMember === name ? 'selected' : ''} ${unavailable ? 'disabled' : ''}" onclick="selectMember('${name}')">
+        <span class="glyph member">${name.slice(0, 2)}</span>
+        <span class="row-copy"><span class="row-title">${name}</span><span class="row-detail">${detail}</span></span>
+        ${unavailable ? `<span class="dot ${scenario === 'creating' ? 'warning' : 'danger'}"></span>` : ''}
+      </button>`;
+    }
+
+    function checkoutRow(extraClass = 'checkout') {
+      const d = scenarioData[scenario];
+      return `<button class="tree-row ${extraClass} ${scenario === 'archived' ? 'disabled' : ''}">
+        <span class="glyph checkout">⌘</span>
+        <span class="row-copy"><span class="row-title">workspace-navigation</span><span class="row-detail">3 repositories · ${focusedMember} focused</span></span>
+        <span class="badge ${d.tone}">${d.label}</span>
+      </button>`;
+    }
+
+    function sidebarA() {
+      return `<aside class="sidebar">
+        ${toolbar()}
+        <div class="group">
+          <button class="group-title"><span class="chev">⌄</span><span class="glyph">A</span><span class="row-copy">Alas</span><span class="badge">4</span></button>
+          <button class="tree-row checkout"><span class="glyph checkout">⑂</span><span class="row-copy"><span class="row-title">main</span><span class="row-detail">2h · +12 −4</span></span></button>
+        </div>
+        <div class="group">
+          <button class="group-title"><span class="chev">⌄</span><span class="glyph workspace">W</span><span class="row-copy">Agent platform</span><span class="badge">2</span></button>
+          ${checkoutRow()}
+          ${scenario === 'archived' ? '' : scenarioData[scenario].members.map(n => memberRow(n, 'deep')).join('')}
+          <button class="tree-row checkout"><span class="glyph checkout">⌘</span><span class="row-copy"><span class="row-title">release-0.15</span><span class="row-detail">3 repositories · yesterday</span></span></button>
+        </div>
+        <div class="group">
+          <button class="group-title"><span class="chev">›</span><span class="glyph">D</span><span class="row-copy">Docs</span><span class="badge">2</span></button>
+        </div>
+      </aside>`;
+    }
+
+    function sidebarB() {
+      return `<aside class="sidebar b-sidebar">
+        ${toolbar()}
+        <div class="sidebar-section-label">Active checkouts</div>
+        <div class="workspace-context">
+          ${checkoutRow('')}
+          ${scenario === 'archived' ? '' : scenarioData[scenario].members.map(n => memberRow(n)).join('')}
+        </div>
+        <button class="tree-row"><span class="glyph checkout">⌘</span><span class="row-copy"><span class="row-title">release-0.15</span><span class="row-detail">Agent platform · yesterday</span></span></button>
+        <div class="sidebar-section-label">Projects</div>
+        <button class="tree-row"><span class="glyph">A</span><span class="row-copy">Alas</span><span class="badge">4</span></button>
+        <button class="tree-row"><span class="glyph">G</span><span class="row-copy">git-gud</span><span class="badge">3</span></button>
+        <button class="tree-row"><span class="glyph">D</span><span class="row-copy">Docs</span><span class="badge">2</span></button>
+        <div class="sidebar-section-label">Workspace definitions</div>
+        <button class="tree-row"><span class="glyph workspace">W</span><span class="row-copy">Agent platform</span><span class="badge">2</span></button>
+      </aside>`;
+    }
+
+    function sidebarC() {
+      return `<aside class="sidebar c-sidebar">
+        <div class="c-split">
+          <nav class="c-rail">
+            <button><span class="glyph">A</span>Alas</button>
+            <button class="active"><span class="glyph workspace">W</span>Agent<br>platform</button>
+            <button><span class="glyph">G</span>git-gud</button>
+            <button><span class="glyph">D</span>Docs</button>
+          </nav>
+          <div class="c-tree">
+            ${toolbar()}
+            <div class="sidebar-section-label">Agent platform</div>
+            ${checkoutRow('')}
+            ${scenario === 'archived' ? '' : scenarioData[scenario].members.map(n => memberRow(n, '')).join('')}
+            <div class="sidebar-section-label">Other checkouts</div>
+            <button class="tree-row"><span class="glyph checkout">⌘</span><span class="row-copy"><span class="row-title">release-0.15</span><span class="row-detail">yesterday</span></span></button>
+          </div>
+        </div>
+      </aside>`;
+    }
+
+    function toolbar() {
+      return `<div class="sidebar-toolbar"><div class="search">⌕ Search</div><button class="icon-button">＋</button></div>`;
+    }
+
+    function banner() {
+      const d = scenarioData[scenario];
+      if (scenario === 'ready') return '';
+      const action = scenario === 'incomplete' || scenario === 'missing' ? ' <u>Repair checkout</u>' : scenario === 'archived' ? ' <u>Unarchive</u>' : '';
+      return `<div class="status-banner ${d.tone || 'archived'}"><strong>${d.label}.</strong> ${d.detail}${action}</div>`;
+    }
+
+    function mainContent() {
+      const selectable = scenarioData[scenario].members.map(name => {
+        const blocked = (scenario === 'missing' && name === 'git-gud') || ((scenario === 'creating' || scenario === 'incomplete') && name === 'Docs');
+        return `<button class="member-choice ${focusedMember === name ? 'active' : ''} ${blocked ? 'missing' : ''}" onclick="selectMember('${name}')">${name}</button>`;
+      }).join('');
+      return `<main class="main">
+        <div class="tabs"><div class="tab active">⌘ Terminal <span class="shared-tag">shared</span></div><div class="tab">◆ Codex <span class="shared-tag">shared</span></div><div class="tab">README.md</div></div>
+        <section class="content">
+          <div class="eyebrow">Workspace checkout · workspace-navigation</div>
+          <h1>${focusedMember}</h1>
+          <div class="subtitle">Repository focus changes Files, Changes, and Review. Shared terminal and ACP tabs stay put.</div>
+          ${banner()}
+          <div class="focus-strip"><strong>Repository focus</strong>${selectable}</div>
+          <div class="file-grid">
+            <div class="card"><div class="card-title">Files · ${focusedMember}</div><div class="files"><div class="file">▾ Sources</div><div class="file active">&nbsp;&nbsp;Workspace.swift</div><div class="file">&nbsp;&nbsp;WorkspaceStore.swift</div><div class="file">▸ Tests</div><div class="file">README.md</div></div></div>
+            <div class="card"><div class="card-title">Workspace.swift</div><pre>struct WorkspaceCheckout: Identifiable {
+    let id: UUID
+    let workspaceID: UUID
+    let resolvedRoot: URL
+
+    // Current repository focus: ${focusedMember}
+}</pre></div>
+          </div>
+        </section>
+      </main>`;
+    }
+
+    function inspector() {
+      const descriptions = {
+        A: ['Projects and Workspaces are literal peers.', 'The selected checkout expands inline to reveal its member Projects.', 'Best global overview, but the deepest tree and most repeated Project names.'],
+        B: ['Active checkouts lead the hierarchy.', 'Projects and Workspace definitions remain separate secondary sections.', 'Fast return to current work, but weakens the peer relationship in the active list.'],
+        C: ['A narrow context rail selects a Project or Workspace.', 'The second column shows only that context’s checkouts and members.', 'Lowest tree depth, but spends more width and introduces a new navigation concept.']
+      };
+      const state = { variant, scenario, selectedWorkspace: 'Agent platform', selectedCheckout: scenario === 'archived' ? null : 'workspace-navigation', focusedMember, sharedTabsOwner: 'checkout:workspace-navigation', repositoryPanesOwner: `project:${focusedMember}` };
+      return `<aside class="inspector"><h2>${variant} · ${variants.find(v => v.key === variant).name}</h2><ul>${descriptions[variant].map(x => `<li>${x}</li>`).join('')}</ul><h2>State after selection</h2><div class="state-box">${JSON.stringify(state, null, 2)}</div><h2>Invariant under test</h2><p>Clicking a member changes repository focus without changing the owner or identity of shared Terminal and ACP tabs.</p></aside>`;
+    }
+
+    function controls() {
+      const index = variants.findIndex(v => v.key === variant);
+      return `<div class="scenario-bar">${scenarios.map(s => `<button class="${s === scenario ? 'active' : ''}" onclick="changeScenario('${s}')">${scenarioData[s].label}</button>`).join('')}</div>
+        <div class="switcher"><button onclick="cycle(-1)" aria-label="Previous variant">←</button><div class="variant-name">${variant} · ${variants[index].name}</div><button onclick="cycle(1)" aria-label="Next variant">→</button></div>`;
+    }
+
+    function cycle(delta) {
+      const index = variants.findIndex(v => v.key === variant);
+      variant = variants[(index + delta + variants.length) % variants.length].key;
+      setParam('variant', variant);
+      render();
+    }
+
+    function changeScenario(next) {
+      scenario = next;
+      if ((scenario === 'missing' && focusedMember === 'git-gud') || ((scenario === 'creating' || scenario === 'incomplete') && focusedMember === 'Docs')) focusedMember = 'Alas';
+      setParam('scenario', scenario);
+      setParam('member', focusedMember);
+      render();
+    }
+
+    function render() {
+      const sidebars = { A: sidebarA, B: sidebarB, C: sidebarC };
+      document.getElementById('app').innerHTML = `<div class="window">${sidebars[variant]()}${mainContent()}${inspector()}</div>${controls()}`;
+    }
+
+    addEventListener('keydown', event => {
+      if (['INPUT', 'TEXTAREA'].includes(event.target.tagName) || event.target.isContentEditable) return;
+      if (event.key === 'ArrowLeft') cycle(-1);
+      if (event.key === 'ArrowRight') cycle(1);
+    });
+    render();
+  </script>
+</body>
+</html>
