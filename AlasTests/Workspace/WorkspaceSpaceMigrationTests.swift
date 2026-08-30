@@ -33,7 +33,11 @@ struct WorkspaceSpaceMigrationTests {
         func readIfExists<T: Decodable>(_ type: T.Type, from url: URL) throws -> T? {
             if type == ProjectsFile.self { return projectsFile as? T }
             if type == SpacesFile.self { return spacesFile as? T }
-            if type == AppConfig.self { return AppConfig.defaults as? T }
+            if type == AppConfig.self {
+                var config = AppConfig.defaults
+                config.workspacesEnabled = true
+                return config as? T
+            }
             return nil
         }
     }

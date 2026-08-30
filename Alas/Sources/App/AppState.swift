@@ -59,7 +59,11 @@ final class AppState {
     var canReopenClosedTab: Bool { !isReopeningClosedTab && !closedTabHistory.isEmpty }
     private var unpersistedGGWorktreeModes: [String: [String: GGWorktreeMode]] = [:]
     var spacesManager: SpacesManager
-    @ObservationIgnored private let workspaceSpacePersistenceBridge: WorkspaceSpacePersistenceBridge
+    var workspacesManager: WorkspacesManager
+    /// Recovery information for a Workspace state file that could not be read.
+    /// Observable so Settings and future Workspace navigation can keep the
+    /// affected data visible instead of silently treating it as empty.
+    private(set) var workspaceRecoveryError: WorkspaceRecoveryState?
     @ObservationIgnored private var workspaceSpaceCheckpointTask: Task<Void, Never>?
     var selectedWorktreeId: String?
     let suppressesRestoredRightPaneAfterAbandonedStartup: Bool
@@ -592,7 +596,8 @@ final class AppState {
         runScriptCompletionWaiter: @escaping RunScriptCompletionWaiter = RunScriptCompletionMonitor.wait(for:),
         tabsManager: TabsManager? = nil,
         restoreActiveTabsOnStartup: Bool = true,
-        workspaceSpacePersistenceBridge: WorkspaceSpacePersistenceBridge = WorkspaceSpacePersistenceBridge()
+        workspaceSpacePersistenceBridge: WorkspaceSpacePersistenceBridge = WorkspaceSpacePersistenceBridge(),
+        workspacesManager: WorkspacesManager? = nil
     ) {
         self.store = store
         restoreActiveTabsOnNextReload = restoreActiveTabsOnStartup
@@ -610,7 +615,7 @@ final class AppState {
         self.remoteAccelerationPreparer = remoteAccelerationPreparer
         self.projectGitWatcherFactory = projectGitWatcherFactory
         self.runScriptCompletionWaiter = runScriptCompletionWaiter
-        self.workspaceSpacePersistenceBridge = workspaceSpacePersistenceBridge
+        self.workspacesManager = workspacesManager ?? WorkspacesManager(bridge: workspaceSpacePersistenceBridge)
         let config = (try? store.readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? AppConfig.defaults
         let projectsFile = (try? store.readIfExists(ProjectsFile.self, from: Paths.projectsFile)) ?? ProjectsFile(projects: [])
         let spacesFile = try? store.readIfExists(SpacesFile.self, from: Paths.spacesFile)
@@ -644,8 +649,10 @@ final class AppState {
             themeStore.setMatchSystem(true)
         }
         self.themeStore = themeStore
-        Task { @MainActor [weak self] in
-            await self?.reconcileWorkspaceSpaceLayouts()
+        if config.workspacesEnabled {
+            Task { @MainActor [weak self] in
+                await self?.setWorkspacesEnabled(true, persistConfig: false)
+            }
         }
         // All stored properties are initialized; we can safely capture `self`.
         // Wire the live default-ordering source so the manager reads the
@@ -928,8 +935,10 @@ final class AppState {
     /// Re-scan persisted tab JSONs for every currently-known worktree id. Call
     /// after `projectsManager.refreshAll()` so worktrees actually exist.
     func reloadTabs() {
-        Task { @MainActor [weak self] in
-            await self?.reconcileWorkspaceSpaceLayouts()
+        if config.workspacesEnabled {
+            Task { @MainActor [weak self] in
+                await self?.setWorkspacesEnabled(true, persistConfig: false)
+            }
         }
         let allWorktreeIds = projectsManager.projects.flatMap {
             projectsManager.worktrees(projectId: $0.id).map(\.id)
@@ -1096,6 +1105,24 @@ final class AppState {
         }
     }
 
+    func setWorkspacesEnabled(_ enabled: Bool, persistConfig: Bool = true) async {
+        config.workspacesEnabled = enabled
+        if persistConfig { _ = saveConfig() }
+        let legacySpaces = spacesManager.file
+        let reconciled = await workspacesManager.setEnabled(enabled, spacesFile: legacySpaces)
+        workspaceRecoveryError = workspacesManager.recoveryState
+        if let recovery = workspaceRecoveryError {
+            persistenceErrorHandler("Workspace Recovery Required", recovery.message)
+        }
+        guard let reconciled,
+              spacesManager.file == legacySpaces
+        else { return }
+        // The enabled preview may reveal dormant typed members, but enabling
+        // itself is not a user mutation. Keep that projection in memory until
+        // a later explicit Spaces or Workspace action persists it.
+        spacesManager.replace(file: reconciled)
+    }
+
     struct LanguageServerConfigChangeTracker {
         private var lastSavedLanguageServers: [LanguageServerConfig]
 
@@ -1132,7 +1159,9 @@ final class AppState {
         do {
             let file = spacesManager.file
             try store.write(file, to: Paths.spacesFile)
-            enqueueWorkspaceSpaceCheckpoint(afterWriting: file)
+            if config.workspacesEnabled {
+                enqueueWorkspaceSpaceCheckpoint(afterWriting: file)
+            }
             return true
         } catch {
             persistenceErrorHandler("Spaces Save Failed", error.localizedDescription)
@@ -1140,26 +1169,13 @@ final class AppState {
         }
     }
 
-    private func reconcileWorkspaceSpaceLayouts() async {
-        let legacySpaces = spacesManager.file
-        do {
-            guard let reconciled = try await workspaceSpacePersistenceBridge.reconcileOnLoad(spacesFile: legacySpaces),
-                  spacesManager.file == legacySpaces
-            else { return }
-            spacesManager.replace(file: reconciled)
-            try store.write(reconciled, to: Paths.spacesFile)
-        } catch {
-            persistenceErrorHandler("Workspace Spaces Reconciliation Failed", error.localizedDescription)
-        }
-    }
-
     private func enqueueWorkspaceSpaceCheckpoint(afterWriting spacesFile: SpacesFile) {
         let previous = workspaceSpaceCheckpointTask
-        let bridge = workspaceSpacePersistenceBridge
+        let manager = workspacesManager
         workspaceSpaceCheckpointTask = Task { @MainActor [weak self] in
             await previous?.value
             do {
-                try await bridge.checkpointAfterSpacesWrite(spacesFile)
+                try await manager.checkpointSpaceLayouts(afterWriting: spacesFile)
             } catch {
                 self?.persistenceErrorHandler("Workspace Spaces Save Failed", error.localizedDescription)
             }

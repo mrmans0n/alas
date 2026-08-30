@@ -7,6 +7,10 @@ actor WorkspaceSpacePersistenceBridge {
         self.workspaceStore = workspaceStore
     }
 
+    func load() async -> WorkspaceStoreLoadResult {
+        await workspaceStore.load()
+    }
+
     func reconcileOnLoad(spacesFile: SpacesFile) async throws -> SpacesFile? {
         try await workspaceStore.reconcileSpaceLayouts(with: spacesFile)
     }
