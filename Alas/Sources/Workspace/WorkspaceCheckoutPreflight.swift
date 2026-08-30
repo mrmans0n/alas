@@ -66,6 +66,7 @@ struct FrozenWorkspaceCheckoutPlan: Equatable, Sendable {
     var branch: String
     var rootPath: String
     var members: [Member]
+    var warnings: [WorkspaceDiagnostic] = []
 }
 
 enum WorkspaceCheckoutPreflightResult: Equatable, Sendable {
@@ -77,11 +78,18 @@ struct WorkspaceCheckoutPreflight: Sendable {
     private let projectsByID: [String: [ProjectConfig]]
     private let git: any WorkspaceGitInspecting
     private let paths: any WorkspacePathInspecting
+    private let remoteValidator: any WorkspaceRemoteRepositoryValidating
 
-    init(projects: [ProjectConfig], git: any WorkspaceGitInspecting = GitService(), paths: any WorkspacePathInspecting = WorkspacePathInspector()) {
+    init(
+        projects: [ProjectConfig],
+        git: any WorkspaceGitInspecting = GitService(),
+        paths: any WorkspacePathInspecting = WorkspacePathInspector(),
+        remoteValidator: any WorkspaceRemoteRepositoryValidating = WorkspaceRemoteRepositoryValidator()
+    ) {
         self.projectsByID = Dictionary(grouping: projects, by: \.id)
         self.git = git
         self.paths = paths
+        self.remoteValidator = remoteValidator
     }
 
     func prepare(_ request: WorkspaceCheckoutRequest) async -> WorkspaceCheckoutPreflightResult {
@@ -104,6 +112,7 @@ struct WorkspaceCheckoutPreflight: Sendable {
 
         let location = request.workspace.executionLocation.normalized
         var resolved: [(WorkspaceMember, ProjectConfig, String, String)] = []
+        var warnings: [WorkspaceDiagnostic] = []
         for (index, member) in request.workspace.members.enumerated() {
             guard let projects = projectsByID[member.projectID], projects.count == 1,
                   let project = projects.first else {
@@ -114,6 +123,14 @@ struct WorkspaceCheckoutPreflight: Sendable {
                 messages.append("Workspace member \(index + 1) Project '\(member.projectID)' is not on the Workspace execution location.")
                 continue
             }
+            if case .ssh(let host) = location {
+                do {
+                    try await remoteValidator.validate(host: host, path: project.path)
+                } catch {
+                    messages.append("Workspace member \(index + 1) could not validate its remote repository.")
+                    continue
+                }
+            }
             let base = request.memberBaseReferences[member.id] ?? request.baseReference
             guard !base.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 messages.append("Workspace member \(index + 1) has no base reference.")
@@ -123,7 +140,16 @@ struct WorkspaceCheckoutPreflight: Sendable {
                 let commit = try await git.resolveRevision(at: project.path, ref: base)
                 resolved.append((member, project, base, commit))
             } catch {
-                messages.append("Workspace member \(index + 1) could not resolve base '\(base)'.")
+                // A locally cached tracking ref is safe only as an immutable
+                // fallback: we still freeze the exact commit in the plan and
+                // never fetch or substitute a branch during creation.
+                if let cachedBase = Self.cachedFallback(for: base),
+                   let commit = try? await git.resolveRevision(at: project.path, ref: cachedBase) {
+                    resolved.append((member, project, base, commit))
+                    warnings.append(.init(severity: .warning, message: "Workspace member \(index + 1) is using cached ref '\(cachedBase)' for '\(base)'."))
+                } else {
+                    messages.append("Workspace member \(index + 1) could not resolve base '\(base)'.")
+                }
             }
         }
 
@@ -196,7 +222,8 @@ struct WorkspaceCheckoutPreflight: Sendable {
             executionLocation: location,
             branch: request.branch,
             rootPath: rootPath,
-            members: plans
+            members: plans,
+            warnings: warnings
         ))
     }
 
@@ -207,6 +234,11 @@ struct WorkspaceCheckoutPreflight: Sendable {
     private static func normalizedPath(_ path: String) -> String {
         guard !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "" }
         return URL(fileURLWithPath: path).standardizedFileURL.path
+    }
+
+    private static func cachedFallback(for ref: String) -> String? {
+        guard ref.hasPrefix("origin/"), ref.count > "origin/".count else { return nil }
+        return String(ref.dropFirst("origin/".count))
     }
 }
 
@@ -235,13 +267,22 @@ private enum WorkspaceCheckoutPreflightProbeError: Error {
 }
 
 struct WorkspacePathInspector: WorkspacePathInspecting {
+    private let remote: WorkspaceRemoteTransport
+
+    init(remote: WorkspaceRemoteTransport = .init()) {
+        self.remote = remote
+    }
+
     func exists(at path: String, location: ExecutionLocation) async -> Bool {
         switch location.normalized {
         case .local:
             return FileManager.default.fileExists(atPath: path)
         case .ssh(let host):
-            guard let result = try? await RemoteExec.run(host: host, cwd: nil, command: "test -e \(SSHCommand.shellQuote(path))") else { return true }
-            return result.exitCode == 0
+            guard let result = try? await remote.run(host: host, command: "test -e \(SSHCommand.shellQuote(path))") else { return true }
+            // An SSH transport failure is not evidence that the destination
+            // is absent. Treat it as occupied so preflight cannot create on a
+            // host whose current state it could not inspect.
+            return result.exitCode == 0 || RemoteExec.isConnectionFailure(exitCode: result.exitCode)
         }
     }
 
@@ -255,7 +296,7 @@ struct WorkspacePathInspector: WorkspacePathInspecting {
                 && FileManager.default.isWritableFile(atPath: parent)
         case .ssh(let host):
             let command = "test -d \(SSHCommand.shellQuote(parent)) && test -w \(SSHCommand.shellQuote(parent))"
-            guard let result = try? await RemoteExec.run(host: host, cwd: nil, command: command) else { return false }
+            guard let result = try? await remote.run(host: host, command: command) else { return false }
             return result.exitCode == 0
         }
     }

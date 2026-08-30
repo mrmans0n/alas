@@ -116,6 +116,7 @@ actor WorkspaceCheckoutCoordinator {
     private let projectMutationGate: ProjectMutationGate
     private let sessions: any WorkspaceCheckoutSessionStopping
     private let lifecycle: any WorkspaceCheckoutLifecycleOperating
+    private let manifests: any WorkspaceCheckoutManifestWriting
 
     init(
         store: WorkspaceStore,
@@ -123,7 +124,8 @@ actor WorkspaceCheckoutCoordinator {
         scripts: any WorkspaceScriptRunning = WorkspaceSetupScriptRunner(),
         projectMutationGate: ProjectMutationGate = .shared,
         sessions: any WorkspaceCheckoutSessionStopping = NoopWorkspaceCheckoutSessionStopper(),
-        lifecycle: any WorkspaceCheckoutLifecycleOperating = WorkspaceCheckoutLifecycleOperator()
+        lifecycle: any WorkspaceCheckoutLifecycleOperating = WorkspaceCheckoutLifecycleOperator(),
+        manifests: (any WorkspaceCheckoutManifestWriting)? = nil
     ) {
         self.store = store
         self.git = git
@@ -131,6 +133,12 @@ actor WorkspaceCheckoutCoordinator {
         self.projectMutationGate = projectMutationGate
         self.sessions = sessions
         self.lifecycle = lifecycle
+        // Production uses the concrete Git operator and writes the manifest.
+        // Narrow test operators opt into a writer explicitly, avoiding any
+        // filesystem side effects from synthetic frozen paths.
+        self.manifests = manifests ?? (git is WorkspaceFrozenGitOperator
+            ? WorkspaceCheckoutManifestWriter()
+            : NoopWorkspaceCheckoutManifestWriter())
     }
 
     func archive(checkoutID: UUID) async throws -> WorkspaceCheckout {
@@ -308,6 +316,18 @@ actor WorkspaceCheckoutCoordinator {
             plan: plan,
             configurationSnapshot: configurationSnapshot
         )
+        // The complete snapshot is durable before this write and before the
+        // first Git mutation. A manifest failure leaves an inspectable
+        // checkpointed checkout and cannot result in partial Git artifacts.
+        do {
+            try await manifests.writeManifest(for: checkout)
+        } catch {
+            try? await mutateCheckout(checkout.id) { current in
+                current.operation = .idle
+                current.diagnostics.append(.init(severity: .error, message: "Could not write the Workspace checkout manifest."))
+            }
+            throw error
+        }
         await executeMembers(of: checkout, plan: plan)
         return try await self.checkout(id: checkout.id)
     }
@@ -482,6 +502,7 @@ actor WorkspaceCheckoutCoordinator {
             rootPath: plan.rootPath,
             operation: .creating,
             members: members,
+            diagnostics: plan.warnings,
             configurationSnapshot: configurationSnapshot
         )
         do {

@@ -97,6 +97,24 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
         #expect(await store.load() == .missing)
     }
 
+    @Test func persistsFrozenPreflightWarningsWithTheCheckoutSnapshot() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-coordinator-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let fixture = makeFixture(count: 1)
+        var plan = fixture.plan
+        plan.warnings = [.init(severity: .warning, message: "Workspace member 1 is using cached ref 'main' for 'origin/main'.")]
+        let store = WorkspaceStore(url: url)
+        let coordinator = WorkspaceCheckoutCoordinator(store: store, git: CountingWorkspaceGit(), scripts: NoopWorkspaceScriptRunner(), projectMutationGate: ProjectMutationGate())
+
+        let checkout = try await coordinator.create(workspace: fixture.workspace, plan: plan)
+        #expect(checkout.diagnostics.map(\.message) == plan.warnings.map(\.message))
+        guard case .loaded(let persisted) = await store.load() else {
+            Issue.record("Expected persisted Workspace state")
+            return
+        }
+        #expect(persisted.checkouts.first?.diagnostics.map(\.message) == plan.warnings.map(\.message))
+    }
+
     private func makeFixture(count: Int) -> (workspace: Workspace, plan: FrozenWorkspaceCheckoutPlan) {
         let members = (0 ..< count).map { index in
             WorkspaceMember(projectID: "project-\(index)", fallbackProjectName: "Project \(index)", fallbackRepositoryRoot: "/repos/\(index)")
