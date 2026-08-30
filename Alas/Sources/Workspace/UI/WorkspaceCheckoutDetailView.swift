@@ -3,6 +3,7 @@ import SwiftUI
 struct WorkspaceCheckoutDetailView: View {
     let model: WorkspaceCheckoutDetailModel
     var perform: (WorkspaceCheckoutActionKind, UUID?) -> Void = { _, _ in }
+    var openReview: (WorkspaceReviewAction) -> Void = { _ in }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -27,6 +28,24 @@ struct WorkspaceCheckoutDetailView: View {
                 ForEach(model.primaryActions) { action in
                     Button(action.title) { perform(action.kind, nil) }
                         .foregroundStyle(action.isDestructive ? .red : .primary)
+                }
+            }
+            if !model.checkout.workItems.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Work Items").font(.headline)
+                    SwiftUI.ForEach(0..<model.checkout.workItems.count, id: \.self) { index in
+                        let item = model.checkout.workItems[index]
+                        WorkspaceWorkItemDetailRow(item: item)
+                    }
+                }
+            }
+            if let rollup = model.reviewRollup, !rollup.members.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Member Reviews").font(.headline)
+                    SwiftUI.ForEach(0..<rollup.members.count, id: \.self) { index in
+                        let row = rollup.members[index]
+                        WorkspaceReviewRollupDetailRow(row: row, openReview: openReview)
+                    }
                 }
             }
             ForEach(model.memberRows) { row in
@@ -59,6 +78,45 @@ struct WorkspaceCheckoutMemberRow: View {
             ForEach(row.actions) { action in
                 Button(action.title) { perform(action.kind) }
                     .foregroundStyle(action.isDestructive ? .red : .primary)
+            }
+        }
+    }
+}
+
+private struct WorkspaceWorkItemDetailRow: View {
+    let item: WorkItemSnapshot
+
+    var body: some View {
+        VStack(alignment: .leading) {
+            Text(item.snapshot.title)
+            if let refreshError = item.snapshot.refreshError {
+                Text(refreshError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            } else {
+                Text(item.snapshot.displayReference ?? item.snapshot.providerLabel)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+private struct WorkspaceReviewRollupDetailRow: View {
+    let row: WorkspaceMemberReviewRollup.Member
+    var openReview: (WorkspaceReviewAction) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading) {
+            Text(row.title)
+            Text("\(row.reviews.count) reviews · \(row.ggStack?.entries.count ?? 0) GG commits · \(row.unpublishedStackEntries.count) unpublished")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack {
+                SwiftUI.ForEach(0..<row.reviewActions.count, id: \.self) { index in
+                    let action = row.reviewActions[index]
+                    Button("Open Review") { openReview(action) }
+                }
             }
         }
     }

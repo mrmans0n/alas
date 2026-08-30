@@ -64,8 +64,27 @@ struct WorkspaceCheckoutMemberRowModel: Equatable, Identifiable, Sendable {
     var actions: [WorkspaceCheckoutAction]
 }
 
+struct WorkspaceWorkItemRowModel: Equatable, Identifiable, Sendable {
+    var id: UUID
+    var title: String
+    var detail: String
+    var hostingMemberID: UUID?
+    var refreshError: String?
+}
+
+struct WorkspaceMemberReviewRollupRowModel: Equatable, Identifiable {
+    var id: UUID { memberID }
+    var memberID: UUID
+    var title: String
+    var reviewCount: Int
+    var stackEntryCount: Int
+    var unpublishedCount: Int
+    var reviewActions: [WorkspaceReviewAction]
+}
+
 struct WorkspaceCheckoutDetailModel: Equatable, Sendable {
     var checkout: WorkspaceCheckout
+    var reviewRollup: WorkspaceMemberReviewRollup?
 
     var title: String { checkout.fallbackWorkspaceName }
 
@@ -141,6 +160,31 @@ struct WorkspaceCheckoutDetailModel: Equatable, Sendable {
                 actions: actions(for: member)
             )
         }
+    }
+
+    var workItemRows: [WorkspaceWorkItemRowModel] {
+        checkout.workItems.map {
+            WorkspaceWorkItemRowModel(
+                id: $0.id,
+                title: $0.snapshot.title,
+                detail: $0.snapshot.displayReference ?? $0.snapshot.providerLabel,
+                hostingMemberID: $0.hostingMemberID,
+                refreshError: $0.snapshot.refreshError
+            )
+        }
+    }
+
+    var reviewRollupRows: [WorkspaceMemberReviewRollupRowModel] {
+        reviewRollup?.members.map {
+            WorkspaceMemberReviewRollupRowModel(
+                memberID: $0.memberID,
+                title: $0.title,
+                reviewCount: $0.reviews.count,
+                stackEntryCount: $0.ggStack?.entries.count ?? 0,
+                unpublishedCount: $0.unpublishedStackEntries.count,
+                reviewActions: $0.reviewActions
+            )
+        } ?? []
     }
 
     static func nearestPeer(afterDeleting deletedID: UUID, orderedCheckoutIDs: [UUID]) -> UUID? {
