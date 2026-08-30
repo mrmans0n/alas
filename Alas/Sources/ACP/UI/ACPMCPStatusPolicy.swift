@@ -204,6 +204,8 @@ struct ACPMCPStatusState: Equatable {
             return "Skipped: missing \(variable)"
         case .invalidConfiguration:
             return "Skipped: invalid configuration"
+        case .unavailableMember:
+            return "Skipped: checkout member unavailable"
         }
     }
 }

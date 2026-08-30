@@ -27,6 +27,14 @@ final class WorkspacesManager {
         return recovery
     }
 
+    /// Current persisted/reconciled checkout snapshot for runtime session
+    /// attachment. Returns nil while Workspace storage is unavailable rather
+    /// than fabricating a focus-derived replacement.
+    func checkout(id: UUID) -> WorkspaceCheckout? {
+        guard case let .loaded(state) = loadState else { return nil }
+        return state.checkouts.first(where: { $0.id == id })
+    }
+
     init(bridge: WorkspaceSpacePersistenceBridge = WorkspaceSpacePersistenceBridge()) {
         self.bridge = bridge
     }

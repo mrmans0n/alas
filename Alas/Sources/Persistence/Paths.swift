@@ -47,6 +47,13 @@ extension Paths {
         acpSessionsRoot.appendingPathComponent("\(id).sqlite")
     }
 
+    /// Worktree owners deliberately retain the historical filename while a
+    /// checkout gets its own namespaced database. This keeps existing ACP
+    /// histories intact and prevents equal paths on separate hosts colliding.
+    static func acpSessionsDB(for owner: SessionOwnerID) -> URL {
+        acpSessionsDB(forWorktreeId: owner.storageKey)
+    }
+
     static var acpOrchestrationDB: URL {
         appSupportRoot.appendingPathComponent("acp-orchestration.sqlite")
     }

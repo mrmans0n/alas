@@ -11,6 +11,9 @@ enum MCPAttachmentSkipReason: Equatable {
     case unsupportedTransport
     case missingVariable(String)
     case invalidConfiguration(String)
+    /// A checkout snapshot retains the descriptor for diagnostics, but never
+    /// retargets it to whichever member currently has focus.
+    case unavailableMember
 }
 
 enum MCPAttachmentDisposition: Equatable {
@@ -79,6 +82,9 @@ struct MCPAttachmentPlannerInput {
     /// Checkout sessions supply descriptors captured during preflight. They
     /// must never fall back to current Project configuration on restore.
     let frozenServerDescriptors: [WorkspaceMCPServerDescriptor]?
+    /// Descriptor identities whose frozen member is currently unavailable.
+    /// The IDs are snapshot identities, not live Project or focus identities.
+    let unavailableFrozenDescriptorIDs: Set<String>
 
     init(
         configuredServers: [ProjectMCPServer],
@@ -86,7 +92,8 @@ struct MCPAttachmentPlannerInput {
         worktreeDirectory: String,
         environment: [String: String],
         capabilities: ACPMCPServerCapabilities,
-        frozenServerDescriptors: [WorkspaceMCPServerDescriptor]? = nil
+        frozenServerDescriptors: [WorkspaceMCPServerDescriptor]? = nil,
+        unavailableFrozenDescriptorIDs: Set<String> = []
     ) {
         self.configuredServers = configuredServers
         self.projectDirectory = projectDirectory
@@ -94,6 +101,7 @@ struct MCPAttachmentPlannerInput {
         self.environment = environment
         self.capabilities = capabilities
         self.frozenServerDescriptors = frozenServerDescriptors
+        self.unavailableFrozenDescriptorIDs = unavailableFrozenDescriptorIDs
     }
 }
 
@@ -115,7 +123,9 @@ enum MCPAttachmentPlanner {
             let disposition: MCPAttachmentDisposition
             let environment = resolvedEnvironment(for: input, descriptor: descriptor)
 
-            if validationIssues.contains(where: { applies($0, to: server) && !isDeferredTemplateURLIssue($0, server: server) }) {
+            if input.unavailableFrozenDescriptorIDs.contains(descriptor.id) {
+                disposition = .skipped(.unavailableMember)
+            } else if validationIssues.contains(where: { applies($0, to: server) && !isDeferredTemplateURLIssue($0, server: server) }) {
                 disposition = .skipped(.invalidConfiguration("The server configuration is invalid."))
             } else if !isSupported(transport, capabilities: input.capabilities) {
                 disposition = .skipped(.unsupportedTransport)

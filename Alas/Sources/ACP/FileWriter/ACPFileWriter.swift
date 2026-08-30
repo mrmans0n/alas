@@ -30,12 +30,11 @@ struct ACPFileWriter {
     /// enforced symmetrically.
     func resolveInsideWorktree(path: String) throws -> URL {
         let target = URL(fileURLWithPath: path).standardizedFileURL
-        let root = worktreeRoot.standardizedFileURL
-        let resolvedTarget = target.resolvingSymlinksInPath().path
-        let resolvedRoot = root.resolvingSymlinksInPath().path
-        guard resolvedTarget.hasPrefix(resolvedRoot + "/") || resolvedTarget == resolvedRoot
-        else { throw Error.outsideWorktree(path: target.path) }
-        return target
+        let boundary = WorkspaceCheckoutBoundary(rootPath: worktreeRoot.path)
+        guard let resolved = try? boundary.managedURL(for: target.path) else {
+            throw Error.outsideWorktree(path: target.path)
+        }
+        return resolved
     }
 
     /// Cheap +N/-M counts via line-set symmetric difference. Good enough for the

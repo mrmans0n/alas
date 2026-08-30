@@ -23,6 +23,20 @@ enum BuiltInAlasMCP {
         let token: String
     }
 
+    /// The only Workspace data given to the built-in MCP process. Its Codable
+    /// shape is intentionally allow-listed: no scripts, server definitions,
+    /// resolved environment values, or credentials can enter this payload.
+    struct WorkspaceContext: Codable, Equatable, Sendable {
+        struct Member: Codable, Equatable, Sendable {
+            let id: UUID
+            let availability: WorkspaceCheckoutMemberAvailability
+        }
+
+        let checkoutID: UUID
+        let rootPath: String
+        let members: [Member]
+    }
+
     /// Whether the built-in server should be injected at all, independent of
     /// transport. Mirrors the guards in `injection`; used by the HTTP path to
     /// avoid spawning a supervised process for a server that will be suppressed.
@@ -46,7 +60,8 @@ enum BuiltInAlasMCP {
         worktreePath: String,
         sessionId: String,
         parentSessionId: String? = nil,
-        httpEndpoint: HTTPEndpoint? = nil
+        httpEndpoint: HTTPEndpoint? = nil,
+        workspaceContext: WorkspaceContext? = nil
     ) -> Injection? {
         guard shouldInject(
             enabled: enabled,
@@ -65,6 +80,14 @@ enum BuiltInAlasMCP {
             )
             transport = .http
         } else {
+            let workspaceEnvironment: [ACPMCPKeyValue]
+            if let workspaceContext,
+               let data = try? JSONEncoder().encode(workspaceContext),
+               let value = String(data: data, encoding: .utf8) {
+                workspaceEnvironment = [.init(name: "ALAS_WORKSPACE_CONTEXT", value: value)]
+            } else {
+                workspaceEnvironment = []
+            }
             server = .stdio(
                 name: serverName,
                 command: binaryPath,
@@ -74,6 +97,7 @@ enum BuiltInAlasMCP {
                     .init(name: "ALAS_WORKTREE_DIR", value: worktreePath),
                     .init(name: "ALAS_SESSION_ID", value: sessionId),
                 ] + (parentSessionId.map { [.init(name: "ALAS_PARENT_SESSION_ID", value: $0)] } ?? [])
+                    + workspaceEnvironment
             )
             transport = .stdio
         }
