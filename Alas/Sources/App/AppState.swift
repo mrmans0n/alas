@@ -59,6 +59,8 @@ final class AppState {
     var canReopenClosedTab: Bool { !isReopeningClosedTab && !closedTabHistory.isEmpty }
     private var unpersistedGGWorktreeModes: [String: [String: GGWorktreeMode]] = [:]
     var spacesManager: SpacesManager
+    @ObservationIgnored private let workspaceSpacePersistenceBridge: WorkspaceSpacePersistenceBridge
+    @ObservationIgnored private var workspaceSpaceCheckpointTask: Task<Void, Never>?
     var selectedWorktreeId: String?
     let suppressesRestoredRightPaneAfterAbandonedStartup: Bool
     private(set) var isRefreshingProjectTopologies = false
@@ -589,7 +591,8 @@ final class AppState {
         projectGitWatcherFactory: @escaping @MainActor (URL) -> ProjectGitWatcher = { ProjectGitWatcher(repoPath: $0) },
         runScriptCompletionWaiter: @escaping RunScriptCompletionWaiter = RunScriptCompletionMonitor.wait(for:),
         tabsManager: TabsManager? = nil,
-        restoreActiveTabsOnStartup: Bool = true
+        restoreActiveTabsOnStartup: Bool = true,
+        workspaceSpacePersistenceBridge: WorkspaceSpacePersistenceBridge = WorkspaceSpacePersistenceBridge()
     ) {
         self.store = store
         restoreActiveTabsOnNextReload = restoreActiveTabsOnStartup
@@ -607,6 +610,7 @@ final class AppState {
         self.remoteAccelerationPreparer = remoteAccelerationPreparer
         self.projectGitWatcherFactory = projectGitWatcherFactory
         self.runScriptCompletionWaiter = runScriptCompletionWaiter
+        self.workspaceSpacePersistenceBridge = workspaceSpacePersistenceBridge
         let config = (try? store.readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? AppConfig.defaults
         let projectsFile = (try? store.readIfExists(ProjectsFile.self, from: Paths.projectsFile)) ?? ProjectsFile(projects: [])
         let spacesFile = try? store.readIfExists(SpacesFile.self, from: Paths.spacesFile)
@@ -640,6 +644,9 @@ final class AppState {
             themeStore.setMatchSystem(true)
         }
         self.themeStore = themeStore
+        Task { @MainActor [weak self] in
+            await self?.reconcileWorkspaceSpaceLayouts()
+        }
         // All stored properties are initialized; we can safely capture `self`.
         // Wire the live default-ordering source so the manager reads the
         // current `config.worktrees.defaultOrdering` on every sort.
@@ -921,6 +928,9 @@ final class AppState {
     /// Re-scan persisted tab JSONs for every currently-known worktree id. Call
     /// after `projectsManager.refreshAll()` so worktrees actually exist.
     func reloadTabs() {
+        Task { @MainActor [weak self] in
+            await self?.reconcileWorkspaceSpaceLayouts()
+        }
         let allWorktreeIds = projectsManager.projects.flatMap {
             projectsManager.worktrees(projectId: $0.id).map(\.id)
         }
@@ -1120,11 +1130,39 @@ final class AppState {
 
     private func writeSpaces() -> Bool {
         do {
-            try store.write(spacesManager.file, to: Paths.spacesFile)
+            let file = spacesManager.file
+            try store.write(file, to: Paths.spacesFile)
+            enqueueWorkspaceSpaceCheckpoint(afterWriting: file)
             return true
         } catch {
             persistenceErrorHandler("Spaces Save Failed", error.localizedDescription)
             return false
+        }
+    }
+
+    private func reconcileWorkspaceSpaceLayouts() async {
+        let legacySpaces = spacesManager.file
+        do {
+            guard let reconciled = try await workspaceSpacePersistenceBridge.reconcileOnLoad(spacesFile: legacySpaces),
+                  spacesManager.file == legacySpaces
+            else { return }
+            spacesManager.replace(file: reconciled)
+            try store.write(reconciled, to: Paths.spacesFile)
+        } catch {
+            persistenceErrorHandler("Workspace Spaces Reconciliation Failed", error.localizedDescription)
+        }
+    }
+
+    private func enqueueWorkspaceSpaceCheckpoint(afterWriting spacesFile: SpacesFile) {
+        let previous = workspaceSpaceCheckpointTask
+        let bridge = workspaceSpacePersistenceBridge
+        workspaceSpaceCheckpointTask = Task { @MainActor [weak self] in
+            await previous?.value
+            do {
+                try await bridge.checkpointAfterSpacesWrite(spacesFile)
+            } catch {
+                self?.persistenceErrorHandler("Workspace Spaces Save Failed", error.localizedDescription)
+            }
         }
     }
 

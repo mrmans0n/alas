@@ -6,15 +6,18 @@ struct WorkspaceStateFile: Codable, Equatable, Sendable {
     var version: Int
     var workspaces: [Workspace]
     var checkouts: [WorkspaceCheckout]
+    var spaceLayouts: [WorkspaceSpaceLayout]
 
     init(
         version: Int = WorkspaceStateFile.currentVersion,
         workspaces: [Workspace] = [],
-        checkouts: [WorkspaceCheckout] = []
+        checkouts: [WorkspaceCheckout] = [],
+        spaceLayouts: [WorkspaceSpaceLayout] = []
     ) {
         self.version = version
         self.workspaces = workspaces
         self.checkouts = checkouts
+        self.spaceLayouts = spaceLayouts
     }
 
     init(from decoder: Decoder) throws {
@@ -22,6 +25,7 @@ struct WorkspaceStateFile: Codable, Equatable, Sendable {
         version = try container.decode(Int.self, forKey: .version)
         workspaces = try container.decodeIfPresent([Workspace].self, forKey: .workspaces) ?? []
         checkouts = try container.decodeIfPresent([WorkspaceCheckout].self, forKey: .checkouts) ?? []
+        spaceLayouts = try container.decodeIfPresent([WorkspaceSpaceLayout].self, forKey: .spaceLayouts) ?? []
     }
 
     func validated() throws -> WorkspaceStateFile {
@@ -29,6 +33,21 @@ struct WorkspaceStateFile: Codable, Equatable, Sendable {
             throw WorkspaceStateFileError.unsupportedVersion(version)
         }
         return self
+    }
+
+    mutating func reconcileSpaceLayouts(with spacesFile: SpacesFile) -> SpacesFile {
+        let result = WorkspaceSpaceMigration.reupgrade(
+            spacesFile: spacesFile,
+            savedLayouts: spaceLayouts
+        )
+        spaceLayouts = result.layouts
+        var reconciled = spacesFile
+        reconciled.spaces = result.spaces
+        return reconciled
+    }
+
+    mutating func checkpointSpaceLayouts(from spacesFile: SpacesFile) {
+        spaceLayouts = WorkspaceSpaceMigration.layouts(for: spacesFile.spaces)
     }
 }
 

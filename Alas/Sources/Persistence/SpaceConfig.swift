@@ -42,6 +42,9 @@ struct SpaceConfig: Codable, Equatable, Identifiable {
     var name: String
     var emoji: String
     var projectIds: [String]
+    /// Current builds retain mixed Project and Workspace ordering here. `projectIds`
+    /// stays as the downgrade-safe projection written for older builds.
+    var members: [SpaceMemberReference]?
     var lastSelectedWorktreeId: String?
     var createdAt: Date
 }

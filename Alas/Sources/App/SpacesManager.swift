@@ -25,7 +25,12 @@ final class SpacesManager {
             : file.spaces.map { space in
                 var normalized = space
                 normalized.name = normalized.name.trimmingCharacters(in: .whitespacesAndNewlines)
-                normalized.projectIds = Self.unique(normalized.projectIds)
+                if let members = normalized.members {
+                    normalized.members = Self.uniqueMembers(members)
+                    normalized.projectIds = WorkspaceSpaceMigration.projectIDs(in: normalized.members ?? [])
+                } else {
+                    normalized.projectIds = Self.unique(normalized.projectIds)
+                }
                 return normalized
             }
 
@@ -125,7 +130,12 @@ final class SpacesManager {
         guard let index = spaces.firstIndex(where: { $0.id == spaceId }),
               !spaces[index].projectIds.contains(projectId)
         else { return }
-        spaces[index].projectIds.append(projectId)
+        if var members = spaces[index].members {
+            members.append(.project(projectId))
+            setMembers(members, at: index)
+        } else {
+            spaces[index].projectIds.append(projectId)
+        }
     }
 
     @discardableResult
@@ -135,13 +145,21 @@ final class SpacesManager {
               spaces[index].projectIds.contains(projectId)
         else { return false }
 
-        spaces[index].projectIds.removeAll { $0 == projectId }
+        if let members = spaces[index].members {
+            setMembers(members.filter { $0 != .project(projectId) }, at: index)
+        } else {
+            spaces[index].projectIds.removeAll { $0 == projectId }
+        }
         return true
     }
 
     func removeProjectEverywhere(_ projectId: String) {
         for index in spaces.indices {
-            spaces[index].projectIds.removeAll { $0 == projectId }
+            if let members = spaces[index].members {
+                setMembers(members.filter { $0 != .project(projectId) }, at: index)
+            } else {
+                spaces[index].projectIds.removeAll { $0 == projectId }
+            }
         }
     }
 
@@ -164,9 +182,17 @@ final class SpacesManager {
               fromIndex != toIndex
         else { return }
 
-        let moving = spaces[spaceIndex].projectIds.remove(at: fromIndex)
-        let clampedDestination = min(toIndex, spaces[spaceIndex].projectIds.count)
-        spaces[spaceIndex].projectIds.insert(moving, at: clampedDestination)
+        if var members = spaces[spaceIndex].members,
+           let memberFromIndex = members.firstIndex(of: .project(movingId)),
+           let memberToIndex = members.firstIndex(of: .project(destinationId)) {
+            let moving = members.remove(at: memberFromIndex)
+            members.insert(moving, at: min(memberToIndex, members.count))
+            setMembers(members, at: spaceIndex)
+        } else {
+            let moving = spaces[spaceIndex].projectIds.remove(at: fromIndex)
+            let clampedDestination = min(toIndex, spaces[spaceIndex].projectIds.count)
+            spaces[spaceIndex].projectIds.insert(moving, at: clampedDestination)
+        }
     }
 
     func moveProjectToEndInActiveSpace(id: String) {
@@ -175,8 +201,15 @@ final class SpacesManager {
               fromIndex != spaces[spaceIndex].projectIds.count - 1
         else { return }
 
-        let moving = spaces[spaceIndex].projectIds.remove(at: fromIndex)
-        spaces[spaceIndex].projectIds.append(moving)
+        if var members = spaces[spaceIndex].members,
+           let memberFromIndex = members.firstIndex(of: .project(id)) {
+            let moving = members.remove(at: memberFromIndex)
+            members.append(moving)
+            setMembers(members, at: spaceIndex)
+        } else {
+            let moving = spaces[spaceIndex].projectIds.remove(at: fromIndex)
+            spaces[spaceIndex].projectIds.append(moving)
+        }
     }
 
     @discardableResult
@@ -197,6 +230,20 @@ final class SpacesManager {
             addProject(projectId, toSpace: spaces[replacementIndex].id)
         }
 
+        // Workspace references are intentionally retained even when the
+        // Workspace record is not currently available. Their lifecycle is
+        // independent from the Project-only Spaces manager.
+        if let members = spaces[index].members {
+            let workspaces = members.filter {
+                if case .workspace = $0 { return true }
+                return false
+            }
+            if !workspaces.isEmpty {
+                let replacementMembers = (spaces[replacementIndex].members ?? spaces[replacementIndex].projectIds.map(SpaceMemberReference.project)) + workspaces
+                setMembers(replacementMembers, at: replacementIndex)
+            }
+        }
+
         let replacementId = spaces[replacementIndex].id
         spaces.remove(at: index)
         recentlyActiveSpaceIds.removeAll { $0 == id }
@@ -210,13 +257,37 @@ final class SpacesManager {
     func pruneMissingProjects(validProjectIds: Set<String>) -> Bool {
         var changed = false
         for index in spaces.indices {
-            let pruned = spaces[index].projectIds.filter { validProjectIds.contains($0) }
-            if pruned != spaces[index].projectIds {
-                spaces[index].projectIds = pruned
-                changed = true
+            if let members = spaces[index].members {
+                let pruned = members.filter { reference in
+                    guard case .project(let projectID) = reference else { return true }
+                    return validProjectIds.contains(projectID)
+                }
+                if pruned != members {
+                    setMembers(pruned, at: index)
+                    changed = true
+                }
+            } else {
+                let pruned = spaces[index].projectIds.filter { validProjectIds.contains($0) }
+                if pruned != spaces[index].projectIds {
+                    spaces[index].projectIds = pruned
+                    changed = true
+                }
             }
         }
         return changed
+    }
+
+    func setTypedMembers(_ members: [SpaceMemberReference], forSpace spaceID: String) {
+        guard let index = spaces.firstIndex(where: { $0.id == spaceID }) else { return }
+        setMembers(members, at: index)
+    }
+
+    func replace(file: SpacesFile) {
+        let replacement = SpacesManager(file: file)
+        spaces = replacement.spaces
+        activeSpaceId = replacement.activeSpaceId
+        showSingleSpaceAffordance = replacement.showSingleSpaceAffordance
+        recentlyActiveSpaceIds.removeAll { id in !spaces.contains(where: { $0.id == id }) }
     }
 
     private func normalizedName(_ name: String) -> String {
@@ -227,5 +298,24 @@ final class SpacesManager {
     private static func unique(_ ids: [String]) -> [String] {
         var seen: Set<String> = []
         return ids.filter { seen.insert($0).inserted }
+    }
+
+    private func setMembers(_ members: [SpaceMemberReference], at index: Int) {
+        let uniqueMembers = Self.uniqueMembers(members)
+        spaces[index].members = uniqueMembers
+        spaces[index].projectIds = WorkspaceSpaceMigration.projectIDs(in: uniqueMembers)
+    }
+
+    private static func uniqueMembers(_ members: [SpaceMemberReference]) -> [SpaceMemberReference] {
+        var seenProjects: Set<String> = []
+        var seenWorkspaces: Set<UUID> = []
+        return members.filter { member in
+            switch member {
+            case .project(let projectID):
+                return seenProjects.insert(projectID).inserted
+            case .workspace(let workspaceID):
+                return seenWorkspaces.insert(workspaceID).inserted
+            }
+        }
     }
 }
