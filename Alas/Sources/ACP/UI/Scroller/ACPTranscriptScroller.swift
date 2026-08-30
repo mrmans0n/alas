@@ -361,9 +361,11 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             )
             for row in rows where transcript.messages.indices.contains(row.index) {
                 let message = transcript.messages[row.index]
+                let messageCreatedAt = transcript.createdAt(forStableId: row.stableId)
                 let messagePhase = ACPTranscriptRowContent.presentationPhase(of: message)
                 let rowToken = token(ACPTranscriptRowContent.equalityKey(
                     stableId: row.stableId, message: message,
+                    messageCreatedAt: messageCreatedAt,
                     messagePhase: messagePhase,
                     contentMaxWidth: host.contentMaxWidth, typography: host.typography,
                     trustedImageRoot: host.trustedImageRoot,
@@ -397,6 +399,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 stableId: row.stableId,
                 messageIndex: row.index,
                 message: message,
+                messageCreatedAt: host.transcript.createdAt(forStableId: row.stableId),
                 messagePhase: ACPTranscriptRowContent.presentationPhase(of: message),
                 contentMaxWidth: host.contentMaxWidth,
                 typography: host.typography,

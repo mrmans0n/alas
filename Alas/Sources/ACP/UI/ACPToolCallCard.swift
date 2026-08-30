@@ -7,6 +7,7 @@ import AppKit
 /// renders an animated spinner instead of a static glyph.
 struct ACPToolCallCard: View {
     let toolCall: ACPMessage.ToolCall
+    let messageCreatedAt: Date?
     var trustedImageRoot: URL? = nil
     /// Closure that returns the full persisted `content` for the tool call
     /// whose in-memory `content` was truncated when its row left the render
@@ -19,16 +20,19 @@ struct ACPToolCallCard: View {
     @State private var expandedContent: String? = nil
     @State private var expandedSyntax = ACPToolCallSyntaxCache()
     @State private var loadingContentToolCallId: String? = nil
+    @State private var isHovering = false
     @Environment(\.theme) private var theme
     @Environment(\.acpTerminalHost) private var terminalHost
 
     init(
         toolCall: ACPMessage.ToolCall,
+        messageCreatedAt: Date? = nil,
         trustedImageRoot: URL? = nil,
         loadFullContent: ((String) async -> String?)? = nil,
         initiallyExpanded: Bool = false
     ) {
         self.toolCall = toolCall
+        self.messageCreatedAt = messageCreatedAt
         self.trustedImageRoot = trustedImageRoot
         self.loadFullContent = loadFullContent
         _expanded = State(initialValue: initiallyExpanded)
@@ -73,6 +77,20 @@ struct ACPToolCallCard: View {
                             .truncationMode(.middle)
                     }
                     Spacer(minLength: 6)
+                    if isHovering, let messageCreatedAt {
+                        Text(ACPMessageTimestampFormatter.string(for: messageCreatedAt))
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .foregroundStyle(theme.color("fg-faint"))
+                            .lineLimit(1)
+                    }
+                    if let duration = toolCall.executionDuration {
+                        Text(ACPToolCallDurationFormatter.string(for: duration))
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .foregroundStyle(theme.color("fg-faint"))
+                            .lineLimit(1)
+                            .accessibilityLabel("Tool duration")
+                            .accessibilityValue(ACPToolCallDurationFormatter.string(for: duration))
+                    }
                     statusIndicator
                     Image(systemName: "chevron.down")
                         .font(.system(size: 9))
@@ -105,6 +123,7 @@ struct ACPToolCallCard: View {
         .onChange(of: toolCall.contentRevision) { _, _ in
             expandedSyntax.clear()
         }
+        .onHover { isHovering = $0 }
     }
 
     /// What to draw inside the expanded card. Prefers the just-fetched

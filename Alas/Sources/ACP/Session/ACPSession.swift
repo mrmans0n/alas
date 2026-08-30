@@ -389,7 +389,11 @@ final class ACPSession: ObservableObject, Identifiable {
     /// `.plan` or `.toolCallUpdate` can mutate a message anywhere in the
     /// transcript, not just the trailing row.
     @discardableResult
-    func apply(_ update: ACPSessionUpdate, tracksRetryStatus: Bool = true) -> Set<Int> {
+    func apply(
+        _ update: ACPSessionUpdate,
+        tracksRetryStatus: Bool = true,
+        at timestamp: Date = Date()
+    ) -> Set<Int> {
         if tracksRetryStatus {
             switch update {
             case .agentMessageChunk, .agentThoughtChunk, .toolCall, .toolCallUpdate, .plan:
@@ -515,7 +519,9 @@ final class ACPSession: ObservableObject, Identifiable {
                 metadata: payload.metadata,
                 assets: Self.mergeAssets(Self.extractAssets(items), rawOutputAssets),
                 locations: payload.locations?.map(\.path) ?? [],
-                terminalIds: terminalIds)))
+                terminalIds: terminalIds,
+                executionStartedAt: payload.status == "in_progress" ? timestamp : nil)),
+                createdAt: timestamp)
             didAppendTranscriptMessage()
             transcript.completedOutputBoundaryMessageIds.removeAll()
             applyToolCallMetadata(payload.metadata)
@@ -524,6 +530,13 @@ final class ACPSession: ObservableObject, Identifiable {
             clearRestoredContextRecoveryStatus()
             let touched = updateToolCall(id: u.toolCallId) { tc in
                 Self.applyToolCallUpdateFields(u, to: &tc)
+                if tc.status == "in_progress", tc.executionStartedAt == nil {
+                    tc.executionStartedAt = timestamp
+                }
+                if Self.isFinalStatus(tc.status), tc.executionStartedAt != nil,
+                   tc.executionFinishedAt == nil {
+                    tc.executionFinishedAt = timestamp
+                }
             }
             if touched != nil {
                 applyToolCallMetadata(u.metadata)
@@ -1325,9 +1338,14 @@ final class ACPSession: ObservableObject, Identifiable {
         transcript.completedOutputBoundaryMessageIds.removeAll()
     }
 
-    func replaceTranscriptMessages(_ messages: [ACPMessage], messageIndexOffset: Int = 0) {
+    func replaceTranscriptMessages(
+        _ messages: [ACPMessage],
+        createdAts: [Date]? = nil,
+        messageIndexOffset: Int = 0
+    ) {
         transcript.replaceMessages(
             with: messagesPreservingToolCallContentRevisions(messages),
+            createdAts: createdAts,
             messageIndexOffset: messageIndexOffset
         )
     }
@@ -1360,9 +1378,9 @@ final class ACPSession: ObservableObject, Identifiable {
     /// forward by `older.count` so the visible tail window stays anchored to
     /// the same messages. Used by the post-hydration backfill that prepends
     /// pre-tail messages after the UI has already painted the tail.
-    func prependTranscriptMessages(_ older: [ACPMessage]) {
+    func prependTranscriptMessages(_ older: [ACPMessage], createdAts: [Date]? = nil) {
         guard !older.isEmpty else { return }
-        transcript.prependMessages(older)
+        transcript.prependMessages(older, createdAts: createdAts)
         // Keep the visible window anchored to the tail the user is already
         // looking at while trimming newly-hidden historical tool output.
         transcript.shiftVisibleHeadAfterPrepending(older.count)

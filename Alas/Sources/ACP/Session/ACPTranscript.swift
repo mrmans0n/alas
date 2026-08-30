@@ -10,6 +10,7 @@ import Combine
 final class ACPTranscript: ObservableObject {
     @Published var messages: [ACPMessage] = [] {
         didSet {
+            synchronizeMessageCreatedAts()
             messagesGeneration &+= 1
             updatePlanCaches(for: pendingMessagesMutation)
             updateMessageIndexCaches(for: pendingMessagesMutation)
@@ -117,6 +118,7 @@ final class ACPTranscript: ObservableObject {
 
     private var markdownCaches: [String: ACPMarkdownBlockCache] = [:]
     private var stableIdCache: [ACPMessage.StableIdentityKey: String] = [:]
+    private var messageCreatedAts: [String: Date] = [:]
 
     func stableId(for message: ACPMessage) -> String {
         let key = message.stableIdentityKey
@@ -168,27 +170,73 @@ final class ACPTranscript: ObservableObject {
         return latestPlanMessageIndex
     }
 
-    func appendMessage(_ message: ACPMessage) {
+    func createdAt(forStableId stableId: String) -> Date? {
+        messageCreatedAts[stableId]
+    }
+
+    func createdAt(forMessageAt index: Int) -> Date? {
+        guard messages.indices.contains(index) else { return nil }
+        return createdAt(forStableId: stableId(for: messages[index]))
+    }
+
+    func appendMessage(_ message: ACPMessage, createdAt: Date = Date()) {
+        messageCreatedAts[stableId(for: message)] = createdAt
         pendingMessagesMutation = .append(message)
         messages.append(message)
     }
 
     func replaceMessage(at index: Int, with message: ACPMessage) {
         let old = messages[index]
+        let oldStableId = stableId(for: old)
+        let newStableId = stableId(for: message)
+        if oldStableId != newStableId {
+            messageCreatedAts[newStableId] = messageCreatedAts[oldStableId] ?? Date()
+            messageCreatedAts.removeValue(forKey: oldStableId)
+        }
         pendingMessagesMutation = .replace(index: index, old: old, new: message)
         messages[index] = message
     }
 
-    func replaceMessages(with newMessages: [ACPMessage], messageIndexOffset: Int = 0) {
+    func replaceMessages(
+        with newMessages: [ACPMessage],
+        createdAts: [Date]? = nil,
+        messageIndexOffset: Int = 0
+    ) {
+        let previousCreatedAts = messageCreatedAts
+        messageCreatedAts.removeAll(keepingCapacity: true)
+        for (index, message) in newMessages.enumerated() {
+            let stableId = stableId(for: message)
+            let createdAt = createdAts?.indices.contains(index) == true
+                ? createdAts![index]
+                : previousCreatedAts[stableId] ?? Date()
+            messageCreatedAts[stableId] = createdAt
+        }
         self.messageIndexOffset = max(0, messageIndexOffset)
         messages = newMessages
     }
 
-    func prependMessages(_ older: [ACPMessage]) {
+    func prependMessages(_ older: [ACPMessage], createdAts: [Date]? = nil) {
         guard !older.isEmpty else { return }
+        for (index, message) in older.enumerated() {
+            let createdAt = createdAts?.indices.contains(index) == true
+                ? createdAts![index]
+                : Date()
+            messageCreatedAts[stableId(for: message)] = createdAt
+        }
         messageIndexOffset = max(0, messageIndexOffset - older.count)
         pendingMessagesMutation = .prepend(count: older.count)
         messages.insert(contentsOf: older, at: 0)
+    }
+
+    private func synchronizeMessageCreatedAts() {
+        let stableIds = Set(messages.map { stableId(for: $0) })
+        messageCreatedAts = messageCreatedAts.filter { stableIds.contains($0.key) }
+        for message in messages {
+            let stableId = stableId(for: message)
+            if messageCreatedAts[stableId] == nil {
+                messageCreatedAts[stableId] = Date()
+            }
+        }
     }
 
     func globalIndex(forLocalIndex index: Int) -> Int? {

@@ -35,6 +35,8 @@ struct ACPMessageGutter<Content: View>: View {
     /// a reference to the live buffer so copy reads the latest text without a
     /// per-row closure recreated on every list evaluation.
     let copySource: CopySource
+    let messageCreatedAt: Date?
+    let showsInlineTimestamp: Bool
     let forkBoundary: ACPForkMessageBoundary?
     let forkTargets: [ACPSessionForkTarget]
     let onQuote: (String) -> Void
@@ -47,7 +49,7 @@ struct ACPMessageGutter<Content: View>: View {
     var body: some View {
         content
             .overlay(alignment: .topTrailing) {
-                dotsMenu
+                actions
                     // Keep the menu label mounted at all times and toggle
                     // visibility via opacity/hit-testing rather than inserting
                     // and removing the view. Removing the label while its menu
@@ -62,7 +64,7 @@ struct ACPMessageGutter<Content: View>: View {
                     // lane reserved by the container; this relies on no ancestor
                     // applying `clipped()` (SwiftUI does not clip overlays by
                     // default), which also keeps the button hit-testable.
-                    .offset(x: ACPMessageGutterLayout.laneWidth - 8, y: -2)
+                    .offset(x: actionsOffsetX, y: -2)
                     // The button sits in the lane, outside `content`'s hover
                     // region, so it must keep itself alive while hovered —
                     // otherwise pointing at it past the hide delay would fade
@@ -76,9 +78,42 @@ struct ACPMessageGutter<Content: View>: View {
             }
     }
 
+    @ViewBuilder private var actions: some View {
+        if showsInlineTimestamp, messageCreatedAt != nil {
+            VStack(alignment: .leading, spacing: ACPMessageGutterLayout.timestampVerticalSpacing) {
+                dotsMenu
+                timestamp
+            }
+            .frame(width: ACPMessageGutterLayout.timestampWidth, alignment: .leading)
+        } else {
+            dotsMenu
+        }
+    }
+
+    private var actionsOffsetX: CGFloat {
+        let expandedWidth = showsInlineTimestamp && messageCreatedAt != nil
+            ? ACPMessageGutterLayout.timestampWidth - ACPMessageGutterLayout.menuWidth
+            : 0
+        return ACPMessageGutterLayout.laneWidth - 8 + expandedWidth
+    }
+
+    @ViewBuilder private var timestamp: some View {
+        if let messageCreatedAt {
+            Text(ACPMessageTimestampFormatter.string(for: messageCreatedAt))
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundStyle(theme.color("fg-faint"))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 4)
+                .background(theme.color("bg-3").opacity(0.92))
+                .clipShape(Capsule())
+                .accessibilityHidden(true)
+        }
+    }
+
     private var dotsMenu: some View {
         ACPMessageActionsButton(
             copySource: copySource,
+            timestampText: messageCreatedAt.map { ACPMessageTimestampFormatter.string(for: $0) },
             forkBoundary: forkBoundary,
             forkTargets: forkTargets,
             onQuote: onQuote,
@@ -99,6 +134,7 @@ struct ACPMessageGutter<Content: View>: View {
 
 private struct ACPMessageActionsButton: NSViewRepresentable {
     let copySource: ACPMessageCopySource
+    let timestampText: String?
     let forkBoundary: ACPForkMessageBoundary?
     let forkTargets: [ACPSessionForkTarget]
     let onQuote: (String) -> Void
@@ -108,6 +144,7 @@ private struct ACPMessageActionsButton: NSViewRepresentable {
     func makeCoordinator() -> Coordinator {
         Coordinator(
             copySource: copySource,
+            timestampText: timestampText,
             forkBoundary: forkBoundary,
             forkTargets: forkTargets,
             onQuote: onQuote,
@@ -125,6 +162,7 @@ private struct ACPMessageActionsButton: NSViewRepresentable {
 
     func updateNSView(_ button: NSButton, context: Context) {
         context.coordinator.copySource = copySource
+        context.coordinator.timestampText = timestampText
         context.coordinator.forkBoundary = forkBoundary
         context.coordinator.forkTargets = forkTargets
         context.coordinator.onQuote = onQuote
@@ -135,6 +173,7 @@ private struct ACPMessageActionsButton: NSViewRepresentable {
     @MainActor
     final class Coordinator: NSObject {
         var copySource: ACPMessageCopySource
+        var timestampText: String?
         var forkBoundary: ACPForkMessageBoundary?
         var forkTargets: [ACPSessionForkTarget]
         var onQuote: (String) -> Void
@@ -142,12 +181,14 @@ private struct ACPMessageActionsButton: NSViewRepresentable {
 
         init(
             copySource: ACPMessageCopySource,
+            timestampText: String?,
             forkBoundary: ACPForkMessageBoundary?,
             forkTargets: [ACPSessionForkTarget],
             onQuote: @escaping (String) -> Void,
             onFork: @escaping (ACPForkMessageBoundary, String) -> Void
         ) {
             self.copySource = copySource
+            self.timestampText = timestampText
             self.forkBoundary = forkBoundary
             self.forkTargets = forkTargets
             self.onQuote = onQuote
@@ -156,6 +197,12 @@ private struct ACPMessageActionsButton: NSViewRepresentable {
 
         @objc func showMenu(_ sender: NSButton) {
             let menu = NSMenu()
+            if let timestampText {
+                let timestampItem = NSMenuItem(title: timestampText, action: nil, keyEquivalent: "")
+                timestampItem.isEnabled = false
+                menu.addItem(timestampItem)
+                menu.addItem(.separator())
+            }
             let copyItem = NSMenuItem(
                 title: "Copy message",
                 action: #selector(copyMessage(_:)),
@@ -261,4 +308,8 @@ enum ACPMessageGutterLayout {
     /// Width of each reserved side lane. The left lane stays empty (reads as
     /// padding); the right lane hosts the "…" on hover.
     static let laneWidth: CGFloat = 32
+    static let menuWidth: CGFloat = 19
+    static let inlineTimestampMinimumContentWidth: CGFloat = 520
+    static let timestampVerticalSpacing: CGFloat = 4
+    static let timestampWidth: CGFloat = 128
 }

@@ -2275,7 +2275,6 @@ extension ACPSessionRunner {
 
     private func persistStreamingPersistSnapshots() {
         guard !pendingStreamingPersistSnapshots.isEmpty else { return }
-        let now = Int64(Date().timeIntervalSince1970)
         let snapshots = pendingStreamingPersistSnapshots
         for i in snapshots.keys.sorted() {
             guard let snapshot = snapshots[i] else { continue }
@@ -2296,7 +2295,7 @@ extension ACPSessionRunner {
                     kind: snapshot.kind,
                     seq: Int64(i),
                     payload: snapshot.payload,
-                    createdAt: now
+                    createdAt: createdAt(forMessageAt: i)
                 )
                 enqueuePersistence { persistence in
                     _ = try await persistence.insertMessageIfMissing(row)
@@ -2332,7 +2331,6 @@ extension ACPSessionRunner {
             return true
         }
         let messages = session.transcript.messages
-        let now = Int64(Date().timeIntervalSince1970)
         var rows: [ACPStoredMessage] = []
         for i in indices.sorted() {
             guard i >= 0, i < messages.count else { continue }
@@ -2345,7 +2343,7 @@ extension ACPSessionRunner {
                 kind: m.kind,
                 seq: Int64(i),
                 payload: payload,
-                createdAt: now
+                createdAt: createdAt(forMessageAt: i)
             ))
         }
         let fence = requiresLease ? leaseFenceProvider() : nil
@@ -2370,6 +2368,11 @@ extension ACPSessionRunner {
 
     private func messageForPersistence(_ message: ACPMessage) -> ACPMessage {
         message
+    }
+
+    private func createdAt(forMessageAt index: Int) -> Int64 {
+        Int64(session.transcript.createdAt(forMessageAt: index)?.timeIntervalSince1970
+            ?? Date().timeIntervalSince1970)
     }
 
     private func commitPersistedMessageRows(_ rows: [ACPStoredMessage]) {
@@ -2411,7 +2414,6 @@ extension ACPSessionRunner {
             return
         }
 
-        let now = Int64(Date().timeIntervalSince1970)
         var rows: [ACPStoredMessage] = []
         for i in lowerBound..<messages.count {
             let m = messages[i]
@@ -2423,7 +2425,7 @@ extension ACPSessionRunner {
                 kind: m.kind,
                 seq: Int64(i),
                 payload: payload,
-                createdAt: now
+                createdAt: createdAt(forMessageAt: i)
             ))
         }
         let fence = leaseFenceProvider()

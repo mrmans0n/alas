@@ -53,11 +53,14 @@ actor ACPSessionHydrator {
         let queue = (try? store.loadQueue(sessionId: sessionId)) ?? []
         var staleSubmittedDraft = false
         var sawRecordedSubmittedDraft = false
-        var wire: [ACPMessageWire] = []
-        wire.reserveCapacity(stored.count)
+        var messages: [ACPHydratedMessage] = []
+        messages.reserveCapacity(stored.count)
         for m in stored {
             if let w = try? ACPMessageWire.decode(kind: m.kind, payload: m.payload, decoder: decoder) {
-                wire.append(w)
+                messages.append(.init(
+                    wire: w,
+                    createdAt: Date(timeIntervalSince1970: TimeInterval(m.createdAt))
+                ))
                 if storedDraft != nil,
                    sawRecordedSubmittedDraft,
                    w.isAgentSideProgress {
@@ -92,7 +95,7 @@ actor ACPSessionHydrator {
 
         return HydrationResult(
             row: row,
-            wireMessages: wire,
+            messages: messages,
             queue: queue,
             draft: draft,
             forkRecord: forkRecord,
@@ -105,11 +108,13 @@ actor ACPSessionHydrator {
 /// `StreamingText`, a `@MainActor` class).
 struct HydrationResult: Sendable {
     let row: ACPSessionRow
-    let wireMessages: [ACPMessageWire]
+    let messages: [ACPHydratedMessage]
     let queue: [QueuedPrompt]
     let draft: ACPComposerDraft?
     let forkRecord: ACPSessionForkRecord?
     let recent: [ACPSessionRow]
+
+    var wireMessages: [ACPMessageWire] { messages.map(\.wire) }
 
     func replacingRowLastOpenedAt(_ lastOpenedAt: Int64) -> HydrationResult {
         HydrationResult(
@@ -126,7 +131,7 @@ struct HydrationResult: Sendable {
                 createdAt: row.createdAt, updatedAt: row.updatedAt,
                 lastOpenedAt: lastOpenedAt,
                 archived: row.archived),
-            wireMessages: wireMessages,
+            messages: messages,
             queue: queue,
             draft: draft,
             forkRecord: forkRecord,
@@ -136,10 +141,15 @@ struct HydrationResult: Sendable {
     func replacingRecent(_ recent: [ACPSessionRow]) -> HydrationResult {
         HydrationResult(
             row: row,
-            wireMessages: wireMessages,
+            messages: messages,
             queue: queue,
             draft: draft,
             forkRecord: forkRecord,
             recent: recent)
     }
+}
+
+struct ACPHydratedMessage: Sendable {
+    let wire: ACPMessageWire
+    let createdAt: Date
 }

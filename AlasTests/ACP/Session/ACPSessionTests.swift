@@ -1687,6 +1687,29 @@ struct ACPSessionTests {
         } else { Issue.record("expected toolCall message") }
     }
 
+    @Test("tool duration starts with active execution and stops at completion")
+    func toolCallExecutionDuration() {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let startedAt = Date(timeIntervalSince1970: 100)
+        let finishedAt = Date(timeIntervalSince1970: 102.4)
+
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-duration", title: "Run", kind: "execute", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil
+        )), at: startedAt)
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-duration", status: "completed", content: nil, rawOutput: nil
+        )), at: finishedAt)
+
+        guard case .toolCall(let toolCall) = session.transcript.messages.first else {
+            Issue.record("expected tool call")
+            return
+        }
+        #expect(toolCall.executionStartedAt == startedAt)
+        #expect(toolCall.executionFinishedAt == finishedAt)
+        #expect(abs((toolCall.executionDuration ?? 0) - 2.4) < 0.0001)
+    }
+
     @Test("initial toolCall preserves raw input metadata")
     func toolCallPreservesRawInput() async {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")

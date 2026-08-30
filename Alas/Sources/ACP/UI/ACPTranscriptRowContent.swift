@@ -14,6 +14,7 @@ struct ACPTranscriptRowContent: View, Equatable {
     let stableId: String
     let messageIndex: Int
     let message: ACPMessage
+    let messageCreatedAt: Date?
     let messagePhase: ACPMessagePhase?
     let contentMaxWidth: CGFloat
     let typography: ACPChatTypography
@@ -55,6 +56,7 @@ struct ACPTranscriptRowContent: View, Equatable {
         guard lhs.messagePhase == rhs.messagePhase else { return false }
         return equalityKey(
             stableId: lhs.stableId, message: lhs.message,
+            messageCreatedAt: lhs.messageCreatedAt,
             messagePhase: lhs.messagePhase,
             contentMaxWidth: lhs.contentMaxWidth, typography: lhs.typography,
             trustedImageRoot: lhs.trustedImageRoot,
@@ -62,6 +64,7 @@ struct ACPTranscriptRowContent: View, Equatable {
         )
         == equalityKey(
             stableId: rhs.stableId, message: rhs.message,
+            messageCreatedAt: rhs.messageCreatedAt,
             messagePhase: rhs.messagePhase,
             contentMaxWidth: rhs.contentMaxWidth, typography: rhs.typography,
             trustedImageRoot: rhs.trustedImageRoot,
@@ -74,6 +77,7 @@ struct ACPTranscriptRowContent: View, Equatable {
     static func equalityKey(
         stableId: String,
         message: ACPMessage,
+        messageCreatedAt: Date? = nil,
         messagePhase: ACPMessagePhase? = nil,
         contentMaxWidth: CGFloat,
         typography: ACPChatTypography,
@@ -83,6 +87,7 @@ struct ACPTranscriptRowContent: View, Equatable {
     ) -> EqualityKey {
         EqualityKey(
             stableId: stableId, message: message,
+            messageCreatedAt: messageCreatedAt,
             messagePhase: messagePhase ?? presentationPhase(of: message),
             contentMaxWidth: contentMaxWidth,
             typography: typography, trustedImageRoot: trustedImageRoot,
@@ -93,6 +98,7 @@ struct ACPTranscriptRowContent: View, Equatable {
     struct EqualityKey: Equatable {
         let stableId: String
         let message: ACPMessage
+        let messageCreatedAt: Date?
         let messagePhase: ACPMessagePhase?
         let contentMaxWidth: CGFloat
         let typography: ACPChatTypography
@@ -111,6 +117,8 @@ struct ACPTranscriptRowContent: View, Equatable {
         case .user(_, _, let text, let attachments, let delegatedSource):
             ACPMessageGutter(
                 copySource: .text(text),
+                messageCreatedAt: messageCreatedAt,
+                showsInlineTimestamp: contentMaxWidth >= ACPMessageGutterLayout.inlineTimestampMinimumContentWidth,
                 forkBoundary: forkBoundary(kind: .user),
                 forkTargets: forkTargets,
                 onQuote: onQuote,
@@ -127,6 +135,8 @@ struct ACPTranscriptRowContent: View, Equatable {
         case .agent(_, _, let buf):
             ACPMessageGutter(
                 copySource: .streaming(buf),
+                messageCreatedAt: messageCreatedAt,
+                showsInlineTimestamp: contentMaxWidth >= ACPMessageGutterLayout.inlineTimestampMinimumContentWidth,
                 forkBoundary: forkBoundary(kind: .agent),
                 forkTargets: forkTargets,
                 onQuote: onQuote,
@@ -151,6 +161,7 @@ struct ACPTranscriptRowContent: View, Equatable {
             } else {
                 ACPToolCallCard(
                     toolCall: tc,
+                    messageCreatedAt: messageCreatedAt,
                     trustedImageRoot: trustedImageRoot,
                     loadFullContent: tc.isContentTruncated ? onLoadFullToolCallContent : nil)
                     .environment(\.acpTerminalHost, session.terminalHost)

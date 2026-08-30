@@ -52,6 +52,11 @@ struct ACPSessionHydratorTests {
         #expect(result.row.currentModel == "sonnet")
         #expect(result.row.autoRun == true)
         #expect(result.wireMessages.count == 3)
+        #expect(result.messages.map(\.createdAt) == [
+            Date(timeIntervalSince1970: 0),
+            Date(timeIntervalSince1970: 1),
+            Date(timeIntervalSince1970: 2)
+        ])
         #expect(result.queue.count == 1)
         #expect(result.draft != nil)
         #expect(result.recent.contains(where: { $0.id == "s" }))
