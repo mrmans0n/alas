@@ -20,4 +20,11 @@ actor WorkspaceSpacePersistenceBridge {
     func checkpointAfterSpacesWrite(_ spacesFile: SpacesFile) async throws {
         try await workspaceStore.checkpointSpaceLayouts(afterWriting: spacesFile)
     }
+
+    func reconcileCheckout(
+        id: UUID,
+        observer: any WorkspaceCheckoutObserving = WorkspaceCheckoutObserver()
+    ) async throws -> WorkspaceCheckoutReconciliation {
+        try await WorkspaceCheckoutReconciler(store: workspaceStore, observer: observer).reconcile(checkoutID: id)
+    }
 }

@@ -15,6 +15,7 @@ enum WorkspaceLoadState: Equatable {
 final class WorkspacesManager {
     private let bridge: WorkspaceSpacePersistenceBridge
     private(set) var loadState: WorkspaceLoadState = .notLoaded
+    private(set) var checkoutReconciliations: [UUID: WorkspaceCheckoutReconciliation] = [:]
 
     var canMutate: Bool {
         if case .loaded = loadState { return true }
@@ -35,6 +36,7 @@ final class WorkspacesManager {
     func setEnabled(_ enabled: Bool, spacesFile: SpacesFile) async -> SpacesFile? {
         guard enabled else {
             loadState = .notLoaded
+            checkoutReconciliations = [:]
             return nil
         }
 
@@ -48,6 +50,7 @@ final class WorkspacesManager {
             return nil
         case .loaded(let state):
             loadState = .loaded(state)
+            checkoutReconciliations = await reconcileCheckouts(in: state)
             // Enabling is strictly observational. Future explicit Workspace
             // operations own persistence; the preview gate must never rewrite
             // an otherwise valid state merely because the app launched.
@@ -61,6 +64,16 @@ final class WorkspacesManager {
                 showSingleSpaceAffordance: spacesFile.showSingleSpaceAffordance
             )
         }
+    }
+
+    private func reconcileCheckouts(in state: WorkspaceStateFile) async -> [UUID: WorkspaceCheckoutReconciliation] {
+        var reports: [UUID: WorkspaceCheckoutReconciliation] = [:]
+        for checkout in state.checkouts {
+            if let report = try? await bridge.reconcileCheckout(id: checkout.id) {
+                reports[checkout.id] = report
+            }
+        }
+        return reports
     }
 
     /// Checkpoints typed Space layout only while the preview has an editable,

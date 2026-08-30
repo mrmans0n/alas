@@ -165,6 +165,13 @@ struct WorktreeService {
         return normalizedLineageID(stored)
     }
 
+    static func existingLocalLineageID(forWorktreeAt path: URL) -> String? {
+        guard let gitDirectory = localGitDirectory(forWorktreeAt: path) else { return nil }
+        let marker = gitDirectory.appendingPathComponent("alas-worktree-lineage")
+        guard let text = try? String(contentsOf: marker, encoding: .utf8) else { return nil }
+        return normalizedLineageID(text)
+    }
+
     static func localBranchName(forWorktreeAt path: URL) -> String? {
         guard let gitDirectory = localGitDirectory(forWorktreeAt: path),
               let head = HeadReader.read(headFile: gitDirectory.appendingPathComponent("HEAD"))
@@ -462,7 +469,11 @@ struct WorktreeService {
             cwd: repoPath
         )
         guard fallbackResult.exitCode == 0 else { throw WorktreeError.gitFailed(fallbackResult.stderr) }
-        return makeWorktree(destination: destination, branch: branch, projectId: projectId)
+        var worktree = makeWorktree(destination: destination, branch: branch, projectId: projectId)
+        if !repoPath.isRemoteAlasPath {
+            worktree.lineageID = Self.localLineageID(forWorktreeAt: destination)
+        }
+        return worktree
     }
 
     /// Prepares exactly the branch state recorded by Workspace preflight.
@@ -534,7 +545,11 @@ struct WorktreeService {
         }
         let result = try await Process.git(["worktree", "add", destination.path, branch], cwd: repoPath)
         guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
-        return makeWorktree(destination: destination, branch: branch, projectId: projectId)
+        var worktree = makeWorktree(destination: destination, branch: branch, projectId: projectId)
+        if !repoPath.isRemoteAlasPath {
+            worktree.lineageID = Self.localLineageID(forWorktreeAt: destination)
+        }
+        return worktree
     }
 
     enum StaleWorktreeRegistration {

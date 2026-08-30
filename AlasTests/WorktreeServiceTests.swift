@@ -96,6 +96,24 @@ struct WorktreeServiceTests {
         #expect(listed.count == 2)
     }
 
+    @Test func addFrozenReturnsTheCreatedLocalLineage() async throws {
+        let repo = try await makeRepo()
+        let destination = repo.deletingLastPathComponent().appendingPathComponent("\(repo.lastPathComponent)-frozen")
+        defer {
+            try? FileManager.default.removeItem(at: destination)
+            try? FileManager.default.removeItem(at: repo)
+        }
+        let base = try await Process.git(["rev-parse", "HEAD"], cwd: repo)
+        let commit = base.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let service = WorktreeService()
+        try await service.prepareFrozenBranch(repoPath: repo, branch: "frozen/lineage", intent: .create(atCommit: commit))
+
+        let worktree = try await service.addFrozen(repoPath: repo, branch: "frozen/lineage", destination: destination, projectId: "p", intent: .create(atCommit: commit))
+
+        #expect(worktree.lineageID != nil)
+        #expect(worktree.lineageID == WorktreeService.existingLocalLineageID(forWorktreeAt: destination))
+    }
+
     @Test func addRecreatesAPrunableWorktreeRegistration() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
