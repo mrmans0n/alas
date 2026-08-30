@@ -1592,12 +1592,15 @@ final class ACPSession: ObservableObject, Identifiable {
     /// status reflects reality (the agent isn't coming back to finish
     /// these). Returns the indices of mutated messages so callers can
     /// persist them.
-    func cancelInFlightToolCalls() -> [Int] {
+    func cancelInFlightToolCalls(at timestamp: Date = Date()) -> [Int] {
         var changed: [Int] = []
         for i in transcript.messages.indices {
             if case .toolCall(var tc) = transcript.messages[i],
                tc.status == "in_progress" || tc.status == "pending" {
                 tc.status = "canceled"
+                if tc.executionStartedAt != nil, tc.executionFinishedAt == nil {
+                    tc.executionFinishedAt = timestamp
+                }
                 transcript.replaceMessage(at: i, with: .toolCall(tc))
                 changed.append(i)
             }

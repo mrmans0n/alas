@@ -10,10 +10,15 @@ import Combine
 final class ACPTranscript: ObservableObject {
     @Published var messages: [ACPMessage] = [] {
         didSet {
-            synchronizeMessageCreatedAts()
+            let mutation = pendingMessagesMutation
+            // Incremental mutation helpers maintain timestamps directly. Only
+            // direct or wholesale assignments need to reconcile the map.
+            if mutation == nil {
+                synchronizeMessageCreatedAts()
+            }
             messagesGeneration &+= 1
-            updatePlanCaches(for: pendingMessagesMutation)
-            updateMessageIndexCaches(for: pendingMessagesMutation)
+            updatePlanCaches(for: mutation)
+            updateMessageIndexCaches(for: mutation)
             pendingMessagesMutation = nil
             recordMessagesDiff(old: oldValue)
         }

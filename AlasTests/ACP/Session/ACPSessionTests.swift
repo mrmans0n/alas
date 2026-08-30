@@ -1710,6 +1710,27 @@ struct ACPSessionTests {
         #expect(abs((toolCall.executionDuration ?? 0) - 2.4) < 0.0001)
     }
 
+    @Test("canceling an active tool stops its duration")
+    func cancelingToolCallStopsExecutionDuration() {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let startedAt = Date(timeIntervalSince1970: 100)
+        let canceledAt = Date(timeIntervalSince1970: 102.4)
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-cancel", title: "Run", kind: "execute", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil
+        )), at: startedAt)
+
+        _ = session.cancelInFlightToolCalls(at: canceledAt)
+
+        guard case .toolCall(let toolCall) = session.transcript.messages.first else {
+            Issue.record("expected tool call")
+            return
+        }
+        #expect(toolCall.status == "canceled")
+        #expect(toolCall.executionFinishedAt == canceledAt)
+        #expect(abs((toolCall.executionDuration ?? 0) - 2.4) < 0.0001)
+    }
+
     @Test("initial toolCall preserves raw input metadata")
     func toolCallPreservesRawInput() async {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
