@@ -59,6 +59,20 @@ struct CenterSelectionStateResolverTests {
         }
     }
 
+    @Test func checkoutScopeRejectsAStaleRepositoryFocus() {
+        let project = ProjectConfig.fixture
+        let worktree = Worktree.fixture()
+        let mgr = ProjectsManager(persistedProjects: [project])
+        mgr.insertOptimisticWorktree(worktree)
+        let resolver = CenterSelectionStateResolver(
+            selectedWorktreeId: worktree.id,
+            projects: [project],
+            projectsManager: mgr,
+            allowedWorktreeIDs: []
+        )
+        #expect(resolver.resolve() == .empty)
+    }
+
     @Test func returnsDeletingWhenDeletingState() {
         let project = ProjectConfig(id: "p1", name: "A", path: "/tmp/a", color: "#fff", addedAt: Date())
         let wt = Worktree(id: "wt1", projectId: "p1", name: "main", branch: "main", path: URL(fileURLWithPath: "/tmp/a"), status: .clean, lastActivity: Date())

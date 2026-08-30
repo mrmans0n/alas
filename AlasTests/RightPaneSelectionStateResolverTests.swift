@@ -5,6 +5,19 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct RightPaneSelectionStateResolverTests {
+    @Test func checkoutScopeRejectsAStaleRepositoryFocus() {
+        let project = ProjectConfig(id: "checkout-project", name: "Checkout", path: "/tmp/checkout", color: "#fff", addedAt: .distantPast)
+        let wt = Worktree(id: "checkout-worktree", projectId: project.id, name: "main", branch: "main", path: URL(fileURLWithPath: "/tmp/checkout"), status: .clean, lastActivity: .distantPast)
+        let manager = ProjectsManager(persistedProjects: [project])
+        manager.insertOptimisticWorktree(wt)
+        let resolver = RightPaneSelectionStateResolver(
+            selectedWorktreeId: wt.id,
+            projects: [project],
+            projectsManager: manager,
+            allowedWorktreeIDs: []
+        )
+        #expect(resolver.resolve() == .empty)
+    }
     @Test func emptyWhenNoSelection() {
         let mgr = ProjectsManager(persistedProjects: [])
         let resolver = RightPaneSelectionStateResolver(

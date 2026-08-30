@@ -27,12 +27,22 @@ final class WorkspacesManager {
         return recovery
     }
 
+    var workspaces: [Workspace] {
+        guard case let .loaded(state) = loadState else { return [] }
+        return state.workspaces
+    }
+
+    var checkouts: [WorkspaceCheckout] {
+        guard case let .loaded(state) = loadState else { return [] }
+        return state.checkouts
+    }
+
     /// Current persisted/reconciled checkout snapshot for runtime session
     /// attachment. Returns nil while Workspace storage is unavailable rather
     /// than fabricating a focus-derived replacement.
     func checkout(id: UUID) -> WorkspaceCheckout? {
         guard case let .loaded(state) = loadState else { return nil }
-        return state.checkouts.first(where: { $0.id == id })
+        return state.checkouts.first(where: { $0.id == id && $0.archivedAt == nil })
     }
 
     init(bridge: WorkspaceSpacePersistenceBridge = WorkspaceSpacePersistenceBridge()) {
@@ -71,6 +81,24 @@ final class WorkspacesManager {
                 spaces: result.spaces,
                 showSingleSpaceAffordance: spacesFile.showSingleSpaceAffordance
             )
+        }
+    }
+
+    /// Lifecycle operations mutate through the coordinator's store. Refresh
+    /// the read-only navigation snapshot afterwards so archived checkouts
+    /// disappear immediately instead of remaining selectable from stale data.
+    func refreshCheckoutSnapshots() async {
+        guard case .loaded = loadState else { return }
+        switch await bridge.load() {
+        case .loaded(let state):
+            loadState = .loaded(state)
+            checkoutReconciliations = await reconcileCheckouts(in: state)
+        case .unreadable(let recovery):
+            loadState = .unreadable(recovery)
+            checkoutReconciliations = [:]
+        case .missing:
+            loadState = .loaded(.init())
+            checkoutReconciliations = [:]
         }
     }
 
