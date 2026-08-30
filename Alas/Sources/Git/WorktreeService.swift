@@ -465,6 +465,78 @@ struct WorktreeService {
         return makeWorktree(destination: destination, branch: branch, projectId: projectId)
     }
 
+    /// Prepares exactly the branch state recorded by Workspace preflight.
+    /// Unlike `add`, this never picks a branch mode from current Git state.
+    func prepareFrozenBranch(
+        repoPath: URL,
+        branch: String,
+        intent: FrozenBranchIntent
+    ) async throws {
+        let refCheck = try await Process.git(
+            ["show-ref", "--verify", "--quiet", "refs/heads/\(branch)"],
+            cwd: repoPath
+        )
+        switch intent {
+        case .create(let atCommit):
+            guard refCheck.exitCode == 1 else {
+                throw WorktreeError.gitFailed("Frozen Workspace branch '\(branch)' changed after preflight.")
+            }
+            let create = try await Process.git(["branch", branch, atCommit], cwd: repoPath)
+            guard create.exitCode == 0 else { throw WorktreeError.gitFailed(create.stderr) }
+        case .reuse(let atCommit):
+            guard refCheck.exitCode == 0 else {
+                throw WorktreeError.gitFailed("Frozen Workspace branch '\(branch)' is no longer reusable.")
+            }
+            let resolved = try await Process.git(["rev-parse", "--verify", "\(branch)^{commit}"], cwd: repoPath)
+            guard resolved.exitCode == 0,
+                  resolved.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == atCommit
+            else { throw WorktreeError.gitFailed("Frozen Workspace branch '\(branch)' changed after preflight.") }
+        }
+    }
+
+    /// Adds a worktree from a branch already prepared by
+    /// `prepareFrozenBranch`. It deliberately refuses stale registrations and
+    /// existing destinations instead of repairing or adopting them.
+    func addFrozen(
+        repoPath: URL,
+        branch: String,
+        destination: URL,
+        projectId: String,
+        intent: FrozenBranchIntent
+    ) async throws -> Worktree {
+        switch GitNameValidator.validateBranchName(branch) {
+        case .valid: break
+        case .invalid(let message): throw WorktreeError.gitFailed("Invalid branch name: \(message)")
+        }
+        if repoPath.isRemoteAlasPath {
+            if let host = RemoteHostRegistry.shared.host(forPath: repoPath.path),
+               await RemoteFileAccess.existence(host: host, path: destination.path) != .missing {
+                throw WorktreeError.gitFailed("Frozen Workspace destination already exists.")
+            }
+        } else if FileManager.default.fileExists(atPath: destination.path) {
+            throw WorktreeError.gitFailed("Frozen Workspace destination already exists.")
+        }
+        let registrations = try await Process.git(["worktree", "list", "--porcelain"], cwd: repoPath)
+        guard registrations.exitCode == 0,
+              Self.staleRegistration(registrations.stdout, destination: destination, lockedDestinationIsMissing: false) == nil,
+              !registrations.stdout.split(separator: "\n").contains(where: { $0 == "worktree \(destination.path)" })
+        else { throw WorktreeError.gitFailed("Frozen Workspace destination is already registered.") }
+        let expectedCommit: String
+        switch intent {
+        case .create(let atCommit), .reuse(let atCommit): expectedCommit = atCommit
+        }
+        let ref = try await Process.git(["rev-parse", "--verify", "\(branch)^{commit}"], cwd: repoPath)
+        guard ref.exitCode == 0,
+              ref.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == expectedCommit
+        else { throw WorktreeError.gitFailed("Frozen Workspace branch '\(branch)' changed after preflight.") }
+        if !repoPath.isRemoteAlasPath {
+            try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        }
+        let result = try await Process.git(["worktree", "add", destination.path, branch], cwd: repoPath)
+        guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
+        return makeWorktree(destination: destination, branch: branch, projectId: projectId)
+    }
+
     enum StaleWorktreeRegistration {
         case prunable
         case locked

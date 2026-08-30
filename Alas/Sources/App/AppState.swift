@@ -1877,21 +1877,23 @@ final class AppState {
         destination: URL,
         projectId: String
     ) async throws -> Worktree {
-        try await Task.detached {
-            if !repoPath.isRemoteAlasPath {
-                try FileManager.default.createDirectory(
-                    at: destination.deletingLastPathComponent(),
-                    withIntermediateDirectories: true
+        try await ProjectMutationGate.shared.withMutation(projectID: projectId) {
+            try await Task.detached {
+                if !repoPath.isRemoteAlasPath {
+                    try FileManager.default.createDirectory(
+                        at: destination.deletingLastPathComponent(),
+                        withIntermediateDirectories: true
+                    )
+                }
+                return try await WorktreeService().add(
+                    repoPath: repoPath,
+                    base: base,
+                    branch: branch,
+                    destination: destination,
+                    projectId: projectId
                 )
-            }
-            return try await WorktreeService().add(
-                repoPath: repoPath,
-                base: base,
-                branch: branch,
-                destination: destination,
-                projectId: projectId
-            )
-        }.value
+            }.value
+        }
     }
 
     nonisolated static func preparedCreateWorktreeDestination(repoPath: URL, destination: URL) async throws -> URL {
@@ -5805,14 +5807,16 @@ final class AppState {
         deleteBranchIfMerged: Bool,
         force: Bool
     ) async throws {
-        try await Task.detached {
-            try await WorktreeService().remove(
-                repoPath: repoPath,
-                worktree: worktree,
-                deleteBranchIfMerged: deleteBranchIfMerged,
-                force: force
-            )
-        }.value
+        try await ProjectMutationGate.shared.withMutation(projectID: worktree.projectId) {
+            try await Task.detached {
+                try await WorktreeService().remove(
+                    repoPath: repoPath,
+                    worktree: worktree,
+                    deleteBranchIfMerged: deleteBranchIfMerged,
+                    force: force
+                )
+            }.value
+        }
     }
 
     nonisolated private static func performDeletePreflight(worktreePath: URL) async -> WorktreeDeletePreflight {
