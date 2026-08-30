@@ -51,6 +51,41 @@ struct ACPTranscriptScrollerRowSpecsTests {
         .systemNotice(id: UUID(), text: "hello")
     }
 
+    @Test("available row width subtracts row padding before timestamp policy")
+    func availableRowWidthSubtractsRowPadding() {
+        #expect(ACPTranscriptScroller.Coordinator.availableRowContentWidth(
+            contentViewWidth: 400,
+            contentMaxWidth: 720
+        ) == 280)
+        #expect(!ACPTranscriptRowContent.showsInlineTimestamp(availableRowContentWidth: 280))
+
+        #expect(ACPTranscriptScroller.Coordinator.availableRowContentWidth(
+            contentViewWidth: 840,
+            contentMaxWidth: 720
+        ) == 720)
+        #expect(ACPTranscriptRowContent.showsInlineTimestamp(availableRowContentWidth: 720))
+    }
+
+    @Test("message row token changes when available row width changes")
+    func messageRowTokenChangesOnAvailableRowWidth() throws {
+        let host = makeHost(contentMaxWidth: 720)
+        let message = ACPMessage.user(id: UUID(), text: "hello", attachments: [])
+        host.transcript.messages = [message]
+        host.transcript.visibleHead = 0
+        host.transcript.visibleTail = nil
+
+        let narrowToken = try #require(ACPTranscriptScroller.Coordinator.rowSpecs(
+            host: host,
+            availableRowContentWidth: 280
+        ).first { $0.id == message.stableId }?.equalityToken)
+        let wideToken = try #require(ACPTranscriptScroller.Coordinator.rowSpecs(
+            host: host,
+            availableRowContentWidth: 720
+        ).first { $0.id == message.stableId }?.equalityToken)
+
+        #expect(!narrowToken.isEqual(to: wideToken))
+    }
+
     @Test("plain transcript: message rows followed by the composer spacer, no head sentinel")
     func plainTranscriptIdList() {
         let host = makeHost()
