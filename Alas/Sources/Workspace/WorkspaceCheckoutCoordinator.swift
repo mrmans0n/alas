@@ -583,16 +583,31 @@ actor WorkspaceCheckoutCoordinator {
     }
 
     private func executeMembers(of checkout: WorkspaceCheckout, plan: FrozenWorkspaceCheckoutPlan) async {
-        await withTaskGroup(of: Void.self) { group in
-            var iterator = plan.members.makeIterator()
-            for _ in 0 ..< min(4, plan.members.count) {
-                guard let member = iterator.next() else { break }
-                group.addTask { await self.execute(member: member, checkout: checkout) }
+        await withTaskGroup(of: String.self) { group in
+            var pending = plan.members
+            var activeProjectIDs: Set<String> = []
+
+            func scheduleNextAvailable() -> Bool {
+                guard let index = pending.firstIndex(where: { !activeProjectIDs.contains($0.projectID) }) else {
+                    return false
+                }
+                let member = pending.remove(at: index)
+                activeProjectIDs.insert(member.projectID)
+                group.addTask {
+                    await self.execute(member: member, checkout: checkout)
+                    return member.projectID
+                }
+                return true
             }
-            while await group.next() != nil {
+
+            for _ in 0 ..< min(4, pending.count) {
+                guard scheduleNextAvailable() else { break }
+            }
+
+            while let projectID = await group.next() {
+                activeProjectIDs.remove(projectID)
                 guard !(await shouldStopAfterCurrentOperations(checkoutID: checkout.id)) else { continue }
-                guard let member = iterator.next() else { continue }
-                group.addTask { await self.execute(member: member, checkout: checkout) }
+                while activeProjectIDs.count < 4, scheduleNextAvailable() {}
             }
         }
         await finishIfAllMembersTerminal(checkoutID: checkout.id, owning: .creating)

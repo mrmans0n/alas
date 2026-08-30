@@ -28,16 +28,22 @@ struct WorkspaceCheckoutLocalIntegrationTests {
             return
         }
         let store = WorkspaceStore(url: temporary.appendingPathComponent("workspaces.json"))
-        let checkout = try await WorkspaceCheckoutCoordinator(store: store, scripts: EmptyWorkspaceSetup()).create(workspace: workspace, plan: plan)
+        let coordinator = WorkspaceCheckoutCoordinator(store: store, scripts: EmptyWorkspaceSetup())
+        let checkout = try await coordinator.create(workspace: workspace, plan: plan)
+        await coordinator.awaitCreationCompletion(checkoutID: checkout.id)
+        guard let completedCheckout = await store.checkout(id: checkout.id) else {
+            Issue.record("Expected persisted checkout after creation")
+            return
+        }
 
-        #expect(checkout.members.allSatisfy { $0.availability == .available })
-        #expect(checkout.members.map(\.worktreePath) == ["\(root)/first", "\(root)/second"])
+        #expect(completedCheckout.members.allSatisfy { $0.availability == .available })
+        #expect(completedCheckout.members.map(\.worktreePath) == ["\(root)/first", "\(root)/second"])
         let manifestURL = URL(fileURLWithPath: root).appendingPathComponent(WorkspaceCheckoutManifest.fileName)
         let manifest = try JSONDecoder().decode(WorkspaceCheckoutManifest.self, from: Data(contentsOf: manifestURL))
         #expect(manifest.checkoutID == checkout.id)
         #expect(manifest.branch == "release/1091")
-        #expect(manifest.members.map(\.path) == checkout.members.map(\.worktreePath))
-        for member in checkout.members {
+        #expect(manifest.members.map(\.path) == completedCheckout.members.map(\.worktreePath))
+        for member in completedCheckout.members {
             let branch = try await Process.git(["branch", "--show-current"], cwd: URL(fileURLWithPath: member.worktreePath))
             #expect(branch.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "release/1091")
         }
