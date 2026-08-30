@@ -49,7 +49,42 @@ actor WorkspaceStore {
         if case .unreadable = load() {
             throw WorkspaceStoreError.recoveryRequired
         }
-        try store.write(try state.validated(), to: url)
+        try checkpointLoaded(state)
+    }
+
+    /// Reconciles legacy Space membership and checkpoints the resulting typed
+    /// layout in one actor-isolated read-modify-write operation.
+    func reconcileSpaceLayouts(with spacesFile: SpacesFile) throws -> SpacesFile? {
+        switch load() {
+        case .missing:
+            return nil
+        case .unreadable:
+            throw WorkspaceStoreError.recoveryRequired
+        case .loaded(var state):
+            let originalState = state
+            let reconciled = state.reconcileSpaceLayouts(with: spacesFile)
+            guard state != originalState else {
+                return reconciled == spacesFile ? nil : reconciled
+            }
+            try checkpointLoaded(state)
+            return reconciled == spacesFile ? nil : reconciled
+        }
+    }
+
+    /// Records a typed Space layout after its legacy projection has been
+    /// written. The entire read-modify-write is serialized by this actor.
+    func checkpointSpaceLayouts(afterWriting spacesFile: SpacesFile) throws {
+        switch load() {
+        case .missing:
+            return
+        case .unreadable:
+            throw WorkspaceStoreError.recoveryRequired
+        case .loaded(var state):
+            let originalState = state
+            state.checkpointSpaceLayouts(from: spacesFile)
+            guard state != originalState else { return }
+            try checkpointLoaded(state)
+        }
     }
 
     func discardUnreadableState() throws {
@@ -62,6 +97,10 @@ actor WorkspaceStore {
 
     private func decodeState() throws -> WorkspaceStateFile {
         try JSONDecoder.workspace.decode(WorkspaceStateFile.self, from: Data(contentsOf: url)).validated()
+    }
+
+    private func checkpointLoaded(_ state: WorkspaceStateFile) throws {
+        try store.write(try state.validated(), to: url)
     }
 
     private func readRecoveryState() -> WorkspaceRecoveryState? {
