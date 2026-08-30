@@ -11,6 +11,28 @@ protocol WorkspaceScriptRunning: Sendable {
     func runSetup(for operation: WorkspaceCheckoutSetupOperation) async throws
 }
 
+/// Checkout-owned processes are deliberately separate from repository focus.
+/// The concrete owner-aware implementation lands with shared Terminal/ACP
+/// storage; this seam already makes archive a durable lifecycle operation.
+protocol WorkspaceCheckoutSessionStopping: Sendable {
+    func stopSessions(for checkoutID: UUID) async
+}
+
+protocol WorkspaceCheckoutLifecycleOperating: Sendable {
+    func deletePreflight(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> WorktreeDeletePreflight
+    func inspectRoot(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutCleanupRootObservation
+    func verifyCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutMemberObservation
+    /// Removes only the worktree. Branch deletion is intentionally disabled.
+    func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan) async throws
+    /// Attempts a normal merged-only branch deletion for an attempt-created
+    /// branch. `false` means it was retained (for example, unmerged).
+    func deleteMergedBranch(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool
+}
+
+struct NoopWorkspaceCheckoutSessionStopper: WorkspaceCheckoutSessionStopping {
+    func stopSessions(for checkoutID: UUID) async {}
+}
+
 struct WorkspaceFrozenWorktreeOperation: Sendable {
     var checkoutID: UUID
     var checkoutMemberID: UUID
@@ -92,17 +114,186 @@ actor WorkspaceCheckoutCoordinator {
     private let git: any WorkspaceGitOperating
     private let scripts: any WorkspaceScriptRunning
     private let projectMutationGate: ProjectMutationGate
+    private let sessions: any WorkspaceCheckoutSessionStopping
+    private let lifecycle: any WorkspaceCheckoutLifecycleOperating
 
     init(
         store: WorkspaceStore,
         git: any WorkspaceGitOperating = WorkspaceFrozenGitOperator(),
         scripts: any WorkspaceScriptRunning = WorkspaceSetupScriptRunner(),
-        projectMutationGate: ProjectMutationGate = .shared
+        projectMutationGate: ProjectMutationGate = .shared,
+        sessions: any WorkspaceCheckoutSessionStopping = NoopWorkspaceCheckoutSessionStopper(),
+        lifecycle: any WorkspaceCheckoutLifecycleOperating = WorkspaceCheckoutLifecycleOperator()
     ) {
         self.store = store
         self.git = git
         self.scripts = scripts
         self.projectMutationGate = projectMutationGate
+        self.sessions = sessions
+        self.lifecycle = lifecycle
+    }
+
+    func archive(checkoutID: UUID) async throws -> WorkspaceCheckout {
+        // Persist the archive claim first so concurrent lifecycle commands
+        // cannot race the owned-process shutdown.
+        try await store.mutate { state in
+            guard let index = state.checkouts.firstIndex(where: { $0.id == checkoutID }) else {
+                throw WorkspaceCheckoutCoordinatorError.checkoutMissing
+            }
+            guard state.checkouts[index].operation == .idle else {
+                throw WorkspaceCheckoutCoordinatorError.operationInProgress
+            }
+            state.checkouts[index].operation = .archiving
+        }
+        await sessions.stopSessions(for: checkoutID)
+        try await mutateCheckout(checkoutID) {
+            guard $0.operation == .archiving else { return }
+            $0.archivedAt = .now
+            $0.operation = .idle
+        }
+        return try await self.checkout(id: checkoutID)
+    }
+
+    func unarchive(checkoutID: UUID) async throws -> WorkspaceCheckout {
+        let checkout = try await checkout(id: checkoutID)
+        guard checkout.operation == .idle else { throw WorkspaceCheckoutCoordinatorError.operationInProgress }
+        try await mutateCheckout(checkoutID) { $0.archivedAt = nil }
+        return try await self.checkout(id: checkoutID)
+    }
+
+    /// This is a checkpointed request: it takes effect between members and
+    /// never supplies a force option to Git.
+    func stopAfterCurrentOperations(checkoutID: UUID) async throws {
+        try await mutateCheckout(checkoutID) { $0.stopAfterCurrentOperations = true }
+    }
+
+    /// Deletes exactly one attempt-owned worktree after verifying its frozen
+    /// location, path, and lineage. The checkout snapshot remains, visibly
+    /// Explicitly Deleted, so its frozen creation plan can later recreate it.
+    func deleteMember(checkoutID: UUID, memberID: UUID, confirmingRisks: Bool = false) async throws -> WorkspaceCheckout {
+        let checkout = try await checkout(id: checkoutID)
+        guard checkout.operation == .idle else { throw WorkspaceCheckoutCoordinatorError.operationInProgress }
+        guard let member = checkout.members.first(where: { $0.id == memberID }),
+              let cleanupPlan = makeCleanupPlan(checkout: checkout, member: member)
+        else { throw WorkspaceCheckoutCoordinatorError.cleanupUnavailable }
+        // Claim and durably freeze the cleanup operation before the first
+        // await. A retry retains its original plan/checkpoints verbatim.
+        try await store.mutate { state in
+            guard let index = state.checkouts.firstIndex(where: { $0.id == checkoutID }),
+                  state.checkouts[index].operation == .idle,
+                  let memberIndex = state.checkouts[index].members.firstIndex(where: { $0.id == memberID })
+            else { throw WorkspaceCheckoutCoordinatorError.operationInProgress }
+            state.checkouts[index].operation = .deleting
+            if state.checkouts[index].members[memberIndex].cleanup == nil {
+                state.checkouts[index].members[memberIndex].cleanup = .init(plan: cleanupPlan)
+            }
+        }
+        do {
+            let persisted = try await self.checkout(id: checkoutID)
+            guard let current = persisted.members.first(where: { $0.id == memberID }),
+                  let frozen = current.cleanup?.plan,
+                  frozen == cleanupPlan || current.cleanup?.worktreeRemoved == true
+            else { throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict }
+            let plan = current.cleanup?.plan ?? cleanupPlan
+            switch await lifecycle.verifyCleanup(plan) {
+            case .exactLineage(let lineage) where lineage == plan.expectedLineageID:
+                break
+            case .missing where current.cleanup?.worktreeRemoved == true:
+                break
+            default:
+                throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict
+            }
+            let root = await lifecycle.inspectRoot(plan)
+            guard root.isContained else { throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict }
+            if current.cleanup?.worktreeRemoved != true {
+                let preflight = try await lifecycle.deletePreflight(plan)
+                guard !preflight.requiresForce || confirmingRisks else {
+                    throw WorkspaceCheckoutCoordinatorError.cleanupConfirmationRequired
+                }
+                try await projectMutationGate.withMutation(projectID: member.projectID) {
+                    try await lifecycle.removeWorktree(plan)
+                }
+                try await mutateMember(checkoutID: checkoutID, memberID: memberID) {
+                    $0.cleanup?.worktreeRemoved = true
+                    $0.cleanup?.checkpoint = .worktreeRemoved
+                }
+            }
+            if plan.branchOwnership == .created {
+                let removed = try await projectMutationGate.withMutation(projectID: member.projectID) {
+                    try await lifecycle.deleteMergedBranch(plan)
+                }
+                try await mutateMember(checkoutID: checkoutID, memberID: memberID) {
+                    $0.cleanup?.branchRemoved = removed
+                    $0.cleanup?.checkpoint = removed ? .complete : .branchDeleteAttempted
+                }
+            }
+            let leftovers = await lifecycle.inspectRoot(plan).leftovers
+            try await mutateMember(checkoutID: checkoutID, memberID: memberID) {
+                $0.cleanup?.sharedRootLeftovers = leftovers
+            }
+            try await mutateCheckout(checkoutID) { current in
+                guard let index = current.members.firstIndex(where: { $0.id == memberID }) else { return }
+                current.members[index].availability = .explicitlyDeleted
+                current.operation = .idle
+                current.stopAfterCurrentOperations = false
+            }
+        } catch {
+            try? await mutateCheckout(checkoutID) { current in
+                current.operation = .idle
+                if let index = current.members.firstIndex(where: { $0.id == memberID }) {
+                    current.members[index].cleanup?.checkpoint = .failed
+                }
+            }
+            throw error
+        }
+        return try await self.checkout(id: checkoutID)
+    }
+
+    /// Runs member cleanup in snapshot order. A request to stop is honored at
+    /// the next member boundary; failed members remain independently visible.
+    func deleteCheckout(checkoutID: UUID) async throws -> WorkspaceCheckout {
+        let initial = try await checkout(id: checkoutID)
+        for member in initial.members where member.availability != .explicitlyDeleted {
+            let current = try await checkout(id: checkoutID)
+            if current.stopAfterCurrentOperations { break }
+            do {
+                _ = try await deleteMember(checkoutID: checkoutID, memberID: member.id)
+            } catch {
+                // One member's risk, failure, or conflict must not erase the
+                // independent cleanup opportunity for later members.
+                continue
+            }
+        }
+        return try await checkout(id: checkoutID)
+    }
+
+    /// Forgetting is distinct from deletion: callers may discard a record only
+    /// after each attempt-owned worktree has been removed. Branches retained
+    /// because they are unmerged deliberately remain user artifacts.
+    /// Requires a separate, explicit acknowledgement before dropping a record
+    /// whose attempt-created branch was retained because it was unmerged.
+    func forget(checkoutID: UUID, confirmedPreserveArtifacts: Bool = false) async throws {
+        let checkout = try await self.checkout(id: checkoutID)
+        guard checkout.operation == .idle,
+              checkout.members.allSatisfy({ member in
+                  guard let cleanup = member.cleanup,
+                        cleanup.worktreeRemoved,
+                        cleanup.sharedRootLeftovers.isEmpty
+                  else { return false }
+                  return cleanup.plan.branchOwnership != .created || cleanup.branchRemoved || confirmedPreserveArtifacts
+              })
+        else { throw WorkspaceCheckoutCoordinatorError.cleanupIncomplete }
+        try await store.mutate { state in state.checkouts.removeAll { $0.id == checkoutID } }
+    }
+
+    /// Surviving snapshots retain their source identity/name and become a
+    /// Former Workspace group when the mutable definition disappears.
+    func markWorkspaceDeleted(workspaceID: UUID) async throws {
+        try await store.mutate { state in
+            for index in state.checkouts.indices where state.checkouts[index].workspaceID == workspaceID {
+                state.checkouts[index].workspaceID = nil
+            }
+        }
     }
 
     /// Persists the complete frozen checkout before scheduling any Git work.
@@ -178,7 +369,17 @@ actor WorkspaceCheckoutCoordinator {
     /// conflict are deliberately excluded.
     func resumeCreation(checkoutID: UUID) async throws -> WorkspaceCheckout {
         let checkout = try await self.checkout(id: checkoutID)
+        try await store.mutate { state in
+            guard let index = state.checkouts.firstIndex(where: { $0.id == checkoutID }) else {
+                throw WorkspaceCheckoutCoordinatorError.checkoutMissing
+            }
+            guard state.checkouts[index].operation == .idle || state.checkouts[index].operation == .repairing else {
+                throw WorkspaceCheckoutCoordinatorError.operationInProgress
+            }
+            state.checkouts[index].operation = .repairing
+        }
         for member in checkout.members {
+            if await shouldStopAfterCurrentOperations(checkoutID: checkoutID) { break }
             guard member.availability != .identityConflict,
                   member.checkpoint != .worktreeCreated,
                   member.checkpoint != .setupComplete,
@@ -218,7 +419,7 @@ actor WorkspaceCheckoutCoordinator {
                 checkout: checkout
             )
         }
-        await finishIfAllMembersTerminal(checkoutID: checkoutID)
+        await finishIfAllMembersTerminal(checkoutID: checkoutID, owning: .repairing)
         return try await self.checkout(id: checkoutID)
     }
 
@@ -304,11 +505,12 @@ actor WorkspaceCheckoutCoordinator {
                 group.addTask { await self.execute(member: member, checkout: checkout) }
             }
             while await group.next() != nil {
+                guard !(await shouldStopAfterCurrentOperations(checkoutID: checkout.id)) else { continue }
                 guard let member = iterator.next() else { continue }
                 group.addTask { await self.execute(member: member, checkout: checkout) }
             }
         }
-        await finishIfAllMembersTerminal(checkoutID: checkout.id)
+        await finishIfAllMembersTerminal(checkoutID: checkout.id, owning: .creating)
     }
 
     private func execute(member plan: FrozenWorkspaceCheckoutPlan.Member, checkout: WorkspaceCheckout) async {
@@ -400,13 +602,74 @@ actor WorkspaceCheckoutCoordinator {
         }
     }
 
-    private func finishIfAllMembersTerminal(checkoutID: UUID) async {
+    private func mutateMember(
+        checkoutID: UUID,
+        memberID: UUID,
+        update: (inout WorkspaceCheckoutMember) -> Void
+    ) async throws {
+        try await updateMember(checkoutID: checkoutID, memberID: memberID, update: update)
+    }
+
+    private func mutateCheckout(
+        _ checkoutID: UUID,
+        update: (inout WorkspaceCheckout) -> Void
+    ) async throws {
+        do {
+            try await store.mutate { state in
+                guard let index = state.checkouts.firstIndex(where: { $0.id == checkoutID }) else {
+                    throw WorkspaceCheckoutCoordinatorError.checkoutMissing
+                }
+                update(&state.checkouts[index])
+            }
+        } catch WorkspaceStoreError.recoveryRequired {
+            throw WorkspaceCheckoutCoordinatorError.workspaceStateUnavailable
+        }
+    }
+
+    private func makeCleanupPlan(
+        checkout: WorkspaceCheckout,
+        member: WorkspaceCheckoutMember
+    ) -> WorkspaceCheckoutCleanupPlan? {
+        guard member.cleanupOwnership.worktreeCreated,
+              let plan = member.plan,
+              plan.checkoutMemberID == member.id,
+              plan.projectID == member.projectID,
+              plan.destinationPath == member.worktreePath,
+              !plan.sourceRepositoryPath.isEmpty,
+              let lineage = member.gitLineageID,
+              !lineage.isEmpty
+        else { return nil }
+        return .init(
+            checkoutID: checkout.id,
+            memberID: member.id,
+            executionLocation: checkout.executionLocation,
+            projectID: member.projectID,
+            sourceRepositoryPath: plan.sourceRepositoryPath,
+            baseReference: plan.baseReference,
+            baseCommit: plan.baseCommit,
+            rootPath: checkout.rootPath,
+            managedMemberPaths: checkout.members.map(\.worktreePath),
+            worktreePath: plan.destinationPath,
+            branch: checkout.branch,
+            expectedLineageID: lineage,
+            branchOwnership: member.cleanupOwnership.branchOwnership
+        )
+    }
+
+    private func finishIfAllMembersTerminal(checkoutID: UUID, owning operation: WorkspaceCheckoutOperation) async {
         try? await store.mutate { state in
             guard let index = state.checkouts.firstIndex(where: { $0.id == checkoutID }),
+                  state.checkouts[index].operation == operation,
                   state.checkouts[index].members.allSatisfy({ $0.checkpoint == .setupComplete || $0.checkpoint == .failed })
             else { return }
             state.checkouts[index].operation = .idle
         }
+    }
+
+    private func shouldStopAfterCurrentOperations(checkoutID: UUID) async -> Bool {
+        guard case .loaded(let state) = await store.load(),
+              let checkout = state.checkouts.first(where: { $0.id == checkoutID }) else { return true }
+        return checkout.stopAfterCurrentOperations
     }
 
     private func checkout(id: UUID) async throws -> WorkspaceCheckout {
@@ -424,6 +687,11 @@ enum WorkspaceCheckoutCoordinatorError: Error, Equatable, Sendable {
     case planDoesNotMatchWorkspaceMember(UUID)
     case workspaceIDMismatch
     case incompletePlan
+    case operationInProgress
+    case cleanupUnavailable
+    case cleanupIdentityConflict
+    case cleanupIncomplete
+    case cleanupConfirmationRequired
 }
 
 struct WorkspaceFrozenGitOperator: WorkspaceGitOperating {
@@ -458,5 +726,65 @@ struct WorkspaceSetupScriptRunner: WorkspaceScriptRunning {
             let result = try await RemoteExec.run(host: host, cwd: operation.worktreePath, command: operation.script)
             guard result.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(result.stderr) }
         }
+    }
+}
+
+/// The concrete lifecycle operator intentionally delegates the exact lineage
+/// check to the read-only observer and never asks `remove` to delete a branch.
+struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
+    func deletePreflight(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> WorktreeDeletePreflight {
+        guard case .local = plan.executionLocation.normalized else { throw WorkspaceCheckoutCoordinatorError.cleanupUnavailable }
+        return try await WorktreeService().deletePreflight(worktreePath: URL(fileURLWithPath: plan.worktreePath))
+    }
+
+    func inspectRoot(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutCleanupRootObservation {
+        guard case .local = plan.executionLocation.normalized else { return .init(isContained: false, leftovers: []) }
+        let root = URL(fileURLWithPath: plan.rootPath).resolvingSymlinksInPath().standardizedFileURL
+        let member = URL(fileURLWithPath: plan.worktreePath).resolvingSymlinksInPath().standardizedFileURL
+        guard member.path.hasPrefix(root.path + "/") else { return .init(isContained: false, leftovers: []) }
+        let managedNames = Set(plan.managedMemberPaths.map {
+            URL(fileURLWithPath: $0).resolvingSymlinksInPath().standardizedFileURL.lastPathComponent
+        })
+        let leftovers = (try? FileManager.default.contentsOfDirectory(atPath: root.path))?
+            .filter { !managedNames.contains($0) } ?? []
+        return .init(isContained: true, leftovers: leftovers)
+    }
+
+    func verifyCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutMemberObservation {
+        let member = WorkspaceCheckoutMember(
+            id: plan.memberID,
+            workspaceMemberID: UUID(),
+            projectID: plan.projectID,
+            fallbackProjectName: "",
+            fallbackRepositoryRoot: plan.sourceRepositoryPath,
+            worktreePath: plan.worktreePath,
+            gitLineageID: plan.expectedLineageID,
+            plan: .init(checkoutMemberID: plan.memberID, projectID: plan.projectID, sourceRepositoryPath: plan.sourceRepositoryPath, destinationPath: plan.worktreePath, baseReference: plan.baseReference, baseCommit: plan.baseCommit, branchIntent: .reuse)
+        )
+        let checkout = WorkspaceCheckout(id: plan.checkoutID, workspaceID: nil, fallbackWorkspaceName: "", executionLocation: plan.executionLocation, branch: plan.branch, rootPath: URL(fileURLWithPath: plan.worktreePath).deletingLastPathComponent().path, members: [member])
+        return await WorkspaceCheckoutObserver().observe(member, in: checkout)
+    }
+
+    func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan) async throws {
+        guard case .local = plan.executionLocation.normalized else {
+            throw WorkspaceCheckoutCoordinatorError.cleanupUnavailable
+        }
+        let path = URL(fileURLWithPath: plan.worktreePath)
+        let worktree = Worktree(
+            id: Worktree.makeId(path: path), projectId: plan.projectID, name: plan.branch,
+            branch: plan.branch, path: path, status: .clean, lastActivity: .distantPast,
+            lineageID: plan.expectedLineageID
+        )
+        try await WorktreeService().remove(
+            repoPath: URL(fileURLWithPath: plan.sourceRepositoryPath),
+            worktree: worktree,
+            deleteBranchIfMerged: false
+        )
+    }
+
+    func deleteMergedBranch(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool {
+        guard case .local = plan.executionLocation.normalized else { return false }
+        let result = try await Process.git(["branch", "-d", plan.branch], cwd: URL(fileURLWithPath: plan.sourceRepositoryPath))
+        return result.exitCode == 0
     }
 }

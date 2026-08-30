@@ -110,6 +110,7 @@ struct WorkspaceMember: Codable, Equatable, Identifiable, Sendable {
 
 enum WorkspaceCheckoutOperation: String, Codable, Equatable, Sendable {
     case idle
+    case archiving
     case creating
     case repairing
     case cleaning
@@ -122,6 +123,56 @@ enum WorkspaceCheckoutMemberAvailability: String, Codable, Equatable, Sendable {
     case missing
     case identityConflict
     case unavailable
+    /// The user deliberately removed this exact snapshot worktree. It stays
+    /// visible so recreation uses the frozen plan rather than guessing.
+    case explicitlyDeleted
+}
+
+enum WorkspaceCheckoutCleanupCheckpoint: String, Codable, Equatable, Sendable {
+    case planPersisted
+    case worktreeRemoved
+    case branchDeleteAttempted
+    case complete
+    case failed
+}
+
+struct WorkspaceCheckoutCleanupPlan: Codable, Equatable, Sendable {
+    var checkoutID: UUID
+    var memberID: UUID
+    var executionLocation: ExecutionLocation
+    var projectID: String
+    var sourceRepositoryPath: String
+    var baseReference: String
+    var baseCommit: String
+    var rootPath: String
+    var managedMemberPaths: [String]
+    var worktreePath: String
+    var branch: String
+    var expectedLineageID: String
+    var branchOwnership: WorkspaceBranchOwnership
+}
+
+struct WorkspaceCheckoutCleanupRootObservation: Equatable, Sendable {
+    var isContained: Bool
+    /// Non-Alas files surviving below the authoritative root. These are never
+    /// removed by cleanup and must be explicitly resolved before forgetting.
+    var leftovers: [String]
+}
+
+struct WorkspaceCheckoutMemberCleanup: Codable, Equatable, Sendable {
+    var plan: WorkspaceCheckoutCleanupPlan
+    var checkpoint: WorkspaceCheckoutCleanupCheckpoint
+    var worktreeRemoved: Bool
+    var branchRemoved: Bool
+    var sharedRootLeftovers: [String]
+
+    init(plan: WorkspaceCheckoutCleanupPlan, checkpoint: WorkspaceCheckoutCleanupCheckpoint = .planPersisted, worktreeRemoved: Bool = false, branchRemoved: Bool = false, sharedRootLeftovers: [String] = []) {
+        self.plan = plan
+        self.checkpoint = checkpoint
+        self.worktreeRemoved = worktreeRemoved
+        self.branchRemoved = branchRemoved
+        self.sharedRootLeftovers = sharedRootLeftovers
+    }
 }
 
 enum WorkspaceCheckoutHealth: String, Codable, Equatable, Sendable {
@@ -170,6 +221,7 @@ struct WorkspaceCheckoutMember: Codable, Equatable, Identifiable, Sendable {
     var checkpoint: WorkspaceCheckoutCheckpoint
     var cleanupOwnership: WorkspaceCleanupOwnership
     var plan: WorkspaceCheckoutMemberPlan?
+    var cleanup: WorkspaceCheckoutMemberCleanup?
 
     init(
         id: UUID = UUID(),
@@ -182,7 +234,8 @@ struct WorkspaceCheckoutMember: Codable, Equatable, Identifiable, Sendable {
         availability: WorkspaceCheckoutMemberAvailability = .pending,
         checkpoint: WorkspaceCheckoutCheckpoint = .notStarted,
         cleanupOwnership: WorkspaceCleanupOwnership = .init(),
-        plan: WorkspaceCheckoutMemberPlan? = nil
+        plan: WorkspaceCheckoutMemberPlan? = nil,
+        cleanup: WorkspaceCheckoutMemberCleanup? = nil
     ) {
         self.id = id
         self.workspaceMemberID = workspaceMemberID
@@ -195,11 +248,12 @@ struct WorkspaceCheckoutMember: Codable, Equatable, Identifiable, Sendable {
         self.checkpoint = checkpoint
         self.cleanupOwnership = cleanupOwnership
         self.plan = plan
+        self.cleanup = cleanup
     }
 
     enum CodingKeys: String, CodingKey {
         case id, workspaceMemberID, projectID, fallbackProjectName, fallbackRepositoryRoot
-        case worktreePath, gitLineageID, availability, checkpoint, cleanupOwnership, plan
+        case worktreePath, gitLineageID, availability, checkpoint, cleanupOwnership, plan, cleanup
     }
 
     init(from decoder: Decoder) throws {
@@ -215,6 +269,7 @@ struct WorkspaceCheckoutMember: Codable, Equatable, Identifiable, Sendable {
         checkpoint = try container.decodeIfPresent(WorkspaceCheckoutCheckpoint.self, forKey: .checkpoint) ?? .notStarted
         cleanupOwnership = try container.decodeIfPresent(WorkspaceCleanupOwnership.self, forKey: .cleanupOwnership) ?? .init()
         plan = try container.decodeIfPresent(WorkspaceCheckoutMemberPlan.self, forKey: .plan)
+        cleanup = try container.decodeIfPresent(WorkspaceCheckoutMemberCleanup.self, forKey: .cleanup)
     }
 }
 
@@ -371,6 +426,9 @@ struct WorkspaceCheckout: Codable, Equatable, Identifiable, Sendable {
     var diagnostics: [WorkspaceDiagnostic]
     var workItems: [WorkspaceWorkItemSnapshot]
     var configurationSnapshot: WorkspaceCheckoutConfigurationSnapshot?
+    /// Persisted cancellation boundary for destructive work. It deliberately
+    /// never interrupts an in-flight Git command.
+    var stopAfterCurrentOperations: Bool
 
     init(
         id: UUID = UUID(),
@@ -385,7 +443,8 @@ struct WorkspaceCheckout: Codable, Equatable, Identifiable, Sendable {
         members: [WorkspaceCheckoutMember],
         diagnostics: [WorkspaceDiagnostic] = [],
         workItems: [WorkspaceWorkItemSnapshot] = [],
-        configurationSnapshot: WorkspaceCheckoutConfigurationSnapshot? = nil
+        configurationSnapshot: WorkspaceCheckoutConfigurationSnapshot? = nil,
+        stopAfterCurrentOperations: Bool = false
     ) {
         self.id = id
         self.workspaceID = workspaceID
@@ -400,11 +459,12 @@ struct WorkspaceCheckout: Codable, Equatable, Identifiable, Sendable {
         self.diagnostics = diagnostics
         self.workItems = workItems
         self.configurationSnapshot = configurationSnapshot
+        self.stopAfterCurrentOperations = stopAfterCurrentOperations
     }
 
     enum CodingKeys: String, CodingKey {
         case id, workspaceID, fallbackWorkspaceName, executionLocation, branch, rootPath
-        case createdAt, archivedAt, operation, members, diagnostics, workItems, configurationSnapshot
+        case createdAt, archivedAt, operation, members, diagnostics, workItems, configurationSnapshot, stopAfterCurrentOperations
     }
 
     init(from decoder: Decoder) throws {
@@ -422,6 +482,7 @@ struct WorkspaceCheckout: Codable, Equatable, Identifiable, Sendable {
         diagnostics = try container.decodeIfPresent([WorkspaceDiagnostic].self, forKey: .diagnostics) ?? []
         workItems = try container.decodeIfPresent([WorkspaceWorkItemSnapshot].self, forKey: .workItems) ?? []
         configurationSnapshot = try container.decodeIfPresent(WorkspaceCheckoutConfigurationSnapshot.self, forKey: .configurationSnapshot)
+        stopAfterCurrentOperations = try container.decodeIfPresent(Bool.self, forKey: .stopAfterCurrentOperations) ?? false
     }
 
     var health: WorkspaceCheckoutHealth {
