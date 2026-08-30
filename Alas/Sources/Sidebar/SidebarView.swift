@@ -34,7 +34,7 @@ struct SidebarView: View {
                 )
                 ScrollView(.vertical, showsIndicators: true) {
                     VStack(alignment: .leading, spacing: 8) {
-                        ForEach(state.activeSpaceProjects) { project in
+                        WorkspaceSidebarTree(state: state) { project in
                             RepoGroupView(
                                 project: project,
                                 worktrees: state.projectsManager.visibleWorktrees(projectId: project.id),

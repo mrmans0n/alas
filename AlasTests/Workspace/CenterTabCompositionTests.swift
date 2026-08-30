@@ -31,4 +31,19 @@ struct CenterTabCompositionTests {
 
         #expect(composition.activeId == secondEditor.id)
     }
+
+    @Test func focusChangeKeepsTheActiveSharedTabAheadOfTheNewMemberTabs() {
+        let terminal = Tab.terminal(.init(id: "shared", title: "Terminal", sessionId: "terminal"))
+        let nextMemberEditor = Tab.editor(.init(id: "next", title: "next.md", relativePath: "next.md"))
+
+        let composition = CenterTabComposition(
+            sharedTabs: [terminal],
+            focusedMemberTabs: [nextMemberEditor],
+            activeSharedTabId: terminal.id,
+            activeFocusedMemberTabId: nextMemberEditor.id
+        )
+
+        #expect(composition.activeId == terminal.id)
+        #expect(composition.tabs.map(\.id) == [terminal.id, nextMemberEditor.id])
+    }
 }

@@ -13,6 +13,9 @@ struct CenterSelectionStateResolver {
     let selectedWorktreeId: String?
     let projects: [ProjectConfig]
     let projectsManager: ProjectsManager
+    /// When a checkout is selected, only its explicitly focused member may
+    /// drive repository panes. Ordinary Project navigation stays unrestricted.
+    var allowedWorktreeIDs: Set<String>? = nil
     var isRefreshingProjectTopologies = false
 
     @MainActor
@@ -20,6 +23,7 @@ struct CenterSelectionStateResolver {
         guard let id = selectedWorktreeId else {
             return isRefreshingProjectTopologies && !projects.isEmpty ? .loadingProject : .empty
         }
+        guard allowedWorktreeIDs?.contains(id) ?? true else { return .empty }
         if let op = projectsManager.operationState(for: id) {
             switch op {
             case .preparingDelete:

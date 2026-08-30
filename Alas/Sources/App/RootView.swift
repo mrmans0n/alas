@@ -215,8 +215,9 @@ struct RootView: View {
     private var rightPaneSelectionState: RightPaneSelectionState {
         RightPaneSelectionStateResolver(
             selectedWorktreeId: state.selectedWorktreeId,
-            projects: state.activeSpaceProjects,
-            projectsManager: state.projectsManager
+            projects: state.navigationProjects,
+            projectsManager: state.projectsManager,
+            allowedWorktreeIDs: state.checkoutScopedWorktreeIDs
         ).resolve()
     }
 
@@ -228,8 +229,9 @@ struct RootView: View {
     private func centerContent(effectiveRightPaneVisible: Bool) -> some View {
         let resolver = CenterSelectionStateResolver(
             selectedWorktreeId: state.selectedWorktreeId,
-            projects: state.activeSpaceProjects,
+            projects: state.navigationProjects,
             projectsManager: state.projectsManager,
+            allowedWorktreeIDs: state.checkoutScopedWorktreeIDs,
             isRefreshingProjectTopologies: state.isRefreshingProjectTopologies
         )
         switch resolver.resolve() {
@@ -237,6 +239,7 @@ struct RootView: View {
             CenterPaneView(
                 state: state,
                 worktree: wt,
+                sharedSessionOwner: state.selectedWorkspaceCheckout.map { SessionOwnerID.workspaceCheckout($0.id, $0.executionLocation) },
                 allowsPaneFocus: !state.isKeyboardOverlayOpen,
                 effectiveRightPaneVisible: effectiveRightPaneVisible
             )
@@ -273,8 +276,9 @@ struct RootView: View {
     private func selectedWorktree() -> Worktree? {
         let resolver = RightPaneSelectionStateResolver(
             selectedWorktreeId: state.selectedWorktreeId,
-            projects: state.activeSpaceProjects,
-            projectsManager: state.projectsManager
+            projects: state.navigationProjects,
+            projectsManager: state.projectsManager,
+            allowedWorktreeIDs: state.checkoutScopedWorktreeIDs
         )
         if case .active(let wt) = resolver.resolve() { return wt }
         return nil

@@ -66,6 +66,7 @@ final class AppState {
     /// Observable so Settings and future Workspace navigation can keep the
     /// affected data visible instead of silently treating it as empty.
     private(set) var workspaceRecoveryError: WorkspaceRecoveryState?
+    var workspaceNavigationState = WorkspaceNavigationState()
     @ObservationIgnored private var workspaceSpaceCheckpointTask: Task<Void, Never>?
     var selectedWorktreeId: String?
     let suppressesRestoredRightPaneAfterAbandonedStartup: Bool
@@ -1035,6 +1036,56 @@ final class AppState {
         spacesManager.activeProjects(from: projects)
     }
 
+    /// The selected checkout may focus a member that is not a normal Project
+    /// peer of the active Space. Existing repository panes still receive a
+    /// Worktree, but only from this explicit checkout-member resolution.
+    var navigationProjects: [ProjectConfig] {
+        workspaceNavigationState.selectedCheckoutID == nil ? activeSpaceProjects : projects
+    }
+
+    var selectedWorkspaceCheckout: WorkspaceCheckout? {
+        workspaceNavigationState.selectedCheckoutID.flatMap(workspacesManager.checkout(id:))
+    }
+
+    /// A refreshed snapshot can archive or remove the displayed checkout.
+    /// Clear its focus so no repository pane keeps a stale checkout context.
+    func reconcileWorkspaceNavigationSelection() {
+        guard let checkoutID = workspaceNavigationState.selectedCheckoutID,
+              workspacesManager.checkout(id: checkoutID) == nil
+        else { return }
+        workspaceNavigationState.removeCheckout(checkoutID)
+        selectedWorktreeId = nil
+    }
+
+    var checkoutScopedWorktreeIDs: Set<String>? {
+        guard workspaceNavigationState.selectedCheckoutID != nil else { return nil }
+        return Set(workspaceNavigationState.repositoryFocusWorktreeID.map { [$0] } ?? [])
+    }
+
+    func selectWorkspace(id: UUID) {
+        workspaceNavigationState.selectWorkspace(id)
+        selectedWorktreeId = nil
+    }
+
+    func selectWorkspaceCheckout(id: UUID) {
+        guard let checkout = workspacesManager.checkout(id: id) else { return }
+        workspaceNavigationState.selectCheckout(checkout, resolvedWorktreeIDs: workspaceMemberWorktreeIDs(checkout))
+        selectedWorktreeId = workspaceNavigationState.repositoryFocusWorktreeID
+    }
+
+    func focusWorkspaceCheckoutMember(id: UUID) {
+        guard let checkout = selectedWorkspaceCheckout else { return }
+        workspaceNavigationState.selectMember(id, in: checkout, resolvedWorktreeIDs: workspaceMemberWorktreeIDs(checkout))
+        selectedWorktreeId = workspaceNavigationState.repositoryFocusWorktreeID
+    }
+
+    private func workspaceMemberWorktreeIDs(_ checkout: WorkspaceCheckout) -> [UUID: String] {
+        WorkspaceMemberWorktreeResolver.resolvedWorktreeIDs(
+            checkout: checkout,
+            worktrees: projects.flatMap { projectsManager.worktrees(projectId: $0.id) }
+        )
+    }
+
     /// Build a `RepoSelectorEnvironment` that captures `self`. Used by
     /// `RepoSelectorDialog` to bind the model to the live app state.
     func repoSelectorEnvironment(
@@ -1112,6 +1163,7 @@ final class AppState {
         if persistConfig { _ = saveConfig() }
         let legacySpaces = spacesManager.file
         let reconciled = await workspacesManager.setEnabled(enabled, spacesFile: legacySpaces)
+        reconcileWorkspaceNavigationSelection()
         workspaceRecoveryError = workspacesManager.recoveryState
         if let recovery = workspaceRecoveryError {
             persistenceErrorHandler("Workspace Recovery Required", recovery.message)
@@ -1204,6 +1256,7 @@ final class AppState {
     }
 
     func selectWorktree(id: String?) {
+        workspaceNavigationState.clearCheckoutSelection()
         guard selectedWorktreeId != id || spacesManager.activeSpace?.lastSelectedWorktreeId != id else { return }
         selectedWorktreeId = id
         spacesManager.setLastSelectedWorktree(id)
@@ -1397,7 +1450,14 @@ final class AppState {
     }
 
     func archiveWorkspaceCheckout(id: UUID) async throws -> WorkspaceCheckout {
-        try await workspaceCoordinator().archive(checkoutID: id)
+        let wasSelected = workspaceNavigationState.selectedCheckoutID == id
+        let checkout = try await workspaceCoordinator().archive(checkoutID: id)
+        await workspacesManager.refreshCheckoutSnapshots()
+        workspaceNavigationState.removeCheckout(id)
+        if wasSelected {
+            selectedWorktreeId = nil
+        }
+        return checkout
     }
 
     func activateComposedCenterTab(

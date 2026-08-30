@@ -21,10 +21,13 @@ struct RightPaneSelectionStateResolver {
     let selectedWorktreeId: String?
     let projects: [ProjectConfig]
     let projectsManager: ProjectsManager
+    /// See `CenterSelectionStateResolver.allowedWorktreeIDs`.
+    var allowedWorktreeIDs: Set<String>? = nil
 
     @MainActor
     func resolve() -> RightPaneSelectionState {
         guard let id = selectedWorktreeId else { return .empty }
+        guard allowedWorktreeIDs?.contains(id) ?? true else { return .empty }
         guard let wt = findWorktree(by: id) else { return .empty }
         if let op = projectsManager.operationState(for: wt.id) {
             switch op {
