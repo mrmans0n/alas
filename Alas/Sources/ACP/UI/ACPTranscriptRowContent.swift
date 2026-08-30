@@ -18,6 +18,7 @@ struct ACPTranscriptRowContent: View, Equatable {
     let messagePhase: ACPMessagePhase?
     let contentMaxWidth: CGFloat
     var availableRowContentWidth: CGFloat?
+    var availableTrailingGutterWidth: CGFloat?
     let typography: ACPChatTypography
     let trustedImageRoot: URL?
     // Excluded from equality — reference-stable for the session's lifetime
@@ -61,6 +62,7 @@ struct ACPTranscriptRowContent: View, Equatable {
             messagePhase: lhs.messagePhase,
             contentMaxWidth: lhs.contentMaxWidth,
             availableRowContentWidth: lhs.availableRowContentWidth ?? lhs.contentMaxWidth,
+            availableTrailingGutterWidth: lhs.availableTrailingGutterWidth ?? .infinity,
             typography: lhs.typography,
             trustedImageRoot: lhs.trustedImageRoot,
             isForkEligible: lhs.isForkEligible, forkTargets: lhs.forkTargets
@@ -71,6 +73,7 @@ struct ACPTranscriptRowContent: View, Equatable {
             messagePhase: rhs.messagePhase,
             contentMaxWidth: rhs.contentMaxWidth,
             availableRowContentWidth: rhs.availableRowContentWidth ?? rhs.contentMaxWidth,
+            availableTrailingGutterWidth: rhs.availableTrailingGutterWidth ?? .infinity,
             typography: rhs.typography,
             trustedImageRoot: rhs.trustedImageRoot,
             isForkEligible: rhs.isForkEligible, forkTargets: rhs.forkTargets
@@ -86,6 +89,7 @@ struct ACPTranscriptRowContent: View, Equatable {
         messagePhase: ACPMessagePhase? = nil,
         contentMaxWidth: CGFloat,
         availableRowContentWidth: CGFloat? = nil,
+        availableTrailingGutterWidth: CGFloat? = nil,
         typography: ACPChatTypography,
         trustedImageRoot: URL?,
         isForkEligible: Bool = false,
@@ -97,6 +101,7 @@ struct ACPTranscriptRowContent: View, Equatable {
             messagePhase: messagePhase ?? presentationPhase(of: message),
             contentMaxWidth: contentMaxWidth,
             availableRowContentWidth: availableRowContentWidth ?? contentMaxWidth,
+            availableTrailingGutterWidth: availableTrailingGutterWidth ?? .infinity,
             typography: typography, trustedImageRoot: trustedImageRoot,
             isForkEligible: isForkEligible, forkTargets: forkTargets
         )
@@ -109,6 +114,7 @@ struct ACPTranscriptRowContent: View, Equatable {
         let messagePhase: ACPMessagePhase?
         let contentMaxWidth: CGFloat
         let availableRowContentWidth: CGFloat
+        let availableTrailingGutterWidth: CGFloat
         let typography: ACPChatTypography
         let trustedImageRoot: URL?
         let isForkEligible: Bool
@@ -120,8 +126,12 @@ struct ACPTranscriptRowContent: View, Equatable {
         return buffer.phase
     }
 
-    static func showsInlineTimestamp(availableRowContentWidth: CGFloat) -> Bool {
+    static func showsInlineTimestamp(
+        availableRowContentWidth: CGFloat,
+        availableTrailingGutterWidth: CGFloat
+    ) -> Bool {
         availableRowContentWidth >= ACPMessageGutterLayout.inlineTimestampMinimumContentWidth
+            && availableTrailingGutterWidth >= ACPMessageGutterLayout.inlineTimestampTrailingExtent
     }
 
     var body: some View {
@@ -131,7 +141,8 @@ struct ACPTranscriptRowContent: View, Equatable {
                 copySource: .text(text),
                 messageCreatedAt: messageCreatedAt,
                 showsInlineTimestamp: Self.showsInlineTimestamp(
-                    availableRowContentWidth: availableRowContentWidth ?? contentMaxWidth
+                    availableRowContentWidth: availableRowContentWidth ?? contentMaxWidth,
+                    availableTrailingGutterWidth: availableTrailingGutterWidth ?? .infinity
                 ),
                 forkBoundary: forkBoundary(kind: .user),
                 forkTargets: forkTargets,
@@ -151,7 +162,8 @@ struct ACPTranscriptRowContent: View, Equatable {
                 copySource: .streaming(buf),
                 messageCreatedAt: messageCreatedAt,
                 showsInlineTimestamp: Self.showsInlineTimestamp(
-                    availableRowContentWidth: availableRowContentWidth ?? contentMaxWidth
+                    availableRowContentWidth: availableRowContentWidth ?? contentMaxWidth,
+                    availableTrailingGutterWidth: availableTrailingGutterWidth ?? .infinity
                 ),
                 forkBoundary: forkBoundary(kind: .agent),
                 forkTargets: forkTargets,

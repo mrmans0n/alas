@@ -165,8 +165,18 @@ struct ACPTranscriptRowContentTests {
             trustedImageRoot: nil)
 
         #expect(a != b)
-        #expect(ACPTranscriptRowContent.showsInlineTimestamp(availableRowContentWidth: 720))
-        #expect(!ACPTranscriptRowContent.showsInlineTimestamp(availableRowContentWidth: 280))
+        #expect(ACPTranscriptRowContent.showsInlineTimestamp(
+            availableRowContentWidth: 720,
+            availableTrailingGutterWidth: 180
+        ))
+        #expect(!ACPTranscriptRowContent.showsInlineTimestamp(
+            availableRowContentWidth: 280,
+            availableTrailingGutterWidth: 180
+        ))
+        #expect(!ACPTranscriptRowContent.showsInlineTimestamp(
+            availableRowContentWidth: 720,
+            availableTrailingGutterWidth: 60
+        ))
     }
 
     @Test("equality detects a message timestamp change")

@@ -312,4 +312,5 @@ enum ACPMessageGutterLayout {
     static let inlineTimestampMinimumContentWidth: CGFloat = 520
     static let timestampVerticalSpacing: CGFloat = 4
     static let timestampWidth: CGFloat = 128
+    static let inlineTimestampTrailingExtent: CGFloat = laneWidth - 8 + timestampWidth - menuWidth
 }

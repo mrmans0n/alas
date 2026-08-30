@@ -51,19 +51,48 @@ struct ACPTranscriptScrollerRowSpecsTests {
         .systemNotice(id: UUID(), text: "hello")
     }
 
-    @Test("available row width subtracts row padding before timestamp policy")
-    func availableRowWidthSubtractsRowPadding() {
+    @Test("timestamp policy uses row width and trailing gutter")
+    func timestampPolicyUsesRowWidthAndTrailingGutter() {
         #expect(ACPTranscriptScroller.Coordinator.availableRowContentWidth(
             contentViewWidth: 400,
             contentMaxWidth: 720
         ) == 280)
-        #expect(!ACPTranscriptRowContent.showsInlineTimestamp(availableRowContentWidth: 280))
+        #expect(ACPTranscriptScroller.Coordinator.availableTrailingGutterWidth(
+            contentViewWidth: 400,
+            contentMaxWidth: 720
+        ) == 60)
+        #expect(!ACPTranscriptRowContent.showsInlineTimestamp(
+            availableRowContentWidth: 280,
+            availableTrailingGutterWidth: 60
+        ))
 
+        let clippedWidth: CGFloat = 640
         #expect(ACPTranscriptScroller.Coordinator.availableRowContentWidth(
-            contentViewWidth: 840,
+            contentViewWidth: clippedWidth,
+            contentMaxWidth: 720
+        ) == 520)
+        #expect(ACPTranscriptScroller.Coordinator.availableTrailingGutterWidth(
+            contentViewWidth: clippedWidth,
+            contentMaxWidth: 720
+        ) == 60)
+        #expect(!ACPTranscriptRowContent.showsInlineTimestamp(
+            availableRowContentWidth: 520,
+            availableTrailingGutterWidth: 60
+        ))
+
+        let fittingWidth: CGFloat = 1_080
+        #expect(ACPTranscriptScroller.Coordinator.availableRowContentWidth(
+            contentViewWidth: fittingWidth,
             contentMaxWidth: 720
         ) == 720)
-        #expect(ACPTranscriptRowContent.showsInlineTimestamp(availableRowContentWidth: 720))
+        #expect(ACPTranscriptScroller.Coordinator.availableTrailingGutterWidth(
+            contentViewWidth: fittingWidth,
+            contentMaxWidth: 720
+        ) == 180)
+        #expect(ACPTranscriptRowContent.showsInlineTimestamp(
+            availableRowContentWidth: 720,
+            availableTrailingGutterWidth: 180
+        ))
     }
 
     @Test("message row token changes when available row width changes")
@@ -76,11 +105,13 @@ struct ACPTranscriptScrollerRowSpecsTests {
 
         let narrowToken = try #require(ACPTranscriptScroller.Coordinator.rowSpecs(
             host: host,
-            availableRowContentWidth: 280
+            availableRowContentWidth: 280,
+            availableTrailingGutterWidth: 60
         ).first { $0.id == message.stableId }?.equalityToken)
         let wideToken = try #require(ACPTranscriptScroller.Coordinator.rowSpecs(
             host: host,
-            availableRowContentWidth: 720
+            availableRowContentWidth: 720,
+            availableTrailingGutterWidth: 180
         ).first { $0.id == message.stableId }?.equalityToken)
 
         #expect(!narrowToken.isEqual(to: wideToken))

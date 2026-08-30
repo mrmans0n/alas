@@ -251,6 +251,10 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 availableRowContentWidth: Self.availableRowContentWidth(
                     contentViewWidth: contentWidth,
                     contentMaxWidth: host.contentMaxWidth
+                ),
+                availableTrailingGutterWidth: Self.availableTrailingGutterWidth(
+                    contentViewWidth: contentWidth,
+                    contentMaxWidth: host.contentMaxWidth
                 )
             )
             hasNonSyntheticRow = specs.contains {
@@ -343,11 +347,13 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         /// same order the legacy VStack rendered them.
         static func rowSpecs(
             host: ACPTranscriptScroller,
-            availableRowContentWidth: CGFloat? = nil
+            availableRowContentWidth: CGFloat? = nil,
+            availableTrailingGutterWidth: CGFloat? = nil
         ) -> [ACPTranscriptRowSpec] {
             let transcript = host.transcript
             var specs: [ACPTranscriptRowSpec] = []
             let availableRowContentWidth = availableRowContentWidth ?? host.contentMaxWidth
+            let availableTrailingGutterWidth = availableTrailingGutterWidth ?? .infinity
 
             if transcript.isBackfillingOlderMessages || transcript.visibleHead > 0 {
                 specs.append(ACPTranscriptRowSpec(
@@ -380,6 +386,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                     messagePhase: messagePhase,
                     contentMaxWidth: host.contentMaxWidth,
                     availableRowContentWidth: availableRowContentWidth,
+                    availableTrailingGutterWidth: availableTrailingGutterWidth,
                     typography: host.typography,
                     trustedImageRoot: host.trustedImageRoot,
                     isForkEligible: host.session.canForkMessage(at: row.index),
@@ -394,7 +401,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                                 host: host,
                                 row: row,
                                 message: message,
-                                availableRowContentWidth: availableRowContentWidth
+                                availableRowContentWidth: availableRowContentWidth,
+                                availableTrailingGutterWidth: availableTrailingGutterWidth
                             )
                         }
                     }
@@ -416,7 +424,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             host: ACPTranscriptScroller,
             row: ACPTranscriptVisibleRow,
             message: ACPMessage,
-            availableRowContentWidth: CGFloat? = nil
+            availableRowContentWidth: CGFloat? = nil,
+            availableTrailingGutterWidth: CGFloat? = nil
         ) -> some View {
             ACPTranscriptRowContent(
                 stableId: row.stableId,
@@ -426,6 +435,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 messagePhase: ACPTranscriptRowContent.presentationPhase(of: message),
                 contentMaxWidth: host.contentMaxWidth,
                 availableRowContentWidth: availableRowContentWidth ?? host.contentMaxWidth,
+                availableTrailingGutterWidth: availableTrailingGutterWidth ?? .infinity,
                 typography: host.typography,
                 trustedImageRoot: host.trustedImageRoot,
                 transcript: host.transcript,
@@ -446,8 +456,25 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             contentViewWidth: CGFloat,
             contentMaxWidth: CGFloat
         ) -> CGFloat {
-            let horizontalPadding = 2 * (28 + ACPMessageGutterLayout.laneWidth)
+            let horizontalPadding = 2 * rowHorizontalPadding
             return max(0, min(contentMaxWidth, contentViewWidth - horizontalPadding))
+        }
+
+        static func availableTrailingGutterWidth(
+            contentViewWidth: CGFloat,
+            contentMaxWidth: CGFloat
+        ) -> CGFloat {
+            let rowContentWidth = availableRowContentWidth(
+                contentViewWidth: contentViewWidth,
+                contentMaxWidth: contentMaxWidth
+            )
+            let centeredRowWidth = rowContentWidth + 2 * rowHorizontalPadding
+            let trailingCenteringMargin = max(0, contentViewWidth - centeredRowWidth) / 2
+            return rowHorizontalPadding + trailingCenteringMargin
+        }
+
+        private static var rowHorizontalPadding: CGFloat {
+            28 + ACPMessageGutterLayout.laneWidth
         }
 
         /// Beyond `fork` (and theme/contentMaxWidth folded by
