@@ -97,6 +97,9 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
     var worktreeOpenAfterCreate: Bool?
     /// Per-project launcher mode preference. `nil` = use global default.
     var worktreeDefaultLauncherMode: AppConfig.LauncherMode?
+    /// Typed successor to the legacy launch fields. Nil keeps old files and
+    /// callers behaviorally identical; decoding derives its effective value.
+    var worktreeLaunchPreference: CreationLaunchPreference?
     /// SSH destination when this project lives on another machine.
     var host: String?
     /// Per-project stacked-diffs (gg) mode. Defaults to `.auto`.
@@ -109,7 +112,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case id, name, path, color, icon, addedAt, hiddenWorktreePaths, worktreeOrder,
              cachedWorktrees, worktreeOrderIsManual, startupScripts,
-             mcpServers, worktreeOpenAfterCreate, worktreeDefaultLauncherMode, host, ggMode,
+             mcpServers, worktreeOpenAfterCreate, worktreeDefaultLauncherMode, worktreeLaunchPreference, host, ggMode,
              ggWorktreeModes, issueAttachments
     }
 
@@ -128,6 +131,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         mcpServers: [ProjectMCPServer] = [],
         worktreeOpenAfterCreate: Bool? = nil,
         worktreeDefaultLauncherMode: AppConfig.LauncherMode? = nil,
+        worktreeLaunchPreference: CreationLaunchPreference? = nil,
         host: String? = nil,
         ggMode: GGProjectMode = .auto,
         ggWorktreeModes: [String: GGWorktreeMode] = [:],
@@ -146,6 +150,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         self.mcpServers = mcpServers
         self.worktreeOpenAfterCreate = worktreeOpenAfterCreate
         self.worktreeDefaultLauncherMode = worktreeDefaultLauncherMode
+        self.worktreeLaunchPreference = worktreeLaunchPreference
         self.host = host
         self.ggMode = ggMode
         self.ggWorktreeModes = ggWorktreeModes
@@ -176,6 +181,14 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         mcpServers = (try? c.decode([ProjectMCPServer].self, forKey: .mcpServers)) ?? []
         worktreeOpenAfterCreate = try? c.decode(Bool.self, forKey: .worktreeOpenAfterCreate)
         worktreeDefaultLauncherMode = try? c.decode(AppConfig.LauncherMode.self, forKey: .worktreeDefaultLauncherMode)
+        worktreeLaunchPreference = try? c.decode(CreationLaunchPreference.self, forKey: .worktreeLaunchPreference)
+        if worktreeLaunchPreference == nil,
+           worktreeOpenAfterCreate != nil || worktreeDefaultLauncherMode != nil {
+            worktreeLaunchPreference = .init(
+                openAfterCreate: worktreeOpenAfterCreate,
+                launcherMode: worktreeDefaultLauncherMode
+            )
+        }
         host = try? c.decode(String.self, forKey: .host)
         ggMode = (try? c.decode(GGProjectMode.self, forKey: .ggMode)) ?? .auto
         ggWorktreeModes = (try? c.decode([String: GGWorktreeMode].self, forKey: .ggWorktreeModes)) ?? [:]
@@ -198,6 +211,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         try c.encode(mcpServers, forKey: .mcpServers)
         try c.encodeIfPresent(worktreeOpenAfterCreate, forKey: .worktreeOpenAfterCreate)
         try c.encodeIfPresent(worktreeDefaultLauncherMode, forKey: .worktreeDefaultLauncherMode)
+        try c.encodeIfPresent(worktreeLaunchPreference, forKey: .worktreeLaunchPreference)
         try c.encodeIfPresent(host, forKey: .host)
         try c.encode(ggMode, forKey: .ggMode)
         let sparseGGWorktreeModes = ggWorktreeModes.filter { $0.value != .inherit }
@@ -207,5 +221,18 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         if !issueAttachments.isEmpty {
             try c.encode(issueAttachments, forKey: .issueAttachments)
         }
+    }
+
+    var effectiveWorktreeLaunchPreference: CreationLaunchPreference {
+        worktreeLaunchPreference ?? .init(
+            openAfterCreate: worktreeOpenAfterCreate,
+            launcherMode: worktreeDefaultLauncherMode
+        )
+    }
+
+    mutating func setWorktreeLaunchPreference(_ preference: CreationLaunchPreference) {
+        worktreeLaunchPreference = preference
+        worktreeOpenAfterCreate = preference.openAfterCreate
+        worktreeDefaultLauncherMode = preference.launcherMode
     }
 }

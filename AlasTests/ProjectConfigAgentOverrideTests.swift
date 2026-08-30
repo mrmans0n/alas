@@ -58,4 +58,26 @@ struct ProjectConfigAgentOverrideTests {
         #expect(s.worktreeAgentId == nil)
         #expect(s.worktreeAgentUseBypassPermissions == false)
     }
+
+    @Test func migratesLegacyLaunchFieldsToTypedPreference() throws {
+        let json = """
+        {
+          "id": "project", "name": "Project", "path": "/tmp/project", "color": "blue",
+          "addedAt": "2023-11-14T22:13:20Z", "worktreeOpenAfterCreate": false,
+          "worktreeDefaultLauncherMode": "acp"
+        }
+        """
+        let project = try JSONDecoder.workspace.decode(ProjectConfig.self, from: Data(json.utf8))
+        #expect(project.worktreeLaunchPreference == .init(openAfterCreate: false, launcherMode: .acp))
+    }
+
+    @Test func typedLaunchPreferenceKeepsLegacyLaunchFieldsInSync() {
+        var project = ProjectConfig(id: "project", name: "Project", path: "/tmp/project", color: "blue", addedAt: .now)
+
+        project.setWorktreeLaunchPreference(.init(openAfterCreate: false, launcherMode: .acp))
+
+        #expect(project.worktreeOpenAfterCreate == false)
+        #expect(project.worktreeDefaultLauncherMode == .acp)
+        #expect(project.worktreeLaunchPreference == .init(openAfterCreate: false, launcherMode: .acp))
+    }
 }

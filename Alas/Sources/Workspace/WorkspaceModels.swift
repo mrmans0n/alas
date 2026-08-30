@@ -55,6 +55,7 @@ struct Workspace: Codable, Equatable, Identifiable, Sendable {
     var createdAt: Date
     var updatedAt: Date
     var members: [WorkspaceMember]
+    var configuration: WorkspaceConfiguration
 
     init(
         id: UUID = UUID(),
@@ -62,7 +63,8 @@ struct Workspace: Codable, Equatable, Identifiable, Sendable {
         executionLocation: ExecutionLocation,
         createdAt: Date = .now,
         updatedAt: Date = .now,
-        members: [WorkspaceMember]
+        members: [WorkspaceMember],
+        configuration: WorkspaceConfiguration = .init()
     ) {
         self.id = id
         self.name = name
@@ -70,6 +72,20 @@ struct Workspace: Codable, Equatable, Identifiable, Sendable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.members = members
+        self.configuration = configuration
+    }
+
+    enum CodingKeys: String, CodingKey { case id, name, executionLocation, createdAt, updatedAt, members, configuration }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        executionLocation = try container.decode(ExecutionLocation.self, forKey: .executionLocation).normalized
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        members = try container.decode([WorkspaceMember].self, forKey: .members)
+        configuration = try container.decodeIfPresent(WorkspaceConfiguration.self, forKey: .configuration) ?? .init()
     }
 }
 
@@ -251,13 +267,53 @@ struct WorkspaceWorkItemSnapshot: Codable, Equatable, Identifiable, Sendable {
 
 struct WorkspaceCheckoutConfigurationSnapshot: Codable, Equatable, Sendable {
     var capturedAt: Date
+    var shared: WorkspaceSharedConfigurationSnapshot
+    var members: [UUID: WorkspaceMemberConfigurationSnapshot]
+    var warnings: [WorkspaceConfigurationWarning]
+    /// Retained only to losslessly migrate slice-1 snapshots. New checkout
+    /// plans use the typed `shared` and `members` fields above.
     var sharedSettings: [String: String]
     var memberSettings: [UUID: [String: String]]
 
-    init(capturedAt: Date = .now, sharedSettings: [String: String] = [:], memberSettings: [UUID: [String: String]] = [:]) {
+    init(capturedAt: Date = .now, shared: WorkspaceSharedConfigurationSnapshot, members: [UUID: WorkspaceMemberConfigurationSnapshot] = [:], warnings: [WorkspaceConfigurationWarning] = [], sharedSettings: [String: String] = [:], memberSettings: [UUID: [String: String]] = [:]) {
         self.capturedAt = capturedAt
+        self.shared = shared
+        self.members = members
+        self.warnings = warnings
         self.sharedSettings = sharedSettings
         self.memberSettings = memberSettings
+    }
+
+    enum CodingKeys: String, CodingKey { case capturedAt, shared, members, warnings, sharedSettings, memberSettings }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        capturedAt = try container.decode(Date.self, forKey: .capturedAt)
+        sharedSettings = try container.decodeIfPresent([String: String].self, forKey: .sharedSettings) ?? [:]
+        if let decoded = try? container.decodeIfPresent([UUID: [String: String]].self, forKey: .memberSettings) {
+            memberSettings = decoded
+        } else {
+            let legacy = try container.decodeIfPresent([String: [String: String]].self, forKey: .memberSettings) ?? [:]
+            memberSettings = legacy.reduce(into: [:]) { result, entry in
+                if let id = UUID(uuidString: entry.key) { result[id] = entry.value }
+            }
+        }
+        shared = try container.decodeIfPresent(WorkspaceSharedConfigurationSnapshot.self, forKey: .shared)
+            ?? .init(sessionOpenScript: sharedSettings["script"] ?? "", worktreeCreateScript: "", creationLaunchPreference: .init(agentID: sharedSettings["launcher"]))
+        members = try container.decodeIfPresent([UUID: WorkspaceMemberConfigurationSnapshot].self, forKey: .members) ?? [:]
+        warnings = try container.decodeIfPresent([WorkspaceConfigurationWarning].self, forKey: .warnings) ?? []
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(capturedAt, forKey: .capturedAt)
+        try container.encode(shared, forKey: .shared)
+        try container.encode(members, forKey: .members)
+        try container.encode(warnings, forKey: .warnings)
+        if !sharedSettings.isEmpty { try container.encode(sharedSettings, forKey: .sharedSettings) }
+        if !memberSettings.isEmpty {
+            try container.encode(Dictionary(uniqueKeysWithValues: memberSettings.map { ($0.key.uuidString, $0.value) }), forKey: .memberSettings)
+        }
     }
 }
 
