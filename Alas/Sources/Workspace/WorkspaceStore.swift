@@ -52,6 +52,26 @@ actor WorkspaceStore {
         try checkpointLoaded(state)
     }
 
+    /// Performs a whole-state update under the store actor. Checkout member
+    /// workers use this rather than separate load/checkpoint calls so one
+    /// member cannot overwrite another member's checkpoint.
+    func mutate<Value: Sendable>(
+        _ update: (inout WorkspaceStateFile) throws -> Value
+    ) throws -> Value {
+        var state: WorkspaceStateFile
+        switch load() {
+        case .missing:
+            state = WorkspaceStateFile()
+        case .loaded(let loaded):
+            state = loaded
+        case .unreadable:
+            throw WorkspaceStoreError.recoveryRequired
+        }
+        let value = try update(&state)
+        try checkpointLoaded(state)
+        return value
+    }
+
     /// Reconciles legacy Space membership and checkpoints the resulting typed
     /// layout in one actor-isolated read-modify-write operation.
     func reconcileSpaceLayouts(with spacesFile: SpacesFile) throws -> SpacesFile? {

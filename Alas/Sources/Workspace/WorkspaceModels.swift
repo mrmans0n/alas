@@ -133,8 +133,11 @@ enum WorkspaceCheckoutHealth: String, Codable, Equatable, Sendable {
 enum WorkspaceCheckoutCheckpoint: String, Codable, Equatable, Sendable {
     case notStarted
     case planPersisted
+    case branchPreparing
     case branchPrepared
+    case worktreeCreating
     case worktreeCreated
+    case setupRunning
     case setupComplete
     case failed
 }
@@ -223,10 +226,47 @@ enum WorkspaceBranchIntent: Codable, Equatable, Sendable {
 struct WorkspaceCheckoutMemberPlan: Codable, Equatable, Sendable {
     var checkoutMemberID: UUID
     var projectID: String
+    /// The repository inspected during preflight. New plans always persist it
+    /// before any Git operation; an empty value only represents old snapshots
+    /// that must be reconciled before they can be repaired.
+    var sourceRepositoryPath: String
     var destinationPath: String
     var baseReference: String
     var baseCommit: String
     var branchIntent: WorkspaceBranchIntent
+
+    init(
+        checkoutMemberID: UUID,
+        projectID: String,
+        sourceRepositoryPath: String = "",
+        destinationPath: String,
+        baseReference: String,
+        baseCommit: String,
+        branchIntent: WorkspaceBranchIntent
+    ) {
+        self.checkoutMemberID = checkoutMemberID
+        self.projectID = projectID
+        self.sourceRepositoryPath = sourceRepositoryPath
+        self.destinationPath = destinationPath
+        self.baseReference = baseReference
+        self.baseCommit = baseCommit
+        self.branchIntent = branchIntent
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case checkoutMemberID, projectID, sourceRepositoryPath, destinationPath, baseReference, baseCommit, branchIntent
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        checkoutMemberID = try container.decode(UUID.self, forKey: .checkoutMemberID)
+        projectID = try container.decode(String.self, forKey: .projectID)
+        sourceRepositoryPath = try container.decodeIfPresent(String.self, forKey: .sourceRepositoryPath) ?? ""
+        destinationPath = try container.decode(String.self, forKey: .destinationPath)
+        baseReference = try container.decode(String.self, forKey: .baseReference)
+        baseCommit = try container.decode(String.self, forKey: .baseCommit)
+        branchIntent = try container.decode(WorkspaceBranchIntent.self, forKey: .branchIntent)
+    }
 }
 
 enum WorkspaceDiagnosticSeverity: String, Codable, Equatable, Sendable {
