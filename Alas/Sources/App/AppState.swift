@@ -60,6 +60,8 @@ final class AppState {
     private var unpersistedGGWorktreeModes: [String: [String: GGWorktreeMode]] = [:]
     var spacesManager: SpacesManager
     var workspacesManager: WorkspacesManager
+    @ObservationIgnored private let workspaceStore = WorkspaceStore()
+    @ObservationIgnored private var workspaceCheckoutCoordinator: WorkspaceCheckoutCoordinator?
     /// Recovery information for a Workspace state file that could not be read.
     /// Observable so Settings and future Workspace navigation can keep the
     /// affected data visible instead of silently treating it as empty.
@@ -1249,7 +1251,152 @@ final class AppState {
     }
 
     func archiveSessionTabs(owner: SessionOwnerID) {
+        closeSharedTerminalTabs(owner: owner)
         tabs.archive(owner: owner)
+    }
+
+    /// Shared checkout sessions are owned by their frozen checkout identity,
+    /// not by the member currently driving repository panes. Lifecycle code
+    /// calls this when archiving a checkout.
+    func stopWorkspaceCheckoutSessions(_ checkout: WorkspaceCheckout) {
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+        // The registry is authoritative for live sessions, including a
+        // freshly opened terminal whose tab has not been persisted yet.
+        // `archive` below only removes tab records, so this performs exactly
+        // one close/kill per live checkout-owned leaf.
+        terminal.stopSessions(owner: owner)
+        tabs.archive(owner: owner)
+    }
+
+    /// Opens a terminal in the checkout root with the startup script frozen
+    /// into the checkout snapshot. Repository Focus is deliberately absent
+    /// from this API.
+    @discardableResult
+    func openWorkspaceCheckoutTerminalTab(_ checkout: WorkspaceCheckout) throws -> Tab {
+        guard config.workspacesEnabled else {
+            throw NSError(domain: "AppState", code: 2, userInfo: [NSLocalizedDescriptionKey: "Workspaces are disabled."])
+        }
+        let context = WorkspaceTerminalContext(
+            checkoutID: checkout.id,
+            executionLocation: checkout.executionLocation,
+            rootPath: checkout.rootPath,
+            branch: checkout.branch,
+            manifestPath: URL(fileURLWithPath: checkout.rootPath)
+                .appendingPathComponent(WorkspaceCheckoutManifest.fileName).path,
+            startupScript: checkout.configurationSnapshot?.shared.sessionOpenScript ?? ""
+        )
+        let session = try terminal.openCheckoutSession(
+            context: context,
+            cfg: config.terminal,
+            theme: themeStore.current
+        )
+        harness.detector.register(sessionId: session.id) { [weak session] in
+            session?.surface.foregroundPid
+        }
+        return tabs.appendTerminal(owner: context.owner, title: "Terminal", sessionId: session.id)
+    }
+
+    /// Checkout-owned counterpart of `splitFocusedPane(worktreeId:axis:)`.
+    /// It carries the frozen checkout context through the entire operation so
+    /// a member focus cannot change the new shell's owner or starting cwd.
+    func splitFocusedPane(checkout: WorkspaceCheckout, axis: SplitAxis) {
+        let context = workspaceTerminalContext(for: checkout)
+        let owner = context.owner
+        guard let tabID = tabs.activeTabId(for: owner),
+              let tab = tabs.tabs(for: owner).first(where: { $0.id == tabID }),
+              case .terminal(let state) = tab,
+              let focused = state.root.find(leafId: state.focusedLeafId)?.leaf,
+              let session = terminal.registry.session(for: focused.id)
+        else { return }
+
+        let cwd = session.surface.currentWorkingDirectory
+            ?? TerminalService.checkoutRestorationCwd(
+                savedPath: focused.lastCwd,
+                context: context,
+                savedLocation: focused.lastCwdLocation
+            )
+            ?? URL(fileURLWithPath: context.rootPath)
+        do {
+            let leafID = UUID().uuidString
+            let newSession = try terminal.openCheckoutSession(
+                context: context,
+                cfg: config.terminal,
+                theme: themeStore.current,
+                forcedCwd: cwd,
+                forcedCwdLocation: context.executionLocation,
+                leafId: leafID
+            )
+            harness.detector.register(sessionId: newSession.id) { [weak newSession] in newSession?.surface.foregroundPid }
+            _ = tabs.splitFocusedLeaf(
+                owner: owner,
+                tabId: tabID,
+                axis: axis,
+                newLeafId: leafID,
+                newSessionId: leafID,
+                newLeafCwdLocation: context.executionLocation
+            )
+        } catch {
+            AlasGhostty.logger.error("splitFocusedPane checkout failed: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    private func workspaceTerminalContext(for checkout: WorkspaceCheckout) -> WorkspaceTerminalContext {
+        WorkspaceTerminalContext(
+            checkoutID: checkout.id,
+            executionLocation: checkout.executionLocation,
+            rootPath: checkout.rootPath,
+            branch: checkout.branch,
+            manifestPath: URL(fileURLWithPath: checkout.rootPath).appendingPathComponent(WorkspaceCheckoutManifest.fileName).path,
+            startupScript: checkout.configurationSnapshot?.shared.sessionOpenScript ?? ""
+        )
+    }
+
+    /// Restores checkout tabs under their checkout owner. A saved cwd without
+    /// matching persisted location is intentionally discarded and restarts at
+    /// the authoritative root rather than trusting an ambiguous path.
+    @discardableResult
+    func restoreWorkspaceCheckoutTerminalTabIfNeeded(_ checkout: WorkspaceCheckout, tabID: TabID) throws -> Tab? {
+        let context = workspaceTerminalContext(for: checkout)
+        let owner = context.owner
+        guard let tab = tabs.tabs(for: owner).first(where: { $0.id == tabID }),
+              case .terminal(let state) = tab
+        else { return nil }
+        for leaf in state.root.leaves() where terminal.registry.session(for: leaf.id) == nil {
+            let session = try terminal.openCheckoutSession(
+                context: context,
+                cfg: config.terminal,
+                theme: themeStore.current,
+                forcedCwd: TerminalService.checkoutRestorationCwd(
+                    savedPath: leaf.lastCwd,
+                    context: context,
+                    savedLocation: leaf.lastCwdLocation
+                ),
+                forcedCwdLocation: leaf.lastCwdLocation,
+                leafId: leaf.id
+            )
+            harness.detector.register(sessionId: session.id) { [weak session] in session?.surface.foregroundPid }
+        }
+        return tabs.tabs(for: owner).first(where: { $0.id == tabID })
+    }
+
+    /// The App owns one coordinator and one authoritative state-file actor.
+    /// Lifecycle operations therefore never consult the manager's read-only
+    /// display cache when deciding which location-qualified sessions to stop.
+    func workspaceCoordinator() -> WorkspaceCheckoutCoordinator {
+        if let workspaceCheckoutCoordinator { return workspaceCheckoutCoordinator }
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: workspaceStore,
+            sessions: WorkspaceCheckoutSessionStopper(
+                store: workspaceStore,
+                stop: { [weak self] checkout in self?.stopWorkspaceCheckoutSessions(checkout) }
+            )
+        )
+        workspaceCheckoutCoordinator = coordinator
+        return coordinator
+    }
+
+    func archiveWorkspaceCheckout(id: UUID) async throws -> WorkspaceCheckout {
+        try await workspaceCoordinator().archive(checkoutID: id)
     }
 
     func activateComposedCenterTab(
@@ -1312,9 +1459,28 @@ final class AppState {
     }
 
     private func closeSharedSessionTab(owner: SessionOwnerID, tabID: TabID) {
-        // Session process and ACP disposal are owner-scoped in slices 11/12.
-        // This slice must not route those operations through Repository Focus.
+        closeSharedTerminalLeaves(in: tabID, owner: owner)
         tabs.close(owner: owner, tabId: tabID)
+    }
+
+    /// Never remove a checkout-owned terminal tab while leaving one of its
+    /// shell/zmx sessions alive. This applies to manual close, archive, and
+    /// process-exit tab teardown and is independent of Repository Focus.
+    private func closeSharedTerminalTabs(owner: SessionOwnerID) {
+        for tab in tabs.tabs(for: owner) {
+            closeSharedTerminalLeaves(in: tab.id, owner: owner)
+        }
+    }
+
+    private func closeSharedTerminalLeaves(in tabID: TabID, owner: SessionOwnerID) {
+        guard let tab = tabs.tabs(for: owner).first(where: { $0.id == tabID }),
+              case .terminal(let state) = tab
+        else { return }
+        for leaf in state.root.leaves() {
+            harness.detector.unregister(sessionId: leaf.id)
+            harness.forgetSession(leaf.id)
+            terminal.closeSession(id: leaf.id, owner: owner)
+        }
     }
 
     func synchronizeVisibleWorktreeCenterTabIfNeeded(worktreeId: String, activeTabId: TabID?) {
@@ -3166,9 +3332,9 @@ final class AppState {
         terminal.socketReleaseHandler = { [weak self] leafId in
             self?.harness.socketServer.unlinkSession(leafId: leafId)
         }
-        terminal.onSessionProcessExited = { [weak self] leafId, worktreeId, processAlive in
+        terminal.onSessionProcessExited = { [weak self] leafId, owner, processAlive in
             self?.handleTerminalProcessExited(
-                worktreeId: worktreeId,
+                owner: owner,
                 leafId: leafId,
                 processAlive: processAlive
             )
@@ -3851,11 +4017,40 @@ final class AppState {
     /// dead session and lets the sibling collapse take over the freed space.
     /// Idempotent: if the leaf is no longer in any tab (manual close raced
     /// ahead), returns without side effects.
-    func handleTerminalProcessExited(worktreeId: String, leafId: String, processAlive: Bool) {
+    func handleTerminalProcessExited(owner: SessionOwnerID, leafId: String, processAlive: Bool) {
         guard !processAlive else { return }
         let authExitHandler = acpAuthTerminalExitHandlers.removeValue(forKey: leafId)
-        closePaneForProcessExit(worktreeId: worktreeId, leafId: leafId)
+        closePaneForProcessExit(owner: owner, leafId: leafId)
         authExitHandler?()
+    }
+
+    /// Legacy worktree compatibility route. Existing terminal callers retain
+    /// their raw worktree identity while checkout sessions stay typed.
+    func handleTerminalProcessExited(worktreeId: String, leafId: String, processAlive: Bool) {
+        handleTerminalProcessExited(owner: .worktree(worktreeId), leafId: leafId, processAlive: processAlive)
+    }
+
+    func closePaneForProcessExit(owner: SessionOwnerID, leafId: String) {
+        switch owner {
+        case .worktree(let worktreeID):
+            closePaneForProcessExit(worktreeId: worktreeID, leafId: leafId)
+        case .workspaceCheckout:
+            let owningTabID = tabs.tabs(for: owner).first { tab in
+                guard case .terminal(let state) = tab else { return false }
+                return state.root.find(leafId: leafId) != nil
+            }?.id
+            guard let tabID = owningTabID else { return }
+            harness.detector.unregister(sessionId: leafId)
+            harness.forgetSession(leafId)
+            guard let outcome = tabs.removeLeaf(owner: owner, tabId: tabID, leafId: leafId) else { return }
+            switch outcome {
+            case .tabRemoved:
+                terminal.closeSession(id: leafId, owner: owner)
+                tabs.close(owner: owner, tabId: tabID)
+            case .leafRemoved:
+                terminal.closeSession(id: leafId, owner: owner)
+            }
+        }
     }
 
     func closePaneForProcessExit(worktreeId: String, leafId: String) {

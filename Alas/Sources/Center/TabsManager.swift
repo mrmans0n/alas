@@ -403,13 +403,14 @@ final class TabsManager {
     @discardableResult
     func splitFocusedLeaf(
         worktreeId: String, tabId: TabID, axis: SplitAxis,
-        newLeafId: String, newSessionId: String
+        newLeafId: String, newSessionId: String,
+        newLeafCwdLocation: ExecutionLocation? = nil
     ) -> Tab? {
         guard var file = byWorktree[worktreeId],
               let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
               case .terminal(var state) = file.tabs[idx],
               let existing = state.root.find(leafId: state.focusedLeafId)?.leaf else { return nil }
-        let newLeaf = PaneLeaf(id: newLeafId, sessionId: newSessionId, lastCwd: nil)
+        let newLeaf = PaneLeaf(id: newLeafId, sessionId: newSessionId, lastCwd: nil, lastCwdLocation: newLeafCwdLocation)
         let replacement: PaneNode = .split(PaneSplit(
             id: UUID().uuidString,
             axis: axis,
@@ -423,6 +424,15 @@ final class TabsManager {
         byWorktree[worktreeId] = file
         persist(worktreeId)
         return tab
+    }
+
+    @discardableResult
+    func splitFocusedLeaf(
+        owner: SessionOwnerID, tabId: TabID, axis: SplitAxis,
+        newLeafId: String, newSessionId: String,
+        newLeafCwdLocation: ExecutionLocation? = nil
+    ) -> Tab? {
+        splitFocusedLeaf(worktreeId: owner.storageKey, tabId: tabId, axis: axis, newLeafId: newLeafId, newSessionId: newSessionId, newLeafCwdLocation: newLeafCwdLocation)
     }
 
     enum RemoveLeafOutcome {
@@ -474,6 +484,10 @@ final class TabsManager {
         } else {
             return .tabRemoved(closedLeafId: closedLeafId)
         }
+    }
+
+    func removeLeaf(owner: SessionOwnerID, tabId: TabID, leafId: String) -> RemoveLeafOutcome? {
+        removeLeaf(worktreeId: owner.storageKey, tabId: tabId, leafId: leafId)
     }
 
     /// Remove the focused leaf. Thin wrapper around `removeLeaf(worktreeId:tabId:leafId:)`.

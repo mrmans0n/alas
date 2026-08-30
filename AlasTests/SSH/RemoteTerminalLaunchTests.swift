@@ -86,4 +86,28 @@ struct RemoteTerminalLaunchTests {
         #expect(remoteScript.contains("echo project"))
         #expect(remoteScript.contains("claude --continue"))
     }
+
+    @Test func checkoutLaunchExportsOnlyTheApprovedWorkspaceContext() {
+        let launch = TerminalService.remoteLaunch(
+            host: "devbox",
+            worktreePath: "/srv/checkout/member",
+            zmxSessionName: "alas-checkout",
+            keepAlive: true,
+            startupSuffix: nil,
+            environment: [
+                "ALAS_WORKSPACE_CHECKOUT_ID": "checkout-1",
+                "ALAS_WORKSPACE_CHECKOUT_ROOT": "/srv/checkout",
+                "ALAS_WORKSPACE_BRANCH": "feature/shared",
+                "ALAS_WORKSPACE_MANIFEST": "/srv/checkout/.alas-workspace-checkout.json",
+                "ALAS_REPO": "must-not-cross-the-boundary",
+            ]
+        )
+        let script = launch.args.last ?? ""
+
+        #expect(script.contains("export ALAS_WORKSPACE_CHECKOUT_ID='\\''checkout-1'\\''"))
+        #expect(script.contains("export ALAS_WORKSPACE_CHECKOUT_ROOT='\\''/srv/checkout'\\''"))
+        #expect(script.contains("export ALAS_WORKSPACE_BRANCH='\\''feature/shared'\\''"))
+        #expect(script.contains("export ALAS_WORKSPACE_MANIFEST='\\''/srv/checkout/.alas-workspace-checkout.json'\\''"))
+        #expect(!script.contains("ALAS_REPO"))
+    }
 }

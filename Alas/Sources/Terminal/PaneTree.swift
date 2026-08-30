@@ -20,6 +20,9 @@ struct PaneLeaf: Codable, Equatable, Identifiable {
     let id: String
     var sessionId: String
     var lastCwd: String?
+    /// Checkout leaves retain the execution location that produced `lastCwd`.
+    /// Missing remains the lossless legacy worktree representation.
+    var lastCwdLocation: ExecutionLocation? = nil
 }
 
 struct PaneSplit: Codable, Equatable, Identifiable {
@@ -72,7 +75,7 @@ enum PaneNode: Codable, Equatable, Identifiable {
             // sessionId is mirrored to id on every encode. The field is retained on
             // disk for backward decode compatibility with leaves persisted before
             // zmx-based stable identity (where sessionId was a per-launch UUID).
-            try single.encode(PaneLeafCodable(kind: .leaf, id: l.id, sessionId: l.id, lastCwd: l.lastCwd))
+            try single.encode(PaneLeafCodable(kind: .leaf, id: l.id, sessionId: l.id, lastCwd: l.lastCwd, lastCwdLocation: l.lastCwdLocation))
         case .split(let s):
             try single.encode(PaneSplitCodable(
                 kind: .split, id: s.id, axis: s.axis, fraction: s.fraction, children: s.children
@@ -89,6 +92,7 @@ private struct PaneLeafCodable: Codable {
     let id: String
     let sessionId: String
     let lastCwd: String?
+    let lastCwdLocation: ExecutionLocation?
 
     var asLeaf: PaneLeaf {
         // Normalize sessionId to id at decode time so the in-memory leaf
@@ -98,7 +102,7 @@ private struct PaneLeafCodable: Codable {
         // lookups (registry, harness, TerminalTabView, zmx kill) are keyed
         // off this single identity; allowing divergence on decode would
         // re-introduce the very mismatch the new invariant was meant to fix.
-        PaneLeaf(id: id, sessionId: id, lastCwd: lastCwd)
+        PaneLeaf(id: id, sessionId: id, lastCwd: lastCwd, lastCwdLocation: lastCwdLocation)
     }
 }
 

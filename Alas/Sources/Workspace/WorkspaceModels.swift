@@ -23,6 +23,13 @@ enum ExecutionLocation: Codable, Equatable, Sendable {
         }
     }
 
+    var identityComponent: String {
+        switch normalized {
+        case .local: "local"
+        case .ssh(let destination): "ssh:\(destination)"
+        }
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         switch try container.decode(Kind.self, forKey: .kind) {
