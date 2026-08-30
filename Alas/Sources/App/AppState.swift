@@ -1223,6 +1223,100 @@ final class AppState {
         tabs.activate(worktreeId: worktreeId, tabId: tabId)
     }
 
+    /// Composes checkout-owned session tabs with the repository tabs of the
+    /// focused member. Passing no owner preserves the existing worktree-only
+    /// center exactly.
+    func centerTabComposition(
+        focusedWorktreeID: String,
+        sharedSessionOwner: SessionOwnerID? = nil
+    ) -> CenterTabComposition {
+        guard let sharedSessionOwner else {
+            return CenterTabComposition(
+                worktreeTabs: tabs.tabs(forWorktree: focusedWorktreeID),
+                activeWorktreeTabId: tabs.activeTabId(forWorktree: focusedWorktreeID)
+            )
+        }
+        return CenterTabComposition(
+            sharedTabs: tabs.tabs(for: sharedSessionOwner),
+            focusedMemberTabs: tabs.tabs(forWorktree: focusedWorktreeID),
+            activeSharedTabId: tabs.activeTabId(for: sharedSessionOwner),
+            activeFocusedMemberTabId: tabs.activeTabId(forWorktree: focusedWorktreeID)
+        )
+    }
+
+    func loadSessionTabs(owner: SessionOwnerID, restoringActiveTabs: Bool = true) {
+        tabs.load(owner: owner, restoringActiveTabs: restoringActiveTabs)
+    }
+
+    func archiveSessionTabs(owner: SessionOwnerID) {
+        tabs.archive(owner: owner)
+    }
+
+    func activateComposedCenterTab(
+        worktreeID: String,
+        sharedSessionOwner: SessionOwnerID?,
+        tabID: TabID
+    ) {
+        if let sharedSessionOwner,
+           tabs.tabs(for: sharedSessionOwner).contains(where: { $0.id == tabID }) {
+            tabs.activate(owner: sharedSessionOwner, tabId: tabID)
+        } else {
+            tabs.activate(worktreeId: worktreeID, tabId: tabID)
+        }
+    }
+
+    /// The ordinary tab-bar close affordance keeps the existing worktree
+    /// close request path, including confirmation and closed-tab history.
+    func requestCloseComposedCenterTab(
+        worktreeID: String,
+        sharedSessionOwner: SessionOwnerID?,
+        tabID: TabID
+    ) {
+        if let sharedSessionOwner,
+           tabs.tabs(for: sharedSessionOwner).contains(where: { $0.id == tabID }) {
+            requestCloseSharedSessionTab(owner: sharedSessionOwner, tabID: tabID)
+        } else {
+            requestCloseTab(worktreeId: worktreeID, tabId: tabID)
+        }
+    }
+
+    /// Bulk close actions retain the established bulk worktree lifecycle for
+    /// member tabs. Checkout-owned tabs intentionally stay in their owner
+    /// bucket and will gain Terminal/ACP teardown when those owners are
+    /// generalized in the following slices.
+    func closeComposedCenterTabs(
+        worktreeID: String,
+        sharedSessionOwner: SessionOwnerID?,
+        tabIDs: [TabID]
+    ) {
+        let sharedIDs = Set(sharedSessionOwner.map { owner in
+            tabs.tabs(for: owner).map(\.id)
+        } ?? [])
+        let memberIDs = tabIDs.filter { !sharedIDs.contains($0) }
+        if !memberIDs.isEmpty {
+            closeCenterTabs(worktreeId: worktreeID, tabIds: memberIDs)
+        }
+        guard let sharedSessionOwner else { return }
+        for tabID in tabIDs where sharedIDs.contains(tabID) {
+            closeSharedSessionTab(owner: sharedSessionOwner, tabID: tabID)
+        }
+    }
+
+    private func requestCloseSharedSessionTab(owner: SessionOwnerID, tabID: TabID) {
+        guard let tab = tabs.tabs(for: owner).first(where: { $0.id == tabID }) else { return }
+        if let prompt = CloseTabConfirmationPolicy.prompt(for: tab, config: config),
+           !confirmCloseTab(prompt) {
+            return
+        }
+        closeSharedSessionTab(owner: owner, tabID: tabID)
+    }
+
+    private func closeSharedSessionTab(owner: SessionOwnerID, tabID: TabID) {
+        // Session process and ACP disposal are owner-scoped in slices 11/12.
+        // This slice must not route those operations through Repository Focus.
+        tabs.close(owner: owner, tabId: tabID)
+    }
+
     func synchronizeVisibleWorktreeCenterTabIfNeeded(worktreeId: String, activeTabId: TabID?) {
         guard let activeTabId else { return }
         tabs.activate(worktreeId: worktreeId, tabId: activeTabId)

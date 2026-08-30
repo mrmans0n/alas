@@ -24,6 +24,29 @@ struct CenterTabComposition {
         }
     }
 
+    /// Shared checkout Terminal/ACP tabs are rendered ahead of repository
+    /// tabs for the currently focused member. An active shared tab wins over
+    /// a member tab so changing repository focus never retargets a session.
+    init(
+        sharedTabs: [Tab],
+        focusedMemberTabs: [Tab],
+        activeSharedTabId: TabID?,
+        activeFocusedMemberTabId: TabID?
+    ) {
+        let shared = sharedTabs.filter(\.isSharedSessionTab)
+        let member = focusedMemberTabs.filter { !$0.isSharedSessionTab }
+        tabs = shared + member
+        if shared.contains(where: { $0.id == activeSharedTabId }) {
+            activeId = activeSharedTabId
+        } else if member.contains(where: { $0.id == activeFocusedMemberTabId }) {
+            activeId = activeFocusedMemberTabId
+        } else if activeSharedTabId != nil || activeFocusedMemberTabId != nil {
+            activeId = tabs.first?.id
+        } else {
+            activeId = nil
+        }
+    }
+
     var activeTab: Tab? {
         guard let activeId else { return nil }
         return tabs.first { $0.id == activeId }
@@ -40,6 +63,17 @@ struct CenterTabComposition {
         }
         let targetIndex = (activeIndex + offset + tabs.count) % tabs.count
         return tabs[targetIndex].id
+    }
+}
+
+private extension Tab {
+    var isSharedSessionTab: Bool {
+        switch self {
+        case .terminal, .acpSession:
+            true
+        default:
+            false
+        }
     }
 }
 
@@ -82,6 +116,10 @@ enum StartupRecoveryPaneCompletionPolicy {
 struct CenterPaneView: View {
     @Bindable var state: AppState
     let worktree: Worktree
+    /// Set by Workspace navigation for a focused checkout member. It remains
+    /// optional until the mixed-peer tree is introduced, preserving normal
+    /// Project and Worktree center behavior.
+    var sharedSessionOwner: SessionOwnerID? = nil
     var allowsPaneFocus: Bool = true
     var effectiveRightPaneVisible: Bool = true
     @Environment(\.theme) var theme
@@ -89,10 +127,9 @@ struct CenterPaneView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            let worktreeTabs = state.tabs.tabs(forWorktree: worktree.id)
-            let composition = CenterTabComposition(
-                worktreeTabs: worktreeTabs,
-                activeWorktreeTabId: state.tabs.activeTabId(forWorktree: worktree.id)
+            let composition = state.centerTabComposition(
+                focusedWorktreeID: worktree.id,
+                sharedSessionOwner: sharedSessionOwner
             )
             let tabs = composition.tabs
             let closurePlan = CenterTabClosurePlan(orderedTabIDs: tabs.map(\.id))
@@ -119,19 +156,31 @@ struct CenterPaneView: View {
                     _ = buffer?.editGeneration
                     return buffer?.dirty ?? false
                 },
-                onActivate: { state.activateWorktreeCenterTab(worktreeId: worktree.id, tabId: $0) },
-                onClose: { state.requestCloseTab(worktreeId: worktree.id, tabId: $0) },
+                onActivate: {
+                    state.activateComposedCenterTab(
+                        worktreeID: worktree.id,
+                        sharedSessionOwner: sharedSessionOwner,
+                        tabID: $0
+                    )
+                },
+                onClose: {
+                    state.requestCloseComposedCenterTab(
+                        worktreeID: worktree.id,
+                        sharedSessionOwner: sharedSessionOwner,
+                        tabID: $0
+                    )
+                },
                 onCloseOthers: { id in
-                    state.closeCenterTabs(worktreeId: worktree.id, tabIds: closurePlan.others(keeping: id))
+                    state.closeComposedCenterTabs(worktreeID: worktree.id, sharedSessionOwner: sharedSessionOwner, tabIDs: closurePlan.others(keeping: id))
                 },
                 onCloseAll: {
-                    state.closeCenterTabs(worktreeId: worktree.id, tabIds: closurePlan.all())
+                    state.closeComposedCenterTabs(worktreeID: worktree.id, sharedSessionOwner: sharedSessionOwner, tabIDs: closurePlan.all())
                 },
                 onCloseToLeft: { id in
-                    state.closeCenterTabs(worktreeId: worktree.id, tabIds: closurePlan.left(of: id))
+                    state.closeComposedCenterTabs(worktreeID: worktree.id, sharedSessionOwner: sharedSessionOwner, tabIDs: closurePlan.left(of: id))
                 },
                 onCloseToRight: { id in
-                    state.closeCenterTabs(worktreeId: worktree.id, tabIds: closurePlan.right(of: id))
+                    state.closeComposedCenterTabs(worktreeID: worktree.id, sharedSessionOwner: sharedSessionOwner, tabIDs: closurePlan.right(of: id))
                 },
                 onCopyPath: { id in
                     guard let tab = tabs.first(where: { $0.id == id }),
@@ -625,6 +674,10 @@ struct CenterPaneView: View {
             startupRecoveryReadyKey = nil
             completeStartupRecoveryIfPaneIsStable()
         }
+        .onChange(of: sharedSessionOwner.flatMap { state.tabs.activeTabId(for: $0) }) { _, _ in
+            startupRecoveryReadyKey = nil
+            completeStartupRecoveryIfPaneIsStable()
+        }
         .onChange(of: startupRecoveryActiveKey) { _, _ in
             startupRecoveryReadyKey = nil
             completeStartupRecoveryIfPaneIsStable()
@@ -640,9 +693,9 @@ struct CenterPaneView: View {
 
     private func completeStartupRecoveryIfPaneIsStable() {
         guard state.tabs.hasLoaded else { return }
-        let composition = CenterTabComposition(
-            worktreeTabs: state.tabs.tabs(forWorktree: worktree.id),
-            activeWorktreeTabId: state.tabs.activeTabId(forWorktree: worktree.id)
+        let composition = state.centerTabComposition(
+            focusedWorktreeID: worktree.id,
+            sharedSessionOwner: sharedSessionOwner
         )
         guard Self.shouldCompleteStartupRecoveryForCenterPane(
             activeTab: composition.activeTab,
@@ -692,9 +745,9 @@ struct CenterPaneView: View {
 
     private func completeStartupRecoveryIfActive(_ tabID: TabID) {
         guard state.selectedWorktreeId == worktree.id else { return }
-        let composition = CenterTabComposition(
-            worktreeTabs: state.tabs.tabs(forWorktree: worktree.id),
-            activeWorktreeTabId: state.tabs.activeTabId(forWorktree: worktree.id)
+        let composition = state.centerTabComposition(
+            focusedWorktreeID: worktree.id,
+            sharedSessionOwner: sharedSessionOwner
         )
         guard composition.activeId == tabID else { return }
         startupRecoveryReadyKey = startupRecoveryActiveKey
@@ -703,9 +756,9 @@ struct CenterPaneView: View {
     }
 
     private var startupRecoveryActiveKey: String? {
-        let composition = CenterTabComposition(
-            worktreeTabs: state.tabs.tabs(forWorktree: worktree.id),
-            activeWorktreeTabId: state.tabs.activeTabId(forWorktree: worktree.id)
+        let composition = state.centerTabComposition(
+            focusedWorktreeID: worktree.id,
+            sharedSessionOwner: sharedSessionOwner
         )
         return Self.startupRecoveryActiveKey(
             activeTab: composition.activeTab,

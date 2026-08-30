@@ -96,6 +96,12 @@ final class TabsManager {
         byWorktree[id]?.tabs ?? []
     }
 
+    /// Owner-aware session tab lookup. The worktree overload intentionally
+    /// keeps its legacy raw key and storage filename.
+    func tabs(for owner: SessionOwnerID) -> [Tab] {
+        byWorktree[owner.storageKey]?.tabs ?? []
+    }
+
     func commitEditorTab(worktreeId: String, currentSha: String) -> Tab? {
         tabs(forWorktree: worktreeId).first { tab in
             if case .commitEditor(let state) = tab {
@@ -107,6 +113,10 @@ final class TabsManager {
 
     func activeTabId(forWorktree id: String) -> TabID? {
         byWorktree[id]?.activeTabId
+    }
+
+    func activeTabId(for owner: SessionOwnerID) -> TabID? {
+        byWorktree[owner.storageKey]?.activeTabId
     }
 
     func activeTab(forWorktree id: String) -> Tab? {
@@ -166,6 +176,20 @@ final class TabsManager {
         hasLoaded = true
     }
 
+    func load(owner: SessionOwnerID, restoringActiveTabs: Bool = true) {
+        let key = owner.storageKey
+        if var file = try? store.readIfExists(TabsFile.self, from: tabsFile(forOwner: owner)) {
+            if !restoringActiveTabs {
+                file.activeTabId = nil
+            }
+            byWorktree[key] = file
+            if !restoringActiveTabs {
+                persist(key)
+            }
+        }
+        hasLoaded = true
+    }
+
     /// Loads every persisted tab file, including files whose worktree is not
     /// currently discoverable. `TabsFile` skips unsupported tab cases.
     func loadAllPersisted(restoringActiveTabs: Bool = true) {
@@ -192,6 +216,21 @@ final class TabsManager {
         let state = TerminalTabState(id: UUID().uuidString, title: title, sessionId: sessionId, runScriptKey: runScriptKey)
         let tab = Tab.terminal(state)
         append(tab, to: worktreeId)
+        return tab
+    }
+
+    @discardableResult
+    func appendTerminal(owner: SessionOwnerID, title: String, sessionId: String, runScriptKey: String? = nil) -> Tab {
+        let state = TerminalTabState(id: UUID().uuidString, title: title, sessionId: sessionId, runScriptKey: runScriptKey)
+        let tab = Tab.terminal(state)
+        append(tab, to: owner.storageKey)
+        return tab
+    }
+
+    @discardableResult
+    func appendACP(owner: SessionOwnerID, sessionId: ACPSession.ID, title: String) -> Tab {
+        let tab = Tab.acpSession(.init(sessionId: sessionId, title: title))
+        append(tab, to: owner.storageKey)
         return tab
     }
 
@@ -1279,6 +1318,10 @@ final class TabsManager {
         persist(worktreeId)
     }
 
+    func activate(owner: SessionOwnerID, tabId: TabID) {
+        activate(worktreeId: owner.storageKey, tabId: tabId)
+    }
+
     func clearActiveTab(worktreeId: String) {
         guard var file = byWorktree[worktreeId],
               file.activeTabId != nil
@@ -1342,6 +1385,16 @@ final class TabsManager {
         }
         byWorktree[worktreeId] = file
         persist(worktreeId)
+    }
+
+    func close(owner: SessionOwnerID, tabId: TabID) {
+        close(worktreeId: owner.storageKey, tabId: tabId)
+    }
+
+    /// Removes visible checkout tabs without changing any focused member's
+    /// worktree bucket or deleting the checkout record itself.
+    func archive(owner: SessionOwnerID) {
+        _ = closeAll(worktreeId: owner.storageKey)
     }
 
     @discardableResult
@@ -1436,6 +1489,10 @@ final class TabsManager {
 
     private func tabsFile(forWorktreeId worktreeId: String) -> URL {
         tabsDirectory.appendingPathComponent("\(worktreeId).json")
+    }
+
+    private func tabsFile(forOwner owner: SessionOwnerID) -> URL {
+        tabsDirectory.appendingPathComponent("\(owner.storageKey).json")
     }
 
     // MARK: - Buffer lifecycle

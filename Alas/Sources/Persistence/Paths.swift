@@ -23,6 +23,10 @@ enum Paths {
 }
 
 extension Paths {
+    static func tabsFile(for owner: SessionOwnerID) -> URL {
+        tabsFile(forWorktreeId: owner.storageKey)
+    }
+
     static func tabsFile(forWorktreeId id: String) -> URL {
         tabsDir.appendingPathComponent("\(id).json")
     }
