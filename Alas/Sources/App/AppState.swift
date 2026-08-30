@@ -1545,6 +1545,73 @@ final class AppState {
         return checkout
     }
 
+    func unarchiveWorkspaceCheckout(id: UUID) async throws -> WorkspaceCheckout {
+        guard config.workspacesEnabled, workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
+        let checkout = try await workspaceCoordinator().unarchive(checkoutID: id)
+        await workspacesManager.refreshCheckoutSnapshots()
+        return checkout
+    }
+
+    func stopWorkspaceCheckoutAfterCurrentOperations(id: UUID) async throws {
+        guard config.workspacesEnabled, workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
+        try await workspaceCoordinator().stopAfterCurrentOperations(checkoutID: id)
+        await workspacesManager.refreshCheckoutSnapshots()
+    }
+
+    func resumeWorkspaceCheckoutCreation(id: UUID) async throws -> WorkspaceCheckout {
+        guard config.workspacesEnabled, workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
+        let checkout = try await workspaceCoordinator().resumeCreation(checkoutID: id)
+        await workspacesManager.refreshCheckoutSnapshots()
+        selectWorkspaceCheckout(id: checkout.id)
+        return checkout
+    }
+
+    func retryWorkspaceCheckoutSetup(checkoutID: UUID, memberID: UUID) async throws -> WorkspaceCheckout {
+        guard config.workspacesEnabled, workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
+        let checkout = try await workspaceCoordinator().retrySetup(checkoutID: checkoutID, memberID: memberID)
+        await workspacesManager.refreshCheckoutSnapshots()
+        selectWorkspaceCheckout(id: checkout.id)
+        return checkout
+    }
+
+    func deleteWorkspaceCheckoutMember(checkoutID: UUID, memberID: UUID, confirmingRisks: Bool = false) async throws -> WorkspaceCheckout {
+        guard config.workspacesEnabled, workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
+        let checkout = try await workspaceCoordinator().deleteMember(checkoutID: checkoutID, memberID: memberID, confirmingRisks: confirmingRisks)
+        await workspacesManager.refreshCheckoutSnapshots()
+        selectWorkspaceCheckout(id: checkout.id)
+        return checkout
+    }
+
+    func workspaceMemberDeletionConfirmation(checkoutID: UUID, memberID: UUID) async throws -> WorkspaceLifecycleConfirmationModel {
+        guard config.workspacesEnabled, workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
+        let preview = try await workspaceCoordinator().previewMemberDeletion(checkoutID: checkoutID, memberID: memberID)
+        var model = WorkspaceLifecycleConfirmationModel.memberDeletion(member: preview.member, preflight: preview.preflight)
+        model.risks.append(contentsOf: preview.rootObservation.leftovers)
+        return model
+    }
+
+    func deleteWorkspaceCheckout(id: UUID) async throws -> WorkspaceCheckout {
+        guard config.workspacesEnabled, workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
+        let checkout = try await workspaceCoordinator().deleteCheckout(checkoutID: id)
+        await workspacesManager.refreshCheckoutSnapshots()
+        selectWorkspaceCheckout(id: id)
+        return checkout
+    }
+
+    func forgetWorkspaceCheckout(id: UUID, confirmedPreserveArtifacts: Bool = false) async throws {
+        guard config.workspacesEnabled, workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
+        let ordered = workspacesManager.checkouts.map(\.id)
+        let nearest = WorkspaceCheckoutDetailModel.nearestPeer(afterDeleting: id, orderedCheckoutIDs: ordered)
+        try await workspaceCoordinator().forget(checkoutID: id, confirmedPreserveArtifacts: confirmedPreserveArtifacts)
+        await workspacesManager.refreshCheckoutSnapshots()
+        workspaceNavigationState.removeCheckout(id)
+        if let nearest {
+            selectWorkspaceCheckout(id: nearest)
+        } else {
+            selectedWorktreeId = nil
+        }
+    }
+
     func activateComposedCenterTab(
         worktreeID: String,
         sharedSessionOwner: SessionOwnerID?,

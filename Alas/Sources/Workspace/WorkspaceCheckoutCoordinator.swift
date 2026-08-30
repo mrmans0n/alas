@@ -78,6 +78,13 @@ struct WorkspaceCheckoutSetupOperation: Sendable {
     var script: String
 }
 
+struct WorkspaceMemberDeletionPreview: Equatable, Sendable {
+    var member: WorkspaceCheckoutMember
+    var plan: WorkspaceCheckoutCleanupPlan
+    var preflight: WorktreeDeletePreflight
+    var rootObservation: WorkspaceCheckoutCleanupRootObservation
+}
+
 /// Serializes all mutations for a Project.  The gate is shared by Workspace
 /// checkout creation and the existing single-worktree entry points.
 actor ProjectMutationGate {
@@ -188,6 +195,24 @@ actor WorkspaceCheckoutCoordinator {
     /// never supplies a force option to Git.
     func stopAfterCurrentOperations(checkoutID: UUID) async throws {
         try await mutateCheckout(checkoutID) { $0.stopAfterCurrentOperations = true }
+    }
+
+    func previewMemberDeletion(checkoutID: UUID, memberID: UUID) async throws -> WorkspaceMemberDeletionPreview {
+        let checkout = try await checkout(id: checkoutID)
+        guard checkout.operation == .idle else { throw WorkspaceCheckoutCoordinatorError.operationInProgress }
+        guard let member = checkout.members.first(where: { $0.id == memberID }),
+              let plan = makeCleanupPlan(checkout: checkout, member: member)
+        else { throw WorkspaceCheckoutCoordinatorError.cleanupUnavailable }
+        switch await lifecycle.verifyCleanup(plan) {
+        case .exactLineage(let lineage) where lineage == plan.expectedLineageID:
+            break
+        default:
+            throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict
+        }
+        let root = await lifecycle.inspectRoot(plan)
+        guard root.isContained else { throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict }
+        let preflight = try await lifecycle.deletePreflight(plan)
+        return WorkspaceMemberDeletionPreview(member: member, plan: plan, preflight: preflight, rootObservation: root)
     }
 
     /// Deletes exactly one attempt-owned worktree after verifying its frozen
