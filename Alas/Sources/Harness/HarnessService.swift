@@ -12,6 +12,7 @@ final class HarnessService {
     private(set) var activeHarnessBySession: [String: HarnessKind] = [:]
 
     var onClickThrough: ((String, String, String) -> Void)?
+    var onContextClickThrough: ((NotificationClickContext) -> Void)?
 
     struct HarnessActivityState: Equatable {
         var agent: AgentKind
@@ -49,8 +50,11 @@ final class HarnessService {
         }
         detector.start()
 
-        notifications.setup { [weak self] p, w, s in
-            self?.onClickThrough?(p, w, s)
+        notifications.setup { [weak self] context in
+            self?.onContextClickThrough?(context)
+            if let projectId = context.projectId, let worktreeId = context.worktreeId {
+                self?.onClickThrough?(projectId, worktreeId, context.sessionId)
+            }
         }
 
         socketServer.onEvent = { [weak self] event in

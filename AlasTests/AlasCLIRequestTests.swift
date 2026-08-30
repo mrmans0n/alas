@@ -167,6 +167,23 @@ struct AlasCLIRequestTests {
         ))
     }
 
+    @Test func decodesWorkspaceAutomationRequests() throws {
+        let checkoutID = UUID()
+        let memberID = UUID()
+
+        let list = #"{"v":1,"kind":"cli","command":"workspace","subcommand":"list","cwd":"/repo"}"#
+        #expect(try AlasCLIRequest.decode(from: Data(list.utf8)).command == .workspace(.list))
+
+        let show = #"{"v":1,"kind":"cli","command":"workspace","subcommand":"show","cwd":"/repo","params":{"checkout_id":"\#(checkoutID.uuidString)"}}"#
+        #expect(try AlasCLIRequest.decode(from: Data(show.utf8)).command == .workspace(.show(checkoutID: checkoutID)))
+
+        let switchRequest = #"{"v":1,"kind":"cli","command":"workspace","subcommand":"switch","cwd":"/repo","params":{"checkout_id":"\#(checkoutID.uuidString)"}}"#
+        #expect(try AlasCLIRequest.decode(from: Data(switchRequest.utf8)).command == .workspace(.switch(checkoutID: checkoutID)))
+
+        let focus = #"{"v":1,"kind":"cli","command":"workspace","subcommand":"focus","cwd":"/repo","params":{"checkout_id":"\#(checkoutID.uuidString)","member_id":"\#(memberID.uuidString)"}}"#
+        #expect(try AlasCLIRequest.decode(from: Data(focus.utf8)).command == .workspace(.focus(checkoutID: checkoutID, memberID: memberID)))
+    }
+
     @Test func rejectsInvalidSessionOrchestrationRequests() throws {
         for invalid in [
             #"{"v":1,"kind":"cli","command":"session_list","session_id":"s1"}"#,

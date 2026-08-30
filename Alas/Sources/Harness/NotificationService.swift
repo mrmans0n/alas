@@ -33,6 +33,12 @@ final class NotificationService {
         center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
+    func setup(onContextClick: @escaping (NotificationClickContext) -> Void) {
+        center.delegate = delegate
+        delegate.onContextClick = onContextClick
+        center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    }
+
     func setEnabled(_ on: Bool) { enabled = on }
 
     func playAwaitingPing() {
@@ -40,10 +46,12 @@ final class NotificationService {
     }
 
     func notifyHarnessAwaiting(agent: AgentKind, body: String?,
-                               projectId: String, worktreeId: String, sessionId: String) {
+                               projectId: String, worktreeId: String, sessionId: String,
+                               owner: SessionOwnerID? = nil) {
         let content = buildContent(agent: agent, body: body ?? "Session is waiting for you.",
                                    title: "\(agent.displayName) needs input",
-                                   projectId: projectId, worktreeId: worktreeId, sessionId: sessionId)
+                                   projectId: projectId, worktreeId: worktreeId, sessionId: sessionId,
+                                   owner: owner)
         let req = UNNotificationRequest(identifier: "\(sessionId)-awaiting", content: content, trigger: nil)
         notificationAdder(req)
     }
@@ -107,16 +115,35 @@ final class NotificationService {
     }
 
     private func buildContent(agent: AgentKind, body: String, title: String,
-                              projectId: String, worktreeId: String, sessionId: String) -> UNMutableNotificationContent {
+                              projectId: String, worktreeId: String, sessionId: String,
+                              owner: SessionOwnerID? = nil) -> UNMutableNotificationContent {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
         content.sound = .default
-        content.userInfo = [
+        var userInfo: [String: Any] = [
             "projectId": projectId,
             "worktreeId": worktreeId,
             "sessionId": sessionId
         ]
+        if let owner {
+            switch owner {
+            case .worktree(let id):
+                userInfo["sessionOwnerKind"] = "worktree"
+                userInfo["sessionOwnerWorktreeId"] = id
+            case .workspaceCheckout(let id, let location):
+                userInfo["sessionOwnerKind"] = "workspaceCheckout"
+                userInfo["sessionOwnerCheckoutId"] = id.uuidString
+                switch location.normalized {
+                case .local:
+                    userInfo["sessionOwnerLocationKind"] = "local"
+                case .ssh(let destination):
+                    userInfo["sessionOwnerLocationKind"] = "ssh"
+                    userInfo["sessionOwnerLocationDestination"] = destination
+                }
+            }
+        }
+        content.userInfo = userInfo
         if let attachment = makeLogoAttachment(for: agent) {
             content.attachments = [attachment]
         }
