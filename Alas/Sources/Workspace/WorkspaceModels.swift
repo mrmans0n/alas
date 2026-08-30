@@ -351,21 +351,106 @@ struct WorkspaceDiagnostic: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
-struct WorkspaceWorkItemSnapshot: Codable, Equatable, Identifiable, Sendable {
+struct WorkItemSnapshot: Codable, Equatable, Identifiable, Sendable {
     var id: UUID
-    var title: String
-    var providerID: String?
+    var snapshot: IssueSnapshot
+    var lastGoodSnapshot: IssueSnapshot
     var hostingMemberID: UUID?
     var capturedAt: Date
 
-    init(id: UUID = UUID(), title: String, providerID: String? = nil, hostingMemberID: UUID? = nil, capturedAt: Date = .now) {
+    var contentOrigin: IssueContentOrigin { snapshot.contentOrigin }
+
+    init(id: UUID = UUID(), snapshot: IssueSnapshot, lastGoodSnapshot: IssueSnapshot? = nil, hostingMemberID: UUID? = nil, capturedAt: Date? = nil) {
         self.id = id
-        self.title = title
-        self.providerID = providerID
+        self.snapshot = snapshot
+        self.lastGoodSnapshot = lastGoodSnapshot ?? snapshot
         self.hostingMemberID = hostingMemberID
+        self.capturedAt = capturedAt ?? snapshot.capturedAt
+    }
+
+    init(id: UUID = UUID(), title: String, providerID: String? = nil, hostingMemberID: UUID? = nil, capturedAt: Date = .now) {
+        let provider = providerID.map(IssueProviderID.init(rawValue:)) ?? .manual
+        let origin: IssueContentOrigin = provider == .manual ? .manual : .provider
+        let snapshot = IssueSnapshot(
+            identity: .init(providerID: provider, stableID: "\(provider.rawValue):\(title)"),
+            canonicalURL: URL(string: "about:blank")!,
+            providerLabel: provider == .manual ? "Manual" : provider.rawValue,
+            displayReference: nil,
+            repositoryLocator: nil,
+            title: title,
+            body: "",
+            state: .unknown,
+            labels: [],
+            assignees: [],
+            providerUpdatedAt: nil,
+            capturedAt: capturedAt,
+            refreshError: nil,
+            contentOrigin: origin,
+            isEditable: origin == .manual,
+            isRefreshable: origin == .provider
+        )
+        self.init(id: id, snapshot: snapshot, hostingMemberID: hostingMemberID, capturedAt: capturedAt)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, snapshot, lastGoodSnapshot, hostingMemberID, capturedAt
+        case title, providerID
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedID = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        let decodedHostingMemberID = try container.decodeIfPresent(UUID.self, forKey: .hostingMemberID)
+        if let decoded = try container.decodeIfPresent(IssueSnapshot.self, forKey: .snapshot) {
+            id = decodedID
+            snapshot = decoded
+            lastGoodSnapshot = try container.decodeIfPresent(IssueSnapshot.self, forKey: .lastGoodSnapshot) ?? decoded
+            hostingMemberID = decodedHostingMemberID
+            capturedAt = try container.decodeIfPresent(Date.self, forKey: .capturedAt) ?? decoded.capturedAt
+            return
+        }
+
+        let title = try container.decodeIfPresent(String.self, forKey: .title) ?? "Untitled Work Item"
+        let providerID = try container.decodeIfPresent(String.self, forKey: .providerID)
+        let capturedAt = try container.decodeIfPresent(Date.self, forKey: .capturedAt) ?? .distantPast
+        let provider = providerID.map(IssueProviderID.init(rawValue:)) ?? .manual
+        let origin: IssueContentOrigin = provider == .manual ? .manual : .provider
+        let legacySnapshot = IssueSnapshot(
+            identity: .init(providerID: provider, stableID: "\(provider.rawValue):\(title)"),
+            canonicalURL: URL(string: "about:blank")!,
+            providerLabel: provider == .manual ? "Manual" : provider.rawValue,
+            displayReference: nil,
+            repositoryLocator: nil,
+            title: title,
+            body: "",
+            state: .unknown,
+            labels: [],
+            assignees: [],
+            providerUpdatedAt: nil,
+            capturedAt: capturedAt,
+            refreshError: nil,
+            contentOrigin: origin,
+            isEditable: origin == .manual,
+            isRefreshable: origin == .provider
+        )
+        id = decodedID
+        snapshot = legacySnapshot
+        lastGoodSnapshot = legacySnapshot
+        hostingMemberID = decodedHostingMemberID
         self.capturedAt = capturedAt
     }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(snapshot, forKey: .snapshot)
+        try container.encode(lastGoodSnapshot, forKey: .lastGoodSnapshot)
+        try container.encodeIfPresent(hostingMemberID, forKey: .hostingMemberID)
+        try container.encode(capturedAt, forKey: .capturedAt)
+    }
 }
+
+typealias WorkspaceWorkItemSnapshot = WorkItemSnapshot
 
 struct WorkspaceCheckoutConfigurationSnapshot: Codable, Equatable, Sendable {
     var capturedAt: Date
