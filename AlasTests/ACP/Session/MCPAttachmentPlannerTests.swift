@@ -254,6 +254,29 @@ struct MCPAttachmentPlannerTests {
         #expect(result.statuses.first?.id == "member-a:before")
     }
 
+    @Test("unavailable frozen members are diagnosed without retargeting their attachment")
+    func unavailableFrozenMemberIsNotAttached() {
+        let frozen = WorkspaceMCPServerDescriptor(
+            id: "member-a:server",
+            server: .stdio(name: "member server", command: "member-server"),
+            projectDirectory: "/project-a",
+            worktreeDirectory: "/checkout/a",
+            checkoutRoot: "/checkout"
+        )
+        let result = MCPAttachmentPlanner.plan(.init(
+            configuredServers: [.stdio(name: "live", command: "live-server")],
+            projectDirectory: "/project-b",
+            worktreeDirectory: "/checkout/b",
+            environment: [:],
+            capabilities: .init(),
+            frozenServerDescriptors: [frozen],
+            unavailableFrozenDescriptorIDs: ["member-a:server"]
+        ))
+
+        #expect(result.wireServers.isEmpty)
+        #expect(result.statuses.first?.disposition == .skipped(.unavailableMember))
+    }
+
     private func plan(
         _ servers: [ProjectMCPServer],
         environment: [String: String] = [:],

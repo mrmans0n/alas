@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import Alas
 
@@ -119,5 +120,26 @@ struct BuiltInAlasMCPTests {
             worktreePath: "/repos/proj/wt", sessionId: "s2",
             parentSessionId: "s1"))
         #expect(child.isDelegated == true)
+    }
+
+    @Test("checkout context is an allow-listed payload")
+    func checkoutContextContainsOnlyIdentityRootAndMemberAvailability() throws {
+        let checkoutID = UUID()
+        let context = BuiltInAlasMCP.WorkspaceContext(
+            checkoutID: checkoutID,
+            rootPath: "/checkout",
+            members: [.init(id: UUID(), availability: .available)]
+        )
+        let injection = try #require(BuiltInAlasMCP.injection(
+            enabled: true, configuredServers: [], binaryPath: "/bin/alas", socketPath: "/tmp/s.sock",
+            worktreePath: "/checkout", sessionId: "s", workspaceContext: context
+        ))
+        guard case let .stdio(_, _, _, environment) = injection.server,
+              let value = environment.first(where: { $0.name == "ALAS_WORKSPACE_CONTEXT" })?.value,
+              let data = value.data(using: .utf8)
+        else { Issue.record("Expected checkout context"); return }
+        #expect(try JSONDecoder().decode(BuiltInAlasMCP.WorkspaceContext.self, from: data) == context)
+        #expect(value.contains("script") == false)
+        #expect(value.contains("secret") == false)
     }
 }

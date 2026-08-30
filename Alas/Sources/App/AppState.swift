@@ -1266,6 +1266,7 @@ final class AppState {
         // one close/kill per live checkout-owned leaf.
         terminal.stopSessions(owner: owner)
         tabs.archive(owner: owner)
+        disposeACPManager(owner: owner)
     }
 
     /// Opens a terminal in the checkout root with the startup script frozen
@@ -3394,7 +3395,7 @@ final class AppState {
     private func worktreeIdForLiveACPSession(_ sessionId: String) -> String? {
         acpManagers.first { _, manager in
             manager.liveSession(for: sessionId) != nil
-        }?.key
+        }?.key.worktreeID
     }
 
     /// Linear scan of persisted terminal tabs for the (projectId, worktreeId)
@@ -3477,9 +3478,10 @@ final class AppState {
                 },
                 sessionLocation: { [weak self] sessionId in
                     guard let self,
-                          let (worktreeId, manager) = self.acpManagers.first(where: { _, manager in
+                          let (owner, manager) = self.acpManagers.first(where: { _, manager in
                               manager.liveSession(for: sessionId) != nil
                           }),
+                          let worktreeId = owner.worktreeID,
                           let worktree = self.worktree(withId: worktreeId)
                     else { return nil }
                     return .init(
@@ -3527,9 +3529,10 @@ final class AppState {
             sessionWorktreeId: sessionWorktreeLookup,
             resolveACPSessionOrigin: { [weak self] sessionId in
                 guard let self,
-                      let (worktreeId, manager) = self.acpManagers.first(where: { _, manager in
+                      let (owner, manager) = self.acpManagers.first(where: { _, manager in
                           manager.liveSession(for: sessionId) != nil
                       }),
+                      let worktreeId = owner.worktreeID,
                       let worktree = self.worktree(withId: worktreeId)
                 else { return nil }
                 return ACPOrchestrationSessionOrigin(
@@ -4846,7 +4849,7 @@ final class AppState {
     /// tears down the whole worktree's manager — this leaves the
     /// manager (and any sibling sessions) running.
     private func cleanupACPSession(worktreeId: String, sessionId: String) {
-        guard let manager = acpManagers[worktreeId] else { return }
+        guard let manager = acpManagers[.worktree(worktreeId)] else { return }
         // Flush any in-flight debounced draft write for this session
         // before the tab goes away. The manager itself stays alive
         // (other tabs may share it), so the global flush from
@@ -6328,9 +6331,11 @@ final class AppState {
 
     // MARK: - ACP
 
-    /// Per-worktree ACP session managers, lazily created on first access.
+    /// ACP managers are keyed by their typed durable owner. Worktree keys stay
+    /// source-compatible through the accessors below; checkout UUID/location
+    /// pairs cannot collide with them or with each other.
     @ObservationIgnored
-    private var acpManagers: [String: ACPSessionManager] = [:]
+    private var acpManagers: [SessionOwnerID: ACPSessionManager] = [:]
 
     @ObservationIgnored
     private let acpOrchestrationPersistence = ACPOrchestrationPersistence()
@@ -6394,13 +6399,14 @@ final class AppState {
     /// Does not create a new manager — use `acpManager(for:)` when lazy
     /// creation is acceptable.
     func acpManager(forWorktreeId id: String) -> ACPSessionManager? {
-        acpManagers[id]
+        acpManagers[.worktree(id)]
     }
 
     /// Returns (or lazily creates) the ACP session manager for the given worktree.
     /// Store opening and migration happen lazily on the persistence actor.
     func acpManager(for worktree: Worktree) -> ACPSessionManager? {
-        if let existing = acpManagers[worktree.id] { return existing }
+        let owner = SessionOwnerID.worktree(worktree.id)
+        if let existing = acpManagers[owner] { return existing }
         let dbURL = Paths.acpSessionsDB(forWorktreeId: worktree.id)
         let persistence = ACPSessionPersistence(path: dbURL.path)
         let mgr = ACPSessionManager(
@@ -6439,7 +6445,7 @@ final class AppState {
             },
             onDelegatedMessageAvailable: { [weak self] sessionId in
                 Task { @MainActor [weak self] in
-                    guard let self, let manager = self.acpManagers[worktree.id] else { return }
+                    guard let self, let manager = self.acpManagers[owner] else { return }
                     await self.deliverPendingDelegatedMessages(to: sessionId, manager: manager)
                 }
             },
@@ -6635,12 +6641,95 @@ final class AppState {
             }
             return (adapterState, configOutcome, userServerNames, skippedServerStatuses)
         }
-        acpManagers[worktree.id] = mgr
+        acpManagers[owner] = mgr
         acpHarnessBridge.attach(manager: mgr)
         #if DEBUG
         memoryDiagnostics.attach(manager: mgr)
         #endif
         return mgr
+    }
+
+    enum WorkspaceACPManagerResolution {
+        case ready(ACPSessionManager)
+        /// Keep persisted tabs/history intact and wait for an explicit later
+        /// resume rather than constructing a session against a guessed root.
+        case pendingRootOrLocation
+    }
+
+    /// Returns a checkout-owned ACP manager without consulting Repository
+    /// Focus. A missing root/location is intentionally non-destructive: UI
+    /// restoration can retain the tab as pending until the checkout returns.
+    func workspaceACPManager(for checkout: WorkspaceCheckout) async -> WorkspaceACPManagerResolution {
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+        if let existing = acpManagers[owner] { return .ready(existing) }
+        switch checkout.executionLocation.normalized {
+        case .local:
+            guard FileManager.default.fileExists(atPath: checkout.rootPath) else {
+                return .pendingRootOrLocation
+            }
+        case .ssh(let destination):
+            guard !destination.isEmpty else { return .pendingRootOrLocation }
+            guard let result = try? await WorkspaceRemoteTransport().run(
+                host: destination,
+                cwd: checkout.rootPath,
+                command: "pwd"
+            ), result.exitCode == 0 else {
+                return .pendingRootOrLocation
+            }
+        }
+
+        let dbURL = Paths.acpSessionsDB(for: owner)
+        let manager = ACPSessionManager(
+            worktreeId: owner.storageKey,
+            worktreePath: checkout.rootPath,
+            owner: owner,
+            persistence: ACPSessionPersistence(path: dbURL.path),
+            instanceId: instanceId,
+            pid: Int64(ProcessInfo.processInfo.processIdentifier),
+            hydratorPath: dbURL.path,
+            brokerServiceFactory: {
+                let resourceURL = Bundle.main.resourceURL ?? Bundle.main.bundleURL
+                return try await LocalACPBrokerServicePool.shared.service(resourceURL: resourceURL)
+            },
+            builtInMCPProvider: { [weak self] worktreePath, sessionId, _ in
+                guard let self,
+                      let binaryPath = (try? TerminalCLIInjection.installExecutables())?
+                          .appendingPathComponent(TerminalCLIInjection.executableName).path
+                else { return nil }
+                let current = self.workspacesManager.checkout(id: checkout.id) ?? checkout
+                let configuredServers = current.configurationSnapshot?.members.values.flatMap { $0.mcpServers.map(\.server) } ?? []
+                let context = BuiltInAlasMCP.WorkspaceContext(
+                    checkoutID: current.id,
+                    rootPath: current.rootPath,
+                    members: current.members.map { .init(id: $0.id, availability: $0.availability) }
+                )
+                return BuiltInAlasMCP.injection(
+                    enabled: self.config.harness.exposeAlasMCP,
+                    configuredServers: configuredServers,
+                    binaryPath: binaryPath,
+                    socketPath: self.harness.socketServer.socketPath,
+                    worktreePath: worktreePath,
+                    sessionId: sessionId,
+                    workspaceContext: context
+                )
+            },
+            frozenMCPAttachmentProvider: { [weak self] in
+                let current = self?.workspacesManager.checkout(id: checkout.id) ?? checkout
+                guard let frozenConfiguration = current.configurationSnapshot else { return nil }
+                let unavailableMemberIDs = Set(current.members.filter { $0.availability != .available }.map(\.workspaceMemberID.uuidString))
+                let descriptors = frozenConfiguration.members.values.flatMap(\.mcpServers)
+                let unavailableDescriptors = Set(descriptors.compactMap { descriptor in
+                    unavailableMemberIDs.contains(where: { descriptor.id.hasPrefix($0 + ":") }) ? descriptor.id : nil
+                })
+                return (descriptors, unavailableDescriptors)
+            }
+        )
+        acpManagers[owner] = manager
+        acpHarnessBridge.attach(manager: manager)
+        #if DEBUG
+        memoryDiagnostics.attach(manager: manager)
+        #endif
+        return .ready(manager)
     }
 
     /// Adds `.pi/` to this worktree's `.git/info/exclude` after a managed
@@ -6709,15 +6798,19 @@ final class AppState {
     /// loops would keep the agent + permission / file handlers alive
     /// after the UI was torn down.
     func disposeACPManager(for worktreeId: String) {
-        guard let manager = acpManagers.removeValue(forKey: worktreeId) else { return }
+        disposeACPManager(owner: .worktree(worktreeId))
+    }
+
+    private func disposeACPManager(owner: SessionOwnerID) {
+        guard let manager = acpManagers.removeValue(forKey: owner) else { return }
         // Flush any pending debounced draft writes before tearing the
         // manager down — otherwise the last ~300ms of typing in any
         // composer for this worktree never reaches SQLite.
         manager.flushPendingDraftWrites()
         #if DEBUG
-        memoryDiagnostics.detach(worktreeId: worktreeId)
+        memoryDiagnostics.detach(worktreeId: owner.storageKey)
         #endif
-        acpHarnessBridge.detach(worktreeId: worktreeId)
+        acpHarnessBridge.detach(worktreeId: owner.storageKey)
         let sessionIds = Array(manager.runners.keys)
         // Synchronously cancel the runner's async loops so they stop
         // pumping the agent's stdout into our handlers immediately —
@@ -6758,6 +6851,43 @@ final class AppState {
         }
         let state = ACPSessionTabState(sessionId: session.id, title: session.title)
         tabs.append(acpSession: state, to: worktree.id)
+    }
+
+    /// Opens a checkout-owned shared ACP tab. This is intentionally separate
+    /// from the selected-worktree entry point so Repository Focus cannot
+    /// retarget the session or its persisted database.
+    @discardableResult
+    func openWorkspaceCheckoutACPSession(
+        checkout: WorkspaceCheckout,
+        agentID: String,
+        initialPrompt: String? = nil
+    ) async -> ACPSessionTabState? {
+        guard config.workspacesEnabled, workspacesManager.canMutate else { return nil }
+        guard case let .ready(manager) = await workspaceACPManager(for: checkout) else { return nil }
+        let session = manager.createSession(agentId: agentID, autoRunDefault: config.harness.acpAutoRunByDefault)
+        if let initialPrompt, !initialPrompt.isEmpty {
+            manager.persistComposerDraft(.init(segments: [.text(initialPrompt)]), for: session)
+        }
+        let state = ACPSessionTabState(sessionId: session.id, title: session.title)
+        tabs.append(acpSession: state, to: SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation))
+        return state
+    }
+
+    /// Restores saved checkout-owned ACP tabs without creating a replacement
+    /// session. If the checkout root or location is unavailable, the tabs stay
+    /// persisted and visibly pending for a later explicit restore.
+    @discardableResult
+    func restoreWorkspaceCheckoutACPSessions(_ checkout: WorkspaceCheckout) async -> Bool {
+        guard config.workspacesEnabled, workspacesManager.canMutate else { return false }
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+        tabs.load(owner: owner, restoringActiveTabs: true)
+        guard case let .ready(manager) = await workspaceACPManager(for: checkout) else { return false }
+        for tab in tabs.tabs(for: owner) {
+            guard case let .acpSession(state) = tab else { continue }
+            guard manager.placeholderSession(id: state.sessionId) != nil else { continue }
+            await manager.hydrateIfNeeded(id: state.sessionId)
+        }
+        return true
     }
 
     func startACPSession(

@@ -42,6 +42,13 @@ final class ACPSessionManager: ObservableObject {
     ) throws -> ACPConnection
     typealias ACPBrokerServiceFactory = @MainActor () async throws -> ACPBrokerServicing
     typealias MCPProjectContextProvider = @MainActor () -> MCPProjectContext?
+    /// Checkout sessions provide their descriptors from the immutable checkout
+    /// snapshot. The set records unavailable snapshot members so reconnecting
+    /// never substitutes the current Repository Focus.
+    typealias FrozenMCPAttachmentProvider = @MainActor () -> (
+        descriptors: [WorkspaceMCPServerDescriptor],
+        unavailableDescriptorIDs: Set<String>
+    )?
     typealias BuiltInMCPProvider = @MainActor (
         _ worktreePath: String,
         _ sessionId: ACPSession.ID,
@@ -78,6 +85,7 @@ final class ACPSessionManager: ObservableObject {
     let pid: Int64
     let worktreeId: String
     let worktreePath: String
+    let owner: SessionOwnerID
     let persistence: ACPSessionPersistence
     let changeNotifier: ACPChangeNotifier
     private let delegatedMessageNotifier: ACPChangeNotifier
@@ -93,6 +101,7 @@ final class ACPSessionManager: ObservableObject {
     private let onInputAwaiting: ((ACPSession, ACPUserInputRequest) -> Void)?
     private let onDelegatedMessageAvailable: ((ACPSession.ID) -> Void)?
     private let mcpProjectContextProvider: MCPProjectContextProvider?
+    private let frozenMCPAttachmentProvider: FrozenMCPAttachmentProvider?
     /// Builds the app-provided "alas" MCP server entry for a worktree path
     /// and local ACP session id,
     /// or nil when injection is disabled/unavailable. Fetched per attach so
@@ -456,7 +465,7 @@ final class ACPSessionManager: ObservableObject {
     private var attachingConnections: [ACPSession.ID: AttachingConnection] = [:]
     private var delegatedMessageWatchTokens: [ACPSession.ID: Int32] = [:]
 
-    init(worktreeId: String, worktreePath: String, store: ACPSessionStore? = nil,
+    init(worktreeId: String, worktreePath: String, owner: SessionOwnerID? = nil, store: ACPSessionStore? = nil,
          persistence: ACPSessionPersistence? = nil,
          instanceId: String = UUID().uuidString,
          pid: Int64 = Int64(ProcessInfo.processInfo.processIdentifier),
@@ -474,6 +483,7 @@ final class ACPSessionManager: ObservableObject {
          brokerServiceFactory: ACPBrokerServiceFactory? = nil,
          mcpProjectContextProvider: MCPProjectContextProvider? = nil,
          builtInMCPProvider: BuiltInMCPProvider? = nil,
+         frozenMCPAttachmentProvider: FrozenMCPAttachmentProvider? = nil,
          isBuiltInMCPRegistered: (@MainActor (String) -> Bool)? = nil,
          clearMCPRegistration: (@MainActor (String) -> Void)? = nil,
          onSessionEnded: (@MainActor (ACPSession.ID) -> Void)? = nil,
@@ -485,8 +495,10 @@ final class ACPSessionManager: ObservableObject {
         let resolvedPersistence = persistence ?? ACPSessionPersistence(path: store!.path)
         self.instanceId = instanceId
         self.pid = pid
-        self.worktreeId = worktreeId
+        let resolvedOwner = owner ?? .worktree(worktreeId)
+        self.worktreeId = resolvedOwner.storageKey
         self.worktreePath = worktreePath
+        self.owner = resolvedOwner
         self.persistence = resolvedPersistence
         self.onDirtyCheck = onDirtyCheck
         self.onLiveBufferRead = onLiveBufferRead
@@ -494,6 +506,7 @@ final class ACPSessionManager: ObservableObject {
         self.onInputAwaiting = onInputAwaiting
         self.onDelegatedMessageAvailable = onDelegatedMessageAvailable
         self.mcpProjectContextProvider = mcpProjectContextProvider
+        self.frozenMCPAttachmentProvider = frozenMCPAttachmentProvider
         self.builtInMCPProvider = builtInMCPProvider
         self.isBuiltInMCPRegistered = isBuiltInMCPRegistered
         self.clearMCPRegistration = clearMCPRegistration
@@ -501,9 +514,9 @@ final class ACPSessionManager: ObservableObject {
         self.ggMCPProvider = ggMCPProvider
         self.ggPreambleProvider = ggPreambleProvider
         self.issuePreambleProvider = issuePreambleProvider
-        self.changeNotifier = changeNotifier ?? DarwinChangeNotifier(worktreeId: worktreeId)
+        self.changeNotifier = changeNotifier ?? DarwinChangeNotifier(worktreeId: resolvedOwner.storageKey)
         self.delegatedMessageNotifier = delegatedMessageNotifier
-            ?? DarwinChangeNotifier(worktreeId: worktreeId, channel: "delegated-inbox")
+            ?? DarwinChangeNotifier(worktreeId: resolvedOwner.storageKey, channel: "delegated-inbox")
         _ = hydratorPath
         self.setupEvaluator = setupEvaluator ?? { spec in
             let checker = ACPSetupChecker(env: ProcessInfo.processInfo.environment)
@@ -605,7 +618,7 @@ final class ACPSessionManager: ObservableObject {
         }
         let session = ACPSession(
             id: id, agentId: agentId, worktreeId: worktreeId,
-            title: row.title, titleSource: .placeholder, origin: row.origin,
+            title: row.title, owner: owner, titleSource: .placeholder, origin: row.origin,
             hydrationState: .ready)
         session.autoRunEnabled = autoRunDefault
         sessions[id] = session
@@ -698,6 +711,7 @@ final class ACPSessionManager: ObservableObject {
                 agentId: targetRow.agentId,
                 worktreeId: worktreeId,
                 title: targetRow.title,
+                owner: owner,
                 titleSource: targetRow.titleSource,
                 origin: targetRow.origin,
                 createdAt: Date(timeIntervalSince1970: TimeInterval(targetRow.createdAt)),
@@ -738,7 +752,7 @@ final class ACPSessionManager: ObservableObject {
         }
         let session = ACPSession(
             id: row.id, agentId: row.agentId, worktreeId: worktreeId,
-            title: row.title, titleSource: row.titleSource, origin: row.origin,
+            title: row.title, owner: owner, titleSource: row.titleSource, origin: row.origin,
             hydrationState: .loading,
             restoredFromPersistence: true)
         session.remoteSessionId = row.remoteSessionId
@@ -3204,12 +3218,15 @@ extension ACPSessionManager {
             session.adapterSupportsHTTPMCP = initialized.mcpCapabilities.http
             let projectContext = mcpProjectContextProvider?()
                 ?? MCPProjectContext(projectDirectory: worktreePath, configuredServers: [])
+            let frozenAttachments = frozenMCPAttachmentProvider?()
             let mcpPlan = MCPAttachmentPlanner.plan(.init(
                 configuredServers: projectContext.configuredServers,
                 projectDirectory: projectContext.projectDirectory,
                 worktreeDirectory: worktreePath,
                 environment: agentEnvironment,
-                capabilities: initialized.mcpCapabilities
+                capabilities: initialized.mcpCapabilities,
+                frozenServerDescriptors: frozenAttachments?.descriptors,
+                unavailableFrozenDescriptorIDs: frozenAttachments?.unavailableDescriptorIDs ?? []
             ))
             // The built-in alas server composes after planning (it is not
             // user configuration). It is local-only by construction — its

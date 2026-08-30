@@ -765,6 +765,13 @@ final class TabsManager {
     }
 
     @discardableResult
+    func append(acpSession state: ACPSessionTabState, to owner: SessionOwnerID) -> Tab {
+        let tab = Tab.acpSession(state)
+        append(tab, to: owner.storageKey)
+        return tab
+    }
+
+    @discardableResult
     func appendDiff(
         worktreeId: String,
         title: String,

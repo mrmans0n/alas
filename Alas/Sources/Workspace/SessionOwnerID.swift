@@ -10,6 +10,14 @@ enum SessionOwnerID: Hashable, Sendable {
     case worktree(String)
     case workspaceCheckout(UUID, ExecutionLocation)
 
+    /// Repository-specific compatibility APIs may only derive a target from a
+    /// real worktree owner. Checkout-owned shared sessions intentionally have
+    /// no implicit repository target.
+    var worktreeID: String? {
+        guard case let .worktree(id) = self else { return nil }
+        return id
+    }
+
     var storageKey: String {
         switch self {
         case .worktree(let id):
