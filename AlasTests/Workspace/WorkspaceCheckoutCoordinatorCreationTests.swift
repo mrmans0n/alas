@@ -38,6 +38,7 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
         let coordinator = WorkspaceCheckoutCoordinator(store: store, git: git, scripts: NoopWorkspaceScriptRunner())
 
         _ = try await coordinator.create(workspace: workspace, plan: plan)
+        await coordinator.awaitCreationCompletion(checkoutID: checkoutID)
 
         #expect(await git.sawCompletePersistedPlan)
     }
@@ -51,12 +52,14 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
         let coordinator = WorkspaceCheckoutCoordinator(store: store, git: git, scripts: NoopWorkspaceScriptRunner(), projectMutationGate: ProjectMutationGate())
 
         let checkout = try await coordinator.create(workspace: fixture.workspace, plan: fixture.plan)
+        await coordinator.awaitCreationCompletion(checkoutID: checkout.id)
 
         #expect(await git.maximumConcurrentPreparations <= 4)
         #expect(await git.createdProjectIDs.count == 4)
-        #expect(checkout.members.first?.checkpoint == .failed)
-        #expect(checkout.members.dropFirst().allSatisfy { $0.checkpoint == .setupComplete })
-        #expect(checkout.members.dropFirst().allSatisfy { $0.gitLineageID == "lineage-\($0.projectID)" })
+        let completed = await store.checkout(id: checkout.id)
+        #expect(completed?.members.first?.checkpoint == .failed)
+        #expect(completed?.members.dropFirst().allSatisfy { $0.checkpoint == .setupComplete } == true)
+        #expect(completed?.members.dropFirst().allSatisfy { $0.gitLineageID == "lineage-\($0.projectID)" } == true)
     }
 
     @Test func serializesSameProjectAndPassesTheExactFrozenIntent() async throws {
@@ -73,6 +76,7 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
         let coordinator = WorkspaceCheckoutCoordinator(store: WorkspaceStore(url: url), git: git, scripts: NoopWorkspaceScriptRunner(), projectMutationGate: ProjectMutationGate())
 
         _ = try await coordinator.create(workspace: workspace, plan: plan)
+        await coordinator.awaitCreationCompletion(checkoutID: plan.checkoutID)
 
         #expect(await git.maximumConcurrentPreparations == 1)
         #expect(await git.intents == [.create(atCommit: "one"), .reuse(atCommit: "two")])

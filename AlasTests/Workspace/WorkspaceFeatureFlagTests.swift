@@ -75,7 +75,11 @@ struct WorkspaceFeatureFlagTests {
         let manager = WorkspacesManager(
             bridge: WorkspaceSpacePersistenceBridge(workspaceStore: WorkspaceStore(url: url))
         )
-        let state = AppState(store: MemoryStore(), workspacesManager: manager)
+        let state = AppState(
+            store: MemoryStore(),
+            persistenceErrorHandler: { _, _ in },
+            workspacesManager: manager
+        )
 
         await state.setWorkspacesEnabled(true)
 
@@ -97,7 +101,12 @@ struct WorkspaceFeatureFlagTests {
         let legacySpaces = SpacesFile(activeSpaceId: "space", spaces: [
             SpaceConfig(id: "space", name: "Default", emoji: "folder", projectIds: ["project"], lastSelectedWorktreeId: nil, createdAt: .distantPast)
         ])
-        let persistence = RecordingSpacesStore(spacesFile: legacySpaces)
+        let persistence = RecordingSpacesStore(
+            spacesFile: legacySpaces,
+            projectsFile: ProjectsFile(projects: [
+                ProjectConfig(id: "project", name: "Project", path: "/repo", color: "#ffffff", addedAt: .distantPast)
+            ])
+        )
         let state = AppState(
             store: persistence,
             workspacesManager: WorkspacesManager(
@@ -118,18 +127,25 @@ struct WorkspaceFeatureFlagTests {
 
     private final class RecordingSpacesStore: PersistenceStoreProtocol, @unchecked Sendable {
         let spacesFile: SpacesFile
+        let projectsFile: ProjectsFile
         private(set) var spacesWriteCount = 0
+        private(set) var writtenSpaces: [SpacesFile] = []
 
-        init(spacesFile: SpacesFile) {
+        init(spacesFile: SpacesFile, projectsFile: ProjectsFile = ProjectsFile(projects: [])) {
             self.spacesFile = spacesFile
+            self.projectsFile = projectsFile
         }
 
         func write<T: Encodable>(_ value: T, to _: URL) throws {
-            if value is SpacesFile { spacesWriteCount += 1 }
+            if let spaces = value as? SpacesFile {
+                spacesWriteCount += 1
+                writtenSpaces.append(spaces)
+            }
         }
 
         func readIfExists<T: Decodable>(_ type: T.Type, from _: URL) throws -> T? {
             if type == SpacesFile.self { return spacesFile as? T }
+            if type == ProjectsFile.self { return projectsFile as? T }
             return nil
         }
     }
@@ -138,6 +154,69 @@ struct WorkspaceFeatureFlagTests {
         SpacesFile(activeSpaceId: "space", spaces: [
             SpaceConfig(id: "space", name: "Default", emoji: "folder", projectIds: [], lastSelectedWorktreeId: nil, createdAt: .distantPast)
         ])
+    }
+
+    @Test @MainActor func failedSpacePlacementDoesNotPersistOrLeaveInvisibleWorkspace() async throws {
+        let url = temporaryURL()
+        defer { removeWorkspaceFiles(near: url) }
+        let workspaceStore = WorkspaceStore(url: url)
+        let spaces = emptySpacesFile()
+        let manager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
+        _ = await manager.setEnabled(true, spacesFile: spaces)
+        let state = AppState(
+            store: ThrowingSpacesStore(spacesFile: spaces),
+            persistenceErrorHandler: { _, _ in },
+            restoreActiveTabsOnStartup: false,
+            workspacesManager: manager,
+            workspaceStore: workspaceStore
+        )
+        state.config.workspacesEnabled = true
+        let workspace = Workspace(name: "Release", executionLocation: .local, members: [])
+
+        await #expect(throws: WorkspaceDefinitionSaveError.spacePlacementFailed) {
+            try await state.saveWorkspaceDefinition(workspace)
+        }
+
+        #expect(state.spacesManager.activeSpace?.members == nil)
+        #expect(state.spacesManager.activeSpace?.projectIds == [])
+        #expect(await workspaceStore.load() == .missing)
+        #expect(state.workspacesManager.workspaces.isEmpty)
+    }
+
+    @Test @MainActor func failedWorkspacePersistenceRollsBackSuccessfulSpacePlacement() async throws {
+        let spaces = emptySpacesFile()
+        let managerURL = temporaryURL()
+        defer { removeWorkspaceFiles(near: managerURL) }
+        let manager = WorkspacesManager(
+            bridge: WorkspaceSpacePersistenceBridge(workspaceStore: WorkspaceStore(url: managerURL))
+        )
+        _ = await manager.setEnabled(true, spacesFile: spaces)
+        let persistence = RecordingSpacesStore(spacesFile: spaces)
+        let state = AppState(
+            store: persistence,
+            persistenceErrorHandler: { _, _ in },
+            restoreActiveTabsOnStartup: false,
+            workspacesManager: manager,
+            workspaceStore: WorkspaceStore(url: URL(fileURLWithPath: "/dev/null/workspaces.json"))
+        )
+        state.config.workspacesEnabled = true
+        let workspace = Workspace(name: "Release", executionLocation: .local, members: [])
+
+        await #expect(throws: WorkspaceDefinitionSaveError.workspacePersistenceFailed) {
+            try await state.saveWorkspaceDefinition(workspace)
+        }
+
+        #expect(persistence.spacesWriteCount == 2)
+        #expect(persistence.writtenSpaces.last == spaces)
+        #expect(state.spacesManager.file == spaces)
+        #expect(state.workspacesManager.workspaces.isEmpty)
+    }
+
+    private final class ThrowingSpacesStore: PersistenceStoreProtocol, @unchecked Sendable {
+        let spacesFile: SpacesFile
+        init(spacesFile: SpacesFile) { self.spacesFile = spacesFile }
+        func write<T: Encodable>(_ value: T, to _: URL) throws { if value is SpacesFile { throw NSError(domain: "test", code: 1) } }
+        func readIfExists<T: Decodable>(_ type: T.Type, from _: URL) throws -> T? { type == SpacesFile.self ? spacesFile as? T : nil }
     }
 
     private func temporaryURL() -> URL {
