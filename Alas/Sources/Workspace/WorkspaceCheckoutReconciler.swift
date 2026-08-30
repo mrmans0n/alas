@@ -48,6 +48,12 @@ struct WorkspaceCheckoutReconciliation: Equatable, Sendable {
 /// Concrete inspection uses read-only Git commands and existing transport;
 /// notably it reads an existing lineage marker rather than creating one.
 struct WorkspaceCheckoutObserver: WorkspaceCheckoutObserving {
+    private let remote: WorkspaceRemoteTransport
+
+    init(remote: WorkspaceRemoteTransport = .init()) {
+        self.remote = remote
+    }
+
     func observe(_ member: WorkspaceCheckoutMember, in checkout: WorkspaceCheckout) async -> WorkspaceCheckoutMemberObservation {
         guard let plan = member.plan,
               plan.checkoutMemberID == member.id,
@@ -66,7 +72,7 @@ struct WorkspaceCheckoutObserver: WorkspaceCheckoutObserving {
         case .ssh(let host):
             let path = SSHCommand.shellQuote(plan.destinationPath)
             let command = "p=\(path); d=$(git -C \"$p\" rev-parse --absolute-git-dir) || exit 1; f=\"$d/alas-worktree-lineage\"; test -s \"$f\" && head -n 1 \"$f\""
-            guard let result = try? await RemoteExec.run(host: host, cwd: nil, command: command) else {
+            guard let result = try? await remote.run(host: host, command: command) else {
                 return .unavailable("Could not inspect Workspace member on \(host).")
             }
             guard result.exitCode == 0 else { return .missing }

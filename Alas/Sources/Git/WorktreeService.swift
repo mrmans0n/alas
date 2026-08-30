@@ -546,7 +546,17 @@ struct WorktreeService {
         let result = try await Process.git(["worktree", "add", destination.path, branch], cwd: repoPath)
         guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
         var worktree = makeWorktree(destination: destination, branch: branch, projectId: projectId)
-        if !repoPath.isRemoteAlasPath {
+        if let host = RemoteHostRegistry.shared.host(forPath: repoPath.path) {
+            let lineage = try await RemoteExec.run(
+                host: host,
+                cwd: nil,
+                command: Self.remoteLineageIDCommand(path: destination.path)
+            )
+            guard lineage.exitCode == 0,
+                  let identifier = Self.normalizedLineageID(lineage.stdout)
+            else { throw WorktreeError.gitFailed("Could not record remote Workspace worktree lineage.") }
+            worktree.lineageID = identifier
+        } else {
             worktree.lineageID = Self.localLineageID(forWorktreeAt: destination)
         }
         return worktree
