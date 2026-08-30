@@ -109,7 +109,8 @@ struct WorkspaceCheckoutLifecycleTests {
             try await coordinator.forget(checkoutID: fixture.checkout.id)
         }
         try await coordinator.forget(checkoutID: fixture.checkout.id, confirmedPreserveArtifacts: true)
-        guard case .loaded(let state) = await fixture.store.load() else { Issue.record("Expected stored state") ; return }
+        guard case .loaded(let state) = await fixture.store.load() else { Issue.record("Expected stored state")
+        return }
         #expect(state.checkouts.contains(where: { $0.id == fixture.checkout.id }) == false)
     }
 
@@ -131,7 +132,9 @@ struct WorkspaceCheckoutLifecycleTests {
             let members = [member] + (1 ..< memberCount).map { index in
                 WorkspaceCheckoutMember(id: UUID(), workspaceMemberID: UUID(), projectID: "a-\(index)", fallbackProjectName: "A \(index)", fallbackRepositoryRoot: "/repo/a-\(index)", worktreePath: "/checkout/a-\(index)", gitLineageID: "lineage-a-\(index)", availability: .available, checkpoint: .setupComplete, cleanupOwnership: .init(worktreeCreated: true, branchOwnership: branchOwnership), plan: .init(checkoutMemberID: UUID(), projectID: "a-\(index)", sourceRepositoryPath: "/repo/a-\(index)", destinationPath: "/checkout/a-\(index)", baseReference: "main", baseCommit: "abc", branchIntent: .create(atCommit: "abc")))
             }
-            let normalized = members.map { member -> WorkspaceCheckoutMember in var copy = member; if copy.plan?.checkoutMemberID != copy.id { copy.plan?.checkoutMemberID = copy.id }; return copy }
+            let normalized = members.map { member -> WorkspaceCheckoutMember in var copy = member
+            if copy.plan?.checkoutMemberID != copy.id { copy.plan?.checkoutMemberID = copy.id }
+            return copy }
             let checkout = WorkspaceCheckout(workspaceID: UUID(), fallbackWorkspaceName: "Release", executionLocation: .local, branch: "feature", rootPath: "/checkout", operation: operation, members: normalized)
             try await store.checkpoint(.init(checkouts: [checkout]))
             return .init(store: store, checkout: checkout, member: member)
@@ -156,20 +159,28 @@ private actor FixtureLifecycle: WorkspaceCheckoutLifecycleOperating {
     let leftovers: [String]
     let failingMember: UUID?
     let branchRemoved: Bool
-    init(verification: WorkspaceCheckoutMemberObservation = .exactLineage("lineage-a"), preflight: WorktreeDeletePreflight = .init(reasons: [], submoduleLocalState: .none), leftovers: [String] = [], failingMember: UUID? = nil, branchRemoved: Bool = true) { self.verification = verification; self.preflight = preflight; self.leftovers = leftovers; self.failingMember = failingMember; self.branchRemoved = branchRemoved }
+    init(verification: WorkspaceCheckoutMemberObservation = .exactLineage("lineage-a"), preflight: WorktreeDeletePreflight = .init(reasons: [], submoduleLocalState: .none), leftovers: [String] = [], failingMember: UUID? = nil, branchRemoved: Bool = true) { self.verification = verification
+    self.preflight = preflight
+    self.leftovers = leftovers
+    self.failingMember = failingMember
+    self.branchRemoved = branchRemoved }
     func deletePreflight(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> WorktreeDeletePreflight { preflight }
     func inspectRoot(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutCleanupRootObservation { .init(isContained: true, leftovers: leftovers) }
     func verifyCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutMemberObservation {
         if verification == .exactLineage("lineage-a") { return .exactLineage(plan.expectedLineageID) }
         return verification
     }
-    func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan) async throws { if failingMember == plan.memberID { throw TestLifecycleError.failed }; removedMembers.append(plan.memberID) }
-    func deleteMergedBranch(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool { deletedBranches.append(plan.memberID); return branchRemoved }
+    func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan) async throws { if failingMember == plan.memberID { throw TestLifecycleError.failed }
+    removedMembers.append(plan.memberID) }
+    func deleteMergedBranch(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool { deletedBranches.append(plan.memberID)
+    return branchRemoved }
 }
 private actor PersistedCleanupLifecycle: WorkspaceCheckoutLifecycleOperating {
-    let store: WorkspaceStore; let checkoutID: UUID
+    let store: WorkspaceStore
+    let checkoutID: UUID
     private(set) var sawPersistedCleanupPlan = false
-    init(store: WorkspaceStore, checkoutID: UUID) { self.store = store; self.checkoutID = checkoutID }
+    init(store: WorkspaceStore, checkoutID: UUID) { self.store = store
+    self.checkoutID = checkoutID }
     func deletePreflight(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> WorktreeDeletePreflight { .init(reasons: [], submoduleLocalState: .none) }
     func inspectRoot(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutCleanupRootObservation { .init(isContained: true, leftovers: []) }
     func verifyCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutMemberObservation { .exactLineage("lineage-a") }

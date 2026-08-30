@@ -146,7 +146,9 @@ struct WorkspaceCheckoutRemoteInvocationTests {
 }
 
 private actor RecordingWorkspaceSSHRunner {
-    struct Call: Sendable { let executable: String; let args: [String]; let timeout: TimeInterval }
+    struct Call: Sendable { let executable: String
+    let args: [String]
+    let timeout: TimeInterval }
     private var results: [ProcessResult]
     private(set) var calls: [Call] = []
 

@@ -137,7 +137,8 @@ struct BuiltInAlasMCPTests {
         guard case let .stdio(_, _, _, environment) = injection.server,
               let value = environment.first(where: { $0.name == "ALAS_WORKSPACE_CONTEXT" })?.value,
               let data = value.data(using: .utf8)
-        else { Issue.record("Expected checkout context"); return }
+        else { Issue.record("Expected checkout context")
+        return }
         #expect(try JSONDecoder().decode(BuiltInAlasMCP.WorkspaceContext.self, from: data) == context)
         #expect(value.contains("script") == false)
         #expect(value.contains("secret") == false)
