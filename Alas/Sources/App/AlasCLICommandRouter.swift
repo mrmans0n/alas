@@ -41,6 +41,9 @@ struct AlasCLICommandRouter {
     var sendDelegatedSessionMessage: (ACPOrchestrationSessionOrigin, ACPDelegatedSessionMessageRequest) async -> AlasCLIResponse = { _, _ in
         .error("Session orchestration is not available yet.")
     }
+    var workspaceCommand: (AlasCLIRequest.WorkspaceCommand) async -> AlasCLIResponse = { _ in
+        .error("Workspace automation is not available yet.")
+    }
     var activateApp: () -> Void
 
     private var service: AlasActionService {
@@ -72,6 +75,8 @@ struct AlasCLICommandRouter {
     func handle(_ request: AlasCLIRequest) async -> AlasCLIResponse {
         let service = self.service
         switch request.command {
+        case .workspace(let command):
+            return await workspaceCommand(command)
         case .sessionList, .sessionNew, .sessionSend:
             guard let sessionId = request.sessionId,
                   let acpOrigin = resolveACPSessionOrigin(sessionId) else {
@@ -157,6 +162,8 @@ struct AlasCLICommandRouter {
             return await service.new(origin: origin, branch: branch, base: base)
         case .worktree(.delete(let target, let force, let keepBranch)):
             return await service.delete(target: target, projectWorktrees: projectWorktrees, force: force, keepBranch: keepBranch)
+        case .workspace:
+            preconditionFailure("Workspace commands are handled before generic origin resolution")
         case .review(.localChanges(let worktreeOverride)):
             switch service.reviewOrigin(origin: origin, override: worktreeOverride, projectWorktrees: projectWorktrees) {
             case .success(let reviewOrigin):

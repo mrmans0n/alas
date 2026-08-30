@@ -3577,6 +3577,11 @@ final class AppState {
                 projectId: projectId, worktreeId: worktreeId, sessionId: sessionId
             )
         }
+        harness.onContextClickThrough = { [weak self] context in
+            guard case .workspaceCheckout(let checkoutID, _) = context.owner else { return }
+            self?.selectWorkspaceCheckout(id: checkoutID)
+            NSApp.activate(ignoringOtherApps: true)
+        }
         // Symlink refresh runs from `reloadTabs()` instead of here —
         // `startHarness()` is called before the tab JSONs have been read,
         // so projectsManager.worktrees(...) would be empty.
@@ -3852,10 +3857,55 @@ final class AppState {
             sendDelegatedSessionMessage: { origin, request in
                 await orchestration.send(origin: origin, request: request)
             },
+            workspaceCommand: { [weak self] command in
+                guard let self else { return .error("Alas is not available.") }
+                return await self.cliWorkspace(command)
+            },
             activateApp: {
                 NSApp.activate(ignoringOtherApps: true)
             }
         )
+    }
+
+    private func cliWorkspace(_ command: AlasCLIRequest.WorkspaceCommand) async -> AlasCLIResponse {
+        let service = WorkspaceAutomationService(
+            store: workspaceStore,
+            isEnabled: { [weak self] in
+                guard let self else { return false }
+                return self.config.workspacesEnabled && self.workspacesManager.canMutate
+            },
+            selectCheckout: { [weak self] id in
+                self?.selectWorkspaceCheckout(id: id)
+            },
+            focusMember: { [weak self] checkoutID, memberID in
+                guard let self else { return }
+                self.selectWorkspaceCheckout(id: checkoutID)
+                self.focusWorkspaceCheckoutMember(id: memberID)
+            }
+        )
+        do {
+            switch command {
+            case .list:
+                return try jsonLine(await service.listCheckouts())
+            case .show(let checkoutID):
+                return try jsonLine(await service.showCheckout(id: checkoutID))
+            case .switch(let checkoutID):
+                try await service.selectCheckout(id: checkoutID)
+                return .ok
+            case .focus(let checkoutID, let memberID):
+                try await service.focusMember(checkoutID: checkoutID, memberID: memberID)
+                return .ok
+            }
+        } catch let error as WorkspaceAutomationError {
+            return .error("\(error.code): \(error.message)")
+        } catch {
+            return .error(error.localizedDescription)
+        }
+    }
+
+    private func jsonLine<T: Encodable>(_ value: T) throws -> AlasCLIResponse {
+        let data = try JSONEncoder.workspaceAutomation.encode(value)
+        return .text([String(data: data, encoding: .utf8) ?? "{}"])
     }
 
     private func cliNotify(
@@ -5513,6 +5563,23 @@ final class AppState {
             },
             statuses: { [statusCache] wt in
                 try await statusCache.statuses(forWorktreePath: wt.absolutePath)
+            },
+            workspaceCheckoutWorktrees: { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self, let checkout = self.selectedWorkspaceCheckout else { return [] }
+                    let resolved = self.workspaceMemberWorktreeIDs(checkout)
+                    return checkout.members.compactMap { member in
+                        guard let worktreeID = resolved[member.id],
+                              let worktree = self.worktree(withId: worktreeID)
+                        else { return nil }
+                        return SearchWorktree(
+                            id: worktree.id,
+                            projectId: worktree.projectId,
+                            displayName: worktree.branch,
+                            absolutePath: worktree.path
+                        )
+                    }
+                }
             },
             fileSearch: { query, wt in
                 try await fileSearchBackend.search(query: query, worktree: wt, limit: 50)

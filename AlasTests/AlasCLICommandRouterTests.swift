@@ -1895,6 +1895,31 @@ struct AlasCLICommandRouterTests {
         #expect(directory == .error("session commands require an originating ACP session"))
     }
 
+    @Test func workspaceCommandsRouteWithoutImplicitRepositoryFocus() async throws {
+        let checkoutID = UUID()
+        let memberID = UUID()
+        var commands: [AlasCLIRequest.WorkspaceCommand] = []
+        let router = AlasCLICommandRouter(
+            sessionWorktreeId: { _ in nil },
+            originatingWorktree: { _ in nil },
+            visibleWorktrees: { [] },
+            openRelativeFile: { _, _ in },
+            openExternalFile: { _, _ in },
+            workspaceCommand: { command in
+                commands.append(command)
+                return .text([#"{"version":1}"#])
+            },
+            activateApp: {}
+        )
+
+        let list = await router.handle(.init(version: 1, sessionId: nil, cwd: "/outside", command: .workspace(.list)))
+        let focus = await router.handle(.init(version: 1, sessionId: nil, cwd: "/outside", command: .workspace(.focus(checkoutID: checkoutID, memberID: memberID))))
+
+        #expect(list == .text([#"{"version":1}"#]))
+        #expect(focus == .text([#"{"version":1}"#]))
+        #expect(commands == [.list, .focus(checkoutID: checkoutID, memberID: memberID)])
+    }
+
     private static func router(
         origin: Worktree,
         visibleWorktrees: [Worktree],

@@ -48,7 +48,7 @@ pub fn env_from(get: impl Fn(&str) -> Option<String>) -> Result<McpEnv, String> 
 pub fn handle_line(
     line: &str,
     worktree_dir: &str,
-    mut dispatch: impl FnMut(&Command) -> Result<Response, TransportError>,
+    dispatch: impl FnMut(&Command) -> Result<Response, TransportError>,
 ) -> Option<Value> {
     handle_line_with_parent(line, worktree_dir, None, dispatch)
 }
@@ -301,6 +301,45 @@ pub fn tool_definitions() -> Vec<Value> {
                 }
             }
         }),
+        json!({
+            "name": "workspace_list",
+            "description": "List Workspace Checkouts visible in Alas as versioned JSON. This observes Workspace state only and never mutates checkout lifecycle.",
+            "inputSchema": { "type": "object", "properties": {} }
+        }),
+        json!({
+            "name": "workspace_show",
+            "description": "Show one Workspace Checkout by UUID as versioned JSON, including independent operation, health, member availability, and diagnostics.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "checkout_id": { "type": "string", "description": "Workspace Checkout UUID." }
+                },
+                "required": ["checkout_id"]
+            }
+        }),
+        json!({
+            "name": "workspace_switch",
+            "description": "Select one Workspace Checkout in Alas by UUID. This changes UI focus only; it does not create, repair, archive, or delete checkouts.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "checkout_id": { "type": "string", "description": "Workspace Checkout UUID." }
+                },
+                "required": ["checkout_id"]
+            }
+        }),
+        json!({
+            "name": "workspace_focus",
+            "description": "Focus a specific member inside a Workspace Checkout. The member UUID is required so repository-specific operations never use Repository Focus implicitly.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "checkout_id": { "type": "string", "description": "Workspace Checkout UUID." },
+                    "member_id": { "type": "string", "description": "Workspace Checkout member UUID." }
+                },
+                "required": ["checkout_id", "member_id"]
+            }
+        }),
     ]
 }
 
@@ -516,6 +555,17 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                 summary: optional_string(args, "summary"),
             })
         }
+        "workspace_list" => Ok(Command::WorkspaceList),
+        "workspace_show" => Ok(Command::WorkspaceShow {
+            checkout_id: required_uuid(args, "checkout_id")?,
+        }),
+        "workspace_switch" => Ok(Command::WorkspaceSwitch {
+            checkout_id: required_uuid(args, "checkout_id")?,
+        }),
+        "workspace_focus" => Ok(Command::WorkspaceFocus {
+            checkout_id: required_uuid(args, "checkout_id")?,
+            member_id: required_uuid(args, "member_id")?,
+        }),
         other => Err(format!("unknown tool: {other}")),
     }
 }
@@ -541,6 +591,28 @@ fn review_target(args: &Value) -> Result<Option<String>, String> {
 
 fn required_string(args: &Value, key: &str) -> Result<String, String> {
     optional_string(args, key).ok_or_else(|| format!("missing required argument '{key}'"))
+}
+
+fn required_uuid(args: &Value, key: &str) -> Result<String, String> {
+    let value = required_string(args, key)?;
+    if is_uuid(&value) {
+        Ok(value)
+    } else {
+        Err(format!("{key} must be a UUID"))
+    }
+}
+
+fn is_uuid(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    let hyphens = [8, 13, 18, 23];
+    bytes.len() == 36
+        && bytes.iter().enumerate().all(|(index, byte)| {
+            if hyphens.contains(&index) {
+                *byte == b'-'
+            } else {
+                byte.is_ascii_hexdigit()
+            }
+        })
 }
 
 fn optional_string(args: &Value, key: &str) -> Option<String> {
@@ -666,6 +738,10 @@ fn success_message(command: &Command) -> String {
         Command::SessionList => "No delegated sessions found.".into(),
         Command::SessionNew { .. } => "Delegated session creation accepted.".into(),
         Command::SessionSend { .. } => "Delegated prompt queued.".into(),
+        Command::WorkspaceList => "No Workspace Checkouts found.".into(),
+        Command::WorkspaceShow { .. } => "Workspace Checkout shown.".into(),
+        Command::WorkspaceSwitch { .. } => "Switched Alas to Workspace Checkout.".into(),
+        Command::WorkspaceFocus { .. } => "Focused Workspace Checkout member.".into(),
         Command::WtList | Command::Resolve => "OK".into(),
     }
 }
@@ -945,7 +1021,7 @@ mod tests {
         command_for_tool, dispatch, env_from, handle_line, http_response, is_initialize_message,
         parse_http_request, McpEnv, PROTOCOL_VERSION,
     };
-    use alas_client::Response;
+    use alas_client::{Command, Response};
     use serde_json::{json, Value};
 
     #[test]
@@ -1141,9 +1217,15 @@ mod tests {
                 "review_reply",
                 "review_resolve",
                 "review_comment_add",
-                "review_finish"
+                "review_finish",
+                "workspace_list",
+                "workspace_show",
+                "workspace_switch",
+                "workspace_focus"
             ]
         );
+        assert!(!names.contains(&"workspace_create"));
+        assert!(!names.contains(&"workspace_delete"));
         for tool in tools {
             assert!(tool["description"].as_str().unwrap().len() > 20);
             assert_eq!(tool["inputSchema"]["type"], json!("object"));
@@ -1151,6 +1233,30 @@ mod tests {
         let open_schema = &reply["result"]["tools"][0]["inputSchema"];
         assert!(open_schema.get("oneOf").is_none());
         assert!(open_schema.get("anyOf").is_none());
+    }
+
+    #[test]
+    fn workspace_tools_map_to_read_only_workspace_commands() {
+        let checkout = "7D064822-8491-4E33-BD74-355FD2AB3330";
+        let member = "C2476427-94B2-423F-A490-568775E8B309";
+
+        assert_eq!(
+            command_for_tool("workspace_list", &json!({}), "/wt").unwrap(),
+            Command::WorkspaceList
+        );
+        assert_eq!(
+            command_for_tool("workspace_show", &json!({ "checkout_id": checkout }), "/wt").unwrap(),
+            Command::WorkspaceShow { checkout_id: checkout.into() }
+        );
+        assert_eq!(
+            command_for_tool("workspace_switch", &json!({ "checkout_id": checkout }), "/wt").unwrap(),
+            Command::WorkspaceSwitch { checkout_id: checkout.into() }
+        );
+        assert_eq!(
+            command_for_tool("workspace_focus", &json!({ "checkout_id": checkout, "member_id": member }), "/wt").unwrap(),
+            Command::WorkspaceFocus { checkout_id: checkout.into(), member_id: member.into() }
+        );
+        assert!(command_for_tool("workspace_focus", &json!({ "checkout_id": checkout }), "/wt").is_err());
     }
 
     #[test]

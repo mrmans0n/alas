@@ -17,6 +17,7 @@ struct SearchEnvironment: Sendable {
     var allWorktrees: @Sendable () -> [SearchWorktree]
     var entries: @Sendable (SearchWorktree) async throws -> [FileIndex.Entry]
     var statuses: @Sendable (SearchWorktree) async throws -> [String: GitStatusBadge]
+    var workspaceCheckoutWorktrees: @Sendable () -> [SearchWorktree] = { [] }
     var fileSearch: @Sendable (String, SearchWorktree) async throws -> [FileSearchBackendResult]?
     var rankFiles: @Sendable (
         String, [FileSearchRankingSource]
@@ -192,6 +193,8 @@ final class SearchModel {
             } else {
                 targets = []
             }
+        case .workspaceCheckout:
+            targets = env.workspaceCheckoutWorktrees()
         case .allRepos:
             targets = env.allWorktrees()
         }

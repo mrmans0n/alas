@@ -41,6 +41,7 @@ struct AlasCLIRequest: Equatable {
         case openAt(path: String, line: Int, endLine: Int?)
         case notify(body: String, title: String?, level: AlasCLINotifyLevel)
         case worktree(WorktreeCommand)
+        case workspace(WorkspaceCommand)
         case review(ReviewCommand)
         case sessionList
         case sessionNew(prompt: String, agentID: String?, worktree: SessionWorktreeSelector)
@@ -53,6 +54,13 @@ struct AlasCLIRequest: Equatable {
         case `switch`(target: String)
         case new(branch: String, base: String?)
         case delete(target: String, force: Bool, keepBranch: Bool)
+    }
+
+    enum WorkspaceCommand: Equatable {
+        case list
+        case show(checkoutID: UUID)
+        case `switch`(checkoutID: UUID)
+        case focus(checkoutID: UUID, memberID: UUID)
     }
 
     enum ReviewCommand: Equatable {
@@ -100,6 +108,8 @@ struct AlasCLIRequest: Equatable {
         var base: String?
         var force: Bool?
         var keep_branch: Bool?
+        var checkout_id: String?
+        var member_id: String?
     }
 
     private struct ParamsEnvelope<P: Decodable>: Decodable {
@@ -171,6 +181,11 @@ struct AlasCLIRequest: Equatable {
         var prompt: String
     }
 
+    private struct WorkspaceParams: Decodable {
+        var checkout_id: String?
+        var member_id: String?
+    }
+
     /// Typed access to the `params` object new-style commands carry.
     /// Returns nil when `params` is absent or explicitly null (`Decodable`
     /// synthesis treats both the same way); throws `.malformed` when
@@ -209,6 +224,13 @@ struct AlasCLIRequest: Equatable {
                 throw AlasCLIRequestError.missingPaths
             }
             return paths
+        }
+
+        func requiredUUID(_ value: String?) throws -> UUID {
+            guard let raw = value?.nilIfBlank, let id = UUID(uuidString: raw) else {
+                throw AlasCLIRequestError.malformed
+            }
+            return id
         }
 
         let raw: Raw
@@ -282,6 +304,23 @@ struct AlasCLIRequest: Equatable {
                     target: try requiredNonEmpty(raw.target),
                     force: raw.force ?? false,
                     keepBranch: raw.keep_branch ?? false
+                ))
+            default:
+                throw AlasCLIRequestError.unsupportedCommand
+            }
+        case "workspace":
+            let params = try Self.decodeParamsIfPresent(WorkspaceParams.self, from: data)
+            switch raw.subcommand {
+            case "list":
+                command = .workspace(.list)
+            case "show":
+                command = .workspace(.show(checkoutID: try requiredUUID(params?.checkout_id ?? raw.checkout_id)))
+            case "switch":
+                command = .workspace(.switch(checkoutID: try requiredUUID(params?.checkout_id ?? raw.checkout_id)))
+            case "focus":
+                command = .workspace(.focus(
+                    checkoutID: try requiredUUID(params?.checkout_id ?? raw.checkout_id),
+                    memberID: try requiredUUID(params?.member_id ?? raw.member_id)
                 ))
             default:
                 throw AlasCLIRequestError.unsupportedCommand

@@ -64,7 +64,8 @@ struct SearchModelTests {
         entries: (@Sendable (SearchWorktree) async throws -> [FileIndex.Entry])? = nil,
         fileSearch: (@Sendable (String, SearchWorktree) async throws -> [FileSearchBackendResult]?)? = nil,
         rankFiles: (@Sendable (String, [FileSearchRankingSource]) async throws -> [FileSearchResult])? = nil,
-        contentSearch: (@Sendable (String, SearchContentOptions, [SearchWorktree]) -> AsyncThrowingStream<ContentSearchHit, Error>)? = nil
+        contentSearch: (@Sendable (String, SearchContentOptions, [SearchWorktree]) -> AsyncThrowingStream<ContentSearchHit, Error>)? = nil,
+        workspaceCheckoutWorktrees: (@Sendable () -> [SearchWorktree])? = nil
     ) -> SearchEnvironment {
         let ranker = FileSearchRanker()
         return SearchEnvironment(
@@ -72,6 +73,7 @@ struct SearchModelTests {
             allWorktrees: { worktrees },
             entries: entries ?? { wt in files[wt.id] ?? [] },
             statuses: { wt in statuses[wt.id] ?? [:] },
+            workspaceCheckoutWorktrees: workspaceCheckoutWorktrees ?? { [] },
             fileSearch: fileSearch ?? { _, _ in nil },
             rankFiles: rankFiles ?? { query, sources in
                 try await ranker.rank(query: query, sources: sources)
@@ -102,6 +104,7 @@ struct SearchModelTests {
             allWorktrees: { [] },
             entries: { _ in [] },
             statuses: { _ in [:] },
+            workspaceCheckoutWorktrees: { [] },
             fileSearch: { _, _ in nil },
             rankFiles: { [ranker = FileSearchRanker()] query, sources in
                 try await ranker.rank(query: query, sources: sources)
@@ -111,6 +114,42 @@ struct SearchModelTests {
         let model2 = SearchModel(environment: env)
         model2.open()
         #expect(model2.scope == .allRepos)
+    }
+
+    @Test func workspaceCheckoutScopeSearchesOnlyExplicitCheckoutMembersAndReportsPartialFailures() async {
+        let member = wt("member", projectId: "p1")
+        let outside = wt("outside", projectId: "p2")
+        let env = makeEnv(
+            worktrees: [member, outside],
+            entries: { wt in
+                if wt.id == "member" { throw CocoaError(.fileReadUnknown) }
+                return [.init(relativePath: "outside.swift", ext: "swift")]
+            },
+            rankFiles: { _, sources in
+                sources.flatMap { source in
+                    source.entries.map {
+                        FileSearchResult(
+                            worktreeId: source.worktreeId,
+                            projectId: source.projectId,
+                            relativePath: $0.relativePath,
+                            ext: $0.ext,
+                            statusBadge: nil,
+                            matchIndices: [],
+                            score: 1
+                        )
+                    }
+                }
+            },
+            workspaceCheckoutWorktrees: { [member] }
+        )
+        let model = SearchModel(environment: env)
+        model.open()
+        model.scope = SearchScope.workspaceCheckout
+        model.query = "swift"
+        await model.waitForIdle()
+
+        #expect(model.results.fileResults.isEmpty)
+        #expect(model.results.partialFailureMessage == "Couldn't read files for wt-member")
     }
 
     @Test func emptyQueryInFilesModeShowsAllInThisWorktree() async {
