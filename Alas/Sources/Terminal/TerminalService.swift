@@ -31,7 +31,7 @@ final class TerminalService {
     /// signal (shell is gone — or a Ghostty action requested teardown);
     /// `processAlive == true` means a manual-close path is already in flight
     /// and the receiver should no-op. Always invoked on the main thread.
-    @ObservationIgnored var onSessionProcessExited: ((_ leafId: String, _ worktreeId: String, _ processAlive: Bool) -> Void)?
+    @ObservationIgnored var onSessionProcessExited: ((_ leafId: String, _ owner: SessionOwnerID, _ processAlive: Bool) -> Void)?
     @ObservationIgnored let zmxClient: ZmxClient
 
     /// In-flight zmx kill tasks. Tracked so `waitForPendingKills` can drain
@@ -43,6 +43,62 @@ final class TerminalService {
     /// Default initializer used by production code paths (AppState).
     init(zmxClient: ZmxClient = ZmxClient(env: ZmxEnv.resolve())) {
         self.zmxClient = zmxClient
+    }
+
+    struct CheckoutLaunchContext: Equatable {
+        let owner: SessionOwnerID
+        let cwd: URL
+        let environment: [String: String]
+        let startupScript: String
+    }
+
+    /// Builds the narrow, repository-independent context for a shared
+    /// checkout terminal. Kept separate from `EnvBuilder` because the latter
+    /// is the compatibility contract for existing Worktree sessions.
+    nonisolated static func checkoutLaunchContext(
+        context: WorkspaceTerminalContext,
+        leafID: String
+    ) -> CheckoutLaunchContext {
+        CheckoutLaunchContext(
+            owner: context.owner,
+            cwd: URL(fileURLWithPath: context.rootPath),
+            environment: [
+                "ALAS_WORKSPACE_CHECKOUT_ID": context.checkoutID.uuidString.lowercased(),
+                "ALAS_WORKSPACE_CHECKOUT_ROOT": context.rootPath,
+                "ALAS_WORKSPACE_BRANCH": context.branch,
+                "ALAS_WORKSPACE_MANIFEST": context.manifestPath,
+            ],
+            startupScript: context.startupScript
+        )
+    }
+
+    /// A persisted checkout cwd is accepted only when it came from the same
+    /// execution location and remains inside the frozen checkout root.
+    nonisolated static func checkoutRestorationCwd(
+        savedPath: String?,
+        context: WorkspaceTerminalContext,
+        savedLocation: ExecutionLocation? = nil
+    ) -> URL? {
+        guard savedLocation?.normalized == context.executionLocation,
+              let savedPath,
+              !savedPath.isEmpty
+        else { return nil }
+        let root = URL(fileURLWithPath: context.rootPath).standardizedFileURL.path
+        let candidate = URL(fileURLWithPath: savedPath).standardizedFileURL.path
+        guard candidate == root || candidate.hasPrefix(root + "/") else { return nil }
+        return URL(fileURLWithPath: candidate)
+    }
+
+    nonisolated static func checkoutWorkingDirectory(
+        forcedCwd: URL?,
+        forcedCwdLocation: ExecutionLocation?,
+        context: WorkspaceTerminalContext
+    ) -> URL? {
+        checkoutRestorationCwd(
+            savedPath: forcedCwd?.path,
+            context: context,
+            savedLocation: forcedCwdLocation
+        )
     }
 
     /// Spawn a detached zmx-related task (kill, ls+kill, sweep) and track it
@@ -219,7 +275,7 @@ final class TerminalService {
         let capturedLeafId = sessionId
         let capturedWorktreeId = worktree.id
         surface.processExitHandler = { [weak self] processAlive in
-            self?.onSessionProcessExited?(capturedLeafId, capturedWorktreeId, processAlive)
+            self?.onSessionProcessExited?(capturedLeafId, .worktree(capturedWorktreeId), processAlive)
         }
         let session = TerminalSession(
             id: sessionId,
@@ -235,8 +291,108 @@ final class TerminalService {
         return session
     }
 
-    nonisolated static func remoteLaunch(host: String, worktreePath: String, zmxSessionName: String, keepAlive: Bool, startupSuffix: String?) -> (executable: String, args: [String]) {
-        let script = RemoteTerminalScript.attachScript(worktreePath: worktreePath, sessionName: zmxSessionName, useZmx: keepAlive, startupSuffix: startupSuffix)
+    /// Opens a shared terminal owned by a frozen Workspace Checkout. Unlike
+    /// the worktree overload, this path never reads a focused repository or
+    /// emits repository-specific environment values.
+    @discardableResult
+    func openCheckoutSession(
+        context: WorkspaceTerminalContext,
+        cfg: AppConfig.Terminal,
+        theme: Theme,
+        forcedCwd: URL? = nil,
+        forcedCwdLocation: ExecutionLocation? = nil,
+        leafId: String = UUID().uuidString
+    ) throws -> TerminalSession {
+        try ensureApp(cfg: cfg, theme: theme)
+        guard let app else { throw NSError(domain: "TerminalService", code: 1) }
+
+        let launchContext = Self.checkoutLaunchContext(context: context, leafID: leafId)
+        let remoteHost: String? = {
+            if case .ssh(let host) = context.executionLocation { return host }
+            return nil
+        }()
+        var env: [String: String] = cfg.inheritParentEnv
+            ? ProcessInfo.processInfo.environment.filter { !$0.key.hasPrefix("ALAS_") }
+            : [:]
+        env.merge(launchContext.environment) { _, checkoutValue in checkoutValue }
+        if remoteHost == nil {
+            env["ZMX_SESSION"] = ""
+            if let zmxDir = zmxClient.env.zmxDir?.path { env["ZMX_DIR"] = zmxDir }
+        }
+
+        let sessionName = ZmxSessionName.derive(owner: context.owner, leafId: leafId)
+        let executable: String
+        let args: [String]
+        if let remoteHost {
+            let acceptedCwd = Self.checkoutWorkingDirectory(
+                forcedCwd: forcedCwd,
+                forcedCwdLocation: forcedCwdLocation,
+                context: context
+            )
+            let launch = Self.remoteLaunch(
+                host: remoteHost,
+                worktreePath: acceptedCwd?.path ?? context.rootPath,
+                zmxSessionName: sessionName,
+                keepAlive: cfg.keepSessionsAlive,
+                startupSuffix: context.startupScript.isEmpty ? nil : context.startupScript,
+                environment: launchContext.environment
+            )
+            executable = launch.executable
+            args = launch.args
+        } else {
+            let startup = try StartupScriptInstaller.plan(
+                shell: cfg.shell,
+                startupScript: context.startupScript,
+                sessionId: leafId
+            )
+            let plan = Self.resolveLaunchPlan(
+                keepAlive: cfg.keepSessionsAlive,
+                zmxClient: zmxClient,
+                sessionName: sessionName,
+                innerPlan: startup
+            )
+            executable = plan.executable
+            args = plan.args
+            for (key, value) in plan.envOverrides { env[key] = value }
+        }
+        let acceptedCwd = Self.checkoutWorkingDirectory(forcedCwd: forcedCwd, forcedCwdLocation: forcedCwdLocation, context: context)
+        let cwd = remoteHost == nil
+            ? (acceptedCwd ?? URL(fileURLWithPath: context.rootPath))
+            : FileManager.default.homeDirectoryForCurrentUser
+        let surface = AlasGhostty.SurfaceView(
+            app: app,
+            configuration: GhosttyConfigBuilder.makeSurfaceConfiguration(
+                cwd: cwd, env: env, executable: executable, args: args
+            )
+        )
+        let capturedOwner = context.owner
+        surface.processExitHandler = { [weak self] processAlive in
+            self?.onSessionProcessExited?(leafId, capturedOwner, processAlive)
+        }
+        let session = TerminalSession(
+            id: leafId,
+            owner: context.owner,
+            surface: surface,
+            executable: executable,
+            args: args,
+            zmxSessionName: cfg.keepSessionsAlive && (remoteHost != nil || zmxClient.isAvailable) ? sessionName : nil,
+            remoteHost: remoteHost
+        )
+        registry.register(session)
+        return session
+    }
+
+    /// Archive and other checkout lifecycle operations stop only sessions
+    /// owned by that exact checkout ID. The execution location is part of the
+    /// owner, preventing a local archive from touching an SSH checkout.
+    func stopSessions(owner: SessionOwnerID) {
+        for session in registry.all where session.owner == owner {
+            closeSession(id: session.id)
+        }
+    }
+
+    nonisolated static func remoteLaunch(host: String, worktreePath: String, zmxSessionName: String, keepAlive: Bool, startupSuffix: String?, environment: [String: String] = [:]) -> (executable: String, args: [String]) {
+        let script = RemoteTerminalScript.attachScript(worktreePath: worktreePath, sessionName: zmxSessionName, useZmx: keepAlive, startupSuffix: startupSuffix, environment: environment)
         let invocation = RemoteTerminalScript.surfaceInvocation(host: host, script: script)
         return (invocation.executable, invocation.args)
     }
@@ -278,6 +434,31 @@ final class TerminalService {
                         client.killSession(name: sessionName)
                     }
                 }
+            }
+        }
+        socketReleaseHandler?(id)
+        cleanupRcfile(sessionId: id)
+    }
+
+    /// Checkout cleanup has no Project/worktree fallback: its typed owner is
+    /// sufficient to derive the exact scoped zmx name and SSH destination.
+    func closeSession(id: String, owner: SessionOwnerID) {
+        if let existing = registry.session(for: id) {
+            closeSession(id: id)
+            return
+        }
+        let name = ZmxSessionName.derive(owner: owner, leafId: id)
+        switch owner {
+        case .worktree(let worktreeID):
+            closeSession(id: id, worktreeId: worktreeID)
+            return
+        case .workspaceCheckout(_, let location):
+            switch location.normalized {
+            case .local:
+                let client = zmxClient
+                dispatchTrackedKill { client.killSession(name: name) }
+            case .ssh(let host):
+                dispatchTrackedKill { await Self.killRemoteSession(host: host, name: name) }
             }
         }
         socketReleaseHandler?(id)

@@ -18,6 +18,19 @@ protocol WorkspaceCheckoutSessionStopping: Sendable {
     func stopSessions(for checkoutID: UUID) async
 }
 
+/// Bridges checkout lifecycle orchestration to AppState without letting the
+/// coordinator learn about focus or SwiftUI. Callers intentionally provide
+/// the complete snapshot so the location-qualified owner is preserved.
+struct WorkspaceCheckoutSessionStopper: WorkspaceCheckoutSessionStopping {
+    let store: WorkspaceStore
+    let stop: @MainActor @Sendable (WorkspaceCheckout) -> Void
+
+    func stopSessions(for checkoutID: UUID) async {
+        guard let checkout = await store.checkout(id: checkoutID) else { return }
+        await stop(checkout)
+    }
+}
+
 protocol WorkspaceCheckoutLifecycleOperating: Sendable {
     func deletePreflight(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> WorktreeDeletePreflight
     func inspectRoot(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutCleanupRootObservation

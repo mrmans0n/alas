@@ -16,6 +16,18 @@ enum ZmxSessionName {
         "alas-\(hash16(worktreeId))-\(hash16(leafId))"
     }
 
+    /// Worktree owners retain their exact historical name. Checkout owners
+    /// include their durable UUID and a hash of the execution location, so a
+    /// local checkout and a same-path checkout on SSH cannot collide.
+    static func derive(owner: SessionOwnerID, leafId: String) -> String {
+        switch owner {
+        case .worktree(let worktreeID):
+            derive(worktreeId: worktreeID, leafId: leafId)
+        case .workspaceCheckout(let checkoutID, let location):
+            "alas-workspace-\(checkoutID.uuidString.lowercased())-\(hash16(location.identityComponent))-\(hash16(leafId))"
+        }
+    }
+
     static func legacy(leafId: String) -> String {
         "alas-\(leafId)"
     }

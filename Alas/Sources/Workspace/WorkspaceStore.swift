@@ -45,6 +45,11 @@ actor WorkspaceStore {
         }
     }
 
+    func checkout(id: UUID) -> WorkspaceCheckout? {
+        guard case .loaded(let state) = load() else { return nil }
+        return state.checkouts.first(where: { $0.id == id })
+    }
+
     func checkpoint(_ state: WorkspaceStateFile) throws {
         if case .unreadable = load() {
             throw WorkspaceStoreError.recoveryRequired
