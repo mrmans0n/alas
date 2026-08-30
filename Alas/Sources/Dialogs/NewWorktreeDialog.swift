@@ -408,9 +408,10 @@ struct NewWorktreeDialog: View {
 
     private func applyLaunchDefaults(for selectedProjectId: String) {
         let project = state.projects.first { $0.id == selectedProjectId }
+        let preference = project?.effectiveWorktreeLaunchPreference
         let defaults = Self.resolvedLaunchDefaults(
-            projectOpenAfterCreate: project?.worktreeOpenAfterCreate,
-            projectLauncherMode: project?.worktreeDefaultLauncherMode,
+            projectOpenAfterCreate: preference?.openAfterCreate,
+            projectLauncherMode: preference?.launcherMode,
             globalLauncherMode: state.config.agents.defaultLauncherMode,
             acpSegmentEnabled: acpSegmentEnabled
         )

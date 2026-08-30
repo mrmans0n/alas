@@ -144,13 +144,36 @@ struct WorkspaceModelsTests {
                 members: [member],
                 diagnostics: [WorkspaceDiagnostic(severity: .warning, message: "Cached base ref", createdAt: capturedAt)],
                 workItems: [WorkspaceWorkItemSnapshot(title: "Ship release", capturedAt: capturedAt)],
-                configurationSnapshot: WorkspaceCheckoutConfigurationSnapshot(capturedAt: capturedAt, sharedSettings: ["launcher": "codex"])
+                configurationSnapshot: WorkspaceCheckoutConfigurationSnapshot(
+                    capturedAt: capturedAt,
+                    shared: .init(
+                        sessionOpenScript: "",
+                        worktreeCreateScript: "",
+                        creationLaunchPreference: .init(agentID: "codex")
+                    )
+                )
             )
         ])
 
         let decoded = try JSONDecoder.workspace.decode(WorkspaceStateFile.self, from: JSONEncoder.workspace.encode(state))
 
         #expect(decoded == state)
+    }
+
+    @Test func legacyConfigurationSnapshotSettingsDecodeWithoutLoss() throws {
+        let memberID = UUID(uuidString: "44444444-4444-4444-4444-444444444444")!
+        let data = Data("""
+        {
+          "capturedAt": "2023-11-14T22:13:20Z",
+          "sharedSettings": { "launcher": "codex", "script": "echo shared" },
+          "memberSettings": { "\(memberID.uuidString)": { "gg": "on", "setup": "echo member" } }
+        }
+        """.utf8)
+
+        let snapshot = try JSONDecoder.workspace.decode(WorkspaceCheckoutConfigurationSnapshot.self, from: data)
+
+        #expect(snapshot.sharedSettings == ["launcher": "codex", "script": "echo shared"])
+        #expect(snapshot.memberSettings[memberID] == ["gg": "on", "setup": "echo member"])
     }
 
     @Test func checkoutOperationArchiveAndMemberAvailabilityRemainIndependent() {

@@ -76,6 +76,25 @@ struct MCPAttachmentPlannerInput {
     let worktreeDirectory: String
     let environment: [String: String]
     let capabilities: ACPMCPServerCapabilities
+    /// Checkout sessions supply descriptors captured during preflight. They
+    /// must never fall back to current Project configuration on restore.
+    let frozenServerDescriptors: [WorkspaceMCPServerDescriptor]?
+
+    init(
+        configuredServers: [ProjectMCPServer],
+        projectDirectory: String,
+        worktreeDirectory: String,
+        environment: [String: String],
+        capabilities: ACPMCPServerCapabilities,
+        frozenServerDescriptors: [WorkspaceMCPServerDescriptor]? = nil
+    ) {
+        self.configuredServers = configuredServers
+        self.projectDirectory = projectDirectory
+        self.worktreeDirectory = worktreeDirectory
+        self.environment = environment
+        self.capabilities = capabilities
+        self.frozenServerDescriptors = frozenServerDescriptors
+    }
 }
 
 enum MCPAttachmentPlanner {
@@ -83,14 +102,18 @@ enum MCPAttachmentPlanner {
         case missingVariable(String)
     }
     static func plan(_ input: MCPAttachmentPlannerInput) -> MCPAttachmentPlan {
-        let validationIssues = ProjectMCPValidation.validate(input.configuredServers)
-        let environment = resolvedEnvironment(for: input)
+        let descriptors = input.frozenServerDescriptors ?? input.configuredServers.enumerated().map { index, server in
+            .init(id: String(index), server: server, projectDirectory: input.projectDirectory, worktreeDirectory: input.worktreeDirectory)
+        }
+        let validationIssues = ProjectMCPValidation.validate(descriptors.map(\.server))
         var wireServers: [ACPMCPServer] = []
         var statuses: [MCPAttachmentServerStatus] = []
 
-        for (index, server) in input.configuredServers.enumerated() {
+        for (index, descriptor) in descriptors.enumerated() {
+            let server = descriptor.server
             let transport = transportKind(for: server.transport)
             let disposition: MCPAttachmentDisposition
+            let environment = resolvedEnvironment(for: input, descriptor: descriptor)
 
             if validationIssues.contains(where: { applies($0, to: server) && !isDeferredTemplateURLIssue($0, server: server) }) {
                 disposition = .skipped(.invalidConfiguration("The server configuration is invalid."))
@@ -113,7 +136,7 @@ enum MCPAttachmentPlanner {
             // Configuration can be edited externally and contain duplicate names.
             // Keep the presentation identity unique without retaining sensitive values.
             statuses.append(.init(
-                id: String(index),
+                id: descriptor.id.isEmpty ? String(index) : descriptor.id,
                 name: server.name,
                 transport: transport,
                 disposition: disposition
@@ -123,7 +146,7 @@ enum MCPAttachmentPlanner {
         return .init(
             wireServers: wireServers,
             statuses: statuses,
-            configurationFingerprint: configurationFingerprint(for: input.configuredServers)
+            configurationFingerprint: configurationFingerprint(for: descriptors.map(\.server))
         )
     }
 
@@ -142,10 +165,10 @@ enum MCPAttachmentPlanner {
         return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
-    private static func resolvedEnvironment(for input: MCPAttachmentPlannerInput) -> [String: String] {
+    private static func resolvedEnvironment(for input: MCPAttachmentPlannerInput, descriptor: WorkspaceMCPServerDescriptor) -> [String: String] {
         var environment = input.environment
-        environment["PROJECT_DIR"] = input.projectDirectory
-        environment["WORKTREE_DIR"] = input.worktreeDirectory
+        environment["PROJECT_DIR"] = descriptor.checkoutRoot
+        environment["WORKTREE_DIR"] = descriptor.worktreeDirectory
         return environment
     }
 

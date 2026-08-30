@@ -226,6 +226,34 @@ struct MCPAttachmentPlannerTests {
         #expect(result.configurationFingerprint == MCPAttachmentPlanner.configurationFingerprint(for: []))
     }
 
+    @Test("frozen descriptors take precedence over current project configuration")
+    func frozenDescriptorsAreUsed() throws {
+        let frozen = WorkspaceMCPServerDescriptor(
+            id: "member-a:before",
+            server: .stdio(name: "before", command: "${PROJECT_DIR}/before"),
+            projectDirectory: "/frozen-project",
+            worktreeDirectory: "/frozen-worktree",
+            checkoutRoot: "/frozen-checkout"
+        )
+        let result = MCPAttachmentPlanner.plan(.init(
+            configuredServers: [.stdio(name: "after", command: "after")],
+            projectDirectory: "/live-project",
+            worktreeDirectory: "/live-worktree",
+            environment: [:],
+            capabilities: .init(),
+            frozenServerDescriptors: [frozen]
+        ))
+
+        let wire = try #require(result.wireServers.first)
+        #expect(serverName(wire) == "before")
+        if case let .stdio(_, command, _, _) = wire {
+            #expect(command == "/frozen-checkout/before")
+        } else {
+            Issue.record("Expected a stdio MCP server")
+        }
+        #expect(result.statuses.first?.id == "member-a:before")
+    }
+
     private func plan(
         _ servers: [ProjectMCPServer],
         environment: [String: String] = [:],
