@@ -4,7 +4,7 @@ import Foundation
 /// It intentionally does not expose the general Git or Worktree services.
 protocol WorkspaceGitOperating: Sendable {
     func prepareBranch(_ operation: WorkspaceFrozenWorktreeOperation) async throws
-    func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws
+    func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String?
 }
 
 protocol WorkspaceScriptRunning: Sendable {
@@ -121,6 +121,107 @@ actor WorkspaceCheckoutCoordinator {
         return try await self.checkout(id: checkout.id)
     }
 
+    /// Explicitly retries a persisted setup checkpoint. Git creation is not
+    /// part of this command, so a relaunch cannot recreate a verified member.
+    func retrySetup(checkoutID: UUID, memberID: UUID) async throws -> WorkspaceCheckout {
+        let checkout = try await self.checkout(id: checkoutID)
+        guard checkout.members.contains(where: { $0.id == memberID }) else {
+            throw WorkspaceCheckoutCoordinatorError.checkoutMissing
+        }
+        let claimed = try await store.mutate { state -> WorkspaceCheckoutMember? in
+            guard let checkoutIndex = state.checkouts.firstIndex(where: { $0.id == checkoutID }),
+                  let memberIndex = state.checkouts[checkoutIndex].members.firstIndex(where: { $0.id == memberID })
+            else { throw WorkspaceCheckoutCoordinatorError.checkoutMissing }
+            let member = state.checkouts[checkoutIndex].members[memberIndex]
+            guard member.availability != .identityConflict,
+                  member.checkpoint == .worktreeCreated || (member.checkpoint == .failed && member.cleanupOwnership.worktreeCreated),
+                  let plan = member.plan,
+                  plan.checkoutMemberID == member.id,
+                  plan.projectID == member.projectID,
+                  plan.destinationPath == member.worktreePath,
+                  !plan.sourceRepositoryPath.isEmpty,
+                  !plan.baseReference.isEmpty,
+                  !plan.baseCommit.isEmpty
+            else { return nil }
+            state.checkouts[checkoutIndex].members[memberIndex].checkpoint = .setupRunning
+            return member
+        }
+        guard let member = claimed else { return checkout }
+        let operation = WorkspaceCheckoutSetupOperation(
+            checkoutID: checkout.id,
+            checkoutMemberID: member.id,
+            executionLocation: checkout.executionLocation,
+            worktreePath: member.plan!.destinationPath,
+            script: await setupScript(checkoutID: checkout.id, memberID: member.id)
+        )
+        do {
+            try await scripts.runSetup(for: operation)
+            try await updateMember(checkoutID: checkout.id, memberID: member.id) {
+                $0.checkpoint = .setupComplete
+                $0.availability = .available
+            }
+        } catch {
+            try? await store.mutate { state in
+                guard let checkoutIndex = state.checkouts.firstIndex(where: { $0.id == checkout.id }),
+                      let memberIndex = state.checkouts[checkoutIndex].members.firstIndex(where: { $0.id == member.id })
+                else { throw WorkspaceCheckoutCoordinatorError.checkoutMissing }
+                state.checkouts[checkoutIndex].members[memberIndex].checkpoint = .failed
+                state.checkouts[checkoutIndex].members[memberIndex].availability = .unavailable
+                state.checkouts[checkoutIndex].diagnostics.append(.init(severity: .error, message: "Workspace setup failed for \(state.checkouts[checkoutIndex].members[memberIndex].fallbackProjectName)."))
+            }
+        }
+        return try await self.checkout(id: checkoutID)
+    }
+
+    /// Explicitly resumes Git creation from the durable frozen plan. Members
+    /// that already reached worktree creation, setup success, or an identity
+    /// conflict are deliberately excluded.
+    func resumeCreation(checkoutID: UUID) async throws -> WorkspaceCheckout {
+        let checkout = try await self.checkout(id: checkoutID)
+        for member in checkout.members {
+            guard member.availability != .identityConflict,
+                  member.checkpoint != .worktreeCreated,
+                  member.checkpoint != .setupComplete,
+                  !(member.checkpoint == .failed && member.cleanupOwnership.worktreeCreated),
+                  let plan = member.plan,
+                  plan.checkoutMemberID == member.id,
+                  plan.projectID == member.projectID,
+                  plan.destinationPath == member.worktreePath,
+                  !plan.sourceRepositoryPath.isEmpty,
+                  !plan.baseReference.isEmpty,
+                  !plan.baseCommit.isEmpty
+            else { continue }
+            let claimed = (try? await store.mutate { state -> Bool in
+                guard let checkoutIndex = state.checkouts.firstIndex(where: { $0.id == checkoutID }),
+                      let memberIndex = state.checkouts[checkoutIndex].members.firstIndex(where: { $0.id == member.id })
+                else { return false }
+                let current = state.checkouts[checkoutIndex].members[memberIndex]
+                guard current.id == member.id,
+                      current.plan == plan,
+                      current.checkpoint == .planPersisted || (current.checkpoint == .failed && !current.cleanupOwnership.worktreeCreated)
+                else { return false }
+                state.checkouts[checkoutIndex].members[memberIndex].checkpoint = .branchPreparing
+                return true
+            }) ?? false
+            guard claimed else { continue }
+            await execute(
+                member: .init(
+                    checkoutMemberID: plan.checkoutMemberID,
+                    workspaceMemberID: member.workspaceMemberID,
+                    projectID: plan.projectID,
+                    sourceRepositoryPath: plan.sourceRepositoryPath,
+                    destinationPath: plan.destinationPath,
+                    baseReference: plan.baseReference,
+                    baseCommit: plan.baseCommit,
+                    branchIntent: plan.branchIntent
+                ),
+                checkout: checkout
+            )
+        }
+        await finishIfAllMembersTerminal(checkoutID: checkoutID)
+        return try await self.checkout(id: checkoutID)
+    }
+
     private func persistFrozenCheckout(
         workspace: Workspace,
         plan: FrozenWorkspaceCheckoutPlan,
@@ -235,9 +336,10 @@ actor WorkspaceCheckoutCoordinator {
                 try await self.updateMember(checkoutID: checkout.id, memberID: plan.checkoutMemberID) { member in
                     member.checkpoint = .worktreeCreating
                 }
-                try await self.git.createWorktree(operation)
+                let lineageID = try await self.git.createWorktree(operation)
                 try await self.updateMember(checkoutID: checkout.id, memberID: plan.checkoutMemberID) { member in
                     member.checkpoint = .worktreeCreated
+                    member.gitLineageID = lineageID
                     member.cleanupOwnership = .init(
                         worktreeCreated: true,
                         branchOwnership: plan.branchIntent == .reuse ? .reused : .created
@@ -260,9 +362,13 @@ actor WorkspaceCheckoutCoordinator {
                 member.availability = .available
             }
         } catch {
-            try? await updateMember(checkoutID: checkout.id, memberID: plan.checkoutMemberID) { member in
-                member.checkpoint = .failed
-                member.availability = .unavailable
+            try? await store.mutate { state in
+                guard let checkoutIndex = state.checkouts.firstIndex(where: { $0.id == checkout.id }),
+                      let memberIndex = state.checkouts[checkoutIndex].members.firstIndex(where: { $0.id == plan.checkoutMemberID })
+                else { throw WorkspaceCheckoutCoordinatorError.checkoutMissing }
+                state.checkouts[checkoutIndex].members[memberIndex].checkpoint = .failed
+                state.checkouts[checkoutIndex].members[memberIndex].availability = .unavailable
+                state.checkouts[checkoutIndex].diagnostics.append(.init(severity: .error, message: "Workspace creation failed for \(state.checkouts[checkoutIndex].members[memberIndex].fallbackProjectName)."))
             }
         }
     }
@@ -329,14 +435,15 @@ struct WorkspaceFrozenGitOperator: WorkspaceGitOperating {
         )
     }
 
-    func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws {
-        _ = try await WorktreeService().addFrozen(
+    func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? {
+        let worktree = try await WorktreeService().addFrozen(
             repoPath: URL(fileURLWithPath: operation.sourceRepositoryPath),
             branch: operation.branch,
             destination: URL(fileURLWithPath: operation.destinationPath),
             projectId: operation.projectID,
             intent: operation.branchIntent
         )
+        return worktree.lineageID
     }
 }
 

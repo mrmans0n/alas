@@ -56,6 +56,7 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
         #expect(await git.createdProjectIDs.count == 4)
         #expect(checkout.members.first?.checkpoint == .failed)
         #expect(checkout.members.dropFirst().allSatisfy { $0.checkpoint == .setupComplete })
+        #expect(checkout.members.dropFirst().allSatisfy { $0.gitLineageID == "lineage-\($0.projectID)" })
     }
 
     @Test func serializesSameProjectAndPassesTheExactFrozenIntent() async throws {
@@ -125,8 +126,9 @@ private actor PersistedPlanInspectingGit: WorkspaceGitOperating {
         await inspectPersistedPlan()
     }
 
-    func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws {
+    func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? {
         await inspectPersistedPlan()
+        return nil
     }
 
     private func inspectPersistedPlan() async {
@@ -164,8 +166,9 @@ private actor ConcurrentWorkspaceGit: WorkspaceGitOperating {
         if operation.projectID == failingProjectID { throw TestError.failed }
     }
 
-    func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws {
+    func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? {
         createdProjectIDs.append(operation.projectID)
+        return "lineage-\(operation.projectID)"
     }
 }
 
@@ -184,12 +187,12 @@ private actor SerialIntentWorkspaceGit: WorkspaceGitOperating {
         active -= 1
     }
 
-    func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws {}
+    func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? { nil }
 }
 
 private actor CountingWorkspaceGit: WorkspaceGitOperating {
     private(set) var callCount = 0
 
     func prepareBranch(_ operation: WorkspaceFrozenWorktreeOperation) async throws { callCount += 1 }
-    func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws { callCount += 1 }
+    func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? { callCount += 1; return nil }
 }
