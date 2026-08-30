@@ -130,6 +130,8 @@ actor WorkspaceCheckoutCoordinator {
     private let sessions: any WorkspaceCheckoutSessionStopping
     private let lifecycle: any WorkspaceCheckoutLifecycleOperating
     private let manifests: any WorkspaceCheckoutManifestWriting
+    private var creationTasks: [UUID: Task<Void, Never>] = [:]
+    private var pendingCreationPlans: [UUID: (WorkspaceCheckout, FrozenWorkspaceCheckoutPlan)] = [:]
 
     init(
         store: WorkspaceStore,
@@ -319,7 +321,7 @@ actor WorkspaceCheckoutCoordinator {
 
     /// Persists the complete frozen checkout before scheduling any Git work.
     /// Individual member failures are checkpointed and never cancel siblings.
-    func create(
+    func createPersisted(
         workspace: Workspace,
         plan: FrozenWorkspaceCheckoutPlan,
         configurationSnapshot: WorkspaceCheckoutConfigurationSnapshot? = nil
@@ -341,9 +343,33 @@ actor WorkspaceCheckoutCoordinator {
             }
             throw error
         }
-        await executeMembers(of: checkout, plan: plan)
-        return try await self.checkout(id: checkout.id)
+        // Return at the durable checkpoint so UI selection and progress are
+        // checkout-owned before any member operation starts.
+        pendingCreationPlans[checkout.id] = (checkout, plan)
+        return checkout
     }
+
+    /// Compatibility entry point for non-UI callers. UI uses the explicit
+    /// persisted handoff so selection is observable before Git begins.
+    func create(workspace: Workspace, plan: FrozenWorkspaceCheckoutPlan, configurationSnapshot: WorkspaceCheckoutConfigurationSnapshot? = nil) async throws -> WorkspaceCheckout {
+        let checkout = try await createPersisted(workspace: workspace, plan: plan, configurationSnapshot: configurationSnapshot)
+        await beginCreation(checkoutID: checkout.id)
+        return checkout
+    }
+
+    func beginCreation(checkoutID: UUID) {
+        guard let (checkout, plan) = pendingCreationPlans.removeValue(forKey: checkoutID), creationTasks[checkoutID] == nil else { return }
+        creationTasks[checkout.id] = Task { [weak self] in
+            await self?.executeMembers(of: checkout, plan: plan)
+            await self?.finishCreationTask(checkout.id)
+        }
+    }
+
+    func awaitCreationCompletion(checkoutID: UUID) async {
+        await creationTasks[checkoutID]?.value
+    }
+
+    private func finishCreationTask(_ checkoutID: UUID) { creationTasks[checkoutID] = nil }
 
     /// Explicitly retries a persisted setup checkpoint. Git creation is not
     /// part of this command, so a relaunch cannot recreate a verified member.

@@ -34,6 +34,23 @@ enum ReviewSessionConsolidation {
     }
 }
 
+enum WorkspaceDefinitionSaveError: LocalizedError {
+    case spacePlacementFailed
+    case workspacePersistenceFailed
+    case spacePlacementRollbackFailed
+
+    var errorDescription: String? {
+        switch self {
+        case .spacePlacementFailed:
+            "Could not place the Workspace in the active Space."
+        case .workspacePersistenceFailed:
+            "Could not save the Workspace definition."
+        case .spacePlacementRollbackFailed:
+            "Could not restore the active Space after the Workspace definition failed to save."
+        }
+    }
+}
+
 @Observable
 @MainActor
 final class AppState {
@@ -60,7 +77,7 @@ final class AppState {
     private var unpersistedGGWorktreeModes: [String: [String: GGWorktreeMode]] = [:]
     var spacesManager: SpacesManager
     var workspacesManager: WorkspacesManager
-    @ObservationIgnored private let workspaceStore = WorkspaceStore()
+    @ObservationIgnored private let workspaceStore: WorkspaceStore
     @ObservationIgnored private var workspaceCheckoutCoordinator: WorkspaceCheckoutCoordinator?
     /// Recovery information for a Workspace state file that could not be read.
     /// Observable so Settings and future Workspace navigation can keep the
@@ -600,9 +617,11 @@ final class AppState {
         tabsManager: TabsManager? = nil,
         restoreActiveTabsOnStartup: Bool = true,
         workspaceSpacePersistenceBridge: WorkspaceSpacePersistenceBridge = WorkspaceSpacePersistenceBridge(),
-        workspacesManager: WorkspacesManager? = nil
+        workspacesManager: WorkspacesManager? = nil,
+        workspaceStore: WorkspaceStore = WorkspaceStore()
     ) {
         self.store = store
+        self.workspaceStore = workspaceStore
         restoreActiveTabsOnNextReload = restoreActiveTabsOnStartup
         suppressesRestoredRightPaneAfterAbandonedStartup = !restoreActiveTabsOnStartup
         _tabs = tabsManager
@@ -1063,17 +1082,20 @@ final class AppState {
     }
 
     func selectWorkspace(id: UUID) {
+        guard config.workspacesEnabled, workspacesManager.canMutate else { return }
         workspaceNavigationState.selectWorkspace(id)
         selectedWorktreeId = nil
     }
 
     func selectWorkspaceCheckout(id: UUID) {
+        guard config.workspacesEnabled, workspacesManager.canMutate else { return }
         guard let checkout = workspacesManager.checkout(id: id) else { return }
         workspaceNavigationState.selectCheckout(checkout, resolvedWorktreeIDs: workspaceMemberWorktreeIDs(checkout))
         selectedWorktreeId = workspaceNavigationState.repositoryFocusWorktreeID
     }
 
     func focusWorkspaceCheckoutMember(id: UUID) {
+        guard config.workspacesEnabled, workspacesManager.canMutate else { return }
         guard let checkout = selectedWorkspaceCheckout else { return }
         workspaceNavigationState.selectMember(id, in: checkout, resolvedWorktreeIDs: workspaceMemberWorktreeIDs(checkout))
         selectedWorktreeId = workspaceNavigationState.repositoryFocusWorktreeID
@@ -1449,7 +1471,70 @@ final class AppState {
         return coordinator
     }
 
+    /// Definition changes are intentionally independent of checkout snapshots:
+    /// they only determine future creation requests.
+    func saveWorkspaceDefinition(_ workspace: Workspace) async throws {
+        guard config.workspacesEnabled, workspacesManager.canMutate else {
+            throw WorkspaceStoreError.recoveryRequired
+        }
+        // Make sidebar placement visible first. If its legacy Spaces write
+        // fails, restore the in-memory layout and do not create an otherwise
+        // invisible durable Workspace definition.
+        let originalSpacesFile = spacesManager.file
+        let activeID = spacesManager.activeSpaceId
+        let space = spacesManager.space(id: activeID)
+        let current = space?.members ?? space?.projectIds.map(SpaceMemberReference.project) ?? []
+        let needsPlacement = !current.contains(.workspace(workspace.id))
+        if needsPlacement {
+            spacesManager.setTypedMembers(current + [.workspace(workspace.id)], forSpace: activeID)
+            guard writeSpaces() else {
+                spacesManager.replace(file: originalSpacesFile)
+                throw WorkspaceDefinitionSaveError.spacePlacementFailed
+            }
+        }
+        do {
+            try await workspaceStore.mutate { state in
+                if let index = state.workspaces.firstIndex(where: { $0.id == workspace.id }) {
+                    state.workspaces[index] = workspace
+                } else {
+                    state.workspaces.append(workspace)
+                }
+            }
+        } catch {
+            if needsPlacement {
+                spacesManager.replace(file: originalSpacesFile)
+                do {
+                    try store.write(originalSpacesFile, to: Paths.spacesFile)
+                } catch {
+                    persistenceErrorHandler("Spaces Save Failed", error.localizedDescription)
+                    throw WorkspaceDefinitionSaveError.spacePlacementRollbackFailed
+                }
+            }
+            throw WorkspaceDefinitionSaveError.workspacePersistenceFailed
+        }
+        await workspacesManager.refreshCheckoutSnapshots()
+    }
+
+    func preflightWorkspaceCheckout(_ request: WorkspaceCheckoutRequest) async -> WorkspaceCheckoutPreflightResult {
+        await WorkspaceCheckoutPreflight(projects: projects).prepare(request)
+    }
+
+    /// The coordinator persists the frozen plan before returning. Selection is
+    /// therefore never optimistic before durability is established.
+    func createWorkspaceCheckout(workspace: Workspace, plan: FrozenWorkspaceCheckoutPlan) async throws -> WorkspaceCheckout {
+        guard config.workspacesEnabled, workspacesManager.canMutate else {
+            throw WorkspaceStoreError.recoveryRequired
+        }
+        let coordinator = workspaceCoordinator()
+        let checkout = try await coordinator.createPersisted(workspace: workspace, plan: plan)
+        await workspacesManager.refreshCheckoutSnapshots()
+        selectWorkspaceCheckout(id: checkout.id)
+        await coordinator.beginCreation(checkoutID: checkout.id)
+        return checkout
+    }
+
     func archiveWorkspaceCheckout(id: UUID) async throws -> WorkspaceCheckout {
+        guard config.workspacesEnabled, workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
         let wasSelected = workspaceNavigationState.selectedCheckoutID == id
         let checkout = try await workspaceCoordinator().archive(checkoutID: id)
         await workspacesManager.refreshCheckoutSnapshots()
