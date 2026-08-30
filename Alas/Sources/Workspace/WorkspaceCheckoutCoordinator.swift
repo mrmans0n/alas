@@ -378,7 +378,7 @@ actor WorkspaceCheckoutCoordinator {
     /// persisted handoff so selection is observable before Git begins.
     func create(workspace: Workspace, plan: FrozenWorkspaceCheckoutPlan, configurationSnapshot: WorkspaceCheckoutConfigurationSnapshot? = nil) async throws -> WorkspaceCheckout {
         let checkout = try await createPersisted(workspace: workspace, plan: plan, configurationSnapshot: configurationSnapshot)
-        await beginCreation(checkoutID: checkout.id)
+        beginCreation(checkoutID: checkout.id)
         return checkout
     }
 
@@ -453,15 +453,21 @@ actor WorkspaceCheckoutCoordinator {
     /// conflict are deliberately excluded.
     func resumeCreation(checkoutID: UUID) async throws -> WorkspaceCheckout {
         let checkout = try await self.checkout(id: checkoutID)
-        try await store.mutate { state in
+        let started = try await store.mutate { state -> Bool in
             guard let index = state.checkouts.firstIndex(where: { $0.id == checkoutID }) else {
                 throw WorkspaceCheckoutCoordinatorError.checkoutMissing
             }
-            guard state.checkouts[index].operation == .idle || state.checkouts[index].operation == .repairing else {
+            if state.checkouts[index].operation == .repairing {
+                return false
+            }
+            guard state.checkouts[index].operation == .idle || state.checkouts[index].operation == .creating else {
                 throw WorkspaceCheckoutCoordinatorError.operationInProgress
             }
             state.checkouts[index].operation = .repairing
+            state.checkouts[index].stopAfterCurrentOperations = false
+            return true
         }
+        guard started else { return checkout }
         for member in checkout.members {
             if await shouldStopAfterCurrentOperations(checkoutID: checkoutID) { break }
             guard member.availability != .identityConflict,
@@ -482,10 +488,18 @@ actor WorkspaceCheckoutCoordinator {
                 else { return false }
                 let current = state.checkouts[checkoutIndex].members[memberIndex]
                 guard current.id == member.id,
-                      current.plan == plan,
-                      current.checkpoint == .planPersisted || (current.checkpoint == .failed && !current.cleanupOwnership.worktreeCreated)
+                      current.plan == plan
                 else { return false }
-                state.checkouts[checkoutIndex].members[memberIndex].checkpoint = .branchPreparing
+                switch current.checkpoint {
+                case .planPersisted, .branchPreparing:
+                    state.checkouts[checkoutIndex].members[memberIndex].checkpoint = .branchPreparing
+                case .branchPrepared, .worktreeCreating:
+                    state.checkouts[checkoutIndex].members[memberIndex].checkpoint = .worktreeCreating
+                case .failed where !current.cleanupOwnership.worktreeCreated:
+                    state.checkouts[checkoutIndex].members[memberIndex].checkpoint = current.cleanupOwnership.branchOwnership == .unknown ? .branchPreparing : .worktreeCreating
+                default:
+                    return false
+                }
                 return true
             }) ?? false
             guard claimed else { continue }
@@ -627,16 +641,18 @@ actor WorkspaceCheckoutCoordinator {
         )
         do {
             try await projectMutationGate.withMutation(projectID: plan.projectID) {
-                try await self.updateMember(checkoutID: checkout.id, memberID: plan.checkoutMemberID) { member in
-                    member.checkpoint = .branchPreparing
-                }
-                try await self.git.prepareBranch(operation)
-                try await self.updateMember(checkoutID: checkout.id, memberID: plan.checkoutMemberID) { member in
-                    member.checkpoint = .branchPrepared
-                    member.cleanupOwnership.branchOwnership = plan.branchIntent == .reuse ? .reused : .created
-                }
-                try await self.updateMember(checkoutID: checkout.id, memberID: plan.checkoutMemberID) { member in
-                    member.checkpoint = .worktreeCreating
+                if await self.shouldPrepareBranch(checkoutID: checkout.id, memberID: plan.checkoutMemberID) {
+                    try await self.updateMember(checkoutID: checkout.id, memberID: plan.checkoutMemberID) { member in
+                        member.checkpoint = .branchPreparing
+                    }
+                    try await self.git.prepareBranch(operation)
+                    try await self.updateMember(checkoutID: checkout.id, memberID: plan.checkoutMemberID) { member in
+                        member.checkpoint = .branchPrepared
+                        member.cleanupOwnership.branchOwnership = plan.branchIntent == .reuse ? .reused : .created
+                    }
+                    try await self.updateMember(checkoutID: checkout.id, memberID: plan.checkoutMemberID) { member in
+                        member.checkpoint = .worktreeCreating
+                    }
                 }
                 let lineageID = try await self.git.createWorktree(operation)
                 try await self.updateMember(checkoutID: checkout.id, memberID: plan.checkoutMemberID) { member in
@@ -759,10 +775,30 @@ actor WorkspaceCheckoutCoordinator {
     private func finishIfAllMembersTerminal(checkoutID: UUID, owning operation: WorkspaceCheckoutOperation) async {
         try? await store.mutate { state in
             guard let index = state.checkouts.firstIndex(where: { $0.id == checkoutID }),
-                  state.checkouts[index].operation == operation,
-                  state.checkouts[index].members.allSatisfy({ $0.checkpoint == .setupComplete || $0.checkpoint == .failed })
+                  state.checkouts[index].operation == operation
             else { return }
+            if state.checkouts[index].stopAfterCurrentOperations {
+                state.checkouts[index].operation = .idle
+                state.checkouts[index].stopAfterCurrentOperations = false
+                return
+            }
+            guard state.checkouts[index].members.allSatisfy({ $0.checkpoint == .setupComplete || $0.checkpoint == .failed }) else { return }
             state.checkouts[index].operation = .idle
+        }
+    }
+
+    private func shouldPrepareBranch(checkoutID: UUID, memberID: UUID) async -> Bool {
+        guard case .loaded(let state) = await store.load(),
+              let checkout = state.checkouts.first(where: { $0.id == checkoutID }),
+              let member = checkout.members.first(where: { $0.id == memberID })
+        else { return true }
+        switch member.checkpoint {
+        case .branchPrepared, .worktreeCreating:
+            return false
+        case .failed:
+            return member.cleanupOwnership.branchOwnership == .unknown
+        default:
+            return true
         }
     }
 
@@ -832,22 +868,36 @@ struct WorkspaceSetupScriptRunner: WorkspaceScriptRunning {
 /// The concrete lifecycle operator intentionally delegates the exact lineage
 /// check to the read-only observer and never asks `remove` to delete a branch.
 struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
+    private let remote: WorkspaceRemoteTransport
+
+    init(remote: WorkspaceRemoteTransport = .init()) {
+        self.remote = remote
+    }
+
     func deletePreflight(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> WorktreeDeletePreflight {
-        guard case .local = plan.executionLocation.normalized else { throw WorkspaceCheckoutCoordinatorError.cleanupUnavailable }
-        return try await WorktreeService().deletePreflight(worktreePath: URL(fileURLWithPath: plan.worktreePath))
+        switch plan.executionLocation.normalized {
+        case .local:
+            return try await WorktreeService().deletePreflight(worktreePath: URL(fileURLWithPath: plan.worktreePath))
+        case .ssh(let host):
+            return try await remoteDeletePreflight(plan, host: host)
+        }
     }
 
     func inspectRoot(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutCleanupRootObservation {
-        guard case .local = plan.executionLocation.normalized else { return .init(isContained: false, leftovers: []) }
-        let root = URL(fileURLWithPath: plan.rootPath).resolvingSymlinksInPath().standardizedFileURL
-        let member = URL(fileURLWithPath: plan.worktreePath).resolvingSymlinksInPath().standardizedFileURL
-        guard member.path.hasPrefix(root.path + "/") else { return .init(isContained: false, leftovers: []) }
-        let managedNames = Set(plan.managedMemberPaths.map {
-            URL(fileURLWithPath: $0).resolvingSymlinksInPath().standardizedFileURL.lastPathComponent
-        })
-        let leftovers = (try? FileManager.default.contentsOfDirectory(atPath: root.path))?
-            .filter { !managedNames.contains($0) } ?? []
-        return .init(isContained: true, leftovers: leftovers)
+        switch plan.executionLocation.normalized {
+        case .local:
+            let root = URL(fileURLWithPath: plan.rootPath).resolvingSymlinksInPath().standardizedFileURL
+            let member = URL(fileURLWithPath: plan.worktreePath).resolvingSymlinksInPath().standardizedFileURL
+            guard member.path.hasPrefix(root.path + "/") else { return .init(isContained: false, leftovers: []) }
+            let managedNames = Set(plan.managedMemberPaths.map {
+                URL(fileURLWithPath: $0).resolvingSymlinksInPath().standardizedFileURL.lastPathComponent
+            })
+            let leftovers = (try? FileManager.default.contentsOfDirectory(atPath: root.path))?
+                .filter { !managedNames.contains($0) } ?? []
+            return .init(isContained: true, leftovers: leftovers)
+        case .ssh(let host):
+            return await remoteInspectRoot(plan, host: host)
+        }
     }
 
     func verifyCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutMemberObservation {
@@ -866,25 +916,73 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
     }
 
     func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan) async throws {
-        guard case .local = plan.executionLocation.normalized else {
-            throw WorkspaceCheckoutCoordinatorError.cleanupUnavailable
+        switch plan.executionLocation.normalized {
+        case .local:
+            let path = URL(fileURLWithPath: plan.worktreePath)
+            let worktree = Worktree(
+                id: Worktree.makeId(path: path), projectId: plan.projectID, name: plan.branch,
+                branch: plan.branch, path: path, status: .clean, lastActivity: .distantPast,
+                lineageID: plan.expectedLineageID
+            )
+            try await WorktreeService().remove(
+                repoPath: URL(fileURLWithPath: plan.sourceRepositoryPath),
+                worktree: worktree,
+                deleteBranchIfMerged: false
+            )
+        case .ssh(let host):
+            let command = "git -C \(SSHCommand.shellQuote(plan.sourceRepositoryPath)) worktree remove -- \(SSHCommand.shellQuote(plan.worktreePath))"
+            let result = try await remote.run(host: host, command: command)
+            guard result.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(result.stderr) }
         }
-        let path = URL(fileURLWithPath: plan.worktreePath)
-        let worktree = Worktree(
-            id: Worktree.makeId(path: path), projectId: plan.projectID, name: plan.branch,
-            branch: plan.branch, path: path, status: .clean, lastActivity: .distantPast,
-            lineageID: plan.expectedLineageID
-        )
-        try await WorktreeService().remove(
-            repoPath: URL(fileURLWithPath: plan.sourceRepositoryPath),
-            worktree: worktree,
-            deleteBranchIfMerged: false
-        )
     }
 
     func deleteMergedBranch(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool {
-        guard case .local = plan.executionLocation.normalized else { return false }
-        let result = try await Process.git(["branch", "-d", plan.branch], cwd: URL(fileURLWithPath: plan.sourceRepositoryPath))
-        return result.exitCode == 0
+        switch plan.executionLocation.normalized {
+        case .local:
+            let result = try await Process.git(["branch", "-d", plan.branch], cwd: URL(fileURLWithPath: plan.sourceRepositoryPath))
+            return result.exitCode == 0
+        case .ssh(let host):
+            let command = "git -C \(SSHCommand.shellQuote(plan.sourceRepositoryPath)) branch -d -- \(SSHCommand.shellQuote(plan.branch))"
+            let result = try await remote.run(host: host, command: command)
+            return result.exitCode == 0
+        }
+    }
+
+    private func remoteDeletePreflight(_ plan: WorkspaceCheckoutCleanupPlan, host: String) async throws -> WorktreeDeletePreflight {
+        let quotedPath = SSHCommand.shellQuote(plan.worktreePath)
+        let status = try await remote.run(host: host, command: "git -C \(quotedPath) status --porcelain=v1 --untracked-files=normal")
+        guard status.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(status.stderr) }
+        var reasons: Set<WorktreeDeletePreflightReason> = []
+        if !status.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            reasons.insert(.dirty)
+        }
+        let submodules = try await remote.run(host: host, command: "git -C \(quotedPath) submodule status --recursive")
+        let hasSubmodules = submodules.exitCode == 0 && !submodules.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if hasSubmodules {
+            reasons.insert(.containsInitializedSubmodules)
+        }
+        return .init(reasons: reasons, submoduleLocalState: hasSubmodules ? .unknown : .none)
+    }
+
+    private func remoteInspectRoot(_ plan: WorkspaceCheckoutCleanupPlan, host: String) async -> WorkspaceCheckoutCleanupRootObservation {
+        let managedNames = Set(plan.managedMemberPaths.map { URL(fileURLWithPath: $0).lastPathComponent })
+        let managedList = managedNames.isEmpty ? "''" : managedNames.map(SSHCommand.shellQuote).joined(separator: " ")
+        let command = """
+        r=$(cd \(SSHCommand.shellQuote(plan.rootPath)) 2>/dev/null && pwd -P) || exit 2
+        m=$(cd \(SSHCommand.shellQuote(plan.worktreePath)) 2>/dev/null && pwd -P) || m=''
+        case "$m" in "$r"/*) : ;; *) exit 3 ;; esac
+        for p in "$r"/* "$r"/.[!.]* "$r"/..?*; do
+          [ -e "$p" ] || [ -L "$p" ] || continue
+          n=${p##*/}
+          skip=0
+          for managed in \(managedList); do [ "$n" = "$managed" ] && skip=1; done
+          [ "$skip" = 1 ] || printf '%s\\n' "$n"
+        done
+        """
+        guard let result = try? await remote.run(host: host, command: command),
+              result.exitCode == 0
+        else { return .init(isContained: false, leftovers: []) }
+        let leftovers = result.stdout.split(separator: "\n").map(String.init).filter { !$0.isEmpty }
+        return .init(isContained: true, leftovers: leftovers)
     }
 }

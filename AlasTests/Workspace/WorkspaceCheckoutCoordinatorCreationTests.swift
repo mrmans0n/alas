@@ -82,6 +82,25 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
         #expect(await git.intents == [.create(atCommit: "one"), .reuse(atCommit: "two")])
     }
 
+    @Test func stopAfterCurrentOperationsLeavesPendingMembersResumable() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-coordinator-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = WorkspaceStore(url: url)
+        let fixture = makeFixture(count: 5)
+        let git = ConcurrentWorkspaceGit(failingProjectID: "never")
+        let coordinator = WorkspaceCheckoutCoordinator(store: store, git: git, scripts: NoopWorkspaceScriptRunner(), projectMutationGate: ProjectMutationGate())
+
+        let checkout = try await coordinator.createPersisted(workspace: fixture.workspace, plan: fixture.plan)
+        await coordinator.beginCreation(checkoutID: checkout.id)
+        try await coordinator.stopAfterCurrentOperations(checkoutID: checkout.id)
+        await coordinator.awaitCreationCompletion(checkoutID: checkout.id)
+
+        let persisted = await store.checkout(id: checkout.id)
+        #expect(persisted?.operation == .idle)
+        #expect(persisted?.stopAfterCurrentOperations == false)
+        #expect(persisted?.members.contains(where: { $0.checkpoint == WorkspaceCheckoutCheckpoint.planPersisted }) == true)
+    }
+
     @Test func rejectsInconsistentFrozenPlanBeforePersistingOrCallingGit() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-coordinator-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: url) }
