@@ -117,7 +117,8 @@ private actor RepairScriptRunner: WorkspaceScriptRunning {
 private actor ResumeGit: WorkspaceGitOperating {
     private(set) var operations: [WorkspaceFrozenWorktreeOperation] = []
     func prepareBranch(_ operation: WorkspaceFrozenWorktreeOperation) async throws { operations.append(operation) }
-    func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? { operations.append(operation); return "lineage-a" }
+    func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? { operations.append(operation)
+    return "lineage-a" }
 }
 
 private extension WorkspaceStoreLoadResult {

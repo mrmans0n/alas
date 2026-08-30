@@ -9,7 +9,8 @@ struct WorkspaceCheckoutBoundaryTests {
         let outside = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root); try? FileManager.default.removeItem(at: outside) }
+        defer { try? FileManager.default.removeItem(at: root)
+        try? FileManager.default.removeItem(at: outside) }
         try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("escape"), withDestinationURL: outside)
 
         let boundary = WorkspaceCheckoutBoundary(rootPath: root.path)

@@ -216,5 +216,6 @@ private actor CountingWorkspaceGit: WorkspaceGitOperating {
     private(set) var callCount = 0
 
     func prepareBranch(_ operation: WorkspaceFrozenWorktreeOperation) async throws { callCount += 1 }
-    func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? { callCount += 1; return nil }
+    func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? { callCount += 1
+    return nil }
 }
