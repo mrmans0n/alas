@@ -1526,11 +1526,44 @@ final class AppState {
             throw WorkspaceStoreError.recoveryRequired
         }
         let coordinator = workspaceCoordinator()
-        let checkout = try await coordinator.createPersisted(workspace: workspace, plan: plan)
+        let checkout = try await coordinator.createPersisted(
+            workspace: workspace,
+            plan: plan,
+            configurationSnapshot: workspaceConfigurationSnapshot(for: workspace, plan: plan)
+        )
         await workspacesManager.refreshCheckoutSnapshots()
         selectWorkspaceCheckout(id: checkout.id)
         await coordinator.beginCreation(checkoutID: checkout.id)
         return checkout
+    }
+
+    private func workspaceConfigurationSnapshot(
+        for workspace: Workspace,
+        plan: FrozenWorkspaceCheckoutPlan
+    ) -> WorkspaceCheckoutConfigurationSnapshot {
+        let projectsByID = Dictionary(uniqueKeysWithValues: projects.map { ($0.id, $0) })
+        let members = plan.members.compactMap { planned -> WorkspaceConfigurationResolver.MemberInput? in
+            guard let project = projectsByID[planned.projectID] else { return nil }
+            return .init(
+                id: planned.workspaceMemberID,
+                project: project,
+                checkoutRoot: plan.rootPath,
+                worktreePath: planned.destinationPath
+            )
+        }
+        return WorkspaceConfigurationResolver.resolve(.init(
+            globalTerminal: config.terminal,
+            globalLaunchPreference: .init(
+                openAfterCreate: true,
+                launcherMode: config.agents.defaultLauncherMode,
+                agentID: config.agents.worktreeAutoLaunch.agentId,
+                useBypassPermissions: config.agents.worktreeAutoLaunch.useBypassPermissions
+            ),
+            workspaceConfiguration: workspace.configuration,
+            members: members,
+            availableLauncherModes: Set(AppConfig.LauncherMode.allCases),
+            enabledAgentIDs: Set(agentRegistry.enabled().map(\.id))
+        ))
     }
 
     func archiveWorkspaceCheckout(id: UUID) async throws -> WorkspaceCheckout {

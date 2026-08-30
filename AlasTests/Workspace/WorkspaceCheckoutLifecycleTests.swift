@@ -114,6 +114,43 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(state.checkouts.contains(where: { $0.id == fixture.checkout.id }) == false)
     }
 
+    @Test func concreteLifecycleUsesSSHTransportForCleanup() async throws {
+        let runner = RemoteLifecycleRunner(results: [
+            .init(exitCode: 0, stdout: " M file.txt\n", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 1, stdout: "", stderr: "not merged"),
+        ])
+        let lifecycle = WorkspaceCheckoutLifecycleOperator(remote: .init { executable, args, timeout in
+            try await runner.run(executable: executable, args: args, timeout: timeout)
+        })
+        let plan = WorkspaceCheckoutCleanupPlan(
+            checkoutID: UUID(),
+            memberID: UUID(),
+            executionLocation: .ssh("example.com"),
+            projectID: "project",
+            sourceRepositoryPath: "/repo",
+            baseReference: "main",
+            baseCommit: "abc",
+            rootPath: "/checkout",
+            managedMemberPaths: ["/checkout/a"],
+            worktreePath: "/checkout/a",
+            branch: "feature",
+            expectedLineageID: "lineage",
+            branchOwnership: .created
+        )
+
+        let preflight = try await lifecycle.deletePreflight(plan)
+        try await lifecycle.removeWorktree(plan)
+        let branchRemoved = try await lifecycle.deleteMergedBranch(plan)
+
+        #expect(preflight.reasons == [.dirty])
+        #expect(branchRemoved == false)
+        let commands = await runner.commands.joined(separator: "\n")
+        #expect(commands.contains("worktree remove"))
+        #expect(commands.contains("branch -d"))
+    }
+
     private struct Fixture {
         let store: WorkspaceStore
         let checkout: WorkspaceCheckout
@@ -192,3 +229,17 @@ private actor PersistedCleanupLifecycle: WorkspaceCheckoutLifecycleOperating {
     func deleteMergedBranch(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool { true }
 }
 private enum TestLifecycleError: Error { case failed }
+
+private actor RemoteLifecycleRunner {
+    private var results: [ProcessResult]
+    private(set) var commands: [String] = []
+
+    init(results: [ProcessResult]) {
+        self.results = results
+    }
+
+    func run(executable: String, args: [String], timeout: TimeInterval) async throws -> ProcessResult {
+        commands.append(args.joined(separator: " "))
+        return results.isEmpty ? .init(exitCode: 0, stdout: "", stderr: "") : results.removeFirst()
+    }
+}

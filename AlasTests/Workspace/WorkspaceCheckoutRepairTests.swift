@@ -53,6 +53,28 @@ struct WorkspaceCheckoutRepairTests {
         #expect(await git.operations.map(\.destinationPath) == ["/checkouts/a", "/checkouts/a"])
     }
 
+    @Test func resumeCreationAcceptsInterruptedCreatingCheckout() async throws {
+        let fixture = try await persistedFixture(checkpoint: .planPersisted, operation: .creating)
+        let git = ResumeGit()
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: git, scripts: RepairScriptRunner(), projectMutationGate: ProjectMutationGate())
+
+        let checkout = try await coordinator.resumeCreation(checkoutID: fixture.checkout.id)
+
+        #expect(checkout.operation == .idle)
+        #expect(await git.operations.map(\.destinationPath) == ["/checkouts/a", "/checkouts/a"])
+    }
+
+    @Test func resumeCreationContinuesFromBranchPreparedWithoutPreparingAgain() async throws {
+        let fixture = try await persistedFixture(checkpoint: .branchPrepared, branchOwnership: .created, operation: .creating)
+        let git = CountingResumeGit()
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: git, scripts: RepairScriptRunner(), projectMutationGate: ProjectMutationGate())
+
+        _ = try await coordinator.resumeCreation(checkoutID: fixture.checkout.id)
+
+        #expect(await git.prepareCount == 0)
+        #expect(await git.createCount == 1)
+    }
+
     @Test func resumeCreationNeverReplaysGitAfterASetupFailure() async throws {
         let fixture = try await persistedFixture(checkpoint: .failed, worktreeCreated: true)
         let git = ResumeGit()
@@ -75,7 +97,13 @@ struct WorkspaceCheckoutRepairTests {
         #expect(await git.operations.count == 2)
     }
 
-    private func persistedFixture(checkpoint: WorkspaceCheckoutCheckpoint, worktreeCreated: Bool = false, lineageID: String? = nil) async throws -> (store: WorkspaceStore, checkout: WorkspaceCheckout) {
+    private func persistedFixture(
+        checkpoint: WorkspaceCheckoutCheckpoint,
+        worktreeCreated: Bool = false,
+        lineageID: String? = nil,
+        branchOwnership: WorkspaceBranchOwnership = .unknown,
+        operation: WorkspaceCheckoutOperation = .idle
+    ) async throws -> (store: WorkspaceStore, checkout: WorkspaceCheckout) {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-repair-\(UUID().uuidString).json")
         let store = WorkspaceStore(url: url)
         let checkoutMemberID = UUID()
@@ -83,10 +111,10 @@ struct WorkspaceCheckoutRepairTests {
             id: checkoutMemberID,
             workspaceMemberID: UUID(), projectID: "project-a", fallbackProjectName: "A", fallbackRepositoryRoot: "/repos/a",
             worktreePath: "/checkouts/a", gitLineageID: lineageID, checkpoint: checkpoint,
-            cleanupOwnership: .init(worktreeCreated: worktreeCreated),
+            cleanupOwnership: .init(worktreeCreated: worktreeCreated, branchOwnership: branchOwnership),
             plan: .init(checkoutMemberID: checkoutMemberID, projectID: "project-a", sourceRepositoryPath: "/repos/a", destinationPath: "/checkouts/a", baseReference: "main", baseCommit: "abc", branchIntent: .create(atCommit: "abc"))
         )
-        let checkout = WorkspaceCheckout(workspaceID: UUID(), fallbackWorkspaceName: "Release", executionLocation: .local, branch: "release/1091", rootPath: "/checkouts", members: [member])
+        let checkout = WorkspaceCheckout(workspaceID: UUID(), fallbackWorkspaceName: "Release", executionLocation: .local, branch: "release/1091", rootPath: "/checkouts", operation: operation, members: [member])
         try await store.checkpoint(.init(checkouts: [checkout]))
         return (store, checkout)
     }
@@ -119,6 +147,16 @@ private actor ResumeGit: WorkspaceGitOperating {
     func prepareBranch(_ operation: WorkspaceFrozenWorktreeOperation) async throws { operations.append(operation) }
     func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? { operations.append(operation)
     return "lineage-a" }
+}
+
+private actor CountingResumeGit: WorkspaceGitOperating {
+    private(set) var prepareCount = 0
+    private(set) var createCount = 0
+    func prepareBranch(_ operation: WorkspaceFrozenWorktreeOperation) async throws { prepareCount += 1 }
+    func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? {
+        createCount += 1
+        return "lineage-a"
+    }
 }
 
 private extension WorkspaceStoreLoadResult {

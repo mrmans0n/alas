@@ -212,6 +212,57 @@ struct WorkspaceFeatureFlagTests {
         #expect(state.workspacesManager.workspaces.isEmpty)
     }
 
+    @Test @MainActor func appStateCreationPersistsResolvedConfigurationSnapshot() async throws {
+        let workspaceURL = temporaryURL()
+        let checkoutRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-workspace-config-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            removeWorkspaceFiles(near: workspaceURL)
+            try? FileManager.default.removeItem(at: checkoutRoot)
+        }
+        let workspaceStore = WorkspaceStore(url: workspaceURL)
+        let spaces = emptySpacesFile()
+        let manager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
+        _ = await manager.setEnabled(true, spacesFile: spaces)
+        let state = AppState(
+            store: RecordingSpacesStore(spacesFile: spaces),
+            persistenceErrorHandler: { _, _ in },
+            restoreActiveTabsOnStartup: false,
+            workspacesManager: manager,
+            workspaceStore: workspaceStore
+        )
+        state.config.workspacesEnabled = true
+        state.config.terminal.worktreeCreateScript = "global setup"
+        let workspace = Workspace(
+            name: "Release",
+            executionLocation: .local,
+            members: [],
+            configuration: .init(sharedStartupScripts: .init(
+                sessionOpenMode: .useGlobal,
+                sessionOpenScript: "",
+                worktreeCreateMode: .overrideGlobal,
+                worktreeCreateScript: "workspace setup"
+            ))
+        )
+        let plan = FrozenWorkspaceCheckoutPlan(
+            checkoutID: UUID(),
+            workspaceID: workspace.id,
+            executionLocation: .local,
+            branch: "release/1091",
+            rootPath: checkoutRoot.path,
+            members: []
+        )
+
+        let checkout = try await state.createWorkspaceCheckout(workspace: workspace, plan: plan)
+        await state.workspaceCoordinator().awaitCreationCompletion(checkoutID: checkout.id)
+
+        guard let persisted = await workspaceStore.checkout(id: checkout.id) else {
+            Issue.record("Expected persisted checkout")
+            return
+        }
+        #expect(persisted.configurationSnapshot?.shared.worktreeCreateScript == "workspace setup")
+    }
+
     private final class ThrowingSpacesStore: PersistenceStoreProtocol, @unchecked Sendable {
         let spacesFile: SpacesFile
         init(spacesFile: SpacesFile) { self.spacesFile = spacesFile }
