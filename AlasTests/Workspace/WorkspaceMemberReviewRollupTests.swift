@@ -91,6 +91,23 @@ struct WorkspaceMemberReviewRollupTests {
         #expect(opened.map(\.1.id) == [record.id])
     }
 
+    @Test func qualifiesReviewAndGGReadersWithCheckoutLocationAndMemberProject() throws {
+        let checkout = WorkspaceCheckout(workspaceID: UUID(), fallbackWorkspaceName: "Release", executionLocation: .ssh("builder.example"), branch: "shared-branch", rootPath: "/srv/checkouts/release", members: [
+            Self.member(id: uuid(1), projectID: "remote-project", name: "Remote", worktreeID: "/srv/checkouts/release/remote"),
+        ])
+        let record = Self.record(id: "remote-review", worktreeID: "/srv/checkouts/release/remote", status: .active, updatedAt: 1)
+        let stack = GGStack(name: "remote-stack", base: "main", totalCommits: 1, syncedCommits: 1, currentPosition: 1, behindBase: 0, entries: [
+            GGStackEntry(position: 1, sha: "aaa", title: "Remote", prNumber: nil, prState: nil, approved: false, ciStatus: nil),
+        ])
+        let reviews = QualifiedWorkspaceReviewSessionReader(record: record)
+        let gg = QualifiedWorkspaceGGStackReader(stack: stack)
+
+        let rollup = try MemberReviewRollupBuilder(reviews: reviews, gg: gg).build(for: checkout)
+
+        #expect(rollup.members.first?.reviews.map(\.id.rawValue) == ["remote-review"])
+        #expect(rollup.members.first?.ggStack?.name == "remote-stack")
+    }
+
     private static func member(id: UUID, projectID: String, name: String, worktreeID: String, availability: WorkspaceCheckoutMemberAvailability = .available) -> WorkspaceCheckoutMember {
         WorkspaceCheckoutMember(id: id, workspaceMemberID: UUID(), projectID: projectID, fallbackProjectName: name, fallbackRepositoryRoot: "/repos/\(projectID)", worktreePath: worktreeID, availability: availability, checkpoint: .setupComplete)
     }
@@ -124,5 +141,46 @@ private struct InMemoryWorkspaceGGStackReader: WorkspaceGGStackReading {
 
     func stack(worktreeID: String) throws -> GGStack? {
         stacks[worktreeID]
+    }
+}
+
+private struct QualifiedWorkspaceReviewSessionReader: WorkspaceReviewSessionReading {
+    var record: ReviewSessionRecord
+
+    func list(worktreeID: String) throws -> [ReviewSessionRecord] {
+        []
+    }
+
+    func list(
+        worktreeID: String,
+        projectID: String,
+        executionLocation: ExecutionLocation,
+        repositoryPath: String
+    ) throws -> [ReviewSessionRecord] {
+        guard worktreeID == "/srv/checkouts/release/remote",
+              projectID == "remote-project",
+              executionLocation == .ssh("builder.example"),
+              repositoryPath == "/srv/checkouts/release/remote" else {
+            return []
+        }
+        return [record]
+    }
+}
+
+private struct QualifiedWorkspaceGGStackReader: WorkspaceGGStackReading {
+    var stack: GGStack
+
+    func stack(worktreeID: String) throws -> GGStack? {
+        nil
+    }
+
+    func stack(worktreeID: String, projectID: String, executionLocation: ExecutionLocation, repositoryPath: String) throws -> GGStack? {
+        guard worktreeID == "/srv/checkouts/release/remote",
+              projectID == "remote-project",
+              executionLocation == .ssh("builder.example"),
+              repositoryPath == "/srv/checkouts/release/remote" else {
+            return nil
+        }
+        return stack
     }
 }

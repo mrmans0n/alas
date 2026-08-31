@@ -34,7 +34,7 @@ protocol WorkspaceCheckoutSessionStopping: Sendable {
 /// the complete snapshot so the location-qualified owner is preserved.
 struct WorkspaceCheckoutSessionStopper: WorkspaceCheckoutSessionStopping {
     let store: WorkspaceStore
-    let stop: @MainActor @Sendable (WorkspaceCheckout) -> Void
+    let stop: @MainActor @Sendable (WorkspaceCheckout) async -> Void
 
     func stopSessions(for checkoutID: UUID) async {
         guard let checkout = await store.checkout(id: checkoutID) else { return }
@@ -1226,8 +1226,9 @@ actor WorkspaceCheckoutCoordinator {
               let member = checkout.members.first(where: { $0.id == memberID })
         else { return "" }
         let shared = checkout.configurationSnapshot?.shared.worktreeCreateScript ?? ""
+        let global = checkout.configurationSnapshot?.shared.globalWorktreeCreateScript ?? ""
         let memberScript = checkout.configurationSnapshot?.members[member.workspaceMemberID]?.setupScript ?? ""
-        let memberOnlyScript = memberScript.removingSharedWorkspaceSetupPrefix(shared)
+        let memberOnlyScript = memberScript.removingInheritedGlobalSetupPrefix(global)
         return [shared, memberOnlyScript].filter { !$0.isEmpty }.joined(separator: "\n")
     }
 
@@ -1373,20 +1374,16 @@ enum WorkspaceCheckoutCoordinatorError: Error, Equatable, Sendable {
 }
 
 private extension String {
-    func removingSharedWorkspaceSetupPrefix(_ shared: String) -> String {
-        let shared = shared.trimmingCharacters(in: .whitespacesAndNewlines)
+    func removingInheritedGlobalSetupPrefix(_ global: String) -> String {
+        let global = global.trimmingCharacters(in: .whitespacesAndNewlines)
         let script = trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !shared.isEmpty, !script.isEmpty else { return script }
-        if script == shared { return "" }
-        let prefix = shared + "\n"
+        guard !global.isEmpty, !script.isEmpty else { return script }
+        if script == global { return "" }
+        let prefix = global + "\n"
         if script.hasPrefix(prefix) {
             return String(script.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        let sharedLines = shared.split(separator: "\n", omittingEmptySubsequences: false)
-        let scriptLines = script.split(separator: "\n", omittingEmptySubsequences: false)
-        let commonCount = zip(sharedLines, scriptLines).prefix { $0 == $1 }.count
-        guard commonCount > 0 else { return script }
-        return scriptLines.dropFirst(commonCount).joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return script
     }
 }
 

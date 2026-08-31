@@ -113,7 +113,7 @@ struct WorkspaceTerminalSessionTests {
     }
 
     @MainActor
-    @Test func archivingCheckoutStopsOnlyItsOwnedSessionsAndTabs() {
+    @Test func archivingCheckoutStopsOnlyItsOwnedSessionsAndTabs() async {
         let tabs = TabsManager(store: WorkspaceTerminalMemoryStore())
         let state = AppState(store: WorkspaceTerminalMemoryStore(), tabsManager: tabs)
         let checkout = WorkspaceCheckout(
@@ -136,7 +136,7 @@ struct WorkspaceTerminalSessionTests {
         )
         state.terminal.registry.register(session)
 
-        state.stopWorkspaceCheckoutSessions(checkout)
+        await state.stopWorkspaceCheckoutSessions(checkout)
 
         #expect(tabs.tabs(for: owner).isEmpty)
         #expect(state.terminal.registry.session(for: "checkout-leaf") == nil)
@@ -226,7 +226,7 @@ struct WorkspaceTerminalSessionTests {
     }
 
     @MainActor
-    @Test func archivingCheckoutStopsRegisteredSessionEvenWithoutPersistedTabs() {
+    @Test func archivingCheckoutStopsRegisteredSessionEvenWithoutPersistedTabs() async {
         let tabs = TabsManager(store: WorkspaceTerminalMemoryStore())
         let state = AppState(store: WorkspaceTerminalMemoryStore(), tabsManager: tabs)
         let checkout = WorkspaceCheckout(
@@ -247,7 +247,7 @@ struct WorkspaceTerminalSessionTests {
             args: []
         ))
 
-        state.stopWorkspaceCheckoutSessions(checkout)
+        await state.stopWorkspaceCheckoutSessions(checkout)
 
         #expect(state.terminal.registry.session(for: "unpersisted-leaf") == nil)
         #expect(tabs.tabs(for: owner).isEmpty)

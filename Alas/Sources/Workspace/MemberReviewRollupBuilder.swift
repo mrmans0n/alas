@@ -2,13 +2,39 @@ import Foundation
 
 protocol WorkspaceReviewSessionReading {
     func list(worktreeID: String) throws -> [ReviewSessionRecord]
+    func list(
+        worktreeID: String,
+        projectID: String,
+        executionLocation: ExecutionLocation,
+        repositoryPath: String
+    ) throws -> [ReviewSessionRecord]
 }
 
 protocol WorkspaceGGStackReading {
     func stack(worktreeID: String) throws -> GGStack?
+    func stack(worktreeID: String, projectID: String, executionLocation: ExecutionLocation, repositoryPath: String) throws -> GGStack?
 }
 
 extension ReviewSessionStore: WorkspaceReviewSessionReading {}
+
+extension WorkspaceReviewSessionReading {
+    func list(
+        worktreeID: String,
+        projectID: String,
+        executionLocation: ExecutionLocation,
+        repositoryPath: String
+    ) throws -> [ReviewSessionRecord] {
+        try list(worktreeID: worktreeID).filter {
+            $0.target.repositoryPath.standardizedFileURL.path == URL(fileURLWithPath: repositoryPath).standardizedFileURL.path
+        }
+    }
+}
+
+extension WorkspaceGGStackReading {
+    func stack(worktreeID: String, projectID: String, executionLocation: ExecutionLocation, repositoryPath: String) throws -> GGStack? {
+        try stack(worktreeID: worktreeID)
+    }
+}
 
 struct WorkspaceReviewAction: Equatable {
     var memberID: UUID
@@ -66,8 +92,18 @@ struct MemberReviewRollupBuilder {
         let members = try checkout.members.map { member in
             let worktreeID = member.worktreePath
             let isAvailable = member.availability == .available
-            let reviewRecords = isAvailable ? try reviews.list(worktreeID: worktreeID) : []
-            let stack = isAvailable ? try gg.stack(worktreeID: worktreeID) : nil
+            let reviewRecords = isAvailable ? try reviews.list(
+                worktreeID: worktreeID,
+                projectID: member.projectID,
+                executionLocation: checkout.executionLocation,
+                repositoryPath: member.worktreePath
+            ) : []
+            let stack = isAvailable ? try gg.stack(
+                worktreeID: worktreeID,
+                projectID: member.projectID,
+                executionLocation: checkout.executionLocation,
+                repositoryPath: member.worktreePath
+            ) : nil
             let unpublished = stack?.entries
                 .sorted { $0.position < $1.position }
                 .filter { $0.prNumber == nil } ?? []

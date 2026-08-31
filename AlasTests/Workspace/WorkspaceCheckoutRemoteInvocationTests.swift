@@ -24,6 +24,8 @@ struct WorkspaceCheckoutRemoteInvocationTests {
         #expect(calls[0].args.last?.contains("test -L") == true)
         #expect(calls[1].args.last?.contains("test -d") == true)
         #expect(calls[1].args.last?.contains("test -w") == true)
+        #expect(calls[1].args.last?.contains("while [ ! -e \"$p\" ] && [ ! -L \"$p\" ]") == true)
+        #expect(calls[1].args.last?.contains("dirname \"$p\"") == true)
     }
 
     @Test func remoteConnectionFailureFailsClosedWithoutTryingAnotherHost() async {
