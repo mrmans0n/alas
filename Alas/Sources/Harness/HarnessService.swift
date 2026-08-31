@@ -53,6 +53,9 @@ final class HarnessService {
 
         notifications.setup { [weak self] context in
             self?.onContextClickThrough?(context)
+            if case .workspaceCheckout = context.owner {
+                return
+            }
             if let projectId = context.projectId, let worktreeId = context.worktreeId {
                 self?.onClickThrough?(projectId, worktreeId, context.sessionId)
             }
