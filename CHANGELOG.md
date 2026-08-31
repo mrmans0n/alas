@@ -6,6 +6,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.24] - 2026-08-31
+
+### ✨ Features
+
+- Show ACP message timestamps and tool durations (#1092).
+
+### 🐛 Fixes
+
+- Keep commit headers sized correctly (#1076).
+
+### 🏗️ Internal
+
+- Update the Rust `tree-sitter-graphql` crate to 0.2.1 (#1077).
+- Update the Rust `tree-sitter-language` crate to 0.1.8 (#1093).
+
 ## [0.14.23] - 2026-08-26
 
 ### ✨ Features
