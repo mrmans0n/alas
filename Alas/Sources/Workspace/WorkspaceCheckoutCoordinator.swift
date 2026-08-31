@@ -628,6 +628,7 @@ actor WorkspaceCheckoutCoordinator {
             }
             throw error
         }
+        var claimedAnyMember = false
         for member in checkout.members {
             if await shouldStopAfterCurrentOperations(checkoutID: checkoutID) { break }
             if let memberIDs, memberIDs.contains(member.id) == false { continue }
@@ -636,10 +637,16 @@ actor WorkspaceCheckoutCoordinator {
                   let frozenMember = frozenMember(from: member)
             else { continue }
             let plan = member.plan!
+            let setupResumeVerified = if member.checkpoint == .setupRunning || member.checkpoint == .worktreeCreated {
+                await setupResumeHasExactLineage(checkout: checkout, member: member)
+            } else {
+                true
+            }
             if member.checkpoint == .setupComplete {
                 guard await completedMemberNeedsRecreation(checkout: checkout, member: frozenMember),
                       try await claimCompletedMemberForRecreation(checkoutID: checkoutID, memberID: member.id, plan: plan)
                 else { continue }
+                claimedAnyMember = true
                 await execute(member: frozenMember, checkout: checkout)
                 continue
             }
@@ -665,10 +672,12 @@ actor WorkspaceCheckoutCoordinator {
                     state.checkouts[checkoutIndex].members[memberIndex].cleanup = nil
                     return .worktreeCreating
                 case .setupRunning:
+                    guard setupResumeVerified else { return nil }
                     state.checkouts[checkoutIndex].members[memberIndex].checkpoint = .setupRunning
                     state.checkouts[checkoutIndex].members[memberIndex].cleanup = nil
                     return .setupRunning
                 case .worktreeCreated:
+                    guard setupResumeVerified else { return nil }
                     state.checkouts[checkoutIndex].members[memberIndex].checkpoint = .setupRunning
                     state.checkouts[checkoutIndex].members[memberIndex].availability = .pending
                     state.checkouts[checkoutIndex].members[memberIndex].cleanup = nil
@@ -684,6 +693,7 @@ actor WorkspaceCheckoutCoordinator {
                 }
             }
             guard let claimedCheckpoint else { continue }
+            claimedAnyMember = true
             if claimedCheckpoint == .setupRunning {
                 await runSetup(member: frozenMember, checkout: checkout)
             } else if claimedCheckpoint == .worktreeCreating {
@@ -716,12 +726,32 @@ actor WorkspaceCheckoutCoordinator {
                 await execute(member: frozenMember, checkout: checkout)
             }
         }
-        if let memberIDs {
+        if !claimedAnyMember {
+            await clearRepairIfOwned(checkoutID: checkoutID)
+        } else if let memberIDs {
             await finishScopedRepair(checkoutID: checkoutID, memberIDs: memberIDs)
         } else {
             await finishIfAllMembersTerminal(checkoutID: checkoutID, owning: .repairing)
         }
         return try await self.checkout(id: checkoutID)
+    }
+
+    private func setupResumeHasExactLineage(checkout: WorkspaceCheckout, member: WorkspaceCheckoutMember) async -> Bool {
+        guard let plan = makeCleanupPlan(checkout: checkout, member: member) else { return false }
+        switch await lifecycle.verifyCleanup(plan) {
+        case .exactLineage(let lineage):
+            return lineage == plan.expectedLineageID
+        default:
+            return false
+        }
+    }
+
+    private func clearRepairIfOwned(checkoutID: UUID) async {
+        try? await mutateCheckout(checkoutID) {
+            guard $0.operation == .repairing else { return }
+            $0.operation = .idle
+            $0.stopAfterCurrentOperations = false
+        }
     }
 
     private func finishScopedRepair(checkoutID: UUID, memberIDs: Set<UUID>) async {
@@ -1225,7 +1255,7 @@ struct WorkspaceFrozenGitOperator: WorkspaceGitOperating {
         switch operation.executionLocation.normalized {
         case .local:
             let destination = URL(fileURLWithPath: operation.destinationPath)
-            guard FileManager.default.fileExists(atPath: destination.path) else { return nil }
+            guard Self.pathEntryExistsOrIsSymlink(destination.path) else { return nil }
             let head = try await Process.git(["rev-parse", "--verify", "HEAD^{commit}"], cwd: destination)
             guard head.exitCode == 0,
                   head.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == operation.baseCommit
@@ -1249,12 +1279,17 @@ struct WorkspaceFrozenGitOperator: WorkspaceGitOperating {
     func frozenWorktreeIsMissing(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> Bool {
         switch operation.executionLocation.normalized {
         case .local:
-            return FileManager.default.fileExists(atPath: operation.destinationPath) == false
+            return Self.pathEntryExistsOrIsSymlink(operation.destinationPath) == false
         case .ssh(let host):
             let path = SSHCommand.shellQuote(operation.destinationPath)
-            let result = try await WorkspaceRemoteTransport().run(host: host, command: "test -e \(path)")
+            let result = try await WorkspaceRemoteTransport().run(host: host, command: "p=\(path); test -e \"$p\" || test -L \"$p\"")
             return result.exitCode == 1
         }
+    }
+
+    private static func pathEntryExistsOrIsSymlink(_ path: String) -> Bool {
+        if FileManager.default.fileExists(atPath: path) { return true }
+        return (try? FileManager.default.destinationOfSymbolicLink(atPath: path)) != nil
     }
 }
 

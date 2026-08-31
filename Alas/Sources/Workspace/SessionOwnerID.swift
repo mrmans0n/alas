@@ -18,6 +18,11 @@ enum SessionOwnerID: Hashable, Sendable {
         return id
     }
 
+    var checkoutExecutionLocation: ExecutionLocation? {
+        guard case .workspaceCheckout(_, let location) = self else { return nil }
+        return location.normalized
+    }
+
     var storageKey: String {
         switch self {
         case .worktree(let id):

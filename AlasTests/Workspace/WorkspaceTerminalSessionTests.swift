@@ -166,6 +166,21 @@ struct WorkspaceTerminalSessionTests {
     }
 
     @MainActor
+    @Test func initialCheckoutTerminalLeafPersistsItsExecutionLocation() {
+        let tabs = TabsManager(store: WorkspaceTerminalMemoryStore())
+        let owner = SessionOwnerID.workspaceCheckout(checkoutID, .ssh("build-host"))
+        let tab = tabs.appendTerminal(owner: owner, title: "Terminal", sessionId: "first")
+
+        let leaves = tabs.tabs(for: owner).compactMap { tab -> [PaneLeaf]? in
+            guard case .terminal(let state) = tab else { return nil }
+            return state.root.leaves()
+        }.flatMap { $0 }
+
+        #expect(tab.id != "")
+        #expect(leaves.first(where: { $0.id == "first" })?.lastCwdLocation == .ssh("build-host"))
+    }
+
+    @MainActor
     @Test func manualSharedTabCloseStopsEveryCheckoutTerminalLeaf() {
         let tabs = TabsManager(store: WorkspaceTerminalMemoryStore())
         let state = AppState(store: WorkspaceTerminalMemoryStore(), tabsManager: tabs)

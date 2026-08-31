@@ -64,14 +64,14 @@ struct WorkspaceCheckoutObserver: WorkspaceCheckoutObserving {
         switch checkout.executionLocation.normalized {
         case .local:
             let destination = URL(fileURLWithPath: plan.destinationPath)
-            guard FileManager.default.fileExists(atPath: destination.path) else { return .missing }
+            guard Self.pathEntryExistsOrIsSymlink(destination.path) else { return .missing }
             guard let lineage = WorktreeService.existingLocalLineageID(forWorktreeAt: destination) else {
                 return .identityConflict(nil)
             }
             return member.gitLineageID == lineage ? .exactLineage(lineage) : .identityConflict(lineage)
         case .ssh(let host):
             let path = SSHCommand.shellQuote(plan.destinationPath)
-            let command = "p=\(path); test -e \"$p\" || exit 2; d=$(git -C \"$p\" rev-parse --absolute-git-dir) || exit 3; f=\"$d/alas-worktree-lineage\"; test -s \"$f\" || exit 4; head -n 1 \"$f\""
+            let command = "p=\(path); test -e \"$p\" || test -L \"$p\" || exit 2; d=$(git -C \"$p\" rev-parse --absolute-git-dir) || exit 3; f=\"$d/alas-worktree-lineage\"; test -s \"$f\" || exit 4; head -n 1 \"$f\""
             guard let result = try? await remote.run(host: host, command: command) else {
                 return .unavailable("Could not inspect Workspace member on \(host).")
             }
@@ -84,5 +84,10 @@ struct WorkspaceCheckoutObserver: WorkspaceCheckoutObserving {
             guard !lineage.isEmpty else { return .identityConflict(nil) }
             return member.gitLineageID == lineage ? .exactLineage(lineage) : .identityConflict(lineage)
         }
+    }
+
+    private static func pathEntryExistsOrIsSymlink(_ path: String) -> Bool {
+        if FileManager.default.fileExists(atPath: path) { return true }
+        return (try? FileManager.default.destinationOfSymbolicLink(atPath: path)) != nil
     }
 }
