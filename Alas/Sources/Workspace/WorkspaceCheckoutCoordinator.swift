@@ -251,7 +251,10 @@ actor WorkspaceCheckoutCoordinator {
         let deletionKey = setupKey(checkoutID: checkoutID, memberID: memberID)
         guard !activeDeletions.contains(deletionKey) else { throw WorkspaceCheckoutCoordinatorError.operationInProgress }
         activeDeletions.insert(deletionKey)
-        defer { activeDeletions.remove(deletionKey) }
+        defer {
+            activeDeletions.remove(deletionKey)
+            notifyLiveOperationWaiters(checkoutID: checkoutID)
+        }
         let checkout = try await checkout(id: checkoutID)
         guard checkout.operation == .idle || checkout.operation == .deleting else { throw WorkspaceCheckoutCoordinatorError.operationInProgress }
         guard let member = checkout.members.first(where: { $0.id == memberID }),
@@ -451,7 +454,10 @@ actor WorkspaceCheckoutCoordinator {
             throw WorkspaceCheckoutCoordinatorError.operationInProgress
         }
         activeCheckoutDeletions.insert(checkoutID)
-        defer { activeCheckoutDeletions.remove(checkoutID) }
+        defer {
+            activeCheckoutDeletions.remove(checkoutID)
+            notifyLiveOperationWaiters(checkoutID: checkoutID)
+        }
         try await store.mutate { state in
             guard let index = state.checkouts.firstIndex(where: { $0.id == checkoutID }) else {
                 throw WorkspaceCheckoutCoordinatorError.checkoutMissing
@@ -576,7 +582,11 @@ actor WorkspaceCheckoutCoordinator {
                 await task.value
                 continue
             }
-            guard activeRepairs.contains(checkoutID) || hasActiveSetup(checkoutID: checkoutID) else {
+            guard activeRepairs.contains(checkoutID)
+                || hasActiveSetup(checkoutID: checkoutID)
+                || activeCheckoutDeletions.contains(checkoutID)
+                || hasActiveDeletion(checkoutID: checkoutID)
+            else {
                 return
             }
             await withCheckedContinuation { continuation in
@@ -1172,6 +1182,11 @@ actor WorkspaceCheckoutCoordinator {
     private func hasActiveSetup(checkoutID: UUID) -> Bool {
         let prefix = "\(checkoutID.uuidString):"
         return activeSetups.contains { $0.hasPrefix(prefix) }
+    }
+
+    private func hasActiveDeletion(checkoutID: UUID) -> Bool {
+        let prefix = "\(checkoutID.uuidString):"
+        return activeDeletions.contains { $0.hasPrefix(prefix) }
     }
 
     private func notifyLiveOperationWaiters(checkoutID: UUID) {
