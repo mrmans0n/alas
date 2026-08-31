@@ -845,6 +845,30 @@ final class TerminalService {
         _ = semaphore.wait(timeout: .now() + timeout)
     }
 
+    /// Await in-flight zmx kills without blocking the MainActor. Used by
+    /// interactive checkout lifecycle flows where the UI must stay responsive
+    /// while archive waits for owned processes to stop.
+    func drainPendingKills(timeout: TimeInterval) async {
+        let tasks = pendingKillTasks
+        guard !tasks.isEmpty else { return }
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask {
+                await withTaskGroup(of: Void.self) { kills in
+                    for task in tasks {
+                        kills.addTask { await task.value }
+                    }
+                    for await _ in kills {}
+                }
+            }
+            group.addTask {
+                let nanoseconds = UInt64(max(0, timeout) * 1_000_000_000)
+                try? await Task.sleep(nanoseconds: nanoseconds)
+            }
+            _ = await group.next()
+            group.cancelAll()
+        }
+    }
+
     /// Best-effort removal of the per-session rcfile artifacts written by
     /// `StartupScriptInstaller`. Either layout may exist depending on the
     /// shell used at launch:

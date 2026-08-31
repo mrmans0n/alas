@@ -73,7 +73,10 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                         }
                         if state.workspaceNavigationState.selectedCheckoutID == id {
                             WorkspaceCheckoutDetailView(
-                                model: Self.detailModel(for: checkout),
+                                model: Self.detailModel(
+                                    for: checkout,
+                                    rollupBuilder: state.workspaceMemberReviewRollupBuilder(for: checkout)
+                                ),
                                 perform: { action, memberID in
                                     perform(action, checkoutID: id, memberID: memberID)
                                 },

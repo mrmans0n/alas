@@ -43,6 +43,7 @@ struct WorkspaceConfigurationResolverTests {
 
         #expect(snapshot.shared.sessionOpenScript == "workspace open")
         #expect(snapshot.shared.worktreeCreateScript == "global setup")
+        #expect(snapshot.shared.globalWorktreeCreateScript == "global setup")
         #expect(snapshot.shared.creationLaunchPreference == .init(openAfterCreate: false, launcherMode: .terminal))
         #expect(snapshot.members[memberID]?.setupScript == "global setup\nproject setup\nmember setup")
         #expect(snapshot.members[memberID]?.ggMode == .on)

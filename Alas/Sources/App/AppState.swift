@@ -1446,9 +1446,8 @@ final class AppState {
         // Persisted checkout-owned tab records are archived only after live
         // sessions have drained, so unarchive cannot expose stale processes.
         terminal.stopSessions(owner: owner)
-        terminal.waitForPendingKills(timeout: 5)
+        await terminal.drainPendingKills(timeout: 5)
         await disposeACPManagerAndWait(owner: owner)
-        archiveSessionTabs(owner: owner)
     }
 
     /// Opens a terminal in the checkout root with the startup script frozen
@@ -1866,6 +1865,7 @@ final class AppState {
     func deleteWorkspaceCheckoutMember(checkoutID: UUID, memberID: UUID, confirmingRisks: Bool = false) async throws -> WorkspaceCheckout {
         guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
         let resolvedWorktree = try await resolveDirtyBuffersBeforeWorkspaceMemberDeletion(checkoutID: checkoutID, memberID: memberID)
+        guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
         let checkout = try await workspaceCoordinator().deleteMember(checkoutID: checkoutID, memberID: memberID, confirmingRisks: confirmingRisks)
         if let resolvedWorktree,
            checkout.members.first(where: { $0.id == memberID })?.availability == .explicitlyDeleted {
@@ -1900,11 +1900,30 @@ final class AppState {
     }
 
     private func workspaceMemberWorktrees(_ checkout: WorkspaceCheckout) -> [UUID: Worktree] {
-        let worktreesByID = Dictionary(uniqueKeysWithValues: projects.flatMap { projectsManager.worktrees(projectId: $0.id) }.map { ($0.id, $0) })
         let ids = workspaceMemberWorktreeIDs(checkout)
-        return Dictionary(uniqueKeysWithValues: ids.compactMap { memberID, worktreeID in
-            worktreesByID[worktreeID].map { (memberID, $0) }
-        })
+        var resolved: [UUID: Worktree] = [:]
+        for member in checkout.members {
+            guard let worktreeID = ids[member.id] else { continue }
+            let expectedPath = URL(fileURLWithPath: member.worktreePath).standardizedFileURL.path
+            guard let worktree = projectsManager.worktrees(projectId: member.projectID).first(where: {
+                $0.id == worktreeID
+                    && $0.projectId == member.projectID
+                    && URL(fileURLWithPath: $0.path.path).standardizedFileURL.path == expectedPath
+            }) else { continue }
+            resolved[member.id] = worktree
+        }
+        return resolved
+    }
+
+    func workspaceMemberReviewRollupBuilder(for checkout: WorkspaceCheckout) -> MemberReviewRollupBuilder {
+        var stacks: [String: GGStack] = [:]
+        for member in checkout.members where member.availability == .available {
+            guard let worktreeID = workspaceMemberWorktreeIDs(checkout)[member.id],
+                  let stack = rightPaneStore.activeState(worktreeId: worktreeID)?.ggStack
+            else { continue }
+            stacks[worktreeID] = stack
+        }
+        return MemberReviewRollupBuilder(gg: WorkspaceCachedGGStackReader(stacksByWorktreeID: stacks))
     }
 
     private func cleanupDeletedWorkspaceMemberRuntime(_ worktree: Worktree) async {
@@ -1971,6 +1990,7 @@ final class AppState {
                 resolvedWorktrees[member.id] = worktree
             }
         }
+        guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
         let checkout = try await workspaceCoordinator().deleteCheckout(checkoutID: id)
         for member in checkout.members where member.availability == .explicitlyDeleted {
             if let worktree = resolvedWorktrees[member.id] {
