@@ -210,6 +210,25 @@ struct WorkspaceCheckoutRepairTests {
         #expect(await lifecycle.observationCount == 1)
     }
 
+    @Test func retrySetupDoesNotRunWhileCheckoutDeletionIsInProgress() async throws {
+        let fixture = try await persistedFixture(
+            checkpoint: .failed,
+            worktreeCreated: true,
+            lineageID: "lineage-a",
+            branchOwnership: .created,
+            operation: .deleting
+        )
+        let scripts = RepairScriptRunner()
+        let lifecycle = RepairLifecycle(result: .exactLineage("lineage-a"))
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: RepairGit(), scripts: scripts, projectMutationGate: ProjectMutationGate(), lifecycle: lifecycle)
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.operationInProgress) {
+            try await coordinator.retrySetup(checkoutID: fixture.checkout.id, memberID: fixture.checkout.members[0].id)
+        }
+        #expect(await scripts.paths.isEmpty)
+        #expect(await fixture.store.load().loadedCheckout(id: fixture.checkout.id)?.operation == .deleting)
+    }
+
     @Test func resumeCreationUsesThePersistedFrozenPlan() async throws {
         let fixture = try await persistedFixture(checkpoint: .planPersisted)
         let git = ResumeGit()

@@ -957,15 +957,22 @@ final class AppState {
     /// Re-scan persisted tab JSONs for every currently-known worktree id. Call
     /// after `projectsManager.refreshAll()` so worktrees actually exist.
     func reloadTabs() {
+        let restoringActiveTabs = restoreActiveTabsOnNextReload
         if config.workspacesEnabled {
             Task { @MainActor [weak self] in
-                await self?.setWorkspacesEnabled(true, persistConfig: false)
+                guard let self else { return }
+                await self.setWorkspacesEnabled(true, persistConfig: false)
+                self.loadWorkspaceCheckoutSessionTabs(restoringActiveTabs: restoringActiveTabs)
+                if !self.config.terminal.keepSessionsAlive {
+                    self.pruneWorkspaceCheckoutTerminalTabs()
+                }
+                self.refreshPersistedHookSymlinks()
             }
         }
         let allWorktreeIds = projectsManager.projects.flatMap {
             projectsManager.worktrees(projectId: $0.id).map(\.id)
         }
-        if restoreActiveTabsOnNextReload {
+        if restoringActiveTabs {
             tabs.loadAll(worktreeIds: allWorktreeIds)
         } else {
             tabs.loadAllPersisted(restoringActiveTabs: false)
@@ -995,6 +1002,27 @@ final class AppState {
         sweepOrphanZmxSessions(worktreeIds: allWorktreeIds)
         Task { [weak self] in
             await self?.reconcileInterruptedDelegations()
+        }
+    }
+
+    func loadWorkspaceCheckoutSessionTabs(restoringActiveTabs: Bool = true) {
+        guard config.workspacesEnabled, workspacesManager.canMutate else { return }
+        for checkout in workspacesManager.checkouts {
+            loadSessionTabs(
+                owner: SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation),
+                restoringActiveTabs: restoringActiveTabs
+            )
+        }
+    }
+
+    private func pruneWorkspaceCheckoutTerminalTabs() {
+        guard config.workspacesEnabled, workspacesManager.canMutate else { return }
+        for checkout in workspacesManager.checkouts {
+            let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+            for tab in tabs.tabs(for: owner) {
+                guard case .terminal = tab else { continue }
+                closeSharedSessionTab(owner: owner, tabID: tab.id)
+            }
         }
     }
 
@@ -3837,6 +3865,15 @@ final class AppState {
                     for leaf in state.root.leaves() {
                         _ = harness.socketServer.linkSession(leafId: leaf.id)
                     }
+                }
+            }
+        }
+        for checkout in workspacesManager.checkouts {
+            let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+            for tab in tabs.tabs(for: owner) {
+                guard case .terminal(let state) = tab else { continue }
+                for leaf in state.root.leaves() {
+                    _ = harness.socketServer.linkSession(leafId: leaf.id)
                 }
             }
         }

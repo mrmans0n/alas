@@ -252,6 +252,50 @@ struct WorkspaceTerminalSessionTests {
         #expect(state.terminal.registry.session(for: "unpersisted-leaf") == nil)
         #expect(tabs.tabs(for: owner).isEmpty)
     }
+
+    @MainActor
+    @Test func reloadTabsLoadsCheckoutOwnedTabsAfterWorkspaceStateLoads() async throws {
+        let workspaceURL = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-tabs-\(UUID().uuidString).json")
+        let tabsDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-tabs-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: workspaceURL)
+            try? FileManager.default.removeItem(at: tabsDirectory)
+        }
+        let workspaceStore = WorkspaceStore(url: workspaceURL)
+        let checkout = WorkspaceCheckout(
+            id: checkoutID,
+            workspaceID: nil,
+            fallbackWorkspaceName: "Shared",
+            executionLocation: .local,
+            branch: "feature/shared",
+            rootPath: "/work/checkout",
+            members: []
+        )
+        try await workspaceStore.checkpoint(.init(checkouts: [checkout]))
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+        let persistence = PersistenceStore()
+        let writer = TabsManager(store: persistence, tabsDirectory: tabsDirectory)
+        let saved = writer.appendTerminal(owner: owner, title: "Shared", sessionId: "checkout-leaf")
+        let tabs = TabsManager(store: persistence, tabsDirectory: tabsDirectory)
+        let bridge = WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore)
+        let manager = WorkspacesManager(bridge: bridge)
+        let state = AppState(
+            store: WorkspaceTerminalMemoryStore(),
+            tabsManager: tabs,
+            workspaceSpacePersistenceBridge: bridge,
+            workspacesManager: manager,
+            workspaceStore: workspaceStore
+        )
+        state.config.workspacesEnabled = true
+
+        state.reloadTabs()
+
+        for _ in 0 ..< 40 where tabs.tabs(for: owner).isEmpty {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        #expect(tabs.tabs(for: owner).map(\.id) == [saved.id])
+        #expect(tabs.activeTabId(for: owner) == saved.id)
+    }
 }
 
 private final class WorkspaceTerminalMemoryStore: PersistenceStoreProtocol {
