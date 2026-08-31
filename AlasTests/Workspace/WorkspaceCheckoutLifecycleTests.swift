@@ -165,13 +165,13 @@ struct WorkspaceCheckoutLifecycleTests {
         )
 
         let preflight = try await lifecycle.deletePreflight(plan)
-        try await lifecycle.removeWorktree(plan, force: false)
+        try await lifecycle.removeWorktree(plan, force: true)
         let branchRemoved = try await lifecycle.deleteMergedBranch(plan)
 
         #expect(preflight.reasons == [.dirty])
         #expect(branchRemoved == false)
         let commands = await runner.commands.joined(separator: "\n")
-        #expect(commands.contains("worktree remove"))
+        #expect(commands.contains("worktree remove -f --"))
         #expect(commands.contains("branch -d"))
     }
 
