@@ -144,6 +144,8 @@ actor WorkspaceCheckoutCoordinator {
     private let manifests: any WorkspaceCheckoutManifestWriting
     private var creationTasks: [UUID: Task<Void, Never>] = [:]
     private var pendingCreationPlans: [UUID: (WorkspaceCheckout, FrozenWorkspaceCheckoutPlan)] = [:]
+    private var activeArchives = Set<UUID>()
+    private var activeRepairs = Set<UUID>()
 
     init(
         store: WorkspaceStore,
@@ -169,13 +171,18 @@ actor WorkspaceCheckoutCoordinator {
     }
 
     func archive(checkoutID: UUID) async throws -> WorkspaceCheckout {
+        guard !activeArchives.contains(checkoutID) else {
+            throw WorkspaceCheckoutCoordinatorError.operationInProgress
+        }
+        activeArchives.insert(checkoutID)
+        defer { activeArchives.remove(checkoutID) }
         // Persist the archive claim first so concurrent lifecycle commands
         // cannot race the owned-process shutdown.
         try await store.mutate { state in
             guard let index = state.checkouts.firstIndex(where: { $0.id == checkoutID }) else {
                 throw WorkspaceCheckoutCoordinatorError.checkoutMissing
             }
-            guard state.checkouts[index].operation == .idle else {
+            guard state.checkouts[index].operation == .idle || state.checkouts[index].operation == .archiving else {
                 throw WorkspaceCheckoutCoordinatorError.operationInProgress
             }
             state.checkouts[index].operation = .archiving
@@ -252,17 +259,22 @@ actor WorkspaceCheckoutCoordinator {
                   frozen == cleanupPlan || current.cleanup?.worktreeRemoved == true
             else { throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict }
             let plan = current.cleanup?.plan ?? cleanupPlan
+            var worktreeAlreadyRemoved = current.cleanup?.worktreeRemoved == true
             switch await lifecycle.verifyCleanup(plan) {
             case .exactLineage(let lineage) where lineage == plan.expectedLineageID:
                 break
-            case .missing where current.cleanup?.worktreeRemoved == true:
-                break
+            case .missing:
+                worktreeAlreadyRemoved = true
+                try await mutateMember(checkoutID: checkoutID, memberID: memberID) {
+                    $0.cleanup?.worktreeRemoved = true
+                    $0.cleanup?.checkpoint = .worktreeRemoved
+                }
             default:
                 throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict
             }
             let root = await lifecycle.inspectRoot(plan)
             guard root.isContained else { throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict }
-            if current.cleanup?.worktreeRemoved != true {
+            if !worktreeAlreadyRemoved {
                 let preflight = try await lifecycle.deletePreflight(plan)
                 guard !preflight.requiresForce || confirmingRisks else {
                     throw WorkspaceCheckoutCoordinatorError.cleanupConfirmationRequired
@@ -490,15 +502,17 @@ actor WorkspaceCheckoutCoordinator {
     /// that already reached worktree creation, setup success, or an identity
     /// conflict are deliberately excluded.
     func resumeCreation(checkoutID: UUID) async throws -> WorkspaceCheckout {
+        guard creationTasks[checkoutID] == nil,
+              !activeRepairs.contains(checkoutID)
+        else { throw WorkspaceCheckoutCoordinatorError.operationInProgress }
+        activeRepairs.insert(checkoutID)
+        defer { activeRepairs.remove(checkoutID) }
         let checkout = try await self.checkout(id: checkoutID)
         let started = try await store.mutate { state -> Bool in
             guard let index = state.checkouts.firstIndex(where: { $0.id == checkoutID }) else {
                 throw WorkspaceCheckoutCoordinatorError.checkoutMissing
             }
-            if state.checkouts[index].operation == .repairing {
-                return false
-            }
-            guard state.checkouts[index].operation == .idle || state.checkouts[index].operation == .creating else {
+            guard state.checkouts[index].operation == .idle || state.checkouts[index].operation == .creating || state.checkouts[index].operation == .repairing else {
                 throw WorkspaceCheckoutCoordinatorError.operationInProgress
             }
             state.checkouts[index].operation = .repairing

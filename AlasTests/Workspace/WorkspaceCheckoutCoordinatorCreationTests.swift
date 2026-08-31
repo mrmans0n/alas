@@ -101,6 +101,26 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
         #expect(persisted?.members.contains(where: { $0.checkpoint == WorkspaceCheckoutCheckpoint.planPersisted }) == true)
     }
 
+    @Test func resumeCreationIsRejectedWhileBackgroundCreationOwnsTheCheckout() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-coordinator-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = WorkspaceStore(url: url)
+        let fixture = makeFixture(count: 1)
+        let git = BlockingWorkspaceGit()
+        let coordinator = WorkspaceCheckoutCoordinator(store: store, git: git, scripts: NoopWorkspaceScriptRunner(), projectMutationGate: ProjectMutationGate())
+
+        let checkout = try await coordinator.createPersisted(workspace: fixture.workspace, plan: fixture.plan)
+        await coordinator.beginCreation(checkoutID: checkout.id)
+        await git.waitUntilPrepareStarted()
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.operationInProgress) {
+            try await coordinator.resumeCreation(checkoutID: checkout.id)
+        }
+
+        await git.release()
+        await coordinator.awaitCreationCompletion(checkoutID: checkout.id)
+    }
+
     @Test func rejectsInconsistentFrozenPlanBeforePersistingOrCallingGit() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-coordinator-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: url) }
@@ -237,4 +257,39 @@ private actor CountingWorkspaceGit: WorkspaceGitOperating {
     func prepareBranch(_ operation: WorkspaceFrozenWorktreeOperation) async throws { callCount += 1 }
     func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? { callCount += 1
     return nil }
+}
+
+private actor BlockingWorkspaceGit: WorkspaceGitOperating {
+    private var prepareStarted = false
+    private var released = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func prepareBranch(_ operation: WorkspaceFrozenWorktreeOperation) async throws {
+        prepareStarted = true
+        waiters.forEach { $0.resume() }
+        waiters.removeAll()
+        if !released {
+            await withCheckedContinuation { continuation in
+                releaseWaiters.append(continuation)
+            }
+        }
+    }
+
+    func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? {
+        "lineage-\(operation.projectID)"
+    }
+
+    func waitUntilPrepareStarted() async {
+        if prepareStarted { return }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func release() {
+        released = true
+        releaseWaiters.forEach { $0.resume() }
+        releaseWaiters.removeAll()
+    }
 }

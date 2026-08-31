@@ -100,6 +100,17 @@ struct WorkspaceCheckoutRepairTests {
         #expect(await git.operations.map(\.destinationPath) == ["/checkouts/a", "/checkouts/a"])
     }
 
+    @Test func resumeCreationAcceptsPersistedRepairingCheckoutAfterRelaunch() async throws {
+        let fixture = try await persistedFixture(checkpoint: .planPersisted, operation: .repairing)
+        let git = ResumeGit()
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: git, scripts: RepairScriptRunner(), projectMutationGate: ProjectMutationGate())
+
+        let checkout = try await coordinator.resumeCreation(checkoutID: fixture.checkout.id)
+
+        #expect(checkout.operation == .idle)
+        #expect(await git.operations.map(\.destinationPath) == ["/checkouts/a", "/checkouts/a"])
+    }
+
     @Test func resumeCreationContinuesFromBranchPreparedWithoutPreparingAgain() async throws {
         let fixture = try await persistedFixture(checkpoint: .branchPrepared, branchOwnership: .created, operation: .creating)
         let git = CountingResumeGit()
@@ -153,15 +164,26 @@ struct WorkspaceCheckoutRepairTests {
         #expect(await git.operations.isEmpty)
     }
 
-    @Test func concurrentResumeCreationClaimsTheFrozenMemberOnce() async throws {
+    @Test func concurrentResumeCreationRejectsTheSecondRepairClaim() async throws {
         let fixture = try await persistedFixture(checkpoint: .planPersisted)
         let git = ResumeGit()
         let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: git, scripts: RepairScriptRunner(), projectMutationGate: ProjectMutationGate())
 
-        async let first = coordinator.resumeCreation(checkoutID: fixture.checkout.id)
-        async let second = coordinator.resumeCreation(checkoutID: fixture.checkout.id)
-        _ = try await (first, second)
+        let first = Task { try await coordinator.resumeCreation(checkoutID: fixture.checkout.id) }
+        let second = Task { try await coordinator.resumeCreation(checkoutID: fixture.checkout.id) }
+        var successes = 0
+        var operationInProgress = 0
+        for task in [first, second] {
+            do {
+                _ = try await task.value
+                successes += 1
+            } catch WorkspaceCheckoutCoordinatorError.operationInProgress {
+                operationInProgress += 1
+            }
+        }
 
+        #expect(successes == 1)
+        #expect(operationInProgress == 1)
         #expect(await git.operations.count == 2)
     }
 
