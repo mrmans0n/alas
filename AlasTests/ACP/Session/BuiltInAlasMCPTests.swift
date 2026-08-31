@@ -140,6 +140,7 @@ struct BuiltInAlasMCPTests {
         else { Issue.record("Expected checkout context")
         return }
         #expect(try JSONDecoder().decode(BuiltInAlasMCP.WorkspaceContext.self, from: data) == context)
+        #expect(environment.contains(.init(name: "ALAS_MCP_WORKSPACE_ONLY", value: "1")))
         #expect(value.contains("script") == false)
         #expect(value.contains("secret") == false)
     }

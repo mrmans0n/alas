@@ -67,6 +67,7 @@ struct WorkspaceFrozenWorktreeOperation: Sendable {
     var branch: String
     var baseCommit: String
     var branchIntent: FrozenBranchIntent
+    var canRecordMissingLineage: Bool = false
 }
 
 enum FrozenBranchIntent: Equatable, Sendable {
@@ -661,7 +662,7 @@ actor WorkspaceCheckoutCoordinator {
             if await shouldStopAfterCurrentOperations(checkoutID: checkoutID) { break }
             if let memberIDs, memberIDs.contains(member.id) == false { continue }
             guard member.availability != .identityConflict,
-                  !(member.checkpoint == .failed && member.cleanupOwnership.worktreeCreated),
+                  !(member.checkpoint == .failed && member.cleanupOwnership.worktreeCreated && member.gitLineageID != nil),
                   let frozenMember = frozenMember(from: member)
             else { continue }
             let plan = member.plan!
@@ -698,6 +699,7 @@ actor WorkspaceCheckoutCoordinator {
                     state.checkouts[checkoutIndex].members[memberIndex].checkpoint = .worktreeCreating
                     state.checkouts[checkoutIndex].members[memberIndex].availability = .pending
                     state.checkouts[checkoutIndex].members[memberIndex].cleanup = nil
+                    state.checkouts[checkoutIndex].members[memberIndex].cleanupOwnership.worktreeCreated = true
                     return .worktreeCreating
                 case .setupRunning:
                     guard setupResumeVerified else { return nil }
@@ -716,6 +718,11 @@ actor WorkspaceCheckoutCoordinator {
                     state.checkouts[checkoutIndex].members[memberIndex].availability = .pending
                     state.checkouts[checkoutIndex].members[memberIndex].cleanup = nil
                     return checkpoint
+                case .failed where current.cleanupOwnership.worktreeCreated && current.gitLineageID == nil:
+                    state.checkouts[checkoutIndex].members[memberIndex].checkpoint = .worktreeCreating
+                    state.checkouts[checkoutIndex].members[memberIndex].availability = .pending
+                    state.checkouts[checkoutIndex].members[memberIndex].cleanup = nil
+                    return .worktreeCreating
                 default:
                     return nil
                 }
@@ -725,7 +732,8 @@ actor WorkspaceCheckoutCoordinator {
             if claimedCheckpoint == .setupRunning {
                 await runSetup(member: frozenMember, checkout: checkout)
             } else if claimedCheckpoint == .worktreeCreating {
-                let operation = frozenWorktreeOperation(checkout: checkout, member: frozenMember)
+                var operation = frozenWorktreeOperation(checkout: checkout, member: frozenMember)
+                operation.canRecordMissingLineage = true
                 do {
                     if let lineageID = try await git.existingCreatedWorktreeLineage(operation) {
                         try await updateMember(checkoutID: checkout.id, memberID: plan.checkoutMemberID) { current in
@@ -870,7 +878,7 @@ actor WorkspaceCheckoutCoordinator {
             state.checkouts[checkoutIndex].members[memberIndex].gitLineageID = nil
             state.checkouts[checkoutIndex].members[memberIndex].cleanup = nil
             state.checkouts[checkoutIndex].members[memberIndex].cleanupOwnership = .init(
-                worktreeCreated: false,
+                worktreeCreated: true,
                 branchOwnership: plan.branchIntent == .reuse ? .reused : .created
             )
             return true
@@ -1014,6 +1022,7 @@ actor WorkspaceCheckoutCoordinator {
                     }
                     try await self.updateMember(checkoutID: checkout.id, memberID: plan.checkoutMemberID) { member in
                         member.checkpoint = .worktreeCreating
+                        member.cleanupOwnership.worktreeCreated = true
                     }
                 }
                 let existingLineageID = try await self.git.existingCreatedWorktreeLineage(operation)
@@ -1311,12 +1320,19 @@ struct WorkspaceFrozenGitOperator: WorkspaceGitOperating {
             guard branch.exitCode == 0,
                   branch.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == operation.branch
             else { return nil }
-            return WorktreeService.existingLocalLineageID(forWorktreeAt: destination)
+            if let lineage = WorktreeService.existingLocalLineageID(forWorktreeAt: destination) {
+                return lineage
+            }
+            guard operation.canRecordMissingLineage else { return nil }
+            return WorktreeService.localLineageID(forWorktreeAt: destination)
         case .ssh(let host):
             let path = SSHCommand.shellQuote(operation.destinationPath)
             let branch = SSHCommand.shellQuote(operation.branch)
             let commit = SSHCommand.shellQuote(operation.baseCommit)
-            let command = "p=\(path); b=\(branch); c=\(commit); test -d \"$p\" || exit 2; [ \"$(git -C \"$p\" rev-parse --verify HEAD^{commit})\" = \"$c\" ] || exit 3; [ \"$(git -C \"$p\" rev-parse --abbrev-ref HEAD)\" = \"$b\" ] || exit 4; d=$(git -C \"$p\" rev-parse --absolute-git-dir) || exit 5; f=\"$d/alas-worktree-lineage\"; test -s \"$f\" || exit 6; head -n 1 \"$f\""
+            let markerCommand = operation.canRecordMissingLineage
+                ? WorktreeService.remoteLineageIDCommand(path: operation.destinationPath)
+                : "d=$(git -C \"$p\" rev-parse --absolute-git-dir) || exit 5; f=\"$d/alas-worktree-lineage\"; test -s \"$f\" || exit 6; head -n 1 \"$f\""
+            let command = "p=\(path); b=\(branch); c=\(commit); test -d \"$p\" || exit 2; [ \"$(git -C \"$p\" rev-parse --verify HEAD^{commit})\" = \"$c\" ] || exit 3; [ \"$(git -C \"$p\" rev-parse --abbrev-ref HEAD)\" = \"$b\" ] || exit 4; \(markerCommand)"
             let result = try await WorkspaceRemoteTransport().run(host: host, command: command)
             guard result.exitCode == 0 else { return nil }
             return WorktreeService.normalizedLineageID(result.stdout)
