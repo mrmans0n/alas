@@ -332,6 +332,32 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
         #expect(persisted?.diagnostics.contains(where: { $0.message == "Could not write the Workspace checkout manifest." }) == true)
     }
 
+    @Test func failedLineageCheckpointKeepsOwnedWorktreeRecoverableWithoutAddingAgain() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-coordinator-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = WorkspaceStore(url: url)
+        let fixture = makeFixture(count: 1)
+        let git = LineageFailureThenRecoveryGit(store: store, checkoutID: fixture.plan.checkoutID)
+        let coordinator = WorkspaceCheckoutCoordinator(store: store, git: git, scripts: NoopWorkspaceScriptRunner(), projectMutationGate: ProjectMutationGate())
+
+        let checkout = try await coordinator.create(workspace: fixture.workspace, plan: fixture.plan)
+        await coordinator.awaitCreationCompletion(checkoutID: checkout.id)
+
+        let failed = try #require(await store.checkout(id: checkout.id))
+        #expect(failed.members[0].checkpoint == .failed)
+        #expect(failed.members[0].cleanupOwnership.worktreeCreated)
+        #expect(failed.members[0].gitLineageID == nil)
+        #expect(await git.sawOwnedWorktreeBeforeCreate)
+
+        _ = try await coordinator.resumeCreation(checkoutID: checkout.id)
+
+        let repaired = try #require(await store.checkout(id: checkout.id))
+        #expect(repaired.members[0].checkpoint == .setupComplete)
+        #expect(repaired.members[0].gitLineageID == "recovered-lineage")
+        #expect(await git.createCount == 1)
+        #expect(await git.existingLineageAllowedRecording)
+    }
+
     @Test func manifestRefreshesWithMemberAvailabilityAfterCreationCompletes() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-coordinator-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: url) }
@@ -566,6 +592,36 @@ private actor CountingWorkspaceGit: WorkspaceGitOperating {
     func prepareBranch(_ operation: WorkspaceFrozenWorktreeOperation) async throws { callCount += 1 }
     func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? { callCount += 1
     return nil }
+}
+
+private actor LineageFailureThenRecoveryGit: WorkspaceGitOperating {
+    let store: WorkspaceStore
+    let checkoutID: UUID
+    private(set) var createCount = 0
+    private(set) var sawOwnedWorktreeBeforeCreate = false
+    private(set) var existingLineageAllowedRecording = false
+
+    init(store: WorkspaceStore, checkoutID: UUID) {
+        self.store = store
+        self.checkoutID = checkoutID
+    }
+
+    func prepareBranch(_ operation: WorkspaceFrozenWorktreeOperation) async throws {}
+
+    func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? {
+        createCount += 1
+        if let checkout = await store.checkout(id: checkoutID),
+           let member = checkout.members.first(where: { $0.id == operation.checkoutMemberID }) {
+            sawOwnedWorktreeBeforeCreate = member.checkpoint == .worktreeCreating
+                && member.cleanupOwnership.worktreeCreated
+        }
+        throw TestError.failed
+    }
+
+    func existingCreatedWorktreeLineage(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? {
+        existingLineageAllowedRecording = operation.canRecordMissingLineage
+        return operation.canRecordMissingLineage ? "recovered-lineage" : nil
+    }
 }
 
 private actor BlockingWorkspaceGit: WorkspaceGitOperating {

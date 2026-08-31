@@ -17,6 +17,7 @@ pub struct McpEnv {
     pub worktree_dir: String,
     pub session_id: String,
     pub parent_session_id: Option<String>,
+    pub workspace_only: bool,
 }
 
 /// Build the env from a lookup function (`std::env::var` in production,
@@ -39,6 +40,9 @@ pub fn env_from(get: impl Fn(&str) -> Option<String>) -> Result<McpEnv, String> 
         worktree_dir,
         session_id,
         parent_session_id: get("ALAS_PARENT_SESSION_ID").filter(|s| !s.is_empty()),
+        workspace_only: get("ALAS_MCP_WORKSPACE_ONLY")
+            .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+            .unwrap_or(false),
     })
 }
 
@@ -50,13 +54,14 @@ pub fn handle_line(
     worktree_dir: &str,
     dispatch: impl FnMut(&Command) -> Result<Response, TransportError>,
 ) -> Option<Value> {
-    handle_line_with_parent(line, worktree_dir, None, dispatch)
+    handle_line_with_parent(line, worktree_dir, None, false, dispatch)
 }
 
 fn handle_line_with_parent(
     line: &str,
     worktree_dir: &str,
     parent_session_id: Option<&str>,
+    workspace_only: bool,
     mut dispatch: impl FnMut(&Command) -> Result<Response, TransportError>,
 ) -> Option<Value> {
     let msg: Value = match serde_json::from_str(line) {
@@ -75,10 +80,10 @@ fn handle_line_with_parent(
     let reply = match method {
         "initialize" => Ok(initialize_result(parent_session_id)),
         "ping" => Ok(json!({})),
-        "tools/list" => Ok(json!({ "tools": tool_definitions() })),
+        "tools/list" => Ok(json!({ "tools": tool_definitions_for_mode(workspace_only) })),
         "tools/call" => {
             let params = msg.get("params").cloned().unwrap_or(Value::Null);
-            call_tool(&params, worktree_dir, &mut dispatch)
+            call_tool(&params, worktree_dir, workspace_only, &mut dispatch)
         }
         other => Err((-32601, format!("method not found: {other}"))),
     };
@@ -110,6 +115,24 @@ fn error_reply(id: Value, code: i64, message: &str) -> Value {
 /// agent-side permission prompt legible. `resolve` is internal and not
 /// exposed.
 pub fn tool_definitions() -> Vec<Value> {
+    tool_definitions_for_mode(false)
+}
+
+fn tool_definitions_for_mode(workspace_only: bool) -> Vec<Value> {
+    if workspace_only {
+        return all_tool_definitions()
+            .into_iter()
+            .filter(|tool| {
+                tool.get("name")
+                    .and_then(Value::as_str)
+                    .is_some_and(|name| name.starts_with("workspace_"))
+            })
+            .collect();
+    }
+    all_tool_definitions()
+}
+
+fn all_tool_definitions() -> Vec<Value> {
     vec![
         json!({
             "name": "open",
@@ -341,6 +364,10 @@ pub fn tool_definitions() -> Vec<Value> {
             }
         }),
     ]
+}
+
+fn is_workspace_tool(name: &str) -> bool {
+    name.starts_with("workspace_")
 }
 
 /// Translate a tool call into the CLI command it mirrors. Relative `open`
@@ -687,6 +714,7 @@ pub fn dispatch(env: &McpEnv, command: &Command) -> Result<Response, TransportEr
 fn call_tool(
     params: &Value,
     worktree_dir: &str,
+    workspace_only: bool,
     mut dispatch: impl FnMut(&Command) -> Result<Response, TransportError>,
 ) -> Result<Value, (i64, String)> {
     let name = params
@@ -697,6 +725,12 @@ fn call_tool(
         .get("arguments")
         .cloned()
         .unwrap_or_else(|| json!({}));
+    if workspace_only && !is_workspace_tool(name) {
+        return Err((
+            -32602,
+            format!("tool unavailable in Workspace Checkout context: {name}"),
+        ));
+    }
     let command = command_for_tool(name, &args, worktree_dir).map_err(|msg| (-32602, msg))?;
     Ok(match dispatch(&command) {
         Ok(resp) => tool_result(&command, resp),
@@ -779,6 +813,7 @@ pub fn serve(env: &McpEnv) -> std::io::Result<()> {
             &line,
             &env.worktree_dir,
             env.parent_session_id.as_deref(),
+            env.workspace_only,
             |cmd| dispatch(env, cmd),
         ) {
             let mut out = stdout.lock();
@@ -949,7 +984,9 @@ fn handle_http_connection(
         }
         let read = match stream.read(&mut chunk) {
             Ok(read) => read,
-            Err(err) if err.kind() == ErrorKind::WouldBlock || err.kind() == ErrorKind::TimedOut => {
+            Err(err)
+                if err.kind() == ErrorKind::WouldBlock || err.kind() == ErrorKind::TimedOut =>
+            {
                 // Client stalled mid-request; drop it so the loop stays free.
                 break Err("request timeout");
             }
@@ -1007,6 +1044,7 @@ fn build_http_response(env: &McpEnv, req: &HttpRequest, token: &str) -> String {
         &req.body,
         &env.worktree_dir,
         env.parent_session_id.as_deref(),
+        env.workspace_only,
         |cmd| dispatch(env, cmd),
     ) {
         Some(reply) => http_response(200, "application/json", &reply.to_string()),
@@ -1018,8 +1056,8 @@ fn build_http_response(env: &McpEnv, req: &HttpRequest, token: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        command_for_tool, dispatch, env_from, handle_line, http_response, is_initialize_message,
-        parse_http_request, McpEnv, PROTOCOL_VERSION,
+        command_for_tool, dispatch, env_from, handle_line, handle_line_with_parent, http_response,
+        is_initialize_message, parse_http_request, McpEnv, PROTOCOL_VERSION,
     };
     use alas_client::{Command, Response};
     use serde_json::{json, Value};
@@ -1109,6 +1147,15 @@ mod tests {
         assert_eq!(ok.socket, std::path::PathBuf::from("/tmp/s"));
         assert_eq!(ok.worktree_dir, "/wt");
         assert_eq!(ok.session_id, "s1");
+        assert!(!ok.workspace_only);
+        let workspace = env_from(env(&[
+            ("ALAS_SOCKET_PATH", "/tmp/s"),
+            ("ALAS_WORKTREE_DIR", "/wt"),
+            ("ALAS_SESSION_ID", "s1"),
+            ("ALAS_MCP_WORKSPACE_ONLY", "true"),
+        ]))
+        .unwrap();
+        assert!(workspace.workspace_only);
     }
 
     #[test]
@@ -1247,17 +1294,89 @@ mod tests {
         );
         assert_eq!(
             command_for_tool("workspace_show", &json!({ "checkout_id": checkout }), "/wt").unwrap(),
-            Command::WorkspaceShow { checkout_id: checkout.into() }
+            Command::WorkspaceShow {
+                checkout_id: checkout.into()
+            }
         );
         assert_eq!(
-            command_for_tool("workspace_switch", &json!({ "checkout_id": checkout }), "/wt").unwrap(),
-            Command::WorkspaceSwitch { checkout_id: checkout.into() }
+            command_for_tool(
+                "workspace_switch",
+                &json!({ "checkout_id": checkout }),
+                "/wt"
+            )
+            .unwrap(),
+            Command::WorkspaceSwitch {
+                checkout_id: checkout.into()
+            }
         );
         assert_eq!(
-            command_for_tool("workspace_focus", &json!({ "checkout_id": checkout, "member_id": member }), "/wt").unwrap(),
-            Command::WorkspaceFocus { checkout_id: checkout.into(), member_id: member.into() }
+            command_for_tool(
+                "workspace_focus",
+                &json!({ "checkout_id": checkout, "member_id": member }),
+                "/wt"
+            )
+            .unwrap(),
+            Command::WorkspaceFocus {
+                checkout_id: checkout.into(),
+                member_id: member.into()
+            }
         );
-        assert!(command_for_tool("workspace_focus", &json!({ "checkout_id": checkout }), "/wt").is_err());
+        assert!(command_for_tool(
+            "workspace_focus",
+            &json!({ "checkout_id": checkout }),
+            "/wt"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn workspace_only_mode_exposes_and_accepts_only_workspace_tools() {
+        let list = handle_line_with_parent(
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
+            "/checkout",
+            None,
+            true,
+            |_| unreachable!(),
+        )
+        .unwrap();
+        let names: Vec<_> = list["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                "workspace_list",
+                "workspace_show",
+                "workspace_switch",
+                "workspace_focus"
+            ]
+        );
+
+        let open = handle_line_with_parent(
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"open","arguments":{"path":"README.md"}}}"#,
+            "/checkout",
+            None,
+            true,
+            |_| unreachable!(),
+        )
+        .unwrap();
+        assert_eq!(open["error"]["code"], json!(-32602));
+
+        let workspace = handle_line_with_parent(
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"workspace_list","arguments":{}}}"#,
+            "/checkout",
+            None,
+            true,
+            |command| {
+                assert_eq!(*command, Command::WorkspaceList);
+                Ok(Response { ok: true, lines: Some(vec!["[]".into()]), error: None, exit_code: None })
+            },
+        )
+        .unwrap();
+        assert!(workspace.get("error").is_none());
     }
 
     #[test]
@@ -1432,7 +1551,10 @@ mod tests {
     fn review_target_is_optional() {
         assert_eq!(
             command_for_tool("review", &json!({}), "/wt").unwrap(),
-            alas_client::Command::Review { target: None, worktree: None }
+            alas_client::Command::Review {
+                target: None,
+                worktree: None
+            }
         );
         assert_eq!(
             command_for_tool("review", &json!({"target": "123"}), "/wt").unwrap(),
@@ -1504,7 +1626,10 @@ mod tests {
         );
         assert_eq!(
             command_for_tool("review", &json!({"target": null}), "/wt").unwrap(),
-            alas_client::Command::Review { target: None, worktree: None }
+            alas_client::Command::Review {
+                target: None,
+                worktree: None
+            }
         );
         assert!(command_for_tool("review", &json!({"target": true}), "/wt").is_err());
         assert!(command_for_tool("review", &json!({"target": ["1"]}), "/wt").is_err());
@@ -1798,6 +1923,7 @@ mod tests {
             worktree_dir: "/wt".into(),
             session_id: "acp-1".into(),
             parent_session_id: None,
+            workspace_only: false,
         };
         let resp = dispatch(&env, &alas_client::Command::WtList).unwrap();
         assert!(resp.ok);

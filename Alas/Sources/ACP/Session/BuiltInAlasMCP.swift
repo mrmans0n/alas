@@ -84,7 +84,10 @@ enum BuiltInAlasMCP {
             if let workspaceContext,
                let data = try? JSONEncoder().encode(workspaceContext),
                let value = String(data: data, encoding: .utf8) {
-                workspaceEnvironment = [.init(name: "ALAS_WORKSPACE_CONTEXT", value: value)]
+                workspaceEnvironment = [
+                    .init(name: "ALAS_WORKSPACE_CONTEXT", value: value),
+                    .init(name: "ALAS_MCP_WORKSPACE_ONLY", value: "1"),
+                ]
             } else {
                 workspaceEnvironment = []
             }
