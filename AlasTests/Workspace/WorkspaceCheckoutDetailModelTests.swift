@@ -66,6 +66,11 @@ import Testing
         ])
         #expect(WorkspaceCheckoutDetailModel(checkout: deleting).primaryActions.map(\.kind) == [.deleteCheckout])
 
+        let archiving = checkout(operation: .archiving, members: [
+            member(name: "One", availability: .available, checkpoint: .setupComplete)
+        ])
+        #expect(WorkspaceCheckoutDetailModel(checkout: archiving).primaryActions.map(\.kind) == [.archive])
+
         let repairing = checkout(operation: .repairing, members: [
             member(name: "One", availability: .missing, checkpoint: .planPersisted)
         ])

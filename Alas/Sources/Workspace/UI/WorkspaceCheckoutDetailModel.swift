@@ -151,7 +151,9 @@ struct WorkspaceCheckoutDetailModel: Equatable, Sendable {
             return actions
         case .deleting:
             return [.init(.deleteCheckout, title: "Resume Deletion", isDestructive: true)]
-        case .archiving, .cleaning:
+        case .archiving:
+            return [.init(.archive, title: "Resume Archive")]
+        case .cleaning:
             return []
         }
     }

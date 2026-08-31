@@ -72,6 +72,33 @@ final class TerminalService {
         )
     }
 
+    nonisolated static func checkoutLocalEnvironment(
+        context: WorkspaceTerminalContext,
+        leafID: String,
+        inheritParent: Bool,
+        parent: [String: String] = ProcessInfo.processInfo.environment,
+        socketPath: String?,
+        zmxDir: String?,
+        cliInstaller: () throws -> URL = { try TerminalCLIInjection.installExecutables() }
+    ) throws -> [String: String] {
+        var env: [String: String] = inheritParent
+            ? parent.filter { !$0.key.hasPrefix("ALAS_") }
+            : [:]
+        env.merge(checkoutLaunchContext(context: context, leafID: leafID).environment) { _, checkoutValue in checkoutValue }
+        env["ALAS_SESSION_ID"] = leafID
+        env["ZMX_SESSION"] = ""
+        if let zmxDir { env["ZMX_DIR"] = zmxDir }
+        if let socketPath {
+            env["ALAS_SOCKET_PATH"] = socketPath
+            let binDir = try cliInstaller()
+            env["PATH"] = TerminalCLIInjection.pathValue(
+                prepending: binDir.path,
+                to: env["PATH"]
+            )
+        }
+        return env
+    }
+
     /// A persisted checkout cwd is accepted only when it came from the same
     /// execution location and remains inside the frozen checkout root.
     nonisolated static func checkoutRestorationCwd(
@@ -311,13 +338,21 @@ final class TerminalService {
             if case .ssh(let host) = context.executionLocation { return host }
             return nil
         }()
-        var env: [String: String] = cfg.inheritParentEnv
-            ? ProcessInfo.processInfo.environment.filter { !$0.key.hasPrefix("ALAS_") }
-            : [:]
-        env.merge(launchContext.environment) { _, checkoutValue in checkoutValue }
+        var env: [String: String]
         if remoteHost == nil {
-            env["ZMX_SESSION"] = ""
-            if let zmxDir = zmxClient.env.zmxDir?.path { env["ZMX_DIR"] = zmxDir }
+            env = try Self.checkoutLocalEnvironment(
+                context: context,
+                leafID: leafId,
+                inheritParent: cfg.inheritParentEnv,
+                socketPath: socketPathProvider?(leafId),
+                zmxDir: zmxClient.env.zmxDir?.path
+            )
+        } else {
+            var remoteEnv: [String: String] = cfg.inheritParentEnv
+                ? ProcessInfo.processInfo.environment.filter { !$0.key.hasPrefix("ALAS_") }
+                : [:]
+            remoteEnv.merge(launchContext.environment) { _, checkoutValue in checkoutValue }
+            env = remoteEnv
         }
 
         let sessionName = ZmxSessionName.derive(owner: context.owner, leafId: leafId)
