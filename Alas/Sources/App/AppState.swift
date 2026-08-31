@@ -1281,16 +1281,16 @@ final class AppState {
 
     private func quiesceWorkspaceCheckoutCreationBeforeDisable() async {
         guard workspacesManager.canMutate else { return }
-        let creatingCheckoutIDs = workspacesManager.checkouts
-            .filter { $0.operation == .creating }
+        let activeCheckoutIDs = workspacesManager.checkouts
+            .filter { $0.operation == .creating || $0.operation == .repairing }
             .map(\.id)
-        guard creatingCheckoutIDs.isEmpty == false else { return }
+        guard activeCheckoutIDs.isEmpty == false else { return }
         let coordinator = workspaceCoordinator()
-        for checkoutID in creatingCheckoutIDs {
+        for checkoutID in activeCheckoutIDs {
             try? await coordinator.stopAfterCurrentOperations(checkoutID: checkoutID)
         }
-        for checkoutID in creatingCheckoutIDs {
-            await coordinator.awaitCreationCompletion(checkoutID: checkoutID)
+        for checkoutID in activeCheckoutIDs {
+            await coordinator.awaitLiveOperations(checkoutID: checkoutID)
         }
         await workspacesManager.refreshCheckoutSnapshots()
     }
@@ -1830,10 +1830,34 @@ final class AppState {
 
     func deleteWorkspaceCheckoutMember(checkoutID: UUID, memberID: UUID, confirmingRisks: Bool = false) async throws -> WorkspaceCheckout {
         guard config.workspacesEnabled, workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
+        try await resolveDirtyBuffersBeforeWorkspaceMemberDeletion(checkoutID: checkoutID, memberID: memberID)
         let checkout = try await workspaceCoordinator().deleteMember(checkoutID: checkoutID, memberID: memberID, confirmingRisks: confirmingRisks)
         await workspacesManager.refreshCheckoutSnapshots()
         selectWorkspaceCheckout(id: checkout.id)
         return checkout
+    }
+
+    private func resolveDirtyBuffersBeforeWorkspaceMemberDeletion(checkoutID: UUID, memberID: UUID) async throws {
+        guard let checkout = workspacesManager.checkout(id: checkoutID),
+              let worktreeID = workspaceMemberWorktreeIDs(checkout)[memberID],
+              let worktree = worktree(withId: worktreeID)
+        else { return }
+        let dirty = dirtyEditorTabIds(worktreeId: worktree.id)
+        guard !dirty.isEmpty else { return }
+        switch promptForDirtyBuffers(
+            action: "Delete",
+            branch: worktree.branch,
+            dirtyCount: dirty.count,
+            onDiskDestructive: true,
+            keepBranch: true
+        ) {
+        case .save:
+            guard await saveDirtyBuffers(in: worktree) else { throw CocoaError(.userCancelled) }
+        case .discard:
+            return
+        case .cancel:
+            throw CocoaError(.userCancelled)
+        }
     }
 
     func deleteWorkspaceCheckoutMemberSnapshot(checkoutID: UUID, memberID: UUID) async throws -> WorkspaceCheckout {

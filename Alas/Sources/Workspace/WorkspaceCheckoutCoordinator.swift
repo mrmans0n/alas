@@ -157,6 +157,7 @@ actor WorkspaceCheckoutCoordinator {
     private var activeDeletions = Set<String>()
     private var activeRepairs = Set<UUID>()
     private var activeSetups = Set<String>()
+    private var liveOperationWaiters: [UUID: [CheckedContinuation<Void, Never>]] = [:]
 
     init(
         store: WorkspaceStore,
@@ -569,7 +570,25 @@ actor WorkspaceCheckoutCoordinator {
         await creationTasks[checkoutID]?.value
     }
 
-    private func finishCreationTask(_ checkoutID: UUID) { creationTasks[checkoutID] = nil }
+    func awaitLiveOperations(checkoutID: UUID) async {
+        while true {
+            if let task = creationTasks[checkoutID] {
+                await task.value
+                continue
+            }
+            guard activeRepairs.contains(checkoutID) || hasActiveSetup(checkoutID: checkoutID) else {
+                return
+            }
+            await withCheckedContinuation { continuation in
+                liveOperationWaiters[checkoutID, default: []].append(continuation)
+            }
+        }
+    }
+
+    private func finishCreationTask(_ checkoutID: UUID) {
+        creationTasks[checkoutID] = nil
+        notifyLiveOperationWaiters(checkoutID: checkoutID)
+    }
 
     /// Explicitly retries a persisted setup checkpoint. Git creation is not
     /// part of this command, so a relaunch cannot recreate a verified member.
@@ -579,7 +598,10 @@ actor WorkspaceCheckoutCoordinator {
             throw WorkspaceCheckoutCoordinatorError.operationInProgress
         }
         activeSetups.insert(setupKey)
-        defer { activeSetups.remove(setupKey) }
+        defer {
+            activeSetups.remove(setupKey)
+            notifyLiveOperationWaiters(checkoutID: checkoutID)
+        }
         let checkout = try await self.checkout(id: checkoutID)
         guard checkout.members.contains(where: { $0.id == memberID }) else {
             throw WorkspaceCheckoutCoordinatorError.checkoutMissing
@@ -660,7 +682,10 @@ actor WorkspaceCheckoutCoordinator {
               !hasActiveSetup(checkoutID: checkoutID)
         else { throw WorkspaceCheckoutCoordinatorError.operationInProgress }
         activeRepairs.insert(checkoutID)
-        defer { activeRepairs.remove(checkoutID) }
+        defer {
+            activeRepairs.remove(checkoutID)
+            notifyLiveOperationWaiters(checkoutID: checkoutID)
+        }
         let checkout = try await self.checkout(id: checkoutID)
         if let memberIDs {
             let checkoutMemberIDs = Set(checkout.members.map(\.id))
@@ -1120,6 +1145,7 @@ actor WorkspaceCheckoutCoordinator {
         defer {
             if !setupAlreadyClaimed {
                 activeSetups.remove(setupKey)
+                notifyLiveOperationWaiters(checkoutID: checkout.id)
             }
         }
         let setup = WorkspaceCheckoutSetupOperation(
@@ -1146,6 +1172,11 @@ actor WorkspaceCheckoutCoordinator {
     private func hasActiveSetup(checkoutID: UUID) -> Bool {
         let prefix = "\(checkoutID.uuidString):"
         return activeSetups.contains { $0.hasPrefix(prefix) }
+    }
+
+    private func notifyLiveOperationWaiters(checkoutID: UUID) {
+        let waiters = liveOperationWaiters.removeValue(forKey: checkoutID) ?? []
+        waiters.forEach { $0.resume() }
     }
 
     private func setupScript(checkoutID: UUID, memberID: UUID) async -> String {
