@@ -220,6 +220,21 @@ struct WorkspaceCheckoutRepairTests {
         #expect(await scripts.paths == ["/checkouts/a"])
     }
 
+    @Test func resumeCreationRetriesSetupFromWorktreeCreatedWithoutRepeatingGit() async throws {
+        let fixture = try await persistedFixture(checkpoint: .worktreeCreated, worktreeCreated: true, lineageID: "lineage-a", branchOwnership: .created, operation: .creating)
+        let git = CountingResumeGit()
+        let scripts = RepairScriptRunner()
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: git, scripts: scripts, projectMutationGate: ProjectMutationGate())
+
+        let checkout = try await coordinator.resumeCreation(checkoutID: fixture.checkout.id)
+
+        #expect(checkout.operation == .idle)
+        #expect(checkout.members[0].checkpoint == .setupComplete)
+        #expect(await git.prepareCount == 0)
+        #expect(await git.createCount == 0)
+        #expect(await scripts.paths == ["/checkouts/a"])
+    }
+
     @Test func resumeCreationReusesAnAlreadyCreatedWorktreeAtTheCreatingCheckpoint() async throws {
         let fixture = try await persistedFixture(checkpoint: .worktreeCreating, branchOwnership: .created, operation: .creating)
         let git = CountingResumeGit(existingLineage: "lineage-a")
