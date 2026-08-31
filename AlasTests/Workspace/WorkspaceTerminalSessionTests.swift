@@ -113,6 +113,52 @@ struct WorkspaceTerminalSessionTests {
     }
 
     @MainActor
+    @Test func checkoutTerminalLaunchUsesAuthoritativeOperationState() async throws {
+        let workspaceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("workspace-terminal-guard-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: workspaceURL) }
+        let workspaceStore = WorkspaceStore(url: workspaceURL)
+        let staleCheckout = WorkspaceCheckout(
+            id: checkoutID,
+            workspaceID: nil,
+            fallbackWorkspaceName: "Shared",
+            executionLocation: .local,
+            branch: "feature/shared",
+            rootPath: "/work/checkout",
+            operation: .idle,
+            members: []
+        )
+        var authoritative = staleCheckout
+        authoritative.operation = .archiving
+        try await workspaceStore.checkpoint(.init(checkouts: [authoritative]))
+        let state = AppState(
+            store: WorkspaceTerminalMemoryStore(),
+            tabsManager: TabsManager(store: WorkspaceTerminalMemoryStore()),
+            workspaceStore: workspaceStore
+        )
+        state.config.workspacesEnabled = true
+
+        await #expect(throws: (any Error).self) {
+            try await state.openWorkspaceCheckoutTerminalTab(staleCheckout)
+        }
+        await #expect(throws: (any Error).self) {
+            try await state.openWorkspaceCheckoutAgentTerminalTab(
+                staleCheckout,
+                focusedMemberWorktree: Worktree(
+                    id: "member",
+                    projectId: "project",
+                    name: "main",
+                    branch: "main",
+                    path: URL(fileURLWithPath: "/work/checkout/member"),
+                    status: .clean,
+                    lastActivity: .distantPast
+                ),
+                agentId: "agent"
+            )
+        }
+    }
+
+    @MainActor
     @Test func archivingCheckoutStopsOnlyItsOwnedSessionsAndPreservesSavedTabs() async {
         let tabs = TabsManager(store: WorkspaceTerminalMemoryStore())
         let state = AppState(store: WorkspaceTerminalMemoryStore(), tabsManager: tabs)
