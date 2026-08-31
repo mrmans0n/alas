@@ -1830,20 +1830,23 @@ final class AppState {
 
     func deleteWorkspaceCheckoutMember(checkoutID: UUID, memberID: UUID, confirmingRisks: Bool = false) async throws -> WorkspaceCheckout {
         guard config.workspacesEnabled, workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
-        try await resolveDirtyBuffersBeforeWorkspaceMemberDeletion(checkoutID: checkoutID, memberID: memberID)
+        let resolvedWorktree = try await resolveDirtyBuffersBeforeWorkspaceMemberDeletion(checkoutID: checkoutID, memberID: memberID)
         let checkout = try await workspaceCoordinator().deleteMember(checkoutID: checkoutID, memberID: memberID, confirmingRisks: confirmingRisks)
+        if let resolvedWorktree,
+           checkout.members.first(where: { $0.id == memberID })?.availability == .explicitlyDeleted {
+            await cleanupDeletedWorkspaceMemberRuntime(resolvedWorktree)
+        }
         await workspacesManager.refreshCheckoutSnapshots()
         selectWorkspaceCheckout(id: checkout.id)
         return checkout
     }
 
-    private func resolveDirtyBuffersBeforeWorkspaceMemberDeletion(checkoutID: UUID, memberID: UUID) async throws {
+    private func resolveDirtyBuffersBeforeWorkspaceMemberDeletion(checkoutID: UUID, memberID: UUID) async throws -> Worktree? {
         guard let checkout = workspacesManager.checkout(id: checkoutID),
-              let worktreeID = workspaceMemberWorktreeIDs(checkout)[memberID],
-              let worktree = worktree(withId: worktreeID)
-        else { return }
+              let worktree = workspaceMemberWorktrees(checkout)[memberID]
+        else { return nil }
         let dirty = dirtyEditorTabIds(worktreeId: worktree.id)
-        guard !dirty.isEmpty else { return }
+        guard !dirty.isEmpty else { return worktree }
         switch promptForDirtyBuffers(
             action: "Delete",
             branch: worktree.branch,
@@ -1854,9 +1857,28 @@ final class AppState {
         case .save:
             guard await saveDirtyBuffers(in: worktree) else { throw CocoaError(.userCancelled) }
         case .discard:
-            return
+            return worktree
         case .cancel:
             throw CocoaError(.userCancelled)
+        }
+        return worktree
+    }
+
+    private func workspaceMemberWorktrees(_ checkout: WorkspaceCheckout) -> [UUID: Worktree] {
+        let worktreesByID = Dictionary(uniqueKeysWithValues: projects.flatMap { projectsManager.worktrees(projectId: $0.id) }.map { ($0.id, $0) })
+        let ids = workspaceMemberWorktreeIDs(checkout)
+        return Dictionary(uniqueKeysWithValues: ids.compactMap { memberID, worktreeID in
+            worktreesByID[worktreeID].map { (memberID, $0) }
+        })
+    }
+
+    private func cleanupDeletedWorkspaceMemberRuntime(_ worktree: Worktree) async {
+        cleanupWorktreeState(worktreeId: worktree.id)
+        projectsManager.setOperationState(id: worktree.id, state: nil)
+        removePersistedGGWorktreeMode(projectId: worktree.projectId, worktreeId: worktree.id)
+        _ = try? await refreshProjectWorktrees(projectId: worktree.projectId)
+        if selectedWorktreeId == worktree.id {
+            selectedWorktreeId = nil
         }
     }
 
@@ -1907,7 +1929,19 @@ final class AppState {
 
     func deleteWorkspaceCheckout(id: UUID) async throws -> WorkspaceCheckout {
         guard config.workspacesEnabled, workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
+        guard let before = workspacesManager.checkout(id: id) else { throw WorkspaceCheckoutCoordinatorError.checkoutMissing }
+        var resolvedWorktrees: [UUID: Worktree] = [:]
+        for member in before.members {
+            if let worktree = try await resolveDirtyBuffersBeforeWorkspaceMemberDeletion(checkoutID: id, memberID: member.id) {
+                resolvedWorktrees[member.id] = worktree
+            }
+        }
         let checkout = try await workspaceCoordinator().deleteCheckout(checkoutID: id)
+        for member in checkout.members where member.availability == .explicitlyDeleted {
+            if let worktree = resolvedWorktrees[member.id] {
+                await cleanupDeletedWorkspaceMemberRuntime(worktree)
+            }
+        }
         await workspacesManager.refreshCheckoutSnapshots()
         selectWorkspaceCheckout(id: id)
         return checkout
