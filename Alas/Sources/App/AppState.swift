@@ -4009,7 +4009,7 @@ final class AppState {
 
     @MainActor
     private func handleCLIRequest(_ request: AlasCLIRequest) async -> AlasCLIResponse {
-        let router = makeCLICommandRouter { [weak self] sessionId in
+        let router = makeCLICommandRouter(sessionWorktreeLookup: { [weak self] sessionId in
             if let s = self?.terminal.registry.session(for: sessionId) {
                 return s.worktreeId
             }
@@ -4020,8 +4020,22 @@ final class AppState {
                 return worktreeId
             }
             return self?.worktreeIdForLiveACPSession(sessionId)
-        }
+        }, sessionOwnerLookup: { [weak self] sessionId in
+            self?.sessionOwnerForCLI(sessionId)
+        })
         return await router.handle(request)
+    }
+
+    private func sessionOwnerForCLI(_ sessionId: String) -> SessionOwnerID? {
+        if let session = terminal.registry.session(for: sessionId) {
+            return session.owner
+        }
+        if let owner = persistedLeafOwner(leafId: sessionId) {
+            return owner
+        }
+        return acpManagers.first { _, manager in
+            manager.liveSession(for: sessionId) != nil
+        }?.key
     }
 
     private func worktreeIdForLiveACPSession(_ sessionId: String) -> String? {
@@ -4110,7 +4124,8 @@ final class AppState {
     private var providerReviewFileSummaryCache: [ReviewDraftSessionID: [DiffReviewFileSummary]] = [:]
 
     func makeCLICommandRouter(
-        sessionWorktreeLookup: @escaping (String) -> String?
+        sessionWorktreeLookup: @escaping (String) -> String?,
+        sessionOwnerLookup: @escaping (String) -> SessionOwnerID? = { _ in nil }
     ) -> AlasCLICommandRouter {
         let orchestration = ACPSessionOrchestrationCoordinator(
             environment: .init(
@@ -4191,6 +4206,10 @@ final class AppState {
         )
         return AlasCLICommandRouter(
             sessionWorktreeId: sessionWorktreeLookup,
+            sessionCwdWorktree: { [weak self] sessionId, cwd in
+                guard let self else { return nil }
+                return self.workspaceCheckoutWorktree(for: sessionOwnerLookup(sessionId), cwd: cwd)
+            },
             resolveACPSessionOrigin: { [weak self] sessionId in
                 guard let self,
                       let (owner, manager) = self.acpManagers.first(where: { _, manager in
@@ -6101,6 +6120,24 @@ final class AppState {
             $0.id == id && $0.path.standardizedFileURL.path == targetPath
         }) else { return nil }
         return (checkout, member, worktree)
+    }
+
+    private func workspaceCheckoutWorktree(for owner: SessionOwnerID?, cwd: String) -> Worktree? {
+        guard case .workspaceCheckout(let checkoutID, let location) = owner,
+              let checkout = workspacesManager.checkout(id: checkoutID),
+              checkout.archivedAt == nil,
+              checkout.executionLocation.normalized == location.normalized
+        else { return nil }
+        let cwdPath = URL(fileURLWithPath: cwd).standardizedFileURL.path
+        for member in checkout.members where member.availability == .available {
+            let memberPath = URL(fileURLWithPath: member.worktreePath).standardizedFileURL.path
+            guard cwdPath == memberPath || cwdPath.hasPrefix(memberPath + "/") else { continue }
+            guard let worktree = projectsManager.worktrees(projectId: member.projectID).first(where: {
+                $0.path.standardizedFileURL.path == memberPath
+            }) else { continue }
+            return worktree
+        }
+        return nil
     }
 
     private func acpQuestionNotificationBody(from params: ACPQuestionRequestParams) -> String? {
