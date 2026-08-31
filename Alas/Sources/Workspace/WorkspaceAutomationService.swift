@@ -168,6 +168,7 @@ struct WorkspaceAutomationService {
             let checkout = copy.checkouts[checkoutIndex]
             for memberIndex in checkout.members.indices {
                 let member = checkout.members[memberIndex]
+                guard member.availability != .explicitlyDeleted else { continue }
                 switch await observer.observe(member, in: checkout) {
                 case .exactLineage:
                     copy.checkouts[checkoutIndex].members[memberIndex].availability = .available

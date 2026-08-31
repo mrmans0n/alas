@@ -95,6 +95,28 @@ struct WorkspaceAutomationServiceTests {
         #expect(try await loaded(store).checkouts.first?.members.first?.availability == .available)
     }
 
+    @Test func automationPreservesExplicitDeletionDuringReconciliation() async throws {
+        let checkoutID = UUID()
+        let memberID = UUID()
+        let store = try await makeStore(state: .init(checkouts: [
+            checkout(id: checkoutID, members: [
+                member(id: memberID, projectID: "project-a", availability: .explicitlyDeleted),
+            ]),
+        ]))
+        let service = WorkspaceAutomationService(
+            store: store,
+            isEnabled: { true },
+            observer: AutomationObserver(result: .missing)
+        )
+
+        let shown = try await service.showCheckout(id: checkoutID)
+
+        #expect(shown.checkout.members.first?.availability == .explicitlyDeleted)
+        await #expect(throws: WorkspaceAutomationError.memberUnavailable) {
+            try await service.memberTarget(checkoutID: checkoutID, memberID: memberID)
+        }
+    }
+
     @Test func disabledOrUnreadableWorkspaceStateReturnsStableErrors() async throws {
         let disabled = WorkspaceAutomationService(store: WorkspaceStore(url: tempURL()), isEnabled: { false })
         await #expect(throws: WorkspaceAutomationError.disabled) {
