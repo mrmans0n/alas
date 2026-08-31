@@ -43,16 +43,22 @@ struct WorkspaceCheckoutBoundary: Sendable {
             // `fileExists` follows links and therefore misses dangling
             // symlinks. Ask the filesystem for link metadata at every path
             // component before a write creates its remaining leaf.
-            if let destination = try? fileManager.destinationOfSymbolicLink(atPath: resolved.path) {
-                let target: URL
-                if destination.hasPrefix("/") {
-                    target = URL(fileURLWithPath: destination)
-                } else {
-                    target = URL(fileURLWithPath: destination, relativeTo: resolved.deletingLastPathComponent())
-                }
-                resolved = target.standardizedFileURL
-            }
+            resolved = Self.resolvingSymlinkChain(from: resolved, fileManager: fileManager)
         }
         return resolved.standardizedFileURL
+    }
+
+    private static func resolvingSymlinkChain(from url: URL, fileManager: FileManager) -> URL {
+        var current = url.standardizedFileURL
+        var seen = Set<String>()
+        while let destination = try? fileManager.destinationOfSymbolicLink(atPath: current.path) {
+            guard seen.insert(current.path).inserted else { break }
+            if destination.hasPrefix("/") {
+                current = URL(fileURLWithPath: destination).standardizedFileURL
+            } else {
+                current = URL(fileURLWithPath: destination, relativeTo: current.deletingLastPathComponent()).standardizedFileURL
+            }
+        }
+        return current
     }
 }

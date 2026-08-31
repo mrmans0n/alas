@@ -11,6 +11,7 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
     @State private var creatingCheckout: Workspace?
     @State private var lifecycleError: String?
     @State private var deletionConfirmation: PendingDeletionConfirmation?
+    @State private var repairPlan: PendingRepairPlan?
 
     var body: some View {
         let members = state.spacesManager.activeSpace?.members
@@ -91,6 +92,11 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                 confirmDeletion(action, checkoutID: pending.checkoutID, memberID: pending.memberID)
             }
         }
+        .sheet(item: $repairPlan) { pending in
+            WorkspaceRepairPlanSheet(model: pending.model) { candidate in
+                useRepairCandidate(candidate, checkoutID: pending.checkoutID, memberID: pending.memberID)
+            }
+        }
     }
 
     private func perform(_ action: WorkspaceCheckoutActionKind, checkoutID: UUID, memberID: UUID?) {
@@ -117,7 +123,10 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                 case .retrySetup:
                     if let memberID { _ = try await state.retryWorkspaceCheckoutSetup(checkoutID: checkoutID, memberID: memberID) }
                 case .findExisting:
-                    lifecycleError = "Find Existing will only accept candidates whose frozen location, path, and lineage match this Workspace Checkout."
+                    if let memberID {
+                        let model = try state.workspaceRepairPlan(checkoutID: checkoutID, memberID: memberID)
+                        repairPlan = PendingRepairPlan(checkoutID: checkoutID, memberID: memberID, model: model)
+                    }
                 case .deleteMember:
                     if let memberID {
                         if state.workspacesManager.checkout(id: checkoutID)?
@@ -158,6 +167,17 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
             }
         }
     }
+
+    private func useRepairCandidate(_ candidate: WorkspaceRepairCandidate, checkoutID: UUID, memberID: UUID) {
+        Task { @MainActor in
+            do {
+                _ = try await state.useWorkspaceRepairCandidate(checkoutID: checkoutID, memberID: memberID, candidate: candidate)
+                repairPlan = nil
+            } catch {
+                lifecycleError = error.localizedDescription
+            }
+        }
+    }
 }
 
 private struct PendingDeletionConfirmation: Identifiable {
@@ -165,4 +185,11 @@ private struct PendingDeletionConfirmation: Identifiable {
     var checkoutID: UUID
     var memberID: UUID?
     var model: WorkspaceLifecycleConfirmationModel
+}
+
+private struct PendingRepairPlan: Identifiable {
+    let id = UUID()
+    var checkoutID: UUID
+    var memberID: UUID
+    var model: WorkspaceRepairPlanModel
 }

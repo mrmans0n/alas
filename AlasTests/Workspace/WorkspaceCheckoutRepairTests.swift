@@ -79,6 +79,34 @@ struct WorkspaceCheckoutRepairTests {
         #expect(await fixture.store.load().loadedCheckout(id: fixture.checkout.id)?.members[0].checkpoint == .setupComplete)
     }
 
+    @Test func retrySetupDoesNotRunInheritedGlobalSetupTwice() async throws {
+        let fixture = try await persistedFixture(checkpoint: .worktreeCreated)
+        let member = fixture.checkout.members[0]
+        try await fixture.store.mutate { state in
+            state.checkouts[0].configurationSnapshot = WorkspaceCheckoutConfigurationSnapshot(
+                capturedAt: Date(timeIntervalSince1970: 0),
+                shared: .init(
+                    sessionOpenScript: "",
+                    worktreeCreateScript: "echo global",
+                    creationLaunchPreference: .inherit
+                ),
+                members: [
+                    member.workspaceMemberID: .init(
+                        setupScript: "echo global\necho project",
+                        ggMode: .off,
+                        mcpServers: []
+                    )
+                ]
+            )
+        }
+        let scripts = RepairScriptRunner()
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: RepairGit(), scripts: scripts, projectMutationGate: ProjectMutationGate())
+
+        _ = try await coordinator.retrySetup(checkoutID: fixture.checkout.id, memberID: member.id)
+
+        #expect(await scripts.scripts == ["echo global\necho project"])
+    }
+
     @Test func concurrentRetrySetupRejectsTheSecondLiveSetup() async throws {
         let fixture = try await persistedFixture(checkpoint: .worktreeCreated)
         let scripts = BlockingRepairScriptRunner()
@@ -219,6 +247,32 @@ struct WorkspaceCheckoutRepairTests {
         #expect(await git.operations.isEmpty)
     }
 
+    @Test func useExistingRepairCandidateOnlyAcceptsExactFrozenLineage() async throws {
+        let fixture = try await persistedFixture(checkpoint: .failed, worktreeCreated: true, lineageID: "lineage-a")
+        try await fixture.store.mutate { state in
+            state.checkouts[0].members[0].availability = .missing
+        }
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: RepairGit(), scripts: RepairScriptRunner(), projectMutationGate: ProjectMutationGate())
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict) {
+            try await coordinator.useExistingVerifiedCandidate(
+                checkoutID: fixture.checkout.id,
+                memberID: fixture.checkout.members[0].id,
+                candidate: .init(path: "/tmp/other", lineageID: "lineage-a", isExactMatch: true)
+            )
+        }
+
+        let repaired = try await coordinator.useExistingVerifiedCandidate(
+            checkoutID: fixture.checkout.id,
+            memberID: fixture.checkout.members[0].id,
+            candidate: .init(path: "/checkouts/a", lineageID: "lineage-a", isExactMatch: true)
+        )
+
+        #expect(repaired.members[0].availability == .available)
+        #expect(repaired.members[0].checkpoint == .worktreeCreated)
+        #expect(repaired.members[0].cleanupOwnership.worktreeCreated == true)
+    }
+
     @Test func concurrentResumeCreationRejectsTheSecondRepairClaim() async throws {
         let fixture = try await persistedFixture(checkpoint: .planPersisted)
         let git = BlockingResumeGit()
@@ -278,7 +332,11 @@ private struct RepairGit: WorkspaceGitOperating {
 
 private actor RepairScriptRunner: WorkspaceScriptRunning {
     private(set) var paths: [String] = []
-    func runSetup(for operation: WorkspaceCheckoutSetupOperation) async throws { paths.append(operation.worktreePath) }
+    private(set) var scripts: [String] = []
+    func runSetup(for operation: WorkspaceCheckoutSetupOperation) async throws {
+        paths.append(operation.worktreePath)
+        scripts.append(operation.script)
+    }
 }
 
 private actor BlockingRepairScriptRunner: WorkspaceScriptRunning {

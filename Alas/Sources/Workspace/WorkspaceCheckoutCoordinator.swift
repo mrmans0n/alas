@@ -369,6 +369,38 @@ actor WorkspaceCheckoutCoordinator {
         return try await self.checkout(id: checkoutID)
     }
 
+    /// Repairs a snapshot only when the user chose a candidate that exactly
+    /// matches the frozen member destination and lineage. This is not an
+    /// adoption path for arbitrary worktrees.
+    func useExistingVerifiedCandidate(
+        checkoutID: UUID,
+        memberID: UUID,
+        candidate: WorkspaceRepairCandidate
+    ) async throws -> WorkspaceCheckout {
+        guard candidate.isExactMatch else { throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict }
+        try await store.mutate { state in
+            guard let checkoutIndex = state.checkouts.firstIndex(where: { $0.id == checkoutID }),
+                  state.checkouts[checkoutIndex].operation == .idle,
+                  let memberIndex = state.checkouts[checkoutIndex].members.firstIndex(where: { $0.id == memberID })
+            else { throw WorkspaceCheckoutCoordinatorError.operationInProgress }
+            var member = state.checkouts[checkoutIndex].members[memberIndex]
+            guard let plan = member.plan,
+                  plan.checkoutMemberID == member.id,
+                  plan.destinationPath == candidate.path,
+                  member.worktreePath == candidate.path,
+                  member.gitLineageID == candidate.lineageID
+            else { throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict }
+            member.availability = .available
+            member.cleanup = nil
+            if member.checkpoint != .setupComplete {
+                member.checkpoint = .worktreeCreated
+            }
+            member.cleanupOwnership.worktreeCreated = true
+            state.checkouts[checkoutIndex].members[memberIndex] = member
+        }
+        return try await self.checkout(id: checkoutID)
+    }
+
     /// Runs member cleanup in snapshot order. A request to stop is honored at
     /// the next member boundary; failed members remain independently visible.
     func deleteCheckout(checkoutID: UUID) async throws -> WorkspaceCheckout {
@@ -872,7 +904,8 @@ actor WorkspaceCheckoutCoordinator {
         else { return "" }
         let shared = checkout.configurationSnapshot?.shared.worktreeCreateScript ?? ""
         let memberScript = checkout.configurationSnapshot?.members[member.workspaceMemberID]?.setupScript ?? ""
-        return [shared, memberScript].filter { !$0.isEmpty }.joined(separator: "\n")
+        let memberOnlyScript = memberScript.removingSharedWorkspaceSetupPrefix(shared)
+        return [shared, memberOnlyScript].filter { !$0.isEmpty }.joined(separator: "\n")
     }
 
     private func updateMember(
@@ -1002,6 +1035,18 @@ enum WorkspaceCheckoutCoordinatorError: Error, Equatable, Sendable {
     case cleanupIdentityConflict
     case cleanupIncomplete
     case cleanupConfirmationRequired
+}
+
+private extension String {
+    func removingSharedWorkspaceSetupPrefix(_ shared: String) -> String {
+        let shared = shared.trimmingCharacters(in: .whitespacesAndNewlines)
+        let script = trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !shared.isEmpty, !script.isEmpty else { return script }
+        if script == shared { return "" }
+        let prefix = shared + "\n"
+        guard script.hasPrefix(prefix) else { return script }
+        return String(script.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 }
 
 struct WorkspaceFrozenGitOperator: WorkspaceGitOperating {

@@ -40,4 +40,22 @@ struct WorkspaceCheckoutBoundaryTests {
             try boundary.managedURL(for: root.appendingPathComponent("dangling/new.txt").path)
         }
     }
+
+    @Test func rejectsNewLeafBelowAChainedEscapeSymlink() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        let outside = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: outside)
+        }
+        try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("first"), withDestinationURL: root.appendingPathComponent("second"))
+        try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("second"), withDestinationURL: outside)
+
+        let boundary = WorkspaceCheckoutBoundary(rootPath: root.path)
+        #expect(throws: WorkspaceCheckoutBoundary.Error.outsideCheckout) {
+            try boundary.managedURL(for: root.appendingPathComponent("first/new.txt").path)
+        }
+    }
 }
