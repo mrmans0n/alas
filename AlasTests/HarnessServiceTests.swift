@@ -74,6 +74,21 @@ struct HarnessServiceTests {
         #expect(collector.requests[0].content.body == "Need help")
     }
 
+    @Test func awaitingNotificationCarriesCheckoutOwnerWhenAvailable() {
+        let (service, collector) = makeService()
+        let checkoutID = UUID()
+
+        service.handleSocketEvent(
+            makeEvent(event: .awaitingInput, sessionId: "checkout-leaf", body: "Need input"),
+            stateLookup: { _ in (projectId: "", worktreeId: "workspace-checkout-storage") },
+            ownerLookup: { _ in .workspaceCheckout(checkoutID, .ssh("devbox")) },
+            shouldNotifyOnAwaiting: { true }
+        )
+
+        let context = NotificationClickContext(userInfo: collector.requests[0].content.userInfo)
+        #expect(context?.owner == .workspaceCheckout(checkoutID, .ssh("devbox")))
+    }
+
     @Test func awaitingNotificationRespectsPreference() {
         let (service, collector) = makeService()
         service.handleSocketEvent(

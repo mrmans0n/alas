@@ -42,6 +42,7 @@ final class HarnessService {
 
     func start(
         stateLookup: @escaping (String) -> (projectId: String, worktreeId: String)?,
+        ownerLookup: @escaping (String) -> SessionOwnerID? = { _ in nil },
         shouldNotifyOnAwaiting: @escaping () -> Bool = { true }
     ) {
         detector.onUpdate = { [weak self] sid, kind in
@@ -58,7 +59,7 @@ final class HarnessService {
         }
 
         socketServer.onEvent = { [weak self] event in
-            self?.handleSocketEvent(event, stateLookup: stateLookup, shouldNotifyOnAwaiting: shouldNotifyOnAwaiting)
+            self?.handleSocketEvent(event, stateLookup: stateLookup, ownerLookup: ownerLookup, shouldNotifyOnAwaiting: shouldNotifyOnAwaiting)
         }
     }
 
@@ -95,6 +96,7 @@ final class HarnessService {
     func handleSocketEvent(
         _ event: AgentHookEvent,
         stateLookup: @escaping (String) -> (projectId: String, worktreeId: String)?,
+        ownerLookup: @escaping (String) -> SessionOwnerID? = { _ in nil },
         shouldNotifyOnAwaiting: () -> Bool
     ) {
         let previousState = activityBySession[event.sessionId]?.state
@@ -126,7 +128,8 @@ final class HarnessService {
                 notifications.notifyHarnessAwaiting(
                     agent: event.agent, body: event.body,
                     projectId: lookup.projectId, worktreeId: lookup.worktreeId,
-                    sessionId: event.sessionId
+                    sessionId: event.sessionId,
+                    owner: ownerLookup(event.sessionId)
                 )
             }
 

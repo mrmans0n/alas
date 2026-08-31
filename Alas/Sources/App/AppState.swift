@@ -3661,6 +3661,13 @@ final class AppState {
                 // notifications routed to the right worktree.
                 return self.persistedLeafLocation(leafId: sessionId)
             },
+            ownerLookup: { [weak self] sessionId in
+                guard let self else { return nil }
+                if let session = self.terminal.registry.session(for: sessionId) {
+                    return session.owner
+                }
+                return self.persistedLeafOwner(leafId: sessionId)
+            },
             shouldNotifyOnAwaiting: { [weak self] in
                 self?.config.harness.notifyOnAwaiting ?? true
             }
@@ -3759,6 +3766,29 @@ final class AppState {
                     if state.root.leaves().contains(where: { $0.id == leafId }) {
                         return (project.id, worktree.id)
                     }
+                }
+            }
+        }
+        return nil
+    }
+
+    private func persistedLeafOwner(leafId: String) -> SessionOwnerID? {
+        for project in projects {
+            for worktree in projectsManager.worktrees(projectId: project.id) {
+                for tab in tabs.tabs(forWorktree: worktree.id) {
+                    guard case .terminal(let state) = tab else { continue }
+                    if state.root.leaves().contains(where: { $0.id == leafId }) {
+                        return .worktree(worktree.id)
+                    }
+                }
+            }
+        }
+        for checkout in workspacesManager.checkouts {
+            let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+            for tab in tabs.tabs(for: owner) {
+                guard case .terminal(let state) = tab else { continue }
+                if state.root.leaves().contains(where: { $0.id == leafId }) {
+                    return owner
                 }
             }
         }

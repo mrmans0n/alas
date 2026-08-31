@@ -4,11 +4,13 @@ import Foundation
 /// It intentionally does not expose the general Git or Worktree services.
 protocol WorkspaceGitOperating: Sendable {
     func prepareBranch(_ operation: WorkspaceFrozenWorktreeOperation) async throws
+    func preparedBranchMatchesFrozenBase(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> Bool
     func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String?
     func existingCreatedWorktreeLineage(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String?
 }
 
 extension WorkspaceGitOperating {
+    func preparedBranchMatchesFrozenBase(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> Bool { false }
     func existingCreatedWorktreeLineage(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? { nil }
 }
 
@@ -145,6 +147,7 @@ actor WorkspaceCheckoutCoordinator {
     private var creationTasks: [UUID: Task<Void, Never>] = [:]
     private var pendingCreationPlans: [UUID: (WorkspaceCheckout, FrozenWorkspaceCheckoutPlan)] = [:]
     private var activeArchives = Set<UUID>()
+    private var activeDeletions = Set<String>()
     private var activeRepairs = Set<UUID>()
     private var activeSetups = Set<String>()
 
@@ -232,6 +235,10 @@ actor WorkspaceCheckoutCoordinator {
     /// location, path, and lineage. The checkout snapshot remains, visibly
     /// Explicitly Deleted, so its frozen creation plan can later recreate it.
     func deleteMember(checkoutID: UUID, memberID: UUID, confirmingRisks: Bool = false) async throws -> WorkspaceCheckout {
+        let deletionKey = setupKey(checkoutID: checkoutID, memberID: memberID)
+        guard !activeDeletions.contains(deletionKey) else { throw WorkspaceCheckoutCoordinatorError.operationInProgress }
+        activeDeletions.insert(deletionKey)
+        defer { activeDeletions.remove(deletionKey) }
         let checkout = try await checkout(id: checkoutID)
         guard checkout.operation == .idle || checkout.operation == .deleting else { throw WorkspaceCheckoutCoordinatorError.operationInProgress }
         guard let member = checkout.members.first(where: { $0.id == memberID }),
@@ -810,7 +817,9 @@ actor WorkspaceCheckoutCoordinator {
                     try await self.updateMember(checkoutID: checkout.id, memberID: plan.checkoutMemberID) { member in
                         member.checkpoint = .branchPreparing
                     }
-                    try await self.git.prepareBranch(operation)
+                    if try await self.git.preparedBranchMatchesFrozenBase(operation) == false {
+                        try await self.git.prepareBranch(operation)
+                    }
                     try await self.updateMember(checkoutID: checkout.id, memberID: plan.checkoutMemberID) { member in
                         member.checkpoint = .branchPrepared
                         member.cleanupOwnership.branchOwnership = plan.branchIntent == .reuse ? .reused : .created
@@ -1058,6 +1067,24 @@ struct WorkspaceFrozenGitOperator: WorkspaceGitOperating {
         )
     }
 
+    func preparedBranchMatchesFrozenBase(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> Bool {
+        switch operation.executionLocation.normalized {
+        case .local:
+            let result = try await Process.git(
+                ["rev-parse", "--verify", "refs/heads/\(operation.branch)^{commit}"],
+                cwd: URL(fileURLWithPath: operation.sourceRepositoryPath)
+            )
+            return result.exitCode == 0
+                && result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == operation.baseCommit
+        case .ssh(let host):
+            let branch = SSHCommand.shellQuote("refs/heads/\(operation.branch)^{commit}")
+            let command = "git -C \(SSHCommand.shellQuote(operation.sourceRepositoryPath)) rev-parse --verify \(branch)"
+            let result = try await WorkspaceRemoteTransport().run(host: host, command: command)
+            return result.exitCode == 0
+                && result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == operation.baseCommit
+        }
+    }
+
     func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? {
         let worktree = try await WorktreeService().addFrozen(
             repoPath: URL(fileURLWithPath: operation.sourceRepositoryPath),
@@ -1206,6 +1233,11 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
         let hasSubmodules = submodules.exitCode == 0 && !submodules.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         if hasSubmodules {
             reasons.insert(.containsInitializedSubmodules)
+        }
+        let registrations = try await remote.run(host: host, command: "git -C \(quotedPath) worktree list --porcelain")
+        guard registrations.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(registrations.stderr) }
+        if WorktreeService.porcelainMarksWorktreeLocked(registrations.stdout, worktreePath: URL(fileURLWithPath: plan.worktreePath)) {
+            reasons.insert(.locked)
         }
         return .init(reasons: reasons, submoduleLocalState: hasSubmodules ? .unknown : .none)
     }

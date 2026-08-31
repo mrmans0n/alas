@@ -121,6 +121,93 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
         await coordinator.awaitCreationCompletion(checkoutID: checkout.id)
     }
 
+    @Test func resumeCreationTreatsPreparedBranchAtFrozenBaseAsDurable() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-coordinator-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = WorkspaceStore(url: url)
+        let fixture = makeFixture(count: 1)
+        let checkout = WorkspaceCheckout(
+            workspaceID: fixture.workspace.id,
+            fallbackWorkspaceName: fixture.workspace.name,
+            executionLocation: fixture.workspace.executionLocation,
+            branch: fixture.plan.branch,
+            rootPath: fixture.plan.rootPath,
+            operation: .creating,
+            members: [
+                WorkspaceCheckoutMember(
+                    id: fixture.plan.members[0].checkoutMemberID,
+                    workspaceMemberID: fixture.plan.members[0].workspaceMemberID,
+                    projectID: fixture.plan.members[0].projectID,
+                    fallbackProjectName: "Project 0",
+                    fallbackRepositoryRoot: "/repos/0",
+                    worktreePath: fixture.plan.members[0].destinationPath,
+                    checkpoint: .branchPreparing,
+                    plan: fixture.plan.members[0].memberPlan
+                )
+            ]
+        )
+        try await store.checkpoint(.init(checkouts: [checkout]))
+        let git = PreparedBranchWorkspaceGit()
+        let coordinator = WorkspaceCheckoutCoordinator(store: store, git: git, scripts: NoopWorkspaceScriptRunner(), projectMutationGate: ProjectMutationGate())
+
+        _ = try await coordinator.resumeCreation(checkoutID: checkout.id)
+
+        #expect(await git.prepareCount == 0)
+        #expect(await git.createCount == 1)
+        #expect(await store.checkout(id: checkout.id)?.members[0].cleanupOwnership.branchOwnership == .created)
+    }
+
+    @Test func overlappingMemberDeletionRejectsTheSecondLiveCall() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-coordinator-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = WorkspaceStore(url: url)
+        let fixture = makeFixture(count: 1)
+        let memberPlan = fixture.plan.members[0]
+        let memberID = memberPlan.checkoutMemberID
+        let member = WorkspaceCheckoutMember(
+            id: memberID,
+            workspaceMemberID: memberPlan.workspaceMemberID,
+            projectID: memberPlan.projectID,
+            fallbackProjectName: "Project 0",
+            fallbackRepositoryRoot: "/repos/0",
+            worktreePath: memberPlan.destinationPath,
+            gitLineageID: "lineage-project-0",
+            availability: .available,
+            checkpoint: .setupComplete,
+            cleanupOwnership: .init(worktreeCreated: true, branchOwnership: .created),
+            plan: memberPlan.memberPlan
+        )
+        let checkout = WorkspaceCheckout(
+            workspaceID: fixture.workspace.id,
+            fallbackWorkspaceName: fixture.workspace.name,
+            executionLocation: .local,
+            branch: fixture.plan.branch,
+            rootPath: fixture.plan.rootPath,
+            members: [member]
+        )
+        try await store.checkpoint(.init(checkouts: [checkout]))
+        let lifecycle = BlockingCleanupLifecycle()
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: store,
+            git: CountingWorkspaceGit(),
+            scripts: NoopWorkspaceScriptRunner(),
+            projectMutationGate: ProjectMutationGate(),
+            lifecycle: lifecycle
+        )
+
+        let first = Task {
+            try await coordinator.deleteMember(checkoutID: checkout.id, memberID: memberID)
+        }
+        await lifecycle.waitUntilPreflightStarted()
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.operationInProgress) {
+            try await coordinator.deleteMember(checkoutID: checkout.id, memberID: memberID)
+        }
+
+        await lifecycle.release()
+        _ = try await first.value
+    }
+
     @Test func rejectsInconsistentFrozenPlanBeforePersistingOrCallingGit() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-coordinator-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: url) }
@@ -170,6 +257,20 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
             }
         )
         return (workspace, plan)
+    }
+}
+
+private extension FrozenWorkspaceCheckoutPlan.Member {
+    var memberPlan: WorkspaceCheckoutMemberPlan {
+        .init(
+            checkoutMemberID: checkoutMemberID,
+            projectID: projectID,
+            sourceRepositoryPath: sourceRepositoryPath,
+            destinationPath: destinationPath,
+            baseReference: baseReference,
+            baseCommit: baseCommit,
+            branchIntent: branchIntent
+        )
     }
 }
 
@@ -234,6 +335,65 @@ private actor ConcurrentWorkspaceGit: WorkspaceGitOperating {
 }
 
 private enum TestError: Error { case failed }
+
+private actor PreparedBranchWorkspaceGit: WorkspaceGitOperating {
+    private(set) var prepareCount = 0
+    private(set) var createCount = 0
+
+    func preparedBranchMatchesFrozenBase(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> Bool { true }
+
+    func prepareBranch(_ operation: WorkspaceFrozenWorktreeOperation) async throws {
+        prepareCount += 1
+    }
+
+    func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? {
+        createCount += 1
+        return "lineage-\(operation.projectID)"
+    }
+}
+
+private actor BlockingCleanupLifecycle: WorkspaceCheckoutLifecycleOperating {
+    private var started = false
+    private var released = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func deletePreflight(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> WorktreeDeletePreflight {
+        started = true
+        waiters.forEach { $0.resume() }
+        waiters.removeAll()
+        if !released {
+            await withCheckedContinuation { continuation in
+                releaseWaiters.append(continuation)
+            }
+        }
+        return .init(reasons: [], submoduleLocalState: .none)
+    }
+
+    func inspectRoot(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutCleanupRootObservation {
+        .init(isContained: true, leftovers: [])
+    }
+
+    func verifyCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutMemberObservation {
+        .exactLineage(plan.expectedLineageID)
+    }
+
+    func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan, force: Bool) async throws {}
+    func deleteMergedBranch(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool { true }
+
+    func waitUntilPreflightStarted() async {
+        if started { return }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func release() {
+        released = true
+        releaseWaiters.forEach { $0.resume() }
+        releaseWaiters.removeAll()
+    }
+}
 
 private actor SerialIntentWorkspaceGit: WorkspaceGitOperating {
     private var active = 0

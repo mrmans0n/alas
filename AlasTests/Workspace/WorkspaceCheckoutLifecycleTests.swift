@@ -294,6 +294,7 @@ struct WorkspaceCheckoutLifecycleTests {
         let runner = RemoteLifecycleRunner(results: [
             .init(exitCode: 0, stdout: " M file.txt\n", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "worktree /checkout/a\nHEAD abc\nbranch refs/heads/feature\n", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
             .init(exitCode: 1, stdout: "", stderr: "not merged"),
             .init(exitCode: 0, stdout: ".alas-workspace-checkout.json\nnotes.txt\n", stderr: ""),
