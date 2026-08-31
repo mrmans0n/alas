@@ -293,6 +293,7 @@ struct WorkspaceCheckoutRepairTests {
 
         let checkout = try await coordinator.resumeCreation(checkoutID: fixture.checkout.id, memberID: fixture.checkout.members[0].id)
 
+        #expect(checkout.operation == .idle)
         #expect(checkout.members[0].checkpoint == .setupComplete)
         #expect(checkout.members[1].checkpoint == .planPersisted)
         #expect(checkout.members[1].availability == .explicitlyDeleted)

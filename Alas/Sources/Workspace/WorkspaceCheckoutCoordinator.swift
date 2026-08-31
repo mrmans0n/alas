@@ -587,6 +587,12 @@ actor WorkspaceCheckoutCoordinator {
         activeRepairs.insert(checkoutID)
         defer { activeRepairs.remove(checkoutID) }
         let checkout = try await self.checkout(id: checkoutID)
+        if let memberIDs {
+            let checkoutMemberIDs = Set(checkout.members.map(\.id))
+            guard memberIDs.isSubset(of: checkoutMemberIDs) else {
+                throw WorkspaceCheckoutCoordinatorError.checkoutMissing
+            }
+        }
         let started = try await store.mutate { state -> Bool in
             guard let index = state.checkouts.firstIndex(where: { $0.id == checkoutID }) else {
                 throw WorkspaceCheckoutCoordinatorError.checkoutMissing
@@ -692,8 +698,26 @@ actor WorkspaceCheckoutCoordinator {
                 await execute(member: frozenMember, checkout: checkout)
             }
         }
-        await finishIfAllMembersTerminal(checkoutID: checkoutID, owning: .repairing)
+        if let memberIDs {
+            await finishScopedRepair(checkoutID: checkoutID, memberIDs: memberIDs)
+        } else {
+            await finishIfAllMembersTerminal(checkoutID: checkoutID, owning: .repairing)
+        }
         return try await self.checkout(id: checkoutID)
+    }
+
+    private func finishScopedRepair(checkoutID: UUID, memberIDs: Set<UUID>) async {
+        try? await store.mutate { state in
+            guard let checkoutIndex = state.checkouts.firstIndex(where: { $0.id == checkoutID }),
+                  state.checkouts[checkoutIndex].operation == .repairing
+            else { return }
+            let selectedMembers = state.checkouts[checkoutIndex].members.filter { memberIDs.contains($0.id) }
+            guard selectedMembers.isEmpty == false,
+                  selectedMembers.allSatisfy({ $0.checkpoint == .setupComplete || $0.checkpoint == .failed })
+            else { return }
+            state.checkouts[checkoutIndex].operation = .idle
+            state.checkouts[checkoutIndex].stopAfterCurrentOperations = false
+        }
     }
 
     private func frozenMember(from member: WorkspaceCheckoutMember) -> FrozenWorkspaceCheckoutPlan.Member? {
