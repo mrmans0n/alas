@@ -246,10 +246,13 @@ struct AlasCLIRequestTests {
     @Test func responseEncodesOKAndError() throws {
         let ok = String(data: try AlasCLIResponse.ok.encode(), encoding: .utf8) ?? ""
         let error = String(data: try AlasCLIResponse.error("No file.").encode(), encoding: .utf8) ?? ""
+        let workspaceError = String(data: try AlasCLIResponse.errorWithExitCode("workspace_recovery_required: recover", 3).encode(), encoding: .utf8) ?? ""
 
         #expect(ok.contains(#""ok":true"#) || ok.contains(#""ok": true"#))
         #expect(error.contains(#""ok":false"#) || error.contains(#""ok": false"#))
         #expect(error.contains("No file."))
+        #expect(error.contains("exit_code") == false)
+        #expect(workspaceError.contains(#""exit_code":3"#) || workspaceError.contains(#""exit_code": 3"#))
     }
 
     @Test func encodesTextResponse() throws {

@@ -142,7 +142,7 @@ struct WorkspaceCheckoutDetailModel: Equatable, Sendable {
                 : [.init(.resumeCreation, title: "Resume Creation"), .init(.stopAfterCurrentOperations, title: "Stop After Current Operations")]
         case .idle:
             var actions: [WorkspaceCheckoutAction] = [.init(.archive, title: "Archive")]
-            if checkout.members.contains(where: { $0.availability == .missing || $0.checkpoint == .failed }) {
+            if checkout.members.contains(where: { $0.availability == .missing || $0.checkpoint == .failed || ($0.availability == .pending && $0.checkpoint != .setupComplete) }) {
                 actions.append(.init(.resumeCreation, title: "Resume Creation"))
             }
             if checkout.members.allSatisfy({ $0.cleanup?.worktreeRemoved == true }) {
@@ -258,6 +258,8 @@ struct WorkspaceCheckoutDetailModel: Equatable, Sendable {
             return [.init(.retrySetup, title: "Retry Setup")]
         case .available:
             return [.init(.deleteMember, title: "Delete Worktree", isDestructive: true)]
+        case .pending where member.checkpoint != .setupComplete:
+            return [.init(.resumeCreation, title: "Resume Creation")]
         case .pending:
             return []
         }
