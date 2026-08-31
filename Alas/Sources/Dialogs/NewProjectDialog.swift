@@ -70,7 +70,22 @@ private struct ProjectDialog: View {
     @State private var path: String = ""
     private enum ProjectLocation: String, CaseIterable {
         case local = "Local"
-        case remoteSSH = "Remote (SSH)"
+        case github = "GitHub"
+        case gitlab = "GitLab"
+        case gitURL = "Git URL"
+        case remoteSSH = "SSH"
+
+        var repositoryHost: RepositoryHost? {
+            switch self {
+            case .github: .github
+            case .gitlab: .gitlab
+            default: nil
+            }
+        }
+
+        var clonesRepository: Bool {
+            self == .github || self == .gitlab || self == .gitURL
+        }
     }
     @State private var location: ProjectLocation = .local
     @State private var sshHost: String = ""
@@ -103,6 +118,16 @@ private struct ProjectDialog: View {
     @State private var sshSetupSurface: AlasGhostty.SurfaceView?
     @State private var sshSetupStatus: SSHSetupStatus = .connecting
     @State private var sshSetupAttemptID = UUID()
+    @State private var gitRemote = ""
+    @State private var cloneRootPath = ""
+    @State private var repositoryCatalogs: [RepositoryHost: [RemoteRepository]] = [:]
+    @State private var displayedRepositories: [RemoteRepository] = []
+    @State private var selectedRepository: RemoteRepository?
+    @State private var repositorySearch = ""
+    @State private var repositoryCatalogLoading = false
+    @State private var catalogErrorMessage: String?
+    @State private var catalogTask: Task<Void, Never>?
+    @State private var cloneTask: Task<Void, Never>?
 
     private let palette = [
         "#5fb7c4", "#c89d6f", "#9789c7", "#7fb978", "#d77b88",
@@ -139,43 +164,10 @@ private struct ProjectDialog: View {
                         Seg(value: $location, options: ProjectLocation.allCases.map { ($0, $0.rawValue) })
                     }
                 }
-                DialogField(label: location == .remoteSSH ? "Remote repository path" : "Repository path") {
+                DialogField(label: locationFieldLabel) {
                     switch mode {
                     case .add:
-                        if location == .local {
-                            HStack(spacing: 6) {
-                                AlasField(text: $path, placeholder: "/path/to/repo", monospaced: true)
-                                AlasButton(title: "Choose…", action: choose)
-                            }
-                        } else {
-                            VStack(alignment: .leading, spacing: 6) {
-                                HStack(spacing: 6) {
-                                    AlasField(text: $sshHost, placeholder: "devbox or user@host", monospaced: true)
-                                    Button(action: { showHostPicker.toggle() }) {
-                                        Image(systemName: "list.bullet")
-                                            .font(.system(size: 12, weight: .semibold))
-                                            .foregroundColor(theme.color("fg-dim"))
-                                            .frame(width: 30, height: 28)
-                                            .background(theme.color("bg-2"))
-                                            .overlay(RoundedRectangle(cornerRadius: 6)
-                                                .strokeBorder(theme.color("line"), lineWidth: 0.5))
-                                            .clipShape(RoundedRectangle(cornerRadius: 6))
-                                    }
-                                    .buttonStyle(.plain)
-                                    .help("Choose a host from ~/.ssh/config")
-                                    .accessibilityLabel("Choose SSH host")
-                                    .popover(isPresented: $showHostPicker, arrowEdge: .bottom) {
-                                        SSHHostPicker(
-                                            host: $sshHost,
-                                            hosts: sshHosts,
-                                            isLoading: sshHostsLoading,
-                                            isPresented: $showHostPicker
-                                        )
-                                    }
-                                }
-                                AlasField(text: $path, placeholder: "/home/me/repo", monospaced: true)
-                            }
-                        }
+                        addLocationFields
                     case .edit:
                         readOnlyPath
                     }
@@ -201,7 +193,7 @@ private struct ProjectDialog: View {
             cancelTitle: "Cancel",
             confirmTitle: confirmTitle,
             confirmStyle: .primary,
-            onCancel: { presented = false },
+            onCancel: cancel,
             onConfirm: confirm,
             confirmEnabled: confirmEnabled
         )
@@ -229,6 +221,19 @@ private struct ProjectDialog: View {
         .onChange(of: location) { _, _ in
             sshConnectionIssue = nil
             errorMessage = nil
+            catalogErrorMessage = nil
+            selectedRepository = nil
+            repositorySearch = ""
+            displayedRepositories = []
+            loadRepositoryCatalogIfNeeded()
+        }
+        .onChange(of: repositorySearch) { _, _ in
+            refreshDisplayedRepositories()
+        }
+        .onChange(of: gitRemote) { _, remote in
+            if let suggested = RepositoryImportService.repositoryName(from: remote), name.isEmpty {
+                name = suggested
+            }
         }
         .sheet(isPresented: $mcpManagerPresented) {
             ProjectMCPServerManager(servers: $mcpServers)
@@ -259,9 +264,159 @@ private struct ProjectDialog: View {
         }
     }
 
+    private var locationFieldLabel: String {
+        switch mode {
+        case .edit: "Repository path"
+        case .add:
+            switch location {
+            case .local: "Repository path"
+            case .github, .gitlab: "Repository"
+            case .gitURL: "Git remote"
+            case .remoteSSH: "Remote repository path"
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var addLocationFields: some View {
+        switch location {
+        case .local:
+            HStack(spacing: 6) {
+                AlasField(text: $path, placeholder: "/path/to/repo", monospaced: true)
+                AlasButton(title: "Choose…", action: choose)
+            }
+        case .github, .gitlab:
+            VStack(alignment: .leading, spacing: 8) {
+                AlasField(text: $repositorySearch, placeholder: "Search repositories")
+                repositoryCatalog
+                cloneFolderField
+            }
+        case .gitURL:
+            VStack(alignment: .leading, spacing: 8) {
+                AlasField(text: $gitRemote, placeholder: "https://host/team/repo.git or git@host:team/repo.git", monospaced: true)
+                cloneFolderField
+            }
+        case .remoteSSH:
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    AlasField(text: $sshHost, placeholder: "devbox or user@host", monospaced: true)
+                    Button(action: { showHostPicker.toggle() }) {
+                        Image(systemName: "list.bullet")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(theme.color("fg-dim"))
+                            .frame(width: 30, height: 28)
+                            .background(theme.color("bg-2"))
+                            .overlay(RoundedRectangle(cornerRadius: 6)
+                                .strokeBorder(theme.color("line"), lineWidth: 0.5))
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Choose a host from ~/.ssh/config")
+                    .accessibilityLabel("Choose SSH host")
+                    .popover(isPresented: $showHostPicker, arrowEdge: .bottom) {
+                        SSHHostPicker(
+                            host: $sshHost,
+                            hosts: sshHosts,
+                            isLoading: sshHostsLoading,
+                            isPresented: $showHostPicker
+                        )
+                    }
+                }
+                AlasField(text: $path, placeholder: "/home/me/repo", monospaced: true)
+            }
+        }
+    }
+
+    private var repositoryCatalog: some View {
+        Group {
+            if repositoryCatalogLoading {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Loading repositories…")
+                        .font(.system(size: 11))
+                        .foregroundColor(theme.color("fg-muted"))
+                }
+                .frame(maxWidth: .infinity, minHeight: 90, alignment: .center)
+            } else if let catalogErrorMessage {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(catalogErrorMessage)
+                        .font(.system(size: 11))
+                        .foregroundColor(.red)
+                        .textSelection(.enabled)
+                    AlasButton(title: "Retry", action: { loadRepositoryCatalog(force: true) })
+                }
+                .frame(maxWidth: .infinity, minHeight: 90, alignment: .leading)
+            } else if displayedRepositories.isEmpty {
+                Text(repositorySearch.isEmpty ? "No repositories found." : "No matching repositories.")
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("fg-muted"))
+                    .frame(maxWidth: .infinity, minHeight: 90, alignment: .center)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 2) {
+                        ForEach(displayedRepositories) { repository in
+                            repositoryRow(repository)
+                        }
+                    }
+                }
+                .frame(height: 150)
+            }
+        }
+        .padding(6)
+        .background(theme.color("bg-1"))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.5))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func repositoryRow(_ repository: RemoteRepository) -> some View {
+        let selected = selectedRepository?.id == repository.id
+        return Button {
+            selectedRepository = repository
+            name = repository.name
+        } label: {
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(repository.fullName)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(theme.color("fg"))
+                    Text([repository.visibility, repository.isArchived ? "Archived" : nil].compactMap { $0 }.joined(separator: " · "))
+                        .font(.system(size: 10.5))
+                        .foregroundColor(theme.color("fg-muted"))
+                }
+                Spacer()
+                if selected {
+                    Image(systemName: "checkmark")
+                        .foregroundColor(theme.color("accent"))
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(selected ? theme.color("bg-3") : Color.clear)
+            .clipShape(RoundedRectangle(cornerRadius: 5))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(repository.fullName), \(repository.visibility)\(repository.isArchived ? ", archived" : "")")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    private var cloneFolderField: some View {
+        HStack(spacing: 6) {
+            Text("Clone into")
+                .font(.system(size: 11))
+                .foregroundColor(theme.color("fg-muted"))
+            AlasField(text: $cloneRootPath, placeholder: "Choose on first clone", monospaced: true)
+            AlasButton(title: "Choose…", action: chooseCloneFolder)
+        }
+    }
+
     private var confirmTitle: String {
         switch mode {
-        case .add: isValidating ? "Adding…" : "Add project"
+        case .add:
+            if location.clonesRepository {
+                isValidating ? "Cloning…" : "Clone and add"
+            } else {
+                isValidating ? "Adding…" : "Add project"
+            }
         case .edit: "Save changes"
         }
     }
@@ -269,9 +424,17 @@ private struct ProjectDialog: View {
     private var confirmEnabled: Bool {
         switch mode {
         case .add:
-            let hasLocation = location == .local
-                ? !path.isEmpty
-                : !sshHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && path.hasPrefix("/")
+            let hasLocation: Bool
+            switch location {
+            case .local:
+                hasLocation = !path.isEmpty
+            case .github, .gitlab:
+                hasLocation = selectedRepository != nil
+            case .gitURL:
+                hasLocation = RepositoryImportService.repositoryName(from: gitRemote) != nil
+            case .remoteSSH:
+                hasLocation = !sshHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && path.hasPrefix("/")
+            }
             return hasLocation && !name.isEmpty && !isValidating
         case .edit:
             return !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -548,7 +711,7 @@ private struct ProjectDialog: View {
     private func populateInitialValues() {
         switch mode {
         case .add:
-            break
+            cloneRootPath = state.config.repositoryCloneRootPath
         case .edit(let project):
             path = project.path
             name = project.name
@@ -574,6 +737,24 @@ private struct ProjectDialog: View {
         if panel.runModal() == .OK, let url = panel.url {
             path = url.path
         }
+    }
+
+    private func chooseCloneFolder() {
+        _ = pickCloneFolder()
+    }
+
+    private func pickCloneFolder() -> URL? {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        cloneRootPath = url.path
+        if state.config.repositoryCloneRootPath.isEmpty {
+            state.config.repositoryCloneRootPath = url.path
+            state.saveConfig()
+        }
+        return url
     }
 
     private func chooseProjectIconImage() {
@@ -620,6 +801,53 @@ private struct ProjectDialog: View {
             sshHosts = parsed
             sshHostsLoading = false
         }
+    }
+
+    private func loadRepositoryCatalogIfNeeded() {
+        guard let host = location.repositoryHost else { return }
+        if let repositories = repositoryCatalogs[host] {
+            showCachedRepositoryCatalog(repositories)
+        } else {
+            loadRepositoryCatalog(force: false)
+        }
+    }
+
+    private func loadRepositoryCatalog(force: Bool) {
+        guard let host = location.repositoryHost else { return }
+        if !force, let repositories = repositoryCatalogs[host] {
+            showCachedRepositoryCatalog(repositories)
+            return
+        }
+        catalogTask?.cancel()
+        repositoryCatalogLoading = true
+        catalogErrorMessage = nil
+        catalogTask = Task {
+            do {
+                let repositories = try await RepositoryImportService().repositories(for: host)
+                guard !Task.isCancelled, location.repositoryHost == host else { return }
+                repositoryCatalogs[host] = repositories
+                displayedRepositories = RepositoryImportService.filter(repositories, query: repositorySearch)
+            } catch {
+                guard !Task.isCancelled, location.repositoryHost == host else { return }
+                catalogErrorMessage = error.localizedDescription
+            }
+            if location.repositoryHost == host {
+                repositoryCatalogLoading = false
+            }
+        }
+    }
+
+    private func showCachedRepositoryCatalog(_ repositories: [RemoteRepository]) {
+        catalogTask?.cancel()
+        catalogTask = nil
+        repositoryCatalogLoading = false
+        catalogErrorMessage = nil
+        displayedRepositories = RepositoryImportService.filter(repositories, query: repositorySearch)
+    }
+
+    private func refreshDisplayedRepositories() {
+        guard let host = location.repositoryHost, let repositories = repositoryCatalogs[host] else { return }
+        displayedRepositories = RepositoryImportService.filter(repositories, query: repositorySearch)
     }
 
     private func existingProjectIdForIconStorage() -> String {
@@ -693,12 +921,24 @@ private struct ProjectDialog: View {
     private func confirm() {
         switch mode {
         case .add:
+            if location.clonesRepository && cloneRootPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                guard pickCloneFolder() != nil else { return }
+            }
+            if location.clonesRepository && state.config.repositoryCloneRootPath.isEmpty {
+                state.config.repositoryCloneRootPath = cloneRootPath
+                state.saveConfig()
+            }
             isValidating = true
             errorMessage = nil
             sshConnectionIssue = nil
-            Task {
-                await addProject(afterInteractiveSetup: false)
+            cloneTask = Task {
+                if location.clonesRepository {
+                    await cloneAndAddProject()
+                } else {
+                    await addProject(afterInteractiveSetup: false)
+                }
                 isValidating = false
+                cloneTask = nil
             }
         case .edit(let project):
             // Preserve fields the dialog doesn't yet edit (the worktree
@@ -722,6 +962,57 @@ private struct ProjectDialog: View {
             )
             presented = false
         }
+    }
+
+    private func cloneAndAddProject() async {
+        let source: RepositoryCloneSource
+        let repositoryName: String
+        switch location {
+        case .github:
+            guard let repository = selectedRepository else { return }
+            source = .github(repository.fullName)
+            repositoryName = repository.name
+        case .gitlab:
+            guard let repository = selectedRepository else { return }
+            source = .gitlab(repository.fullName)
+            repositoryName = repository.name
+        case .gitURL:
+            guard let derivedName = RepositoryImportService.repositoryName(from: gitRemote) else { return }
+            source = .gitURL(gitRemote.trimmingCharacters(in: .whitespacesAndNewlines))
+            repositoryName = derivedName
+        case .local, .remoteSSH:
+            return
+        }
+
+        let expandedRoot = NSString(string: cloneRootPath).expandingTildeInPath
+        let destination = URL(fileURLWithPath: expandedRoot, isDirectory: true)
+            .appendingPathComponent(repositoryName, isDirectory: true)
+        do {
+            try await RepositoryImportService().clone(source, to: destination)
+            if Task.isCancelled { return }
+            path = destination.path
+            do {
+                try await state.addProject(
+                    path: destination,
+                    displayName: name,
+                    icon: draftIcon,
+                    id: pendingProjectId
+                )
+                presented = false
+            } catch {
+                errorMessage = "Cloned to \(destination.path), but Alas couldn't add the project: \(error.localizedDescription)"
+            }
+        } catch {
+            if !Task.isCancelled {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func cancel() {
+        catalogTask?.cancel()
+        cloneTask?.cancel()
+        presented = false
     }
 
     private func addProject(afterInteractiveSetup: Bool) async {
