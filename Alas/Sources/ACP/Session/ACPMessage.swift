@@ -197,6 +197,16 @@ enum ACPMessage: Equatable {
         /// `ACPTerminalTailView` per id, in addition to whatever text
         /// content the agent emitted.
         var terminalIds: [String]
+        /// Local observation times for the active part of a tool invocation.
+        /// They are intentionally optional because an adapter can first report
+        /// a call after it has already reached a terminal state.
+        var executionStartedAt: Date?
+        var executionFinishedAt: Date?
+
+        var executionDuration: TimeInterval? {
+            guard let executionStartedAt, let executionFinishedAt else { return nil }
+            return max(0, executionFinishedAt.timeIntervalSince(executionStartedAt))
+        }
 
         /// Set when `content` has been truncated to save memory. The full
         /// content is still in SQLite (`ACPSessionStore.loadMessages`) and
@@ -296,7 +306,8 @@ enum ACPMessage: Equatable {
              contentLanguage: String? = nil, rawInput: String? = nil,
              rawOutput: String? = nil, metadata: AnyCodable? = nil,
              assets: [ToolCallAsset] = [],
-             locations: [String]? = nil, terminalIds: [String] = [])
+             locations: [String]? = nil, terminalIds: [String] = [],
+             executionStartedAt: Date? = nil, executionFinishedAt: Date? = nil)
         {
             self.toolCallId = toolCallId
             self.title = title
@@ -311,6 +322,8 @@ enum ACPMessage: Equatable {
             self.assets = assets
             self.locations = locations ?? []
             self.terminalIds = terminalIds
+            self.executionStartedAt = executionStartedAt
+            self.executionFinishedAt = executionFinishedAt
         }
 
         // Backwards-compatible decoder: older messages persisted only a
@@ -319,7 +332,7 @@ enum ACPMessage: Equatable {
         enum CodingKeys: String, CodingKey {
             case toolCallId, title, kind, status, content, preview,
                  contentSummary, contentLanguage, rawInput, rawOutput, metadata,
-                 assets, locations, terminalIds
+                 assets, locations, terminalIds, executionStartedAt, executionFinishedAt
         }
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -337,6 +350,8 @@ enum ACPMessage: Equatable {
             assets = (try? c.decode([ToolCallAsset].self, forKey: .assets)) ?? []
             locations = (try? c.decode([String].self, forKey: .locations)) ?? []
             terminalIds = (try? c.decode([String].self, forKey: .terminalIds)) ?? []
+            executionStartedAt = try? c.decode(Date.self, forKey: .executionStartedAt)
+            executionFinishedAt = try? c.decode(Date.self, forKey: .executionFinishedAt)
         }
         func encode(to encoder: Encoder) throws {
             var c = encoder.container(keyedBy: CodingKeys.self)
@@ -353,6 +368,8 @@ enum ACPMessage: Equatable {
             try c.encode(assets, forKey: .assets)
             try c.encode(locations, forKey: .locations)
             try c.encode(terminalIds, forKey: .terminalIds)
+            try c.encodeIfPresent(executionStartedAt, forKey: .executionStartedAt)
+            try c.encodeIfPresent(executionFinishedAt, forKey: .executionFinishedAt)
         }
 
         // Manual Equatable/Hashable: `isContentTruncated` is an in-memory-only
@@ -373,6 +390,8 @@ enum ACPMessage: Equatable {
                 && lhs.assets == rhs.assets
                 && lhs.locations == rhs.locations
                 && lhs.terminalIds == rhs.terminalIds
+                && lhs.executionStartedAt == rhs.executionStartedAt
+                && lhs.executionFinishedAt == rhs.executionFinishedAt
         }
 
         func hash(into hasher: inout Hasher) {
@@ -389,6 +408,8 @@ enum ACPMessage: Equatable {
             hasher.combine(assets)
             hasher.combine(locations)
             hasher.combine(terminalIds)
+            hasher.combine(executionStartedAt)
+            hasher.combine(executionFinishedAt)
         }
 
         mutating func replaceContent(_ newContent: String) {

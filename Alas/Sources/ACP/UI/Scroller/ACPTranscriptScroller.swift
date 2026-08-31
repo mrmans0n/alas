@@ -245,13 +245,24 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             // "already applied" memo would leave the transcript permanently
             // empty once a real width does arrive.
             guard let reconciler, let scroller else { return }
-            let specs = Self.rowSpecs(host: host)
+            let contentWidth = scroller.contentView.bounds.width
+            let specs = Self.rowSpecs(
+                host: host,
+                availableRowContentWidth: Self.availableRowContentWidth(
+                    contentViewWidth: contentWidth,
+                    contentMaxWidth: host.contentMaxWidth
+                ),
+                availableTrailingGutterWidth: Self.availableTrailingGutterWidth(
+                    contentViewWidth: contentWidth,
+                    contentMaxWidth: host.contentMaxWidth
+                )
+            )
             hasNonSyntheticRow = specs.contains {
                 !$0.id.hasPrefix(ACPTranscriptScrollerReconciler.syntheticIdPrefix)
             }
             reconciler.apply(
                 specs: specs,
-                contentWidth: scroller.contentView.bounds.width,
+                contentWidth: contentWidth,
                 followsTail: host.session.followsTranscriptTail
             )
             // This update carries whatever `visibleHead` currently is, so a
@@ -334,9 +345,15 @@ struct ACPTranscriptScroller: NSViewRepresentable {
 
         /// Message rows from the render window + synthetic tail rows, in the
         /// same order the legacy VStack rendered them.
-        static func rowSpecs(host: ACPTranscriptScroller) -> [ACPTranscriptRowSpec] {
+        static func rowSpecs(
+            host: ACPTranscriptScroller,
+            availableRowContentWidth: CGFloat? = nil,
+            availableTrailingGutterWidth: CGFloat? = nil
+        ) -> [ACPTranscriptRowSpec] {
             let transcript = host.transcript
             var specs: [ACPTranscriptRowSpec] = []
+            let availableRowContentWidth = availableRowContentWidth ?? host.contentMaxWidth
+            let availableTrailingGutterWidth = availableTrailingGutterWidth ?? .infinity
 
             if transcript.isBackfillingOlderMessages || transcript.visibleHead > 0 {
                 specs.append(ACPTranscriptRowSpec(
@@ -361,11 +378,16 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             )
             for row in rows where transcript.messages.indices.contains(row.index) {
                 let message = transcript.messages[row.index]
+                let messageCreatedAt = transcript.createdAt(forStableId: row.stableId)
                 let messagePhase = ACPTranscriptRowContent.presentationPhase(of: message)
                 let rowToken = token(ACPTranscriptRowContent.equalityKey(
                     stableId: row.stableId, message: message,
+                    messageCreatedAt: messageCreatedAt,
                     messagePhase: messagePhase,
-                    contentMaxWidth: host.contentMaxWidth, typography: host.typography,
+                    contentMaxWidth: host.contentMaxWidth,
+                    availableRowContentWidth: availableRowContentWidth,
+                    availableTrailingGutterWidth: availableTrailingGutterWidth,
+                    typography: host.typography,
                     trustedImageRoot: host.trustedImageRoot,
                     isForkEligible: host.session.canForkMessage(at: row.index),
                     forkTargets: host.forkTargets
@@ -373,7 +395,17 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 specs.append(ACPTranscriptRowSpec(
                     id: row.stableId,
                     equalityToken: rowToken,
-                    build: { wrapRow(host: host) { Self.messageRow(host: host, row: row, message: message) } }
+                    build: {
+                        wrapRow(host: host) {
+                            Self.messageRow(
+                                host: host,
+                                row: row,
+                                message: message,
+                                availableRowContentWidth: availableRowContentWidth,
+                                availableTrailingGutterWidth: availableTrailingGutterWidth
+                            )
+                        }
+                    }
                 ))
                 // Fork divider follows its boundary row, as in the legacy list.
                 if let fork = host.session.forkRecord,
@@ -391,14 +423,19 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         static func messageRow(
             host: ACPTranscriptScroller,
             row: ACPTranscriptVisibleRow,
-            message: ACPMessage
+            message: ACPMessage,
+            availableRowContentWidth: CGFloat? = nil,
+            availableTrailingGutterWidth: CGFloat? = nil
         ) -> some View {
             ACPTranscriptRowContent(
                 stableId: row.stableId,
                 messageIndex: row.index,
                 message: message,
+                messageCreatedAt: host.transcript.createdAt(forStableId: row.stableId),
                 messagePhase: ACPTranscriptRowContent.presentationPhase(of: message),
                 contentMaxWidth: host.contentMaxWidth,
+                availableRowContentWidth: availableRowContentWidth ?? host.contentMaxWidth,
+                availableTrailingGutterWidth: availableTrailingGutterWidth ?? .infinity,
                 typography: host.typography,
                 trustedImageRoot: host.trustedImageRoot,
                 transcript: host.transcript,
@@ -413,6 +450,31 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             // Column framing (max width / horizontal padding / centering)
             // is applied uniformly to every row by `wrapRow`, not here —
             // see its doc comment.
+        }
+
+        static func availableRowContentWidth(
+            contentViewWidth: CGFloat,
+            contentMaxWidth: CGFloat
+        ) -> CGFloat {
+            let horizontalPadding = 2 * rowHorizontalPadding
+            return max(0, min(contentMaxWidth, contentViewWidth - horizontalPadding))
+        }
+
+        static func availableTrailingGutterWidth(
+            contentViewWidth: CGFloat,
+            contentMaxWidth: CGFloat
+        ) -> CGFloat {
+            let rowContentWidth = availableRowContentWidth(
+                contentViewWidth: contentViewWidth,
+                contentMaxWidth: contentMaxWidth
+            )
+            let centeredRowWidth = rowContentWidth + 2 * rowHorizontalPadding
+            let trailingCenteringMargin = max(0, contentViewWidth - centeredRowWidth) / 2
+            return rowHorizontalPadding + trailingCenteringMargin
+        }
+
+        private static var rowHorizontalPadding: CGFloat {
+            28 + ACPMessageGutterLayout.laneWidth
         }
 
         /// Beyond `fork` (and theme/contentMaxWidth folded by

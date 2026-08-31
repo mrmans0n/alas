@@ -51,6 +51,72 @@ struct ACPTranscriptScrollerRowSpecsTests {
         .systemNotice(id: UUID(), text: "hello")
     }
 
+    @Test("timestamp policy uses row width and trailing gutter")
+    func timestampPolicyUsesRowWidthAndTrailingGutter() {
+        #expect(ACPTranscriptScroller.Coordinator.availableRowContentWidth(
+            contentViewWidth: 400,
+            contentMaxWidth: 720
+        ) == 280)
+        #expect(ACPTranscriptScroller.Coordinator.availableTrailingGutterWidth(
+            contentViewWidth: 400,
+            contentMaxWidth: 720
+        ) == 60)
+        #expect(!ACPTranscriptRowContent.showsInlineTimestamp(
+            availableRowContentWidth: 280,
+            availableTrailingGutterWidth: 60
+        ))
+
+        let clippedWidth: CGFloat = 640
+        #expect(ACPTranscriptScroller.Coordinator.availableRowContentWidth(
+            contentViewWidth: clippedWidth,
+            contentMaxWidth: 720
+        ) == 520)
+        #expect(ACPTranscriptScroller.Coordinator.availableTrailingGutterWidth(
+            contentViewWidth: clippedWidth,
+            contentMaxWidth: 720
+        ) == 60)
+        #expect(!ACPTranscriptRowContent.showsInlineTimestamp(
+            availableRowContentWidth: 520,
+            availableTrailingGutterWidth: 60
+        ))
+
+        let fittingWidth: CGFloat = 1_080
+        #expect(ACPTranscriptScroller.Coordinator.availableRowContentWidth(
+            contentViewWidth: fittingWidth,
+            contentMaxWidth: 720
+        ) == 720)
+        #expect(ACPTranscriptScroller.Coordinator.availableTrailingGutterWidth(
+            contentViewWidth: fittingWidth,
+            contentMaxWidth: 720
+        ) == 180)
+        #expect(ACPTranscriptRowContent.showsInlineTimestamp(
+            availableRowContentWidth: 720,
+            availableTrailingGutterWidth: 180
+        ))
+    }
+
+    @Test("message row token changes when available row width changes")
+    func messageRowTokenChangesOnAvailableRowWidth() throws {
+        let host = makeHost(contentMaxWidth: 720)
+        let message = ACPMessage.user(id: UUID(), text: "hello", attachments: [])
+        host.transcript.messages = [message]
+        host.transcript.visibleHead = 0
+        host.transcript.visibleTail = nil
+
+        let narrowToken = try #require(ACPTranscriptScroller.Coordinator.rowSpecs(
+            host: host,
+            availableRowContentWidth: 280,
+            availableTrailingGutterWidth: 60
+        ).first { $0.id == message.stableId }?.equalityToken)
+        let wideToken = try #require(ACPTranscriptScroller.Coordinator.rowSpecs(
+            host: host,
+            availableRowContentWidth: 720,
+            availableTrailingGutterWidth: 180
+        ).first { $0.id == message.stableId }?.equalityToken)
+
+        #expect(!narrowToken.isEqual(to: wideToken))
+    }
+
     @Test("plain transcript: message rows followed by the composer spacer, no head sentinel")
     func plainTranscriptIdList() {
         let host = makeHost()

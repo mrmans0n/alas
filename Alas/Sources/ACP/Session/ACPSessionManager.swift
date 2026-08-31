@@ -412,7 +412,7 @@ final class ACPSessionManager: ObservableObject {
     /// tail-only paint applied by `applyHydration`. Tracked so tests (and
     /// teardown) can wait for it; production UI does not.
     private var inFlightBackfills: [ACPSession.ID: Task<Void, Never>] = [:]
-    private var pendingBackfillOlderWires: [ACPSession.ID: [ACPMessageWire]] = [:]
+    private var pendingBackfillOlderMessages: [ACPSession.ID: [ACPHydratedMessage]] = [:]
 
     /// Per-session UI refcount. When this drops to zero AND the session is
     /// not `attached`, the cached `ACPSession` is evicted from `sessions`.
@@ -869,8 +869,8 @@ final class ACPSessionManager: ObservableObject {
         // later prepends the older entries, `visibleHead` is shifted by
         // the prepended count so the same tail messages stay on screen
         // without a layout jump.
-        let wires = result.wireMessages
-        let tailStart = replaceTranscriptWithTail(wires, in: session, markCompletedBoundary: true)
+        let messages = result.messages
+        let tailStart = replaceTranscriptWithTail(messages, in: session, markCompletedBoundary: true)
         applyRememberedTranscriptScrollWindow(to: session, messageIndexOffset: tailStart)
         session.restoreQueue(result.queue)
         // The composer is rendered (and focused) the moment the placeholder
@@ -921,7 +921,7 @@ final class ACPSessionManager: ObservableObject {
         // we captured before the user typed it.
         session.hydrationState = .ready
         self.recent = result.recent
-        scheduleBackfillIfNeeded(olderWires: Array(wires.prefix(tailStart)),
+        scheduleBackfillIfNeeded(olderMessages: Array(messages.prefix(tailStart)),
                                  sessionId: session.id, session: session)
     }
 
@@ -930,20 +930,27 @@ final class ACPSessionManager: ObservableObject {
     /// any surrounding session state.
     @discardableResult
     private func replaceTranscriptWithTail(
-        _ wires: [ACPMessageWire],
+        _ messages: [ACPHydratedMessage],
         in session: ACPSession,
         markCompletedBoundary: Bool
     ) -> Int {
-        let total = wires.count
+        let total = messages.count
         let tailWindow = ACPTranscript.tailWindow
         let tailStart = max(0, total - tailWindow)
 
         var tail: [ACPMessage] = []
+        var tailCreatedAts: [Date] = []
         tail.reserveCapacity(total - tailStart)
+        tailCreatedAts.reserveCapacity(total - tailStart)
         for i in tailStart..<total {
-            tail.append(wires[i].toMessage())
+            tail.append(messages[i].wire.toMessage())
+            tailCreatedAts.append(messages[i].createdAt)
         }
-        session.replaceTranscriptMessages(tail, messageIndexOffset: tailStart)
+        session.replaceTranscriptMessages(
+            tail,
+            createdAts: tailCreatedAts,
+            messageIndexOffset: tailStart
+        )
         session.transcript.visibleHead = 0
         if markCompletedBoundary {
             // Seed completedOutputBoundaryMessageIds from loaded history so
@@ -982,26 +989,26 @@ final class ACPSessionManager: ObservableObject {
     /// the same instance: the user closed-then-reopened the tab and the
     /// fresh placeholder will run its own hydration.
     private func scheduleBackfillIfNeeded(
-        olderWires: [ACPMessageWire],
+        olderMessages: [ACPHydratedMessage],
         sessionId: ACPSession.ID,
         session: ACPSession
     ) {
         if let existing = inFlightBackfills[sessionId], !existing.isCancelled {
-            if olderWires.isEmpty {
+            if olderMessages.isEmpty {
                 existing.cancel()
                 inFlightBackfills[sessionId] = nil
-                pendingBackfillOlderWires[sessionId] = nil
+                pendingBackfillOlderMessages[sessionId] = nil
                 session.transcript.isBackfillingOlderMessages = false
             } else {
-                pendingBackfillOlderWires[sessionId] = olderWires
+                pendingBackfillOlderMessages[sessionId] = olderMessages
                 session.transcript.isBackfillingOlderMessages = true
             }
             return
         }
 
         inFlightBackfills[sessionId] = nil
-        pendingBackfillOlderWires[sessionId] = nil
-        guard !olderWires.isEmpty else { return }
+        pendingBackfillOlderMessages[sessionId] = nil
+        guard !olderMessages.isEmpty else { return }
         session.transcript.isBackfillingOlderMessages = true
 
         // Capture a stable handle the task body can compare against the
@@ -1028,16 +1035,19 @@ final class ACPSessionManager: ObservableObject {
             guard !Task.isCancelled else { return }
 
             var older: [ACPMessage] = []
-            older.reserveCapacity(olderWires.count)
+            older.reserveCapacity(olderMessages.count)
+            var olderCreatedAts: [Date] = []
+            olderCreatedAts.reserveCapacity(olderMessages.count)
             let batchSize = 100
             var index = 0
-            while index < olderWires.count {
-                let end = min(index + batchSize, olderWires.count)
+            while index < olderMessages.count {
+                let end = min(index + batchSize, olderMessages.count)
                 for i in index..<end {
-                    older.append(olderWires[i].toMessage())
+                    older.append(olderMessages[i].wire.toMessage())
+                    olderCreatedAts.append(olderMessages[i].createdAt)
                 }
                 index = end
-                if index < olderWires.count {
+                if index < olderMessages.count {
                     await Task.yield()
                     if Task.isCancelled { return }
                 }
@@ -1047,15 +1057,15 @@ final class ACPSessionManager: ObservableObject {
                   self.inFlightBackfills[sessionId] == me,
                   self.sessions[sessionId] === session
             else { return }
-            if let newerWires = self.pendingBackfillOlderWires.removeValue(forKey: sessionId) {
+            if let newerMessages = self.pendingBackfillOlderMessages.removeValue(forKey: sessionId) {
                 self.inFlightBackfills[sessionId] = nil
                 self.scheduleBackfillIfNeeded(
-                    olderWires: newerWires,
+                    olderMessages: newerMessages,
                     sessionId: sessionId,
                     session: session)
                 return
             }
-            session.prependTranscriptMessages(older)
+            session.prependTranscriptMessages(older, createdAts: olderCreatedAts)
             self.applyRememberedTranscriptScrollWindow(to: session)
         }
         handle.task = task
@@ -1070,7 +1080,7 @@ final class ACPSessionManager: ObservableObject {
         flushPendingDraftWrite(for: id)
         inFlightBackfills[id]?.cancel()
         inFlightBackfills[id] = nil
-        pendingBackfillOlderWires[id] = nil
+        pendingBackfillOlderMessages[id] = nil
         sessions[id]?.transcript.resetMarkdownCaches()
         sessions[id] = nil
         sessionRefCounts.removeValue(forKey: id)
@@ -1127,7 +1137,7 @@ final class ACPSessionManager: ObservableObject {
         cancelPendingDraftWrite(for: id)
         inFlightBackfills[id]?.cancel()
         inFlightBackfills[id] = nil
-        pendingBackfillOlderWires[id] = nil
+        pendingBackfillOlderMessages[id] = nil
         sessions[id]?.transcript.resetMarkdownCaches()
         sessions[id] = nil
         sessionRefCounts.removeValue(forKey: id)
@@ -1247,7 +1257,7 @@ final class ACPSessionManager: ObservableObject {
         flushPendingDraftWrite(for: id)
         inFlightBackfills[id]?.cancel()
         inFlightBackfills[id] = nil
-        pendingBackfillOlderWires[id] = nil
+        pendingBackfillOlderMessages[id] = nil
         // Stop any active mirror poll/subscription so the 2.5s poll task
         // doesn't keep waking after a mirrored tab closes. Idempotent —
         // no-op for writer sessions.
@@ -2886,12 +2896,12 @@ extension ACPSessionManager {
         session.restoreQueue(result.queue)
         guard !result.wireMessages.isEmpty else { return }
         let tailStart = replaceTranscriptWithTail(
-            result.wireMessages,
+            result.messages,
             in: session,
             markCompletedBoundary: false)
         applyRememberedTranscriptScrollWindow(to: session, messageIndexOffset: tailStart)
         scheduleBackfillIfNeeded(
-            olderWires: Array(result.wireMessages.prefix(tailStart)),
+            olderMessages: Array(result.messages.prefix(tailStart)),
             sessionId: sessionId,
             session: session)
     }

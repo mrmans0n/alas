@@ -47,6 +47,7 @@ struct ACPTranscriptRowContentTests {
                 stableId: message.stableId,
                 messageIndex: 0,
                 message: message,
+                messageCreatedAt: nil,
                 messagePhase: ACPTranscriptRowContent.presentationPhase(of: message),
                 contentMaxWidth: 800,
                 typography: .default,
@@ -107,6 +108,7 @@ struct ACPTranscriptRowContentTests {
                 stableId: message.stableId,
                 messageIndex: 0,
                 message: message,
+                messageCreatedAt: nil,
                 messagePhase: ACPTranscriptRowContent.presentationPhase(of: message),
                 contentMaxWidth: 800,
                 typography: .default,
@@ -140,6 +142,55 @@ struct ACPTranscriptRowContentTests {
         let b = ACPTranscriptRowContent.equalityKey(
             stableId: "s1", message: msg, contentMaxWidth: 640,
             typography: .default, trustedImageRoot: nil)
+        #expect(a != b)
+    }
+
+    @Test("equality detects available row width changes independently from content max width")
+    @MainActor
+    func rowContentEqualityDetectsAvailableRowWidthChange() {
+        let msg = ACPMessage.user(id: UUID(), text: "hello", attachments: [])
+        let a = ACPTranscriptRowContent.equalityKey(
+            stableId: "s1", message: msg,
+            messageCreatedAt: Date(timeIntervalSince1970: 1),
+            contentMaxWidth: 720,
+            availableRowContentWidth: 720,
+            typography: .default,
+            trustedImageRoot: nil)
+        let b = ACPTranscriptRowContent.equalityKey(
+            stableId: "s1", message: msg,
+            messageCreatedAt: Date(timeIntervalSince1970: 1),
+            contentMaxWidth: 720,
+            availableRowContentWidth: 280,
+            typography: .default,
+            trustedImageRoot: nil)
+
+        #expect(a != b)
+        #expect(ACPTranscriptRowContent.showsInlineTimestamp(
+            availableRowContentWidth: 720,
+            availableTrailingGutterWidth: 180
+        ))
+        #expect(!ACPTranscriptRowContent.showsInlineTimestamp(
+            availableRowContentWidth: 280,
+            availableTrailingGutterWidth: 180
+        ))
+        #expect(!ACPTranscriptRowContent.showsInlineTimestamp(
+            availableRowContentWidth: 720,
+            availableTrailingGutterWidth: 60
+        ))
+    }
+
+    @Test("equality detects a message timestamp change")
+    @MainActor
+    func rowContentEqualityDetectsTimestampChange() {
+        let message = ACPMessage.systemNotice(id: UUID(), text: "hello")
+        let a = ACPTranscriptRowContent.equalityKey(
+            stableId: "s1", message: message,
+            messageCreatedAt: Date(timeIntervalSince1970: 1),
+            contentMaxWidth: 800, typography: .default, trustedImageRoot: nil)
+        let b = ACPTranscriptRowContent.equalityKey(
+            stableId: "s1", message: message,
+            messageCreatedAt: Date(timeIntervalSince1970: 2),
+            contentMaxWidth: 800, typography: .default, trustedImageRoot: nil)
         #expect(a != b)
     }
 

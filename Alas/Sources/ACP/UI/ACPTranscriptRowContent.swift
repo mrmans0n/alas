@@ -14,8 +14,11 @@ struct ACPTranscriptRowContent: View, Equatable {
     let stableId: String
     let messageIndex: Int
     let message: ACPMessage
+    let messageCreatedAt: Date?
     let messagePhase: ACPMessagePhase?
     let contentMaxWidth: CGFloat
+    var availableRowContentWidth: CGFloat?
+    var availableTrailingGutterWidth: CGFloat?
     let typography: ACPChatTypography
     let trustedImageRoot: URL?
     // Excluded from equality — reference-stable for the session's lifetime
@@ -55,15 +58,23 @@ struct ACPTranscriptRowContent: View, Equatable {
         guard lhs.messagePhase == rhs.messagePhase else { return false }
         return equalityKey(
             stableId: lhs.stableId, message: lhs.message,
+            messageCreatedAt: lhs.messageCreatedAt,
             messagePhase: lhs.messagePhase,
-            contentMaxWidth: lhs.contentMaxWidth, typography: lhs.typography,
+            contentMaxWidth: lhs.contentMaxWidth,
+            availableRowContentWidth: lhs.availableRowContentWidth ?? lhs.contentMaxWidth,
+            availableTrailingGutterWidth: lhs.availableTrailingGutterWidth ?? .infinity,
+            typography: lhs.typography,
             trustedImageRoot: lhs.trustedImageRoot,
             isForkEligible: lhs.isForkEligible, forkTargets: lhs.forkTargets
         )
         == equalityKey(
             stableId: rhs.stableId, message: rhs.message,
+            messageCreatedAt: rhs.messageCreatedAt,
             messagePhase: rhs.messagePhase,
-            contentMaxWidth: rhs.contentMaxWidth, typography: rhs.typography,
+            contentMaxWidth: rhs.contentMaxWidth,
+            availableRowContentWidth: rhs.availableRowContentWidth ?? rhs.contentMaxWidth,
+            availableTrailingGutterWidth: rhs.availableTrailingGutterWidth ?? .infinity,
+            typography: rhs.typography,
             trustedImageRoot: rhs.trustedImageRoot,
             isForkEligible: rhs.isForkEligible, forkTargets: rhs.forkTargets
         )
@@ -74,8 +85,11 @@ struct ACPTranscriptRowContent: View, Equatable {
     static func equalityKey(
         stableId: String,
         message: ACPMessage,
+        messageCreatedAt: Date? = nil,
         messagePhase: ACPMessagePhase? = nil,
         contentMaxWidth: CGFloat,
+        availableRowContentWidth: CGFloat? = nil,
+        availableTrailingGutterWidth: CGFloat? = nil,
         typography: ACPChatTypography,
         trustedImageRoot: URL?,
         isForkEligible: Bool = false,
@@ -83,8 +97,11 @@ struct ACPTranscriptRowContent: View, Equatable {
     ) -> EqualityKey {
         EqualityKey(
             stableId: stableId, message: message,
+            messageCreatedAt: messageCreatedAt,
             messagePhase: messagePhase ?? presentationPhase(of: message),
             contentMaxWidth: contentMaxWidth,
+            availableRowContentWidth: availableRowContentWidth ?? contentMaxWidth,
+            availableTrailingGutterWidth: availableTrailingGutterWidth ?? .infinity,
             typography: typography, trustedImageRoot: trustedImageRoot,
             isForkEligible: isForkEligible, forkTargets: forkTargets
         )
@@ -93,8 +110,11 @@ struct ACPTranscriptRowContent: View, Equatable {
     struct EqualityKey: Equatable {
         let stableId: String
         let message: ACPMessage
+        let messageCreatedAt: Date?
         let messagePhase: ACPMessagePhase?
         let contentMaxWidth: CGFloat
+        let availableRowContentWidth: CGFloat
+        let availableTrailingGutterWidth: CGFloat
         let typography: ACPChatTypography
         let trustedImageRoot: URL?
         let isForkEligible: Bool
@@ -106,11 +126,24 @@ struct ACPTranscriptRowContent: View, Equatable {
         return buffer.phase
     }
 
+    static func showsInlineTimestamp(
+        availableRowContentWidth: CGFloat,
+        availableTrailingGutterWidth: CGFloat
+    ) -> Bool {
+        availableRowContentWidth >= ACPMessageGutterLayout.inlineTimestampMinimumContentWidth
+            && availableTrailingGutterWidth >= ACPMessageGutterLayout.inlineTimestampTrailingExtent
+    }
+
     var body: some View {
         switch message {
         case .user(_, _, let text, let attachments, let delegatedSource):
             ACPMessageGutter(
                 copySource: .text(text),
+                messageCreatedAt: messageCreatedAt,
+                showsInlineTimestamp: Self.showsInlineTimestamp(
+                    availableRowContentWidth: availableRowContentWidth ?? contentMaxWidth,
+                    availableTrailingGutterWidth: availableTrailingGutterWidth ?? .infinity
+                ),
                 forkBoundary: forkBoundary(kind: .user),
                 forkTargets: forkTargets,
                 onQuote: onQuote,
@@ -127,6 +160,11 @@ struct ACPTranscriptRowContent: View, Equatable {
         case .agent(_, _, let buf):
             ACPMessageGutter(
                 copySource: .streaming(buf),
+                messageCreatedAt: messageCreatedAt,
+                showsInlineTimestamp: Self.showsInlineTimestamp(
+                    availableRowContentWidth: availableRowContentWidth ?? contentMaxWidth,
+                    availableTrailingGutterWidth: availableTrailingGutterWidth ?? .infinity
+                ),
                 forkBoundary: forkBoundary(kind: .agent),
                 forkTargets: forkTargets,
                 onQuote: onQuote,
@@ -151,6 +189,7 @@ struct ACPTranscriptRowContent: View, Equatable {
             } else {
                 ACPToolCallCard(
                     toolCall: tc,
+                    messageCreatedAt: messageCreatedAt,
                     trustedImageRoot: trustedImageRoot,
                     loadFullContent: tc.isContentTruncated ? onLoadFullToolCallContent : nil)
                     .environment(\.acpTerminalHost, session.terminalHost)
