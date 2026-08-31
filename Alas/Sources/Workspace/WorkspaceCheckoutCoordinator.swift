@@ -618,7 +618,6 @@ actor WorkspaceCheckoutCoordinator {
             if await shouldStopAfterCurrentOperations(checkoutID: checkoutID) { break }
             if let memberIDs, memberIDs.contains(member.id) == false { continue }
             guard member.availability != .identityConflict,
-                  member.checkpoint != .worktreeCreated,
                   !(member.checkpoint == .failed && member.cleanupOwnership.worktreeCreated),
                   let frozenMember = frozenMember(from: member)
             else { continue }
@@ -653,6 +652,11 @@ actor WorkspaceCheckoutCoordinator {
                     return .worktreeCreating
                 case .setupRunning:
                     state.checkouts[checkoutIndex].members[memberIndex].checkpoint = .setupRunning
+                    state.checkouts[checkoutIndex].members[memberIndex].cleanup = nil
+                    return .setupRunning
+                case .worktreeCreated:
+                    state.checkouts[checkoutIndex].members[memberIndex].checkpoint = .setupRunning
+                    state.checkouts[checkoutIndex].members[memberIndex].availability = .pending
                     state.checkouts[checkoutIndex].members[memberIndex].cleanup = nil
                     return .setupRunning
                 case .failed where !current.cleanupOwnership.worktreeCreated:
