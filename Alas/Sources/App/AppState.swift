@@ -1258,6 +1258,9 @@ final class AppState {
     }
 
     func setWorkspacesEnabled(_ enabled: Bool, persistConfig: Bool = true) async {
+        if !enabled, config.workspacesEnabled {
+            await quiesceWorkspaceCheckoutCreationBeforeDisable()
+        }
         config.workspacesEnabled = enabled
         if persistConfig { _ = saveConfig() }
         let legacySpaces = spacesManager.file
@@ -1274,6 +1277,22 @@ final class AppState {
         // itself is not a user mutation. Keep that projection in memory until
         // a later explicit Spaces or Workspace action persists it.
         spacesManager.replace(file: reconciled)
+    }
+
+    private func quiesceWorkspaceCheckoutCreationBeforeDisable() async {
+        guard workspacesManager.canMutate else { return }
+        let creatingCheckoutIDs = workspacesManager.checkouts
+            .filter { $0.operation == .creating }
+            .map(\.id)
+        guard creatingCheckoutIDs.isEmpty == false else { return }
+        let coordinator = workspaceCoordinator()
+        for checkoutID in creatingCheckoutIDs {
+            try? await coordinator.stopAfterCurrentOperations(checkoutID: checkoutID)
+        }
+        for checkoutID in creatingCheckoutIDs {
+            await coordinator.awaitCreationCompletion(checkoutID: checkoutID)
+        }
+        await workspacesManager.refreshCheckoutSnapshots()
     }
 
     struct LanguageServerConfigChangeTracker {
@@ -1447,6 +1466,47 @@ final class AppState {
             session?.surface.foregroundPid
         }
         return tabs.appendTerminal(owner: context.owner, title: "Terminal", sessionId: session.id)
+    }
+
+    @discardableResult
+    func openWorkspaceCheckoutAgentTerminalTab(
+        _ checkout: WorkspaceCheckout,
+        focusedMemberWorktree: Worktree,
+        agentId: String
+    ) async throws -> Tab {
+        guard config.workspacesEnabled else {
+            throw NSError(domain: "AppState", code: 2, userInfo: [NSLocalizedDescriptionKey: "Workspaces are disabled."])
+        }
+        guard let project = projects.first(where: { $0.id == focusedMemberWorktree.projectId }) else {
+            throw AgentTerminalLaunchError.projectUnavailable
+        }
+        guard let agent = agentRegistry.enabled().first(where: { $0.id == agentId }) else {
+            throw AgentTerminalLaunchError.agentUnavailable
+        }
+        if agent.id == AgentKind.copilot.rawValue, project.host == nil {
+            try CopilotInstaller(projectRootURL: focusedMemberWorktree.path).install()
+        }
+        let baseContext = workspaceTerminalContext(for: checkout)
+        let context = WorkspaceTerminalContext(
+            checkoutID: checkout.id,
+            executionLocation: checkout.executionLocation,
+            rootPath: checkout.rootPath,
+            branch: checkout.branch,
+            manifestPath: baseContext.manifestPath,
+            startupScript: [
+                baseContext.startupScript,
+                agentStartupCommand(for: agent, project: project),
+            ].filter { !$0.isEmpty }.joined(separator: "\n")
+        )
+        let session = try terminal.openCheckoutSession(
+            context: context,
+            cfg: config.terminal,
+            theme: themeStore.current
+        )
+        harness.detector.register(sessionId: session.id) { [weak session] in
+            session?.surface.foregroundPid
+        }
+        return tabs.appendTerminal(owner: context.owner, title: agent.displayName, sessionId: session.id)
     }
 
     /// Checkout-owned counterpart of `splitFocusedPane(worktreeId:axis:)`.

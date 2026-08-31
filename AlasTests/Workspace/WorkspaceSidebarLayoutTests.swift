@@ -28,4 +28,19 @@ struct WorkspaceSidebarLayoutTests {
 
         #expect(rows == [.workspace(workspaceID), .checkout(archived.id)])
     }
+
+    @Test func formerWorkspaceCheckoutsRemainReachableAfterDefinitionDeletion() {
+        let former = WorkspaceCheckout(
+            workspaceID: nil,
+            fallbackWorkspaceName: "Former Workspace",
+            executionLocation: .local,
+            branch: "release",
+            rootPath: "/tmp/release",
+            members: []
+        )
+
+        let rows = WorkspaceSidebarLayout.rows(members: [], workspaces: [], checkouts: [former])
+
+        #expect(rows == [.formerWorkspace, .checkout(former.id)])
+    }
 }

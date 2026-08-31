@@ -316,11 +316,21 @@ struct CenterPaneView: View {
                 enabledAgents: state.agentRegistry.enabled(),
                 onLaunchAgent: { agentId in
                     Task { @MainActor in
-                        _ = try? await state.openAgentTerminalTabPreparingRemoteZmxIfNeeded(for: worktree, agentId: agentId)
+                        if let checkout = selectedCheckoutForSharedOwner {
+                            _ = try? await state.openWorkspaceCheckoutAgentTerminalTab(checkout, focusedMemberWorktree: worktree, agentId: agentId)
+                        } else {
+                            _ = try? await state.openAgentTerminalTabPreparingRemoteZmxIfNeeded(for: worktree, agentId: agentId)
+                        }
                     }
                 },
                 onLaunchACPSession: { agentId in
-                    state.openNewACPSession(agentID: agentId)
+                    if let checkout = selectedCheckoutForSharedOwner {
+                        Task { @MainActor in
+                            _ = await state.openWorkspaceCheckoutACPSession(checkout: checkout, agentID: agentId)
+                        }
+                    } else {
+                        state.openNewACPSession(agentID: agentId)
+                    }
                 },
                 acpAgents: {
                     // Only enabled builtins with a wired ACP launch spec.
@@ -824,7 +834,20 @@ struct CenterPaneView: View {
 
     private func openTerminal() {
         Task { @MainActor in
-            _ = try? await state.openTerminalTabPreparingRemoteZmxIfNeeded(for: worktree)
+            if let checkout = selectedCheckoutForSharedOwner {
+                _ = try? state.openWorkspaceCheckoutTerminalTab(checkout)
+            } else {
+                _ = try? await state.openTerminalTabPreparingRemoteZmxIfNeeded(for: worktree)
+            }
         }
+    }
+
+    private var selectedCheckoutForSharedOwner: WorkspaceCheckout? {
+        guard let sharedSessionOwner,
+              case .workspaceCheckout(let checkoutID, _) = sharedSessionOwner,
+              let checkout = state.selectedWorkspaceCheckout,
+              checkout.id == checkoutID
+        else { return nil }
+        return checkout
     }
 }
