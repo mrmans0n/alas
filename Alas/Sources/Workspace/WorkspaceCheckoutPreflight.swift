@@ -281,7 +281,8 @@ struct WorkspacePathInspector: WorkspacePathInspecting {
             }
             return (try? FileManager.default.destinationOfSymbolicLink(atPath: path)) != nil
         case .ssh(let host):
-            guard let result = try? await remote.run(host: host, command: "test -e \(SSHCommand.shellQuote(path))") else { return true }
+            let quoted = SSHCommand.shellQuote(path)
+            guard let result = try? await remote.run(host: host, command: "test -e \(quoted) || test -L \(quoted)") else { return true }
             // An SSH transport failure is not evidence that the destination
             // is absent. Treat it as occupied so preflight cannot create on a
             // host whose current state it could not inspect.

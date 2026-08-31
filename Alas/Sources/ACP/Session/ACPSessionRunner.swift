@@ -15,6 +15,7 @@ final class ACPSessionRunner {
     /// identifier used for persistence. Every agent file request is
     /// validated against this path before being honoured.
     let worktreePath: String
+    let remoteHost: String?
     /// Single policy instance shared between the runner (where the agent's
     /// `requestPermission` resumes a continuation) and the UI (where the
     /// user's click resolves it). Storing it here is the single source of
@@ -126,6 +127,7 @@ final class ACPSessionRunner {
     init(session: ACPSession, connection: ACPConnection, store: ACPSessionStore? = nil,
          sessionId: String, worktreePath: String,
          agentEnv: [String: String] = ProcessInfo.processInfo.environment,
+         remoteHost: String? = nil,
          suppressingLoadReplay: Bool = false,
          onDirtyCheck: ((String) -> Bool)? = nil,
          onLiveBufferRead: ((String) -> String?)? = nil,
@@ -150,6 +152,7 @@ final class ACPSessionRunner {
         self.persistence = resolvedPersistence
         self.sessionId = sessionId
         self.worktreePath = worktreePath
+        self.remoteHost = remoteHost
         self.agentEnv = agentEnv
         self.ownerInstanceId = ownerInstanceId
         self.onAuthRequired = onAuthRequired
@@ -281,14 +284,14 @@ final class ACPSessionRunner {
         // aware CLI run from the terminal refuses to start).
         session.terminalHost.updateContext(sessionCwd: worktreePath,
                                            sessionEnv: agentEnv,
-                                           sessionRemoteHost: RemoteHostRegistry.shared.host(forPath: worktreePath))
+                                           sessionRemoteHost: remoteHost ?? RemoteHostRegistry.shared.host(forPath: worktreePath))
 
         filesTask = Task { @MainActor [weak self] in
             guard let self else { return }
             let writer = ACPFileWriter(
                 worktreeRoot: URL(fileURLWithPath: self.worktreePath)
             )
-            let remoteServer = RemoteHostRegistry.shared.host(forPath: self.worktreePath).map {
+            let remoteServer = (self.remoteHost ?? RemoteHostRegistry.shared.host(forPath: self.worktreePath)).map {
                 ACPRemoteFileServer(host: $0, worktreeRoot: self.worktreePath)
             }
             for await req in self.connection.client.fileRequests {

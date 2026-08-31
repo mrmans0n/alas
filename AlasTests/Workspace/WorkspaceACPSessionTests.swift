@@ -36,14 +36,17 @@ struct WorkspaceACPSessionTests {
         client.script(method: "initialize") { _ in Data(#"{"protocolVersion":1,"sessionCapabilities":{}}"#.utf8) }
         client.script(method: "session/new") { _ in Data(#"{"sessionId":"remote-new"}"#.utf8) }
         var capturedSpec: ACPLaunchSpec?
+        var capturedHost: String?
         let manager = ACPSessionManager(
             worktreeId: "checkout",
             worktreePath: "/checkout",
-            owner: .workspaceCheckout(UUID(), .local),
+            owner: .workspaceCheckout(UUID(), .ssh("checkout-host")),
             store: try ACPSessionStore(path: path.path),
+            remoteHost: "checkout-host",
             setupEvaluator: { _ in .ready },
-            connectionFactory: { spec, _, _ in
+            connectionFactory: { spec, host, _ in
                 capturedSpec = spec
+                capturedHost = host
                 return ACPConnection(client: client)
             },
             launchSpecTransformer: { spec in
@@ -55,6 +58,8 @@ struct WorkspaceACPSessionTests {
         await manager.attach(to: session.id, freshlyCreated: true)
 
         #expect(capturedSpec?.arguments.first == "--dangerously-bypass-approvals-and-sandbox")
+        #expect(capturedHost == "checkout-host")
+        #expect(manager.remoteHost == "checkout-host")
     }
 
     @MainActor

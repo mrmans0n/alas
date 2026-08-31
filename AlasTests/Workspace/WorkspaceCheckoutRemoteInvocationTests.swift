@@ -21,6 +21,7 @@ struct WorkspaceCheckoutRemoteInvocationTests {
         #expect(calls.allSatisfy { $0.args.contains("BatchMode=yes") })
         #expect(calls.allSatisfy { $0.args.dropLast().last == "builder.example" })
         #expect(calls[0].args.last?.contains("test -e") == true)
+        #expect(calls[0].args.last?.contains("test -L") == true)
         #expect(calls[1].args.last?.contains("test -d") == true)
         #expect(calls[1].args.last?.contains("test -w") == true)
     }
