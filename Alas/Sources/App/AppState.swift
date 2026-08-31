@@ -1634,6 +1634,15 @@ final class AppState {
         return checkout
     }
 
+    func resumeWorkspaceCheckoutMemberCreation(checkoutID: UUID, memberID: UUID) async throws -> WorkspaceCheckout {
+        guard config.workspacesEnabled, workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
+        let checkout = try await workspaceCoordinator().resumeCreation(checkoutID: checkoutID, memberID: memberID)
+        await workspacesManager.refreshCheckoutSnapshots()
+        selectWorkspaceCheckout(id: checkout.id)
+        focusWorkspaceCheckoutMember(id: memberID)
+        return checkout
+    }
+
     func retryWorkspaceCheckoutSetup(checkoutID: UUID, memberID: UUID) async throws -> WorkspaceCheckout {
         guard config.workspacesEnabled, workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
         let checkout = try await workspaceCoordinator().retrySetup(checkoutID: checkoutID, memberID: memberID)

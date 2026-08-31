@@ -118,8 +118,12 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                     }
                 case .stopAfterCurrentOperations:
                     try await state.stopWorkspaceCheckoutAfterCurrentOperations(id: checkoutID)
-                case .resumeCreation, .recreateMember:
+                case .resumeCreation:
                     _ = try await state.resumeWorkspaceCheckoutCreation(id: checkoutID)
+                case .recreateMember:
+                    if let memberID {
+                        _ = try await state.resumeWorkspaceCheckoutMemberCreation(checkoutID: checkoutID, memberID: memberID)
+                    }
                 case .retrySetup:
                     if let memberID { _ = try await state.retryWorkspaceCheckoutSetup(checkoutID: checkoutID, memberID: memberID) }
                 case .findExisting:
