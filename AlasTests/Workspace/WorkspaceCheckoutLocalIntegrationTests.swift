@@ -49,6 +49,32 @@ struct WorkspaceCheckoutLocalIntegrationTests {
         }
     }
 
+    @Test func existingCreatedWorktreeLineageDoesNotMintAMarkerForAnUnownedWorktree() async throws {
+        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-local-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
+        let repository = try await makeRepository(at: temporary.appendingPathComponent("repo"))
+        let destination = temporary.appendingPathComponent("external-worktree")
+        _ = try await Process.git(["branch", "release/1091", "HEAD"], cwd: repository)
+        _ = try await Process.git(["worktree", "add", "-q", destination.path, "release/1091"], cwd: repository)
+        let operation = WorkspaceFrozenWorktreeOperation(
+            checkoutID: UUID(),
+            checkoutMemberID: UUID(),
+            projectID: "repo",
+            executionLocation: .local,
+            sourceRepositoryPath: repository.path,
+            destinationPath: destination.path,
+            branch: "release/1091",
+            baseCommit: try await headCommit(at: repository),
+            branchIntent: .create(atCommit: try await headCommit(at: repository))
+        )
+
+        let lineage = try await WorkspaceFrozenGitOperator().existingCreatedWorktreeLineage(operation)
+
+        #expect(lineage == nil)
+        #expect(WorktreeService.existingLocalLineageID(forWorktreeAt: destination) == nil)
+    }
+
     private func makeRepository(at url: URL) async throws -> URL {
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         _ = try await Process.git(["init", "-q", "-b", "main"], cwd: url)
@@ -56,6 +82,11 @@ struct WorkspaceCheckoutLocalIntegrationTests {
         _ = try await Process.git(["config", "user.name", "Workspace"], cwd: url)
         _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "initial"], cwd: url)
         return url
+    }
+
+    private func headCommit(at url: URL) async throws -> String {
+        let result = try await Process.git(["rev-parse", "--verify", "HEAD^{commit}"], cwd: url)
+        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func project(id: String, path: String) -> ProjectConfig {
