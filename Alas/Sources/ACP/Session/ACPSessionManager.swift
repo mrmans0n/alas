@@ -87,6 +87,7 @@ final class ACPSessionManager: ObservableObject {
     let worktreeId: String
     let worktreePath: String
     let owner: SessionOwnerID
+    let remoteHost: String?
     let persistence: ACPSessionPersistence
     let changeNotifier: ACPChangeNotifier
     private let delegatedMessageNotifier: ACPChangeNotifier
@@ -472,6 +473,7 @@ final class ACPSessionManager: ObservableObject {
          instanceId: String = UUID().uuidString,
          pid: Int64 = Int64(ProcessInfo.processInfo.processIdentifier),
          hydratorPath: String? = nil,
+         remoteHost: String? = nil,
          onDirtyCheck: ((String) -> Bool)? = nil,
          onLiveBufferRead: ((String) -> String?)? = nil,
          onSessionTitleUpdated: ((ACPSession.ID, String) -> Void)? = nil,
@@ -502,6 +504,7 @@ final class ACPSessionManager: ObservableObject {
         self.worktreeId = resolvedOwner.storageKey
         self.worktreePath = worktreePath
         self.owner = resolvedOwner
+        self.remoteHost = remoteHost
         self.persistence = resolvedPersistence
         self.onDirtyCheck = onDirtyCheck
         self.onLiveBufferRead = onLiveBufferRead
@@ -1740,7 +1743,7 @@ final class ACPSessionManager: ObservableObject {
     }
 
     private func killRemoteHelperACPProcIfPossible(sessionId: ACPSession.ID) {
-        guard let host = RemoteHostRegistry.shared.host(forPath: worktreePath) else { return }
+        guard let host = remoteHost ?? RemoteHostRegistry.shared.host(forPath: worktreePath) else { return }
         let procId = Self.helperACPProcId(sessionId: sessionId)
         Task {
             let client = await RemoteHelperClientPool.shared.client(for: host)
@@ -1764,7 +1767,7 @@ final class ACPSessionManager: ObservableObject {
             throw ACPSessionDiscoveryError.setupRequired(setup.reasonText)
         }
 
-        let host = RemoteHostRegistry.shared.host(forPath: worktreePath)
+        let host = remoteHost ?? RemoteHostRegistry.shared.host(forPath: worktreePath)
         let launchSpec = await resolvedLaunchSpec(for: spec, host: host)
         let connection = try connectionFactory(launchSpec, host, worktreePath)
         do {
@@ -3093,7 +3096,7 @@ extension ACPSessionManager {
         var cliParentSessionId: String?
         let agentEnvironment: [String: String]
         do {
-            let host = RemoteHostRegistry.shared.host(forPath: worktreePath)
+            let host = remoteHost ?? RemoteHostRegistry.shared.host(forPath: worktreePath)
             var launchSpec = launchSpecTransformer(await resolvedLaunchSpec(for: spec, host: host))
             if host == nil, let cliEnv = await alasCLIEnvProvider?(worktreePath, sessionId) {
                 launchSpec = launchSpec.mergingExtraEnv(cliEnv)
@@ -3237,7 +3240,7 @@ extension ACPSessionManager {
             // command and socket live on this machine — so remote sessions
             // skip it entirely instead of reporting it unavailable on every
             // connect.
-            let remoteHost = RemoteHostRegistry.shared.host(forPath: worktreePath)
+            let remoteHost = self.remoteHost ?? RemoteHostRegistry.shared.host(forPath: worktreePath)
             let builtInMCP = remoteHost == nil
                 ? await builtInMCPProvider?(worktreePath, sessionId, initialized.mcpCapabilities.http)
                 : nil
@@ -3371,6 +3374,7 @@ extension ACPSessionManager {
                                           sessionId: sessionId,
                                           worktreePath: worktreePath,
                                           agentEnv: agentEnvironment,
+                                          remoteHost: remoteHost,
                                           suppressingLoadReplay: shouldSuppressLoadReplay,
                                           onDirtyCheck: onDirtyCheck,
                                           onLiveBufferRead: onLiveBufferRead,
@@ -3982,7 +3986,7 @@ extension ACPSessionManager {
     /// reattach path so restoration and queued-prompt handling stay identical.
     func scheduleAutoReconnect(sessionId: ACPSession.ID) {
         guard sessions[sessionId] != nil,
-              RemoteHostRegistry.shared.host(forPath: worktreePath) != nil
+              (remoteHost ?? RemoteHostRegistry.shared.host(forPath: worktreePath)) != nil
         else { return }
 
         autoReconnectTasks.removeValue(forKey: sessionId)?.cancel()
@@ -4007,7 +4011,7 @@ extension ACPSessionManager {
                 case .idle, .spawning:
                     continue
                 }
-                if let host = RemoteHostRegistry.shared.host(forPath: self.worktreePath),
+                if let host = self.remoteHost ?? RemoteHostRegistry.shared.host(forPath: self.worktreePath),
                    RemoteHostStatusStore.shared.isOffline(host) {
                     continue
                 }
@@ -4266,7 +4270,7 @@ extension ACPSessionManager {
     }
 
     private func evaluateSetup(for spec: ACPLaunchSpec) async -> ACPSetupResult {
-        guard let host = RemoteHostRegistry.shared.host(forPath: worktreePath) else {
+        guard let host = remoteHost ?? RemoteHostRegistry.shared.host(forPath: worktreePath) else {
             return await setupEvaluator(spec)
         }
 

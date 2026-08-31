@@ -7545,12 +7545,15 @@ final class AppState {
     func workspaceACPManager(for checkout: WorkspaceCheckout) async -> WorkspaceACPManagerResolution {
         let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
         if let existing = acpManagers[owner] { return .ready(existing) }
+        let pinnedRemoteHost: String?
         switch checkout.executionLocation.normalized {
         case .local:
+            pinnedRemoteHost = nil
             guard FileManager.default.fileExists(atPath: checkout.rootPath) else {
                 return .pendingRootOrLocation
             }
         case .ssh(let destination):
+            pinnedRemoteHost = destination
             guard !destination.isEmpty else { return .pendingRootOrLocation }
             guard let result = try? await WorkspaceRemoteTransport().run(
                 host: destination,
@@ -7559,10 +7562,24 @@ final class AppState {
             ), result.exitCode == 0 else {
                 return .pendingRootOrLocation
             }
-            RemoteHostRegistry.shared.register(root: checkout.rootPath, host: destination)
         }
 
         let dbURL = Paths.acpSessionsDB(for: owner)
+        let checkoutMemberWorktreeID: (String) -> String? = { [weak self] absolutePath in
+            guard let self else { return nil }
+            let target = Self.canonicalWorktreePath(absolutePath)
+            let current = self.workspacesManager.checkout(id: checkout.id) ?? checkout
+            for member in current.members where member.availability == .available {
+                guard Self.canonicalWorktreePath(member.worktreePath) == target
+                    || target.hasPrefix(Self.canonicalWorktreePath(member.worktreePath) + "/")
+                else { continue }
+                guard let worktree = self.projectsManager.worktrees(projectId: member.projectID).first(where: {
+                    Self.canonicalWorktreePath($0.path.path) == Self.canonicalWorktreePath(member.worktreePath)
+                }) else { return nil }
+                return worktree.id
+            }
+            return nil
+        }
         let manager = ACPSessionManager(
             worktreeId: owner.storageKey,
             worktreePath: checkout.rootPath,
@@ -7571,6 +7588,15 @@ final class AppState {
             instanceId: instanceId,
             pid: Int64(ProcessInfo.processInfo.processIdentifier),
             hydratorPath: dbURL.path,
+            remoteHost: pinnedRemoteHost,
+            onDirtyCheck: { [weak self] path in
+                guard let worktreeID = checkoutMemberWorktreeID(path) else { return false }
+                return self?.editorHasDirtyBuffer(for: path, worktreeId: worktreeID) ?? false
+            },
+            onLiveBufferRead: { [weak self] path in
+                guard let worktreeID = checkoutMemberWorktreeID(path) else { return nil }
+                return self?.editorLiveBufferText(for: path, worktreeId: worktreeID)
+            },
             onSessionTitleUpdated: { [weak self] sessionId, title in
                 _ = self?.tabs.renameACPSessionTabs(
                     worktreeId: owner.storageKey,
