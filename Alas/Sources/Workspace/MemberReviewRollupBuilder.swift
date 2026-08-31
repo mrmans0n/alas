@@ -130,6 +130,14 @@ struct MemberReviewRollupBuilder {
     }
 }
 
+struct WorkspaceCachedGGStackReader: WorkspaceGGStackReading {
+    var stacksByWorktreeID: [String: GGStack]
+
+    func stack(worktreeID: String) throws -> GGStack? {
+        stacksByWorktreeID[worktreeID]
+    }
+}
+
 private struct EmptyWorkspaceGGStackReader: WorkspaceGGStackReading {
     func stack(worktreeID: String) throws -> GGStack? { nil }
 }

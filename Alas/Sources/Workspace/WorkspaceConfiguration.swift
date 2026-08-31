@@ -227,7 +227,17 @@ enum WorkspaceConfigurationResolver {
                 }
             )
         }
-        return .init(capturedAt: capturedAt, shared: .init(sessionOpenScript: shared.sessionOpenScript, worktreeCreateScript: shared.worktreeCreateScript, creationLaunchPreference: normalizedLaunch), members: members, warnings: warnings)
+        return .init(
+            capturedAt: capturedAt,
+            shared: .init(
+                sessionOpenScript: shared.sessionOpenScript,
+                worktreeCreateScript: shared.worktreeCreateScript,
+                creationLaunchPreference: normalizedLaunch,
+                globalWorktreeCreateScript: shared.globalWorktreeCreateScript
+            ),
+            members: members,
+            warnings: warnings
+        )
     }
 
     private static func resolveLaunchPreference(_ input: Input) -> CreationLaunchPreference {
