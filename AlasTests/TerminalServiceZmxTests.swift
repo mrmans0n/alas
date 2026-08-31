@@ -413,6 +413,28 @@ struct TerminalServiceZmxTests {
     }
 
     @Test
+    func terminateAllKillsPersistedCheckoutOwnerLeavesWithoutLiveRegistryEntries() async {
+        let checkoutID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        let owner = SessionOwnerID.workspaceCheckout(checkoutID, .local)
+        let leafID = "checkout-leaf"
+        let recorder = RecordingRunner()
+        recorder.resultsByFirstArg["ls"] = .init(exitCode: 0, stdout: "", stderr: "")
+        let service = TerminalService(
+            zmxClient: ZmxClient(env: makeZmxEnv(available: true), runner: recorder.runner())
+        )
+
+        service.terminateAll(additionalSessions: [
+            TerminalSessionIdentity(owner: owner, leafId: leafID),
+        ])
+        await waitForCalls(recorder, count: 2) { $0.calls.count }
+
+        #expect(Set(recorder.calls.map(\.args)) == Set([
+            ["ls"],
+            ["kill", ZmxSessionName.derive(owner: owner, leafId: leafID)],
+        ]))
+    }
+
+    @Test
     func terminateAllDeduplicatesRegistryAndAdditional() async {
         let recorder = RecordingRunner()
         recorder.resultsByFirstArg["ls"] = .init(exitCode: 0, stdout: "", stderr: "")

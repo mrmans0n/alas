@@ -119,16 +119,18 @@ struct AlasCLICommandRouter {
             break
         }
 
-        // Resolve the origin worktree: exact session first, else cwd.
+        // Resolve the origin worktree: exact legacy session first, else cwd.
+        // Checkout-owned terminal sessions intentionally do not collapse to a
+        // synthetic worktree ID; their repository target is the current cwd.
         let origin: Worktree
         if let sessionId = request.sessionId,
            let worktreeId = sessionWorktreeId(sessionId),
            let resolved = originatingWorktree(worktreeId) {
             origin = resolved
-        } else if request.sessionId != nil {
-            return .error("Unknown Alas terminal session.")
         } else if let cwd = request.cwd, let resolved = service.resolveWorktree(forDirectory: cwd) {
             origin = resolved
+        } else if request.sessionId != nil {
+            return .error("Unknown Alas terminal session.")
         } else {
             return .error("not inside an Alas worktree")
         }

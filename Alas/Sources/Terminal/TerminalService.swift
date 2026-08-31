@@ -535,8 +535,8 @@ final class TerminalService {
         }
         let client = zmxClient
         for session in additionalSessions {
-            let scoped = ZmxSessionName.derive(worktreeId: session.worktreeId, leafId: session.leafId)
-            if let host = Self.remoteHostForCleanup(worktreeId: session.worktreeId, projectPath: session.projectPath) {
+            let scoped = session.zmxSessionName
+            if let host = Self.remoteHostForCleanup(session: session) {
                 remoteNamesByHost[host, default: []].insert(scoped)
             } else {
                 localNames.insert(scoped)
@@ -547,11 +547,11 @@ final class TerminalService {
                 client.killSession(name: name)
             }
             let localAdditionalSessions = additionalSessions.filter {
-                Self.remoteHostForCleanup(worktreeId: $0.worktreeId, projectPath: $0.projectPath) == nil
+                Self.remoteHostForCleanup(session: $0) == nil
             }
             let localLegacySessionInfos = localAdditionalSessions.isEmpty ? [] : client.listSessionInfos()
             for session in localAdditionalSessions {
-                let scoped = ZmxSessionName.derive(worktreeId: session.worktreeId, leafId: session.leafId)
+                let scoped = session.zmxSessionName
                 let legacyNames = Self.sessionNamesForCleanup(
                     worktreeId: session.worktreeId,
                     projectPath: session.projectPath,
@@ -569,7 +569,7 @@ final class TerminalService {
                 }
             }
             let remoteAdditionalSessionsByHost = Dictionary(grouping: additionalSessions.compactMap { session -> (String, TerminalSessionIdentity)? in
-                guard let host = Self.remoteHostForCleanup(worktreeId: session.worktreeId, projectPath: session.projectPath) else {
+                guard let host = Self.remoteHostForCleanup(session: session) else {
                     return nil
                 }
                 return (host, session)
@@ -577,7 +577,7 @@ final class TerminalService {
             for (host, pairs) in remoteAdditionalSessionsByHost {
                 let remoteSessionInfos = await Self.remoteSessionInfos(host: host)
                 for (_, session) in pairs {
-                    let scoped = ZmxSessionName.derive(worktreeId: session.worktreeId, leafId: session.leafId)
+                    let scoped = session.zmxSessionName
                     let legacyNames = Self.sessionNamesForCleanup(
                         worktreeId: session.worktreeId,
                         projectPath: session.projectPath,
@@ -589,6 +589,17 @@ final class TerminalService {
                     }
                 }
             }
+        }
+    }
+
+    private nonisolated static func remoteHostForCleanup(session: TerminalSessionIdentity) -> String? {
+        switch session.owner {
+        case .worktree:
+            return remoteHostForCleanup(worktreeId: session.worktreeId, projectPath: session.projectPath)
+        case .workspaceCheckout(_, .local):
+            return nil
+        case .workspaceCheckout(_, .ssh(let host)):
+            return host
         }
     }
 

@@ -61,6 +61,35 @@ struct AlasCLICommandRouterTests {
         #expect(opened.first?.relativePath == "a.txt")
     }
 
+    @Test func resolvesOriginFromCwdWhenSessionMapsToCheckoutStorageKey() async throws {
+        let root = try makeFile("repo/a.txt").deletingLastPathComponent()
+        let worktree = Worktree(
+            id: "member-wt", projectId: "p1", name: "member", branch: "main",
+            path: root, status: .clean, lastActivity: Date()
+        )
+        var opened: [(worktreeId: String, relativePath: String)] = []
+        let router = AlasCLICommandRouter(
+            sessionWorktreeId: { _ in "workspace-checkout-storage-key" },
+            originatingWorktree: { _ in nil },
+            visibleWorktrees: { [worktree] },
+            openRelativeFile: { relativePath, worktreeId in opened.append((worktreeId, relativePath)) },
+            openExternalFile: { _, _ in Issue.record("expected relative open") },
+            activateApp: {}
+        )
+
+        let response = await router.handle(.init(
+            version: 1,
+            sessionId: "checkout-leaf",
+            cwd: root.path,
+            command: .open(paths: [root.appendingPathComponent("a.txt").path])
+        ))
+
+        #expect(response == .ok)
+        #expect(opened.count == 1)
+        #expect(opened.first?.worktreeId == "member-wt")
+        #expect(opened.first?.relativePath == "a.txt")
+    }
+
     @Test func notifyRoutesToOriginatingSessionAndWorktree() async throws {
         let root = try makeFile("repo/a.txt").deletingLastPathComponent()
         let worktree = Worktree(

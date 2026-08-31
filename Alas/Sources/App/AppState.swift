@@ -3825,9 +3825,10 @@ final class AppState {
             )
         }
         harness.onContextClickThrough = { [weak self] context in
-            guard case .workspaceCheckout(let checkoutID, _) = context.owner else { return }
-            self?.selectWorkspaceCheckout(id: checkoutID)
-            NSApp.activate(ignoringOtherApps: true)
+            guard let owner = context.owner,
+                  case .workspaceCheckout = owner
+            else { return }
+            self?.activateHarnessSession(owner: owner, sessionId: context.sessionId)
         }
         // Symlink refresh runs from `reloadTabs()` instead of here —
         // `startHarness()` is called before the tab JSONs have been read,
@@ -4265,6 +4266,37 @@ final class AppState {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    func activateHarnessSession(owner: SessionOwnerID, sessionId: String) {
+        guard case .workspaceCheckout(let checkoutID, _) = owner else { return }
+        selectWorkspaceCheckout(id: checkoutID)
+        var matchedTabId: TabID?
+        var matchedLeafId: String?
+        for tab in tabs.tabs(for: owner) {
+            guard case .terminal(let state) = tab,
+                  let leaf = state.root.leaves().first(where: { $0.sessionId == sessionId }) else { continue }
+            matchedTabId = tab.id
+            matchedLeafId = leaf.id
+            break
+        }
+        if matchedTabId == nil {
+            for tab in tabs.tabs(for: owner) {
+                guard case .acpSession(let state) = tab, state.sessionId == sessionId else { continue }
+                matchedTabId = tab.id
+                break
+            }
+        }
+        if let tabId = matchedTabId {
+            if let leafId = matchedLeafId {
+                _ = tabs.setFocusedLeaf(owner: owner, tabId: tabId, leafId: leafId)
+            }
+            tabs.activate(owner: owner, tabId: tabId)
+            if let selectedWorktreeId {
+                tabs.clearActiveTab(worktreeId: selectedWorktreeId)
+            }
+        }
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
     @discardableResult
     func openTerminalTabPreparingRemoteZmxIfNeeded(
         for worktree: Worktree,
@@ -4669,7 +4701,7 @@ final class AppState {
         // with the live registry catches any session not yet flushed to disk.
         let sessionCount = Set(persistedSessions)
             .union(terminal.registry.all.map {
-                TerminalSessionIdentity(worktreeId: $0.worktreeId, leafId: $0.id)
+                TerminalSessionIdentity(owner: $0.owner, leafId: $0.id)
             })
             .count
 
@@ -4695,7 +4727,7 @@ final class AppState {
 
     /// All terminal sessions persisted under this Alas instance's projects.
     private func allPersistedTerminalSessions() -> [TerminalSessionIdentity] {
-        projects.flatMap { project in
+        let worktreeSessions = projects.flatMap { project in
             projectsManager.worktrees(projectId: project.id).flatMap { worktree in
                 tabs.tabs(forWorktree: worktree.id).flatMap { tab -> [TerminalSessionIdentity] in
                     guard case .terminal(let state) = tab else { return [] }
@@ -4709,6 +4741,16 @@ final class AppState {
                 }
             }
         }
+        let checkoutSessions = workspacesManager.checkouts.flatMap { checkout in
+            let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+            return tabs.tabs(for: owner).flatMap { tab -> [TerminalSessionIdentity] in
+                guard case .terminal(let state) = tab else { return [] }
+                return state.root.leaves().map {
+                    TerminalSessionIdentity(owner: owner, leafId: $0.id)
+                }
+            }
+        }
+        return worktreeSessions + checkoutSessions
     }
 
     /// Move focus to the geometrically nearest leaf in `direction`. No-op when

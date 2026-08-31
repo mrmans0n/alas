@@ -146,6 +146,44 @@ struct OwnerTabsManagerTests {
         }
         #expect(stateAfter.focusedLeafId == "second")
     }
+
+    @Test func notificationClickActivatesCheckoutOwnedTerminalLeaf() async throws {
+        let workspaceURL = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-owner-notify-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: workspaceURL) }
+        let store = WorkspaceStore(url: workspaceURL)
+        let checkout = WorkspaceCheckout(
+            workspaceID: nil,
+            fallbackWorkspaceName: "Workspace",
+            executionLocation: .local,
+            branch: "topic",
+            rootPath: "/checkout",
+            members: []
+        )
+        try await store.checkpoint(.init(checkouts: [checkout]))
+        let workspacesManager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: store))
+        let manager = TabsManager(store: OwnerTabsMemoryStore())
+        let state = AppState(
+            store: OwnerTabsMemoryStore(),
+            tabsManager: manager,
+            workspacesManager: workspacesManager,
+            workspaceStore: store
+        )
+        state.config.workspacesEnabled = true
+        _ = await workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, .local)
+        let tab = manager.appendTerminal(owner: owner, title: "Shared", sessionId: "first")
+        _ = manager.splitFocusedLeaf(owner: owner, tabId: tab.id, axis: .vertical, newLeafId: "second", newSessionId: "second-session")
+
+        state.activateHarnessSession(owner: owner, sessionId: "second-session")
+
+        #expect(state.selectedWorkspaceCheckout?.id == checkout.id)
+        #expect(manager.activeTabId(for: owner) == tab.id)
+        guard case let .terminal(stateAfter) = manager.tabs(for: owner).first else {
+            Issue.record("Expected shared terminal tab")
+            return
+        }
+        #expect(stateAfter.focusedLeafId == "second")
+    }
 }
 
 private final class OwnerTabsMemoryStore: PersistenceStoreProtocol {
