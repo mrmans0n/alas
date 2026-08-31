@@ -71,14 +71,15 @@ struct WorkspaceCheckoutObserver: WorkspaceCheckoutObserving {
             return member.gitLineageID == lineage ? .exactLineage(lineage) : .identityConflict(lineage)
         case .ssh(let host):
             let path = SSHCommand.shellQuote(plan.destinationPath)
-            let command = "p=\(path); d=$(git -C \"$p\" rev-parse --absolute-git-dir) || exit 1; f=\"$d/alas-worktree-lineage\"; test -s \"$f\" && head -n 1 \"$f\""
+            let command = "p=\(path); test -e \"$p\" || exit 2; d=$(git -C \"$p\" rev-parse --absolute-git-dir) || exit 3; f=\"$d/alas-worktree-lineage\"; test -s \"$f\" || exit 4; head -n 1 \"$f\""
             guard let result = try? await remote.run(host: host, command: command) else {
                 return .unavailable("Could not inspect Workspace member on \(host).")
             }
             if result.exitCode == 255 {
                 return .unavailable("Could not connect to \(host) to inspect Workspace member.")
             }
-            guard result.exitCode == 0 else { return .missing }
+            if result.exitCode == 2 { return .missing }
+            guard result.exitCode == 0 else { return .identityConflict(nil) }
             let lineage = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !lineage.isEmpty else { return .identityConflict(nil) }
             return member.gitLineageID == lineage ? .exactLineage(lineage) : .identityConflict(lineage)

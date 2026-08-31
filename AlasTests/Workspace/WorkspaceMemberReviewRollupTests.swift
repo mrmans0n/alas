@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import Testing
 @testable import Alas
 
@@ -49,6 +50,26 @@ struct WorkspaceMemberReviewRollupTests {
         #expect(action.worktreeID == "/checkouts/release/app")
         #expect(action.reviewSessionID == record.id)
         #expect(action.sharedCheckoutBranch == nil)
+    }
+
+    @MainActor
+    @Test func sidebarDetailModelIncludesProductionReviewRollup() throws {
+        let memberID = uuid(1)
+        let checkout = WorkspaceCheckout(workspaceID: UUID(), fallbackWorkspaceName: "Release", executionLocation: .local, branch: "shared-branch", rootPath: "/checkouts/release", members: [
+            Self.member(id: memberID, projectID: "app", name: "App", worktreeID: "/checkouts/release/app"),
+        ])
+        let record = Self.record(id: "active-review", worktreeID: "/checkouts/release/app", status: .active, updatedAt: 1)
+        let model = WorkspaceSidebarTree<EmptyView>.detailModel(
+            for: checkout,
+            rollupBuilder: MemberReviewRollupBuilder(
+                reviews: InMemoryWorkspaceReviewSessionReader(records: [record]),
+                gg: InMemoryWorkspaceGGStackReader(stacks: [:])
+            )
+        )
+
+        #expect(model.reviewRollupRows.map(\.memberID) == [memberID])
+        #expect(model.reviewRollupRows[0].reviewCount == 1)
+        #expect(model.reviewRollupRows[0].reviewActions.map(\.reviewSessionID) == [record.id])
     }
 
     private static func member(id: UUID, projectID: String, name: String, worktreeID: String, availability: WorkspaceCheckoutMemberAvailability = .available) -> WorkspaceCheckoutMember {

@@ -68,7 +68,7 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                             .padding(.leading, 48)
                         }
                         if state.workspaceNavigationState.selectedCheckoutID == id {
-                            WorkspaceCheckoutDetailView(model: WorkspaceCheckoutDetailModel(checkout: checkout)) { action, memberID in
+                            WorkspaceCheckoutDetailView(model: Self.detailModel(for: checkout)) { action, memberID in
                                 perform(action, checkoutID: id, memberID: memberID)
                             }
                             .padding(.leading, 28)
@@ -151,6 +151,13 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                 lifecycleError = error.localizedDescription
             }
         }
+    }
+
+    static func detailModel(for checkout: WorkspaceCheckout, rollupBuilder: MemberReviewRollupBuilder = .init()) -> WorkspaceCheckoutDetailModel {
+        WorkspaceCheckoutDetailModel(
+            checkout: checkout,
+            reviewRollup: try? rollupBuilder.build(for: checkout)
+        )
     }
 
     private func confirmDeletion(_ action: WorkspaceLifecycleAction, checkoutID: UUID, memberID: UUID?) {
