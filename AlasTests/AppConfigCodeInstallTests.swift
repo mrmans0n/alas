@@ -15,6 +15,16 @@ struct AppConfigCodeInstallTests {
         #expect(AppConfig.defaults.code.showLineNumbers)
     }
 
+    @Test("clone folder round trips")
+    func cloneFolderRoundTrip() throws {
+        var config = AppConfig.defaults
+        config.repositoryCloneRootPath = "/tmp/repositories"
+
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(config))
+
+        #expect(decoded.repositoryCloneRootPath == "/tmp/repositories")
+    }
+
     @Test("legacy config without these keys decodes with empty defaults")
     func legacyDecode() throws {
         // Minimal config omitting dismissedInstallNudges and userDefinedRecipes
@@ -52,6 +62,7 @@ struct AppConfigCodeInstallTests {
         let cfg = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
         #expect(cfg.code.dismissedInstallNudges == [])
         #expect(cfg.code.userDefinedRecipes == [:])
+        #expect(cfg.repositoryCloneRootPath == "")
     }
 
     @Test("legacy code config without showLineNumbers decodes as enabled")

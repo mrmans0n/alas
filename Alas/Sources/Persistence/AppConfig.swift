@@ -47,6 +47,7 @@ struct AppConfig: Codable, Equatable {
     var collapsedProjectIds: [String] = []
     var sidebarChromeOverrides: [String: SidebarChromeOverride] = [:]
     var shortcutOverrides: [String: ShortcutBinding?] = [:]
+    var repositoryCloneRootPath: String = ""
 
     struct Remote: Codable, Equatable {
         var enabled: Bool = false
@@ -582,7 +583,8 @@ extension AppConfig {
              recentProjectIds, recentWorktreeIdsByProject, recentWorktreeRefs,
              collapsedProjectIds,
              sidebarChromeOverrides,
-             shortcutOverrides
+             shortcutOverrides,
+             repositoryCloneRootPath
     }
 
     // Custom decode tolerates older config files that predate `code`.
@@ -821,6 +823,8 @@ extension AppConfig {
             (try? c.decode([String: SidebarChromeOverride].self, forKey: .sidebarChromeOverrides)) ?? [:]
         shortcutOverrides =
             (try? c.decode([String: ShortcutBinding?].self, forKey: .shortcutOverrides)) ?? [:]
+        repositoryCloneRootPath =
+            (try? c.decode(String.self, forKey: .repositoryCloneRootPath)) ?? ""
         migrateLegacyFindAndReplaceShortcutOverride()
         migrateLegacyAgentLauncherShortcutOverrides()
         removeShortcutOverridesCollidingWithReservedBindings()
