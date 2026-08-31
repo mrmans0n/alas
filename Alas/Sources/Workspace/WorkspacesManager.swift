@@ -43,7 +43,7 @@ final class WorkspacesManager {
     func checkout(id: UUID) -> WorkspaceCheckout? {
         guard case let .loaded(state) = loadState else { return nil }
         return state.checkouts
-            .first(where: { $0.id == id && $0.archivedAt == nil })
+            .first(where: { $0.id == id })
             .map(presentedCheckout)
     }
 

@@ -75,6 +75,9 @@ struct WorkspaceCheckoutObserver: WorkspaceCheckoutObserving {
             guard let result = try? await remote.run(host: host, command: command) else {
                 return .unavailable("Could not inspect Workspace member on \(host).")
             }
+            if result.exitCode == 255 {
+                return .unavailable("Could not connect to \(host) to inspect Workspace member.")
+            }
             guard result.exitCode == 0 else { return .missing }
             let lineage = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !lineage.isEmpty else { return .identityConflict(nil) }

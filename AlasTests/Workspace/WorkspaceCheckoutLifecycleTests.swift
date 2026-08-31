@@ -48,6 +48,41 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(checkout.members[0].cleanup?.worktreeRemoved == true)
     }
 
+    @Test func interruptedDeletingCheckoutCanResumeFromPersistedCleanup() async throws {
+        let fixture = try await Fixture.make()
+        let plan = WorkspaceCheckoutCleanupPlan(
+            checkoutID: fixture.checkout.id,
+            memberID: fixture.member.id,
+            executionLocation: fixture.checkout.executionLocation,
+            projectID: fixture.member.projectID,
+            sourceRepositoryPath: fixture.member.plan!.sourceRepositoryPath,
+            baseReference: fixture.member.plan!.baseReference,
+            baseCommit: fixture.member.plan!.baseCommit,
+            rootPath: fixture.checkout.rootPath,
+            managedMemberPaths: [fixture.member.worktreePath],
+            worktreePath: fixture.member.worktreePath,
+            branch: fixture.checkout.branch,
+            expectedLineageID: fixture.member.gitLineageID!,
+            branchOwnership: .reused
+        )
+        try await fixture.store.mutate { state in
+            state.checkouts[0].operation = .deleting
+            state.checkouts[0].members[0].cleanup = .init(
+                plan: plan,
+                checkpoint: .worktreeRemoved,
+                worktreeRemoved: true
+            )
+        }
+        let lifecycle = FixtureLifecycle(verification: .missing)
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+
+        let checkout = try await coordinator.deleteMember(checkoutID: fixture.checkout.id, memberID: fixture.member.id)
+
+        #expect(checkout.operation == .idle)
+        #expect(checkout.members[0].availability == .explicitlyDeleted)
+        #expect(await lifecycle.removedMembers.isEmpty)
+    }
+
     @Test func deleteSnapshotForIdentityConflictDoesNotVerifyOrRemoveAWorktree() async throws {
         let fixture = try await Fixture.make()
         try await fixture.store.mutate { state in

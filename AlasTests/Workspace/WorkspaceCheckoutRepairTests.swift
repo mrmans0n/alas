@@ -31,6 +31,42 @@ struct WorkspaceCheckoutRepairTests {
         #expect(await fixture.store.load().loadedCheckout(id: fixture.checkout.id) == before)
     }
 
+    @Test func sshConnectionFailureIsUnavailableNotMissing() async throws {
+        let memberID = UUID()
+        let member = WorkspaceCheckoutMember(
+            id: memberID,
+            workspaceMemberID: UUID(),
+            projectID: "project-a",
+            fallbackProjectName: "A",
+            fallbackRepositoryRoot: "/repos/a",
+            worktreePath: "/remote/checkouts/a",
+            gitLineageID: "lineage-a",
+            availability: .available,
+            checkpoint: .setupComplete,
+            cleanupOwnership: .init(worktreeCreated: true, branchOwnership: .created),
+            plan: .init(
+                checkoutMemberID: memberID,
+                projectID: "project-a",
+                sourceRepositoryPath: "/remote/repos/a",
+                destinationPath: "/remote/checkouts/a",
+                baseReference: "main",
+                baseCommit: "abc",
+                branchIntent: .create(atCommit: "abc")
+            )
+        )
+        let checkout = WorkspaceCheckout(workspaceID: UUID(), fallbackWorkspaceName: "Release", executionLocation: .ssh("ssh-host"), branch: "feature", rootPath: "/remote/checkouts", members: [member])
+        let observer = WorkspaceCheckoutObserver(remote: .init { _, _, _ in
+            ProcessResult(exitCode: 255, stdout: "", stderr: "ssh: connect failed")
+        })
+
+        let observation = await observer.observe(member, in: checkout)
+
+        guard case .unavailable = observation else {
+            Issue.record("Expected SSH connection failures to stay unavailable, got \(observation)")
+            return
+        }
+    }
+
     @Test func retrySetupUsesTheFrozenWorktreeAndNeverRepeatsASuccess() async throws {
         let fixture = try await persistedFixture(checkpoint: .worktreeCreated)
         let scripts = RepairScriptRunner()

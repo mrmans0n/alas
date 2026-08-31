@@ -225,17 +225,21 @@ actor WorkspaceCheckoutCoordinator {
     /// Explicitly Deleted, so its frozen creation plan can later recreate it.
     func deleteMember(checkoutID: UUID, memberID: UUID, confirmingRisks: Bool = false) async throws -> WorkspaceCheckout {
         let checkout = try await checkout(id: checkoutID)
-        guard checkout.operation == .idle else { throw WorkspaceCheckoutCoordinatorError.operationInProgress }
+        guard checkout.operation == .idle || checkout.operation == .deleting else { throw WorkspaceCheckoutCoordinatorError.operationInProgress }
         guard let member = checkout.members.first(where: { $0.id == memberID }),
-              let cleanupPlan = makeCleanupPlan(checkout: checkout, member: member)
+              let cleanupPlan = member.cleanup?.plan ?? makeCleanupPlan(checkout: checkout, member: member)
         else { throw WorkspaceCheckoutCoordinatorError.cleanupUnavailable }
         // Claim and durably freeze the cleanup operation before the first
         // await. A retry retains its original plan/checkpoints verbatim.
         try await store.mutate { state in
             guard let index = state.checkouts.firstIndex(where: { $0.id == checkoutID }),
-                  state.checkouts[index].operation == .idle,
+                  state.checkouts[index].operation == .idle || state.checkouts[index].operation == .deleting,
                   let memberIndex = state.checkouts[index].members.firstIndex(where: { $0.id == memberID })
             else { throw WorkspaceCheckoutCoordinatorError.operationInProgress }
+            if state.checkouts[index].operation == .deleting,
+               state.checkouts[index].members[memberIndex].cleanup == nil {
+                throw WorkspaceCheckoutCoordinatorError.operationInProgress
+            }
             state.checkouts[index].operation = .deleting
             if state.checkouts[index].members[memberIndex].cleanup == nil {
                 state.checkouts[index].members[memberIndex].cleanup = .init(plan: cleanupPlan)

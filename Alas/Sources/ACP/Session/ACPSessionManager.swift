@@ -40,6 +40,7 @@ final class ACPSessionManager: ObservableObject {
         _ host: String?,
         _ worktreePath: String
     ) throws -> ACPConnection
+    typealias ACPLaunchSpecTransformer = @MainActor (_ spec: ACPLaunchSpec) -> ACPLaunchSpec
     typealias ACPBrokerServiceFactory = @MainActor () async throws -> ACPBrokerServicing
     typealias MCPProjectContextProvider = @MainActor () -> MCPProjectContext?
     /// Checkout sessions provide their descriptors from the immutable checkout
@@ -102,6 +103,7 @@ final class ACPSessionManager: ObservableObject {
     private let onDelegatedMessageAvailable: ((ACPSession.ID) -> Void)?
     private let mcpProjectContextProvider: MCPProjectContextProvider?
     private let frozenMCPAttachmentProvider: FrozenMCPAttachmentProvider?
+    private let launchSpecTransformer: ACPLaunchSpecTransformer
     /// Builds the app-provided "alas" MCP server entry for a worktree path
     /// and local ACP session id,
     /// or nil when injection is disabled/unavailable. Fetched per attach so
@@ -480,6 +482,7 @@ final class ACPSessionManager: ObservableObject {
          setupEvaluator: ACPSetupEvaluator? = nil,
          remoteAdapterResolver: ACPRemoteAdapterResolver? = nil,
          connectionFactory: ACPConnectionFactory? = nil,
+         launchSpecTransformer: ACPLaunchSpecTransformer? = nil,
          brokerServiceFactory: ACPBrokerServiceFactory? = nil,
          mcpProjectContextProvider: MCPProjectContextProvider? = nil,
          builtInMCPProvider: BuiltInMCPProvider? = nil,
@@ -507,6 +510,7 @@ final class ACPSessionManager: ObservableObject {
         self.onDelegatedMessageAvailable = onDelegatedMessageAvailable
         self.mcpProjectContextProvider = mcpProjectContextProvider
         self.frozenMCPAttachmentProvider = frozenMCPAttachmentProvider
+        self.launchSpecTransformer = launchSpecTransformer ?? { $0 }
         self.builtInMCPProvider = builtInMCPProvider
         self.isBuiltInMCPRegistered = isBuiltInMCPRegistered
         self.clearMCPRegistration = clearMCPRegistration
@@ -3090,7 +3094,7 @@ extension ACPSessionManager {
         let agentEnvironment: [String: String]
         do {
             let host = RemoteHostRegistry.shared.host(forPath: worktreePath)
-            var launchSpec = await resolvedLaunchSpec(for: spec, host: host)
+            var launchSpec = launchSpecTransformer(await resolvedLaunchSpec(for: spec, host: host))
             if host == nil, let cliEnv = await alasCLIEnvProvider?(worktreePath, sessionId) {
                 launchSpec = launchSpec.mergingExtraEnv(cliEnv)
                 cliEnvActive = true
