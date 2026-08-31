@@ -180,6 +180,18 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(await lifecycle.removedMembers.isEmpty)
     }
 
+    @Test func deleteSnapshotForReconciledIdentityConflictDoesNotRequirePersistedConflict() async throws {
+        let fixture = try await Fixture.make()
+        let lifecycle = FixtureLifecycle(verification: .identityConflict("replacement"))
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+
+        let checkout = try await coordinator.deleteMemberSnapshot(checkoutID: fixture.checkout.id, memberID: fixture.member.id)
+
+        #expect(checkout.members[0].availability == .explicitlyDeleted)
+        #expect(checkout.members[0].cleanup?.worktreeRemoved == true)
+        #expect(await lifecycle.removedMembers.isEmpty)
+    }
+
     @Test func confirmedForgetCanDiscardSnapshotOnlyDeletion() async throws {
         let fixture = try await Fixture.make()
         try await fixture.store.mutate { state in

@@ -68,9 +68,15 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                             .padding(.leading, 48)
                         }
                         if state.workspaceNavigationState.selectedCheckoutID == id {
-                            WorkspaceCheckoutDetailView(model: Self.detailModel(for: checkout)) { action, memberID in
-                                perform(action, checkoutID: id, memberID: memberID)
-                            }
+                            WorkspaceCheckoutDetailView(
+                                model: Self.detailModel(for: checkout),
+                                perform: { action, memberID in
+                                    perform(action, checkoutID: id, memberID: memberID)
+                                },
+                                openReview: { action in
+                                    state.openWorkspaceReview(action)
+                                }
+                            )
                             .padding(.leading, 28)
                         }
                     }
