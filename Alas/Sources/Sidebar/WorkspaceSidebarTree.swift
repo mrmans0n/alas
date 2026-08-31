@@ -46,6 +46,10 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                         Button("Edit") { editingWorkspace = workspace }.buttonStyle(.plain)
                     }.padding(.horizontal, 12)
                 }
+            case .formerWorkspace:
+                Label("Former Workspace", systemImage: "archivebox")
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 12)
             case .checkout(let id):
                 if let checkout = checkouts[id] {
                     VStack(alignment: .leading, spacing: 3) {

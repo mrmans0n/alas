@@ -276,7 +276,10 @@ struct WorkspacePathInspector: WorkspacePathInspecting {
     func exists(at path: String, location: ExecutionLocation) async -> Bool {
         switch location.normalized {
         case .local:
-            return FileManager.default.fileExists(atPath: path)
+            if FileManager.default.fileExists(atPath: path) {
+                return true
+            }
+            return (try? FileManager.default.destinationOfSymbolicLink(atPath: path)) != nil
         case .ssh(let host):
             guard let result = try? await remote.run(host: host, command: "test -e \(SSHCommand.shellQuote(path))") else { return true }
             // An SSH transport failure is not evidence that the destination

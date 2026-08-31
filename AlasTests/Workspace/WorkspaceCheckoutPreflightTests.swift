@@ -119,6 +119,39 @@ struct WorkspaceCheckoutPreflightTests {
         #expect(paths.mutationCount == 0)
     }
 
+    @Test func rejectsDanglingSymlinkCheckoutRootAsOccupied() async throws {
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-preflight-\(UUID().uuidString)")
+        let source = temp.appendingPathComponent("source")
+        let root = temp.appendingPathComponent("checkout")
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: root, withDestinationURL: temp.appendingPathComponent("missing"))
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let member = WorkspaceMember(projectID: "one", fallbackProjectName: "One", fallbackRepositoryRoot: source.path)
+        let workspace = Workspace(name: "Release", executionLocation: .local, members: [member])
+        let git = GitProbe(
+            resolutions: [source.path: "one-commit"],
+            branches: [source.path: .available]
+        )
+        let preflight = WorkspaceCheckoutPreflight(
+            projects: [project(id: "one", name: "One", path: source.path)],
+            git: git
+        )
+
+        let result = await preflight.prepare(.init(
+            workspace: workspace,
+            branch: "release/1091",
+            rootPath: root.path,
+            baseReference: "main"
+        ))
+
+        guard case .failure(let diagnostics) = result else {
+            Issue.record("Expected dangling symlink root to fail preflight")
+            return
+        }
+        #expect(diagnostics.map(\.message).contains("Checkout root '\(root.path)' already exists."))
+        #expect(await git.mutationCount == 0)
+    }
+
     @Test func rejectsDuplicateProjectRecordsAndUnsafeBranchReuse() async {
         let member = WorkspaceMember(projectID: "one", fallbackProjectName: "One", fallbackRepositoryRoot: "/repos/one")
         let workspace = Workspace(name: "Release", executionLocation: .local, members: [member])

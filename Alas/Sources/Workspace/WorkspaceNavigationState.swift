@@ -105,6 +105,7 @@ struct WorkspaceNavigationState: Equatable {
 enum WorkspaceSidebarRow: Equatable {
     case project(String)
     case workspace(UUID)
+    case formerWorkspace
     case checkout(UUID)
     case member(UUID)
 }
@@ -150,6 +151,11 @@ enum WorkspaceSidebarLayout {
                     rows.append(.checkout(checkout.id))
                 }
             }
+        }
+        let formerCheckouts = checkouts.filter { $0.workspaceID == nil }
+        if formerCheckouts.isEmpty == false {
+            rows.append(.formerWorkspace)
+            rows.append(contentsOf: formerCheckouts.map { .checkout($0.id) })
         }
         return rows
     }
