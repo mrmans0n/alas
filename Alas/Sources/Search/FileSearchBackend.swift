@@ -95,7 +95,7 @@ actor FffFileSearchBackend {
             return handle.raw
         }
 
-        let handle = try key.withCString { basePath in
+        let handle = try worktree.absolutePath.path.withCString { basePath in
             var options = FffCreateOptions(
                 version: UInt32(FFF_CREATE_OPTIONS_VERSION),
                 base_path: basePath,
