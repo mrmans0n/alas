@@ -1282,7 +1282,7 @@ final class AppState {
     private func quiesceWorkspaceCheckoutCreationBeforeDisable() async {
         guard workspacesManager.canMutate else { return }
         let activeCheckoutIDs = workspacesManager.checkouts
-            .filter { $0.operation == .creating || $0.operation == .repairing }
+            .filter { $0.operation == .creating || $0.operation == .repairing || $0.operation == .deleting }
             .map(\.id)
         guard activeCheckoutIDs.isEmpty == false else { return }
         let coordinator = workspaceCoordinator()
@@ -1690,6 +1690,7 @@ final class AppState {
     private func applyWorkspaceCheckoutCreationLaunchPreference(checkoutID: UUID) async {
         await workspacesManager.refreshCheckoutSnapshots()
         guard let checkout = workspacesManager.checkout(id: checkoutID),
+              checkout.archivedAt == nil,
               checkout.operation == .idle,
               checkout.members.allSatisfy({ $0.checkpoint == .setupComplete }),
               let preference = checkout.configurationSnapshot?.shared.creationLaunchPreference,
@@ -1699,7 +1700,18 @@ final class AppState {
         selectWorkspaceCheckout(id: checkout.id)
         switch preference.launcherMode ?? .terminal {
         case .terminal:
-            _ = try? openWorkspaceCheckoutTerminalTab(checkout)
+            if let agentID = preference.agentID,
+               agent(id: agentID) != nil,
+               let worktreeID = selectedWorktreeId,
+               let worktree = worktree(withId: worktreeID) {
+                _ = try? await openWorkspaceCheckoutAgentTerminalTab(
+                    checkout,
+                    focusedMemberWorktree: worktree,
+                    agentId: agentID
+                )
+            } else {
+                _ = try? openWorkspaceCheckoutTerminalTab(checkout)
+            }
         case .acp:
             guard let agentID = preference.agentID, agent(id: agentID) != nil else { return }
             _ = await openWorkspaceCheckoutACPSession(checkout: checkout, agentID: agentID)
@@ -4286,7 +4298,7 @@ final class AppState {
             store: workspaceStore,
             isEnabled: { [weak self] in
                 guard let self else { return false }
-                return self.config.workspacesEnabled && self.workspacesManager.canMutate
+                return self.config.workspacesEnabled
             },
             selectCheckout: { [weak self] id in
                 self?.selectWorkspaceCheckout(id: id)

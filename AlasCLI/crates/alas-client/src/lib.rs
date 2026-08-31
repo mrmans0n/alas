@@ -456,6 +456,10 @@ pub fn build_request(
     req
 }
 
+pub fn build_session_request(command: &Command, session_id: String, cwd: String) -> Request {
+    build_request(command, Some(session_id), Some(cwd))
+}
+
 /// The per-user socket directory Alas binds its `pid-<pid>` sockets under.
 pub fn socket_dir() -> PathBuf {
     let uid = unsafe { libc::getuid() };
@@ -638,7 +642,8 @@ pub enum DispatchError {
 pub fn dispatch(command: &Command, target: &Target) -> Result<Response, DispatchError> {
     match target {
         Target::Session { socket, session_id } => {
-            let req = build_request(command, Some(session_id.clone()), None);
+            let cwd = absolutize(&logical_base(), ".");
+            let req = build_session_request(command, session_id.clone(), cwd);
             send(Path::new(socket), &req).map_err(DispatchError::Transport)
         }
         Target::Directory { .. } => {
@@ -1059,6 +1064,14 @@ mod tests {
         assert_eq!(req.command, "resolve");
         assert_eq!(req.cwd.as_deref(), Some("/repo"));
         assert!(req.session_id.is_none());
+    }
+
+    #[test]
+    fn session_target_request_includes_logical_cwd() {
+        let req = build_session_request(&Command::Resolve, "s1".into(), "/repo/member".into());
+        assert_eq!(req.command, "resolve");
+        assert_eq!(req.session_id.as_deref(), Some("s1"));
+        assert_eq!(req.cwd.as_deref(), Some("/repo/member"));
     }
 
     #[test]
