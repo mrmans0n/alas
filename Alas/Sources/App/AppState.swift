@@ -1281,15 +1281,15 @@ final class AppState {
 
     private func quiesceWorkspaceCheckoutCreationBeforeDisable() async {
         guard workspacesManager.canMutate else { return }
-        let activeCheckoutIDs = workspacesManager.checkouts
+        let checkouts = workspacesManager.checkouts
+        let stoppableCheckoutIDs = checkouts
             .filter { $0.operation == .creating || $0.operation == .repairing || $0.operation == .deleting }
             .map(\.id)
-        guard activeCheckoutIDs.isEmpty == false else { return }
         let coordinator = workspaceCoordinator()
-        for checkoutID in activeCheckoutIDs {
+        for checkoutID in stoppableCheckoutIDs {
             try? await coordinator.stopAfterCurrentOperations(checkoutID: checkoutID)
         }
-        for checkoutID in activeCheckoutIDs {
+        for checkoutID in checkouts.map(\.id) {
             await coordinator.awaitLiveOperations(checkoutID: checkoutID)
         }
         await workspacesManager.refreshCheckoutSnapshots()
@@ -1445,7 +1445,7 @@ final class AppState {
     /// from this API.
     @discardableResult
     func openWorkspaceCheckoutTerminalTab(_ checkout: WorkspaceCheckout) throws -> Tab {
-        guard config.workspacesEnabled else {
+        guard config.workspacesEnabled, checkout.archivedAt == nil else {
             throw NSError(domain: "AppState", code: 2, userInfo: [NSLocalizedDescriptionKey: "Workspaces are disabled."])
         }
         let context = WorkspaceTerminalContext(
@@ -1474,7 +1474,7 @@ final class AppState {
         focusedMemberWorktree: Worktree,
         agentId: String
     ) async throws -> Tab {
-        guard config.workspacesEnabled else {
+        guard config.workspacesEnabled, checkout.archivedAt == nil else {
             throw NSError(domain: "AppState", code: 2, userInfo: [NSLocalizedDescriptionKey: "Workspaces are disabled."])
         }
         guard let project = projects.first(where: { $0.id == focusedMemberWorktree.projectId }) else {
@@ -7887,7 +7887,7 @@ final class AppState {
         agentID: String,
         initialPrompt: String? = nil
     ) async -> ACPSessionTabState? {
-        guard config.workspacesEnabled, workspacesManager.canMutate else { return nil }
+        guard config.workspacesEnabled, workspacesManager.canMutate, checkout.archivedAt == nil else { return nil }
         guard case let .ready(manager) = await workspaceACPManager(for: checkout) else { return nil }
         let session = manager.createSession(agentId: agentID, autoRunDefault: config.harness.acpAutoRunByDefault)
         if let initialPrompt, !initialPrompt.isEmpty {

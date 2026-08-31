@@ -155,6 +155,7 @@ actor WorkspaceCheckoutCoordinator {
     private var activeArchives = Set<UUID>()
     private var activeCheckoutDeletions = Set<UUID>()
     private var activeDeletions = Set<String>()
+    private var activeForgets = Set<UUID>()
     private var activeRepairs = Set<UUID>()
     private var activeSetups = Set<String>()
     private var liveOperationWaiters: [UUID: [CheckedContinuation<Void, Never>]] = [:]
@@ -187,7 +188,10 @@ actor WorkspaceCheckoutCoordinator {
             throw WorkspaceCheckoutCoordinatorError.operationInProgress
         }
         activeArchives.insert(checkoutID)
-        defer { activeArchives.remove(checkoutID) }
+        defer {
+            activeArchives.remove(checkoutID)
+            notifyLiveOperationWaiters(checkoutID: checkoutID)
+        }
         // Persist the archive claim first so concurrent lifecycle commands
         // cannot race the owned-process shutdown.
         try await store.mutate { state in
@@ -493,6 +497,14 @@ actor WorkspaceCheckoutCoordinator {
     /// Requires a separate, explicit acknowledgement before dropping a record
     /// whose attempt-created branch was retained because it was unmerged.
     func forget(checkoutID: UUID, confirmedPreserveArtifacts: Bool = false) async throws {
+        guard !activeForgets.contains(checkoutID) else {
+            throw WorkspaceCheckoutCoordinatorError.operationInProgress
+        }
+        activeForgets.insert(checkoutID)
+        defer {
+            activeForgets.remove(checkoutID)
+            notifyLiveOperationWaiters(checkoutID: checkoutID)
+        }
         let checkout = try await self.checkout(id: checkoutID)
         guard checkout.operation == .idle,
               checkout.members.allSatisfy({ member in
@@ -586,6 +598,8 @@ actor WorkspaceCheckoutCoordinator {
                 || hasActiveSetup(checkoutID: checkoutID)
                 || activeCheckoutDeletions.contains(checkoutID)
                 || hasActiveDeletion(checkoutID: checkoutID)
+                || activeArchives.contains(checkoutID)
+                || activeForgets.contains(checkoutID)
             else {
                 return
             }
