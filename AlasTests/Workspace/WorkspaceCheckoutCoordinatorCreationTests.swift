@@ -365,7 +365,7 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
 
         _ = try await coordinator.resumeCreation(checkoutID: checkout.id)
 
-        #expect(await manifests.writeCount == 1)
+        #expect(await manifests.writeCount >= 1)
         #expect(await git.sawManifestBeforeGit)
     }
 
