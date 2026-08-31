@@ -19,13 +19,13 @@ struct WorkspaceSidebarLayoutTests {
         #expect(rows == [.project("project-a"), .workspace(workspaceID), .checkout(checkout.id)])
     }
 
-    @Test func archivedCheckoutsDoNotAppearInTheTree() {
+    @Test func archivedCheckoutsRemainSelectableForUnarchive() {
         let workspaceID = UUID()
         let workspace = Workspace(id: workspaceID, name: "Release", executionLocation: .local, members: [])
         let archived = WorkspaceCheckout(workspaceID: workspaceID, fallbackWorkspaceName: "Release", executionLocation: .local, branch: "release", rootPath: "/tmp/release", archivedAt: .now, members: [])
 
         let rows = WorkspaceSidebarLayout.rows(members: [.workspace(workspaceID)], workspaces: [workspace], checkouts: [archived])
 
-        #expect(rows == [.workspace(workspaceID)])
+        #expect(rows == [.workspace(workspaceID), .checkout(archived.id)])
     }
 }

@@ -138,7 +138,6 @@ enum WorkspaceSidebarLayout {
         checkouts: [WorkspaceCheckout]
     ) -> [WorkspaceSidebarRow] {
         let workspacesByID = Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) })
-        let activeCheckouts = checkouts.filter { $0.archivedAt == nil }
         var rows: [WorkspaceSidebarRow] = []
         for member in members {
             switch member {
@@ -147,7 +146,7 @@ enum WorkspaceSidebarLayout {
             case .workspace(let workspaceID):
                 guard workspacesByID[workspaceID] != nil else { continue }
                 rows.append(.workspace(workspaceID))
-                for checkout in activeCheckouts where checkout.workspaceID == workspaceID {
+                for checkout in checkouts where checkout.workspaceID == workspaceID {
                     rows.append(.checkout(checkout.id))
                 }
             }

@@ -29,6 +29,35 @@ struct WorkspaceACPSessionTests {
     }
 
     @MainActor
+    @Test func checkoutLaunchSpecAppliesFrozenBypassPermissionFlag() async throws {
+        let path = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString + ".sqlite")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let client = ACPMockClient()
+        client.script(method: "initialize") { _ in Data(#"{"protocolVersion":1,"sessionCapabilities":{}}"#.utf8) }
+        client.script(method: "session/new") { _ in Data(#"{"sessionId":"remote-new"}"#.utf8) }
+        var capturedSpec: ACPLaunchSpec?
+        let manager = ACPSessionManager(
+            worktreeId: "checkout",
+            worktreePath: "/checkout",
+            owner: .workspaceCheckout(UUID(), .local),
+            store: try ACPSessionStore(path: path.path),
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { spec, _, _ in
+                capturedSpec = spec
+                return ACPConnection(client: client)
+            },
+            launchSpecTransformer: { spec in
+                spec.agentID == "codex" ? spec.prependingArguments(["--dangerously-bypass-approvals-and-sandbox"]) : spec
+            }
+        )
+        let session = manager.createSession(agentId: "codex")
+
+        await manager.attach(to: session.id, freshlyCreated: true)
+
+        #expect(capturedSpec?.arguments.first == "--dangerously-bypass-approvals-and-sandbox")
+    }
+
+    @MainActor
     @Test func appStateCreatesCheckoutManagerAtTheFrozenRootAndKeepsMissingRootPending() async throws {
         let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

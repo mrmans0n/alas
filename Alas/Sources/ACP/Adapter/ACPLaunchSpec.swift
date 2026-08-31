@@ -82,4 +82,18 @@ struct ACPLaunchSpec: Equatable {
             mcpInjection: mcpInjection,
             remoteNodeBinDirectory: remoteNodeBinDirectory)
     }
+
+    /// A copy of this spec with launch arguments inserted before the
+    /// adapter-specific argument tail. Used for frozen Workspace launch
+    /// preferences that must affect adapter process startup.
+    func prependingArguments(_ arguments: [String]) -> ACPLaunchSpec {
+        ACPLaunchSpec(
+            agentID: agentID, command: command, arguments: arguments + self.arguments,
+            extraEnv: extraEnv,
+            setupCheck: setupCheck,
+            supportsModelSelection: supportsModelSelection,
+            supportsModeSelection: supportsModeSelection,
+            mcpInjection: mcpInjection,
+            remoteNodeBinDirectory: remoteNodeBinDirectory)
+    }
 }

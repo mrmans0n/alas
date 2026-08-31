@@ -100,6 +100,27 @@ struct WorkspaceFeatureFlagTests {
         #expect(persistedState.checkouts.first?.members.first?.availability == .available)
     }
 
+    @Test func managerLookupKeepsArchivedCheckoutsSelectableForUnarchive() async throws {
+        let url = temporaryURL()
+        defer { removeWorkspaceFiles(near: url) }
+        let checkout = WorkspaceCheckout(
+            workspaceID: UUID(),
+            fallbackWorkspaceName: "Release",
+            executionLocation: .local,
+            branch: "release/1091",
+            rootPath: "/checkout",
+            archivedAt: Date(timeIntervalSince1970: 10),
+            members: []
+        )
+        let store = WorkspaceStore(url: url)
+        try await store.checkpoint(.init(checkouts: [checkout]))
+        let manager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: store))
+
+        await manager.setEnabled(true, spacesFile: emptySpacesFile())
+
+        #expect(manager.checkout(id: checkout.id)?.archivedAt == checkout.archivedAt)
+    }
+
     @Test func unreadableStorageMakesEnabledManagerReadOnlyWithoutRewrite() async throws {
         let url = temporaryURL()
         defer { removeWorkspaceFiles(near: url) }

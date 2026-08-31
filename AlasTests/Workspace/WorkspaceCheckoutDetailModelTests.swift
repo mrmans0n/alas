@@ -60,6 +60,11 @@ import Testing
         #expect(model.progress == WorkspaceCheckoutProgress(completedMembers: 1, totalMembers: 3))
         #expect(model.stopMessage == "Stop requested. Current member operations will finish before the checkout pauses.")
         #expect(model.primaryActions.map(\.kind).contains(.resumeCreation) == false)
+
+        let deleting = checkout(operation: .deleting, members: [
+            member(name: "One", availability: .available, checkpoint: .setupComplete)
+        ])
+        #expect(WorkspaceCheckoutDetailModel(checkout: deleting).primaryActions.map(\.kind) == [.deleteCheckout])
     }
 
     @Test func exposesPersistedDiagnosticsForNeedsAttention() {
