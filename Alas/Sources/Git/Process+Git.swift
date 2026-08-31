@@ -189,9 +189,10 @@ extension Process {
         _ args: [String],
         cwd: URL? = nil,
         stdin: String? = nil,
+        remoteHost: String? = nil,
         timeout: TimeInterval = Process.defaultTimeout
     ) async throws -> ProcessResult {
-        let host = RemoteHostRegistry.shared.host(forPath: cwd?.path)
+        let host = remoteHost ?? RemoteHostRegistry.shared.host(forPath: cwd?.path)
         if host == nil {
             try validateWorkingDirectory(cwd)
         }

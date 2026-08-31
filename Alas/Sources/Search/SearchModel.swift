@@ -8,6 +8,19 @@ struct SearchWorktree: Equatable, Sendable, Identifiable {
     let projectId: String
     let displayName: String
     let absolutePath: URL
+    var executionLocation: ExecutionLocation? = nil
+
+    var remoteHost: String? {
+        executionLocation?.normalized.sshHost
+            ?? RemoteHostRegistry.shared.host(forPath: absolutePath.path)
+    }
+
+    var cacheKey: String {
+        if let remoteHost {
+            return "ssh:\(remoteHost):\(absolutePath.path)"
+        }
+        return "local:\(absolutePath.path)"
+    }
 }
 
 /// All inputs SearchModel needs from the rest of the app, isolated for
