@@ -819,9 +819,10 @@ actor WorkspaceCheckoutCoordinator {
                         try await updateMember(checkoutID: checkout.id, memberID: plan.checkoutMemberID) { current in
                             current.checkpoint = .worktreeCreated
                             current.gitLineageID = lineageID
+                            let branchOwnership = current.cleanupOwnership.branchOwnership
                             current.cleanupOwnership = .init(
                                 worktreeCreated: true,
-                                branchOwnership: plan.branchIntent == .reuse ? .reused : .created
+                                branchOwnership: branchOwnership
                             )
                         }
                         await runSetup(member: frozenMember, checkout: checkout)
@@ -1131,9 +1132,10 @@ actor WorkspaceCheckoutCoordinator {
                     member.checkpoint = .worktreeCreated
                     member.gitLineageID = lineageID
                     member.cleanup = nil
+                    let branchOwnership = member.cleanupOwnership.branchOwnership
                     member.cleanupOwnership = .init(
                         worktreeCreated: true,
-                        branchOwnership: plan.branchIntent == .reuse ? .reused : .created
+                        branchOwnership: branchOwnership
                     )
                 }
             }

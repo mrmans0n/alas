@@ -82,6 +82,38 @@ struct WorkspaceCheckoutPreflightTests {
         #expect(plannedMember.destinationPath == "/checkouts/release/one")
     }
 
+    @Test func derivesDestinationFromResolvedProjectPathInsteadOfStaleFallback() async {
+        let member = WorkspaceMember(
+            projectID: "one",
+            fallbackProjectName: "One",
+            fallbackRepositoryRoot: "/repos/old-name"
+        )
+        let workspace = Workspace(name: "Release", executionLocation: .local, members: [member])
+        let git = GitProbe(
+            resolutions: ["/repos/current-name": "base-commit"],
+            branches: ["/repos/current-name": .available]
+        )
+        let preflight = WorkspaceCheckoutPreflight(
+            projects: [project(id: "one", name: "Renamed", path: "/repos/current-name")],
+            git: git,
+            paths: PathProbe()
+        )
+
+        let result = await preflight.prepare(.init(
+            workspace: workspace,
+            branch: "release/1091",
+            rootPath: "/checkouts/release",
+            baseReference: "main"
+        ))
+
+        guard case .success(let plan) = result, let plannedMember = plan.members.first else {
+            Issue.record("Expected a frozen plan")
+            return
+        }
+        #expect(plannedMember.sourceRepositoryPath == "/repos/current-name")
+        #expect(plannedMember.destinationPath == "/checkouts/release/current-name")
+    }
+
     @Test func reportsHostBaseBranchAndDestinationFailuresTogetherWithoutMutation() async {
         let local = WorkspaceMember(projectID: "local", fallbackProjectName: "Local", fallbackRepositoryRoot: "/repos/shared")
         let remote = WorkspaceMember(projectID: "remote", fallbackProjectName: "Remote", fallbackRepositoryRoot: "/repos/remote")
@@ -91,7 +123,7 @@ struct WorkspaceCheckoutPreflightTests {
             resolutions: ["/repos/local": "local-commit"],
             branches: ["/repos/local": .checkedOut]
         )
-        let paths = PathProbe(existing: ["/checkouts/release", "/checkouts/release/shared"])
+        let paths = PathProbe(existing: ["/checkouts/release", "/checkouts/release/local"])
         let preflight = WorkspaceCheckoutPreflight(projects: [
             project(id: "local", name: "Local", path: "/repos/local"),
             project(id: "remote", name: "Remote", path: "/repos/remote", host: "builder.example"),
@@ -113,7 +145,7 @@ struct WorkspaceCheckoutPreflightTests {
         #expect(messages.contains("Workspace member 2 Project 'remote' is not on the Workspace execution location."))
         #expect(messages.contains("Workspace member 3 could not resolve base 'main'."))
         #expect(messages.contains("Checkout root '/checkouts/release' already exists."))
-        #expect(messages.contains("Workspace member 1 destination '/checkouts/release/shared' already exists."))
+        #expect(messages.contains("Workspace member 1 destination '/checkouts/release/local' already exists."))
         #expect(messages.contains("Workspace member 1 branch 'release/1091' is already checked out."))
         #expect(await git.mutationCount == 0)
         #expect(paths.mutationCount == 0)

@@ -166,7 +166,7 @@ struct WorkspaceCheckoutPreflight: Sendable {
         for (index, item) in resolved.enumerated() {
             // The checkout path is repository-root-derived, not display-name-derived:
             // changing a Project's label must not change a durable checkout layout.
-            let destinationName = URL(fileURLWithPath: item.0.fallbackRepositoryRoot).lastPathComponent
+            let destinationName = URL(fileURLWithPath: item.1.path).lastPathComponent
             let destination = URL(fileURLWithPath: rootPath).appendingPathComponent(destinationName).path
             let memberIndex = request.workspace.members.firstIndex(where: { $0.id == item.0.id })! + 1
             var memberHasError = false
