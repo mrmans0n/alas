@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.25] - 2026-08-31
+
+### ✨ Features
+
+- Add repository import sources to new project creation (#1097).
+
+### 🐛 Fixes
+
+- Prevent GitGud stack refresh blinking after state updates (#1096).
+
 ## [0.14.24] - 2026-08-31
 
 ### ✨ Features
