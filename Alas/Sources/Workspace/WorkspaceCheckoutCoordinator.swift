@@ -417,7 +417,8 @@ actor WorkspaceCheckoutCoordinator {
             else { throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict }
             member.availability = .available
             member.cleanup = nil
-            if member.checkpoint != .setupComplete {
+            if member.checkpoint != .setupComplete,
+               member.checkpoint != .failed {
                 member.checkpoint = .worktreeCreated
             }
             member.cleanupOwnership.worktreeCreated = true
@@ -538,6 +539,12 @@ actor WorkspaceCheckoutCoordinator {
         guard checkout.members.contains(where: { $0.id == memberID }) else {
             throw WorkspaceCheckoutCoordinatorError.checkoutMissing
         }
+        let setupResumeVerified: Bool
+        if let member = checkout.members.first(where: { $0.id == memberID }) {
+            setupResumeVerified = await setupResumeHasExactLineage(checkout: checkout, member: member)
+        } else {
+            setupResumeVerified = false
+        }
         let claimed = try await store.mutate { state -> WorkspaceCheckoutMember? in
             guard let checkoutIndex = state.checkouts.firstIndex(where: { $0.id == checkoutID }),
                   let memberIndex = state.checkouts[checkoutIndex].members.firstIndex(where: { $0.id == memberID })
@@ -553,6 +560,9 @@ actor WorkspaceCheckoutCoordinator {
                   !plan.baseReference.isEmpty,
                   !plan.baseCommit.isEmpty
             else { return nil }
+            guard setupResumeVerified else {
+                return nil
+            }
             state.checkouts[checkoutIndex].members[memberIndex].checkpoint = .setupRunning
             return member
         }
@@ -1264,12 +1274,12 @@ struct WorkspaceFrozenGitOperator: WorkspaceGitOperating {
             guard branch.exitCode == 0,
                   branch.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == operation.branch
             else { return nil }
-            return WorktreeService.localLineageID(forWorktreeAt: destination)
+            return WorktreeService.existingLocalLineageID(forWorktreeAt: destination)
         case .ssh(let host):
             let path = SSHCommand.shellQuote(operation.destinationPath)
             let branch = SSHCommand.shellQuote(operation.branch)
             let commit = SSHCommand.shellQuote(operation.baseCommit)
-            let command = "p=\(path); b=\(branch); c=\(commit); test -d \"$p\" || exit 2; [ \"$(git -C \"$p\" rev-parse --verify HEAD^{commit})\" = \"$c\" ] || exit 3; [ \"$(git -C \"$p\" rev-parse --abbrev-ref HEAD)\" = \"$b\" ] || exit 4; \(WorktreeService.remoteLineageIDCommand(path: operation.destinationPath))"
+            let command = "p=\(path); b=\(branch); c=\(commit); test -d \"$p\" || exit 2; [ \"$(git -C \"$p\" rev-parse --verify HEAD^{commit})\" = \"$c\" ] || exit 3; [ \"$(git -C \"$p\" rev-parse --abbrev-ref HEAD)\" = \"$b\" ] || exit 4; d=$(git -C \"$p\" rev-parse --absolute-git-dir) || exit 5; f=\"$d/alas-worktree-lineage\"; test -s \"$f\" || exit 6; head -n 1 \"$f\""
             let result = try await WorkspaceRemoteTransport().run(host: host, command: command)
             guard result.exitCode == 0 else { return nil }
             return WorktreeService.normalizedLineageID(result.stdout)

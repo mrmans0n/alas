@@ -137,9 +137,10 @@ struct WorkspaceCheckoutRepairTests {
     }
 
     @Test func retrySetupUsesTheFrozenWorktreeAndNeverRepeatsASuccess() async throws {
-        let fixture = try await persistedFixture(checkpoint: .worktreeCreated)
+        let fixture = try await persistedFixture(checkpoint: .worktreeCreated, worktreeCreated: true, lineageID: "lineage-a")
         let scripts = RepairScriptRunner()
-        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: RepairGit(), scripts: scripts, projectMutationGate: ProjectMutationGate())
+        let lifecycle = RepairLifecycle(result: .exactLineage("lineage-a"))
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: RepairGit(), scripts: scripts, projectMutationGate: ProjectMutationGate(), lifecycle: lifecycle)
 
         _ = try await coordinator.retrySetup(checkoutID: fixture.checkout.id, memberID: fixture.checkout.members[0].id)
         _ = try await coordinator.retrySetup(checkoutID: fixture.checkout.id, memberID: fixture.checkout.members[0].id)
@@ -149,7 +150,7 @@ struct WorkspaceCheckoutRepairTests {
     }
 
     @Test func retrySetupDoesNotRunInheritedGlobalSetupTwice() async throws {
-        let fixture = try await persistedFixture(checkpoint: .worktreeCreated)
+        let fixture = try await persistedFixture(checkpoint: .worktreeCreated, worktreeCreated: true, lineageID: "lineage-a")
         let member = fixture.checkout.members[0]
         try await fixture.store.mutate { state in
             state.checkouts[0].configurationSnapshot = WorkspaceCheckoutConfigurationSnapshot(
@@ -169,7 +170,8 @@ struct WorkspaceCheckoutRepairTests {
             )
         }
         let scripts = RepairScriptRunner()
-        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: RepairGit(), scripts: scripts, projectMutationGate: ProjectMutationGate())
+        let lifecycle = RepairLifecycle(result: .exactLineage("lineage-a"))
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: RepairGit(), scripts: scripts, projectMutationGate: ProjectMutationGate(), lifecycle: lifecycle)
 
         _ = try await coordinator.retrySetup(checkoutID: fixture.checkout.id, memberID: member.id)
 
@@ -177,9 +179,10 @@ struct WorkspaceCheckoutRepairTests {
     }
 
     @Test func concurrentRetrySetupRejectsTheSecondLiveSetup() async throws {
-        let fixture = try await persistedFixture(checkpoint: .worktreeCreated)
+        let fixture = try await persistedFixture(checkpoint: .worktreeCreated, worktreeCreated: true, lineageID: "lineage-a")
         let scripts = BlockingRepairScriptRunner()
-        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: RepairGit(), scripts: scripts, projectMutationGate: ProjectMutationGate())
+        let lifecycle = RepairLifecycle(result: .exactLineage("lineage-a"))
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: RepairGit(), scripts: scripts, projectMutationGate: ProjectMutationGate(), lifecycle: lifecycle)
         let memberID = fixture.checkout.members[0].id
 
         let first = Task { try await coordinator.retrySetup(checkoutID: fixture.checkout.id, memberID: memberID) }
@@ -192,6 +195,19 @@ struct WorkspaceCheckoutRepairTests {
         await scripts.release()
         _ = try await first.value
         #expect(await scripts.runCount == 1)
+    }
+
+    @Test func retrySetupDoesNotRunWhenTheFrozenWorktreeLineageNoLongerMatches() async throws {
+        let fixture = try await persistedFixture(checkpoint: .failed, worktreeCreated: true, lineageID: "lineage-a", branchOwnership: .created)
+        let scripts = RepairScriptRunner()
+        let lifecycle = RepairLifecycle(result: .identityConflict("replacement-lineage"))
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: RepairGit(), scripts: scripts, projectMutationGate: ProjectMutationGate(), lifecycle: lifecycle)
+
+        let checkout = try await coordinator.retrySetup(checkoutID: fixture.checkout.id, memberID: fixture.checkout.members[0].id)
+
+        #expect(checkout.members[0].checkpoint == .failed)
+        #expect(await scripts.paths.isEmpty)
+        #expect(await lifecycle.observationCount == 1)
     }
 
     @Test func resumeCreationUsesThePersistedFrozenPlan() async throws {
@@ -454,7 +470,7 @@ struct WorkspaceCheckoutRepairTests {
         )
 
         #expect(repaired.members[0].availability == .available)
-        #expect(repaired.members[0].checkpoint == .worktreeCreated)
+        #expect(repaired.members[0].checkpoint == .failed)
         #expect(repaired.members[0].cleanupOwnership.worktreeCreated == true)
     }
 
