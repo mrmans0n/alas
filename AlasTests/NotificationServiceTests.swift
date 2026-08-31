@@ -53,6 +53,7 @@ struct NotificationServiceTests {
     }
 
     @Test func acpQuestionUsesClickableQuestionNotificationRequest() {
+        let checkoutID = UUID()
         var requests: [UNNotificationRequest] = []
         let service = NotificationService(notificationAdder: { request in
             requests.append(request)
@@ -64,7 +65,8 @@ struct NotificationServiceTests {
             projectId: "project-1",
             worktreeId: "worktree-1",
             sessionId: "session-1",
-            requestId: "42"
+            requestId: "42",
+            owner: .workspaceCheckout(checkoutID, .ssh("devbox"))
         )
 
         #expect(requests.count == 1)
@@ -75,6 +77,7 @@ struct NotificationServiceTests {
         #expect(requests[0].content.userInfo["projectId"] as? String == "project-1")
         #expect(requests[0].content.userInfo["worktreeId"] as? String == "worktree-1")
         #expect(requests[0].content.userInfo["sessionId"] as? String == "session-1")
+        #expect(NotificationClickContext(userInfo: requests[0].content.userInfo)?.owner == .workspaceCheckout(checkoutID, .ssh("devbox")))
         #expect(requests[0].content.attachments.isEmpty == false)
         #expect(requests[0].content.attachments.first?.identifier == "logo")
     }

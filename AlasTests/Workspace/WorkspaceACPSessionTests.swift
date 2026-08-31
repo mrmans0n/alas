@@ -97,6 +97,83 @@ struct WorkspaceACPSessionTests {
         #expect(restored == false)
     }
 
+    @MainActor
+    @Test func closingCheckoutACPTabDisposesTheOwnedSession() async throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let checkout = WorkspaceCheckout(
+            workspaceID: nil,
+            fallbackWorkspaceName: "Workspace",
+            executionLocation: .local,
+            branch: "topic",
+            rootPath: root.path,
+            members: []
+        )
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, .local)
+        let dbURL = Paths.acpSessionsDB(for: owner)
+        defer { try? FileManager.default.removeItem(at: dbURL) }
+        var detached: [(SessionOwnerID, ACPSession.ID)] = []
+        let state = AppState(
+            store: MemoryStore(),
+            acpDetachRunner: { manager, sessionID in
+                detached.append((manager.owner, sessionID))
+            }
+        )
+        guard case let .ready(manager) = await state.workspaceACPManager(for: checkout) else {
+            Issue.record("Expected checkout manager")
+            return
+        }
+        let session = manager.createSession(id: "checkout-acp", agentId: "test")
+        let tab = state.tabs.append(acpSession: .init(sessionId: session.id, title: "Checkout ACP"), to: owner)
+
+        state.closeComposedCenterTabs(worktreeID: "member", sharedSessionOwner: owner, tabIDs: [tab.id])
+        for _ in 0 ..< 20 where state.pendingACPDetachCountForTesting != 0 {
+            await Task.yield()
+        }
+
+        #expect(state.tabs.tabs(for: owner).isEmpty)
+        #expect(detached.map(\.0) == [owner])
+        #expect(detached.map(\.1) == ["checkout-acp"])
+        #expect(state.pendingACPDetachCountForTesting == 0)
+    }
+
+    @MainActor
+    @Test func checkoutManagerTitleUpdatesRenameOwnerTabs() async throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let checkout = WorkspaceCheckout(
+            workspaceID: nil,
+            fallbackWorkspaceName: "Workspace",
+            executionLocation: .local,
+            branch: "topic",
+            rootPath: root.path,
+            members: []
+        )
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, .local)
+        let dbURL = Paths.acpSessionsDB(for: owner)
+        defer { try? FileManager.default.removeItem(at: dbURL) }
+        let state = AppState(store: MemoryStore())
+        guard case let .ready(manager) = await state.workspaceACPManager(for: checkout) else {
+            Issue.record("Expected checkout manager")
+            return
+        }
+        let session = manager.createSession(id: "checkout-title", agentId: "test")
+        _ = state.tabs.append(acpSession: .init(sessionId: session.id, title: "Old Title"), to: owner)
+        await manager.flushPersistence()
+
+        let store = try ACPSessionStore(path: dbURL.path)
+        #expect(try store.renameSession(id: session.id, title: "Generated Title", titleSource: .generated, updatedAt: 10))
+        await manager.refreshMirror(sessionId: session.id)
+
+        guard case let .acpSession(tabState) = state.tabs.tabs(for: owner).first else {
+            Issue.record("Expected checkout ACP tab")
+            return
+        }
+        #expect(tabState.title == "Generated Title")
+    }
+
     private struct MemoryStore: PersistenceStoreProtocol {
         func write<T: Encodable>(_: T, to _: URL) throws {}
         func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }

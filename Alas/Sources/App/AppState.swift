@@ -1894,6 +1894,10 @@ final class AppState {
 
     private func closeSharedSessionTab(owner: SessionOwnerID, tabID: TabID) {
         closeSharedTerminalLeaves(in: tabID, owner: owner)
+        if let tab = tabs.tabs(for: owner).first(where: { $0.id == tabID }),
+           case .acpSession(let state) = tab {
+            cleanupACPSession(owner: owner, sessionId: state.sessionId)
+        }
         tabs.close(owner: owner, tabId: tabID)
     }
 
@@ -5519,7 +5523,11 @@ final class AppState {
     /// tears down the whole worktree's manager — this leaves the
     /// manager (and any sibling sessions) running.
     private func cleanupACPSession(worktreeId: String, sessionId: String) {
-        guard let manager = acpManagers[.worktree(worktreeId)] else { return }
+        cleanupACPSession(owner: .worktree(worktreeId), sessionId: sessionId)
+    }
+
+    private func cleanupACPSession(owner: SessionOwnerID, sessionId: String) {
+        guard let manager = acpManagers[owner] else { return }
         // Flush any in-flight debounced draft write for this session
         // before the tab goes away. The manager itself stays alive
         // (other tabs may share it), so the global flush from
@@ -5536,6 +5544,7 @@ final class AppState {
             runner.stop()
         }
         let pendingID = UUID()
+        let pendingKey = owner.storageKey
         let task = Task { @MainActor in
             if let acpDetachRunner {
                 await acpDetachRunner(manager, sessionId)
@@ -5551,10 +5560,10 @@ final class AppState {
                 }
             }
         }
-        pendingACPDetachTasks[worktreeId, default: [:]][sessionId] = PendingACPDetach(id: pendingID, task: task)
+        pendingACPDetachTasks[pendingKey, default: [:]][sessionId] = PendingACPDetach(id: pendingID, task: task)
         Task { @MainActor [weak self] in
             await task.value
-            self?.clearPendingACPDetach(worktreeId: worktreeId, sessionId: sessionId, id: pendingID)
+            self?.clearPendingACPDetach(worktreeId: pendingKey, sessionId: sessionId, id: pendingID)
         }
     }
 
@@ -7379,6 +7388,27 @@ final class AppState {
             instanceId: instanceId,
             pid: Int64(ProcessInfo.processInfo.processIdentifier),
             hydratorPath: dbURL.path,
+            onSessionTitleUpdated: { [weak self] sessionId, title in
+                _ = self?.tabs.renameACPSessionTabs(
+                    worktreeId: owner.storageKey,
+                    sessionId: sessionId,
+                    title: title
+                )
+            },
+            onInputAwaiting: { [weak self] session, request in
+                guard let self,
+                      self.config.harness.notifyOnAwaiting
+                else { return }
+                self.harness.notifications.notifyACPQuestion(
+                    agent: ACPHarnessBridge.agentKind(for: session.agentId),
+                    body: self.acpInputNotificationBody(from: request),
+                    projectId: checkout.id.uuidString,
+                    worktreeId: owner.storageKey,
+                    sessionId: session.id,
+                    requestId: self.notificationRequestId(for: request),
+                    owner: owner
+                )
+            },
             launchSpecTransformer: { [weak self] spec in
                 guard let self,
                       checkout.configurationSnapshot?.shared.creationLaunchPreference.useBypassPermissions == true,

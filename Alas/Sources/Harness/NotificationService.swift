@@ -67,10 +67,12 @@ final class NotificationService {
 
     func notifyACPQuestion(agent: AgentKind, body: String?,
                            projectId: String, worktreeId: String, sessionId: String,
-                           requestId: String) {
+                           requestId: String,
+                           owner: SessionOwnerID? = nil) {
         let content = buildContent(agent: agent, body: questionBody(body),
                                    title: "\(agent.displayName) has a question",
-                                   projectId: projectId, worktreeId: worktreeId, sessionId: sessionId)
+                                   projectId: projectId, worktreeId: worktreeId, sessionId: sessionId,
+                                   owner: owner)
         let req = UNNotificationRequest(
             identifier: "\(sessionId)-question-\(requestId)",
             content: content,
