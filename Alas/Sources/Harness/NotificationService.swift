@@ -57,10 +57,12 @@ final class NotificationService {
     }
 
     func notifyHarnessPermission(agent: AgentKind, body: String?,
-                                 projectId: String, worktreeId: String, sessionId: String) {
+                                 projectId: String, worktreeId: String, sessionId: String,
+                                 owner: SessionOwnerID? = nil) {
         let content = buildContent(agent: agent, body: body ?? "Session is waiting for you.",
                                    title: "\(agent.displayName) needs permission",
-                                   projectId: projectId, worktreeId: worktreeId, sessionId: sessionId)
+                                   projectId: projectId, worktreeId: worktreeId, sessionId: sessionId,
+                                   owner: owner)
         let req = UNNotificationRequest(identifier: "\(sessionId)-permission", content: content, trigger: nil)
         notificationAdder(req)
     }
@@ -82,11 +84,13 @@ final class NotificationService {
     }
 
     func notifyHarnessFinished(agent: AgentKind, body: String?,
-                               projectId: String, worktreeId: String, sessionId: String) {
+                               projectId: String, worktreeId: String, sessionId: String,
+                               owner: SessionOwnerID? = nil) {
         guard enabled else { return }
         let content = buildContent(agent: agent, body: body ?? "Session is done.",
                                    title: "\(agent.displayName) finished",
-                                   projectId: projectId, worktreeId: worktreeId, sessionId: sessionId)
+                                   projectId: projectId, worktreeId: worktreeId, sessionId: sessionId,
+                                   owner: owner)
         let req = UNNotificationRequest(identifier: sessionId, content: content, trigger: nil)
         notificationAdder(req)
     }

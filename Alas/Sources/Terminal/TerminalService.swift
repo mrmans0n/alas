@@ -849,23 +849,11 @@ final class TerminalService {
     /// interactive checkout lifecycle flows where the UI must stay responsive
     /// while archive waits for owned processes to stop.
     func drainPendingKills(timeout: TimeInterval) async {
-        let tasks = pendingKillTasks
-        guard !tasks.isEmpty else { return }
-        await withTaskGroup(of: Void.self) { group in
-            group.addTask {
-                await withTaskGroup(of: Void.self) { kills in
-                    for task in tasks {
-                        kills.addTask { await task.value }
-                    }
-                    for await _ in kills {}
-                }
-            }
-            group.addTask {
-                let nanoseconds = UInt64(max(0, timeout) * 1_000_000_000)
-                try? await Task.sleep(nanoseconds: nanoseconds)
-            }
-            _ = await group.next()
-            group.cancelAll()
+        let deadline = Date().addingTimeInterval(max(0, timeout))
+        while !pendingKillTasks.isEmpty, Date() < deadline {
+            let sleepSeconds = min(max(0, deadline.timeIntervalSinceNow), 0.05)
+            guard sleepSeconds > 0 else { break }
+            try? await Task.sleep(nanoseconds: UInt64(sleepSeconds * 1_000_000_000))
         }
     }
 
