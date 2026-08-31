@@ -1065,6 +1065,7 @@ mod tests {
             ok: true,
             lines: None,
             error: None,
+            exit_code: None,
         })
     }
 
@@ -1663,6 +1664,7 @@ mod tests {
                 ok: true,
                 lines: Some(vec!["main *".into(), "feat".into()]),
                 error: None,
+                exit_code: None,
             })
         })
         .unwrap();
@@ -1688,6 +1690,7 @@ mod tests {
                     ok: true,
                     lines: None,
                     error: None,
+                    exit_code: None,
                 })
             },
         )
@@ -1706,6 +1709,7 @@ mod tests {
                 ok: false,
                 lines: None,
                 error: Some("no changes to review".into()),
+                exit_code: None,
             })
         })
         .unwrap();
@@ -1746,6 +1750,7 @@ mod tests {
                 ok: true,
                 lines: Some(vec![]),
                 error: None,
+                exit_code: None,
             })
         })
         .unwrap();

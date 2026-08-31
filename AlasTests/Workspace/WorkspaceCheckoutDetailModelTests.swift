@@ -78,6 +78,17 @@ import Testing
         #expect(WorkspaceCheckoutDetailModel(checkout: repairing).primaryActions.map(\.kind).contains(.resumeCreation))
     }
 
+    @Test func exposesResumeCreationForPausedPendingMembers() {
+        let checkout = checkout(operation: .idle, members: [
+            member(name: "Done", availability: .available, checkpoint: .setupComplete),
+            member(name: "Paused", availability: .pending, checkpoint: .planPersisted)
+        ])
+        let model = WorkspaceCheckoutDetailModel(checkout: checkout)
+
+        #expect(model.primaryActions.map(\.kind).contains(.resumeCreation))
+        #expect(model.memberRows[1].actions.map(\.kind).contains(.resumeCreation))
+    }
+
     @Test func exposesPersistedDiagnosticsForNeedsAttention() {
         let checkout = WorkspaceCheckout(
             workspaceID: UUID(),

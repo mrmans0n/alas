@@ -115,6 +115,8 @@ pub struct Response {
     pub lines: Option<Vec<String>>,
     #[serde(default)]
     pub error: Option<String>,
+    #[serde(default)]
+    pub exit_code: Option<u8>,
 }
 
 /// The parsed CLI intent, independent of transport. `Open` paths are already
@@ -836,9 +838,15 @@ mod tests {
     #[test]
     fn response_parses_lines_and_error_defaults() {
         let ok: Response = serde_json::from_str(r#"{"ok":true}"#).unwrap();
-        assert!(ok.ok && ok.lines.is_none() && ok.error.is_none());
+        assert!(ok.ok && ok.lines.is_none() && ok.error.is_none() && ok.exit_code.is_none());
         let err: Response = serde_json::from_str(r#"{"ok":false,"error":"nope"}"#).unwrap();
         assert_eq!(err.error.as_deref(), Some("nope"));
+        assert_eq!(err.exit_code, None);
+        let coded: Response = serde_json::from_str(
+            r#"{"ok":false,"error":"workspace_recovery_required: recover","exit_code":3}"#,
+        )
+        .unwrap();
+        assert_eq!(coded.exit_code, Some(3));
     }
 
     #[test]

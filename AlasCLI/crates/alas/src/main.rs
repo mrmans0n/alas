@@ -42,7 +42,7 @@ fn main() -> ExitCode {
                 ExitCode::SUCCESS
             } else {
                 eprintln!("alas: {}", resp.error.unwrap_or_else(|| "request failed".into()));
-                ExitCode::FAILURE
+                ExitCode::from(resp.exit_code.unwrap_or(1))
             }
         }
         Err(err) => {

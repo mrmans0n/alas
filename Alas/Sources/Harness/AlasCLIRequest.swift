@@ -437,9 +437,10 @@ enum AlasCLIResponse: Equatable {
     case ok
     case text([String])
     case error(String)
+    case errorWithExitCode(String, Int)
 
     func encode() throws -> Data {
-        let object: [String: Any]
+        var object: [String: Any]
         switch self {
         case .ok:
             object = ["ok": true]
@@ -447,6 +448,11 @@ enum AlasCLIResponse: Equatable {
             object = ["ok": true, "lines": lines]
         case .error(let message):
             object = ["ok": false, "error": message]
+        case .errorWithExitCode(let message, let exitCode):
+            object = ["ok": false, "error": message]
+            if exitCode != 1 {
+                object["exit_code"] = exitCode
+            }
         }
         return try JSONSerialization.data(withJSONObject: object)
     }

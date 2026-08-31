@@ -4089,7 +4089,7 @@ final class AppState {
                 return .ok
             }
         } catch let error as WorkspaceAutomationError {
-            return .error("\(error.code): \(error.message)")
+            return .errorWithExitCode("\(error.code): \(error.message)", error.exitCode)
         } catch {
             return .error(error.localizedDescription)
         }
