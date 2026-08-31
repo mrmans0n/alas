@@ -100,6 +100,51 @@ struct WorkspaceFeatureFlagTests {
         #expect(persistedState.checkouts.first?.members.first?.availability == .available)
     }
 
+    @Test func reconciliationOverlayPreservesExplicitlyDeletedMembers() async throws {
+        let url = temporaryURL()
+        defer { removeWorkspaceFiles(near: url) }
+        let memberID = UUID()
+        let missingPath = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-deleted-workspace-member-\(UUID().uuidString)").path
+        let member = WorkspaceCheckoutMember(
+            id: memberID,
+            workspaceMemberID: UUID(),
+            projectID: "project",
+            fallbackProjectName: "Project",
+            fallbackRepositoryRoot: "/repo",
+            worktreePath: missingPath,
+            gitLineageID: nil,
+            availability: .explicitlyDeleted,
+            checkpoint: .planPersisted,
+            cleanupOwnership: .init(),
+            plan: .init(
+                checkoutMemberID: memberID,
+                projectID: "project",
+                sourceRepositoryPath: "/repo",
+                destinationPath: missingPath,
+                baseReference: "main",
+                baseCommit: "abc",
+                branchIntent: .create(atCommit: "abc")
+            )
+        )
+        let checkout = WorkspaceCheckout(
+            workspaceID: UUID(),
+            fallbackWorkspaceName: "Release",
+            executionLocation: .local,
+            branch: "release/1091",
+            rootPath: "/checkout",
+            operation: .idle,
+            members: [member]
+        )
+        let store = WorkspaceStore(url: url)
+        try await store.checkpoint(.init(checkouts: [checkout]))
+        let manager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: store))
+
+        await manager.setEnabled(true, spacesFile: emptySpacesFile())
+
+        #expect(manager.checkout(id: checkout.id)?.members.first?.availability == .explicitlyDeleted)
+    }
+
     @Test func managerLookupKeepsArchivedCheckoutsSelectableForUnarchive() async throws {
         let url = temporaryURL()
         defer { removeWorkspaceFiles(near: url) }

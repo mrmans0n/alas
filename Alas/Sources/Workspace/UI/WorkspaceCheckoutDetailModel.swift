@@ -132,8 +132,12 @@ struct WorkspaceCheckoutDetailModel: Equatable, Sendable {
             return [.init(.unarchive, title: "Unarchive")]
         }
         switch checkout.operation {
-        case .creating, .repairing:
+        case .creating:
             return checkout.stopAfterCurrentOperations ? [] : [.init(.stopAfterCurrentOperations, title: "Stop After Current Operations")]
+        case .repairing:
+            return checkout.stopAfterCurrentOperations
+                ? [.init(.resumeCreation, title: "Resume Creation")]
+                : [.init(.resumeCreation, title: "Resume Creation"), .init(.stopAfterCurrentOperations, title: "Stop After Current Operations")]
         case .idle:
             var actions: [WorkspaceCheckoutAction] = [.init(.archive, title: "Archive")]
             if checkout.members.contains(where: { $0.availability == .missing || $0.checkpoint == .failed }) {

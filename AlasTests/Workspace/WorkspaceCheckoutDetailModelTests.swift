@@ -65,6 +65,11 @@ import Testing
             member(name: "One", availability: .available, checkpoint: .setupComplete)
         ])
         #expect(WorkspaceCheckoutDetailModel(checkout: deleting).primaryActions.map(\.kind) == [.deleteCheckout])
+
+        let repairing = checkout(operation: .repairing, members: [
+            member(name: "One", availability: .missing, checkpoint: .planPersisted)
+        ])
+        #expect(WorkspaceCheckoutDetailModel(checkout: repairing).primaryActions.map(\.kind).contains(.resumeCreation))
     }
 
     @Test func exposesPersistedDiagnosticsForNeedsAttention() {

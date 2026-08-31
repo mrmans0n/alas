@@ -118,6 +118,7 @@ final class WorkspacesManager {
         guard let report = checkoutReconciliations[checkout.id] else { return checkout }
         var copy = checkout
         copy.members = checkout.members.map { member in
+            guard member.availability != .explicitlyDeleted else { return member }
             guard let observation = report.observations[member.id] else { return member }
             var presented = member
             switch observation {
