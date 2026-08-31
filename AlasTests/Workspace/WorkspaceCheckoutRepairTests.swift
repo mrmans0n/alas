@@ -247,6 +247,30 @@ struct WorkspaceCheckoutRepairTests {
         #expect(await git.operations.isEmpty)
     }
 
+    @Test func resumeCreationRecreatesACompletedMemberWhoseFrozenWorktreeIsMissing() async throws {
+        let fixture = try await persistedFixture(
+            checkpoint: .setupComplete,
+            worktreeCreated: true,
+            lineageID: "lineage-a",
+            branchOwnership: .created,
+            operation: .creating
+        )
+        let git = CountingResumeGit(existingLineage: nil)
+        let scripts = RepairScriptRunner()
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: git, scripts: scripts, projectMutationGate: ProjectMutationGate())
+
+        let checkout = try await coordinator.resumeCreation(checkoutID: fixture.checkout.id)
+
+        #expect(checkout.operation == .idle)
+        #expect(checkout.members[0].checkpoint == .setupComplete)
+        #expect(checkout.members[0].availability == .available)
+        #expect(checkout.members[0].gitLineageID == "lineage-a")
+        #expect(await git.prepareCount == 0)
+        #expect(await git.createCount == 1)
+        #expect(await git.existingLineageChecks == 2)
+        #expect(await scripts.paths == ["/checkouts/a"])
+    }
+
     @Test func useExistingRepairCandidateOnlyAcceptsExactFrozenLineage() async throws {
         let fixture = try await persistedFixture(checkpoint: .failed, worktreeCreated: true, lineageID: "lineage-a")
         try await fixture.store.mutate { state in
