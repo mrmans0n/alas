@@ -77,6 +77,16 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(await lifecycle.removedMembers.isEmpty)
     }
 
+    @Test func confirmedRiskPassesForceToWorktreeRemoval() async throws {
+        let fixture = try await Fixture.make()
+        let lifecycle = FixtureLifecycle(preflight: .init(reasons: [.dirty], submoduleLocalState: .none))
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+
+        _ = try await coordinator.deleteMember(checkoutID: fixture.checkout.id, memberID: fixture.member.id, confirmingRisks: true)
+
+        #expect(await lifecycle.removeForces == [true])
+    }
+
     @Test func wholeDeletionContinuesAfterOneMemberFails() async throws {
         let fixture = try await Fixture.make(memberCount: 2)
         let lifecycle = FixtureLifecycle(failingMember: fixture.checkout.members[0].id)
@@ -97,6 +107,20 @@ struct WorkspaceCheckoutLifecycleTests {
         await #expect(throws: WorkspaceCheckoutCoordinatorError.cleanupIncomplete) {
             try await coordinator.forget(checkoutID: fixture.checkout.id)
         }
+    }
+
+    @Test func confirmedForgetPreservesSharedRootLeftovers() async throws {
+        let fixture = try await Fixture.make(branchOwnership: .reused)
+        let lifecycle = FixtureLifecycle(leftovers: [WorkspaceCheckoutManifest.fileName, "notes.txt"])
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+        _ = try await coordinator.deleteMember(checkoutID: fixture.checkout.id, memberID: fixture.member.id)
+
+        try await coordinator.forget(checkoutID: fixture.checkout.id, confirmedPreserveArtifacts: true)
+
+        guard case .loaded(let state) = await fixture.store.load() else { Issue.record("Expected stored state")
+            return
+        }
+        #expect(state.checkouts.contains(where: { $0.id == fixture.checkout.id }) == false)
     }
 
     @Test func forgettingARetainedAttemptCreatedBranchRequiresSeparateConfirmation() async throws {
@@ -141,7 +165,7 @@ struct WorkspaceCheckoutLifecycleTests {
         )
 
         let preflight = try await lifecycle.deletePreflight(plan)
-        try await lifecycle.removeWorktree(plan)
+        try await lifecycle.removeWorktree(plan, force: false)
         let branchRemoved = try await lifecycle.deleteMergedBranch(plan)
 
         #expect(preflight.reasons == [.dirty])
@@ -192,6 +216,7 @@ private actor FixtureLifecycle: WorkspaceCheckoutLifecycleOperating {
     let verification: WorkspaceCheckoutMemberObservation
     private(set) var removedMembers: [UUID] = []
     private(set) var deletedBranches: [UUID] = []
+    private(set) var removeForces: [Bool] = []
     let preflight: WorktreeDeletePreflight
     let leftovers: [String]
     let failingMember: UUID?
@@ -207,7 +232,8 @@ private actor FixtureLifecycle: WorkspaceCheckoutLifecycleOperating {
         if verification == .exactLineage("lineage-a") { return .exactLineage(plan.expectedLineageID) }
         return verification
     }
-    func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan) async throws { if failingMember == plan.memberID { throw TestLifecycleError.failed }
+    func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan, force: Bool) async throws { if failingMember == plan.memberID { throw TestLifecycleError.failed }
+    removeForces.append(force)
     removedMembers.append(plan.memberID) }
     func deleteMergedBranch(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool { deletedBranches.append(plan.memberID)
     return branchRemoved }
@@ -221,7 +247,7 @@ private actor PersistedCleanupLifecycle: WorkspaceCheckoutLifecycleOperating {
     func deletePreflight(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> WorktreeDeletePreflight { .init(reasons: [], submoduleLocalState: .none) }
     func inspectRoot(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutCleanupRootObservation { .init(isContained: true, leftovers: []) }
     func verifyCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutMemberObservation { .exactLineage("lineage-a") }
-    func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan) async throws {
+    func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan, force: Bool) async throws {
         guard case .loaded(let state) = await store.load(),
               state.checkouts.first(where: { $0.id == checkoutID })?.members.first?.cleanup?.plan == plan else { return }
         sawPersistedCleanupPlan = true

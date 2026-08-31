@@ -75,6 +75,38 @@ struct WorkspaceCheckoutRepairTests {
         #expect(await git.createCount == 1)
     }
 
+    @Test func resumeCreationRetriesSetupRunningWithoutRepeatingGit() async throws {
+        let fixture = try await persistedFixture(checkpoint: .setupRunning, worktreeCreated: true, lineageID: "lineage-a", branchOwnership: .created, operation: .creating)
+        let git = CountingResumeGit()
+        let scripts = RepairScriptRunner()
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: git, scripts: scripts, projectMutationGate: ProjectMutationGate())
+
+        let checkout = try await coordinator.resumeCreation(checkoutID: fixture.checkout.id)
+
+        #expect(checkout.operation == .idle)
+        #expect(checkout.members[0].checkpoint == .setupComplete)
+        #expect(await git.prepareCount == 0)
+        #expect(await git.createCount == 0)
+        #expect(await scripts.paths == ["/checkouts/a"])
+    }
+
+    @Test func resumeCreationReusesAnAlreadyCreatedWorktreeAtTheCreatingCheckpoint() async throws {
+        let fixture = try await persistedFixture(checkpoint: .worktreeCreating, branchOwnership: .created, operation: .creating)
+        let git = CountingResumeGit(existingLineage: "lineage-a")
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: git, scripts: RepairScriptRunner(), projectMutationGate: ProjectMutationGate())
+
+        let checkout = try await coordinator.resumeCreation(checkoutID: fixture.checkout.id)
+
+        #expect(checkout.operation == .idle)
+        #expect(checkout.members[0].gitLineageID == "lineage-a")
+        #expect(checkout.members[0].checkpoint == .setupComplete)
+        #expect(await git.prepareCount == 0)
+        let calls = await git.calls
+        #expect(calls == ["existing"], "calls: \(calls)")
+        #expect(await git.existingLineageChecks == 1)
+        #expect(await git.createCount == 0)
+    }
+
     @Test func resumeCreationNeverReplaysGitAfterASetupFailure() async throws {
         let fixture = try await persistedFixture(checkpoint: .failed, worktreeCreated: true)
         let git = ResumeGit()
@@ -150,12 +182,29 @@ private actor ResumeGit: WorkspaceGitOperating {
 }
 
 private actor CountingResumeGit: WorkspaceGitOperating {
-    private(set) var prepareCount = 0
-    private(set) var createCount = 0
-    func prepareBranch(_ operation: WorkspaceFrozenWorktreeOperation) async throws { prepareCount += 1 }
+    let existingLineage: String?
+    private(set) var calls: [String] = []
+    var prepareCount: Int { calls.filter { $0 == "prepare" }.count }
+    var createCount: Int { calls.filter { $0 == "create" }.count }
+
+    init(existingLineage: String? = nil) {
+        self.existingLineage = existingLineage
+    }
+
+    func prepareBranch(_ operation: WorkspaceFrozenWorktreeOperation) async throws {
+        calls.append("prepare")
+    }
+
     func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? {
-        createCount += 1
+        calls.append("create")
         return "lineage-a"
+    }
+
+    private(set) var existingLineageChecks = 0
+    func existingCreatedWorktreeLineage(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? {
+        existingLineageChecks += 1
+        calls.append("existing")
+        return existingLineage
     }
 }
 
