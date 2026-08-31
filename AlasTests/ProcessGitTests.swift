@@ -208,7 +208,15 @@ struct ProcessGitTests {
         )
 
         #expect(result.exitCode == 0)
-        #expect(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == directory.path)
+        let reported = URL(fileURLWithPath: result.stdout.trimmingCharacters(in: .whitespacesAndNewlines))
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+            .path
+        let expected = directory
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+            .path
+        #expect(reported == expected)
     }
 
     @Test func gitInvocationSurvivesWorkingDirectoryDeletionBeforeLaunch() async throws {

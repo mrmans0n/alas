@@ -722,6 +722,41 @@ struct TerminalServiceZmxTests {
         #expect(Date().timeIntervalSince(start) < 0.1)
     }
 
+    @Test
+    func drainPendingKillsReturnsAtTimeoutWhileKillIsStillBlocked() async {
+        let started = DispatchSemaphore(value: 0)
+        let unblock = DispatchSemaphore(value: 0)
+        let stallRunner = SubprocessRunner { _, _, _, _ in
+            started.signal()
+            _ = unblock.wait(timeout: .now() + 5.0)
+            return .init(exitCode: 0, stdout: "", stderr: "")
+        }
+        let svc = TerminalService(
+            zmxClient: ZmxClient(env: makeZmxEnv(available: true), runner: stallRunner)
+        )
+
+        let surface = AlasGhostty.SurfaceView(testIO: FakeGhosttySurfaceIO())
+        svc.registry.register(TerminalSession(
+            id: "leaf-drain-timeout",
+            worktreeId: "wt-1",
+            projectId: "proj-1",
+            surface: surface,
+            executable: "/bin/zsh",
+            args: [],
+            zmxSessionName: ZmxSessionName.derive(worktreeId: "wt-1", leafId: "leaf-drain-timeout")
+        ))
+        svc.closeSession(id: "leaf-drain-timeout", worktreeId: "wt-1")
+        _ = started.wait(timeout: .now() + 2.0)
+
+        let start = Date()
+        await svc.drainPendingKills(timeout: 0.1)
+        let elapsed = Date().timeIntervalSince(start)
+        unblock.signal()
+        svc.waitForPendingKills(timeout: 2.0)
+
+        #expect(elapsed < 0.5, "drain should return at its timeout even when a kill task stays blocked")
+    }
+
     // MARK: resolveLaunchPlan — keepSessionsAlive gating
 
     @Test func resolveLaunchPlanWrapsWhenKeepAliveTrueAndZmxAvailable() {

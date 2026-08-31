@@ -159,7 +159,8 @@ final class HarnessService {
                 notifications.notifyHarnessPermission(
                     agent: event.agent, body: event.body,
                     projectId: lookup.projectId, worktreeId: lookup.worktreeId,
-                    sessionId: event.sessionId
+                    sessionId: event.sessionId,
+                    owner: ownerLookup(event.sessionId)
                 )
             }
 
@@ -179,7 +180,7 @@ final class HarnessService {
                     debouncer.onFire = { [weak self] in
                         guard let self else { return }
                         if let event = self.pendingCursorIdleEvents.removeValue(forKey: sid) {
-                            self.commitIdle(event: event, stateLookup: stateLookup)
+                            self.commitIdle(event: event, stateLookup: stateLookup, ownerLookup: ownerLookup)
                         }
                         self.cursorIdleDebouncers.removeValue(forKey: sid)
                     }
@@ -187,7 +188,7 @@ final class HarnessService {
                     debouncer.poke()
                 }
             } else {
-                commitIdle(event: event, stateLookup: stateLookup)
+                commitIdle(event: event, stateLookup: stateLookup, ownerLookup: ownerLookup)
             }
 
         case .detached:
@@ -199,7 +200,8 @@ final class HarnessService {
 
     private func commitIdle(
         event: AgentHookEvent,
-        stateLookup: @escaping (String) -> (projectId: String, worktreeId: String)?
+        stateLookup: @escaping (String) -> (projectId: String, worktreeId: String)?,
+        ownerLookup: @escaping (String) -> SessionOwnerID?
     ) {
         activityBySession[event.sessionId] = HarnessActivityState(
             agent: event.agent, state: .idle, pid: event.pid,
@@ -209,7 +211,8 @@ final class HarnessService {
             notifications.notifyHarnessFinished(
                 agent: event.agent, body: event.body,
                 projectId: lookup.projectId, worktreeId: lookup.worktreeId,
-                sessionId: event.sessionId
+                sessionId: event.sessionId,
+                owner: ownerLookup(event.sessionId)
             )
         }
     }
