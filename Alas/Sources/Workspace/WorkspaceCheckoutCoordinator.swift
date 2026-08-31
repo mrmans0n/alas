@@ -146,6 +146,7 @@ actor WorkspaceCheckoutCoordinator {
     private var pendingCreationPlans: [UUID: (WorkspaceCheckout, FrozenWorkspaceCheckoutPlan)] = [:]
     private var activeArchives = Set<UUID>()
     private var activeRepairs = Set<UUID>()
+    private var activeSetups = Set<String>()
 
     init(
         store: WorkspaceStore,
@@ -326,6 +327,11 @@ actor WorkspaceCheckoutCoordinator {
     /// for conflicts because the worktree at that path is not this snapshot's
     /// frozen member.
     func deleteMemberSnapshot(checkoutID: UUID, memberID: UUID) async throws -> WorkspaceCheckout {
+        let checkout = try await self.checkout(id: checkoutID)
+        guard let member = checkout.members.first(where: { $0.id == memberID }) else {
+            throw WorkspaceCheckoutCoordinatorError.checkoutMissing
+        }
+        let cleanupPlan = member.cleanup?.plan ?? makeCleanupPlan(checkout: checkout, member: member)
         do {
             try await store.mutate { state in
                 guard let checkoutIndex = state.checkouts.firstIndex(where: { $0.id == checkoutID }),
@@ -339,7 +345,17 @@ actor WorkspaceCheckoutCoordinator {
                 state.checkouts[checkoutIndex].members[memberIndex].checkpoint = .planPersisted
                 state.checkouts[checkoutIndex].members[memberIndex].gitLineageID = nil
                 state.checkouts[checkoutIndex].members[memberIndex].cleanupOwnership = .init()
-                state.checkouts[checkoutIndex].members[memberIndex].cleanup = nil
+                if let cleanupPlan {
+                    state.checkouts[checkoutIndex].members[memberIndex].cleanup = .init(
+                        plan: cleanupPlan,
+                        checkpoint: .complete,
+                        worktreeRemoved: true,
+                        branchRemoved: cleanupPlan.branchOwnership != .created,
+                        sharedRootLeftovers: [cleanupPlan.worktreePath]
+                    )
+                } else {
+                    state.checkouts[checkoutIndex].members[memberIndex].cleanup = nil
+                }
             }
         } catch WorkspaceStoreError.recoveryRequired {
             throw WorkspaceCheckoutCoordinatorError.workspaceStateUnavailable
@@ -449,6 +465,12 @@ actor WorkspaceCheckoutCoordinator {
     /// Explicitly retries a persisted setup checkpoint. Git creation is not
     /// part of this command, so a relaunch cannot recreate a verified member.
     func retrySetup(checkoutID: UUID, memberID: UUID) async throws -> WorkspaceCheckout {
+        let setupKey = setupKey(checkoutID: checkoutID, memberID: memberID)
+        guard !activeSetups.contains(setupKey) else {
+            throw WorkspaceCheckoutCoordinatorError.operationInProgress
+        }
+        activeSetups.insert(setupKey)
+        defer { activeSetups.remove(setupKey) }
         let checkout = try await self.checkout(id: checkoutID)
         guard checkout.members.contains(where: { $0.id == memberID }) else {
             throw WorkspaceCheckoutCoordinatorError.checkoutMissing
@@ -472,19 +494,19 @@ actor WorkspaceCheckoutCoordinator {
             return member
         }
         guard let member = claimed else { return checkout }
-        let operation = WorkspaceCheckoutSetupOperation(
-            checkoutID: checkout.id,
-            checkoutMemberID: member.id,
-            executionLocation: checkout.executionLocation,
-            worktreePath: member.plan!.destinationPath,
-            script: await setupScript(checkoutID: checkout.id, memberID: member.id)
+        let plan = member.plan!
+        let frozenMember = FrozenWorkspaceCheckoutPlan.Member(
+            checkoutMemberID: plan.checkoutMemberID,
+            workspaceMemberID: member.workspaceMemberID,
+            projectID: plan.projectID,
+            sourceRepositoryPath: plan.sourceRepositoryPath,
+            destinationPath: plan.destinationPath,
+            baseReference: plan.baseReference,
+            baseCommit: plan.baseCommit,
+            branchIntent: plan.branchIntent
         )
         do {
-            try await scripts.runSetup(for: operation)
-            try await updateMember(checkoutID: checkout.id, memberID: member.id) {
-                $0.checkpoint = .setupComplete
-                $0.availability = .available
-            }
+            try await runSetupThrowing(member: frozenMember, checkout: checkout, setupAlreadyClaimed: true)
         } catch {
             try? await store.mutate { state in
                 guard let checkoutIndex = state.checkouts.firstIndex(where: { $0.id == checkout.id }),
@@ -545,16 +567,25 @@ actor WorkspaceCheckoutCoordinator {
                 switch current.checkpoint {
                 case .planPersisted, .branchPreparing:
                     state.checkouts[checkoutIndex].members[memberIndex].checkpoint = .branchPreparing
+                    state.checkouts[checkoutIndex].members[memberIndex].availability = .pending
+                    state.checkouts[checkoutIndex].members[memberIndex].cleanup = nil
+                    state.checkouts[checkoutIndex].members[memberIndex].cleanupOwnership = .init()
+                    state.checkouts[checkoutIndex].members[memberIndex].gitLineageID = nil
                     return .branchPreparing
                 case .branchPrepared, .worktreeCreating:
                     state.checkouts[checkoutIndex].members[memberIndex].checkpoint = .worktreeCreating
+                    state.checkouts[checkoutIndex].members[memberIndex].availability = .pending
+                    state.checkouts[checkoutIndex].members[memberIndex].cleanup = nil
                     return .worktreeCreating
                 case .setupRunning:
                     state.checkouts[checkoutIndex].members[memberIndex].checkpoint = .setupRunning
+                    state.checkouts[checkoutIndex].members[memberIndex].cleanup = nil
                     return .setupRunning
                 case .failed where !current.cleanupOwnership.worktreeCreated:
                     let checkpoint: WorkspaceCheckoutCheckpoint = current.cleanupOwnership.branchOwnership == .unknown ? .branchPreparing : .worktreeCreating
                     state.checkouts[checkoutIndex].members[memberIndex].checkpoint = checkpoint
+                    state.checkouts[checkoutIndex].members[memberIndex].availability = .pending
+                    state.checkouts[checkoutIndex].members[memberIndex].cleanup = nil
                     return checkpoint
                 default:
                     return nil
@@ -759,6 +790,7 @@ actor WorkspaceCheckoutCoordinator {
                 try await self.updateMember(checkoutID: checkout.id, memberID: plan.checkoutMemberID) { member in
                     member.checkpoint = .worktreeCreated
                     member.gitLineageID = lineageID
+                    member.cleanup = nil
                     member.cleanupOwnership = .init(
                         worktreeCreated: true,
                         branchOwnership: plan.branchIntent == .reuse ? .reused : .created
@@ -793,7 +825,19 @@ actor WorkspaceCheckoutCoordinator {
         }
     }
 
-    private func runSetupThrowing(member plan: FrozenWorkspaceCheckoutPlan.Member, checkout: WorkspaceCheckout) async throws {
+    private func runSetupThrowing(member plan: FrozenWorkspaceCheckoutPlan.Member, checkout: WorkspaceCheckout, setupAlreadyClaimed: Bool = false) async throws {
+        let setupKey = setupKey(checkoutID: checkout.id, memberID: plan.checkoutMemberID)
+        if !setupAlreadyClaimed {
+            guard !activeSetups.contains(setupKey) else {
+                throw WorkspaceCheckoutCoordinatorError.operationInProgress
+            }
+            activeSetups.insert(setupKey)
+        }
+        defer {
+            if !setupAlreadyClaimed {
+                activeSetups.remove(setupKey)
+            }
+        }
         let setup = WorkspaceCheckoutSetupOperation(
             checkoutID: checkout.id,
             checkoutMemberID: plan.checkoutMemberID,
@@ -809,6 +853,10 @@ actor WorkspaceCheckoutCoordinator {
             member.checkpoint = .setupComplete
             member.availability = .available
         }
+    }
+
+    private func setupKey(checkoutID: UUID, memberID: UUID) -> String {
+        "\(checkoutID.uuidString):\(memberID.uuidString)"
     }
 
     private func setupScript(checkoutID: UUID, memberID: UUID) async -> String {

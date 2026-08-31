@@ -140,7 +140,25 @@ struct WorkspaceCheckoutLifecycleTests {
 
         #expect(checkout.members[0].availability == .explicitlyDeleted)
         #expect(checkout.members[0].checkpoint == .planPersisted)
+        #expect(checkout.members[0].cleanup?.worktreeRemoved == true)
         #expect(await lifecycle.removedMembers.isEmpty)
+    }
+
+    @Test func confirmedForgetCanDiscardSnapshotOnlyDeletion() async throws {
+        let fixture = try await Fixture.make()
+        try await fixture.store.mutate { state in
+            state.checkouts[0].members[0].availability = .identityConflict
+        }
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: FixtureLifecycle())
+        _ = try await coordinator.deleteMemberSnapshot(checkoutID: fixture.checkout.id, memberID: fixture.member.id)
+
+        try await coordinator.forget(checkoutID: fixture.checkout.id, confirmedPreserveArtifacts: true)
+
+        guard case .loaded(let state) = await fixture.store.load() else {
+            Issue.record("Expected loaded Workspace state")
+            return
+        }
+        #expect(state.checkouts.isEmpty)
     }
 
     @Test func deletionNeverRemovesAReusedBranch() async throws {

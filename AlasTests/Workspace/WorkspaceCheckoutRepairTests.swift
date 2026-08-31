@@ -79,6 +79,24 @@ struct WorkspaceCheckoutRepairTests {
         #expect(await fixture.store.load().loadedCheckout(id: fixture.checkout.id)?.members[0].checkpoint == .setupComplete)
     }
 
+    @Test func concurrentRetrySetupRejectsTheSecondLiveSetup() async throws {
+        let fixture = try await persistedFixture(checkpoint: .worktreeCreated)
+        let scripts = BlockingRepairScriptRunner()
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: RepairGit(), scripts: scripts, projectMutationGate: ProjectMutationGate())
+        let memberID = fixture.checkout.members[0].id
+
+        let first = Task { try await coordinator.retrySetup(checkoutID: fixture.checkout.id, memberID: memberID) }
+        await scripts.waitUntilStarted()
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.operationInProgress) {
+            try await coordinator.retrySetup(checkoutID: fixture.checkout.id, memberID: memberID)
+        }
+
+        await scripts.release()
+        _ = try await first.value
+        #expect(await scripts.runCount == 1)
+    }
+
     @Test func resumeCreationUsesThePersistedFrozenPlan() async throws {
         let fixture = try await persistedFixture(checkpoint: .planPersisted)
         let git = ResumeGit()
@@ -109,6 +127,43 @@ struct WorkspaceCheckoutRepairTests {
 
         #expect(checkout.operation == .idle)
         #expect(await git.operations.map(\.destinationPath) == ["/checkouts/a", "/checkouts/a"])
+    }
+
+    @Test func recreationClearsStaleCleanupBeforePersistingNewLineage() async throws {
+        let fixture = try await persistedFixture(checkpoint: .planPersisted, operation: .idle)
+        try await fixture.store.mutate { state in
+            let checkout = state.checkouts[0]
+            let member = checkout.members[0]
+            state.checkouts[0].members[0].availability = .explicitlyDeleted
+            state.checkouts[0].members[0].cleanup = WorkspaceCheckoutMemberCleanup(
+                plan: WorkspaceCheckoutCleanupPlan(
+                    checkoutID: checkout.id,
+                    memberID: member.id,
+                    executionLocation: checkout.executionLocation,
+                    projectID: member.projectID,
+                    sourceRepositoryPath: member.plan!.sourceRepositoryPath,
+                    baseReference: member.plan!.baseReference,
+                    baseCommit: member.plan!.baseCommit,
+                    rootPath: checkout.rootPath,
+                    managedMemberPaths: [member.worktreePath],
+                    worktreePath: member.worktreePath,
+                    branch: checkout.branch,
+                    expectedLineageID: "old-lineage",
+                    branchOwnership: .created
+                ),
+                checkpoint: .complete,
+                worktreeRemoved: true,
+                branchRemoved: true
+            )
+        }
+        let git = ResumeGit()
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: git, scripts: RepairScriptRunner(), projectMutationGate: ProjectMutationGate())
+
+        let checkout = try await coordinator.resumeCreation(checkoutID: fixture.checkout.id)
+
+        #expect(checkout.members[0].availability == .available)
+        #expect(checkout.members[0].gitLineageID == "lineage-a")
+        #expect(checkout.members[0].cleanup == nil)
     }
 
     @Test func resumeCreationContinuesFromBranchPreparedWithoutPreparingAgain() async throws {
@@ -166,25 +221,19 @@ struct WorkspaceCheckoutRepairTests {
 
     @Test func concurrentResumeCreationRejectsTheSecondRepairClaim() async throws {
         let fixture = try await persistedFixture(checkpoint: .planPersisted)
-        let git = ResumeGit()
+        let git = BlockingResumeGit()
         let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: git, scripts: RepairScriptRunner(), projectMutationGate: ProjectMutationGate())
 
         let first = Task { try await coordinator.resumeCreation(checkoutID: fixture.checkout.id) }
-        let second = Task { try await coordinator.resumeCreation(checkoutID: fixture.checkout.id) }
-        var successes = 0
-        var operationInProgress = 0
-        for task in [first, second] {
-            do {
-                _ = try await task.value
-                successes += 1
-            } catch WorkspaceCheckoutCoordinatorError.operationInProgress {
-                operationInProgress += 1
-            }
+        await git.waitUntilStarted()
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.operationInProgress) {
+            try await coordinator.resumeCreation(checkoutID: fixture.checkout.id)
         }
 
-        #expect(successes == 1)
-        #expect(operationInProgress == 1)
-        #expect(await git.operations.count == 2)
+        await git.release()
+        _ = try await first.value
+        #expect(await git.operations == ["prepare", "existing", "create"])
     }
 
     private func persistedFixture(
@@ -232,11 +281,87 @@ private actor RepairScriptRunner: WorkspaceScriptRunning {
     func runSetup(for operation: WorkspaceCheckoutSetupOperation) async throws { paths.append(operation.worktreePath) }
 }
 
+private actor BlockingRepairScriptRunner: WorkspaceScriptRunning {
+    private(set) var runCount = 0
+    private var started = false
+    private var released = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func runSetup(for operation: WorkspaceCheckoutSetupOperation) async throws {
+        runCount += 1
+        started = true
+        waiters.forEach { $0.resume() }
+        waiters.removeAll()
+        if !released {
+            await withCheckedContinuation { continuation in
+                releaseWaiters.append(continuation)
+            }
+        }
+    }
+
+    func waitUntilStarted() async {
+        if started { return }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func release() {
+        released = true
+        releaseWaiters.forEach { $0.resume() }
+        releaseWaiters.removeAll()
+    }
+}
+
 private actor ResumeGit: WorkspaceGitOperating {
     private(set) var operations: [WorkspaceFrozenWorktreeOperation] = []
     func prepareBranch(_ operation: WorkspaceFrozenWorktreeOperation) async throws { operations.append(operation) }
     func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? { operations.append(operation)
     return "lineage-a" }
+}
+
+private actor BlockingResumeGit: WorkspaceGitOperating {
+    private(set) var operations: [String] = []
+    private var started = false
+    private var released = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func prepareBranch(_ operation: WorkspaceFrozenWorktreeOperation) async throws {
+        operations.append("prepare")
+        started = true
+        waiters.forEach { $0.resume() }
+        waiters.removeAll()
+        if !released {
+            await withCheckedContinuation { continuation in
+                releaseWaiters.append(continuation)
+            }
+        }
+    }
+
+    func existingCreatedWorktreeLineage(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? {
+        operations.append("existing")
+        return nil
+    }
+
+    func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? {
+        operations.append("create")
+        return "lineage-a"
+    }
+
+    func waitUntilStarted() async {
+        if started { return }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func release() {
+        released = true
+        releaseWaiters.forEach { $0.resume() }
+        releaseWaiters.removeAll()
+    }
 }
 
 private actor CountingResumeGit: WorkspaceGitOperating {
