@@ -1088,7 +1088,6 @@ final class AppState {
 
     private func sweepOrphanWorkspaceCheckoutZmxSessions() {
         let knownLeavesByOwner = workspaceCheckoutTerminalLeafIDsByOwner()
-        guard !knownLeavesByOwner.isEmpty else { return }
         terminal.sweepWorkspaceCheckoutOrphans(knownLeavesByOwner: knownLeavesByOwner)
 
         let remoteHosts = Set(knownLeavesByOwner.keys.compactMap { owner -> String? in
@@ -1106,13 +1105,12 @@ final class AppState {
     }
 
     private func workspaceCheckoutTerminalLeafIDsByOwner() -> [SessionOwnerID: Set<String>] {
-        Dictionary(uniqueKeysWithValues: workspacesManager.checkouts.compactMap { checkout in
+        Dictionary(uniqueKeysWithValues: workspacesManager.checkouts.map { checkout in
             let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
             let leafIDs = tabs.tabs(for: owner).flatMap { tab -> [String] in
                 guard case .terminal(let state) = tab else { return [] }
                 return state.root.leaves().map(\.id)
             }
-            guard !leafIDs.isEmpty else { return nil }
             return (owner, Set(leafIDs))
         })
     }
