@@ -963,9 +963,10 @@ actor WorkspaceCheckoutCoordinator {
             state.checkouts[checkoutIndex].members[memberIndex].availability = .pending
             state.checkouts[checkoutIndex].members[memberIndex].gitLineageID = nil
             state.checkouts[checkoutIndex].members[memberIndex].cleanup = nil
+            let branchOwnership = current.cleanupOwnership.branchOwnership
             state.checkouts[checkoutIndex].members[memberIndex].cleanupOwnership = .init(
                 worktreeCreated: true,
-                branchOwnership: plan.branchIntent == .reuse ? .reused : .created
+                branchOwnership: branchOwnership
             )
             return true
         }
