@@ -549,6 +549,9 @@ actor WorkspaceCheckoutCoordinator {
             guard let checkoutIndex = state.checkouts.firstIndex(where: { $0.id == checkoutID }),
                   let memberIndex = state.checkouts[checkoutIndex].members.firstIndex(where: { $0.id == memberID })
             else { throw WorkspaceCheckoutCoordinatorError.checkoutMissing }
+            guard state.checkouts[checkoutIndex].operation == .idle else {
+                throw WorkspaceCheckoutCoordinatorError.operationInProgress
+            }
             let member = state.checkouts[checkoutIndex].members[memberIndex]
             guard member.availability != .identityConflict,
                   member.checkpoint == .worktreeCreated || member.checkpoint == .setupRunning || (member.checkpoint == .failed && member.cleanupOwnership.worktreeCreated),
@@ -563,6 +566,7 @@ actor WorkspaceCheckoutCoordinator {
             guard setupResumeVerified else {
                 return nil
             }
+            state.checkouts[checkoutIndex].operation = .repairing
             state.checkouts[checkoutIndex].members[memberIndex].checkpoint = .setupRunning
             return member
         }
@@ -590,6 +594,7 @@ actor WorkspaceCheckoutCoordinator {
                 state.checkouts[checkoutIndex].diagnostics.append(.init(severity: .error, message: "Workspace setup failed for \(state.checkouts[checkoutIndex].members[memberIndex].fallbackProjectName)."))
             }
         }
+        await finishScopedRepair(checkoutID: checkoutID, memberIDs: [memberID])
         return try await self.checkout(id: checkoutID)
     }
 
