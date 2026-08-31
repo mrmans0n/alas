@@ -214,6 +214,11 @@ final class RightPaneState: GGSplitCommitServicing {
         ggStack != nil && ggStackCommitsKey != currentGGStackCommitsKey
     }
 
+    private var cachedGGStackSnapshot: GGStackSnapshot? {
+        guard !ggCommitSelectionIsStale, let ggStack else { return nil }
+        return GGStackSnapshot(version: GGStackSnapshot.supportedSchemaVersion, stack: ggStack)
+    }
+
     // Sync-nudge state. All fields are in-memory only; nothing is
     // persisted to AppConfig. Two independent conditions:
     //   - behindBase: HEAD is behind the trunk base (origin/main).
@@ -1472,14 +1477,15 @@ final class RightPaneState: GGSplitCommitServicing {
     @ObservationIgnored var requestGGSplitCommit: ((GGStackEntry) -> Void)? = nil
 
     func loadDescription(target: GGSplitCommitTarget) async throws -> GGSplitLoadedDescription {
-        let before = try await ggService.currentStackSnapshot(worktreePath: worktree.path.path)
-        guard let identity = before.identity else { throw GGMutationError.staleConfirmation }
+        guard let snapshot = cachedGGStackSnapshot,
+              let identity = snapshot.identity,
+              let entry = snapshot.stack?.entry(matchingCommitSHA: target.targetSHA),
+              target.targetGGID == nil || entry.ggId == target.targetGGID
+        else { throw GGMutationError.staleConfirmation }
         let description = try await ggService.describeSplit(
             worktreePath: worktree.path.path,
             target: target.commandTarget
         )
-        let after = try await ggService.currentStackSnapshot(worktreePath: worktree.path.path)
-        guard after.identity == identity else { throw GGMutationError.staleConfirmation }
         return GGSplitLoadedDescription(description: description, stackIdentity: identity)
     }
 
@@ -1496,24 +1502,25 @@ final class RightPaneState: GGSplitCommitServicing {
     }
 
     func requestGGDrop(_ entry: GGStackEntry) {
-        Task { @MainActor in
-            do {
-                let prepared = try await ggMutationCoordinator.prepare(.drop(target: entry.id))
-                guard case .drop(_, let descendants, let hasOpenReview) = prepared.confirmation else {
-                    throw GGMutationError.staleConfirmation
-                }
-                pendingGGDropPrepared = prepared
-                pendingGGDrop = GGDropPresentation(
-                    target: entry.id,
-                    title: entry.title,
-                    rewrittenDescendants: descendants,
-                    openReviewLabel: hasOpenReview
-                        ? (commitRemote?.kind.reviewRequestLabel ?? "review")
-                        : nil
-                )
-            } catch {
-                ggActionState.setError(GGErrorPresentation.message(for: error))
+        do {
+            guard let snapshot = cachedGGStackSnapshot else {
+                throw GGMutationError.staleConfirmation
             }
+            let prepared = try ggMutationCoordinator.prepare(.drop(target: entry.id), using: snapshot)
+            guard case .drop(_, let descendants, let hasOpenReview) = prepared.confirmation else {
+                throw GGMutationError.staleConfirmation
+            }
+            pendingGGDropPrepared = prepared
+            pendingGGDrop = GGDropPresentation(
+                target: entry.id,
+                title: entry.title,
+                rewrittenDescendants: descendants,
+                openReviewLabel: hasOpenReview
+                    ? (commitRemote?.kind.reviewRequestLabel ?? "review")
+                    : nil
+            )
+        } catch {
+            ggActionState.setError(GGErrorPresentation.message(for: error))
         }
     }
 
@@ -1526,7 +1533,23 @@ final class RightPaneState: GGSplitCommitServicing {
         guard let prepared = pendingGGDropPrepared else { return }
         pendingGGDrop = nil
         pendingGGDropPrepared = nil
-        runGGMutation(prepared)
+        guard let operation = ggMutationCoordinator.startApplying(prepared) else { return }
+        let actionGeneration = ggActionState.actionGeneration
+        Task { @MainActor in
+            do {
+                try await operation.value
+            } catch let error as GGMutationError {
+                switch error {
+                case .immutableTarget, .staleConfirmation:
+                    await refreshGGStack(forceRemote: true)
+                default:
+                    break
+                }
+                publishGGMutationPresentationError(error, forActionGeneration: actionGeneration)
+            } catch {
+                publishGGMutationPresentationError(error, forActionGeneration: actionGeneration)
+            }
+        }
     }
 
     func requestGGUnstack(_ entry: GGStackEntry) {
