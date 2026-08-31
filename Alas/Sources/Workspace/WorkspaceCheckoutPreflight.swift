@@ -351,10 +351,15 @@ struct WorkspacePathInspector: WorkspacePathInspecting {
         let parent = URL(fileURLWithPath: path).deletingLastPathComponent().path
         switch location.normalized {
         case .local:
+            var candidate = URL(fileURLWithPath: parent)
             var isDirectory = ObjCBool(false)
-            return FileManager.default.fileExists(atPath: parent, isDirectory: &isDirectory)
-                && isDirectory.boolValue
-                && FileManager.default.isWritableFile(atPath: parent)
+            while !FileManager.default.fileExists(atPath: candidate.path, isDirectory: &isDirectory) {
+                let next = candidate.deletingLastPathComponent()
+                guard next.path != candidate.path else { return false }
+                candidate = next
+                isDirectory = false
+            }
+            return isDirectory.boolValue && FileManager.default.isWritableFile(atPath: candidate.path)
         case .ssh(let host):
             let command = "test -d \(SSHCommand.shellQuote(parent)) && test -w \(SSHCommand.shellQuote(parent))"
             guard let result = try? await remote.run(host: host, command: command) else { return false }

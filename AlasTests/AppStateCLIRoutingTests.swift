@@ -73,6 +73,57 @@ struct AppStateCLIRoutingTests {
         #expect(editor.revealEndLine == 2)
     }
 
+    @Test func checkoutOwnedCLIUsesOwnerQualifiedCwdResolution() async throws {
+        let sharedPath = URL(fileURLWithPath: "/srv/shared/member")
+        let local = Worktree(
+            id: "local-id",
+            projectId: "local-project",
+            name: "local",
+            branch: "main",
+            path: sharedPath,
+            status: .clean,
+            lastActivity: Date()
+        )
+        let remote = Worktree(
+            id: "remote-id",
+            projectId: "remote-project",
+            name: "remote",
+            branch: "main",
+            path: sharedPath,
+            status: .clean,
+            lastActivity: Date()
+        )
+        let owner = SessionOwnerID.workspaceCheckout(
+            UUID(uuidString: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")!,
+            .ssh("devbox")
+        )
+        let router = AlasCLICommandRouter(
+            sessionWorktreeId: { _ in nil },
+            sessionCwdWorktree: { sessionId, cwd in
+                sessionId == "checkout-leaf" && cwd == sharedPath.appendingPathComponent("subdir").path ? remote : nil
+            },
+            originatingWorktree: { id in [local, remote].first(where: { $0.id == id }) },
+            visibleWorktrees: { [local, remote] },
+            openRelativeFile: { _, _ in },
+            openExternalFile: { _, _ in },
+            activateApp: {}
+        )
+
+        let response = await router.handle(.init(
+            version: 1,
+            sessionId: "checkout-leaf",
+            cwd: sharedPath.appendingPathComponent("subdir").path,
+            command: .worktree(.list)
+        ))
+
+        guard case .text(let rows) = response else {
+            Issue.record("Expected worktree list response")
+            return
+        }
+        #expect(owner.storageKey.hasPrefix("workspace-checkout--"))
+        #expect(rows == AlasCLIWorktreeResolver.rows(worktrees: [remote], currentWorktreeId: remote.id))
+    }
+
     @Test func startHarnessCLIRequestUsesRealTerminalRegistry() async throws {
         let (state, project, worktree) = try await makeStateWithWorktree(name: "socket-callback")
         defer {

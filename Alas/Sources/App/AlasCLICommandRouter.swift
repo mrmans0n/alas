@@ -3,6 +3,7 @@ import Foundation
 @MainActor
 struct AlasCLICommandRouter {
     var sessionWorktreeId: (String) -> String?
+    var sessionCwdWorktree: (String, String) -> Worktree? = { _, _ in nil }
     var resolveACPSessionOrigin: (String) -> ACPOrchestrationSessionOrigin? = { _ in nil }
     var originatingWorktree: (String) -> Worktree?
     var visibleWorktrees: () -> [Worktree]
@@ -126,6 +127,10 @@ struct AlasCLICommandRouter {
         if let sessionId = request.sessionId,
            let worktreeId = sessionWorktreeId(sessionId),
            let resolved = originatingWorktree(worktreeId) {
+            origin = resolved
+        } else if let sessionId = request.sessionId,
+                  let cwd = request.cwd,
+                  let resolved = sessionCwdWorktree(sessionId, cwd) {
             origin = resolved
         } else if let cwd = request.cwd, let resolved = service.resolveWorktree(forDirectory: cwd) {
             origin = resolved
