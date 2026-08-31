@@ -72,6 +72,25 @@ struct WorkspaceMemberReviewRollupTests {
         #expect(model.reviewRollupRows[0].reviewActions.map(\.reviewSessionID) == [record.id])
     }
 
+    @Test func reviewActionHandlerOpensThePersistedMemberReviewTab() {
+        let record = Self.record(id: "active-review", worktreeID: "/checkouts/release/app", status: .active, updatedAt: 1)
+        var opened: [(String, ReviewSessionRecord)] = []
+        let handler = WorkspaceReviewActionHandler(
+            load: { id in id == record.id ? record : nil },
+            open: { worktreeID, loaded in opened.append((worktreeID, loaded)) }
+        )
+
+        handler.open(WorkspaceReviewAction(
+            memberID: uuid(1),
+            worktreeID: "/checkouts/release/app",
+            reviewSessionID: record.id,
+            sharedCheckoutBranch: nil
+        ))
+
+        #expect(opened.map(\.0) == ["/checkouts/release/app"])
+        #expect(opened.map(\.1.id) == [record.id])
+    }
+
     private static func member(id: UUID, projectID: String, name: String, worktreeID: String, availability: WorkspaceCheckoutMemberAvailability = .available) -> WorkspaceCheckoutMember {
         WorkspaceCheckoutMember(id: id, workspaceMemberID: UUID(), projectID: projectID, fallbackProjectName: name, fallbackRepositoryRoot: "/repos/\(projectID)", worktreePath: worktreeID, availability: availability, checkpoint: .setupComplete)
     }

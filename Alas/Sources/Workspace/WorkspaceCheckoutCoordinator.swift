@@ -349,13 +349,27 @@ actor WorkspaceCheckoutCoordinator {
             throw WorkspaceCheckoutCoordinatorError.checkoutMissing
         }
         let cleanupPlan = member.cleanup?.plan ?? makeCleanupPlan(checkout: checkout, member: member)
+        let observedConflict: Bool
+        if member.availability == .identityConflict {
+            observedConflict = true
+        } else if let cleanupPlan {
+            switch await lifecycle.verifyCleanup(cleanupPlan) {
+            case .identityConflict:
+                observedConflict = true
+            default:
+                observedConflict = false
+            }
+        } else {
+            observedConflict = false
+        }
+        guard observedConflict else { throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict }
         do {
             try await store.mutate { state in
                 guard let checkoutIndex = state.checkouts.firstIndex(where: { $0.id == checkoutID }),
                       state.checkouts[checkoutIndex].operation == .idle,
                       let memberIndex = state.checkouts[checkoutIndex].members.firstIndex(where: { $0.id == memberID })
                 else { throw WorkspaceCheckoutCoordinatorError.operationInProgress }
-                guard state.checkouts[checkoutIndex].members[memberIndex].availability == .identityConflict else {
+                guard observedConflict || state.checkouts[checkoutIndex].members[memberIndex].availability == .identityConflict else {
                     throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict
                 }
                 state.checkouts[checkoutIndex].members[memberIndex].availability = .explicitlyDeleted

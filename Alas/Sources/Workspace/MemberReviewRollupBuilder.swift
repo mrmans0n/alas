@@ -17,6 +17,24 @@ struct WorkspaceReviewAction: Equatable {
     var sharedCheckoutBranch: String?
 }
 
+struct WorkspaceReviewActionHandler {
+    var load: (ReviewSessionID) throws -> ReviewSessionRecord?
+    var open: (String, ReviewSessionRecord) -> Void
+
+    init(
+        load: @escaping (ReviewSessionID) throws -> ReviewSessionRecord? = { try ReviewSessionStore().load(id: $0) },
+        open: @escaping (String, ReviewSessionRecord) -> Void
+    ) {
+        self.load = load
+        self.open = open
+    }
+
+    func open(_ action: WorkspaceReviewAction) {
+        guard let record = try? load(action.reviewSessionID) else { return }
+        open(action.worktreeID, record)
+    }
+}
+
 struct WorkspaceMemberReviewRollup: Equatable {
     struct Member: Equatable, Identifiable {
         var id: UUID { memberID }

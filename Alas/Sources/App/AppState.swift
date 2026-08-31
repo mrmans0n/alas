@@ -1710,6 +1710,24 @@ final class AppState {
         return checkout
     }
 
+    func openWorkspaceReview(_ action: WorkspaceReviewAction) {
+        guard config.workspacesEnabled, workspacesManager.canMutate else { return }
+        WorkspaceReviewActionHandler(open: { [weak self] worktreeID, record in
+            _ = self?.tabs.openOrFocusReviewSession(worktreeId: worktreeID, record: record)
+            self?.selectedWorktreeId = worktreeID
+            if let checkoutID = self?.workspaceNavigationState.selectedCheckoutID,
+               let checkout = self?.workspacesManager.checkout(id: checkoutID),
+               checkout.members.contains(where: { $0.id == action.memberID }) {
+                self?.workspaceNavigationState.selectMember(
+                    action.memberID,
+                    in: checkout,
+                    resolvedWorktreeIDs: self?.workspaceMemberWorktreeIDs(checkout) ?? [:]
+                )
+                self?.selectedWorktreeId = self?.workspaceNavigationState.repositoryFocusWorktreeID
+            }
+        }).open(action)
+    }
+
     func workspaceMemberDeletionConfirmation(checkoutID: UUID, memberID: UUID) async throws -> WorkspaceLifecycleConfirmationModel {
         guard config.workspacesEnabled, workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
         let preview = try await workspaceCoordinator().previewMemberDeletion(checkoutID: checkoutID, memberID: memberID)
