@@ -16,7 +16,7 @@ actor FileIndex {
 
     private let logger = Logger(subsystem: "io.nlopez.alas", category: "search.fileindex")
 
-    /// In-memory cache keyed by absolute worktree path. Cleared by
+    /// In-memory cache keyed by location-qualified absolute worktree path. Cleared by
     /// `invalidate(forWorktreePath:)` and `invalidateAll()`.
     private var cache: [String: (timestamp: Date, entries: [Entry])] = [:]
 
@@ -24,8 +24,17 @@ actor FileIndex {
     /// in the next 30s reuse it.
     private let ttl: TimeInterval = 30
 
+    func entries(for worktree: SearchWorktree) async throws -> [Entry] {
+        try await entries(forWorktreePath: worktree.absolutePath, remoteHost: worktree.remoteHost, cacheKey: worktree.cacheKey)
+    }
+
     func entries(forWorktreePath worktree: URL) async throws -> [Entry] {
-        let key = worktree.path
+        let remoteHost = RemoteHostRegistry.shared.host(forPath: worktree.path)
+        let key = remoteHost.map { "ssh:\($0):\(worktree.path)" } ?? "local:\(worktree.path)"
+        return try await entries(forWorktreePath: worktree, remoteHost: remoteHost, cacheKey: key)
+    }
+
+    private func entries(forWorktreePath worktree: URL, remoteHost: String?, cacheKey key: String) async throws -> [Entry] {
         if let hit = cache[key], Date().timeIntervalSince(hit.timestamp) < ttl {
             return hit.entries
         }
@@ -34,7 +43,8 @@ actor FileIndex {
         do {
             result = try await Process.git(
                 ["-c", "core.quotePath=false", "ls-files", "-coz", "--exclude-standard"],
-                cwd: worktree
+                cwd: worktree,
+                remoteHost: remoteHost
             )
         } catch {
             logger.error("git ls-files failed in \(worktree.path): \(error.localizedDescription)")

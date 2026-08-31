@@ -40,7 +40,7 @@ actor FffFileSearchBackend {
         // fff mmaps and watches the local filesystem, neither of which is
         // meaningful for an ssh-backed worktree. Returning nil selects the
         // existing host-aware git-ls-files fallback in SearchModel.
-        if worktree.absolutePath.isRemoteAlasPath { return nil }
+        if worktree.remoteHost != nil { return nil }
 #if canImport(FffC)
         guard canSearchWithFff(query: query) else {
             return nil
@@ -90,7 +90,7 @@ actor FffFileSearchBackend {
 
 #if canImport(FffC)
     private func instance(for worktree: SearchWorktree) throws -> UnsafeMutableRawPointer {
-        let key = worktree.absolutePath.path
+        let key = worktree.cacheKey
         if let handle = handles[key] {
             return handle.raw
         }

@@ -52,6 +52,28 @@ struct SearchModelTests {
         #expect(hit.revealCharacter == 0)
     }
 
+    @Test func searchWorktreeCacheKeyIncludesPinnedSSHHost() {
+        let path = URL(fileURLWithPath: "/repos/shared")
+        let first = SearchWorktree(
+            id: "a",
+            projectId: "project-a",
+            displayName: "A",
+            absolutePath: path,
+            executionLocation: .ssh("build-a")
+        )
+        let second = SearchWorktree(
+            id: "b",
+            projectId: "project-b",
+            displayName: "B",
+            absolutePath: path,
+            executionLocation: .ssh("build-b")
+        )
+
+        #expect(first.remoteHost == "build-a")
+        #expect(second.remoteHost == "build-b")
+        #expect(first.cacheKey != second.cacheKey)
+    }
+
     /// Returns a finished AsyncThrowingStream with no elements.
     private func emptyContentStream() -> AsyncThrowingStream<ContentSearchHit, Error> {
         AsyncThrowingStream { $0.finish() }
