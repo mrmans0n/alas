@@ -1108,6 +1108,17 @@ final class AppState {
         )
     }
 
+    private func isExactWorkspaceRepairCandidate(path: String, lineageID: String, member: WorkspaceCheckoutMember) -> Bool {
+        guard let plan = member.plan,
+              let expectedLineage = member.gitLineageID,
+              !expectedLineage.isEmpty,
+              !lineageID.isEmpty
+        else { return false }
+        return URL(fileURLWithPath: plan.destinationPath).standardizedFileURL.path == path
+            && member.worktreePath == plan.destinationPath
+            && lineageID == expectedLineage
+    }
+
     /// Build a `RepoSelectorEnvironment` that captures `self`. Used by
     /// `RepoSelectorDialog` to bind the model to the live app state.
     func repoSelectorEnvironment(
@@ -1626,6 +1637,49 @@ final class AppState {
     func retryWorkspaceCheckoutSetup(checkoutID: UUID, memberID: UUID) async throws -> WorkspaceCheckout {
         guard config.workspacesEnabled, workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
         let checkout = try await workspaceCoordinator().retrySetup(checkoutID: checkoutID, memberID: memberID)
+        await workspacesManager.refreshCheckoutSnapshots()
+        selectWorkspaceCheckout(id: checkout.id)
+        return checkout
+    }
+
+    func workspaceRepairPlan(checkoutID: UUID, memberID: UUID) throws -> WorkspaceRepairPlanModel {
+        guard config.workspacesEnabled, workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
+        guard let checkout = workspacesManager.checkout(id: checkoutID),
+              let member = checkout.members.first(where: { $0.id == memberID })
+        else { throw WorkspaceCheckoutCoordinatorError.checkoutMissing }
+        var candidatesByPath: [String: WorkspaceRepairCandidate] = [:]
+        let worktrees = projects.flatMap { projectsManager.worktrees(projectId: $0.id) }
+            .filter { $0.projectId == member.projectID }
+        for worktree in worktrees {
+            let path = worktree.path.standardizedFileURL.path
+            let lineage = worktree.lineageID ?? ""
+            candidatesByPath[path] = WorkspaceRepairCandidate(
+                path: path,
+                lineageID: lineage,
+                isExactMatch: isExactWorkspaceRepairCandidate(path: path, lineageID: lineage, member: member)
+            )
+        }
+        if let plan = member.plan {
+            let path = URL(fileURLWithPath: plan.destinationPath).standardizedFileURL.path
+            candidatesByPath[path] = WorkspaceRepairCandidate(
+                path: path,
+                lineageID: member.gitLineageID ?? "",
+                isExactMatch: candidatesByPath[path]?.isExactMatch == true
+            )
+        }
+        return WorkspaceRepairPlanModel(
+            memberName: member.fallbackProjectName,
+            candidates: candidatesByPath.values.sorted { $0.path < $1.path }
+        )
+    }
+
+    func useWorkspaceRepairCandidate(checkoutID: UUID, memberID: UUID, candidate: WorkspaceRepairCandidate) async throws -> WorkspaceCheckout {
+        guard config.workspacesEnabled, workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
+        let checkout = try await workspaceCoordinator().useExistingVerifiedCandidate(
+            checkoutID: checkoutID,
+            memberID: memberID,
+            candidate: candidate
+        )
         await workspacesManager.refreshCheckoutSnapshots()
         selectWorkspaceCheckout(id: checkout.id)
         return checkout
