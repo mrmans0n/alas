@@ -42,7 +42,25 @@ struct WorkspaceCheckoutLifecycleTests {
 
         #expect(await lifecycle.sawPersistedCleanupPlan)
         #expect(checkout.members[0].availability == .explicitlyDeleted)
+        #expect(checkout.members[0].checkpoint == .planPersisted)
+        #expect(checkout.members[0].gitLineageID == nil)
+        #expect(checkout.members[0].cleanupOwnership.worktreeCreated == false)
         #expect(checkout.members[0].cleanup?.worktreeRemoved == true)
+    }
+
+    @Test func deleteSnapshotForIdentityConflictDoesNotVerifyOrRemoveAWorktree() async throws {
+        let fixture = try await Fixture.make()
+        try await fixture.store.mutate { state in
+            state.checkouts[0].members[0].availability = .identityConflict
+        }
+        let lifecycle = FixtureLifecycle()
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+
+        let checkout = try await coordinator.deleteMemberSnapshot(checkoutID: fixture.checkout.id, memberID: fixture.member.id)
+
+        #expect(checkout.members[0].availability == .explicitlyDeleted)
+        #expect(checkout.members[0].checkpoint == .planPersisted)
+        #expect(await lifecycle.removedMembers.isEmpty)
     }
 
     @Test func deletionNeverRemovesAReusedBranch() async throws {
@@ -144,6 +162,7 @@ struct WorkspaceCheckoutLifecycleTests {
             .init(exitCode: 0, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
             .init(exitCode: 1, stdout: "", stderr: "not merged"),
+            .init(exitCode: 0, stdout: ".alas-workspace-checkout.json\nnotes.txt\n", stderr: ""),
         ])
         let lifecycle = WorkspaceCheckoutLifecycleOperator(remote: .init { executable, args, timeout in
             try await runner.run(executable: executable, args: args, timeout: timeout)
@@ -167,12 +186,15 @@ struct WorkspaceCheckoutLifecycleTests {
         let preflight = try await lifecycle.deletePreflight(plan)
         try await lifecycle.removeWorktree(plan, force: true)
         let branchRemoved = try await lifecycle.deleteMergedBranch(plan)
+        let root = await lifecycle.inspectRoot(plan)
 
         #expect(preflight.reasons == [.dirty])
         #expect(branchRemoved == false)
+        #expect(root.leftovers == [".alas-workspace-checkout.json", "notes.txt"])
         let commands = await runner.commands.joined(separator: "\n")
         #expect(commands.contains("worktree remove -f --"))
         #expect(commands.contains("branch -d"))
+        #expect(commands.contains("m=$(cd") == false)
     }
 
     private struct Fixture {

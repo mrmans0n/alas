@@ -104,7 +104,12 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                 case .deleteCheckout:
                     _ = try await state.deleteWorkspaceCheckout(id: checkoutID)
                 case .forgetCheckout:
-                    try await state.forgetWorkspaceCheckout(id: checkoutID)
+                    let confirmation = try state.workspaceForgetConfirmation(checkoutID: checkoutID)
+                    if confirmation.requiresConfirmation {
+                        deletionConfirmation = PendingDeletionConfirmation(checkoutID: checkoutID, memberID: nil, model: confirmation)
+                    } else {
+                        try await state.forgetWorkspaceCheckout(id: checkoutID)
+                    }
                 case .stopAfterCurrentOperations:
                     try await state.stopWorkspaceCheckoutAfterCurrentOperations(id: checkoutID)
                 case .resumeCreation, .recreateMember:
@@ -115,11 +120,17 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                     lifecycleError = "Find Existing will only accept candidates whose frozen location, path, and lineage match this Workspace Checkout."
                 case .deleteMember:
                     if let memberID {
-                        let confirmation = try await state.workspaceMemberDeletionConfirmation(checkoutID: checkoutID, memberID: memberID)
-                        if confirmation.requiresConfirmation {
-                            deletionConfirmation = PendingDeletionConfirmation(checkoutID: checkoutID, memberID: memberID, model: confirmation)
+                        if state.workspacesManager.checkout(id: checkoutID)?
+                            .members.first(where: { $0.id == memberID })?
+                            .availability == .identityConflict {
+                            _ = try await state.deleteWorkspaceCheckoutMemberSnapshot(checkoutID: checkoutID, memberID: memberID)
                         } else {
-                            _ = try await state.deleteWorkspaceCheckoutMember(checkoutID: checkoutID, memberID: memberID)
+                            let confirmation = try await state.workspaceMemberDeletionConfirmation(checkoutID: checkoutID, memberID: memberID)
+                            if confirmation.requiresConfirmation {
+                                deletionConfirmation = PendingDeletionConfirmation(checkoutID: checkoutID, memberID: memberID, model: confirmation)
+                            } else {
+                                _ = try await state.deleteWorkspaceCheckoutMember(checkoutID: checkoutID, memberID: memberID)
+                            }
                         }
                     }
                 }
@@ -129,15 +140,18 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
         }
     }
 
-    private func confirmDeletion(_ action: WorkspaceLifecycleAction, checkoutID: UUID, memberID: UUID) {
+    private func confirmDeletion(_ action: WorkspaceLifecycleAction, checkoutID: UUID, memberID: UUID?) {
         Task { @MainActor in
             do {
                 switch action {
                 case .deleteMember(let confirmingRisks):
-                    _ = try await state.deleteWorkspaceCheckoutMember(checkoutID: checkoutID, memberID: memberID, confirmingRisks: confirmingRisks)
+                    if let memberID {
+                        _ = try await state.deleteWorkspaceCheckoutMember(checkoutID: checkoutID, memberID: memberID, confirmingRisks: confirmingRisks)
+                    }
                     deletionConfirmation = nil
-                case .forgetCheckout:
-                    break
+                case .forgetCheckout(let confirmedPreserveArtifacts):
+                    try await state.forgetWorkspaceCheckout(id: checkoutID, confirmedPreserveArtifacts: confirmedPreserveArtifacts)
+                    deletionConfirmation = nil
                 }
             } catch {
                 lifecycleError = error.localizedDescription
@@ -149,6 +163,6 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
 private struct PendingDeletionConfirmation: Identifiable {
     let id = UUID()
     var checkoutID: UUID
-    var memberID: UUID
+    var memberID: UUID?
     var model: WorkspaceLifecycleConfirmationModel
 }

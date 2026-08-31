@@ -97,17 +97,20 @@ struct WorkspaceAutomationService {
     var isEnabled: () -> Bool
     var selectCheckout: @MainActor (UUID) -> Void
     var focusMember: @MainActor (UUID, UUID) -> Void
+    var observer: any WorkspaceCheckoutObserving
 
     init(
         store: WorkspaceStore,
         isEnabled: @escaping () -> Bool,
         selectCheckout: @escaping @MainActor (UUID) -> Void = { _ in },
-        focusMember: @escaping @MainActor (UUID, UUID) -> Void = { _, _ in }
+        focusMember: @escaping @MainActor (UUID, UUID) -> Void = { _, _ in },
+        observer: any WorkspaceCheckoutObserving = WorkspaceCheckoutObserver()
     ) {
         self.store = store
         self.isEnabled = isEnabled
         self.selectCheckout = selectCheckout
         self.focusMember = focusMember
+        self.observer = observer
     }
 
     func listCheckouts() async throws -> WorkspaceAutomationListResponse {
@@ -153,10 +156,31 @@ struct WorkspaceAutomationService {
     private func loadedState() async throws -> WorkspaceStateFile {
         guard isEnabled() else { throw WorkspaceAutomationError.disabled }
         switch await store.load() {
-        case .loaded(let state): return state
+        case .loaded(let state): return await reconciled(state)
         case .missing: return WorkspaceStateFile()
         case .unreadable: throw WorkspaceAutomationError.recoveryRequired
         }
+    }
+
+    private func reconciled(_ state: WorkspaceStateFile) async -> WorkspaceStateFile {
+        var copy = state
+        for checkoutIndex in copy.checkouts.indices {
+            let checkout = copy.checkouts[checkoutIndex]
+            for memberIndex in checkout.members.indices {
+                let member = checkout.members[memberIndex]
+                switch await observer.observe(member, in: checkout) {
+                case .exactLineage:
+                    copy.checkouts[checkoutIndex].members[memberIndex].availability = .available
+                case .missing:
+                    copy.checkouts[checkoutIndex].members[memberIndex].availability = .missing
+                case .identityConflict:
+                    copy.checkouts[checkoutIndex].members[memberIndex].availability = .identityConflict
+                case .unavailable:
+                    copy.checkouts[checkoutIndex].members[memberIndex].availability = .unavailable
+                }
+            }
+        }
+        return copy
     }
 
     private func checkout(id: UUID) async throws -> WorkspaceCheckout {

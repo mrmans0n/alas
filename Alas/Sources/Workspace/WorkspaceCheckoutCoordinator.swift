@@ -287,6 +287,9 @@ actor WorkspaceCheckoutCoordinator {
             try await mutateCheckout(checkoutID) { current in
                 guard let index = current.members.firstIndex(where: { $0.id == memberID }) else { return }
                 current.members[index].availability = .explicitlyDeleted
+                current.members[index].checkpoint = .planPersisted
+                current.members[index].gitLineageID = nil
+                current.members[index].cleanupOwnership = .init()
                 current.operation = .idle
                 current.stopAfterCurrentOperations = false
             }
@@ -298,6 +301,32 @@ actor WorkspaceCheckoutCoordinator {
                 }
             }
             throw error
+        }
+        return try await self.checkout(id: checkoutID)
+    }
+
+    /// Drops ownership of an identity-conflicted member without touching the
+    /// filesystem. The verified deletion path is intentionally unavailable
+    /// for conflicts because the worktree at that path is not this snapshot's
+    /// frozen member.
+    func deleteMemberSnapshot(checkoutID: UUID, memberID: UUID) async throws -> WorkspaceCheckout {
+        do {
+            try await store.mutate { state in
+                guard let checkoutIndex = state.checkouts.firstIndex(where: { $0.id == checkoutID }),
+                      state.checkouts[checkoutIndex].operation == .idle,
+                      let memberIndex = state.checkouts[checkoutIndex].members.firstIndex(where: { $0.id == memberID })
+                else { throw WorkspaceCheckoutCoordinatorError.operationInProgress }
+                guard state.checkouts[checkoutIndex].members[memberIndex].availability == .identityConflict else {
+                    throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict
+                }
+                state.checkouts[checkoutIndex].members[memberIndex].availability = .explicitlyDeleted
+                state.checkouts[checkoutIndex].members[memberIndex].checkpoint = .planPersisted
+                state.checkouts[checkoutIndex].members[memberIndex].gitLineageID = nil
+                state.checkouts[checkoutIndex].members[memberIndex].cleanupOwnership = .init()
+                state.checkouts[checkoutIndex].members[memberIndex].cleanup = nil
+            }
+        } catch WorkspaceStoreError.recoveryRequired {
+            throw WorkspaceCheckoutCoordinatorError.workspaceStateUnavailable
         }
         return try await self.checkout(id: checkoutID)
     }
@@ -1069,8 +1098,6 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
         let managedList = managedNames.isEmpty ? "''" : managedNames.map(SSHCommand.shellQuote).joined(separator: " ")
         let command = """
         r=$(cd \(SSHCommand.shellQuote(plan.rootPath)) 2>/dev/null && pwd -P) || exit 2
-        m=$(cd \(SSHCommand.shellQuote(plan.worktreePath)) 2>/dev/null && pwd -P) || m=''
-        case "$m" in "$r"/*) : ;; *) exit 3 ;; esac
         for p in "$r"/* "$r"/.[!.]* "$r"/..?*; do
           [ -e "$p" ] || [ -L "$p" ] || continue
           n=${p##*/}
