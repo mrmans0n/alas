@@ -153,6 +153,7 @@ actor WorkspaceCheckoutCoordinator {
     private var creationTasks: [UUID: Task<Void, Never>] = [:]
     private var pendingCreationPlans: [UUID: (WorkspaceCheckout, FrozenWorkspaceCheckoutPlan)] = [:]
     private var activeArchives = Set<UUID>()
+    private var activeCheckoutDeletions = Set<UUID>()
     private var activeDeletions = Set<String>()
     private var activeRepairs = Set<UUID>()
     private var activeSetups = Set<String>()
@@ -445,6 +446,11 @@ actor WorkspaceCheckoutCoordinator {
     /// Runs member cleanup in snapshot order. A request to stop is honored at
     /// the next member boundary; failed members remain independently visible.
     func deleteCheckout(checkoutID: UUID) async throws -> WorkspaceCheckout {
+        guard !activeCheckoutDeletions.contains(checkoutID) else {
+            throw WorkspaceCheckoutCoordinatorError.operationInProgress
+        }
+        activeCheckoutDeletions.insert(checkoutID)
+        defer { activeCheckoutDeletions.remove(checkoutID) }
         try await store.mutate { state in
             guard let index = state.checkouts.firstIndex(where: { $0.id == checkoutID }) else {
                 throw WorkspaceCheckoutCoordinatorError.checkoutMissing
@@ -650,7 +656,8 @@ actor WorkspaceCheckoutCoordinator {
 
     private func resumeCreation(checkoutID: UUID, memberIDs: Set<UUID>?) async throws -> WorkspaceCheckout {
         guard creationTasks[checkoutID] == nil,
-              !activeRepairs.contains(checkoutID)
+              !activeRepairs.contains(checkoutID),
+              !hasActiveSetup(checkoutID: checkoutID)
         else { throw WorkspaceCheckoutCoordinatorError.operationInProgress }
         activeRepairs.insert(checkoutID)
         defer { activeRepairs.remove(checkoutID) }
@@ -1136,6 +1143,11 @@ actor WorkspaceCheckoutCoordinator {
         "\(checkoutID.uuidString):\(memberID.uuidString)"
     }
 
+    private func hasActiveSetup(checkoutID: UUID) -> Bool {
+        let prefix = "\(checkoutID.uuidString):"
+        return activeSetups.contains { $0.hasPrefix(prefix) }
+    }
+
     private func setupScript(checkoutID: UUID, memberID: UUID) async -> String {
         guard case .loaded(let state) = await store.load(),
               let checkout = state.checkouts.first(where: { $0.id == checkoutID }),
@@ -1305,7 +1317,8 @@ struct WorkspaceFrozenGitOperator: WorkspaceGitOperating {
         try await WorktreeService().prepareFrozenBranch(
             repoPath: URL(fileURLWithPath: operation.sourceRepositoryPath),
             branch: operation.branch,
-            intent: operation.branchIntent
+            intent: operation.branchIntent,
+            remoteHost: operation.executionLocation.normalized.sshHost
         )
     }
 
@@ -1334,7 +1347,8 @@ struct WorkspaceFrozenGitOperator: WorkspaceGitOperating {
             destination: URL(fileURLWithPath: operation.destinationPath),
             projectId: operation.projectID,
             intent: operation.branchIntent,
-            expectedLineageID: operation.expectedLineageID
+            expectedLineageID: operation.expectedLineageID,
+            remoteHost: operation.executionLocation.normalized.sshHost
         )
         return worktree.lineageID
     }
@@ -1428,11 +1442,13 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
             let root = URL(fileURLWithPath: plan.rootPath).resolvingSymlinksInPath().standardizedFileURL
             let member = URL(fileURLWithPath: plan.worktreePath).resolvingSymlinksInPath().standardizedFileURL
             guard member.path.hasPrefix(root.path + "/") else { return .init(isContained: false, leftovers: []) }
-            let managedNames = Set(plan.managedMemberPaths.map {
+            var managedNames = Set(plan.managedMemberPaths.map {
                 URL(fileURLWithPath: $0).resolvingSymlinksInPath().standardizedFileURL.lastPathComponent
             })
+            managedNames.insert(WorkspaceCheckoutManifest.fileName)
             let leftovers = (try? FileManager.default.contentsOfDirectory(atPath: root.path))?
-                .filter { !managedNames.contains($0) } ?? []
+                .filter { !managedNames.contains($0) }
+                .sorted() ?? []
             return .init(isContained: true, leftovers: leftovers)
         case .ssh(let host):
             return await remoteInspectRoot(plan, host: host)
@@ -1511,7 +1527,8 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
     }
 
     private func remoteInspectRoot(_ plan: WorkspaceCheckoutCleanupPlan, host: String) async -> WorkspaceCheckoutCleanupRootObservation {
-        let managedNames = Set(plan.managedMemberPaths.map { URL(fileURLWithPath: $0).lastPathComponent })
+        var managedNames = Set(plan.managedMemberPaths.map { URL(fileURLWithPath: $0).lastPathComponent })
+        managedNames.insert(WorkspaceCheckoutManifest.fileName)
         let managedList = managedNames.isEmpty ? "''" : managedNames.map(SSHCommand.shellQuote).joined(separator: " ")
         let command = """
         r=$(cd \(SSHCommand.shellQuote(plan.rootPath)) 2>/dev/null && pwd -P) || exit 2
@@ -1526,7 +1543,7 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
         guard let result = try? await remote.run(host: host, command: command),
               result.exitCode == 0
         else { return .init(isContained: false, leftovers: []) }
-        let leftovers = result.stdout.split(separator: "\n").map(String.init).filter { !$0.isEmpty }
+        let leftovers = result.stdout.split(separator: "\n").map(String.init).filter { !$0.isEmpty }.sorted()
         return .init(isContained: true, leftovers: leftovers)
     }
 }

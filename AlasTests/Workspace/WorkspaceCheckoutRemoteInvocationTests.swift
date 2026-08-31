@@ -141,6 +141,25 @@ struct WorkspaceCheckoutRemoteInvocationTests {
         #expect(plan.warnings.map(\.message) == ["Workspace member 1 is using cached ref 'main' for 'origin/main'."])
     }
 
+    @Test func workspacePreflightPassesTheExactSSHLocationToGitInspection() async {
+        let member = WorkspaceMember(projectID: "one", fallbackProjectName: "One", fallbackRepositoryRoot: "/srv/repo")
+        let workspace = Workspace(name: "Release", executionLocation: .ssh("builder.example"), members: [member])
+        let git = CapturingLocationGit()
+
+        let result = await WorkspaceCheckoutPreflight(
+            projects: [project(id: "one", path: "/srv/repo", host: "builder.example")],
+            git: git,
+            paths: EmptyWorkspacePaths(),
+            remoteValidator: NoopWorkspaceRemoteRepositoryValidator()
+        ).prepare(.init(workspace: workspace, branch: "release/1091", rootPath: "/srv/checkouts/release", baseReference: "main"))
+
+        guard case .success = result else {
+            Issue.record("Expected preflight success")
+            return
+        }
+        #expect(await git.locations == [.ssh("builder.example"), .ssh("builder.example")])
+    }
+
     private func project(id: String, path: String, host: String) -> ProjectConfig {
         .init(id: id, name: id, path: path, color: "blue", addedAt: .distantPast, host: host)
     }
@@ -162,8 +181,8 @@ private actor RecordingWorkspaceSSHRunner {
 }
 
 private actor FixedWorkspaceGit: WorkspaceGitInspecting {
-    func resolveRevision(at repositoryPath: String, ref: String) async throws -> String { "commit-\(repositoryPath)" }
-    func branchDisposition(named branch: String, at repositoryPath: String) async throws -> WorkspaceBranchDisposition { .available }
+    func resolveRevision(at repositoryPath: String, location: ExecutionLocation, ref: String) async throws -> String { "commit-\(repositoryPath)" }
+    func branchDisposition(named branch: String, at repositoryPath: String, location: ExecutionLocation) async throws -> WorkspaceBranchDisposition { .available }
 }
 
 private struct EmptyWorkspacePaths: WorkspacePathInspecting {
@@ -172,11 +191,25 @@ private struct EmptyWorkspacePaths: WorkspacePathInspecting {
 }
 
 private actor CachedFallbackGit: WorkspaceGitInspecting {
-    func resolveRevision(at repositoryPath: String, ref: String) async throws -> String {
+    func resolveRevision(at repositoryPath: String, location: ExecutionLocation, ref: String) async throws -> String {
         if ref == "main" { return "cached-main-commit" }
         throw CachedFallbackError.unavailable
     }
-    func branchDisposition(named branch: String, at repositoryPath: String) async throws -> WorkspaceBranchDisposition { .available }
+    func branchDisposition(named branch: String, at repositoryPath: String, location: ExecutionLocation) async throws -> WorkspaceBranchDisposition { .available }
 }
 
 private enum CachedFallbackError: Error { case unavailable }
+
+private actor CapturingLocationGit: WorkspaceGitInspecting {
+    private(set) var locations: [ExecutionLocation] = []
+
+    func resolveRevision(at repositoryPath: String, location: ExecutionLocation, ref: String) async throws -> String {
+        locations.append(location)
+        return "commit"
+    }
+
+    func branchDisposition(named branch: String, at repositoryPath: String, location: ExecutionLocation) async throws -> WorkspaceBranchDisposition {
+        locations.append(location)
+        return .available
+    }
+}

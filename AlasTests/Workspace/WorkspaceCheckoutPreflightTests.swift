@@ -231,12 +231,12 @@ private actor GitProbe: WorkspaceGitInspecting {
         self.branches = branches
     }
 
-    func resolveRevision(at repositoryPath: String, ref: String) async throws -> String {
+    func resolveRevision(at repositoryPath: String, location: ExecutionLocation, ref: String) async throws -> String {
         guard let value = resolutions[repositoryPath] else { throw ProbeError.unresolved }
         return value
     }
 
-    func branchDisposition(named branch: String, at repositoryPath: String) async throws -> WorkspaceBranchDisposition {
+    func branchDisposition(named branch: String, at repositoryPath: String, location: ExecutionLocation) async throws -> WorkspaceBranchDisposition {
         switch branches[repositoryPath] ?? .available {
         case .available: .available
         case .reusable(let commit): .reusable(atCommit: commit)

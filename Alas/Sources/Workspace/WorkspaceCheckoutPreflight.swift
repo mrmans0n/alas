@@ -3,8 +3,8 @@ import Foundation
 /// Read-only Git facts needed to turn a checkout request into a durable plan.
 /// Mutation deliberately lives in the later checkout coordinator.
 protocol WorkspaceGitInspecting: Sendable {
-    func resolveRevision(at repositoryPath: String, ref: String) async throws -> String
-    func branchDisposition(named branch: String, at repositoryPath: String) async throws -> WorkspaceBranchDisposition
+    func resolveRevision(at repositoryPath: String, location: ExecutionLocation, ref: String) async throws -> String
+    func branchDisposition(named branch: String, at repositoryPath: String, location: ExecutionLocation) async throws -> WorkspaceBranchDisposition
 }
 
 enum WorkspaceBranchDisposition: Equatable, Sendable {
@@ -137,14 +137,14 @@ struct WorkspaceCheckoutPreflight: Sendable {
                 continue
             }
             do {
-                let commit = try await git.resolveRevision(at: project.path, ref: base)
+                let commit = try await git.resolveRevision(at: project.path, location: location, ref: base)
                 resolved.append((member, project, base, commit))
             } catch {
                 // A locally cached tracking ref is safe only as an immutable
                 // fallback: we still freeze the exact commit in the plan and
                 // never fetch or substitute a branch during creation.
                 if let cachedBase = Self.cachedFallback(for: base),
-                   let commit = try? await git.resolveRevision(at: project.path, ref: cachedBase) {
+                   let commit = try? await git.resolveRevision(at: project.path, location: location, ref: cachedBase) {
                     resolved.append((member, project, base, commit))
                     warnings.append(.init(severity: .warning, message: "Workspace member \(index + 1) is using cached ref '\(cachedBase)' for '\(base)'."))
                 } else {
@@ -179,7 +179,7 @@ struct WorkspaceCheckoutPreflight: Sendable {
                 memberHasError = true
             }
             do {
-                let disposition = try await git.branchDisposition(named: request.branch, at: item.1.path)
+                let disposition = try await git.branchDisposition(named: request.branch, at: item.1.path, location: location)
                 let intent: WorkspaceBranchIntent?
                 switch disposition {
                 case .available:
@@ -244,10 +244,38 @@ struct WorkspaceCheckoutPreflight: Sendable {
 
 extension GitService: WorkspaceGitInspecting {
     func resolveRevision(at repositoryPath: String, ref: String) async throws -> String {
-        try await resolveRevision(at: URL(fileURLWithPath: repositoryPath), ref: ref)
+        try await resolveRevision(at: repositoryPath, location: .local, ref: ref)
+    }
+
+    func resolveRevision(at repositoryPath: String, location: ExecutionLocation, ref: String) async throws -> String {
+        switch location.normalized {
+        case .local:
+            return try await resolveRevision(at: URL(fileURLWithPath: repositoryPath), ref: ref)
+        case .ssh(let host):
+            let revision = SSHCommand.shellQuote("\(ref)^{commit}")
+            let command = "git -C \(SSHCommand.shellQuote(repositoryPath)) rev-parse --verify \(revision)"
+            let result = try await WorkspaceRemoteTransport().run(host: host, command: command)
+            guard result.exitCode == 0 else {
+                throw WorkspaceCheckoutPreflightProbeError.gitInspectionFailed(result.stderr)
+            }
+            return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
     }
 
     func branchDisposition(named branch: String, at repositoryPath: String) async throws -> WorkspaceBranchDisposition {
+        try await branchDisposition(named: branch, at: repositoryPath, location: .local)
+    }
+
+    func branchDisposition(named branch: String, at repositoryPath: String, location: ExecutionLocation) async throws -> WorkspaceBranchDisposition {
+        switch location.normalized {
+        case .local:
+            return try await localBranchDisposition(named: branch, at: repositoryPath)
+        case .ssh(let host):
+            return try await remoteBranchDisposition(named: branch, at: repositoryPath, host: host)
+        }
+    }
+
+    private func localBranchDisposition(named branch: String, at repositoryPath: String) async throws -> WorkspaceBranchDisposition {
         let repository = URL(fileURLWithPath: repositoryPath)
         let ref = try await Process.git(["show-ref", "--verify", "--quiet", "refs/heads/\(branch)"], cwd: repository)
         if ref.exitCode == 1 { return .available }
@@ -258,6 +286,27 @@ extension GitService: WorkspaceGitInspecting {
         let worktrees = try await Process.git(["worktree", "list", "--porcelain"], cwd: repository)
         guard worktrees.exitCode == 0 else { return .unsafeReuse }
         let isCheckedOut = worktrees.stdout.split(separator: "\n").contains { $0 == "branch refs/heads/\(branch)" }
+        return isCheckedOut ? .checkedOut : .reusable(atCommit: commit)
+    }
+
+    private func remoteBranchDisposition(named branch: String, at repositoryPath: String, host: String) async throws -> WorkspaceBranchDisposition {
+        let remote = WorkspaceRemoteTransport()
+        let branchRef = "refs/heads/\(branch)"
+        let check = try await remote.run(
+            host: host,
+            command: "git -C \(SSHCommand.shellQuote(repositoryPath)) show-ref --verify --quiet \(SSHCommand.shellQuote(branchRef))"
+        )
+        if check.exitCode == 1 { return .available }
+        guard check.exitCode == 0 else {
+            throw WorkspaceCheckoutPreflightProbeError.gitInspectionFailed(check.stderr)
+        }
+        let commit = try await resolveRevision(at: repositoryPath, location: .ssh(host), ref: branch)
+        let worktrees = try await remote.run(
+            host: host,
+            command: "git -C \(SSHCommand.shellQuote(repositoryPath)) worktree list --porcelain"
+        )
+        guard worktrees.exitCode == 0 else { return .unsafeReuse }
+        let isCheckedOut = worktrees.stdout.split(separator: "\n").contains { $0 == "branch \(branchRef)" }
         return isCheckedOut ? .checkedOut : .reusable(atCommit: commit)
     }
 }
