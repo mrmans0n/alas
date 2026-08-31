@@ -346,14 +346,15 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
         let failed = try #require(await store.checkout(id: checkout.id))
         #expect(failed.members[0].checkpoint == .failed)
         #expect(failed.members[0].cleanupOwnership.worktreeCreated)
-        #expect(failed.members[0].gitLineageID == nil)
+        let expectedLineage = "workspace-\(checkout.id.uuidString.lowercased())-\(failed.members[0].id.uuidString.lowercased())"
+        #expect(failed.members[0].gitLineageID == expectedLineage)
         #expect(await git.sawOwnedWorktreeBeforeCreate)
 
         _ = try await coordinator.resumeCreation(checkoutID: checkout.id)
 
         let repaired = try #require(await store.checkout(id: checkout.id))
         #expect(repaired.members[0].checkpoint == .setupComplete)
-        #expect(repaired.members[0].gitLineageID == "recovered-lineage")
+        #expect(repaired.members[0].gitLineageID == expectedLineage)
         #expect(await git.createCount == 1)
         #expect(await git.existingLineageAllowedRecording)
     }
@@ -620,7 +621,7 @@ private actor LineageFailureThenRecoveryGit: WorkspaceGitOperating {
 
     func existingCreatedWorktreeLineage(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? {
         existingLineageAllowedRecording = operation.canRecordMissingLineage
-        return operation.canRecordMissingLineage ? "recovered-lineage" : nil
+        return operation.canRecordMissingLineage ? operation.expectedLineageID : nil
     }
 }
 
