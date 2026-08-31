@@ -7686,6 +7686,7 @@ final class AppState {
             pid: Int64(ProcessInfo.processInfo.processIdentifier),
             hydratorPath: dbURL.path,
             remoteHost: pinnedRemoteHost,
+            usesRemoteHostRegistry: checkout.executionLocation.normalized != .local,
             onDirtyCheck: { [weak self] path in
                 guard let worktreeID = checkoutMemberWorktreeID(path) else { return false }
                 return self?.editorHasDirtyBuffer(for: path, worktreeId: worktreeID) ?? false

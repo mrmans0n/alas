@@ -15,16 +15,21 @@ actor GitStatusCache {
     private let ttl: TimeInterval = 2
 
     func statuses(for worktree: SearchWorktree) async throws -> [String: GitStatusBadge] {
-        try await statuses(forWorktreePath: worktree.absolutePath, remoteHost: worktree.remoteHost, cacheKey: worktree.cacheKey)
+        try await statuses(
+            forWorktreePath: worktree.absolutePath,
+            remoteHost: worktree.remoteHost,
+            usesRemoteHostRegistry: worktree.usesRemoteHostRegistry,
+            cacheKey: worktree.cacheKey
+        )
     }
 
     func statuses(forWorktreePath worktree: URL) async throws -> [String: GitStatusBadge] {
         let remoteHost = RemoteHostRegistry.shared.host(forPath: worktree.path)
         let key = remoteHost.map { "ssh:\($0):\(worktree.path)" } ?? "local:\(worktree.path)"
-        return try await statuses(forWorktreePath: worktree, remoteHost: remoteHost, cacheKey: key)
+        return try await statuses(forWorktreePath: worktree, remoteHost: remoteHost, usesRemoteHostRegistry: true, cacheKey: key)
     }
 
-    private func statuses(forWorktreePath worktree: URL, remoteHost: String?, cacheKey key: String) async throws -> [String: GitStatusBadge] {
+    private func statuses(forWorktreePath worktree: URL, remoteHost: String?, usesRemoteHostRegistry: Bool, cacheKey key: String) async throws -> [String: GitStatusBadge] {
         if let hit = cache[key], Date().timeIntervalSince(hit.timestamp) < ttl {
             return hit.statuses
         }
@@ -32,7 +37,8 @@ actor GitStatusCache {
         let result = try await Process.git(
             ["-c", "core.quotePath=false", "status", "--porcelain=v1", "--no-renames", "-z"],
             cwd: worktree,
-            remoteHost: remoteHost
+            remoteHost: remoteHost,
+            usesRemoteHostRegistry: usesRemoteHostRegistry
         )
         guard result.exitCode == 0 else {
             logger.error("git status exit \(result.exitCode): \(result.stderr)")

@@ -305,6 +305,7 @@ final class ContentSearcher: Sendable {
                 RemoteContentSearch.gitGrepArgs(query: query, options: options),
                 cwd: worktree.absolutePath,
                 remoteHost: worktree.remoteHost,
+                usesRemoteHostRegistry: worktree.usesRemoteHostRegistry,
                 timeout: 60
             )
         }
