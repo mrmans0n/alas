@@ -179,7 +179,27 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
 
         #expect(await git.prepareCount == 0)
         #expect(await git.createCount == 1)
-        #expect(await store.checkout(id: checkout.id)?.members[0].cleanupOwnership.branchOwnership == .created)
+        #expect(await store.checkout(id: checkout.id)?.members[0].cleanupOwnership.branchOwnership == .unknown)
+    }
+
+    @Test func createIntentWithExternallyPreparedSameCommitBranchDoesNotClaimBranchOwnership() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-coordinator-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = WorkspaceStore(url: url)
+        let fixture = makeFixture(count: 1)
+        let git = PreparedBranchWorkspaceGit()
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: store,
+            git: git,
+            scripts: NoopWorkspaceScriptRunner(),
+            projectMutationGate: ProjectMutationGate()
+        )
+
+        let checkout = try await coordinator.create(workspace: fixture.workspace, plan: fixture.plan)
+        await coordinator.awaitCreationCompletion(checkoutID: checkout.id)
+
+        #expect(await git.prepareCount == 0)
+        #expect(await store.checkout(id: checkout.id)?.members[0].cleanupOwnership.branchOwnership == .unknown)
     }
 
     @Test func overlappingMemberDeletionRejectsTheSecondLiveCall() async throws {
