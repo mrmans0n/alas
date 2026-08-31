@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 import Testing
 @testable import Alas
 
@@ -102,6 +103,48 @@ struct OwnerTabsManagerTests {
         #expect(state.activateAdjacentCenterTab(.previous, worktreeId: "member", sharedSessionOwner: owner) == shared.id)
         #expect(manager.activeTabId(for: owner) == shared.id)
         #expect(manager.activeTabId(forWorktree: "member") == nil)
+    }
+
+    @Test func paneFocusShortcutRoutesToActiveSharedCheckoutTerminal() async throws {
+        let workspaceURL = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-owner-pane-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: workspaceURL) }
+        let store = WorkspaceStore(url: workspaceURL)
+        let checkout = WorkspaceCheckout(
+            workspaceID: nil,
+            fallbackWorkspaceName: "Workspace",
+            executionLocation: .local,
+            branch: "topic",
+            rootPath: "/checkout",
+            members: []
+        )
+        try await store.checkpoint(.init(checkouts: [checkout]))
+        let workspacesManager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: store))
+        let manager = TabsManager(store: OwnerTabsMemoryStore())
+        let state = AppState(
+            store: OwnerTabsMemoryStore(),
+            tabsManager: manager,
+            workspacesManager: workspacesManager,
+            workspaceStore: store
+        )
+        state.config.workspacesEnabled = true
+        _ = await workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+        state.selectWorkspaceCheckout(id: checkout.id)
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, .local)
+        let tab = manager.appendTerminal(owner: owner, title: "Shared", sessionId: "first")
+        _ = manager.splitFocusedLeaf(owner: owner, tabId: tab.id, axis: .vertical, newLeafId: "second", newSessionId: "second")
+        _ = manager.setFocusedLeaf(owner: owner, tabId: tab.id, leafId: "first")
+        state.terminalLeafFrames[tab.id] = [
+            "first": CGRect(x: 0, y: 0, width: 20, height: 20),
+            "second": CGRect(x: 40, y: 0, width: 20, height: 20),
+        ]
+
+        state.focusPane(worktreeId: "member", sharedSessionOwner: owner, direction: .right)
+
+        guard case let .terminal(stateAfter) = manager.tabs(for: owner).first else {
+            Issue.record("Expected shared terminal tab")
+            return
+        }
+        #expect(stateAfter.focusedLeafId == "second")
     }
 }
 

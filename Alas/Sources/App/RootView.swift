@@ -941,35 +941,41 @@ private struct RootPaneHandlers: ViewModifier {
     func body(content: Content) -> some View {
         content
             .onReceive(NotificationCenter.default.publisher(for: .alasSplitRight)) { _ in
-                if let wt = selectedWorktree() { state.splitFocusedPane(worktreeId: wt.id, axis: .vertical) }
+                if let wt = selectedWorktree() { state.splitFocusedPane(worktreeId: wt.id, sharedSessionOwner: selectedWorkspaceSessionOwner(), axis: .vertical) }
             }
             .onReceive(NotificationCenter.default.publisher(for: .alasSplitDown)) { _ in
-                if let wt = selectedWorktree() { state.splitFocusedPane(worktreeId: wt.id, axis: .horizontal) }
+                if let wt = selectedWorktree() { state.splitFocusedPane(worktreeId: wt.id, sharedSessionOwner: selectedWorkspaceSessionOwner(), axis: .horizontal) }
             }
             .onReceive(NotificationCenter.default.publisher(for: .alasFocusPaneLeft)) { _ in
-                if let wt = selectedWorktree() { state.focusPane(worktreeId: wt.id, direction: .left) }
+                if let wt = selectedWorktree() { state.focusPane(worktreeId: wt.id, sharedSessionOwner: selectedWorkspaceSessionOwner(), direction: .left) }
             }
             .onReceive(NotificationCenter.default.publisher(for: .alasFocusPaneRight)) { _ in
-                if let wt = selectedWorktree() { state.focusPane(worktreeId: wt.id, direction: .right) }
+                if let wt = selectedWorktree() { state.focusPane(worktreeId: wt.id, sharedSessionOwner: selectedWorkspaceSessionOwner(), direction: .right) }
             }
             .onReceive(NotificationCenter.default.publisher(for: .alasFocusPaneUp)) { _ in
-                if let wt = selectedWorktree() { state.focusPane(worktreeId: wt.id, direction: .up) }
+                if let wt = selectedWorktree() { state.focusPane(worktreeId: wt.id, sharedSessionOwner: selectedWorkspaceSessionOwner(), direction: .up) }
             }
             .onReceive(NotificationCenter.default.publisher(for: .alasFocusPaneDown)) { _ in
-                if let wt = selectedWorktree() { state.focusPane(worktreeId: wt.id, direction: .down) }
+                if let wt = selectedWorktree() { state.focusPane(worktreeId: wt.id, sharedSessionOwner: selectedWorkspaceSessionOwner(), direction: .down) }
             }
             .onReceive(NotificationCenter.default.publisher(for: .alasResizePaneLeft)) { _ in
-                if let wt = selectedWorktree() { state.resizePane(worktreeId: wt.id, direction: .left) }
+                if let wt = selectedWorktree() { state.resizePane(worktreeId: wt.id, sharedSessionOwner: selectedWorkspaceSessionOwner(), direction: .left) }
             }
             .onReceive(NotificationCenter.default.publisher(for: .alasResizePaneRight)) { _ in
-                if let wt = selectedWorktree() { state.resizePane(worktreeId: wt.id, direction: .right) }
+                if let wt = selectedWorktree() { state.resizePane(worktreeId: wt.id, sharedSessionOwner: selectedWorkspaceSessionOwner(), direction: .right) }
             }
             .onReceive(NotificationCenter.default.publisher(for: .alasResizePaneUp)) { _ in
-                if let wt = selectedWorktree() { state.resizePane(worktreeId: wt.id, direction: .up) }
+                if let wt = selectedWorktree() { state.resizePane(worktreeId: wt.id, sharedSessionOwner: selectedWorkspaceSessionOwner(), direction: .up) }
             }
             .onReceive(NotificationCenter.default.publisher(for: .alasResizePaneDown)) { _ in
-                if let wt = selectedWorktree() { state.resizePane(worktreeId: wt.id, direction: .down) }
+                if let wt = selectedWorktree() { state.resizePane(worktreeId: wt.id, sharedSessionOwner: selectedWorkspaceSessionOwner(), direction: .down) }
             }
+    }
+
+    private func selectedWorkspaceSessionOwner() -> SessionOwnerID? {
+        state.selectedWorkspaceCheckout.map {
+            SessionOwnerID.workspaceCheckout($0.id, $0.executionLocation)
+        }
     }
 }
 

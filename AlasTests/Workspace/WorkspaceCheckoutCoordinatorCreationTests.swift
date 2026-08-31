@@ -332,6 +332,26 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
         #expect(persisted?.diagnostics.contains(where: { $0.message == "Could not write the Workspace checkout manifest." }) == true)
     }
 
+    @Test func manifestRefreshesWithMemberAvailabilityAfterCreationCompletes() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-coordinator-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = WorkspaceStore(url: url)
+        let fixture = makeFixture(count: 1)
+        let manifests = RecordingManifestWriter()
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: store,
+            git: ConcurrentWorkspaceGit(failingProjectID: "never"),
+            scripts: NoopWorkspaceScriptRunner(),
+            projectMutationGate: ProjectMutationGate(),
+            manifests: manifests
+        )
+
+        let checkout = try await coordinator.create(workspace: fixture.workspace, plan: fixture.plan)
+        await coordinator.awaitCreationCompletion(checkoutID: checkout.id)
+
+        #expect(await manifests.memberAvailabilities.contains([.available]))
+    }
+
     private func makeFixture(count: Int) -> (workspace: Workspace, plan: FrozenWorkspaceCheckoutPlan) {
         let members = (0 ..< count).map { index in
             WorkspaceMember(projectID: "project-\(index)", fallbackProjectName: "Project \(index)", fallbackRepositoryRoot: "/repos/\(index)")
@@ -425,9 +445,15 @@ private enum TestError: Error { case failed }
 
 private actor RecordingManifestWriter: WorkspaceCheckoutManifestWriting {
     private(set) var writeCount = 0
+    private var snapshots: [WorkspaceCheckout] = []
+
+    var memberAvailabilities: [[WorkspaceCheckoutMemberAvailability]] {
+        snapshots.map { $0.members.map(\.availability) }
+    }
 
     func writeManifest(for checkout: WorkspaceCheckout) async throws {
         writeCount += 1
+        snapshots.append(checkout)
     }
 }
 

@@ -58,6 +58,19 @@ struct WorkspaceCheckoutManifest: Codable, Equatable, Sendable {
         var id: UUID
         var projectID: String
         var path: String
+        var availability: WorkspaceCheckoutMemberAvailability
+
+        init(
+            id: UUID,
+            projectID: String,
+            path: String,
+            availability: WorkspaceCheckoutMemberAvailability = .pending
+        ) {
+            self.id = id
+            self.projectID = projectID
+            self.path = path
+            self.availability = availability
+        }
     }
 
     var version: Int = Self.version
@@ -110,7 +123,7 @@ struct WorkspaceCheckoutManifestWriter: WorkspaceCheckoutManifestWriting, Sendab
             rootPath: checkout.rootPath,
             branch: checkout.branch,
             members: checkout.members.map {
-                .init(id: $0.id, projectID: $0.projectID, path: $0.worktreePath)
+                .init(id: $0.id, projectID: $0.projectID, path: $0.worktreePath, availability: $0.availability)
             }
         )
         try await write(manifest, to: checkout.rootPath, location: checkout.executionLocation)

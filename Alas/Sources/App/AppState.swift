@@ -963,6 +963,7 @@ final class AppState {
                 guard let self else { return }
                 await self.setWorkspacesEnabled(true, persistConfig: false)
                 self.loadWorkspaceCheckoutSessionTabs(restoringActiveTabs: restoringActiveTabs)
+                await self.restoreLoadedWorkspaceCheckoutACPSessions()
                 if !self.config.terminal.keepSessionsAlive {
                     self.pruneWorkspaceCheckoutTerminalTabs()
                 }
@@ -1003,6 +1004,13 @@ final class AppState {
         sweepOrphanZmxSessions(worktreeIds: allWorktreeIds)
         Task { [weak self] in
             await self?.reconcileInterruptedDelegations()
+        }
+    }
+
+    private func restoreLoadedWorkspaceCheckoutACPSessions() async {
+        guard config.workspacesEnabled, workspacesManager.canMutate else { return }
+        for checkout in workspacesManager.checkouts where checkout.archivedAt == nil {
+            _ = await restoreWorkspaceCheckoutACPSessions(checkout)
         }
     }
 
@@ -1485,6 +1493,14 @@ final class AppState {
         } catch {
             AlasGhostty.logger.error("splitFocusedPane checkout failed: \(String(describing: error), privacy: .public)")
         }
+    }
+
+    func splitFocusedPane(worktreeId: String, sharedSessionOwner: SessionOwnerID?, axis: SplitAxis) {
+        if let checkout = activeSharedCheckoutTerminal(worktreeId: worktreeId, owner: sharedSessionOwner) {
+            splitFocusedPane(checkout: checkout, axis: axis)
+            return
+        }
+        splitFocusedPane(worktreeId: worktreeId, axis: axis)
     }
 
     private func workspaceTerminalContext(for checkout: WorkspaceCheckout) -> WorkspaceTerminalContext {
@@ -4710,6 +4726,26 @@ final class AppState {
         _ = tabs.setFocusedLeaf(worktreeId: worktreeId, tabId: activeId, leafId: next)
     }
 
+    func focusPane(worktreeId: String, sharedSessionOwner: SessionOwnerID?, direction: PaneFocusDirection) {
+        guard let owner = sharedSessionOwner,
+              activeSharedCheckoutTerminal(worktreeId: worktreeId, owner: owner) != nil,
+              let activeId = centerTabComposition(
+                  focusedWorktreeID: worktreeId,
+                  sharedSessionOwner: owner
+              ).activeId,
+              let tab = tabs.tabs(for: owner).first(where: { $0.id == activeId }),
+              case .terminal(let state) = tab,
+              let frames = terminalLeafFrames[activeId],
+              let next = PaneFocusFinder.nearestLeaf(
+                from: state.focusedLeafId, direction: direction, frames: frames
+              )
+        else {
+            focusPane(worktreeId: worktreeId, direction: direction)
+            return
+        }
+        _ = tabs.setFocusedLeaf(owner: owner, tabId: activeId, leafId: next)
+    }
+
     /// Resize the focused leaf's enclosing split by ±0.05 toward `direction`.
     /// Picks the innermost split on the focused-leaf's path whose axis matches
     /// the direction's axis; nudges its fraction (positive when the focused
@@ -4731,6 +4767,53 @@ final class AppState {
         }()
         let newFraction = target.fraction + signed
         _ = tabs.setSplitFraction(worktreeId: worktreeId, tabId: activeId, splitId: target.id, fraction: newFraction)
+    }
+
+    func resizePane(worktreeId: String, sharedSessionOwner: SessionOwnerID?, direction: PaneFocusDirection) {
+        guard let owner = sharedSessionOwner,
+              activeSharedCheckoutTerminal(worktreeId: worktreeId, owner: owner) != nil,
+              let activeId = centerTabComposition(
+                  focusedWorktreeID: worktreeId,
+                  sharedSessionOwner: owner
+              ).activeId,
+              let tab = tabs.tabs(for: owner).first(where: { $0.id == activeId }),
+              case .terminal(let state) = tab,
+              let pathLeaf = state.root.find(leafId: state.focusedLeafId)
+        else {
+            resizePane(worktreeId: worktreeId, direction: direction)
+            return
+        }
+        let axis: SplitAxis = (direction == .left || direction == .right) ? .vertical : .horizontal
+        guard let target = innermostSplit(matching: axis, path: pathLeaf.path, in: state.root) else { return }
+        let isFirstChildOfTarget = isLeafInFirstChild(of: target, leafId: state.focusedLeafId)
+        let delta = 0.05
+        let signed: Double = {
+            switch direction {
+            case .right, .down: return isFirstChildOfTarget ? delta : -delta
+            case .left, .up:    return isFirstChildOfTarget ? -delta : delta
+            }
+        }()
+        let newFraction = target.fraction + signed
+        _ = tabs.setSplitFraction(owner: owner, tabId: activeId, splitId: target.id, fraction: newFraction)
+    }
+
+    private func activeSharedCheckoutTerminal(worktreeId: String, owner: SessionOwnerID?) -> WorkspaceCheckout? {
+        guard let owner,
+              case .workspaceCheckout(let checkoutID, _) = owner,
+              let checkout = selectedWorkspaceCheckout,
+              checkout.id == checkoutID,
+              let activeId = centerTabComposition(
+                  focusedWorktreeID: worktreeId,
+                  sharedSessionOwner: owner
+              ).activeId,
+              tabs.tabs(for: owner).contains(where: {
+                  guard $0.id == activeId,
+                        case .terminal = $0
+                  else { return false }
+                  return true
+              })
+        else { return nil }
+        return checkout
     }
 
     /// ⌘W router: if the active tab is a multi-pane terminal, close the focused
