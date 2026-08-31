@@ -6988,6 +6988,7 @@ final class AppState {
             ), result.exitCode == 0 else {
                 return .pendingRootOrLocation
             }
+            RemoteHostRegistry.shared.register(root: checkout.rootPath, host: destination)
         }
 
         let dbURL = Paths.acpSessionsDB(for: owner)
