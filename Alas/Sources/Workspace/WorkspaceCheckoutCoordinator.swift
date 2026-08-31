@@ -1101,12 +1101,19 @@ actor WorkspaceCheckoutCoordinator {
                     try await self.updateMember(checkoutID: checkout.id, memberID: plan.checkoutMemberID) { member in
                         member.checkpoint = .branchPreparing
                     }
-                    if try await self.git.preparedBranchMatchesFrozenBase(operation) == false {
+                    let branchAlreadyMatchedFrozenBase = try await self.git.preparedBranchMatchesFrozenBase(operation)
+                    if branchAlreadyMatchedFrozenBase == false {
                         try await self.git.prepareBranch(operation)
                     }
                     try await self.updateMember(checkoutID: checkout.id, memberID: plan.checkoutMemberID) { member in
                         member.checkpoint = .branchPrepared
-                        member.cleanupOwnership.branchOwnership = plan.branchIntent == .reuse ? .reused : .created
+                        member.cleanupOwnership.branchOwnership = if plan.branchIntent == .reuse {
+                            .reused
+                        } else if branchAlreadyMatchedFrozenBase {
+                            .unknown
+                        } else {
+                            .created
+                        }
                     }
                     try await self.updateMember(checkoutID: checkout.id, memberID: plan.checkoutMemberID) { member in
                         member.checkpoint = .worktreeCreating

@@ -1707,6 +1707,8 @@ final class AppState {
               preference.openAfterCreate == true
         else { return }
 
+        await refreshWorkspaceCheckoutMemberProjects(checkout)
+        await workspacesManager.refreshCheckoutSnapshots()
         selectWorkspaceCheckout(id: checkout.id)
         switch preference.launcherMode ?? .terminal {
         case .terminal:
@@ -1725,6 +1727,14 @@ final class AppState {
         case .acp:
             guard let agentID = preference.agentID, agent(id: agentID) != nil else { return }
             _ = await openWorkspaceCheckoutACPSession(checkout: checkout, agentID: agentID)
+        }
+    }
+
+    private func refreshWorkspaceCheckoutMemberProjects(_ checkout: WorkspaceCheckout) async {
+        var refreshed = Set<String>()
+        for member in checkout.members where !refreshed.contains(member.projectID) {
+            refreshed.insert(member.projectID)
+            _ = try? await refreshProjectWorktrees(projectId: member.projectID)
         }
     }
 
@@ -6043,6 +6053,9 @@ final class AppState {
     }
 
     func worktree(withId id: String) -> Worktree? {
+        if let focused = workspaceSelectedWorktree(matching: id) {
+            return focused.worktree
+        }
         for project in projects {
             if let worktree = projectsManager.worktrees(projectId: project.id).first(where: { $0.id == id }) {
                 return worktree
@@ -6065,12 +6078,29 @@ final class AppState {
     }
 
     private func projectAndWorktree(withWorktreeId id: String) -> (project: ProjectConfig, worktree: Worktree)? {
+        if let focused = workspaceSelectedWorktree(matching: id),
+           let project = projects.first(where: { $0.id == focused.worktree.projectId }) {
+            return (project, focused.worktree)
+        }
         for project in projects {
             if let worktree = projectsManager.worktrees(projectId: project.id).first(where: { $0.id == id }) {
                 return (project, worktree)
             }
         }
         return nil
+    }
+
+    private func workspaceSelectedWorktree(matching id: String) -> (checkout: WorkspaceCheckout, member: WorkspaceCheckoutMember, worktree: Worktree)? {
+        guard workspaceNavigationState.repositoryFocusWorktreeID == id,
+              let checkout = selectedWorkspaceCheckout,
+              let memberID = workspaceNavigationState.focusedCheckoutMemberID,
+              let member = checkout.members.first(where: { $0.id == memberID && $0.availability == .available })
+        else { return nil }
+        let targetPath = URL(fileURLWithPath: member.worktreePath).standardizedFileURL.path
+        guard let worktree = projectsManager.worktrees(projectId: member.projectID).first(where: {
+            $0.id == id && $0.path.standardizedFileURL.path == targetPath
+        }) else { return nil }
+        return (checkout, member, worktree)
     }
 
     private func acpQuestionNotificationBody(from params: ACPQuestionRequestParams) -> String? {
