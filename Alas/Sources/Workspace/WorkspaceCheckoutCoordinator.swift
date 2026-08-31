@@ -289,12 +289,18 @@ actor WorkspaceCheckoutCoordinator {
                 }
             }
             if plan.branchOwnership == .created {
-                let removed = try await projectMutationGate.withMutation(projectID: member.projectID) {
-                    try await lifecycle.deleteMergedBranch(plan)
-                }
-                try await mutateMember(checkoutID: checkoutID, memberID: memberID) {
-                    $0.cleanup?.branchRemoved = removed
-                    $0.cleanup?.checkpoint = removed ? .complete : .branchDeleteAttempted
+                if current.cleanup?.branchRemoved == true {
+                    try await mutateMember(checkoutID: checkoutID, memberID: memberID) {
+                        $0.cleanup?.checkpoint = .complete
+                    }
+                } else {
+                    let removed = try await projectMutationGate.withMutation(projectID: member.projectID) {
+                        try await lifecycle.deleteMergedBranch(plan)
+                    }
+                    try await mutateMember(checkoutID: checkoutID, memberID: memberID) {
+                        $0.cleanup?.branchRemoved = removed
+                        $0.cleanup?.checkpoint = removed ? .complete : .branchDeleteAttempted
+                    }
                 }
             }
             let leftovers = await lifecycle.inspectRoot(plan).leftovers

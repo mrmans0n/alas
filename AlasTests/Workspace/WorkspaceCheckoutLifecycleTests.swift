@@ -95,6 +95,42 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(await lifecycle.removedMembers.isEmpty)
     }
 
+    @Test func interruptedDeletionKeepsAlreadyRemovedBranchComplete() async throws {
+        let fixture = try await Fixture.make()
+        let plan = WorkspaceCheckoutCleanupPlan(
+            checkoutID: fixture.checkout.id,
+            memberID: fixture.member.id,
+            executionLocation: fixture.checkout.executionLocation,
+            projectID: fixture.member.projectID,
+            sourceRepositoryPath: fixture.member.plan!.sourceRepositoryPath,
+            baseReference: fixture.member.plan!.baseReference,
+            baseCommit: fixture.member.plan!.baseCommit,
+            rootPath: fixture.checkout.rootPath,
+            managedMemberPaths: [fixture.member.worktreePath],
+            worktreePath: fixture.member.worktreePath,
+            branch: fixture.checkout.branch,
+            expectedLineageID: fixture.member.gitLineageID!,
+            branchOwnership: .created
+        )
+        try await fixture.store.mutate { state in
+            state.checkouts[0].operation = .deleting
+            state.checkouts[0].members[0].cleanup = .init(
+                plan: plan,
+                checkpoint: .complete,
+                worktreeRemoved: true,
+                branchRemoved: true
+            )
+        }
+        let lifecycle = FixtureLifecycle(verification: .missing)
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+
+        let checkout = try await coordinator.deleteMember(checkoutID: fixture.checkout.id, memberID: fixture.member.id)
+
+        #expect(checkout.members[0].cleanup?.branchRemoved == true)
+        #expect(checkout.members[0].cleanup?.checkpoint == .complete)
+        #expect(await lifecycle.deletedBranches.isEmpty)
+    }
+
     @Test func interruptedDeletionTreatsMissingWorktreeAsRemovedWhenCleanupPlanWasDurable() async throws {
         let fixture = try await Fixture.make()
         let plan = WorkspaceCheckoutCleanupPlan(

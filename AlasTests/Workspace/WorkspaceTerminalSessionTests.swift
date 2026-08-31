@@ -48,6 +48,42 @@ struct WorkspaceTerminalSessionTests {
         #expect(launch.environment["ALAS_WORKTREE"] == nil)
     }
 
+    @Test func localCheckoutTerminalInjectsCliSocketAndSessionEnvironment() throws {
+        let context = WorkspaceTerminalContext(
+            checkoutID: checkoutID,
+            executionLocation: .local,
+            rootPath: "/work/checkout",
+            branch: "feature/shared",
+            manifestPath: "/work/checkout/.alas-workspace-checkout.json"
+        )
+
+        let env = try TerminalService.checkoutLocalEnvironment(
+            context: context,
+            leafID: "leaf-1",
+            inheritParent: true,
+            parent: [
+                "PATH": "/usr/bin:/bin",
+                "ALAS_SOCKET_PATH": "/tmp/wrong.sock",
+                "ALAS_SESSION_ID": "wrong",
+            ],
+            socketPath: "/tmp/alas.sock",
+            zmxDir: "/tmp/zmx",
+            cliInstaller: { URL(fileURLWithPath: "/managed/bin", isDirectory: true) }
+        )
+
+        #expect(env["ALAS_WORKSPACE_CHECKOUT_ID"] == checkoutID.uuidString.lowercased())
+        #expect(env["ALAS_WORKSPACE_CHECKOUT_ROOT"] == "/work/checkout")
+        #expect(env["ALAS_WORKSPACE_BRANCH"] == "feature/shared")
+        #expect(env["ALAS_WORKSPACE_MANIFEST"] == "/work/checkout/.alas-workspace-checkout.json")
+        #expect(env["ALAS_SESSION_ID"] == "leaf-1")
+        #expect(env["ALAS_SOCKET_PATH"] == "/tmp/alas.sock")
+        #expect(env["ZMX_SESSION"] == "")
+        #expect(env["ZMX_DIR"] == "/tmp/zmx")
+        #expect(env["PATH"] == "/managed/bin:/usr/bin:/bin")
+        #expect(env["ALAS_REPO"] == nil)
+        #expect(env["ALAS_WORKTREE"] == nil)
+    }
+
     @Test func checkoutRestoreRequiresMatchingLocationAndKeepsTheValidatedCwdForRemoteLaunch() {
         let context = WorkspaceTerminalContext(
             checkoutID: checkoutID,
