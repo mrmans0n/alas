@@ -82,6 +82,27 @@ struct OwnerTabsManagerTests {
         #expect(manager.tabs(forWorktree: "member").isEmpty)
         #expect(state.canReopenClosedTab)
     }
+
+    @Test func keyboardRoutingUsesComposedSharedThenMemberOrder() {
+        let manager = TabsManager(store: OwnerTabsMemoryStore())
+        let state = AppState(store: OwnerTabsMemoryStore(), tabsManager: manager)
+        let owner = SessionOwnerID.workspaceCheckout(UUID(), .local)
+        let shared = manager.appendTerminal(owner: owner, title: "Shared", sessionId: "shared")
+        let member = Tab.editor(.init(id: "member-editor", title: "Member", relativePath: "Member.swift"))
+        manager.restore(
+            tab: member,
+            worktreeID: "member",
+            placement: .init(previousID: nil, nextID: nil, ordinal: 0)
+        )
+
+        #expect(state.activateCenterTabNumber(2, worktreeId: "member", sharedSessionOwner: owner) == member.id)
+        #expect(manager.activeTabId(forWorktree: "member") == member.id)
+        #expect(manager.activeTabId(for: owner) == nil)
+
+        #expect(state.activateAdjacentCenterTab(.previous, worktreeId: "member", sharedSessionOwner: owner) == shared.id)
+        #expect(manager.activeTabId(for: owner) == shared.id)
+        #expect(manager.activeTabId(forWorktree: "member") == nil)
+    }
 }
 
 private final class OwnerTabsMemoryStore: PersistenceStoreProtocol {

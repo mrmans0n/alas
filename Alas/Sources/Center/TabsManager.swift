@@ -150,6 +150,10 @@ final class TabsManager {
         persist(worktreeId)
     }
 
+    func moveTab(owner: SessionOwnerID, fromId: TabID, toId: TabID) {
+        moveTab(worktreeId: owner.storageKey, fromId: fromId, toId: toId)
+    }
+
     @discardableResult
     func activateTabNumber(_ number: Int, worktreeId: String) -> TabID? {
         guard number > 0 else { return nil }
@@ -304,6 +308,11 @@ final class TabsManager {
     }
 
     @discardableResult
+    func renameTerminal(owner: SessionOwnerID, tabId: TabID, title: String) -> Tab? {
+        renameTerminal(worktreeId: owner.storageKey, tabId: tabId, title: title)
+    }
+
+    @discardableResult
     func renameACPSession(worktreeId: String, tabId: TabID, title: String) -> Tab? {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
@@ -316,6 +325,11 @@ final class TabsManager {
         byWorktree[worktreeId] = file
         persist(worktreeId)
         return tab
+    }
+
+    @discardableResult
+    func renameACPSession(owner: SessionOwnerID, tabId: TabID, title: String) -> Tab? {
+        renameACPSession(worktreeId: owner.storageKey, tabId: tabId, title: title)
     }
 
     @discardableResult

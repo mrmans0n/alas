@@ -284,6 +284,12 @@ struct RootView: View {
         return nil
     }
 
+    private func selectedWorkspaceSessionOwner() -> SessionOwnerID? {
+        state.selectedWorkspaceCheckout.map {
+            SessionOwnerID.workspaceCheckout($0.id, $0.executionLocation)
+        }
+    }
+
     private func openOrFocusDiff(worktree: Worktree, path: String, staged: Bool, originalPath: String?) {
         if ImageFileType.isSupported(relativePath: path) {
             state.openFile(relativePath: path, worktreeId: worktree.id)
@@ -783,7 +789,10 @@ private struct RootBaseHandlers: ViewModifier {
             }
         let f = e
             .onReceive(NotificationCenter.default.publisher(for: .alasCloseTab)) { _ in
-                state.handleCloseCenterShortcut(worktreeId: selectedWorktree()?.id)
+                state.handleCloseCenterShortcut(
+                    worktreeId: selectedWorktree()?.id,
+                    sharedSessionOwner: selectedWorkspaceSessionOwner()
+                )
             }
         let fReopenClosedTab = f
             .onReceive(NotificationCenter.default.publisher(for: .alasReopenClosedTab)) { _ in
@@ -794,12 +803,20 @@ private struct RootBaseHandlers: ViewModifier {
         let gAdjacent = fReopenClosedTab
             .onReceive(NotificationCenter.default.publisher(for: .alasActivateAdjacentTab)) { notification in
                 guard let direction = notification.object as? CenterTabNavigationDirection else { return }
-                state.activateAdjacentCenterTab(direction, worktreeId: selectedWorktree()?.id)
+                state.activateAdjacentCenterTab(
+                    direction,
+                    worktreeId: selectedWorktree()?.id,
+                    sharedSessionOwner: selectedWorkspaceSessionOwner()
+                )
             }
         let g = gAdjacent
             .onReceive(NotificationCenter.default.publisher(for: .alasActivateTabByNumber)) { notification in
                 guard let number = notification.object as? Int else { return }
-                state.activateCenterTabNumber(number, worktreeId: selectedWorktree()?.id)
+                state.activateCenterTabNumber(
+                    number,
+                    worktreeId: selectedWorktree()?.id,
+                    sharedSessionOwner: selectedWorkspaceSessionOwner()
+                )
             }
         let h = g
             .onReceive(NotificationCenter.default.publisher(for: .alasSaveActiveTab)) { _ in
@@ -908,6 +925,12 @@ private struct RootBaseHandlers: ViewModifier {
                 // they'd accumulate across the lifetime of the daemon.
                 state.terminal.waitForPendingKills(timeout: 3.0)
             }
+    }
+
+    private func selectedWorkspaceSessionOwner() -> SessionOwnerID? {
+        state.selectedWorkspaceCheckout.map {
+            SessionOwnerID.workspaceCheckout($0.id, $0.executionLocation)
+        }
     }
 }
 

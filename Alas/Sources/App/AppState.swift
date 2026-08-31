@@ -967,6 +967,7 @@ final class AppState {
                     self.pruneWorkspaceCheckoutTerminalTabs()
                 }
                 self.refreshPersistedHookSymlinks()
+                self.sweepOrphanWorkspaceCheckoutZmxSessions()
             }
         }
         let allWorktreeIds = projectsManager.projects.flatMap {
@@ -1075,6 +1076,37 @@ final class AppState {
                 )
             }
         }
+    }
+
+    private func sweepOrphanWorkspaceCheckoutZmxSessions() {
+        let knownLeavesByOwner = workspaceCheckoutTerminalLeafIDsByOwner()
+        guard !knownLeavesByOwner.isEmpty else { return }
+        terminal.sweepWorkspaceCheckoutOrphans(knownLeavesByOwner: knownLeavesByOwner)
+
+        let remoteHosts = Set(knownLeavesByOwner.keys.compactMap { owner -> String? in
+            guard case .workspaceCheckout(_, .ssh(let host)) = owner else { return nil }
+            return host
+        })
+        for host in remoteHosts {
+            Task {
+                await TerminalService.sweepRemoteWorkspaceCheckoutOrphans(
+                    host: host,
+                    knownLeavesByOwner: knownLeavesByOwner
+                )
+            }
+        }
+    }
+
+    private func workspaceCheckoutTerminalLeafIDsByOwner() -> [SessionOwnerID: Set<String>] {
+        Dictionary(uniqueKeysWithValues: workspacesManager.checkouts.compactMap { checkout in
+            let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+            let leafIDs = tabs.tabs(for: owner).flatMap { tab -> [String] in
+                guard case .terminal(let state) = tab else { return [] }
+                return state.root.leaves().map(\.id)
+            }
+            guard !leafIDs.isEmpty else { return nil }
+            return (owner, Set(leafIDs))
+        })
     }
 
     var projects: [ProjectConfig] { projectsManager.projects }
@@ -4712,41 +4744,66 @@ final class AppState {
         }
     }
 
-    func handleCloseCenterShortcut(worktreeId: String?) {
+    func handleCloseCenterShortcut(worktreeId: String?, sharedSessionOwner: SessionOwnerID? = nil) {
         guard let worktreeId else { return }
+        if let sharedSessionOwner,
+           let activeId = centerTabComposition(
+               focusedWorktreeID: worktreeId,
+               sharedSessionOwner: sharedSessionOwner
+           ).activeId,
+           tabs.tabs(for: sharedSessionOwner).contains(where: { $0.id == activeId }) {
+            requestCloseSharedSessionTab(owner: sharedSessionOwner, tabID: activeId)
+            return
+        }
         handleCloseShortcut(worktreeId: worktreeId)
     }
 
     @discardableResult
-    func activateCenterTabNumber(_ number: Int, worktreeId: String?) -> TabID? {
+    func activateCenterTabNumber(
+        _ number: Int,
+        worktreeId: String?,
+        sharedSessionOwner: SessionOwnerID? = nil
+    ) -> TabID? {
         guard number > 0 else { return nil }
-        let worktreeTabs = worktreeId.map { tabs.tabs(forWorktree: $0) } ?? []
-        let composition = CenterTabComposition(
-            worktreeTabs: worktreeTabs,
-            activeWorktreeTabId: worktreeId.flatMap { tabs.activeTabId(forWorktree: $0) }
+        guard let worktreeId else { return nil }
+        let composition = centerTabComposition(
+            focusedWorktreeID: worktreeId,
+            sharedSessionOwner: sharedSessionOwner
         )
         let index = number - 1
         guard composition.tabs.indices.contains(index) else { return nil }
-        return activateCenterTab(composition.tabs[index].id, worktreeId: worktreeId)
+        return activateCenterTab(
+            composition.tabs[index].id,
+            worktreeId: worktreeId,
+            sharedSessionOwner: sharedSessionOwner
+        )
     }
 
     @discardableResult
     func activateAdjacentCenterTab(
         _ direction: CenterTabNavigationDirection,
-        worktreeId: String?
+        worktreeId: String?,
+        sharedSessionOwner: SessionOwnerID? = nil
     ) -> TabID? {
-        let worktreeTabs = worktreeId.map { tabs.tabs(forWorktree: $0) } ?? []
-        let composition = CenterTabComposition(
-            worktreeTabs: worktreeTabs,
-            activeWorktreeTabId: worktreeId.flatMap { tabs.activeTabId(forWorktree: $0) }
+        guard let worktreeId else { return nil }
+        let composition = centerTabComposition(
+            focusedWorktreeID: worktreeId,
+            sharedSessionOwner: sharedSessionOwner
         )
         guard let tabID = composition.adjacentTabID(in: direction) else { return nil }
-        return activateCenterTab(tabID, worktreeId: worktreeId)
+        return activateCenterTab(tabID, worktreeId: worktreeId, sharedSessionOwner: sharedSessionOwner)
     }
 
-    private func activateCenterTab(_ tabID: TabID, worktreeId: String?) -> TabID? {
-        guard let worktreeId else { return nil }
-        activateWorktreeCenterTab(worktreeId: worktreeId, tabId: tabID)
+    private func activateCenterTab(
+        _ tabID: TabID,
+        worktreeId: String,
+        sharedSessionOwner: SessionOwnerID? = nil
+    ) -> TabID? {
+        activateComposedCenterTab(
+            worktreeID: worktreeId,
+            sharedSessionOwner: sharedSessionOwner,
+            tabID: tabID
+        )
         return tabID
     }
 
@@ -5173,7 +5230,20 @@ final class AppState {
     func renameTerminalTab(worktreeId: String, tabId: TabID) {
         guard let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == tabId }),
               case .terminal(let state) = tab else { return }
+        renameTerminalTab(initialTitle: state.title, tabID: tabId) { [tabs] title in
+            _ = tabs.renameTerminal(worktreeId: worktreeId, tabId: tabId, title: title)
+        }
+    }
 
+    func renameTerminalTab(owner: SessionOwnerID, tabId: TabID) {
+        guard let tab = tabs.tabs(for: owner).first(where: { $0.id == tabId }),
+              case .terminal(let state) = tab else { return }
+        renameTerminalTab(initialTitle: state.title, tabID: tabId) { [tabs] title in
+            _ = tabs.renameTerminal(owner: owner, tabId: tabId, title: title)
+        }
+    }
+
+    private func renameTerminalTab(initialTitle: String, tabID: TabID, applyTitle: (String) -> Void) {
         let alert = NSAlert()
         alert.messageText = "Rename Terminal"
         alert.informativeText = "Choose a stable name for this terminal tab."
@@ -5182,13 +5252,13 @@ final class AppState {
         alert.addButton(withTitle: "Cancel")
 
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
-        field.stringValue = state.title
+        field.stringValue = initialTitle
         field.lineBreakMode = .byTruncatingTail
         alert.accessoryView = field
 
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        _ = tabs.renameTerminal(worktreeId: worktreeId, tabId: tabId, title: field.stringValue)
-        tabs.clearTerminalRuntimeTitles(forLeavesInTabId: tabId)
+        applyTitle(field.stringValue)
+        tabs.clearTerminalRuntimeTitles(forLeavesInTabId: tabID)
     }
 
     func renameACPSessionTab(worktreeId: String, tabId: TabID) {
@@ -5196,7 +5266,25 @@ final class AppState {
               case .acpSession(let state) = tab,
               let worktree = worktree(withId: worktreeId),
               let mgr = acpManager(for: worktree) else { return }
+        renameACPSessionTab(tabState: state, manager: mgr) { [tabs] title in
+            _ = tabs.renameACPSession(worktreeId: worktreeId, tabId: tabId, title: title)
+        }
+    }
 
+    func renameACPSessionTab(owner: SessionOwnerID, tabId: TabID) {
+        guard let tab = tabs.tabs(for: owner).first(where: { $0.id == tabId }),
+              case .acpSession(let state) = tab,
+              let mgr = acpManager(for: owner) else { return }
+        renameACPSessionTab(tabState: state, manager: mgr) { [tabs] title in
+            _ = tabs.renameACPSession(owner: owner, tabId: tabId, title: title)
+        }
+    }
+
+    private func renameACPSessionTab(
+        tabState state: ACPSessionTabState,
+        manager mgr: ACPSessionManager,
+        applyTabTitle: (String) -> Void
+    ) {
         let alert = NSAlert()
         alert.messageText = "Rename Session"
         alert.informativeText = "Choose a name for this ACP session."
@@ -5213,7 +5301,7 @@ final class AppState {
         let newTitle = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !newTitle.isEmpty else { return }
         mgr.renameSession(id: state.sessionId, title: newTitle, source: .manual)
-        _ = tabs.renameACPSession(worktreeId: worktreeId, tabId: tabId, title: newTitle)
+        applyTabTitle(newTitle)
     }
 
     /// Copy the active ACP session's conversation (user + agent, Markdown)
@@ -5230,29 +5318,53 @@ final class AppState {
         }
     }
 
+    func copyACPSessionMarkdown(owner: SessionOwnerID, tabId: TabID) {
+        Task { @MainActor in
+            await withHydratedACPSession(owner: owner, tabId: tabId) { session in
+                Clipboard.copy(ACPTranscriptMarkdown.document(
+                    title: session.title,
+                    agentName: agent(id: session.agentId)?.displayName,
+                    messages: session.transcript.messages
+                ))
+            }
+        }
+    }
+
     /// Save the active ACP session's conversation to a `.md` file via a
     /// save panel. Cancel is a no-op; write failures surface through the
     /// shared file-action error handler.
     func exportACPSessionMarkdown(worktreeId: String, tabId: TabID) {
         Task { @MainActor in
             await withHydratedACPSession(worktreeId: worktreeId, tabId: tabId) { session in
-                let markdown = ACPTranscriptMarkdown.document(
-                    title: session.title,
-                    agentName: agent(id: session.agentId)?.displayName,
-                    messages: session.transcript.messages
-                )
-                let panel = NSSavePanel()
-                panel.title = "Save Session as Markdown"
-                panel.message = "Choose where to save this conversation."
-                panel.nameFieldStringValue = ACPTranscriptMarkdown.sanitizedFilename(title: session.title)
-                panel.canCreateDirectories = true
-                guard panel.runModal() == .OK, let url = panel.url else { return }
-                do {
-                    try markdown.write(to: url, atomically: true, encoding: .utf8)
-                } catch {
-                    showFileActionError(title: "Export Failed", message: error.localizedDescription)
-                }
+                exportMarkdown(for: session)
             }
+        }
+    }
+
+    func exportACPSessionMarkdown(owner: SessionOwnerID, tabId: TabID) {
+        Task { @MainActor in
+            await withHydratedACPSession(owner: owner, tabId: tabId) { session in
+                exportMarkdown(for: session)
+            }
+        }
+    }
+
+    private func exportMarkdown(for session: ACPSession) {
+        let markdown = ACPTranscriptMarkdown.document(
+            title: session.title,
+            agentName: agent(id: session.agentId)?.displayName,
+            messages: session.transcript.messages
+        )
+        let panel = NSSavePanel()
+        panel.title = "Save Session as Markdown"
+        panel.message = "Choose where to save this conversation."
+        panel.nameFieldStringValue = ACPTranscriptMarkdown.sanitizedFilename(title: session.title)
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try markdown.write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            showFileActionError(title: "Export Failed", message: error.localizedDescription)
         }
     }
 
@@ -5287,6 +5399,21 @@ final class AppState {
         // so block until backfill is done before handing the session to
         // `body` — otherwise a long conversation would serialize as just
         // its last 30 entries.
+        await mgr.awaitBackfill(id: tabState.sessionId)
+        guard let session = mgr.sessions[tabState.sessionId] else { return }
+        body(session)
+    }
+
+    private func withHydratedACPSession(
+        owner: SessionOwnerID, tabId: TabID, _ body: (ACPSession) -> Void
+    ) async {
+        guard let tab = tabs.tabs(for: owner).first(where: { $0.id == tabId }),
+              case .acpSession(let tabState) = tab,
+              let mgr = acpManager(for: owner),
+              mgr.placeholderSession(id: tabState.sessionId) != nil else { return }
+        mgr.retainSession(id: tabState.sessionId)
+        defer { mgr.releaseSession(id: tabState.sessionId) }
+        await mgr.hydrateIfNeeded(id: tabState.sessionId)
         await mgr.awaitBackfill(id: tabState.sessionId)
         guard let session = mgr.sessions[tabState.sessionId] else { return }
         body(session)
