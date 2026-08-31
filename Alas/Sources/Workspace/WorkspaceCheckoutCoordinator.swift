@@ -67,6 +67,7 @@ struct WorkspaceFrozenWorktreeOperation: Sendable {
     var branch: String
     var baseCommit: String
     var branchIntent: FrozenBranchIntent
+    var expectedLineageID: String?
     var canRecordMissingLineage: Bool = false
 }
 
@@ -239,7 +240,12 @@ actor WorkspaceCheckoutCoordinator {
     /// Deletes exactly one attempt-owned worktree after verifying its frozen
     /// location, path, and lineage. The checkout snapshot remains, visibly
     /// Explicitly Deleted, so its frozen creation plan can later recreate it.
-    func deleteMember(checkoutID: UUID, memberID: UUID, confirmingRisks: Bool = false) async throws -> WorkspaceCheckout {
+    func deleteMember(
+        checkoutID: UUID,
+        memberID: UUID,
+        confirmingRisks: Bool = false,
+        checkoutOperationAlreadyClaimed: Bool = false
+    ) async throws -> WorkspaceCheckout {
         let deletionKey = setupKey(checkoutID: checkoutID, memberID: memberID)
         guard !activeDeletions.contains(deletionKey) else { throw WorkspaceCheckoutCoordinatorError.operationInProgress }
         activeDeletions.insert(deletionKey)
@@ -257,7 +263,8 @@ actor WorkspaceCheckoutCoordinator {
                   let memberIndex = state.checkouts[index].members.firstIndex(where: { $0.id == memberID })
             else { throw WorkspaceCheckoutCoordinatorError.operationInProgress }
             if state.checkouts[index].operation == .deleting,
-               state.checkouts[index].members[memberIndex].cleanup == nil {
+               state.checkouts[index].members[memberIndex].cleanup == nil,
+               !checkoutOperationAlreadyClaimed {
                 throw WorkspaceCheckoutCoordinatorError.operationInProgress
             }
             state.checkouts[index].operation = .deleting
@@ -325,13 +332,17 @@ actor WorkspaceCheckoutCoordinator {
                 current.members[index].checkpoint = .planPersisted
                 current.members[index].gitLineageID = nil
                 current.members[index].cleanupOwnership = .init()
-                current.operation = .idle
-                current.stopAfterCurrentOperations = false
+                if !checkoutOperationAlreadyClaimed {
+                    current.operation = .idle
+                    current.stopAfterCurrentOperations = false
+                }
             }
             await refreshManifestIfPresent(checkoutID: checkoutID)
         } catch {
             try? await mutateCheckout(checkoutID) { current in
-                current.operation = .idle
+                if !checkoutOperationAlreadyClaimed {
+                    current.operation = .idle
+                }
                 if let index = current.members.firstIndex(where: { $0.id == memberID }) {
                     current.members[index].cleanup?.checkpoint = .failed
                 }
@@ -434,17 +445,31 @@ actor WorkspaceCheckoutCoordinator {
     /// Runs member cleanup in snapshot order. A request to stop is honored at
     /// the next member boundary; failed members remain independently visible.
     func deleteCheckout(checkoutID: UUID) async throws -> WorkspaceCheckout {
+        try await store.mutate { state in
+            guard let index = state.checkouts.firstIndex(where: { $0.id == checkoutID }) else {
+                throw WorkspaceCheckoutCoordinatorError.checkoutMissing
+            }
+            guard state.checkouts[index].operation == .idle || state.checkouts[index].operation == .deleting else {
+                throw WorkspaceCheckoutCoordinatorError.operationInProgress
+            }
+            state.checkouts[index].operation = .deleting
+        }
         let initial = try await checkout(id: checkoutID)
         for member in initial.members where member.availability != .explicitlyDeleted {
             let current = try await checkout(id: checkoutID)
             if current.stopAfterCurrentOperations { break }
             do {
-                _ = try await deleteMember(checkoutID: checkoutID, memberID: member.id)
+                _ = try await deleteMember(checkoutID: checkoutID, memberID: member.id, checkoutOperationAlreadyClaimed: true)
             } catch {
                 // One member's risk, failure, or conflict must not erase the
                 // independent cleanup opportunity for later members.
                 continue
             }
+        }
+        try? await mutateCheckout(checkoutID) { current in
+            guard current.operation == .deleting else { return }
+            current.operation = .idle
+            current.stopAfterCurrentOperations = false
         }
         return try await checkout(id: checkoutID)
     }
@@ -662,7 +687,6 @@ actor WorkspaceCheckoutCoordinator {
             if await shouldStopAfterCurrentOperations(checkoutID: checkoutID) { break }
             if let memberIDs, memberIDs.contains(member.id) == false { continue }
             guard member.availability != .identityConflict,
-                  !(member.checkpoint == .failed && member.cleanupOwnership.worktreeCreated && member.gitLineageID != nil),
                   let frozenMember = frozenMember(from: member)
             else { continue }
             let plan = member.plan!
@@ -718,7 +742,7 @@ actor WorkspaceCheckoutCoordinator {
                     state.checkouts[checkoutIndex].members[memberIndex].availability = .pending
                     state.checkouts[checkoutIndex].members[memberIndex].cleanup = nil
                     return checkpoint
-                case .failed where current.cleanupOwnership.worktreeCreated && current.gitLineageID == nil:
+                case .failed where current.cleanupOwnership.worktreeCreated:
                     state.checkouts[checkoutIndex].members[memberIndex].checkpoint = .worktreeCreating
                     state.checkouts[checkoutIndex].members[memberIndex].availability = .pending
                     state.checkouts[checkoutIndex].members[memberIndex].cleanup = nil
@@ -842,8 +866,13 @@ actor WorkspaceCheckoutCoordinator {
             destinationPath: member.destinationPath,
             branch: checkout.branch,
             baseCommit: member.baseCommit,
-            branchIntent: .init(member.branchIntent, baseCommit: member.baseCommit)
+            branchIntent: .init(member.branchIntent, baseCommit: member.baseCommit),
+            expectedLineageID: expectedLineageID(checkoutID: checkout.id, memberID: member.checkoutMemberID)
         )
+    }
+
+    private func expectedLineageID(checkoutID: UUID, memberID: UUID) -> String {
+        "workspace-\(checkoutID.uuidString.lowercased())-\(memberID.uuidString.lowercased())"
     }
 
     private func completedMemberNeedsRecreation(
@@ -1005,7 +1034,8 @@ actor WorkspaceCheckoutCoordinator {
             destinationPath: plan.destinationPath,
             branch: checkout.branch,
             baseCommit: plan.baseCommit,
-            branchIntent: .init(plan.branchIntent, baseCommit: plan.baseCommit)
+            branchIntent: .init(plan.branchIntent, baseCommit: plan.baseCommit),
+            expectedLineageID: expectedLineageID(checkoutID: checkout.id, memberID: plan.checkoutMemberID)
         )
         do {
             try await projectMutationGate.withMutation(projectID: plan.projectID) {
@@ -1022,6 +1052,7 @@ actor WorkspaceCheckoutCoordinator {
                     }
                     try await self.updateMember(checkoutID: checkout.id, memberID: plan.checkoutMemberID) { member in
                         member.checkpoint = .worktreeCreating
+                        member.gitLineageID = operation.expectedLineageID
                         member.cleanupOwnership.worktreeCreated = true
                     }
                 }
@@ -1302,7 +1333,8 @@ struct WorkspaceFrozenGitOperator: WorkspaceGitOperating {
             branch: operation.branch,
             destination: URL(fileURLWithPath: operation.destinationPath),
             projectId: operation.projectID,
-            intent: operation.branchIntent
+            intent: operation.branchIntent,
+            expectedLineageID: operation.expectedLineageID
         )
         return worktree.lineageID
     }
@@ -1321,21 +1353,23 @@ struct WorkspaceFrozenGitOperator: WorkspaceGitOperating {
                   branch.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == operation.branch
             else { return nil }
             if let lineage = WorktreeService.existingLocalLineageID(forWorktreeAt: destination) {
-                return lineage
+                return operation.expectedLineageID.map { $0 == lineage ? lineage : nil } ?? lineage
             }
             guard operation.canRecordMissingLineage else { return nil }
-            return WorktreeService.localLineageID(forWorktreeAt: destination)
+            guard let expectedLineageID = operation.expectedLineageID else { return nil }
+            return WorktreeService.localLineageID(forWorktreeAt: destination, candidateID: expectedLineageID)
         case .ssh(let host):
             let path = SSHCommand.shellQuote(operation.destinationPath)
             let branch = SSHCommand.shellQuote(operation.branch)
             let commit = SSHCommand.shellQuote(operation.baseCommit)
             let markerCommand = operation.canRecordMissingLineage
-                ? WorktreeService.remoteLineageIDCommand(path: operation.destinationPath)
+                ? WorktreeService.remoteLineageIDCommand(path: operation.destinationPath, candidateID: operation.expectedLineageID ?? UUID().uuidString.lowercased())
                 : "d=$(git -C \"$p\" rev-parse --absolute-git-dir) || exit 5; f=\"$d/alas-worktree-lineage\"; test -s \"$f\" || exit 6; head -n 1 \"$f\""
             let command = "p=\(path); b=\(branch); c=\(commit); test -d \"$p\" || exit 2; [ \"$(git -C \"$p\" rev-parse --verify HEAD^{commit})\" = \"$c\" ] || exit 3; [ \"$(git -C \"$p\" rev-parse --abbrev-ref HEAD)\" = \"$b\" ] || exit 4; \(markerCommand)"
             let result = try await WorkspaceRemoteTransport().run(host: host, command: command)
             guard result.exitCode == 0 else { return nil }
-            return WorktreeService.normalizedLineageID(result.stdout)
+            guard let lineage = WorktreeService.normalizedLineageID(result.stdout) else { return nil }
+            return operation.expectedLineageID.map { $0 == lineage ? lineage : nil } ?? lineage
         }
     }
 

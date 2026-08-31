@@ -304,6 +304,18 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(result.members[1].availability == .explicitlyDeleted)
     }
 
+    @Test func wholeDeletionRetainsTheCheckoutClaimUntilTheOuterLoopFinishes() async throws {
+        let fixture = try await Fixture.make(memberCount: 2)
+        let lifecycle = StoreInspectingLifecycle(store: fixture.store, checkoutID: fixture.checkout.id)
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+
+        let result = try await coordinator.deleteCheckout(checkoutID: fixture.checkout.id)
+
+        #expect(await lifecycle.operationsDuringRemoval == [.deleting, .deleting])
+        #expect(result.operation == .idle)
+        #expect(result.members.allSatisfy { $0.availability == .explicitlyDeleted })
+    }
+
     @Test func forgettingRequiresResolvedSharedRootLeftovers() async throws {
         let fixture = try await Fixture.make()
         let lifecycle = FixtureLifecycle(leftovers: ["notes.txt"])
@@ -448,6 +460,39 @@ private actor FixtureLifecycle: WorkspaceCheckoutLifecycleOperating {
     removedMembers.append(plan.memberID) }
     func deleteMergedBranch(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool { deletedBranches.append(plan.memberID)
     return branchRemoved }
+}
+
+private actor StoreInspectingLifecycle: WorkspaceCheckoutLifecycleOperating {
+    let store: WorkspaceStore
+    let checkoutID: UUID
+    private(set) var operationsDuringRemoval: [WorkspaceCheckoutOperation] = []
+
+    init(store: WorkspaceStore, checkoutID: UUID) {
+        self.store = store
+        self.checkoutID = checkoutID
+    }
+
+    func deletePreflight(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> WorktreeDeletePreflight {
+        .init(reasons: [], submoduleLocalState: .none)
+    }
+
+    func inspectRoot(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutCleanupRootObservation {
+        .init(isContained: true, leftovers: [])
+    }
+
+    func verifyCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutMemberObservation {
+        .exactLineage(plan.expectedLineageID)
+    }
+
+    func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan, force: Bool) async throws {
+        if let checkout = await store.checkout(id: checkoutID) {
+            operationsDuringRemoval.append(checkout.operation)
+        }
+    }
+
+    func deleteMergedBranch(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool {
+        true
+    }
 }
 private actor PersistedCleanupLifecycle: WorkspaceCheckoutLifecycleOperating {
     let store: WorkspaceStore

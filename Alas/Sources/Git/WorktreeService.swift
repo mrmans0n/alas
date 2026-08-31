@@ -153,15 +153,14 @@ struct WorktreeService {
             + "printf '%s\\n' \"$b\""
     }
 
-    static func localLineageID(forWorktreeAt path: URL) -> String? {
+    static func localLineageID(forWorktreeAt path: URL, candidateID: String = UUID().uuidString.lowercased()) -> String? {
         guard let gitDirectory = localGitDirectory(forWorktreeAt: path) else { return nil }
         let marker = gitDirectory.appendingPathComponent("alas-worktree-lineage")
         if let existing = try? String(contentsOf: marker, encoding: .utf8),
            let normalized = normalizedLineageID(existing) {
             return normalized
         }
-        let candidate = UUID().uuidString.lowercased()
-        try? Data("\(candidate)\n".utf8).write(to: marker, options: .withoutOverwriting)
+        try? Data("\(candidateID)\n".utf8).write(to: marker, options: .withoutOverwriting)
         guard let stored = try? String(contentsOf: marker, encoding: .utf8) else { return nil }
         return normalizedLineageID(stored)
     }
@@ -514,7 +513,8 @@ struct WorktreeService {
         branch: String,
         destination: URL,
         projectId: String,
-        intent: FrozenBranchIntent
+        intent: FrozenBranchIntent,
+        expectedLineageID: String? = nil
     ) async throws -> Worktree {
         switch GitNameValidator.validateBranchName(branch) {
         case .valid: break
@@ -551,14 +551,14 @@ struct WorktreeService {
             let lineage = try await RemoteExec.run(
                 host: host,
                 cwd: nil,
-                command: Self.remoteLineageIDCommand(path: destination.path)
-            )
+                    command: Self.remoteLineageIDCommand(path: destination.path, candidateID: expectedLineageID ?? UUID().uuidString.lowercased())
+                )
             guard lineage.exitCode == 0,
                   let identifier = Self.normalizedLineageID(lineage.stdout)
             else { throw WorktreeError.gitFailed("Could not record remote Workspace worktree lineage.") }
             worktree.lineageID = identifier
         } else {
-            worktree.lineageID = Self.localLineageID(forWorktreeAt: destination)
+            worktree.lineageID = Self.localLineageID(forWorktreeAt: destination, candidateID: expectedLineageID ?? UUID().uuidString.lowercased())
         }
         return worktree
     }
