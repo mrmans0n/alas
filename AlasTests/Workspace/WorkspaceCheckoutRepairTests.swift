@@ -271,6 +271,65 @@ struct WorkspaceCheckoutRepairTests {
         #expect(await scripts.paths == ["/checkouts/a"])
     }
 
+    @Test func recreateMemberOnlyUsesTheSelectedFrozenMemberPlan() async throws {
+        let fixture = try await persistedFixture(checkpoint: .planPersisted, operation: .idle)
+        let second = checkoutMember(
+            id: UUID(),
+            workspaceMemberID: UUID(),
+            projectID: "project-b",
+            name: "B",
+            sourcePath: "/repos/b",
+            destinationPath: "/checkouts/b",
+            checkpoint: .planPersisted,
+            availability: .explicitlyDeleted
+        )
+        try await fixture.store.mutate { state in
+            state.checkouts[0].members[0].availability = .explicitlyDeleted
+            state.checkouts[0].members.append(second)
+        }
+        let git = ResumeGit()
+        let scripts = RepairScriptRunner()
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: git, scripts: scripts, projectMutationGate: ProjectMutationGate())
+
+        let checkout = try await coordinator.resumeCreation(checkoutID: fixture.checkout.id, memberID: fixture.checkout.members[0].id)
+
+        #expect(checkout.members[0].checkpoint == .setupComplete)
+        #expect(checkout.members[1].checkpoint == .planPersisted)
+        #expect(checkout.members[1].availability == .explicitlyDeleted)
+        #expect(await scripts.paths == ["/checkouts/a"])
+        #expect(await git.operations.map(\.destinationPath) == ["/checkouts/a", "/checkouts/a"])
+    }
+
+    @Test func resumeCreationDoesNotResetCompletedSiblingUnlessItsFrozenPathIsAbsent() async throws {
+        let fixture = try await persistedFixture(checkpoint: .planPersisted, operation: .creating)
+        let completed = checkoutMember(
+            id: UUID(),
+            workspaceMemberID: UUID(),
+            projectID: "project-b",
+            name: "B",
+            sourcePath: "/repos/b",
+            destinationPath: "/checkouts/b",
+            lineageID: "lineage-b",
+            checkpoint: .setupComplete,
+            availability: .available,
+            worktreeCreated: true,
+            branchOwnership: .created
+        )
+        try await fixture.store.mutate { state in
+            state.checkouts[0].members.append(completed)
+        }
+        let git = NonMissingCompletedGit(nonMissingDestinations: ["/checkouts/b"])
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: git, scripts: RepairScriptRunner(), projectMutationGate: ProjectMutationGate())
+
+        let checkout = try await coordinator.resumeCreation(checkoutID: fixture.checkout.id)
+
+        #expect(checkout.members[1].checkpoint == .setupComplete)
+        #expect(checkout.members[1].availability == .available)
+        #expect(checkout.members[1].gitLineageID == "lineage-b")
+        #expect(await git.createdDestinations == ["/checkouts/a"])
+        #expect(await git.missingChecks == ["/checkouts/b"])
+    }
+
     @Test func useExistingRepairCandidateOnlyAcceptsExactFrozenLineage() async throws {
         let fixture = try await persistedFixture(checkpoint: .failed, worktreeCreated: true, lineageID: "lineage-a")
         try await fixture.store.mutate { state in
@@ -334,6 +393,42 @@ struct WorkspaceCheckoutRepairTests {
         let checkout = WorkspaceCheckout(workspaceID: UUID(), fallbackWorkspaceName: "Release", executionLocation: .local, branch: "release/1091", rootPath: "/checkouts", operation: operation, members: [member])
         try await store.checkpoint(.init(checkouts: [checkout]))
         return (store, checkout)
+    }
+
+    private func checkoutMember(
+        id: UUID,
+        workspaceMemberID: UUID,
+        projectID: String,
+        name: String,
+        sourcePath: String,
+        destinationPath: String,
+        lineageID: String? = nil,
+        checkpoint: WorkspaceCheckoutCheckpoint,
+        availability: WorkspaceCheckoutMemberAvailability = .pending,
+        worktreeCreated: Bool = false,
+        branchOwnership: WorkspaceBranchOwnership = .unknown
+    ) -> WorkspaceCheckoutMember {
+        WorkspaceCheckoutMember(
+            id: id,
+            workspaceMemberID: workspaceMemberID,
+            projectID: projectID,
+            fallbackProjectName: name,
+            fallbackRepositoryRoot: sourcePath,
+            worktreePath: destinationPath,
+            gitLineageID: lineageID,
+            availability: availability,
+            checkpoint: checkpoint,
+            cleanupOwnership: .init(worktreeCreated: worktreeCreated, branchOwnership: branchOwnership),
+            plan: .init(
+                checkoutMemberID: id,
+                projectID: projectID,
+                sourceRepositoryPath: sourcePath,
+                destinationPath: destinationPath,
+                baseReference: "main",
+                baseCommit: "abc",
+                branchIntent: .create(atCommit: "abc")
+            )
+        )
     }
 }
 
@@ -470,6 +565,28 @@ private actor CountingResumeGit: WorkspaceGitOperating {
         existingLineageChecks += 1
         calls.append("existing")
         return existingLineage
+    }
+}
+
+private actor NonMissingCompletedGit: WorkspaceGitOperating {
+    let nonMissingDestinations: Set<String>
+    private(set) var createdDestinations: [String] = []
+    private(set) var missingChecks: [String] = []
+
+    init(nonMissingDestinations: Set<String>) {
+        self.nonMissingDestinations = nonMissingDestinations
+    }
+
+    func prepareBranch(_ operation: WorkspaceFrozenWorktreeOperation) async throws {}
+
+    func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? {
+        createdDestinations.append(operation.destinationPath)
+        return "lineage-a"
+    }
+
+    func frozenWorktreeIsMissing(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> Bool {
+        missingChecks.append(operation.destinationPath)
+        return nonMissingDestinations.contains(operation.destinationPath) == false
     }
 }
 

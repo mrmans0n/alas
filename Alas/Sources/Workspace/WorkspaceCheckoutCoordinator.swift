@@ -7,11 +7,15 @@ protocol WorkspaceGitOperating: Sendable {
     func preparedBranchMatchesFrozenBase(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> Bool
     func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String?
     func existingCreatedWorktreeLineage(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String?
+    func frozenWorktreeIsMissing(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> Bool
 }
 
 extension WorkspaceGitOperating {
     func preparedBranchMatchesFrozenBase(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> Bool { false }
     func existingCreatedWorktreeLineage(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? { nil }
+    func frozenWorktreeIsMissing(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> Bool {
+        try await existingCreatedWorktreeLineage(operation) == nil
+    }
 }
 
 protocol WorkspaceScriptRunning: Sendable {
@@ -569,6 +573,14 @@ actor WorkspaceCheckoutCoordinator {
     /// that already reached worktree creation, setup success, or an identity
     /// conflict are deliberately excluded.
     func resumeCreation(checkoutID: UUID) async throws -> WorkspaceCheckout {
+        try await resumeCreation(checkoutID: checkoutID, memberIDs: nil)
+    }
+
+    func resumeCreation(checkoutID: UUID, memberID: UUID) async throws -> WorkspaceCheckout {
+        try await resumeCreation(checkoutID: checkoutID, memberIDs: [memberID])
+    }
+
+    private func resumeCreation(checkoutID: UUID, memberIDs: Set<UUID>?) async throws -> WorkspaceCheckout {
         guard creationTasks[checkoutID] == nil,
               !activeRepairs.contains(checkoutID)
         else { throw WorkspaceCheckoutCoordinatorError.operationInProgress }
@@ -598,6 +610,7 @@ actor WorkspaceCheckoutCoordinator {
         }
         for member in checkout.members {
             if await shouldStopAfterCurrentOperations(checkoutID: checkoutID) { break }
+            if let memberIDs, memberIDs.contains(member.id) == false { continue }
             guard member.availability != .identityConflict,
                   member.checkpoint != .worktreeCreated,
                   !(member.checkpoint == .failed && member.cleanupOwnership.worktreeCreated),
@@ -731,7 +744,7 @@ actor WorkspaceCheckoutCoordinator {
         let operation = frozenWorktreeOperation(checkout: checkout, member: member)
         do {
             return try await projectMutationGate.withMutation(projectID: member.projectID) {
-                try await git.existingCreatedWorktreeLineage(operation) == nil
+                try await git.frozenWorktreeIsMissing(operation)
             }
         } catch {
             return false
@@ -1188,6 +1201,17 @@ struct WorkspaceFrozenGitOperator: WorkspaceGitOperating {
             let result = try await WorkspaceRemoteTransport().run(host: host, command: command)
             guard result.exitCode == 0 else { return nil }
             return WorktreeService.normalizedLineageID(result.stdout)
+        }
+    }
+
+    func frozenWorktreeIsMissing(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> Bool {
+        switch operation.executionLocation.normalized {
+        case .local:
+            return FileManager.default.fileExists(atPath: operation.destinationPath) == false
+        case .ssh(let host):
+            let path = SSHCommand.shellQuote(operation.destinationPath)
+            let result = try await WorkspaceRemoteTransport().run(host: host, command: "test -e \(path)")
+            return result.exitCode == 1
         }
     }
 }
