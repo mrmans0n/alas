@@ -316,6 +316,22 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(result.members.allSatisfy { $0.availability == .explicitlyDeleted })
     }
 
+    @Test func concurrentWholeDeletionRejectsTheSecondLiveRequest() async throws {
+        let fixture = try await Fixture.make(memberCount: 2)
+        let lifecycle = BlockingLifecycle()
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+
+        let first = Task { try await coordinator.deleteCheckout(checkoutID: fixture.checkout.id) }
+        await lifecycle.waitUntilRemoving()
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.operationInProgress) {
+            try await coordinator.deleteCheckout(checkoutID: fixture.checkout.id)
+        }
+
+        await lifecycle.release()
+        _ = try await first.value
+    }
+
     @Test func forgettingRequiresResolvedSharedRootLeftovers() async throws {
         let fixture = try await Fixture.make()
         let lifecycle = FixtureLifecycle(leftovers: ["notes.txt"])
@@ -391,11 +407,40 @@ struct WorkspaceCheckoutLifecycleTests {
 
         #expect(preflight.reasons == [.dirty])
         #expect(branchRemoved == false)
-        #expect(root.leftovers == [".alas-workspace-checkout.json", "notes.txt"])
+        #expect(root.leftovers == ["notes.txt"])
         let commands = await runner.commands.joined(separator: "\n")
         #expect(commands.contains("worktree remove -f --"))
         #expect(commands.contains("branch -d"))
         #expect(commands.contains("m=$(cd") == false)
+    }
+
+    @Test func localRootInspectionIgnoresTheManagedCheckoutManifest() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-cleanup-root-\(UUID().uuidString)")
+        let member = root.appendingPathComponent("a")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: member, withIntermediateDirectories: true)
+        try Data().write(to: root.appendingPathComponent(WorkspaceCheckoutManifest.fileName))
+        try Data().write(to: root.appendingPathComponent("notes.txt"))
+        let plan = WorkspaceCheckoutCleanupPlan(
+            checkoutID: UUID(),
+            memberID: UUID(),
+            executionLocation: .local,
+            projectID: "project",
+            sourceRepositoryPath: "/repo",
+            baseReference: "main",
+            baseCommit: "abc",
+            rootPath: root.path,
+            managedMemberPaths: [member.path],
+            worktreePath: member.path,
+            branch: "feature",
+            expectedLineageID: "lineage",
+            branchOwnership: .created
+        )
+
+        let inspection = await WorkspaceCheckoutLifecycleOperator().inspectRoot(plan)
+
+        #expect(inspection.isContained)
+        #expect(inspection.leftovers == ["notes.txt"])
     }
 
     private struct Fixture {
@@ -511,6 +556,51 @@ private actor PersistedCleanupLifecycle: WorkspaceCheckoutLifecycleOperating {
     func deleteMergedBranch(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool { true }
 }
 private enum TestLifecycleError: Error { case failed }
+
+private actor BlockingLifecycle: WorkspaceCheckoutLifecycleOperating {
+    private var started = false
+    private var released = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func deletePreflight(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> WorktreeDeletePreflight {
+        .init(reasons: [], submoduleLocalState: .none)
+    }
+
+    func inspectRoot(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutCleanupRootObservation {
+        .init(isContained: true, leftovers: [])
+    }
+
+    func verifyCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutMemberObservation {
+        .exactLineage(plan.expectedLineageID)
+    }
+
+    func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan, force: Bool) async throws {
+        started = true
+        startWaiters.forEach { $0.resume() }
+        startWaiters.removeAll()
+        if !released {
+            await withCheckedContinuation { continuation in
+                releaseWaiters.append(continuation)
+            }
+        }
+    }
+
+    func deleteMergedBranch(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool { true }
+
+    func waitUntilRemoving() async {
+        if started { return }
+        await withCheckedContinuation { continuation in
+            startWaiters.append(continuation)
+        }
+    }
+
+    func release() {
+        released = true
+        releaseWaiters.forEach { $0.resume() }
+        releaseWaiters.removeAll()
+    }
+}
 
 private actor RemoteLifecycleRunner {
     private var results: [ProcessResult]

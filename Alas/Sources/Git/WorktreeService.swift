@@ -481,8 +481,13 @@ struct WorktreeService {
     func prepareFrozenBranch(
         repoPath: URL,
         branch: String,
-        intent: FrozenBranchIntent
+        intent: FrozenBranchIntent,
+        remoteHost: String? = nil
     ) async throws {
+        if let remoteHost {
+            try await prepareFrozenRemoteBranch(repoPath: repoPath, branch: branch, intent: intent, host: remoteHost)
+            return
+        }
         let refCheck = try await Process.git(
             ["show-ref", "--verify", "--quiet", "refs/heads/\(branch)"],
             cwd: repoPath
@@ -505,6 +510,46 @@ struct WorktreeService {
         }
     }
 
+    private func prepareFrozenRemoteBranch(
+        repoPath: URL,
+        branch: String,
+        intent: FrozenBranchIntent,
+        host: String
+    ) async throws {
+        let repo = SSHCommand.shellQuote(repoPath.path)
+        let branchName = SSHCommand.shellQuote(branch)
+        let branchRef = SSHCommand.shellQuote("refs/heads/\(branch)")
+        let refCheck = try await RemoteExec.run(
+            host: host,
+            cwd: nil,
+            command: "git -C \(repo) show-ref --verify --quiet \(branchRef)"
+        )
+        switch intent {
+        case .create(let atCommit):
+            guard refCheck.exitCode == 1 else {
+                throw WorktreeError.gitFailed("Frozen Workspace branch '\(branch)' changed after preflight.")
+            }
+            let create = try await RemoteExec.run(
+                host: host,
+                cwd: nil,
+                command: "git -C \(repo) branch \(branchName) \(SSHCommand.shellQuote(atCommit))"
+            )
+            guard create.exitCode == 0 else { throw WorktreeError.gitFailed(create.stderr) }
+        case .reuse(let atCommit):
+            guard refCheck.exitCode == 0 else {
+                throw WorktreeError.gitFailed("Frozen Workspace branch '\(branch)' is no longer reusable.")
+            }
+            let resolved = try await RemoteExec.run(
+                host: host,
+                cwd: nil,
+                command: "git -C \(repo) rev-parse --verify \(SSHCommand.shellQuote("\(branch)^{commit}"))"
+            )
+            guard resolved.exitCode == 0,
+                  resolved.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == atCommit
+            else { throw WorktreeError.gitFailed("Frozen Workspace branch '\(branch)' changed after preflight.") }
+        }
+    }
+
     /// Adds a worktree from a branch already prepared by
     /// `prepareFrozenBranch`. It deliberately refuses stale registrations and
     /// existing destinations instead of repairing or adopting them.
@@ -514,21 +559,31 @@ struct WorktreeService {
         destination: URL,
         projectId: String,
         intent: FrozenBranchIntent,
-        expectedLineageID: String? = nil
+        expectedLineageID: String? = nil,
+        remoteHost: String? = nil
     ) async throws -> Worktree {
         switch GitNameValidator.validateBranchName(branch) {
         case .valid: break
         case .invalid(let message): throw WorktreeError.gitFailed("Invalid branch name: \(message)")
         }
-        if repoPath.isRemoteAlasPath {
-            if let host = RemoteHostRegistry.shared.host(forPath: repoPath.path),
-               await RemoteFileAccess.existence(host: host, path: destination.path) != .missing {
+        let pinnedRemoteHost = remoteHost ?? RemoteHostRegistry.shared.host(forPath: repoPath.path)
+        if let host = pinnedRemoteHost {
+            if await RemoteFileAccess.existence(host: host, path: destination.path) != .missing {
                 throw WorktreeError.gitFailed("Frozen Workspace destination already exists.")
             }
         } else if FileManager.default.fileExists(atPath: destination.path) {
             throw WorktreeError.gitFailed("Frozen Workspace destination already exists.")
         }
-        let registrations = try await Process.git(["worktree", "list", "--porcelain"], cwd: repoPath)
+        let registrations: ProcessResult
+        if let host = pinnedRemoteHost {
+            registrations = try await RemoteExec.run(
+                host: host,
+                cwd: nil,
+                command: "git -C \(SSHCommand.shellQuote(repoPath.path)) worktree list --porcelain"
+            )
+        } else {
+            registrations = try await Process.git(["worktree", "list", "--porcelain"], cwd: repoPath)
+        }
         guard registrations.exitCode == 0,
               Self.staleRegistration(registrations.stdout, destination: destination, lockedDestinationIsMissing: false) == nil,
               !registrations.stdout.split(separator: "\n").contains(where: { $0 == "worktree \(destination.path)" })
@@ -537,17 +592,35 @@ struct WorktreeService {
         switch intent {
         case .create(let atCommit), .reuse(let atCommit): expectedCommit = atCommit
         }
-        let ref = try await Process.git(["rev-parse", "--verify", "\(branch)^{commit}"], cwd: repoPath)
+        let ref: ProcessResult
+        if let host = pinnedRemoteHost {
+            ref = try await RemoteExec.run(
+                host: host,
+                cwd: nil,
+                command: "git -C \(SSHCommand.shellQuote(repoPath.path)) rev-parse --verify \(SSHCommand.shellQuote("\(branch)^{commit}"))"
+            )
+        } else {
+            ref = try await Process.git(["rev-parse", "--verify", "\(branch)^{commit}"], cwd: repoPath)
+        }
         guard ref.exitCode == 0,
               ref.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == expectedCommit
         else { throw WorktreeError.gitFailed("Frozen Workspace branch '\(branch)' changed after preflight.") }
-        if !repoPath.isRemoteAlasPath {
+        if pinnedRemoteHost == nil {
             try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
         }
-        let result = try await Process.git(["worktree", "add", destination.path, branch], cwd: repoPath)
+        let result: ProcessResult
+        if let host = pinnedRemoteHost {
+            result = try await RemoteExec.run(
+                host: host,
+                cwd: nil,
+                command: "git -C \(SSHCommand.shellQuote(repoPath.path)) worktree add \(SSHCommand.shellQuote(destination.path)) \(SSHCommand.shellQuote(branch))"
+            )
+        } else {
+            result = try await Process.git(["worktree", "add", destination.path, branch], cwd: repoPath)
+        }
         guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
         var worktree = makeWorktree(destination: destination, branch: branch, projectId: projectId)
-        if let host = RemoteHostRegistry.shared.host(forPath: repoPath.path) {
+        if let host = pinnedRemoteHost {
             let lineage = try await RemoteExec.run(
                 host: host,
                 cwd: nil,

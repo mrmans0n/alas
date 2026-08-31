@@ -510,6 +510,34 @@ struct WorkspaceCheckoutRepairTests {
         #expect(await git.operations == ["prepare", "existing", "create"])
     }
 
+    @Test func resumeCreationRejectsLiveSetupRetryOwnership() async throws {
+        let fixture = try await persistedFixture(
+            checkpoint: .worktreeCreated,
+            worktreeCreated: true,
+            lineageID: "lineage-a",
+            branchOwnership: .created
+        )
+        let scripts = BlockingRepairScriptRunner()
+        let lifecycle = RepairLifecycle(result: .exactLineage("lineage-a"))
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: fixture.store,
+            git: CountingResumeGit(),
+            scripts: scripts,
+            projectMutationGate: ProjectMutationGate(),
+            lifecycle: lifecycle
+        )
+
+        let retry = Task { try await coordinator.retrySetup(checkoutID: fixture.checkout.id, memberID: fixture.checkout.members[0].id) }
+        await scripts.waitUntilStarted()
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.operationInProgress) {
+            try await coordinator.resumeCreation(checkoutID: fixture.checkout.id)
+        }
+
+        await scripts.release()
+        _ = try await retry.value
+    }
+
     private func persistedFixture(
         checkpoint: WorkspaceCheckoutCheckpoint,
         worktreeCreated: Bool = false,

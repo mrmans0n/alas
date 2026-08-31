@@ -30,6 +30,11 @@ enum ExecutionLocation: Codable, Equatable, Sendable {
         }
     }
 
+    var sshHost: String? {
+        guard case .ssh(let host) = normalized else { return nil }
+        return host
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         switch try container.decode(Kind.self, forKey: .kind) {
