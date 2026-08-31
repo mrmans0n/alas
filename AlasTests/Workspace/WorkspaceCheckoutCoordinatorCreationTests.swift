@@ -202,6 +202,49 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
         #expect(await store.checkout(id: checkout.id)?.members[0].cleanupOwnership.branchOwnership == .unknown)
     }
 
+    @Test func recreatingCompletedMemberPreservesAmbiguousBranchOwnership() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-coordinator-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = WorkspaceStore(url: url)
+        let fixture = makeFixture(count: 1)
+        let memberPlan = fixture.plan.members[0]
+        let checkout = WorkspaceCheckout(
+            workspaceID: fixture.workspace.id,
+            fallbackWorkspaceName: fixture.workspace.name,
+            executionLocation: fixture.workspace.executionLocation,
+            branch: fixture.plan.branch,
+            rootPath: fixture.plan.rootPath,
+            operation: .idle,
+            members: [
+                WorkspaceCheckoutMember(
+                    id: memberPlan.checkoutMemberID,
+                    workspaceMemberID: memberPlan.workspaceMemberID,
+                    projectID: memberPlan.projectID,
+                    fallbackProjectName: "Project 0",
+                    fallbackRepositoryRoot: "/repos/0",
+                    worktreePath: memberPlan.destinationPath,
+                    availability: .explicitlyDeleted,
+                    checkpoint: .setupComplete,
+                    cleanupOwnership: .init(worktreeCreated: true, branchOwnership: .unknown),
+                    plan: memberPlan.memberPlan
+                )
+            ]
+        )
+        try await store.checkpoint(.init(checkouts: [checkout]))
+        let git = PreparedBranchWorkspaceGit()
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: store,
+            git: git,
+            scripts: NoopWorkspaceScriptRunner(),
+            projectMutationGate: ProjectMutationGate()
+        )
+
+        _ = try await coordinator.resumeCreation(checkoutID: checkout.id, memberID: memberPlan.checkoutMemberID)
+
+        #expect(await git.createCount == 1)
+        #expect(await store.checkout(id: checkout.id)?.members[0].cleanupOwnership.branchOwnership == .unknown)
+    }
+
     @Test func overlappingMemberDeletionRejectsTheSecondLiveCall() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-coordinator-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: url) }
