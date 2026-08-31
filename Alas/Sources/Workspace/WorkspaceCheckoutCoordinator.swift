@@ -1029,7 +1029,8 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
                 force: force
             )
         case .ssh(let host):
-            let command = "git -C \(SSHCommand.shellQuote(plan.sourceRepositoryPath)) worktree remove -- \(SSHCommand.shellQuote(plan.worktreePath))"
+            let forceFlag = force ? " -f" : ""
+            let command = "git -C \(SSHCommand.shellQuote(plan.sourceRepositoryPath)) worktree remove\(forceFlag) -- \(SSHCommand.shellQuote(plan.worktreePath))"
             let result = try await remote.run(host: host, command: command)
             guard result.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(result.stderr) }
         }

@@ -1534,7 +1534,31 @@ final class AppState {
         await workspacesManager.refreshCheckoutSnapshots()
         selectWorkspaceCheckout(id: checkout.id)
         await coordinator.beginCreation(checkoutID: checkout.id)
+        Task { @MainActor [weak self, weak coordinator] in
+            guard let self, let coordinator else { return }
+            await coordinator.awaitCreationCompletion(checkoutID: checkout.id)
+            await self.applyWorkspaceCheckoutCreationLaunchPreference(checkoutID: checkout.id)
+        }
         return checkout
+    }
+
+    private func applyWorkspaceCheckoutCreationLaunchPreference(checkoutID: UUID) async {
+        await workspacesManager.refreshCheckoutSnapshots()
+        guard let checkout = workspacesManager.checkout(id: checkoutID),
+              checkout.operation == .idle,
+              checkout.members.allSatisfy({ $0.checkpoint == .setupComplete }),
+              let preference = checkout.configurationSnapshot?.shared.creationLaunchPreference,
+              preference.openAfterCreate == true
+        else { return }
+
+        selectWorkspaceCheckout(id: checkout.id)
+        switch preference.launcherMode ?? .terminal {
+        case .terminal:
+            _ = try? openWorkspaceCheckoutTerminalTab(checkout)
+        case .acp:
+            guard let agentID = preference.agentID, agent(id: agentID) != nil else { return }
+            _ = await openWorkspaceCheckoutACPSession(checkout: checkout, agentID: agentID)
+        }
     }
 
     private func workspaceConfigurationSnapshot(

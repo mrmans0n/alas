@@ -50,6 +50,56 @@ struct WorkspaceFeatureFlagTests {
         #expect(persistedState.spaceLayouts == [])
     }
 
+    @Test func enabledManagerPresentsReconciledMemberAvailabilityWithoutMutatingStorage() async throws {
+        let url = temporaryURL()
+        defer { removeWorkspaceFiles(near: url) }
+        let memberID = UUID()
+        let missingPath = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-missing-workspace-member-\(UUID().uuidString)").path
+        let member = WorkspaceCheckoutMember(
+            id: memberID,
+            workspaceMemberID: UUID(),
+            projectID: "project",
+            fallbackProjectName: "Project",
+            fallbackRepositoryRoot: "/repo",
+            worktreePath: missingPath,
+            gitLineageID: "lineage",
+            availability: .available,
+            checkpoint: .setupComplete,
+            cleanupOwnership: .init(worktreeCreated: true, branchOwnership: .created),
+            plan: .init(
+                checkoutMemberID: memberID,
+                projectID: "project",
+                sourceRepositoryPath: "/repo",
+                destinationPath: missingPath,
+                baseReference: "main",
+                baseCommit: "abc",
+                branchIntent: .create(atCommit: "abc")
+            )
+        )
+        let checkout = WorkspaceCheckout(
+            workspaceID: UUID(),
+            fallbackWorkspaceName: "Release",
+            executionLocation: .local,
+            branch: "release/1091",
+            rootPath: "/checkout",
+            operation: .idle,
+            members: [member]
+        )
+        let store = WorkspaceStore(url: url)
+        try await store.checkpoint(.init(checkouts: [checkout]))
+        let manager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: store))
+
+        await manager.setEnabled(true, spacesFile: emptySpacesFile())
+
+        #expect(manager.checkout(id: checkout.id)?.members.first?.availability == .missing)
+        guard case .loaded(let persistedState) = await store.load() else {
+            Issue.record("Expected durable Workspace state")
+            return
+        }
+        #expect(persistedState.checkouts.first?.members.first?.availability == .available)
+    }
+
     @Test func unreadableStorageMakesEnabledManagerReadOnlyWithoutRewrite() async throws {
         let url = temporaryURL()
         defer { removeWorkspaceFiles(near: url) }
@@ -263,6 +313,72 @@ struct WorkspaceFeatureFlagTests {
         #expect(persisted.configurationSnapshot?.shared.worktreeCreateScript == "workspace setup")
     }
 
+    @Test @MainActor func appStateAppliesFrozenACPCreationLaunchPreferenceAfterCheckoutCompletes() async throws {
+        let workspaceURL = temporaryURL()
+        let checkoutRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-workspace-launch-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            removeWorkspaceFiles(near: workspaceURL)
+            try? FileManager.default.removeItem(at: checkoutRoot)
+        }
+        try FileManager.default.createDirectory(at: checkoutRoot, withIntermediateDirectories: true)
+        let workspaceStore = WorkspaceStore(url: workspaceURL)
+        let spaces = emptySpacesFile()
+        let manager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
+        _ = await manager.setEnabled(true, spacesFile: spaces)
+        let state = AppState(
+            store: RecordingSpacesStore(spacesFile: spaces),
+            persistenceErrorHandler: { _, _ in },
+            restoreActiveTabsOnStartup: false,
+            workspacesManager: manager,
+            workspaceStore: workspaceStore
+        )
+        state.config.workspacesEnabled = true
+        let agent = AgentDefinition(
+            id: "workspace-test-agent",
+            displayName: "Workspace Test Agent",
+            binary: "workspace-test-agent",
+            binaryOverride: nil,
+            promptModeArgs: [],
+            bypassPermissionsFlag: "--unsafe",
+            extraTerminalArgs: nil,
+            isBuiltin: false,
+            isEnabled: true,
+            builtinLogoAssetName: nil
+        )
+        state.agentRegistry = AgentRegistry(builtinState: [:], customs: [agent], installedIds: [agent.id])
+        let workspace = Workspace(
+            name: "Release",
+            executionLocation: .local,
+            members: [],
+            configuration: .init(creationLaunchPreference: .override(.init(
+                openAfterCreate: true,
+                launcherMode: .acp,
+                agentID: agent.id,
+                useBypassPermissions: true
+            )))
+        )
+        let plan = FrozenWorkspaceCheckoutPlan(
+            checkoutID: UUID(),
+            workspaceID: workspace.id,
+            executionLocation: .local,
+            branch: "release/1091",
+            rootPath: checkoutRoot.path,
+            members: []
+        )
+
+        let checkout = try await state.createWorkspaceCheckout(workspace: workspace, plan: plan)
+        await state.workspaceCoordinator().awaitCreationCompletion(checkoutID: checkout.id)
+        try await waitForCheckoutOwnedACPTab(state: state, checkout: checkout)
+
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+        let acpTabs = state.tabs.tabs(for: owner).filter {
+            if case .acpSession = $0 { return true }
+            return false
+        }
+        #expect(acpTabs.count == 1)
+    }
+
     private final class ThrowingSpacesStore: PersistenceStoreProtocol, @unchecked Sendable {
         let spacesFile: SpacesFile
         init(spacesFile: SpacesFile) { self.spacesFile = spacesFile }
@@ -281,5 +397,24 @@ struct WorkspaceFeatureFlagTests {
             where entry.lastPathComponent.hasPrefix(url.lastPathComponent) {
             try? FileManager.default.removeItem(at: entry)
         }
+    }
+
+    private func waitForCheckoutOwnedACPTab(
+        state: AppState,
+        checkout: WorkspaceCheckout,
+        timeoutSeconds: Double = 5
+    ) async throws {
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        while Date() < deadline {
+            if state.tabs.tabs(for: owner).contains(where: {
+                if case .acpSession = $0 { return true }
+                return false
+            }) {
+                return
+            }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        Issue.record("Timed out waiting for checkout-owned ACP tab")
     }
 }

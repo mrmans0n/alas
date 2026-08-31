@@ -34,7 +34,7 @@ final class WorkspacesManager {
 
     var checkouts: [WorkspaceCheckout] {
         guard case let .loaded(state) = loadState else { return [] }
-        return state.checkouts
+        return state.checkouts.map(presentedCheckout)
     }
 
     /// Current persisted/reconciled checkout snapshot for runtime session
@@ -42,7 +42,9 @@ final class WorkspacesManager {
     /// than fabricating a focus-derived replacement.
     func checkout(id: UUID) -> WorkspaceCheckout? {
         guard case let .loaded(state) = loadState else { return nil }
-        return state.checkouts.first(where: { $0.id == id && $0.archivedAt == nil })
+        return state.checkouts
+            .first(where: { $0.id == id && $0.archivedAt == nil })
+            .map(presentedCheckout)
     }
 
     init(bridge: WorkspaceSpacePersistenceBridge = WorkspaceSpacePersistenceBridge()) {
@@ -110,6 +112,27 @@ final class WorkspacesManager {
             }
         }
         return reports
+    }
+
+    private func presentedCheckout(_ checkout: WorkspaceCheckout) -> WorkspaceCheckout {
+        guard let report = checkoutReconciliations[checkout.id] else { return checkout }
+        var copy = checkout
+        copy.members = checkout.members.map { member in
+            guard let observation = report.observations[member.id] else { return member }
+            var presented = member
+            switch observation {
+            case .exactLineage:
+                presented.availability = .available
+            case .missing:
+                presented.availability = .missing
+            case .identityConflict:
+                presented.availability = .identityConflict
+            case .unavailable:
+                presented.availability = .unavailable
+            }
+            return presented
+        }
+        return copy
     }
 
     /// Checkpoints typed Space layout only while the preview has an editable,
