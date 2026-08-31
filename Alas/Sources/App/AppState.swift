@@ -1639,12 +1639,31 @@ final class AppState {
         return checkout
     }
 
+    func deleteWorkspaceCheckoutMemberSnapshot(checkoutID: UUID, memberID: UUID) async throws -> WorkspaceCheckout {
+        guard config.workspacesEnabled, workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
+        let checkout = try await workspaceCoordinator().deleteMemberSnapshot(checkoutID: checkoutID, memberID: memberID)
+        await workspacesManager.refreshCheckoutSnapshots()
+        selectWorkspaceCheckout(id: checkout.id)
+        return checkout
+    }
+
     func workspaceMemberDeletionConfirmation(checkoutID: UUID, memberID: UUID) async throws -> WorkspaceLifecycleConfirmationModel {
         guard config.workspacesEnabled, workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
         let preview = try await workspaceCoordinator().previewMemberDeletion(checkoutID: checkoutID, memberID: memberID)
         var model = WorkspaceLifecycleConfirmationModel.memberDeletion(member: preview.member, preflight: preview.preflight)
         model.risks.append(contentsOf: preview.rootObservation.leftovers)
         return model
+    }
+
+    func workspaceForgetConfirmation(checkoutID: UUID) throws -> WorkspaceLifecycleConfirmationModel {
+        guard config.workspacesEnabled, workspacesManager.canMutate else { throw WorkspaceStoreError.recoveryRequired }
+        guard let checkout = workspacesManager.checkout(id: checkoutID) else {
+            throw WorkspaceCheckoutCoordinatorError.checkoutMissing
+        }
+        return WorkspaceLifecycleConfirmationModel.forgetCheckout(
+            cleanups: checkout.members.compactMap(\.cleanup),
+            confirmedPreserveArtifacts: false
+        )
     }
 
     func deleteWorkspaceCheckout(id: UUID) async throws -> WorkspaceCheckout {

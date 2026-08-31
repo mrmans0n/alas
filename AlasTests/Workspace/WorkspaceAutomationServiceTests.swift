@@ -49,7 +49,11 @@ struct WorkspaceAutomationServiceTests {
             store: store,
             isEnabled: { true },
             selectCheckout: { selectedCheckout = $0 },
-            focusMember: { focusedMember = ($0, $1) }
+            focusMember: { focusedMember = ($0, $1) },
+            observer: AutomationObserver(results: [
+                available: .exactLineage("available-lineage"),
+                unavailable: .missing,
+            ])
         )
 
         let target = try await service.memberTarget(checkoutID: checkoutID, memberID: available)
@@ -66,6 +70,29 @@ struct WorkspaceAutomationServiceTests {
         await #expect(throws: WorkspaceAutomationError.memberRequired) {
             try await service.memberTarget(checkoutID: checkoutID, memberID: nil)
         }
+    }
+
+    @Test func automationAppliesReadOnlyReconciliationBeforeReportingAvailability() async throws {
+        let checkoutID = UUID()
+        let memberID = UUID()
+        let store = try await makeStore(state: .init(checkouts: [
+            checkout(id: checkoutID, members: [
+                member(id: memberID, projectID: "project-a", availability: .available),
+            ]),
+        ]))
+        let service = WorkspaceAutomationService(
+            store: store,
+            isEnabled: { true },
+            observer: AutomationObserver(result: .missing)
+        )
+
+        let shown = try await service.showCheckout(id: checkoutID)
+
+        #expect(shown.checkout.members.first?.availability == .missing)
+        await #expect(throws: WorkspaceAutomationError.memberUnavailable) {
+            try await service.memberTarget(checkoutID: checkoutID, memberID: memberID)
+        }
+        #expect(try await loaded(store).checkouts.first?.members.first?.availability == .available)
     }
 
     @Test func disabledOrUnreadableWorkspaceStateReturnsStableErrors() async throws {
@@ -141,5 +168,14 @@ struct WorkspaceAutomationServiceTests {
             availability: availability,
             checkpoint: availability == .available ? .setupComplete : .failed
         )
+    }
+}
+
+private struct AutomationObserver: WorkspaceCheckoutObserving {
+    var result: WorkspaceCheckoutMemberObservation = .missing
+    var results: [UUID: WorkspaceCheckoutMemberObservation] = [:]
+
+    func observe(_ member: WorkspaceCheckoutMember, in checkout: WorkspaceCheckout) async -> WorkspaceCheckoutMemberObservation {
+        results[member.id] ?? result
     }
 }
