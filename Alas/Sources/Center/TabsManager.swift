@@ -221,7 +221,20 @@ final class TabsManager {
 
     @discardableResult
     func appendTerminal(owner: SessionOwnerID, title: String, sessionId: String, runScriptKey: String? = nil) -> Tab {
-        let state = TerminalTabState(id: UUID().uuidString, title: title, sessionId: sessionId, runScriptKey: runScriptKey)
+        let leaf = PaneLeaf(
+            id: sessionId,
+            sessionId: sessionId,
+            lastCwd: nil,
+            lastCwdLocation: owner.checkoutExecutionLocation
+        )
+        let state = TerminalTabState(
+            id: UUID().uuidString,
+            title: title,
+            root: .leaf(leaf),
+            focusedLeafId: leaf.id,
+            runScriptKey: runScriptKey,
+            runScriptLeafId: runScriptKey != nil ? leaf.id : nil
+        )
         let tab = Tab.terminal(state)
         append(tab, to: owner.storageKey)
         return tab

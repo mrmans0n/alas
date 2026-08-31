@@ -103,6 +103,39 @@ struct WorkspaceCheckoutRepairTests {
         #expect(await unmarked.observe(member, in: checkout) == .identityConflict(nil))
     }
 
+    @Test func localDanglingSymlinkDestinationIsIdentityConflictNotMissing() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-dangling-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let destination = root.appendingPathComponent("member")
+        try FileManager.default.createSymbolicLink(at: destination, withDestinationURL: root.appendingPathComponent("missing-target"))
+        defer { try? FileManager.default.removeItem(at: root) }
+        let memberID = UUID()
+        let member = WorkspaceCheckoutMember(
+            id: memberID,
+            workspaceMemberID: UUID(),
+            projectID: "project-a",
+            fallbackProjectName: "A",
+            fallbackRepositoryRoot: "/repos/a",
+            worktreePath: destination.path,
+            gitLineageID: "lineage-a",
+            availability: .available,
+            checkpoint: .setupComplete,
+            cleanupOwnership: .init(worktreeCreated: true, branchOwnership: .created),
+            plan: .init(
+                checkoutMemberID: memberID,
+                projectID: "project-a",
+                sourceRepositoryPath: "/repos/a",
+                destinationPath: destination.path,
+                baseReference: "main",
+                baseCommit: "abc",
+                branchIntent: .create(atCommit: "abc")
+            )
+        )
+        let checkout = WorkspaceCheckout(workspaceID: UUID(), fallbackWorkspaceName: "Release", executionLocation: .local, branch: "feature", rootPath: root.path, members: [member])
+
+        #expect(await WorkspaceCheckoutObserver().observe(member, in: checkout) == .identityConflict(nil))
+    }
+
     @Test func retrySetupUsesTheFrozenWorktreeAndNeverRepeatsASuccess() async throws {
         let fixture = try await persistedFixture(checkpoint: .worktreeCreated)
         let scripts = RepairScriptRunner()
@@ -245,7 +278,8 @@ struct WorkspaceCheckoutRepairTests {
         let fixture = try await persistedFixture(checkpoint: .setupRunning, worktreeCreated: true, lineageID: "lineage-a", branchOwnership: .created, operation: .creating)
         let git = CountingResumeGit()
         let scripts = RepairScriptRunner()
-        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: git, scripts: scripts, projectMutationGate: ProjectMutationGate())
+        let lifecycle = RepairLifecycle(result: .exactLineage("lineage-a"))
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: git, scripts: scripts, projectMutationGate: ProjectMutationGate(), lifecycle: lifecycle)
 
         let checkout = try await coordinator.resumeCreation(checkoutID: fixture.checkout.id)
 
@@ -256,11 +290,27 @@ struct WorkspaceCheckoutRepairTests {
         #expect(await scripts.paths == ["/checkouts/a"])
     }
 
+    @Test func resumeCreationDoesNotRunSetupWhenTheFrozenWorktreeLineageNoLongerMatches() async throws {
+        let fixture = try await persistedFixture(checkpoint: .setupRunning, worktreeCreated: true, lineageID: "lineage-a", branchOwnership: .created, operation: .creating)
+        let git = CountingResumeGit()
+        let scripts = RepairScriptRunner()
+        let lifecycle = RepairLifecycle(result: .identityConflict("replacement-lineage"))
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: git, scripts: scripts, projectMutationGate: ProjectMutationGate(), lifecycle: lifecycle)
+
+        let checkout = try await coordinator.resumeCreation(checkoutID: fixture.checkout.id)
+
+        #expect(checkout.members[0].checkpoint == .setupRunning)
+        #expect(checkout.operation == .idle)
+        #expect(await scripts.paths.isEmpty)
+        #expect(await lifecycle.observationCount == 1)
+    }
+
     @Test func resumeCreationRetriesSetupFromWorktreeCreatedWithoutRepeatingGit() async throws {
         let fixture = try await persistedFixture(checkpoint: .worktreeCreated, worktreeCreated: true, lineageID: "lineage-a", branchOwnership: .created, operation: .creating)
         let git = CountingResumeGit()
         let scripts = RepairScriptRunner()
-        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: git, scripts: scripts, projectMutationGate: ProjectMutationGate())
+        let lifecycle = RepairLifecycle(result: .exactLineage("lineage-a"))
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: git, scripts: scripts, projectMutationGate: ProjectMutationGate(), lifecycle: lifecycle)
 
         let checkout = try await coordinator.resumeCreation(checkoutID: fixture.checkout.id)
 
@@ -494,6 +544,30 @@ private actor RepairObserver: WorkspaceCheckoutObserving {
         observationCount += 1
         return result
     }
+}
+
+private actor RepairLifecycle: WorkspaceCheckoutLifecycleOperating {
+    let result: WorkspaceCheckoutMemberObservation
+    private(set) var observationCount = 0
+
+    init(result: WorkspaceCheckoutMemberObservation) { self.result = result }
+
+    func deletePreflight(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> WorktreeDeletePreflight {
+        .init(reasons: [], submoduleLocalState: .none)
+    }
+
+    func inspectRoot(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutCleanupRootObservation {
+        .init(isContained: true, leftovers: [])
+    }
+
+    func verifyCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutMemberObservation {
+        observationCount += 1
+        return result
+    }
+
+    func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan, force: Bool) async throws {}
+
+    func deleteMergedBranch(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool { true }
 }
 
 private struct RepairGit: WorkspaceGitOperating {
