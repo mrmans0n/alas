@@ -133,7 +133,9 @@ struct WorkspaceCheckoutDetailModel: Equatable, Sendable {
         }
         switch checkout.operation {
         case .creating:
-            return checkout.stopAfterCurrentOperations ? [] : [.init(.stopAfterCurrentOperations, title: "Stop After Current Operations")]
+            return checkout.stopAfterCurrentOperations
+                ? [.init(.resumeCreation, title: "Resume Creation")]
+                : [.init(.resumeCreation, title: "Resume Creation"), .init(.stopAfterCurrentOperations, title: "Stop After Current Operations")]
         case .repairing:
             return checkout.stopAfterCurrentOperations
                 ? [.init(.resumeCreation, title: "Resume Creation")]
@@ -278,6 +280,7 @@ struct WorkspaceLifecycleConfirmationModel: Equatable, Sendable {
     static func memberDeletion(member: WorkspaceCheckoutMember, preflight: WorktreeDeletePreflight) -> WorkspaceLifecycleConfirmationModel {
         var risks: [String] = []
         if preflight.reasons.contains(.dirty) { risks.append("Uncommitted changes") }
+        if preflight.reasons.contains(.locked) { risks.append("Locked worktree") }
         if preflight.reasons.contains(.containsInitializedSubmodules) || preflight.submoduleLocalState == .present {
             risks.append("Initialized submodules")
         }

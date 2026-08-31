@@ -10,6 +10,7 @@ struct WorktreeDeletePreflight: Equatable {
 enum WorktreeDeletePreflightReason: Equatable, Hashable {
     case dirty
     case containsInitializedSubmodules
+    case locked
 }
 
 enum SubmoduleLocalState: Equatable {
@@ -652,6 +653,12 @@ struct WorktreeService {
     func deletePreflight(worktreePath: URL) async throws -> WorktreeDeletePreflight {
         var reasons: Set<WorktreeDeletePreflightReason> = []
 
+        let registrations = try await Process.git(["worktree", "list", "--porcelain"], cwd: worktreePath)
+        guard registrations.exitCode == 0 else { throw WorktreeError.gitFailed(registrations.stderr) }
+        if Self.porcelainMarksWorktreeLocked(registrations.stdout, worktreePath: worktreePath) {
+            reasons.insert(.locked)
+        }
+
         let hasInitializedSubmodules = try await containsInitializedSubmodules(worktreePath)
         if hasInitializedSubmodules {
             reasons.insert(.containsInitializedSubmodules)
@@ -692,6 +699,28 @@ struct WorktreeService {
         }
 
         return WorktreeDeletePreflight(reasons: reasons, submoduleLocalState: submoduleLocalState)
+    }
+
+    static func porcelainMarksWorktreeLocked(_ porcelain: String, worktreePath: URL) -> Bool {
+        let target = worktreePath.standardizedFileURL.path
+        var currentPath: String?
+        var currentLocked = false
+
+        func matchesCurrent() -> Bool {
+            guard let currentPath else { return false }
+            return URL(fileURLWithPath: currentPath).standardizedFileURL.path == target && currentLocked
+        }
+
+        for line in porcelain.split(separator: "\n") {
+            if line.hasPrefix("worktree ") {
+                if matchesCurrent() { return true }
+                currentPath = String(line.dropFirst("worktree ".count))
+                currentLocked = false
+            } else if line.hasPrefix("locked") {
+                currentLocked = true
+            }
+        }
+        return matchesCurrent()
     }
 
     func prune(repoPath: URL) async throws {

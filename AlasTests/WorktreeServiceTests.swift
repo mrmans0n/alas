@@ -320,6 +320,42 @@ extension WorktreeServiceTests {
         #expect(preflight.submoduleLocalState == .none)
     }
 
+    @Test func deletePreflightReportsLockedWorktree() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let dest = repo.deletingLastPathComponent().appendingPathComponent("\(repo.lastPathComponent)-preflight-locked")
+        defer { try? FileManager.default.removeItem(at: dest) }
+        let svc = WorktreeService()
+        let wt = try await svc.add(
+            repoPath: repo, base: "main", branch: "feat/preflight-locked",
+            destination: dest, projectId: "p"
+        )
+        let lock = try await Process.git(["worktree", "lock", wt.path.path], cwd: repo)
+        #expect(lock.exitCode == 0)
+
+        let preflight = try await svc.deletePreflight(worktreePath: wt.path)
+
+        #expect(preflight.requiresForce == true)
+        #expect(preflight.reasons.contains(.locked))
+    }
+
+    @Test func lockedDeletePreflightReasonIsParsedFromPorcelain() {
+        let path = URL(fileURLWithPath: "/repos/app-worktree")
+        let porcelain = """
+        worktree /repos/app
+        HEAD abc
+        branch refs/heads/main
+
+        worktree /repos/app-worktree
+        HEAD def
+        branch refs/heads/feature
+        locked
+
+        """
+
+        #expect(WorktreeService.porcelainMarksWorktreeLocked(porcelain, worktreePath: path))
+    }
+
     @Test func deletePreflightReportsInitializedSubmodulesWithoutLocalState() async throws {
         let fixture = try await makeRepoWithInitializedSubmodule(suffix: "preflight-submodule-clean")
         defer {

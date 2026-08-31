@@ -13,6 +13,7 @@ import Testing
         let creating = checkout(operation: .creating, members: [creatingMember], stopAfterCurrentOperations: false)
         let creatingModel = WorkspaceCheckoutDetailModel(checkout: creating)
         #expect(creatingModel.status == .creating("Creating Workspace Checkout"))
+        #expect(creatingModel.primaryActions.map(\.kind).contains(.resumeCreation))
         #expect(creatingModel.primaryActions.map(\.kind).contains(.stopAfterCurrentOperations))
         #expect(creatingModel.memberRows[0].detail.contains("Creating worktree"))
 
@@ -59,7 +60,7 @@ import Testing
 
         #expect(model.progress == WorkspaceCheckoutProgress(completedMembers: 1, totalMembers: 3))
         #expect(model.stopMessage == "Stop requested. Current member operations will finish before the checkout pauses.")
-        #expect(model.primaryActions.map(\.kind).contains(.resumeCreation) == false)
+        #expect(model.primaryActions.map(\.kind).contains(.resumeCreation))
 
         let deleting = checkout(operation: .deleting, members: [
             member(name: "One", availability: .available, checkpoint: .setupComplete)
