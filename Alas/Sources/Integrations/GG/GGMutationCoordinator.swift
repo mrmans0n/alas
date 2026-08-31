@@ -94,6 +94,11 @@ final class GGMutationCoordinator {
         return try preflight(request, snapshot: snapshot)
     }
 
+    func prepare(_ request: GGMutationRequest, using snapshot: GGStackSnapshot) throws -> GGPreparedMutation {
+        guard activeRequest == nil else { throw GGMutationError.operationInFlight }
+        return try preflight(request, snapshot: snapshot)
+    }
+
     func prepareRestackPreview() async throws -> GGPreparedRestack {
         guard activeRequest == nil else { throw GGMutationError.operationInFlight }
         activeRequest = .restack
