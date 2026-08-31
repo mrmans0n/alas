@@ -1228,7 +1228,10 @@ actor WorkspaceCheckoutCoordinator {
         let shared = checkout.configurationSnapshot?.shared.worktreeCreateScript ?? ""
         let global = checkout.configurationSnapshot?.shared.globalWorktreeCreateScript ?? ""
         let memberScript = checkout.configurationSnapshot?.members[member.workspaceMemberID]?.setupScript ?? ""
-        let memberOnlyScript = memberScript.removingInheritedGlobalSetupPrefix(global)
+        let sharedInheritedGlobal = shared.inheritsGlobalSetupPrefix(global)
+        let memberOnlyScript = sharedInheritedGlobal
+            ? memberScript.removingInheritedGlobalSetupPrefix(global)
+            : memberScript.trimmingCharacters(in: .whitespacesAndNewlines)
         return [shared, memberOnlyScript].filter { !$0.isEmpty }.joined(separator: "\n")
     }
 
@@ -1374,6 +1377,13 @@ enum WorkspaceCheckoutCoordinatorError: Error, Equatable, Sendable {
 }
 
 private extension String {
+    func inheritsGlobalSetupPrefix(_ global: String) -> Bool {
+        let global = global.trimmingCharacters(in: .whitespacesAndNewlines)
+        let script = trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !global.isEmpty, !script.isEmpty else { return false }
+        return script == global || script.hasPrefix(global + "\n")
+    }
+
     func removingInheritedGlobalSetupPrefix(_ global: String) -> String {
         let global = global.trimmingCharacters(in: .whitespacesAndNewlines)
         let script = trimmingCharacters(in: .whitespacesAndNewlines)

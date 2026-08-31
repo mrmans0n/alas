@@ -43,4 +43,37 @@ struct WorkspaceSidebarLayoutTests {
 
         #expect(rows == [.formerWorkspace, .checkout(former.id)])
     }
+
+    @Test func visibleCheckoutIDsIgnoreWorkspaceCheckoutsFromOtherSpaces() {
+        let visibleWorkspaceID = UUID(uuidString: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA")!
+        let hiddenWorkspaceID = UUID(uuidString: "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB")!
+        let visibleWorkspace = Workspace(id: visibleWorkspaceID, name: "Visible", executionLocation: .local, members: [])
+        let hiddenWorkspace = Workspace(id: hiddenWorkspaceID, name: "Hidden", executionLocation: .local, members: [])
+        let visibleCheckout = WorkspaceCheckout(
+            id: UUID(uuidString: "CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC")!,
+            workspaceID: visibleWorkspaceID,
+            fallbackWorkspaceName: "Visible",
+            executionLocation: .local,
+            branch: "visible",
+            rootPath: "/tmp/visible",
+            members: []
+        )
+        let hiddenCheckout = WorkspaceCheckout(
+            id: UUID(uuidString: "DDDDDDDD-DDDD-DDDD-DDDD-DDDDDDDDDDDD")!,
+            workspaceID: hiddenWorkspaceID,
+            fallbackWorkspaceName: "Hidden",
+            executionLocation: .local,
+            branch: "hidden",
+            rootPath: "/tmp/hidden",
+            members: []
+        )
+
+        let ids = WorkspaceSidebarLayout.visibleCheckoutIDs(
+            members: [.workspace(visibleWorkspaceID)],
+            workspaces: [visibleWorkspace, hiddenWorkspace],
+            checkouts: [hiddenCheckout, visibleCheckout]
+        )
+
+        #expect(ids == [visibleCheckout.id])
+    }
 }

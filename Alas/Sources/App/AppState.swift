@@ -2004,7 +2004,14 @@ final class AppState {
 
     func forgetWorkspaceCheckout(id: UUID, confirmedPreserveArtifacts: Bool = false) async throws {
         guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
-        let ordered = workspacesManager.checkouts.map(\.id)
+        let activeMembers = spacesManager.activeSpace?.members
+            ?? spacesManager.activeSpace?.projectIds.map(SpaceMemberReference.project)
+            ?? []
+        let ordered = WorkspaceSidebarLayout.visibleCheckoutIDs(
+            members: activeMembers,
+            workspaces: workspacesManager.workspaces,
+            checkouts: workspacesManager.checkouts
+        )
         let nearest = WorkspaceCheckoutDetailModel.nearestPeer(afterDeleting: id, orderedCheckoutIDs: ordered)
         try await workspaceCoordinator().forget(checkoutID: id, confirmedPreserveArtifacts: confirmedPreserveArtifacts)
         await workspacesManager.refreshCheckoutSnapshots()

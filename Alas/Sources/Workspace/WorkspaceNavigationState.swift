@@ -133,6 +133,16 @@ enum WorkspaceMemberWorktreeResolver {
 /// Pure presentation plan for the full sidebar tree. Views own disclosure
 /// state; this type only protects ordering and archive visibility.
 enum WorkspaceSidebarLayout {
+    static func visibleCheckoutIDs(
+        members: [SpaceMemberReference],
+        workspaces: [Workspace],
+        checkouts: [WorkspaceCheckout]
+    ) -> [UUID] {
+        rows(members: members, workspaces: workspaces, checkouts: checkouts).compactMap { row in
+            if case .checkout(let id) = row { id } else { nil }
+        }
+    }
+
     static func rows(
         members: [SpaceMemberReference],
         workspaces: [Workspace],
