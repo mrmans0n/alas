@@ -411,6 +411,11 @@ final class TabsManager {
         return tab
     }
 
+    @discardableResult
+    func setFocusedLeaf(owner: SessionOwnerID, tabId: TabID, leafId: String) -> Tab? {
+        setFocusedLeaf(worktreeId: owner.storageKey, tabId: tabId, leafId: leafId)
+    }
+
     /// Split the focused leaf into a 2-child split. The freshly-spawned session id
     /// is wrapped in a new leaf, which becomes the focused one.
     @discardableResult
@@ -530,6 +535,11 @@ final class TabsManager {
     }
 
     @discardableResult
+    func setSplitFraction(owner: SessionOwnerID, tabId: TabID, splitId: String, fraction: Double) -> Tab? {
+        setSplitFraction(worktreeId: owner.storageKey, tabId: tabId, splitId: splitId, fraction: fraction)
+    }
+
+    @discardableResult
     func setLeafCwd(worktreeId: String, tabId: TabID, leafId: String, cwd: String) -> Tab? {
         guard var file = byWorktree[worktreeId],
               let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
@@ -545,6 +555,11 @@ final class TabsManager {
         file.tabs[idx] = tab
         byWorktree[worktreeId] = file
         return tab
+    }
+
+    @discardableResult
+    func setLeafCwd(owner: SessionOwnerID, tabId: TabID, leafId: String, cwd: String) -> Tab? {
+        setLeafCwd(worktreeId: owner.storageKey, tabId: tabId, leafId: leafId, cwd: cwd)
     }
 
     /// Walks the tree and applies `transform` to the split with `splitId`.
@@ -1354,6 +1369,10 @@ final class TabsManager {
 
     func activate(owner: SessionOwnerID, tabId: TabID) {
         activate(worktreeId: owner.storageKey, tabId: tabId)
+    }
+
+    func clearActiveTab(owner: SessionOwnerID) {
+        clearActiveTab(worktreeId: owner.storageKey)
     }
 
     func clearActiveTab(worktreeId: String) {

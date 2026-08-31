@@ -382,11 +382,15 @@ struct CenterPaneView: View {
                     )
                 } else if let activeId = composition.activeId,
                           let tab = tabs.first(where: { $0.id == activeId }) {
+                    let activeSharedOwner = sharedSessionOwner.flatMap { owner in
+                        state.tabs.tabs(for: owner).contains(where: { $0.id == activeId }) ? owner : nil
+                    }
                     switch tab {
                     case .terminal:
                         TerminalTabView(state: state,
                                         worktreeId: worktree.id,
                                         tabId: tab.id,
+                                        owner: activeSharedOwner,
                                         allowsPaneFocus: allowsPaneFocus,
                                         onStartupRecoveryReady: { completeStartupRecoveryIfActive(tab.id) })
                     case .editor(let s):
@@ -568,6 +572,7 @@ struct CenterPaneView: View {
                             sessionId: s.sessionId,
                             state: state,
                             worktree: worktree,
+                            owner: activeSharedOwner,
                             onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) }
                         )
                             .id(s.id)

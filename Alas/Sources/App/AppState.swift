@@ -1805,8 +1805,12 @@ final class AppState {
         if let sharedSessionOwner,
            tabs.tabs(for: sharedSessionOwner).contains(where: { $0.id == tabID }) {
             tabs.activate(owner: sharedSessionOwner, tabId: tabID)
+            tabs.clearActiveTab(worktreeId: worktreeID)
         } else {
             tabs.activate(worktreeId: worktreeID, tabId: tabID)
+            if let sharedSessionOwner {
+                tabs.clearActiveTab(owner: sharedSessionOwner)
+            }
         }
     }
 
@@ -1883,6 +1887,7 @@ final class AppState {
 
     func synchronizeVisibleWorktreeCenterTabIfNeeded(worktreeId: String, activeTabId: TabID?) {
         guard let activeTabId else { return }
+        guard tabs.tabs(forWorktree: worktreeId).contains(where: { $0.id == activeTabId }) else { return }
         tabs.activate(worktreeId: worktreeId, tabId: activeTabId)
     }
 
@@ -4806,6 +4811,58 @@ final class AppState {
         )
     }
 
+    @discardableResult
+    func restoreTerminalTabIfNeededAsync(owner: SessionOwnerID, tabId: TabID) async throws -> Tab? {
+        switch owner {
+        case .worktree(let worktreeID):
+            return try await restoreTerminalTabIfNeededAsync(worktreeId: worktreeID, tabId: tabId)
+        case .workspaceCheckout(let checkoutID, _):
+            return try restoreCheckoutTerminalTabIfNeeded(checkoutID: checkoutID, owner: owner, tabID: tabId)
+        }
+    }
+
+    @discardableResult
+    private func restoreCheckoutTerminalTabIfNeeded(
+        checkoutID: UUID,
+        owner: SessionOwnerID,
+        tabID: TabID
+    ) throws -> Tab? {
+        guard let checkout = workspacesManager.checkout(id: checkoutID) else { return nil }
+        guard let tab = tabs.tabs(for: owner).first(where: { $0.id == tabID }),
+              case .terminal(let state) = tab else { return nil }
+
+        if !config.terminal.keepSessionsAlive {
+            let hasLiveLeaf = state.root.leaves()
+                .contains { terminal.registry.session(for: $0.id) != nil }
+            if !hasLiveLeaf {
+                closeSharedSessionTab(owner: owner, tabID: tabID)
+                return nil
+            }
+        }
+
+        let context = workspaceTerminalContext(for: checkout)
+        for leaf in state.root.leaves() {
+            if terminal.registry.session(for: leaf.id) != nil { continue }
+            let forcedCwd = TerminalService.checkoutRestorationCwd(
+                savedPath: leaf.lastCwd,
+                context: context,
+                savedLocation: leaf.lastCwdLocation
+            )
+            let session = try terminal.openCheckoutSession(
+                context: context,
+                cfg: config.terminal,
+                theme: themeStore.current,
+                forcedCwd: forcedCwd,
+                forcedCwdLocation: leaf.lastCwdLocation,
+                leafId: leaf.id
+            )
+            harness.detector.register(sessionId: session.id) { [weak session] in
+                session?.surface.foregroundPid
+            }
+        }
+        return tabs.tabs(for: owner).first(where: { $0.id == tabID })
+    }
+
     private func legacySessionInfosForTerminalRestore(
         worktreeId: String,
         tabId: TabID
@@ -6903,6 +6960,10 @@ final class AppState {
     /// creation is acceptable.
     func acpManager(forWorktreeId id: String) -> ACPSessionManager? {
         acpManagers[.worktree(id)]
+    }
+
+    func acpManager(for owner: SessionOwnerID) -> ACPSessionManager? {
+        acpManagers[owner]
     }
 
     /// Returns (or lazily creates) the ACP session manager for the given worktree.

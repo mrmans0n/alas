@@ -461,6 +461,16 @@ actor WorkspaceCheckoutCoordinator {
                   return cleanup.plan.branchOwnership != .created || cleanup.branchRemoved || confirmedPreserveArtifacts
               })
         else { throw WorkspaceCheckoutCoordinatorError.cleanupIncomplete }
+        try await store.mutate { state in
+            guard let index = state.checkouts.firstIndex(where: { $0.id == checkoutID }) else {
+                throw WorkspaceCheckoutCoordinatorError.checkoutMissing
+            }
+            guard state.checkouts[index].operation == .idle else {
+                throw WorkspaceCheckoutCoordinatorError.operationInProgress
+            }
+            state.checkouts[index].operation = .deleting
+        }
+        await sessions.stopSessions(for: checkoutID)
         try await store.mutate { state in state.checkouts.removeAll { $0.id == checkoutID } }
     }
 

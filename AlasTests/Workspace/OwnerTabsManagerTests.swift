@@ -55,7 +55,7 @@ struct OwnerTabsManagerTests {
 
         state.activateComposedCenterTab(worktreeID: "member", sharedSessionOwner: owner, tabID: member.id)
         #expect(manager.activeTabId(forWorktree: "member") == member.id)
-        #expect(manager.activeTabId(for: owner) == shared.id)
+        #expect(manager.activeTabId(for: owner) == nil)
 
         state.closeComposedCenterTabs(worktreeID: "member", sharedSessionOwner: owner, tabIDs: [shared.id])
         #expect(manager.tabs(for: owner).isEmpty)

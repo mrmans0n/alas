@@ -5,6 +5,7 @@ struct TerminalTabView: View {
     @Bindable var state: AppState
     let worktreeId: String
     let tabId: TabID
+    var owner: SessionOwnerID? = nil
     var allowsPaneFocus: Bool = true
     var onStartupRecoveryReady: () -> Void = {}
 
@@ -18,6 +19,7 @@ struct TerminalTabView: View {
                     state: state,
                     worktreeId: worktreeId,
                     tabId: tabId,
+                    owner: owner,
                     node: tab.root,
                     focusedLeafId: tab.focusedLeafId,
                     allowsPaneFocus: allowsPaneFocus,
@@ -32,7 +34,11 @@ struct TerminalTabView: View {
             state.terminalLeafFrames[tabId] = frames
         }
         .task(id: tabId) {
-            _ = try? await state.restoreTerminalTabIfNeededAsync(worktreeId: worktreeId, tabId: tabId)
+            if let owner {
+                _ = try? await state.restoreTerminalTabIfNeededAsync(owner: owner, tabId: tabId)
+            } else {
+                _ = try? await state.restoreTerminalTabIfNeededAsync(worktreeId: worktreeId, tabId: tabId)
+            }
             onStartupRecoveryReady()
         }
         .background(theme.color("bg-0"))
@@ -41,7 +47,8 @@ struct TerminalTabView: View {
     private var tabCoordinateSpace: String { "alas-tab-\(tabId)" }
 
     private func currentTab() -> TerminalTabState? {
-        state.tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == tabId }).flatMap {
+        let sourceTabs = owner.map { state.tabs.tabs(for: $0) } ?? state.tabs.tabs(forWorktree: worktreeId)
+        return sourceTabs.first(where: { $0.id == tabId }).flatMap {
             if case .terminal(let s) = $0 { return s } else { return nil }
         }
     }
@@ -51,6 +58,7 @@ private struct PaneNodeView: View {
     @Bindable var state: AppState
     let worktreeId: String
     let tabId: TabID
+    let owner: SessionOwnerID?
     let node: PaneNode
     let focusedLeafId: String
     let allowsPaneFocus: Bool
@@ -63,6 +71,7 @@ private struct PaneNodeView: View {
                 state: state,
                 worktreeId: worktreeId,
                 tabId: tabId,
+                owner: owner,
                 leaf: leaf,
                 isFocused: leaf.id == focusedLeafId && allowsPaneFocus,
                 showFocusBorder: inSplit
@@ -72,6 +81,7 @@ private struct PaneNodeView: View {
                 state: state,
                 worktreeId: worktreeId,
                 tabId: tabId,
+                owner: owner,
                 split: split,
                 focusedLeafId: focusedLeafId,
                 allowsPaneFocus: allowsPaneFocus
@@ -84,6 +94,7 @@ private struct PaneLeafView: View {
     @Bindable var state: AppState
     let worktreeId: String
     let tabId: TabID
+    let owner: SessionOwnerID?
     let leaf: PaneLeaf
     let isFocused: Bool
     let showFocusBorder: Bool
@@ -116,7 +127,11 @@ private struct PaneLeafView: View {
         )
         .contentShape(Rectangle())
         .onTapGesture {
-            _ = state.tabs.setFocusedLeaf(worktreeId: worktreeId, tabId: tabId, leafId: leaf.id)
+            if let owner {
+                _ = state.tabs.setFocusedLeaf(owner: owner, tabId: tabId, leafId: leaf.id)
+            } else {
+                _ = state.tabs.setFocusedLeaf(worktreeId: worktreeId, tabId: tabId, leafId: leaf.id)
+            }
         }
         .background(
             GeometryReader { geo in
@@ -129,10 +144,14 @@ private struct PaneLeafView: View {
     }
 
     private func wireCwdHandler(session: TerminalSession) {
-        session.surface.cwdHandler = { [worktreeId, tabId, leafId = leaf.id] url in
-            _ = state.tabs.setLeafCwd(
-                worktreeId: worktreeId, tabId: tabId, leafId: leafId, cwd: url.path
-            )
+        session.surface.cwdHandler = { [worktreeId, owner, tabId, leafId = leaf.id] url in
+            if let owner {
+                _ = state.tabs.setLeafCwd(owner: owner, tabId: tabId, leafId: leafId, cwd: url.path)
+            } else {
+                _ = state.tabs.setLeafCwd(
+                    worktreeId: worktreeId, tabId: tabId, leafId: leafId, cwd: url.path
+                )
+            }
         }
     }
 
@@ -156,6 +175,7 @@ private struct SplitContainer: View {
     @Bindable var state: AppState
     let worktreeId: String
     let tabId: TabID
+    let owner: SessionOwnerID?
     let split: PaneSplit
     let focusedLeafId: String
     let allowsPaneFocus: Bool
@@ -183,12 +203,14 @@ private struct SplitContainer: View {
         if split.axis == .vertical {
             HStack(spacing: 0) {
                 PaneNodeView(state: state, worktreeId: worktreeId, tabId: tabId,
+                             owner: owner,
                              node: split.children[0], focusedLeafId: focusedLeafId,
                              allowsPaneFocus: allowsPaneFocus, inSplit: true)
                     .frame(width: firstSize)
                     .clipped()
                 dividerView(totalForFraction: totalForFraction)
                 PaneNodeView(state: state, worktreeId: worktreeId, tabId: tabId,
+                             owner: owner,
                              node: split.children[1], focusedLeafId: focusedLeafId,
                              allowsPaneFocus: allowsPaneFocus, inSplit: true)
                     .frame(width: secondSize)
@@ -197,12 +219,14 @@ private struct SplitContainer: View {
         } else {
             VStack(spacing: 0) {
                 PaneNodeView(state: state, worktreeId: worktreeId, tabId: tabId,
+                             owner: owner,
                              node: split.children[0], focusedLeafId: focusedLeafId,
                              allowsPaneFocus: allowsPaneFocus, inSplit: true)
                     .frame(height: firstSize)
                     .clipped()
                 dividerView(totalForFraction: totalForFraction)
                 PaneNodeView(state: state, worktreeId: worktreeId, tabId: tabId,
+                             owner: owner,
                              node: split.children[1], focusedLeafId: focusedLeafId,
                              allowsPaneFocus: allowsPaneFocus, inSplit: true)
                     .frame(height: secondSize)
@@ -242,10 +266,17 @@ private struct SplitContainer: View {
                     }
                     .onEnded { _ in
                         let finalFraction = dragState.ended(fallback: split.fraction)
-                        _ = state.tabs.setSplitFraction(
-                            worktreeId: worktreeId, tabId: tabId,
-                            splitId: split.id, fraction: finalFraction
-                        )
+                        if let owner {
+                            _ = state.tabs.setSplitFraction(
+                                owner: owner, tabId: tabId,
+                                splitId: split.id, fraction: finalFraction
+                            )
+                        } else {
+                            _ = state.tabs.setSplitFraction(
+                                worktreeId: worktreeId, tabId: tabId,
+                                splitId: split.id, fraction: finalFraction
+                            )
+                        }
                     }
             )
     }

@@ -11,10 +11,11 @@ struct ACPTabView: View {
     let sessionId: ACPSession.ID
     let state: AppState
     let worktree: Worktree
+    var owner: SessionOwnerID? = nil
     var onStartupRecoveryReady: () -> Void = {}
 
     var body: some View {
-        if let manager = state.acpManager(for: worktree) {
+        if let manager = owner.flatMap({ state.acpManager(for: $0) }) ?? state.acpManager(for: worktree) {
             ACPManagedTabView(
                 sessionId: sessionId,
                 state: state,
