@@ -245,6 +245,93 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
         #expect(persisted.checkouts.first?.diagnostics.map(\.message) == plan.warnings.map(\.message))
     }
 
+    @Test func resumeCreationRecreatesManifestBeforeMemberMutation() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-coordinator-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = WorkspaceStore(url: url)
+        let fixture = makeFixture(count: 1)
+        let checkout = WorkspaceCheckout(
+            workspaceID: fixture.workspace.id,
+            fallbackWorkspaceName: fixture.workspace.name,
+            executionLocation: fixture.workspace.executionLocation,
+            branch: fixture.plan.branch,
+            rootPath: fixture.plan.rootPath,
+            operation: .creating,
+            members: [
+                WorkspaceCheckoutMember(
+                    id: fixture.plan.members[0].checkoutMemberID,
+                    workspaceMemberID: fixture.plan.members[0].workspaceMemberID,
+                    projectID: fixture.plan.members[0].projectID,
+                    fallbackProjectName: "Project 0",
+                    fallbackRepositoryRoot: "/repos/0",
+                    worktreePath: fixture.plan.members[0].destinationPath,
+                    checkpoint: .planPersisted,
+                    plan: fixture.plan.members[0].memberPlan
+                )
+            ]
+        )
+        try await store.checkpoint(.init(checkouts: [checkout]))
+        let manifests = RecordingManifestWriter()
+        let git = ManifestOrderingGit(manifests: manifests)
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: store,
+            git: git,
+            scripts: NoopWorkspaceScriptRunner(),
+            projectMutationGate: ProjectMutationGate(),
+            manifests: manifests
+        )
+
+        _ = try await coordinator.resumeCreation(checkoutID: checkout.id)
+
+        #expect(await manifests.writeCount == 1)
+        #expect(await git.sawManifestBeforeGit)
+    }
+
+    @Test func resumeCreationDoesNotRunGitWhenManifestCannotBeRecreated() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-coordinator-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = WorkspaceStore(url: url)
+        let fixture = makeFixture(count: 1)
+        let checkout = WorkspaceCheckout(
+            workspaceID: fixture.workspace.id,
+            fallbackWorkspaceName: fixture.workspace.name,
+            executionLocation: fixture.workspace.executionLocation,
+            branch: fixture.plan.branch,
+            rootPath: fixture.plan.rootPath,
+            operation: .creating,
+            members: [
+                WorkspaceCheckoutMember(
+                    id: fixture.plan.members[0].checkoutMemberID,
+                    workspaceMemberID: fixture.plan.members[0].workspaceMemberID,
+                    projectID: fixture.plan.members[0].projectID,
+                    fallbackProjectName: "Project 0",
+                    fallbackRepositoryRoot: "/repos/0",
+                    worktreePath: fixture.plan.members[0].destinationPath,
+                    checkpoint: .planPersisted,
+                    plan: fixture.plan.members[0].memberPlan
+                )
+            ]
+        )
+        try await store.checkpoint(.init(checkouts: [checkout]))
+        let git = CountingWorkspaceGit()
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: store,
+            git: git,
+            scripts: NoopWorkspaceScriptRunner(),
+            projectMutationGate: ProjectMutationGate(),
+            manifests: FailingManifestWriter()
+        )
+
+        await #expect(throws: TestError.failed) {
+            try await coordinator.resumeCreation(checkoutID: checkout.id)
+        }
+
+        #expect(await git.callCount == 0)
+        let persisted = await store.checkout(id: checkout.id)
+        #expect(persisted?.operation == .idle)
+        #expect(persisted?.diagnostics.contains(where: { $0.message == "Could not write the Workspace checkout manifest." }) == true)
+    }
+
     private func makeFixture(count: Int) -> (workspace: Workspace, plan: FrozenWorkspaceCheckoutPlan) {
         let members = (0 ..< count).map { index in
             WorkspaceMember(projectID: "project-\(index)", fallbackProjectName: "Project \(index)", fallbackRepositoryRoot: "/repos/\(index)")
@@ -335,6 +422,42 @@ private actor ConcurrentWorkspaceGit: WorkspaceGitOperating {
 }
 
 private enum TestError: Error { case failed }
+
+private actor RecordingManifestWriter: WorkspaceCheckoutManifestWriting {
+    private(set) var writeCount = 0
+
+    func writeManifest(for checkout: WorkspaceCheckout) async throws {
+        writeCount += 1
+    }
+}
+
+private struct FailingManifestWriter: WorkspaceCheckoutManifestWriting {
+    func writeManifest(for checkout: WorkspaceCheckout) async throws {
+        throw TestError.failed
+    }
+}
+
+private actor ManifestOrderingGit: WorkspaceGitOperating {
+    let manifests: RecordingManifestWriter
+    private(set) var sawManifestBeforeGit = false
+
+    init(manifests: RecordingManifestWriter) {
+        self.manifests = manifests
+    }
+
+    func prepareBranch(_ operation: WorkspaceFrozenWorktreeOperation) async throws {
+        if await manifests.writeCount > 0 {
+            sawManifestBeforeGit = true
+        }
+    }
+
+    func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? {
+        if await manifests.writeCount > 0 {
+            sawManifestBeforeGit = true
+        }
+        return "lineage-\(operation.projectID)"
+    }
+}
 
 private actor PreparedBranchWorkspaceGit: WorkspaceGitOperating {
     private(set) var prepareCount = 0

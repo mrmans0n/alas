@@ -587,20 +587,30 @@ actor WorkspaceCheckoutCoordinator {
             return true
         }
         guard started else { return checkout }
+        do {
+            try await manifests.writeManifest(for: checkout)
+        } catch {
+            try? await mutateCheckout(checkoutID) { current in
+                current.operation = .idle
+                current.diagnostics.append(.init(severity: .error, message: "Could not write the Workspace checkout manifest."))
+            }
+            throw error
+        }
         for member in checkout.members {
             if await shouldStopAfterCurrentOperations(checkoutID: checkoutID) { break }
             guard member.availability != .identityConflict,
                   member.checkpoint != .worktreeCreated,
-                  member.checkpoint != .setupComplete,
                   !(member.checkpoint == .failed && member.cleanupOwnership.worktreeCreated),
-                  let plan = member.plan,
-                  plan.checkoutMemberID == member.id,
-                  plan.projectID == member.projectID,
-                  plan.destinationPath == member.worktreePath,
-                  !plan.sourceRepositoryPath.isEmpty,
-                  !plan.baseReference.isEmpty,
-                  !plan.baseCommit.isEmpty
+                  let frozenMember = frozenMember(from: member)
             else { continue }
+            let plan = member.plan!
+            if member.checkpoint == .setupComplete {
+                guard await completedMemberNeedsRecreation(checkout: checkout, member: frozenMember),
+                      try await claimCompletedMemberForRecreation(checkoutID: checkoutID, memberID: member.id, plan: plan)
+                else { continue }
+                await execute(member: frozenMember, checkout: checkout)
+                continue
+            }
             let claimedCheckpoint = try? await store.mutate { state -> WorkspaceCheckoutCheckpoint? in
                 guard let checkoutIndex = state.checkouts.firstIndex(where: { $0.id == checkoutID }),
                       let memberIndex = state.checkouts[checkoutIndex].members.firstIndex(where: { $0.id == member.id })
@@ -637,30 +647,10 @@ actor WorkspaceCheckoutCoordinator {
                 }
             }
             guard let claimedCheckpoint else { continue }
-            let frozenMember = FrozenWorkspaceCheckoutPlan.Member(
-                checkoutMemberID: plan.checkoutMemberID,
-                workspaceMemberID: member.workspaceMemberID,
-                projectID: plan.projectID,
-                sourceRepositoryPath: plan.sourceRepositoryPath,
-                destinationPath: plan.destinationPath,
-                baseReference: plan.baseReference,
-                baseCommit: plan.baseCommit,
-                branchIntent: plan.branchIntent
-            )
             if claimedCheckpoint == .setupRunning {
                 await runSetup(member: frozenMember, checkout: checkout)
             } else if claimedCheckpoint == .worktreeCreating {
-                let operation = WorkspaceFrozenWorktreeOperation(
-                    checkoutID: checkout.id,
-                    checkoutMemberID: plan.checkoutMemberID,
-                    projectID: plan.projectID,
-                    executionLocation: checkout.executionLocation,
-                    sourceRepositoryPath: plan.sourceRepositoryPath,
-                    destinationPath: plan.destinationPath,
-                    branch: checkout.branch,
-                    baseCommit: plan.baseCommit,
-                    branchIntent: .init(plan.branchIntent, baseCommit: plan.baseCommit)
-                )
+                let operation = frozenWorktreeOperation(checkout: checkout, member: frozenMember)
                 do {
                     if let lineageID = try await git.existingCreatedWorktreeLineage(operation) {
                         try await updateMember(checkoutID: checkout.id, memberID: plan.checkoutMemberID) { current in
@@ -691,6 +681,86 @@ actor WorkspaceCheckoutCoordinator {
         }
         await finishIfAllMembersTerminal(checkoutID: checkoutID, owning: .repairing)
         return try await self.checkout(id: checkoutID)
+    }
+
+    private func frozenMember(from member: WorkspaceCheckoutMember) -> FrozenWorkspaceCheckoutPlan.Member? {
+        guard let plan = member.plan,
+              plan.checkoutMemberID == member.id,
+              plan.projectID == member.projectID,
+              plan.destinationPath == member.worktreePath,
+              !plan.sourceRepositoryPath.isEmpty,
+              !plan.baseReference.isEmpty,
+              !plan.baseCommit.isEmpty
+        else { return nil }
+        if case .create(let atCommit) = plan.branchIntent, atCommit != plan.baseCommit {
+            return nil
+        }
+        return .init(
+            checkoutMemberID: plan.checkoutMemberID,
+            workspaceMemberID: member.workspaceMemberID,
+            projectID: plan.projectID,
+            sourceRepositoryPath: plan.sourceRepositoryPath,
+            destinationPath: plan.destinationPath,
+            baseReference: plan.baseReference,
+            baseCommit: plan.baseCommit,
+            branchIntent: plan.branchIntent
+        )
+    }
+
+    private func frozenWorktreeOperation(
+        checkout: WorkspaceCheckout,
+        member: FrozenWorkspaceCheckoutPlan.Member
+    ) -> WorkspaceFrozenWorktreeOperation {
+        WorkspaceFrozenWorktreeOperation(
+            checkoutID: checkout.id,
+            checkoutMemberID: member.checkoutMemberID,
+            projectID: member.projectID,
+            executionLocation: checkout.executionLocation,
+            sourceRepositoryPath: member.sourceRepositoryPath,
+            destinationPath: member.destinationPath,
+            branch: checkout.branch,
+            baseCommit: member.baseCommit,
+            branchIntent: .init(member.branchIntent, baseCommit: member.baseCommit)
+        )
+    }
+
+    private func completedMemberNeedsRecreation(
+        checkout: WorkspaceCheckout,
+        member: FrozenWorkspaceCheckoutPlan.Member
+    ) async -> Bool {
+        let operation = frozenWorktreeOperation(checkout: checkout, member: member)
+        do {
+            return try await projectMutationGate.withMutation(projectID: member.projectID) {
+                try await git.existingCreatedWorktreeLineage(operation) == nil
+            }
+        } catch {
+            return false
+        }
+    }
+
+    private func claimCompletedMemberForRecreation(
+        checkoutID: UUID,
+        memberID: UUID,
+        plan: WorkspaceCheckoutMemberPlan
+    ) async throws -> Bool {
+        try await store.mutate { state -> Bool in
+            guard let checkoutIndex = state.checkouts.firstIndex(where: { $0.id == checkoutID }),
+                  let memberIndex = state.checkouts[checkoutIndex].members.firstIndex(where: { $0.id == memberID })
+            else { throw WorkspaceCheckoutCoordinatorError.checkoutMissing }
+            let current = state.checkouts[checkoutIndex].members[memberIndex]
+            guard current.checkpoint == .setupComplete,
+                  current.plan == plan
+            else { return false }
+            state.checkouts[checkoutIndex].members[memberIndex].checkpoint = .worktreeCreating
+            state.checkouts[checkoutIndex].members[memberIndex].availability = .pending
+            state.checkouts[checkoutIndex].members[memberIndex].gitLineageID = nil
+            state.checkouts[checkoutIndex].members[memberIndex].cleanup = nil
+            state.checkouts[checkoutIndex].members[memberIndex].cleanupOwnership = .init(
+                worktreeCreated: false,
+                branchOwnership: plan.branchIntent == .reuse ? .reused : .created
+            )
+            return true
+        }
     }
 
     private func persistFrozenCheckout(
