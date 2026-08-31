@@ -559,6 +559,32 @@ struct TerminalServiceZmxTests {
     }
 
     @Test
+    func workspaceCheckoutOrphanFilterUsesCheckoutOwnerAndLeafIdentity() {
+        let checkoutID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        let owner = SessionOwnerID.workspaceCheckout(checkoutID, .ssh("build-host"))
+        let knownLeaf = "leaf-keep"
+        let unknownLeaf = "leaf-stranded"
+        let foreignOwner = SessionOwnerID.workspaceCheckout(UUID(), .ssh("build-host"))
+        let knownName = ZmxSessionName.derive(owner: owner, leafId: knownLeaf)
+        let orphanName = ZmxSessionName.derive(owner: owner, leafId: unknownLeaf)
+        let foreignName = ZmxSessionName.derive(owner: foreignOwner, leafId: unknownLeaf)
+
+        let orphans = TerminalService.orphanWorkspaceSessionNames(
+            allSessionNames: [
+                "team-\(knownName)",
+                "team-\(orphanName)",
+                "team-\(foreignName)",
+                knownName,
+                "team-alas-\(ZmxSessionName.hash16("wt"))-\(ZmxSessionName.hash16("leaf"))",
+            ],
+            knownLeavesByOwner: [owner: [knownLeaf]],
+            sessionPrefix: "team-"
+        )
+
+        #expect(orphans == [orphanName])
+    }
+
+    @Test
     func sweepOrphansIssuesKillsForFilteredNames() async {
         let mineWt = "wt-1"
         let mineLeaf = "leaf-keep"

@@ -625,6 +625,22 @@ final class TerminalService {
         }
     }
 
+    func sweepWorkspaceCheckoutOrphans(knownLeavesByOwner: [SessionOwnerID: Set<String>]) {
+        let prefix = ProcessInfo.processInfo.environment["ZMX_SESSION_PREFIX"] ?? ""
+        let client = zmxClient
+        dispatchTrackedKill {
+            let names = client.listSessions()
+            let orphans = Self.orphanWorkspaceSessionNames(
+                allSessionNames: names,
+                knownLeavesByOwner: knownLeavesByOwner,
+                sessionPrefix: prefix
+            )
+            for name in orphans {
+                client.killSession(name: name)
+            }
+        }
+    }
+
     /// Best-effort remote counterpart to `ZmxClient.killSession`. This is
     /// intentionally batch-mode so closing a pane can never wait for auth.
     nonisolated static func killRemoteSession(host: String, name: String) async {
@@ -677,6 +693,30 @@ final class TerminalService {
             knownLeafIdHashes: Set(knownLeafIds.map(ZmxSessionName.hash16))
         )
         for name in orphans {
+            await killRemoteSession(host: host, name: name)
+        }
+    }
+
+    nonisolated static func sweepRemoteWorkspaceCheckoutOrphans(
+        host: String,
+        knownLeavesByOwner: [SessionOwnerID: Set<String>]
+    ) async {
+        let filtered = knownLeavesByOwner.filter { owner, _ in
+            guard case .workspaceCheckout(_, .ssh(let destination)) = owner else { return false }
+            return destination == host
+        }
+        guard !filtered.isEmpty,
+              let result = try? await RemoteExec.run(
+                  host: host,
+                  cwd: nil,
+                  command: RemoteTerminalScript.zmxBatchCommand(["ls", "--short"]),
+                  timeout: 10
+              ), result.exitCode == 0 else {
+            return
+        }
+
+        let names = result.stdout.split(separator: "\n").map(String.init)
+        for name in orphanWorkspaceSessionNames(allSessionNames: names, knownLeavesByOwner: filtered) {
             await killRemoteSession(host: host, name: name)
         }
     }
@@ -737,6 +777,33 @@ final class TerminalService {
             guard let parsed = ZmxSessionName.parseScoped(bareName),
                   knownWorktreeIdHashes.contains(parsed.worktreeIdHash),
                   !knownLeafIdHashes.contains(parsed.leafIdHash)
+            else { return nil }
+            return bareName
+        }
+    }
+
+    nonisolated static func orphanWorkspaceSessionNames(
+        allSessionNames: [String],
+        knownLeavesByOwner: [SessionOwnerID: Set<String>],
+        sessionPrefix: String = ""
+    ) -> [String] {
+        let knownNames = Set(knownLeavesByOwner.flatMap { owner, leafIds in
+            leafIds.map { ZmxSessionName.derive(owner: owner, leafId: $0) }
+        })
+        let ownerPrefixes = knownLeavesByOwner.map { owner, _ -> String in
+            switch owner {
+            case .worktree:
+                return ""
+            case .workspaceCheckout(let checkoutID, let location):
+                return "alas-workspace-\(checkoutID.uuidString.lowercased())-\(ZmxSessionName.hash16(location.normalized.identityComponent))-"
+            }
+        }.filter { !$0.isEmpty }
+        guard !ownerPrefixes.isEmpty else { return [] }
+        return allSessionNames.compactMap { rawName in
+            guard rawName.hasPrefix(sessionPrefix) else { return nil }
+            let bareName = String(rawName.dropFirst(sessionPrefix.count))
+            guard ownerPrefixes.contains(where: { bareName.hasPrefix($0) }),
+                  !knownNames.contains(bareName)
             else { return nil }
             return bareName
         }

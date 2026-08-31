@@ -133,6 +133,11 @@ struct CenterPaneView: View {
             )
             let tabs = composition.tabs
             let closurePlan = CenterTabClosurePlan(orderedTabIDs: tabs.map(\.id))
+            let sharedOwnerForTab: (TabID) -> SessionOwnerID? = { id in
+                sharedSessionOwner.flatMap { owner in
+                    state.tabs.tabs(for: owner).contains(where: { $0.id == id }) ? owner : nil
+                }
+            }
             TabBarView(
                 tabs: tabs,
                 activeId: composition.activeId,
@@ -280,16 +285,32 @@ struct CenterPaneView: View {
                 },
                 systemActionsEnabled: !worktree.path.isRemoteAlasPath,
                 onRenameTerminal: { id in
-                    state.renameTerminalTab(worktreeId: worktree.id, tabId: id)
+                    if let owner = sharedOwnerForTab(id) {
+                        state.renameTerminalTab(owner: owner, tabId: id)
+                    } else {
+                        state.renameTerminalTab(worktreeId: worktree.id, tabId: id)
+                    }
                 },
                 onRenameACPSession: { id in
-                    state.renameACPSessionTab(worktreeId: worktree.id, tabId: id)
+                    if let owner = sharedOwnerForTab(id) {
+                        state.renameACPSessionTab(owner: owner, tabId: id)
+                    } else {
+                        state.renameACPSessionTab(worktreeId: worktree.id, tabId: id)
+                    }
                 },
                 onCopyACPSession: { id in
-                    state.copyACPSessionMarkdown(worktreeId: worktree.id, tabId: id)
+                    if let owner = sharedOwnerForTab(id) {
+                        state.copyACPSessionMarkdown(owner: owner, tabId: id)
+                    } else {
+                        state.copyACPSessionMarkdown(worktreeId: worktree.id, tabId: id)
+                    }
                 },
                 onExportACPSession: { id in
-                    state.exportACPSessionMarkdown(worktreeId: worktree.id, tabId: id)
+                    if let owner = sharedOwnerForTab(id) {
+                        state.exportACPSessionMarkdown(owner: owner, tabId: id)
+                    } else {
+                        state.exportACPSessionMarkdown(worktreeId: worktree.id, tabId: id)
+                    }
                 },
                 onNewTerminal: openTerminal,
                 enabledAgents: state.agentRegistry.enabled(),
@@ -326,12 +347,17 @@ struct CenterPaneView: View {
                 },
                 sidebarHidden: !state.config.sidebarVisible,
                 onMove: { draggedId, destinationId in
-                    state.tabs.moveTab(worktreeId: worktree.id, fromId: draggedId, toId: destinationId)
+                    if let owner = sharedOwnerForTab(draggedId), sharedOwnerForTab(destinationId) == owner {
+                        state.tabs.moveTab(owner: owner, fromId: draggedId, toId: destinationId)
+                    } else {
+                        state.tabs.moveTab(worktreeId: worktree.id, fromId: draggedId, toId: destinationId)
+                    }
                 },
                 titleLookup: { id in
                     guard let tab = tabs.first(where: { $0.id == id }) else { return nil }
                     if case .acpSession(let s) = tab,
-                       let mgr = state.acpManager(forWorktreeId: worktree.id),
+                       let mgr = sharedOwnerForTab(id).flatMap({ state.acpManager(for: $0) })
+                           ?? state.acpManager(forWorktreeId: worktree.id),
                        let session = mgr.sessions[s.sessionId] {
                         let t = session.title.trimmingCharacters(in: .whitespacesAndNewlines)
                         return t.isEmpty ? nil : t
@@ -341,14 +367,16 @@ struct CenterPaneView: View {
                 transcriptLookup: { id in
                     guard let tab = tabs.first(where: { $0.id == id }),
                           case .acpSession(let s) = tab,
-                          let mgr = state.acpManager(for: worktree),
+                          let mgr = sharedOwnerForTab(id).flatMap({ state.acpManager(for: $0) })
+                              ?? state.acpManager(for: worktree),
                           let session = mgr.placeholderSession(id: s.sessionId) else { return nil }
                     return session.transcript
                 },
                 acpAgentLookup: { id in
                     guard let tab = tabs.first(where: { $0.id == id }),
                           case .acpSession(let s) = tab,
-                          let mgr = state.acpManager(forWorktreeId: worktree.id),
+                          let mgr = sharedOwnerForTab(id).flatMap({ state.acpManager(for: $0) })
+                              ?? state.acpManager(forWorktreeId: worktree.id),
                           let session = mgr.sessions[s.sessionId] else { return nil }
                     return state.agent(id: session.agentId)
                         ?? AgentBuiltins.entry(id: session.agentId)
@@ -382,9 +410,7 @@ struct CenterPaneView: View {
                     )
                 } else if let activeId = composition.activeId,
                           let tab = tabs.first(where: { $0.id == activeId }) {
-                    let activeSharedOwner = sharedSessionOwner.flatMap { owner in
-                        state.tabs.tabs(for: owner).contains(where: { $0.id == activeId }) ? owner : nil
-                    }
+                    let activeSharedOwner = sharedOwnerForTab(activeId)
                     switch tab {
                     case .terminal:
                         TerminalTabView(state: state,
