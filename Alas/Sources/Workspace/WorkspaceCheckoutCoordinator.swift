@@ -1067,8 +1067,10 @@ actor WorkspaceCheckoutCoordinator {
                 return true
             }
 
-            for _ in 0 ..< min(4, pending.count) {
-                guard scheduleNextAvailable() else { break }
+            if !(await shouldStopAfterCurrentOperations(checkoutID: checkout.id)) {
+                for _ in 0 ..< min(4, pending.count) {
+                    guard scheduleNextAvailable() else { break }
+                }
             }
 
             while let projectID = await group.next() {

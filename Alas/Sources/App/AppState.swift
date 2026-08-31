@@ -1702,6 +1702,7 @@ final class AppState {
             configurationSnapshot: workspaceConfigurationSnapshot(for: workspace, plan: plan)
         )
         await workspacesManager.refreshCheckoutSnapshots()
+        guard workspaceMutationAvailable else { return checkout }
         selectWorkspaceCheckout(id: checkout.id)
         await coordinator.beginCreation(checkoutID: checkout.id)
         Task { @MainActor [weak self, weak coordinator] in
@@ -1788,6 +1789,7 @@ final class AppState {
         guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
         let checkout = try await workspaceCoordinator().unarchive(checkoutID: id)
         await workspacesManager.refreshCheckoutSnapshots()
+        _ = await restoreWorkspaceCheckoutACPSessions(checkout)
         return checkout
     }
 

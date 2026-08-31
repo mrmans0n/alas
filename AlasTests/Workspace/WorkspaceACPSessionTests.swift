@@ -223,6 +223,49 @@ struct WorkspaceACPSessionTests {
         #expect(state.acpManager(for: owner)?.owner == owner)
     }
 
+    @MainActor
+    @Test func unarchiveRestoresCheckoutOwnedACPManagerForRetainedTabs() async throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        let workspaceURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString + ".json")
+        let tabsDirectory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: workspaceURL)
+            try? FileManager.default.removeItem(at: tabsDirectory)
+        }
+        let checkout = WorkspaceCheckout(
+            workspaceID: nil,
+            fallbackWorkspaceName: "Workspace",
+            executionLocation: .local,
+            branch: "topic",
+            rootPath: root.path,
+            archivedAt: Date(timeIntervalSince1970: 1),
+            members: []
+        )
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, .local)
+        let workspaceStore = WorkspaceStore(url: workspaceURL)
+        try await workspaceStore.checkpoint(.init(checkouts: [checkout]))
+        let tabWriter = TabsManager(store: PersistenceStore(), tabsDirectory: tabsDirectory)
+        _ = tabWriter.append(acpSession: .init(sessionId: "saved-acp", title: "Saved ACP"), to: owner)
+        let tabs = TabsManager(store: PersistenceStore(), tabsDirectory: tabsDirectory)
+        let workspacesManager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
+        let state = AppState(
+            store: MemoryStore(),
+            tabsManager: tabs,
+            restoreActiveTabsOnStartup: false,
+            workspacesManager: workspacesManager,
+            workspaceStore: workspaceStore
+        )
+        state.config.workspacesEnabled = true
+        _ = await workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+
+        _ = try await state.unarchiveWorkspaceCheckout(id: checkout.id)
+
+        #expect(state.tabs.tabs(for: owner).count == 1)
+        #expect(state.acpManager(for: owner)?.owner == owner)
+    }
+
     private struct MemoryStore: PersistenceStoreProtocol {
         func write<T: Encodable>(_: T, to _: URL) throws {}
         func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }

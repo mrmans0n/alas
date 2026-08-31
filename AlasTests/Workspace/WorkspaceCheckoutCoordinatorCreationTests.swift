@@ -101,6 +101,31 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
         #expect(persisted?.members.contains(where: { $0.checkpoint == WorkspaceCheckoutCheckpoint.planPersisted }) == true)
     }
 
+    @Test func stopRequestedBeforeBeginCreationPreventsFirstGitMutation() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-coordinator-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = WorkspaceStore(url: url)
+        let fixture = makeFixture(count: 1)
+        let git = CountingWorkspaceGit()
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: store,
+            git: git,
+            scripts: NoopWorkspaceScriptRunner(),
+            projectMutationGate: ProjectMutationGate()
+        )
+
+        let checkout = try await coordinator.createPersisted(workspace: fixture.workspace, plan: fixture.plan)
+        try await coordinator.stopAfterCurrentOperations(checkoutID: checkout.id)
+        await coordinator.beginCreation(checkoutID: checkout.id)
+        await coordinator.awaitCreationCompletion(checkoutID: checkout.id)
+
+        #expect(await git.callCount == 0)
+        let persisted = await store.checkout(id: checkout.id)
+        #expect(persisted?.operation == .idle)
+        #expect(persisted?.stopAfterCurrentOperations == false)
+        #expect(persisted?.members[0].checkpoint == .planPersisted)
+    }
+
     @Test func resumeCreationIsRejectedWhileBackgroundCreationOwnsTheCheckout() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-coordinator-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: url) }
