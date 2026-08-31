@@ -327,6 +327,7 @@ actor WorkspaceCheckoutCoordinator {
                 current.operation = .idle
                 current.stopAfterCurrentOperations = false
             }
+            await refreshManifestIfPresent(checkoutID: checkoutID)
         } catch {
             try? await mutateCheckout(checkoutID) { current in
                 current.operation = .idle
@@ -391,6 +392,7 @@ actor WorkspaceCheckoutCoordinator {
         } catch WorkspaceStoreError.recoveryRequired {
             throw WorkspaceCheckoutCoordinatorError.workspaceStateUnavailable
         }
+        await refreshManifestIfPresent(checkoutID: checkoutID)
         return try await self.checkout(id: checkoutID)
     }
 
@@ -424,6 +426,7 @@ actor WorkspaceCheckoutCoordinator {
             member.cleanupOwnership.worktreeCreated = true
             state.checkouts[checkoutIndex].members[memberIndex] = member
         }
+        await refreshManifestIfPresent(checkoutID: checkoutID)
         return try await self.checkout(id: checkoutID)
     }
 
@@ -746,6 +749,7 @@ actor WorkspaceCheckoutCoordinator {
                         state.checkouts[checkoutIndex].members[memberIndex].availability = .unavailable
                         state.checkouts[checkoutIndex].diagnostics.append(.init(severity: .error, message: "Workspace creation failed for \(state.checkouts[checkoutIndex].members[memberIndex].fallbackProjectName)."))
                     }
+                    await refreshManifestIfPresent(checkoutID: checkout.id)
                 }
             } else {
                 await execute(member: frozenMember, checkout: checkout)
@@ -853,7 +857,7 @@ actor WorkspaceCheckoutCoordinator {
         memberID: UUID,
         plan: WorkspaceCheckoutMemberPlan
     ) async throws -> Bool {
-        try await store.mutate { state -> Bool in
+        let claimed = try await store.mutate { state -> Bool in
             guard let checkoutIndex = state.checkouts.firstIndex(where: { $0.id == checkoutID }),
                   let memberIndex = state.checkouts[checkoutIndex].members.firstIndex(where: { $0.id == memberID })
             else { throw WorkspaceCheckoutCoordinatorError.checkoutMissing }
@@ -871,6 +875,10 @@ actor WorkspaceCheckoutCoordinator {
             )
             return true
         }
+        if claimed {
+            await refreshManifestIfPresent(checkoutID: checkoutID)
+        }
+        return claimed
     }
 
     private func persistFrozenCheckout(
@@ -1034,6 +1042,7 @@ actor WorkspaceCheckoutCoordinator {
                 state.checkouts[checkoutIndex].members[memberIndex].availability = .unavailable
                 state.checkouts[checkoutIndex].diagnostics.append(.init(severity: .error, message: "Workspace creation failed for \(state.checkouts[checkoutIndex].members[memberIndex].fallbackProjectName)."))
             }
+            await refreshManifestIfPresent(checkoutID: checkout.id)
         }
     }
 
@@ -1049,6 +1058,7 @@ actor WorkspaceCheckoutCoordinator {
                 state.checkouts[checkoutIndex].members[memberIndex].availability = .unavailable
                 state.checkouts[checkoutIndex].diagnostics.append(.init(severity: .error, message: "Workspace setup failed for \(state.checkouts[checkoutIndex].members[memberIndex].fallbackProjectName)."))
             }
+            await refreshManifestIfPresent(checkoutID: checkout.id)
         }
     }
 
@@ -1109,8 +1119,20 @@ actor WorkspaceCheckoutCoordinator {
                 else { throw WorkspaceCheckoutCoordinatorError.checkoutMissing }
                 update(&state.checkouts[checkoutIndex].members[memberIndex])
             }
+            await refreshManifestIfPresent(checkoutID: checkoutID)
         } catch WorkspaceStoreError.recoveryRequired {
             throw WorkspaceCheckoutCoordinatorError.workspaceStateUnavailable
+        }
+    }
+
+    private func refreshManifestIfPresent(checkoutID: UUID) async {
+        guard case .loaded(let state) = await store.load(),
+              let checkout = state.checkouts.first(where: { $0.id == checkoutID })
+        else { return }
+        do {
+            try await manifests.writeManifest(for: checkout)
+        } catch {
+            return
         }
     }
 

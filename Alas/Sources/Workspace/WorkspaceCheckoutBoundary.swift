@@ -12,11 +12,11 @@ struct WorkspaceCheckoutBoundary: Sendable {
     private let resolvedRoot: URL
 
     init(rootPath: String) {
-        resolvedRoot = Self.resolvedURL(for: URL(fileURLWithPath: rootPath).standardizedFileURL)
+        resolvedRoot = Self.resolvedURL(for: URL(fileURLWithPath: rootPath))
     }
 
     func managedURL(for path: String) throws -> URL {
-        let candidate = Self.resolvedURL(for: URL(fileURLWithPath: path).standardizedFileURL)
+        let candidate = Self.resolvedURL(for: URL(fileURLWithPath: path))
         let root = resolvedRoot.path
         let candidatePath = candidate.path
         guard candidatePath == root || candidatePath.hasPrefix(root + "/") else {
@@ -33,28 +33,59 @@ struct WorkspaceCheckoutBoundary: Sendable {
     /// which is exactly the common write case. Resolve the nearest existing
     /// ancestor first, then rebuild the not-yet-created suffix below it.
     private static func resolvedURL(for url: URL) -> URL {
-        let candidate = url.standardizedFileURL
-        var resolved = URL(fileURLWithPath: "/")
         let fileManager = FileManager.default
-        var components = candidate.pathComponents.filter { $0 != "/" }
+        var components = normalizedComponents(url.pathComponents.filter { $0 != "/" })
+        var resolvedComponents: [String] = []
         var seen = Set<String>()
+        var symlinkDepth = 0
+
         while components.isEmpty == false {
             let component = components.removeFirst()
-            resolved.appendPathComponent(component)
-            guard let destination = try? fileManager.destinationOfSymbolicLink(atPath: resolved.path) else {
+            if component == "." || component.isEmpty {
                 continue
             }
-            guard seen.insert(resolved.path).inserted else { break }
-            let target: URL
-            if destination.hasPrefix("/") {
-                target = URL(fileURLWithPath: destination)
-            } else {
-                target = resolved.deletingLastPathComponent()
-                    .appendingPathComponent(destination)
+            if component == ".." {
+                if resolvedComponents.isEmpty == false {
+                    resolvedComponents.removeLast()
+                }
+                continue
             }
-            components = target.pathComponents.filter { $0 != "/" } + components
-            resolved = URL(fileURLWithPath: "/")
+
+            let candidateComponents = resolvedComponents + [component]
+            let candidatePath = "/" + candidateComponents.joined(separator: "/")
+            guard let destination = try? fileManager.destinationOfSymbolicLink(atPath: candidatePath) else {
+                resolvedComponents.append(component)
+                continue
+            }
+
+            guard seen.insert(candidatePath).inserted, symlinkDepth < 40 else { break }
+            symlinkDepth += 1
+
+            if destination.hasPrefix("/") {
+                components = normalizedComponents(URL(fileURLWithPath: destination).pathComponents.filter { $0 != "/" } + components)
+            } else {
+                components = normalizedComponents(resolvedComponents + destination.split(separator: "/").map(String.init) + components)
+            }
+            resolvedComponents = []
         }
-        return resolved
+
+        return URL(fileURLWithPath: "/" + resolvedComponents.joined(separator: "/"))
+    }
+
+    private static func normalizedComponents(_ components: [String]) -> [String] {
+        var result: [String] = []
+        for component in components {
+            switch component {
+            case "", ".":
+                continue
+            case "..":
+                if result.isEmpty == false {
+                    result.removeLast()
+                }
+            default:
+                result.append(component)
+            }
+        }
+        return result
     }
 }

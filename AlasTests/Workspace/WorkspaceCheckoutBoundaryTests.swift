@@ -79,4 +79,22 @@ struct WorkspaceCheckoutBoundaryTests {
             try boundary.managedURL(for: root.appendingPathComponent("link/new.txt").path)
         }
     }
+
+    @Test func rejectsRelativeSymlinkTargetThatEscapesWithParentComponents() throws {
+        let parent = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        let root = parent.appendingPathComponent("root")
+        let outside = parent.appendingPathComponent("outside")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: parent) }
+        try FileManager.default.createSymbolicLink(
+            atPath: root.appendingPathComponent("link").path,
+            withDestinationPath: "../outside"
+        )
+
+        let boundary = WorkspaceCheckoutBoundary(rootPath: root.path)
+        #expect(throws: WorkspaceCheckoutBoundary.Error.outsideCheckout) {
+            try boundary.managedURL(for: root.appendingPathComponent("link/new.txt").path)
+        }
+    }
 }

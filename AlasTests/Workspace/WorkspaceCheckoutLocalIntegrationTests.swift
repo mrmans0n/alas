@@ -43,6 +43,7 @@ struct WorkspaceCheckoutLocalIntegrationTests {
         #expect(manifest.checkoutID == checkout.id)
         #expect(manifest.branch == "release/1091")
         #expect(manifest.members.map(\.path) == completedCheckout.members.map(\.worktreePath))
+        #expect(manifest.members.map(\.availability) == completedCheckout.members.map(\.availability))
         for member in completedCheckout.members {
             let branch = try await Process.git(["branch", "--show-current"], cwd: URL(fileURLWithPath: member.worktreePath))
             #expect(branch.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "release/1091")
