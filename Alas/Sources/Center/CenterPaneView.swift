@@ -835,7 +835,7 @@ struct CenterPaneView: View {
     private func openTerminal() {
         Task { @MainActor in
             if let checkout = selectedCheckoutForSharedOwner {
-                _ = try? state.openWorkspaceCheckoutTerminalTab(checkout)
+                _ = try? await state.openWorkspaceCheckoutTerminalTab(checkout)
             } else {
                 _ = try? await state.openTerminalTabPreparingRemoteZmxIfNeeded(for: worktree)
             }

@@ -1149,6 +1149,19 @@ final class AppState {
         return Set(workspaceNavigationState.repositoryFocusWorktreeID.map { [$0] } ?? [])
     }
 
+    var checkoutFocusedWorktreeScope: CheckoutFocusedWorktreeScope? {
+        guard let checkout = selectedWorkspaceCheckout,
+              let memberID = workspaceNavigationState.focusedCheckoutMemberID,
+              let worktreeID = workspaceNavigationState.repositoryFocusWorktreeID,
+              let member = checkout.members.first(where: { $0.id == memberID })
+        else { return nil }
+        return CheckoutFocusedWorktreeScope(
+            worktreeID: worktreeID,
+            projectID: member.projectID,
+            executionLocation: checkout.executionLocation
+        )
+    }
+
     func selectWorkspace(id: UUID) {
         guard config.workspacesEnabled, workspacesManager.canMutate else { return }
         workspaceNavigationState.selectWorkspace(id)
@@ -1454,18 +1467,22 @@ final class AppState {
     /// into the checkout snapshot. Repository Focus is deliberately absent
     /// from this API.
     @discardableResult
-    func openWorkspaceCheckoutTerminalTab(_ checkout: WorkspaceCheckout) throws -> Tab {
-        guard config.workspacesEnabled, checkout.archivedAt == nil else {
+    func openWorkspaceCheckoutTerminalTab(_ checkout: WorkspaceCheckout) async throws -> Tab {
+        guard config.workspacesEnabled,
+              let authoritative = await workspaceStore.checkout(id: checkout.id),
+              authoritative.archivedAt == nil,
+              authoritative.operation == .idle
+        else {
             throw NSError(domain: "AppState", code: 2, userInfo: [NSLocalizedDescriptionKey: "Workspaces are disabled."])
         }
         let context = WorkspaceTerminalContext(
-            checkoutID: checkout.id,
-            executionLocation: checkout.executionLocation,
-            rootPath: checkout.rootPath,
-            branch: checkout.branch,
-            manifestPath: URL(fileURLWithPath: checkout.rootPath)
+            checkoutID: authoritative.id,
+            executionLocation: authoritative.executionLocation,
+            rootPath: authoritative.rootPath,
+            branch: authoritative.branch,
+            manifestPath: URL(fileURLWithPath: authoritative.rootPath)
                 .appendingPathComponent(WorkspaceCheckoutManifest.fileName).path,
-            startupScript: checkout.configurationSnapshot?.shared.sessionOpenScript ?? ""
+            startupScript: authoritative.configurationSnapshot?.shared.sessionOpenScript ?? ""
         )
         let session = try terminal.openCheckoutSession(
             context: context,
@@ -1484,7 +1501,11 @@ final class AppState {
         focusedMemberWorktree: Worktree,
         agentId: String
     ) async throws -> Tab {
-        guard config.workspacesEnabled, checkout.archivedAt == nil else {
+        guard config.workspacesEnabled,
+              let authoritative = await workspaceStore.checkout(id: checkout.id),
+              authoritative.archivedAt == nil,
+              authoritative.operation == .idle
+        else {
             throw NSError(domain: "AppState", code: 2, userInfo: [NSLocalizedDescriptionKey: "Workspaces are disabled."])
         }
         guard let project = projects.first(where: { $0.id == focusedMemberWorktree.projectId }) else {
@@ -1496,16 +1517,16 @@ final class AppState {
         if agent.id == AgentKind.copilot.rawValue, project.host == nil {
             try CopilotInstaller(projectRootURL: focusedMemberWorktree.path).install()
         }
-        let baseContext = workspaceTerminalContext(for: checkout)
+        let baseContext = workspaceTerminalContext(for: authoritative)
         let context = WorkspaceTerminalContext(
-            checkoutID: checkout.id,
-            executionLocation: checkout.executionLocation,
-            rootPath: checkout.rootPath,
-            branch: checkout.branch,
+            checkoutID: authoritative.id,
+            executionLocation: authoritative.executionLocation,
+            rootPath: authoritative.rootPath,
+            branch: authoritative.branch,
             manifestPath: baseContext.manifestPath,
             startupScript: [
                 baseContext.startupScript,
-                workspaceCheckoutAgentStartupCommand(for: agent, project: project, checkout: checkout),
+                workspaceCheckoutAgentStartupCommand(for: agent, project: project, checkout: authoritative),
             ].filter { !$0.isEmpty }.joined(separator: "\n")
         )
         let session = try terminal.openCheckoutSession(
@@ -1723,7 +1744,7 @@ final class AppState {
                     agentId: agentID
                 )
             } else {
-                _ = try? openWorkspaceCheckoutTerminalTab(checkout)
+                _ = try? await openWorkspaceCheckoutTerminalTab(checkout)
             }
         case .acp:
             guard let agentID = preference.agentID, agent(id: agentID) != nil else { return }

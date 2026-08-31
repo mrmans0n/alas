@@ -217,7 +217,8 @@ struct RootView: View {
             selectedWorktreeId: state.selectedWorktreeId,
             projects: state.navigationProjects,
             projectsManager: state.projectsManager,
-            allowedWorktreeIDs: state.checkoutScopedWorktreeIDs
+            allowedWorktreeIDs: state.checkoutScopedWorktreeIDs,
+            checkoutFocusedWorktreeScope: state.checkoutFocusedWorktreeScope
         ).resolve()
     }
 
@@ -232,6 +233,7 @@ struct RootView: View {
             projects: state.navigationProjects,
             projectsManager: state.projectsManager,
             allowedWorktreeIDs: state.checkoutScopedWorktreeIDs,
+            checkoutFocusedWorktreeScope: state.checkoutFocusedWorktreeScope,
             isRefreshingProjectTopologies: state.isRefreshingProjectTopologies
         )
         switch resolver.resolve() {
@@ -278,7 +280,8 @@ struct RootView: View {
             selectedWorktreeId: state.selectedWorktreeId,
             projects: state.navigationProjects,
             projectsManager: state.projectsManager,
-            allowedWorktreeIDs: state.checkoutScopedWorktreeIDs
+            allowedWorktreeIDs: state.checkoutScopedWorktreeIDs,
+            checkoutFocusedWorktreeScope: state.checkoutFocusedWorktreeScope
         )
         if case .active(let wt) = resolver.resolve() { return wt }
         return nil
