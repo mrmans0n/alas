@@ -1495,7 +1495,7 @@ final class AppState {
             manifestPath: baseContext.manifestPath,
             startupScript: [
                 baseContext.startupScript,
-                agentStartupCommand(for: agent, project: project),
+                workspaceCheckoutAgentStartupCommand(for: agent, project: project, checkout: checkout),
             ].filter { !$0.isEmpty }.joined(separator: "\n")
         )
         let session = try terminal.openCheckoutSession(
@@ -2511,6 +2511,22 @@ final class AppState {
     }
 
     func agentStartupCommand(for agent: AgentDefinition, project: ProjectConfig) -> String {
+        agentStartupCommand(
+            for: agent,
+            project: project,
+            useBypassPermissions: agentBypassPermissionsEnabled(for: project)
+        )
+    }
+
+    private func workspaceCheckoutAgentStartupCommand(for agent: AgentDefinition, project: ProjectConfig, checkout: WorkspaceCheckout) -> String {
+        agentStartupCommand(
+            for: agent,
+            project: project,
+            useBypassPermissions: checkout.configurationSnapshot?.shared.creationLaunchPreference.useBypassPermissions == true
+        )
+    }
+
+    private func agentStartupCommand(for agent: AgentDefinition, project: ProjectConfig, useBypassPermissions: Bool) -> String {
         let binary = project.host == nil
             ? agent.resolvedBinary
             : URL(fileURLWithPath: agent.resolvedBinary).lastPathComponent
@@ -2518,7 +2534,7 @@ final class AppState {
         if let extra = agent.extraTerminalArgs, !extra.isEmpty {
             argv.append(contentsOf: extra)
         }
-        if agentBypassPermissionsEnabled(for: project),
+        if useBypassPermissions,
            let flag = agent.bypassPermissionsFlag {
             argv.append(flag)
         }
