@@ -2753,6 +2753,46 @@ struct RightPaneGGStackTests {
         await runner.releasePostSyncRead()
     }
 
+    @Test func reevaluatingGGGateKeepsCompatibleLoadedStackVisible() async throws {
+        let worktree = makeWorktree()
+        let result = ProcessResult(
+            exitCode: 0,
+            stdout: GGStackModelsTests.fixture,
+            stderr: ""
+        )
+        let runner = ControlledStackGGRunner(
+            stackResults: [("agent-inbox", result), ("agent-inbox", result)],
+            suspendedCalls: [2]
+        )
+        let state = makeState(worktree: worktree)
+        installFakeGGStackLoader(on: state)
+        state.ggService = GGService(runner: runner)
+        state.ggCapabilities = {
+            GGCapabilities(
+                structuredSplit: false,
+                keepCurrentUnstack: false,
+                localStackSnapshot: false
+            )
+        }
+        state.ggContextProvider = { _ in .active(stackName: "agent-inbox") }
+        state.ggStackSourceCommits = [
+            commit(sha: String(repeating: "s", count: 40), stackShaped: true),
+        ]
+
+        await state.refreshGGStack()
+        let refresh = state.reevaluateGGGate()
+        for _ in 0..<500 where await runner.lsCallCount < 2 {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+
+        #expect(await runner.lsCallCount == 2)
+        #expect(state.ggStack?.name == "agent-inbox")
+        #expect(state.ggStackLoadState == .loaded)
+
+        await runner.complete(call: 2)
+        await refresh.value
+    }
+
     @Test func staleMutationFailureDoesNotOverwriteNewerActionState() async throws {
         let worktree = makeWorktree()
         let runner = StaleMutationFailureRunner()

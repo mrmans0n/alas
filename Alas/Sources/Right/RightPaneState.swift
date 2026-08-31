@@ -1235,20 +1235,21 @@ final class RightPaneState: GGSplitCommitServicing {
     }
 
     /// Re-run the gg gate immediately (e.g. after a Settings toggle) rather
-    /// than waiting for the next watcher-driven refresh. Resets the
-    /// commits-key so the gate is fully re-evaluated even when commits are
-    /// unchanged, then reloads or clears stack state. Returns the
+    /// than waiting for the next watcher-driven refresh. Forces a fresh query
+    /// even when commits are unchanged while keeping a compatible loaded
+    /// stack visible, then reloads or clears stack state. Returns the
     /// underlying task so tests can await completion; production call
     /// sites ignore the return value.
     @MainActor
     @discardableResult
     func reevaluateGGGate() -> Task<Void, Never> {
         let remoteMetadata = ggStack
-        invalidateGGPresentation(startingRefresh: false)
+        ggStackRefreshGeneration &+= 1
+        ggStackRefreshTask?.cancel()
         ggStackRemoteMetadataCache = remoteMetadata
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
-            await self.refreshGGStack()
+            await self.refreshGGStack(forceRemote: true)
         }
         ggStackRefreshTask = task
         return task
