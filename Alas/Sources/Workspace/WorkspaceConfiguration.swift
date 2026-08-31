@@ -143,6 +143,31 @@ struct WorkspaceSharedConfigurationSnapshot: Codable, Equatable, Sendable {
     var sessionOpenScript: String
     var worktreeCreateScript: String
     var creationLaunchPreference: CreationLaunchPreference
+    var globalWorktreeCreateScript: String
+
+    init(
+        sessionOpenScript: String,
+        worktreeCreateScript: String,
+        creationLaunchPreference: CreationLaunchPreference,
+        globalWorktreeCreateScript: String = ""
+    ) {
+        self.sessionOpenScript = sessionOpenScript
+        self.worktreeCreateScript = worktreeCreateScript
+        self.creationLaunchPreference = creationLaunchPreference
+        self.globalWorktreeCreateScript = globalWorktreeCreateScript
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionOpenScript, worktreeCreateScript, creationLaunchPreference, globalWorktreeCreateScript
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        sessionOpenScript = try container.decodeIfPresent(String.self, forKey: .sessionOpenScript) ?? ""
+        worktreeCreateScript = try container.decodeIfPresent(String.self, forKey: .worktreeCreateScript) ?? ""
+        creationLaunchPreference = try container.decodeIfPresent(CreationLaunchPreference.self, forKey: .creationLaunchPreference) ?? .inherit
+        globalWorktreeCreateScript = try container.decodeIfPresent(String.self, forKey: .globalWorktreeCreateScript) ?? ""
+    }
 }
 
 struct WorkspaceMemberConfigurationSnapshot: Codable, Equatable, Sendable {
@@ -173,7 +198,8 @@ enum WorkspaceConfigurationResolver {
         let shared = WorkspaceSharedConfigurationSnapshot(
             sessionOpenScript: resolveScript(global: input.globalTerminal.startupScript, mode: sharedScripts.sessionOpenMode, local: sharedScripts.sessionOpenScript),
             worktreeCreateScript: resolveScript(global: input.globalTerminal.worktreeCreateScript, mode: sharedScripts.worktreeCreateMode, local: sharedScripts.worktreeCreateScript),
-            creationLaunchPreference: resolveLaunchPreference(input)
+            creationLaunchPreference: resolveLaunchPreference(input),
+            globalWorktreeCreateScript: input.globalTerminal.worktreeCreateScript.trimmingCharacters(in: .whitespacesAndNewlines)
         )
         var warnings: [WorkspaceConfigurationWarning] = []
         let normalizedLaunch = validatedLaunchPreference(shared.creationLaunchPreference, input: input, warnings: &warnings)

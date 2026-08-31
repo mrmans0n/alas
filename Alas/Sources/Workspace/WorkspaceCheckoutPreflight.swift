@@ -361,7 +361,10 @@ struct WorkspacePathInspector: WorkspacePathInspecting {
             }
             return isDirectory.boolValue && FileManager.default.isWritableFile(atPath: candidate.path)
         case .ssh(let host):
-            let command = "test -d \(SSHCommand.shellQuote(parent)) && test -w \(SSHCommand.shellQuote(parent))"
+            let quotedParent = SSHCommand.shellQuote(parent)
+            let command = """
+            p=\(quotedParent); while [ ! -e "$p" ] && [ ! -L "$p" ]; do next=$(dirname "$p"); [ "$next" = "$p" ] && exit 1; p="$next"; done; test -d "$p" && test -w "$p"
+            """
             guard let result = try? await remote.run(host: host, command: command) else { return false }
             return result.exitCode == 0
         }

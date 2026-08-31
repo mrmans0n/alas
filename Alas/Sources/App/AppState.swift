@@ -1439,14 +1439,16 @@ final class AppState {
     /// Shared checkout sessions are owned by their frozen checkout identity,
     /// not by the member currently driving repository panes. Lifecycle code
     /// calls this when archiving a checkout.
-    func stopWorkspaceCheckoutSessions(_ checkout: WorkspaceCheckout) {
+    func stopWorkspaceCheckoutSessions(_ checkout: WorkspaceCheckout) async {
         let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
         // The registry is authoritative for live sessions, including a
         // freshly opened terminal whose tab has not been persisted yet.
-        // Persisted checkout-owned tab records are intentionally retained so
-        // unarchiving can restore the previous shared session layout/history.
+        // Persisted checkout-owned tab records are archived only after live
+        // sessions have drained, so unarchive cannot expose stale processes.
         terminal.stopSessions(owner: owner)
-        disposeACPManager(owner: owner)
+        terminal.waitForPendingKills(timeout: 5)
+        await disposeACPManagerAndWait(owner: owner)
+        archiveSessionTabs(owner: owner)
     }
 
     /// Opens a terminal in the checkout root with the startup script frozen
@@ -1618,7 +1620,7 @@ final class AppState {
             store: workspaceStore,
             sessions: WorkspaceCheckoutSessionStopper(
                 store: workspaceStore,
-                stop: { [weak self] checkout in self?.stopWorkspaceCheckoutSessions(checkout) }
+                stop: { [weak self] checkout in await self?.stopWorkspaceCheckoutSessions(checkout) }
             )
         )
         workspaceCheckoutCoordinator = coordinator
@@ -7909,6 +7911,19 @@ final class AppState {
 
     private func disposeACPManager(owner: SessionOwnerID) {
         guard let manager = acpManagers.removeValue(forKey: owner) else { return }
+        prepareACPManagerForDisposal(manager, owner: owner)
+        Task { @MainActor in
+            await self.finishDisposingACPManager(manager)
+        }
+    }
+
+    private func disposeACPManagerAndWait(owner: SessionOwnerID) async {
+        guard let manager = acpManagers.removeValue(forKey: owner) else { return }
+        prepareACPManagerForDisposal(manager, owner: owner)
+        await finishDisposingACPManager(manager)
+    }
+
+    private func prepareACPManagerForDisposal(_ manager: ACPSessionManager, owner: SessionOwnerID) {
         // Flush any pending debounced draft writes before tearing the
         // manager down — otherwise the last ~300ms of typing in any
         // composer for this worktree never reaches SQLite.
@@ -7930,17 +7945,18 @@ final class AppState {
         // must be torn down explicitly to stop the 2.5s backstop polls and
         // notifier subscriptions from outliving the manager.
         manager.shutdownBackgroundTasks()
-        Task { @MainActor in
-            await manager.flushAllPersistence()
-            await manager.disposeAllLiveSessions()
-            // Release any leases this manager still owns AFTER all runner
-            // connections are shut down (detach above). A freed lease must
-            // not be claimable while an old agent process is still alive.
-            // `detach` already released runner-session leases; this mops up
-            // any remaining pre-runner owned leases (e.g. sessions acquired
-            // a lease but didn't register a runner yet).
-            await manager.releaseAllOwnedLeases()
-        }
+    }
+
+    private func finishDisposingACPManager(_ manager: ACPSessionManager) async {
+        await manager.flushAllPersistence()
+        await manager.disposeAllLiveSessions()
+        // Release any leases this manager still owns AFTER all runner
+        // connections are shut down (detach above). A freed lease must
+        // not be claimable while an old agent process is still alive.
+        // `detach` already released runner-session leases; this mops up
+        // any remaining pre-runner owned leases (e.g. sessions acquired
+        // a lease but didn't register a runner yet).
+        await manager.releaseAllOwnedLeases()
     }
 
     /// Open a new ACP session tab for the given agent in the currently-selected worktree.
