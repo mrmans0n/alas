@@ -505,6 +505,148 @@ struct WorkspaceACPSessionTests {
         #expect(state.acpManager(for: owner)?.owner == owner)
     }
 
+    @MainActor
+    @Test func checkoutToolbarUsesFrozenMCPServersInsteadOfFocusedProjectServers() async throws {
+        let workspaceURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString + ".json")
+        defer { try? FileManager.default.removeItem(at: workspaceURL) }
+        let memberID = UUID()
+        let frozenServer = ProjectMCPServer(
+            id: "frozen-server",
+            name: "frozen-filesystem",
+            transport: .stdio(command: "frozen-mcp", args: [], environment: [])
+        )
+        let liveServer = ProjectMCPServer(
+            id: "live-server",
+            name: "live-filesystem",
+            transport: .stdio(command: "live-mcp", args: [], environment: [])
+        )
+        let checkout = WorkspaceCheckout(
+            workspaceID: nil,
+            fallbackWorkspaceName: "Workspace",
+            executionLocation: .local,
+            branch: "topic",
+            rootPath: "/checkout",
+            members: [],
+            configurationSnapshot: .init(
+                shared: .init(sessionOpenScript: "", worktreeCreateScript: "", creationLaunchPreference: .inherit),
+                members: [
+                    memberID: .init(
+                        setupScript: "",
+                        ggMode: .auto,
+                        mcpServers: [
+                            .init(
+                                id: "\(memberID.uuidString):frozen-server",
+                                server: frozenServer,
+                                projectDirectory: "/repo",
+                                worktreeDirectory: "/checkout/repo",
+                                checkoutRoot: "/checkout"
+                            ),
+                        ]
+                    ),
+                ]
+            )
+        )
+        let workspaceStore = WorkspaceStore(url: workspaceURL)
+        try await workspaceStore.checkpoint(.init(checkouts: [checkout]))
+        let workspacesManager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
+        let state = AppState(
+            store: MemoryStore(),
+            workspacesManager: workspacesManager,
+            workspaceStore: workspaceStore
+        )
+        state.projectsManager = ProjectsManager(persistedProjects: [
+            ProjectConfig(
+                id: "project",
+                name: "Project",
+                path: "/repo",
+                color: "blue",
+                addedAt: .distantPast,
+                mcpServers: [liveServer]
+            ),
+        ])
+        _ = await workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+        let worktree = Worktree(
+            id: "worktree",
+            projectId: "project",
+            name: "main",
+            branch: "main",
+            path: URL(fileURLWithPath: "/repo"),
+            status: .clean,
+            lastActivity: .distantPast
+        )
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, .local)
+
+        #expect(state.mcpServersForACPToolbar(worktree: worktree, owner: owner).map(\.name) == ["frozen-filesystem"])
+        #expect(state.mcpServersForACPToolbar(worktree: worktree, owner: nil).map(\.name) == ["live-filesystem"])
+    }
+
+    @MainActor
+    @Test func checkoutACPManagerProvidesAlasCLIEnvAndFrozenExternalMCPStatus() async throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        let workspaceURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString + ".json")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: workspaceURL)
+        }
+        let memberID = UUID()
+        let frozenServer = ProjectMCPServer(
+            id: "frozen-external",
+            name: "frozen-linear",
+            transport: .stdio(command: "linear-mcp", args: [], environment: [])
+        )
+        let checkout = WorkspaceCheckout(
+            workspaceID: nil,
+            fallbackWorkspaceName: "Workspace",
+            executionLocation: .local,
+            branch: "topic",
+            rootPath: root.path,
+            members: [],
+            configurationSnapshot: .init(
+                shared: .init(sessionOpenScript: "", worktreeCreateScript: "", creationLaunchPreference: .inherit),
+                members: [
+                    memberID: .init(
+                        setupScript: "",
+                        ggMode: .auto,
+                        mcpServers: [
+                            .init(
+                                id: "\(memberID.uuidString):frozen-external",
+                                server: frozenServer,
+                                projectDirectory: "/repo",
+                                worktreeDirectory: root.appendingPathComponent("repo").path,
+                                checkoutRoot: root.path
+                            ),
+                        ]
+                    ),
+                ]
+            )
+        )
+        try writeManifest(for: checkout)
+        let workspaceStore = WorkspaceStore(url: workspaceURL)
+        try await workspaceStore.checkpoint(.init(checkouts: [checkout]))
+        let workspacesManager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
+        let state = AppState(
+            store: MemoryStore(),
+            workspacesManager: workspacesManager,
+            workspaceStore: workspaceStore
+        )
+        state.config.workspacesEnabled = true
+        _ = await workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+
+        guard case let .ready(manager) = await state.workspaceACPManager(for: checkout) else {
+            Issue.record("Expected checkout ACP manager")
+            return
+        }
+        let envProvider = try #require(manager.alasCLIEnvProvider)
+        let env = await envProvider(root.path, "checkout-session")
+        #expect(env?["ALAS_WORKTREE_DIR"] == root.path)
+        #expect(env?["ALAS_SESSION_ID"] == "checkout-session")
+
+        let externalProvider = try #require(manager.externalMCPStatusProvider)
+        let external = await externalProvider(root.path)
+        #expect(external.userServerNames == ["frozen-linear"])
+    }
+
     private struct MemoryStore: PersistenceStoreProtocol {
         func write<T: Encodable>(_: T, to _: URL) throws {}
         func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }

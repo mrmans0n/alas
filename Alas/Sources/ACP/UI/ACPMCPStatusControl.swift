@@ -158,10 +158,10 @@ private struct ACPMCPStatusPopover: View {
                 installActionRow
             }
 
-            if status.showsSwitchToHTTPAction {
+            if status.showsSwitchToHTTPAction, let onSwitchToHTTP {
                 VStack(alignment: .leading, spacing: 6) {
                     AlasButton(title: "Switch to HTTP transport", style: .subtle) {
-                        onSwitchToHTTP?()
+                        onSwitchToHTTP()
                     }
                 }
                 .padding(.horizontal, 12)
@@ -170,7 +170,7 @@ private struct ACPMCPStatusPopover: View {
                 HStack(alignment: .top, spacing: 7) {
                     Image(systemName: "info.circle")
                         .font(.system(size: 10))
-                    Text("Already using HTTP; check whether your agent policy allows http://localhost MCP servers.")
+                    Text(builtInWarningDetail)
                         .font(.system(size: 10.5))
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -196,6 +196,19 @@ private struct ACPMCPStatusPopover: View {
         }
         .frame(width: 300)
         .background(theme.color("bg-1"))
+    }
+
+    private var builtInWarningDetail: String {
+        switch status.builtInWarning {
+        case .none:
+            return ""
+        case .canSwitchToHTTP:
+            return "The HTTP transport switch is unavailable for this session."
+        case .alreadyHTTP:
+            return "Already using HTTP; check whether your agent policy allows http://localhost MCP servers."
+        case .httpUnsupported:
+            return "This agent does not advertise HTTP MCP support."
+        }
     }
 
     @ViewBuilder

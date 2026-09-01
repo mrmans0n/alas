@@ -181,7 +181,7 @@ struct WorkspaceCheckoutRemoteInvocationTests {
 
     @Test func remoteManifestRefreshRequiresTheFrozenRootPath() async throws {
         let checkoutID = UUID()
-        let root = "/srv/checkouts/release"
+        let root = #"/srv/checkouts/release"quoted"#
         let manifest = WorkspaceCheckoutManifest(checkoutID: checkoutID, rootPath: root, branch: "release/1091", members: [])
         let runner = RecordingWorkspaceSSHRunner(results: [.init(exitCode: 73, stdout: "", stderr: "")])
 
@@ -193,7 +193,7 @@ struct WorkspaceCheckoutRemoteInvocationTests {
 
         let command = try #require(await runner.calls.first?.args.last)
         #expect(command.contains(#""checkoutID":"\#(checkoutID.uuidString)""#))
-        #expect(command.contains(#""rootPath":"\#(root)""#))
+        #expect(command.contains(WorkspaceCheckoutManifest.jsonStringNeedle(key: "rootPath", value: root)))
         #expect(command.contains("grep -F"))
     }
 
