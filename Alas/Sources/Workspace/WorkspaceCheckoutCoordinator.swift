@@ -236,6 +236,15 @@ actor WorkspaceCheckoutCoordinator {
         switch await lifecycle.verifyCleanup(plan) {
         case .exactLineage(let lineage) where lineage == plan.expectedLineageID:
             break
+        case .missing where member.cleanupOwnership.worktreeCreated:
+            let root = await lifecycle.inspectRoot(plan)
+            guard root.isContained else { throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict }
+            return WorkspaceMemberDeletionPreview(
+                member: member,
+                plan: plan,
+                preflight: .init(reasons: [], submoduleLocalState: .none),
+                rootObservation: root
+            )
         default:
             throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict
         }

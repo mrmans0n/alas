@@ -1510,6 +1510,7 @@ final class AppState {
         terminal.terminateSessions(persistedTerminalSessions)
         await terminal.drainPendingKills(timeout: 5)
         await disposeACPManagerAndWait(owner: owner)
+        archiveSessionTabs(owner: owner)
     }
 
 #if DEBUG
