@@ -8317,7 +8317,8 @@ final class AppState {
                        socketPath: socketPath,
                        worktreePath: worktreePath,
                        sessionId: sessionId,
-                       parentSessionId: nil
+                       parentSessionId: nil,
+                       workspaceOnly: true
                    ) {
                     return BuiltInAlasMCP.injection(
                         enabled: self.config.harness.exposeAlasMCP,
