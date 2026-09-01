@@ -1669,7 +1669,9 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
             if FileManager.default.fileExists(atPath: manifestURL.path) {
                 let data = try Data(contentsOf: manifestURL)
                 let manifest = try JSONDecoder().decode(WorkspaceCheckoutManifest.self, from: data)
-                guard manifest.checkoutID == checkout.id else {
+                guard manifest.checkoutID == checkout.id,
+                      URL(fileURLWithPath: manifest.rootPath).standardizedFileURL.path == URL(fileURLWithPath: checkout.rootPath).standardizedFileURL.path
+                else {
                     throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict
                 }
                 try FileManager.default.removeItem(at: manifestURL)
@@ -1681,9 +1683,11 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
             let root = SSHCommand.shellQuote(checkout.rootPath)
             let manifest = SSHCommand.shellQuote(URL(fileURLWithPath: checkout.rootPath).appendingPathComponent(WorkspaceCheckoutManifest.fileName).path)
             let expectedCheckoutID = SSHCommand.shellQuote("\"checkoutID\":\"\(checkout.id.uuidString)\"")
+            let expectedRootPath = SSHCommand.shellQuote(WorkspaceCheckoutManifest.jsonStringNeedle(key: "rootPath", value: checkout.rootPath))
             let command = """
             if [ -e \(manifest) ]; then
               grep -F \(expectedCheckoutID) \(manifest) >/dev/null 2>&1 || exit 73
+              grep -F \(expectedRootPath) \(manifest) >/dev/null 2>&1 || exit 73
               rm -f \(manifest) || exit 74
             fi
             rmdir \(root) 2>/dev/null || true
