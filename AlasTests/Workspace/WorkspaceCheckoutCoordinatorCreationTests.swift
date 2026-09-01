@@ -126,6 +126,36 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
         #expect(persisted?.members[0].checkpoint == .planPersisted)
     }
 
+    @Test func stopPendingCreationBeforeStartLeavesDurableCheckoutResumableWithoutGit() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-coordinator-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = WorkspaceStore(url: url)
+        let fixture = makeFixture(count: 1)
+        let git = CountingWorkspaceGit()
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: store,
+            git: git,
+            scripts: NoopWorkspaceScriptRunner(),
+            projectMutationGate: ProjectMutationGate()
+        )
+
+        let checkout = try await coordinator.createPersisted(workspace: fixture.workspace, plan: fixture.plan)
+        let stopped = try await coordinator.stopPendingCreationBeforeStart(checkoutID: checkout.id)
+        await coordinator.beginCreation(checkoutID: checkout.id)
+        await coordinator.awaitCreationCompletion(checkoutID: checkout.id)
+
+        #expect(stopped.operation == .idle)
+        #expect(stopped.members.map(\.checkpoint) == [.planPersisted])
+        #expect(stopped.diagnostics.contains {
+            $0.severity == .warning
+                && $0.message.contains("stopped before Git operations started")
+        })
+        #expect(await git.callCount == 0)
+        let persisted = await store.checkout(id: checkout.id)
+        #expect(persisted?.operation == .idle)
+        #expect(persisted?.members.map(\.checkpoint) == [.planPersisted])
+    }
+
     @Test func resumeCreationIsRejectedWhileBackgroundCreationOwnsTheCheckout() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-coordinator-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: url) }
