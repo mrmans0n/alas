@@ -18,6 +18,27 @@ import Testing
         #expect(plan.canForceDelete == false)
     }
 
+    @Test func riskyCheckoutDeletionAggregatesMemberRisks() {
+        let plan = WorkspaceLifecycleConfirmationModel.checkoutDeletion(risks: [
+            "App: Uncommitted changes",
+            "API: Initialized submodules",
+        ])
+
+        #expect(plan.requiresConfirmation == true)
+        #expect(plan.title == "Delete Workspace Checkout?")
+        #expect(plan.risks == ["App: Uncommitted changes", "API: Initialized submodules"])
+        #expect(plan.confirmAction == .deleteCheckout(confirmingRisks: true))
+        #expect(plan.canForceDelete == false)
+    }
+
+    @Test func cleanCheckoutDeletionDoesNotRequireConfirmation() {
+        let plan = WorkspaceLifecycleConfirmationModel.checkoutDeletion(risks: [])
+
+        #expect(plan.requiresConfirmation == false)
+        #expect(plan.confirmAction == .deleteCheckout(confirmingRisks: false))
+        #expect(plan.canForceDelete == false)
+    }
+
     @Test func verifiedFindExistingCandidatesAreExplicitRepairChoices() {
         let candidates = [
             WorkspaceRepairCandidate(path: "/checkouts/release/app", lineageID: "lineage-a", isExactMatch: true),

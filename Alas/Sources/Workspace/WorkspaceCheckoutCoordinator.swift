@@ -453,7 +453,7 @@ actor WorkspaceCheckoutCoordinator {
 
     /// Runs member cleanup in snapshot order. A request to stop is honored at
     /// the next member boundary; failed members remain independently visible.
-    func deleteCheckout(checkoutID: UUID) async throws -> WorkspaceCheckout {
+    func deleteCheckout(checkoutID: UUID, confirmingRisks: Bool = false) async throws -> WorkspaceCheckout {
         guard !activeCheckoutDeletions.contains(checkoutID) else {
             throw WorkspaceCheckoutCoordinatorError.operationInProgress
         }
@@ -476,7 +476,12 @@ actor WorkspaceCheckoutCoordinator {
             let current = try await checkout(id: checkoutID)
             if current.stopAfterCurrentOperations { break }
             do {
-                _ = try await deleteMember(checkoutID: checkoutID, memberID: member.id, checkoutOperationAlreadyClaimed: true)
+                _ = try await deleteMember(
+                    checkoutID: checkoutID,
+                    memberID: member.id,
+                    confirmingRisks: confirmingRisks,
+                    checkoutOperationAlreadyClaimed: true
+                )
             } catch {
                 // One member's risk, failure, or conflict must not erase the
                 // independent cleanup opportunity for later members.

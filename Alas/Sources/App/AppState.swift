@@ -1733,6 +1733,60 @@ final class AppState {
         await workspacesManager.refreshCheckoutSnapshots()
     }
 
+    func deleteWorkspaceDefinition(id workspaceID: UUID) async throws {
+        guard workspaceMutationAvailable else {
+            throw WorkspaceStoreError.recoveryRequired
+        }
+        let originalSpacesFile = spacesManager.file
+        var stagedSpacesFile = originalSpacesFile
+        var changedSpaces = false
+        for index in stagedSpacesFile.spaces.indices {
+            guard let members = stagedSpacesFile.spaces[index].members else { continue }
+            let filtered = members.filter { reference in
+                guard case .workspace(let id) = reference else { return true }
+                return id != workspaceID
+            }
+            guard filtered != members else { continue }
+            stagedSpacesFile.spaces[index].members = filtered
+            stagedSpacesFile.spaces[index].projectIds = filtered.compactMap { reference in
+                guard case .project(let id) = reference else { return nil }
+                return id
+            }
+            changedSpaces = true
+        }
+        if changedSpaces {
+            spacesManager.replace(file: stagedSpacesFile)
+            guard writeSpaces() else {
+                spacesManager.replace(file: originalSpacesFile)
+                throw WorkspaceDefinitionSaveError.spacePlacementFailed
+            }
+        }
+        do {
+            try await workspaceStore.mutate { state in
+                guard state.workspaces.contains(where: { $0.id == workspaceID }) else {
+                    throw WorkspaceCheckoutCoordinatorError.checkoutMissing
+                }
+                state.workspaces.removeAll { $0.id == workspaceID }
+                for index in state.checkouts.indices where state.checkouts[index].workspaceID == workspaceID {
+                    state.checkouts[index].workspaceID = nil
+                }
+            }
+        } catch {
+            if changedSpaces {
+                spacesManager.replace(file: originalSpacesFile)
+                do {
+                    try store.write(originalSpacesFile, to: Paths.spacesFile)
+                } catch {
+                    persistenceErrorHandler("Spaces Save Failed", error.localizedDescription)
+                    throw WorkspaceDefinitionSaveError.spacePlacementRollbackFailed
+                }
+            }
+            throw WorkspaceDefinitionSaveError.workspacePersistenceFailed
+        }
+        await workspacesManager.refreshCheckoutSnapshots()
+        workspaceNavigationState.removeWorkspace(workspaceID)
+    }
+
     func preflightWorkspaceCheckout(_ request: WorkspaceCheckoutRequest) async -> WorkspaceCheckoutPreflightResult {
         await WorkspaceCheckoutPreflight(projects: projects).prepare(request)
     }
@@ -2033,6 +2087,21 @@ final class AppState {
         return model
     }
 
+    func workspaceCheckoutDeletionConfirmation(checkoutID: UUID) async throws -> WorkspaceLifecycleConfirmationModel {
+        guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        guard let checkout = workspacesManager.checkout(id: checkoutID) else {
+            throw WorkspaceCheckoutCoordinatorError.checkoutMissing
+        }
+        var risks: [String] = []
+        for member in checkout.members where member.availability != .explicitlyDeleted {
+            let preview = try await workspaceCoordinator().previewMemberDeletion(checkoutID: checkoutID, memberID: member.id)
+            var model = WorkspaceLifecycleConfirmationModel.memberDeletion(member: preview.member, preflight: preview.preflight)
+            model.risks.append(contentsOf: preview.rootObservation.leftovers)
+            risks.append(contentsOf: model.risks.map { "\(member.fallbackProjectName): \($0)" })
+        }
+        return WorkspaceLifecycleConfirmationModel.checkoutDeletion(risks: risks)
+    }
+
     func workspaceForgetConfirmation(checkoutID: UUID) throws -> WorkspaceLifecycleConfirmationModel {
         guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
         guard let checkout = workspacesManager.checkout(id: checkoutID) else {
@@ -2044,7 +2113,7 @@ final class AppState {
         )
     }
 
-    func deleteWorkspaceCheckout(id: UUID) async throws -> WorkspaceCheckout {
+    func deleteWorkspaceCheckout(id: UUID, confirmingRisks: Bool = false) async throws -> WorkspaceCheckout {
         guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
         guard let before = workspacesManager.checkout(id: id) else { throw WorkspaceCheckoutCoordinatorError.checkoutMissing }
         var resolvedWorktrees: [UUID: Worktree] = [:]
@@ -2054,7 +2123,7 @@ final class AppState {
             }
         }
         guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
-        let checkout = try await workspaceCoordinator().deleteCheckout(checkoutID: id)
+        let checkout = try await workspaceCoordinator().deleteCheckout(checkoutID: id, confirmingRisks: confirmingRisks)
         for member in checkout.members where member.availability == .explicitlyDeleted {
             if let worktree = resolvedWorktrees[member.id] {
                 await cleanupDeletedWorkspaceMemberRuntime(worktree)

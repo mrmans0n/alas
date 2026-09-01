@@ -293,6 +293,28 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(await lifecycle.removeForces == [true])
     }
 
+    @Test func wholeDeletionRequiresRiskConfirmationBeforeRemovingAnyMember() async throws {
+        let fixture = try await Fixture.make(memberCount: 2)
+        let lifecycle = FixtureLifecycle(preflight: .init(reasons: [.dirty], submoduleLocalState: .none))
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+
+        let result = try await coordinator.deleteCheckout(checkoutID: fixture.checkout.id)
+
+        #expect(result.members.allSatisfy { $0.availability == .available })
+        #expect(await lifecycle.removedMembers.isEmpty)
+    }
+
+    @Test func confirmedWholeDeletionPassesRiskConfirmationToEveryMember() async throws {
+        let fixture = try await Fixture.make(memberCount: 2)
+        let lifecycle = FixtureLifecycle(preflight: .init(reasons: [.dirty], submoduleLocalState: .none))
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+
+        let result = try await coordinator.deleteCheckout(checkoutID: fixture.checkout.id, confirmingRisks: true)
+
+        #expect(result.members.allSatisfy { $0.availability == .explicitlyDeleted })
+        #expect(await lifecycle.removeForces == [true, true])
+    }
+
     @Test func wholeDeletionContinuesAfterOneMemberFails() async throws {
         let fixture = try await Fixture.make(memberCount: 2)
         let lifecycle = FixtureLifecycle(failingMember: fixture.checkout.members[0].id)

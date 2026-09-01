@@ -267,6 +267,7 @@ struct WorkspaceCheckoutDetailModel: Equatable, Sendable {
 }
 
 enum WorkspaceLifecycleAction: Equatable, Sendable {
+    case deleteCheckout(confirmingRisks: Bool)
     case deleteMember(confirmingRisks: Bool)
     case forgetCheckout(confirmedPreserveArtifacts: Bool)
 }
@@ -293,6 +294,15 @@ struct WorkspaceLifecycleConfirmationModel: Equatable, Sendable {
             title: "Delete Workspace Member Worktree?",
             risks: risks,
             confirmAction: .deleteMember(confirmingRisks: preflight.requiresForce || preflight.submoduleLocalState != .none),
+            canForceDelete: false
+        )
+    }
+
+    static func checkoutDeletion(risks: [String]) -> WorkspaceLifecycleConfirmationModel {
+        WorkspaceLifecycleConfirmationModel(
+            title: "Delete Workspace Checkout?",
+            risks: risks,
+            confirmAction: .deleteCheckout(confirmingRisks: !risks.isEmpty),
             canForceDelete: false
         )
     }

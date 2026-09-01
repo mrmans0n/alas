@@ -43,6 +43,7 @@ struct EditWorkspaceDialog: View {
     let workspace: Workspace
     @State private var model: WorkspaceDefinitionDialogModel
     @State private var error: String?
+    @State private var confirmingDeletion = false
     init(state: AppState, workspace: Workspace, presented: Binding<Bool>) { self.state = state
     self.workspace = workspace
     self._presented = presented
@@ -59,11 +60,32 @@ struct EditWorkspaceDialog: View {
             Button("Remove", role: .destructive) { model.removeMember(id: member.id) } } }
             ForEach(model.eligibleProjects) { project in Button("Add \(project.name)") { _ = model.add(project: project) } }
             if let error { Text(error).foregroundStyle(.red) }
+            Button("Delete Workspace", role: .destructive) { confirmingDeletion = true }
         }, cancelTitle: "Cancel", confirmTitle: model.saveTitle, confirmStyle: .primary, onCancel: { presented = false }, onConfirm: save, confirmEnabled: !model.trimmedName.isEmpty && !model.members.isEmpty)
+        .confirmationDialog(
+            "Delete Workspace?",
+            isPresented: $confirmingDeletion,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Workspace", role: .destructive) { deleteWorkspace() }
+            Button("Cancel", role: .cancel) { confirmingDeletion = false }
+        } message: {
+            Text("Delete \(workspace.name)? Existing checkouts are retained as Former Workspace checkouts.")
+        }
     }
     private func save() { let definition = model.definition()
     Task { @MainActor in do { try await state.saveWorkspaceDefinition(definition)
     presented = false } catch { self.error = error.localizedDescription } } }
+    private func deleteWorkspace() {
+        Task { @MainActor in
+            do {
+                try await state.deleteWorkspaceDefinition(id: workspace.id)
+                presented = false
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
+    }
 }
 
 struct CreateWorkspaceCheckoutDialog: View {

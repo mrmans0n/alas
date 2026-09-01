@@ -66,6 +66,15 @@ struct WorkspaceNavigationState: Equatable {
         repositoryFocusWorktreeID = nil
     }
 
+    mutating func removeWorkspace(_ workspaceID: UUID) {
+        guard selectedWorkspaceID == workspaceID else { return }
+        selectedWorkspaceID = nil
+        if selectedCheckoutID == nil {
+            focusedCheckoutMemberID = nil
+            repositoryFocusWorktreeID = nil
+        }
+    }
+
     mutating func clearCheckoutSelection() {
         selectedWorkspaceID = nil
         selectedCheckoutID = nil
