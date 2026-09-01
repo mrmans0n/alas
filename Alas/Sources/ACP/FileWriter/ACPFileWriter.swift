@@ -14,13 +14,14 @@ struct ACPFileWriter {
     }
 
     func write(path: String, content: String) throws -> Result {
-        let target = try resolveInsideWorktree(path: path)
+        let logicalTarget = try resolveInsideWorktree(path: path)
+        let diskTarget = try managedDiskURLInsideWorktree(path: path)
 
-        let pre = try? String(contentsOf: target, encoding: .utf8)
-        try FileManager.default.createDirectory(at: target.deletingLastPathComponent(),
+        let pre = try? String(contentsOf: diskTarget, encoding: .utf8)
+        try FileManager.default.createDirectory(at: diskTarget.deletingLastPathComponent(),
                                                 withIntermediateDirectories: true)
-        try content.write(to: target, atomically: true, encoding: .utf8)
-        return Self.makeResult(oldText: pre, newText: content, path: target.path)
+        try content.write(to: diskTarget, atomically: true, encoding: .utf8)
+        return Self.makeResult(oldText: pre, newText: content, path: logicalTarget.path)
     }
 
     /// Throws `outsideWorktree` if `path` resolves outside the
@@ -34,6 +35,16 @@ struct ACPFileWriter {
             throw Error.outsideWorktree(path: target.path)
         }
         return target
+    }
+
+    func managedDiskURLInsideWorktree(path: String) throws -> URL {
+        let target = URL(fileURLWithPath: path).standardizedFileURL
+        let boundary = WorkspaceCheckoutBoundary(rootPath: worktreeRoot.path)
+        do {
+            return try boundary.managedURL(for: target.path)
+        } catch {
+            throw Error.outsideWorktree(path: target.path)
+        }
     }
 
     /// Cheap +N/-M counts via line-set symmetric difference. Good enough for the

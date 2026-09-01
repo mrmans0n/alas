@@ -336,6 +336,7 @@ final class ACPSessionRunner {
                         // exfiltrate it without a permission prompt.
                         // Cheap pure string work, safe on-main.
                         let target = try writer.resolveInsideWorktree(path: params.path)
+                        let diskTarget = try writer.managedDiskURLInsideWorktree(path: params.path)
                         // Prefer the live editor buffer when the file
                         // is open and dirty so the agent sees what the
                         // user sees (avoids "agent reads stale disk,
@@ -346,7 +347,7 @@ final class ACPSessionRunner {
                         let live = self.onLiveBufferRead?(target.path)
                         // Disk read + slice + encode run off-main.
                         let outcome = await Self.serveRead(
-                            target: target, liveBuffer: live,
+                            target: diskTarget, liveBuffer: live,
                             line: params.line, limit: params.limit
                         )
                         // A detach/takeover can cancel this task during the
