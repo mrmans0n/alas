@@ -61,6 +61,10 @@ struct WorkspaceCheckoutRemoteInvocationTests {
         #expect(call.args.dropLast().last == "builder.example")
         #expect(call.args.last?.contains(".alas-workspace-checkout.json") == true)
         #expect(call.args.last?.contains(String(data: local, encoding: .utf8)!) == true)
+        #expect(call.args.last?.contains("printf %s") == true)
+        #expect(call.args.last?.contains("|| { rm -f") == true)
+        #expect(call.args.last?.contains("rmdir") == true)
+        #expect(call.args.last?.contains("exit 74; }") == true)
     }
 
     @Test func manifestWriterDoesNotOverwriteADifferentCheckoutClaim() async throws {
