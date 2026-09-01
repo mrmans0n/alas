@@ -333,7 +333,21 @@ struct WorkspaceCheckoutLifecycleTests {
 
         _ = try await coordinator.deleteMember(checkoutID: fixture.checkout.id, memberID: fixture.member.id, confirmingRisks: true)
 
-        #expect(await lifecycle.removeForces == [true])
+        let decisions = await lifecycle.removeForces
+        #expect(decisions.map { $0.force } == [true])
+        #expect(decisions.map { $0.forceTwice } == [false])
+    }
+
+    @Test func confirmedLockedWorktreePassesDoubleForceToWorktreeRemoval() async throws {
+        let fixture = try await Fixture.make()
+        let lifecycle = FixtureLifecycle(preflight: .init(reasons: [.locked], submoduleLocalState: .none))
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+
+        _ = try await coordinator.deleteMember(checkoutID: fixture.checkout.id, memberID: fixture.member.id, confirmingRisks: true)
+
+        let decisions = await lifecycle.removeForces
+        #expect(decisions.map { $0.force } == [true])
+        #expect(decisions.map { $0.forceTwice } == [true])
     }
 
     @Test func wholeDeletionRequiresRiskConfirmationBeforeRemovingAnyMember() async throws {
@@ -355,7 +369,9 @@ struct WorkspaceCheckoutLifecycleTests {
         let result = try await coordinator.deleteCheckout(checkoutID: fixture.checkout.id, confirmingRisks: true)
 
         #expect(result.members.allSatisfy { $0.availability == .explicitlyDeleted })
-        #expect(await lifecycle.removeForces == [true, true])
+        let decisions = await lifecycle.removeForces
+        #expect(decisions.map { $0.force } == [true, true])
+        #expect(decisions.map { $0.forceTwice } == [false, false])
     }
 
     @Test func wholeDeletionContinuesAfterOneMemberFails() async throws {
@@ -466,7 +482,7 @@ struct WorkspaceCheckoutLifecycleTests {
         )
 
         let preflight = try await lifecycle.deletePreflight(plan)
-        try await lifecycle.removeWorktree(plan, force: true)
+        try await lifecycle.removeWorktree(plan, force: true, forceTwice: true)
         let branchRemoved = try await lifecycle.deleteMergedBranch(plan)
         let root = await lifecycle.inspectRoot(plan)
 
@@ -549,7 +565,7 @@ private actor FixtureLifecycle: WorkspaceCheckoutLifecycleOperating {
     let verification: WorkspaceCheckoutMemberObservation
     private(set) var removedMembers: [UUID] = []
     private(set) var deletedBranches: [UUID] = []
-    private(set) var removeForces: [Bool] = []
+    private(set) var removeForces: [(force: Bool, forceTwice: Bool)] = []
     let preflight: WorktreeDeletePreflight
     let leftovers: [String]
     let failingMember: UUID?
@@ -565,8 +581,8 @@ private actor FixtureLifecycle: WorkspaceCheckoutLifecycleOperating {
         if verification == .exactLineage("lineage-a") { return .exactLineage(plan.expectedLineageID) }
         return verification
     }
-    func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan, force: Bool) async throws { if failingMember == plan.memberID { throw TestLifecycleError.failed }
-    removeForces.append(force)
+    func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan, force: Bool, forceTwice: Bool) async throws { if failingMember == plan.memberID { throw TestLifecycleError.failed }
+    removeForces.append((force, forceTwice))
     removedMembers.append(plan.memberID) }
     func deleteMergedBranch(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool { deletedBranches.append(plan.memberID)
     return branchRemoved }
@@ -594,7 +610,7 @@ private actor StoreInspectingLifecycle: WorkspaceCheckoutLifecycleOperating {
         .exactLineage(plan.expectedLineageID)
     }
 
-    func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan, force: Bool) async throws {
+    func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan, force: Bool, forceTwice: Bool) async throws {
         if let checkout = await store.checkout(id: checkoutID) {
             operationsDuringRemoval.append(checkout.operation)
         }
@@ -613,7 +629,7 @@ private actor PersistedCleanupLifecycle: WorkspaceCheckoutLifecycleOperating {
     func deletePreflight(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> WorktreeDeletePreflight { .init(reasons: [], submoduleLocalState: .none) }
     func inspectRoot(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutCleanupRootObservation { .init(isContained: true, leftovers: []) }
     func verifyCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutMemberObservation { .exactLineage("lineage-a") }
-    func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan, force: Bool) async throws {
+    func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan, force: Bool, forceTwice: Bool) async throws {
         guard case .loaded(let state) = await store.load(),
               state.checkouts.first(where: { $0.id == checkoutID })?.members.first?.cleanup?.plan == plan else { return }
         sawPersistedCleanupPlan = true
@@ -640,7 +656,7 @@ private actor BlockingLifecycle: WorkspaceCheckoutLifecycleOperating {
         .exactLineage(plan.expectedLineageID)
     }
 
-    func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan, force: Bool) async throws {
+    func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan, force: Bool, forceTwice: Bool) async throws {
         started = true
         startWaiters.forEach { $0.resume() }
         startWaiters.removeAll()

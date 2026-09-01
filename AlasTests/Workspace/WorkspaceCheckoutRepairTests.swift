@@ -766,7 +766,7 @@ private actor RepairLifecycle: WorkspaceCheckoutLifecycleOperating {
         return result
     }
 
-    func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan, force: Bool) async throws {}
+    func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan, force: Bool, forceTwice: Bool) async throws {}
 
     func deleteMergedBranch(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool { true }
 }
