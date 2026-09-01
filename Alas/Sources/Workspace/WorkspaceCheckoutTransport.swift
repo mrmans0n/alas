@@ -147,11 +147,13 @@ struct WorkspaceCheckoutManifestWriter: WorkspaceCheckoutManifestWriting, Sendab
             let temporary = "\(target).tmp-\(UUID().uuidString)"
             let payload = String(decoding: data, as: UTF8.self)
             let expectedCheckoutID = "\"checkoutID\":\"\(manifest.checkoutID.uuidString)\""
+            let expectedRootPath = "\"rootPath\":\"\(rootPath)\""
             let parentPath = URL(fileURLWithPath: rootPath).deletingLastPathComponent().path
             let command = """
             umask 077
             if [ -e \(SSHCommand.shellQuote(target)) ]; then
               grep -F \(SSHCommand.shellQuote(expectedCheckoutID)) \(SSHCommand.shellQuote(target)) >/dev/null 2>&1 || exit 73
+              grep -F \(SSHCommand.shellQuote(expectedRootPath)) \(SSHCommand.shellQuote(target)) >/dev/null 2>&1 || exit 73
               printf %s \(SSHCommand.shellQuote(payload)) > \(SSHCommand.shellQuote(temporary)) || { rm -f \(SSHCommand.shellQuote(temporary)); exit 74; }
               mv \(SSHCommand.shellQuote(temporary)) \(SSHCommand.shellQuote(target))
             else
@@ -160,7 +162,9 @@ struct WorkspaceCheckoutManifestWriter: WorkspaceCheckoutManifestWriting, Sendab
               printf %s \(SSHCommand.shellQuote(payload)) > \(SSHCommand.shellQuote(temporary)) || { rm -f \(SSHCommand.shellQuote(temporary)); rmdir \(SSHCommand.shellQuote(rootPath)) 2>/dev/null; exit 74; }
               if ln \(SSHCommand.shellQuote(temporary)) \(SSHCommand.shellQuote(target)) 2>/dev/null; then
                 rm -f \(SSHCommand.shellQuote(temporary))
-              elif [ -e \(SSHCommand.shellQuote(target)) ] && grep -F \(SSHCommand.shellQuote(expectedCheckoutID)) \(SSHCommand.shellQuote(target)) >/dev/null 2>&1; then
+              elif [ -e \(SSHCommand.shellQuote(target)) ] \
+                && grep -F \(SSHCommand.shellQuote(expectedCheckoutID)) \(SSHCommand.shellQuote(target)) >/dev/null 2>&1 \
+                && grep -F \(SSHCommand.shellQuote(expectedRootPath)) \(SSHCommand.shellQuote(target)) >/dev/null 2>&1; then
                 mv \(SSHCommand.shellQuote(temporary)) \(SSHCommand.shellQuote(target))
               else
                 rm -f \(SSHCommand.shellQuote(temporary))

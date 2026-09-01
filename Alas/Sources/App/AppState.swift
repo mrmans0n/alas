@@ -1532,14 +1532,7 @@ final class AppState {
     /// from this API.
     @discardableResult
     func openWorkspaceCheckoutTerminalTab(_ checkout: WorkspaceCheckout) async throws -> Tab {
-        guard config.workspacesEnabled,
-              let authoritative = await workspaceStore.checkout(id: checkout.id),
-              authoritative.archivedAt == nil,
-              authoritative.operation == .idle
-        else {
-            throw NSError(domain: "AppState", code: 2, userInfo: [NSLocalizedDescriptionKey: "Workspaces are disabled."])
-        }
-        guard await workspaceCheckoutManifestMatches(authoritative) else {
+        guard let authoritative = await authoritativeCheckoutForWorkspaceTerminal(checkout) else {
             throw NSError(domain: "AppState", code: 3, userInfo: [NSLocalizedDescriptionKey: "The Workspace checkout root is not owned by this checkout."])
         }
         let context = WorkspaceTerminalContext(
@@ -1568,14 +1561,7 @@ final class AppState {
         focusedMemberWorktree: Worktree,
         agentId: String
     ) async throws -> Tab {
-        guard config.workspacesEnabled,
-              let authoritative = await workspaceStore.checkout(id: checkout.id),
-              authoritative.archivedAt == nil,
-              authoritative.operation == .idle
-        else {
-            throw NSError(domain: "AppState", code: 2, userInfo: [NSLocalizedDescriptionKey: "Workspaces are disabled."])
-        }
-        guard await workspaceCheckoutManifestMatches(authoritative),
+        guard let authoritative = await authoritativeCheckoutForWorkspaceTerminal(checkout),
               let focusedMember = authoritativeCheckoutMember(
                 for: focusedMemberWorktree,
                 in: authoritative
@@ -1617,7 +1603,14 @@ final class AppState {
     /// It carries the frozen checkout context through the entire operation so
     /// a member focus cannot change the new shell's owner or starting cwd.
     func splitFocusedPane(checkout: WorkspaceCheckout, axis: SplitAxis) {
-        let context = workspaceTerminalContext(for: checkout)
+        Task { @MainActor in
+            await splitFocusedPaneAfterCheckoutValidation(checkout: checkout, axis: axis)
+        }
+    }
+
+    private func splitFocusedPaneAfterCheckoutValidation(checkout: WorkspaceCheckout, axis: SplitAxis) async {
+        guard let authoritative = await authoritativeCheckoutForWorkspaceTerminal(checkout) else { return }
+        let context = workspaceTerminalContext(for: authoritative)
         let owner = context.owner
         guard let tabID = tabs.activeTabId(for: owner),
               let tab = tabs.tabs(for: owner).first(where: { $0.id == tabID }),
@@ -1698,6 +1691,17 @@ final class AppState {
             guard let result = try? await workspaceRemoteTransport.run(host: host, command: command) else { return false }
             return result.exitCode == 0
         }
+    }
+
+    private func authoritativeCheckoutForWorkspaceTerminal(_ checkout: WorkspaceCheckout) async -> WorkspaceCheckout? {
+        guard config.workspacesEnabled,
+              let authoritative = await workspaceStore.checkout(id: checkout.id),
+              authoritative.executionLocation.normalized == checkout.executionLocation.normalized,
+              authoritative.archivedAt == nil,
+              authoritative.operation == .idle,
+              await workspaceCheckoutManifestMatches(authoritative)
+        else { return nil }
+        return authoritative
     }
 
     private func authoritativeCheckoutMember(
@@ -8040,6 +8044,7 @@ final class AppState {
                 return .pendingRootOrLocation
             }
         }
+        guard await workspaceCheckoutManifestMatches(checkout) else { return .pendingRootOrLocation }
         if let existing = acpManagers[owner] { return .ready(existing) }
 
         let dbURL = Paths.acpSessionsDB(for: owner)
@@ -8322,6 +8327,7 @@ final class AppState {
         guard let authoritative = await workspaceStore.checkout(id: checkout.id) else { return nil }
         guard authoritative.executionLocation.normalized == checkout.executionLocation.normalized else { return nil }
         guard authoritative.archivedAt == nil, authoritative.operation == .idle else { return nil }
+        guard await workspaceCheckoutManifestMatches(authoritative) else { return nil }
         return authoritative
     }
 

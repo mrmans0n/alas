@@ -179,6 +179,24 @@ struct WorkspaceCheckoutRemoteInvocationTests {
         #expect(!command.contains("mkdir -p '\\''/srv/checkouts/release"))
     }
 
+    @Test func remoteManifestRefreshRequiresTheFrozenRootPath() async throws {
+        let checkoutID = UUID()
+        let root = "/srv/checkouts/release"
+        let manifest = WorkspaceCheckoutManifest(checkoutID: checkoutID, rootPath: root, branch: "release/1091", members: [])
+        let runner = RecordingWorkspaceSSHRunner(results: [.init(exitCode: 73, stdout: "", stderr: "")])
+
+        await #expect(throws: WorkspaceCheckoutManifestError.checkoutRootAlreadyClaimed(root)) {
+            try await WorkspaceCheckoutManifestWriter(remote: .init(runner: { executable, args, timeout in
+                await runner.run(executable: executable, args: args, timeout: timeout)
+            })).write(manifest, to: root, location: .ssh("builder.example"))
+        }
+
+        let command = try #require(await runner.calls.first?.args.last)
+        #expect(command.contains(#""checkoutID":"\#(checkoutID.uuidString)""#))
+        #expect(command.contains(#""rootPath":"\#(root)""#))
+        #expect(command.contains("grep -F"))
+    }
+
     @Test func remoteLineageInspectionUsesTheExactWorkspaceHost() async {
         let memberID = UUID()
         let member = WorkspaceCheckoutMember(

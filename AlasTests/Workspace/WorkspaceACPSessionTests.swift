@@ -78,6 +78,7 @@ struct WorkspaceACPSessionTests {
             rootPath: root.path,
             members: []
         )
+        try writeManifest(for: checkout)
         let state = AppState(store: MemoryStore())
         guard case let .ready(manager) = await state.workspaceACPManager(for: checkout) else {
             Issue.record("Expected checkout manager")
@@ -118,6 +119,7 @@ struct WorkspaceACPSessionTests {
             rootPath: root.path,
             members: []
         )
+        try writeManifest(for: checkout)
         let owner = SessionOwnerID.workspaceCheckout(checkout.id, .local)
         let dbURL = Paths.acpSessionsDB(for: owner)
         defer { try? FileManager.default.removeItem(at: dbURL) }
@@ -159,6 +161,7 @@ struct WorkspaceACPSessionTests {
             rootPath: root.path,
             members: []
         )
+        try writeManifest(for: checkout)
         let owner = SessionOwnerID.workspaceCheckout(checkout.id, .local)
         let dbURL = Paths.acpSessionsDB(for: owner)
         defer { try? FileManager.default.removeItem(at: dbURL) }
@@ -304,6 +307,49 @@ struct WorkspaceACPSessionTests {
     }
 
     @MainActor
+    @Test func checkoutACPManagerRequiresManifestRootOwnership() async throws {
+        let claimedRoot = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        let replacedRoot = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: claimedRoot, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: replacedRoot, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: claimedRoot)
+            try? FileManager.default.removeItem(at: replacedRoot)
+        }
+        let checkoutID = UUID()
+        let original = WorkspaceCheckout(
+            id: checkoutID,
+            workspaceID: nil,
+            fallbackWorkspaceName: "Workspace",
+            executionLocation: .local,
+            branch: "topic",
+            rootPath: claimedRoot.path,
+            members: []
+        )
+        try writeManifest(for: original)
+        try FileManager.default.copyItem(
+            at: claimedRoot.appendingPathComponent(WorkspaceCheckoutManifest.fileName),
+            to: replacedRoot.appendingPathComponent(WorkspaceCheckoutManifest.fileName)
+        )
+        let replaced = WorkspaceCheckout(
+            id: checkoutID,
+            workspaceID: nil,
+            fallbackWorkspaceName: "Workspace",
+            executionLocation: .local,
+            branch: "topic",
+            rootPath: replacedRoot.path,
+            members: []
+        )
+        let state = AppState(store: MemoryStore())
+
+        guard case .pendingRootOrLocation = await state.workspaceACPManager(for: replaced) else {
+            Issue.record("Expected copied manifest with a different root to stay pending")
+            return
+        }
+        #expect(state.acpManager(for: SessionOwnerID.workspaceCheckout(replaced.id, .local)) == nil)
+    }
+
+    @MainActor
     @Test func concurrentRemoteCheckoutACPManagerRequestsReuseTheFirstManagerAfterProbe() async throws {
         let checkout = WorkspaceCheckout(
             workspaceID: nil,
@@ -331,7 +377,7 @@ struct WorkspaceACPSessionTests {
             return
         }
         #expect(firstManager === secondManager)
-        #expect(await runner.callCount == 2)
+        #expect(await runner.callCount == 4)
         #expect(state.acpManager(for: SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)) === firstManager)
     }
 
@@ -348,6 +394,7 @@ struct WorkspaceACPSessionTests {
             rootPath: root.path,
             members: []
         )
+        try writeManifest(for: checkout)
         let owner = SessionOwnerID.workspaceCheckout(checkout.id, .local)
         let dbURL = Paths.acpSessionsDB(for: owner)
         defer { try? FileManager.default.removeItem(at: dbURL) }
@@ -388,6 +435,7 @@ struct WorkspaceACPSessionTests {
             rootPath: root.path,
             members: []
         )
+        try writeManifest(for: checkout)
         let owner = SessionOwnerID.workspaceCheckout(checkout.id, .local)
         let workspaceStore = WorkspaceStore(url: workspaceURL)
         try await workspaceStore.checkpoint(.init(checkouts: [checkout]))
@@ -433,6 +481,7 @@ struct WorkspaceACPSessionTests {
             archivedAt: Date(timeIntervalSince1970: 1),
             members: []
         )
+        try writeManifest(for: checkout)
         let owner = SessionOwnerID.workspaceCheckout(checkout.id, .local)
         let workspaceStore = WorkspaceStore(url: workspaceURL)
         try await workspaceStore.checkpoint(.init(checkouts: [checkout]))
@@ -459,6 +508,19 @@ struct WorkspaceACPSessionTests {
     private struct MemoryStore: PersistenceStoreProtocol {
         func write<T: Encodable>(_: T, to _: URL) throws {}
         func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
+    }
+
+    private func writeManifest(for checkout: WorkspaceCheckout) throws {
+        let manifest = WorkspaceCheckoutManifest(
+            checkoutID: checkout.id,
+            rootPath: checkout.rootPath,
+            branch: checkout.branch,
+            members: checkout.members.map {
+                .init(id: $0.id, projectID: $0.projectID, path: $0.worktreePath, availability: $0.availability)
+            }
+        )
+        let url = URL(fileURLWithPath: checkout.rootPath).appendingPathComponent(WorkspaceCheckoutManifest.fileName)
+        try JSONEncoder().encode(manifest).write(to: url)
     }
 }
 
