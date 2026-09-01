@@ -199,8 +199,8 @@ struct ProcessGGCommandRunner: GGCommandRunning {
 
 private func forceTerminateGGStreamingProcessTree(_ process: Process) {
     let pid = process.processIdentifier
-    let descendants = Set(ACPTerminal.collectChildDescendants(of: pid))
     _ = Darwin.kill(-pid, SIGKILL)
+    let descendants = Set(ACPTerminal.collectChildDescendants(of: pid))
     for descendant in ACPTerminal.currentlyMatching(descendants) {
         kill(descendant.pid, SIGKILL)
     }
