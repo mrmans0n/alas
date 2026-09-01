@@ -74,12 +74,16 @@ struct GGCommandRunningStreamingTests {
     @Test func cancelingStreamKillsProcessThatIgnoresTermination() async throws {
         let pidFile = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-gg-stream-\(UUID().uuidString).pid")
+        let childPIDFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-gg-stream-child-\(UUID().uuidString).pid")
         defer { try? FileManager.default.removeItem(at: pidFile) }
+        defer { try? FileManager.default.removeItem(at: childPIDFile) }
         var env = ProcessInfo.processInfo.environment
         env["PID_FILE"] = pidFile.path
+        env["CHILD_PID_FILE"] = childPIDFile.path
         let stream = ProcessGGCommandRunner.streamProcess(
             executable: "/bin/sh",
-            args: ["-c", "trap '' TERM; echo $$ > \"$PID_FILE\"; while :; do :; done"],
+            args: ["-c", "sh -c 'trap \"\" TERM; while :; do :; done' & echo $! > \"$CHILD_PID_FILE\"; echo $$ > \"$PID_FILE\"; wait"],
             cwd: nil,
             env: env
         )
@@ -99,12 +103,19 @@ struct GGCommandRunningStreamingTests {
             try await Task.sleep(nanoseconds: 20_000_000)
         }
         let processID = try #require(discoveredProcessID)
+        let childProcessID = try #require(pid_t(try String(contentsOf: childPIDFile, encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines)))
         defer { kill(processID, SIGKILL) }
+        defer { kill(childProcessID, SIGKILL) }
 
         consumer.cancel()
         _ = try? await consumer.value
         #expect(kill(processID, 0) == -1)
         #expect(errno == ESRCH)
+        for _ in 0 ..< 50 where kill(childProcessID, 0) == 0 {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(kill(childProcessID, 0) == -1 && errno == ESRCH)
     }
 
     @Test func nonZeroExitSurfacesCommandFailedWithAccumulatedStderr() async throws {

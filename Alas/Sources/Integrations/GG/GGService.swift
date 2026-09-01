@@ -157,6 +157,7 @@ struct ProcessGGCommandRunner: GGCommandRunning {
             }
             do {
                 try process.run()
+                _ = setpgid(process.processIdentifier, process.processIdentifier)
             } catch {
                 outPipe.fileHandleForReading.readabilityHandler = nil
                 errPipe.fileHandleForReading.readabilityHandler = nil
@@ -186,8 +187,10 @@ struct ProcessGGCommandRunner: GGCommandRunning {
             continuation.onTermination = { _ in
                 watchdog.cancel()
                 if process.isRunning {
+                    let processGroup = process.processIdentifier
                     terminateGGStreamingProcessWithEscalation(process)
                     process.waitUntilExit()
+                    _ = Darwin.kill(-processGroup, SIGKILL)
                 }
                 outPipe.fileHandleForReading.readabilityHandler = nil
                 errPipe.fileHandleForReading.readabilityHandler = nil
@@ -197,10 +200,14 @@ struct ProcessGGCommandRunner: GGCommandRunning {
 }
 
 private func terminateGGStreamingProcessWithEscalation(_ process: Process) {
-    process.terminate()
     let pid = process.processIdentifier
+    _ = Darwin.kill(-pid, SIGTERM)
+    process.terminate()
     DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 2) {
-        if process.isRunning { kill(pid, SIGKILL) }
+        if process.isRunning {
+            _ = Darwin.kill(-pid, SIGKILL)
+            kill(pid, SIGKILL)
+        }
     }
 }
 
