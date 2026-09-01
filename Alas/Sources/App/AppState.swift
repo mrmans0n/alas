@@ -1487,7 +1487,7 @@ final class AppState {
         // Persisted checkout-owned tab records are archived only after live
         // sessions have drained, so unarchive cannot expose stale processes.
         terminal.stopSessions(owner: owner)
-        terminal.terminateAll(additionalSessions: persistedTerminalSessions)
+        terminal.terminateSessions(persistedTerminalSessions)
         await terminal.drainPendingKills(timeout: 5)
         await disposeACPManagerAndWait(owner: owner)
     }

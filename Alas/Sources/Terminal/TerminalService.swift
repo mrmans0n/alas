@@ -596,6 +596,33 @@ final class TerminalService {
         }
     }
 
+    /// Kills only the supplied persisted session identities. Unlike
+    /// `terminateAll`, this does not enumerate the live registry, so scoped
+    /// lifecycle operations cannot affect unrelated terminals.
+    func terminateSessions(_ sessions: [TerminalSessionIdentity]) {
+        var localNames = Set<String>()
+        var remoteNamesByHost: [String: Set<String>] = [:]
+        for session in sessions {
+            let scoped = session.zmxSessionName
+            if let host = Self.remoteHostForCleanup(session: session) {
+                remoteNamesByHost[host, default: []].insert(scoped)
+            } else {
+                localNames.insert(scoped)
+            }
+        }
+        let client = zmxClient
+        dispatchTrackedKill {
+            for name in localNames {
+                client.killSession(name: name)
+            }
+            for (host, names) in remoteNamesByHost {
+                for name in names {
+                    await Self.killRemoteSession(host: host, name: name)
+                }
+            }
+        }
+    }
+
     private nonisolated static func remoteHostForCleanup(session: TerminalSessionIdentity) -> String? {
         switch session.owner {
         case .worktree:

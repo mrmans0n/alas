@@ -12,8 +12,8 @@ struct WorkspaceMemberReviewRollupTests {
             Self.member(id: uuid(3), projectID: "web", name: "Web", worktreeID: "/checkouts/release/web", availability: .unavailable),
         ])
         let reviews = InMemoryWorkspaceReviewSessionReader(records: [
-            Self.record(id: "api-review", worktreeID: "/checkouts/release/api", status: .active, updatedAt: 20),
-            Self.record(id: "app-review", worktreeID: "/checkouts/release/app", status: .reviewed, updatedAt: 10),
+            Self.record(id: "api-review", projectID: "api", worktreeID: "/checkouts/release/api", status: .active, updatedAt: 20),
+            Self.record(id: "app-review", projectID: "app", worktreeID: "/checkouts/release/app", status: .reviewed, updatedAt: 10),
         ])
         let gg = InMemoryWorkspaceGGStackReader(stacks: [
             "/checkouts/release/app": GGStack(name: "app-stack", base: "main", totalCommits: 2, syncedCommits: 1, currentPosition: 2, behindBase: 0, entries: [
@@ -108,12 +108,44 @@ struct WorkspaceMemberReviewRollupTests {
         #expect(rollup.members.first?.ggStack?.name == "remote-stack")
     }
 
+    @Test func defaultReviewReaderDoesNotMixSamePathAcrossExecutionLocations() throws {
+        let path = "/srv/checkouts/release/shared"
+        let checkout = WorkspaceCheckout(workspaceID: UUID(), fallbackWorkspaceName: "Release", executionLocation: .ssh("builder.example"), branch: "shared-branch", rootPath: "/srv/checkouts/release", members: [
+            Self.member(id: uuid(1), projectID: "remote-project", name: "Remote", worktreeID: path),
+        ])
+        let reviews = InMemoryWorkspaceReviewSessionReader(records: [
+            Self.record(id: "builder-review", projectID: "remote-project", worktreeID: path, executionLocation: .ssh("builder.example"), status: .active, updatedAt: 2),
+            Self.record(id: "other-review", projectID: "remote-project", worktreeID: path, executionLocation: .ssh("other.example"), status: .active, updatedAt: 1),
+        ])
+
+        let rollup = try MemberReviewRollupBuilder(reviews: reviews, gg: InMemoryWorkspaceGGStackReader(stacks: [:])).build(for: checkout)
+
+        #expect(rollup.members.first?.reviews.map(\.id.rawValue) == ["builder-review"])
+    }
+
     private static func member(id: UUID, projectID: String, name: String, worktreeID: String, availability: WorkspaceCheckoutMemberAvailability = .available) -> WorkspaceCheckoutMember {
         WorkspaceCheckoutMember(id: id, workspaceMemberID: UUID(), projectID: projectID, fallbackProjectName: name, fallbackRepositoryRoot: "/repos/\(projectID)", worktreePath: worktreeID, availability: availability, checkpoint: .setupComplete)
     }
 
-    private static func record(id: String, worktreeID: String, status: ReviewSessionStatus, updatedAt: TimeInterval) -> ReviewSessionRecord {
-        let target = ReviewSessionTarget.branch(worktreeID: worktreeID, repositoryPath: URL(fileURLWithPath: worktreeID), base: "main", head: "feature", title: "Review \(id)")
+    private static func record(
+        id: String,
+        projectID: String = "app",
+        worktreeID: String,
+        executionLocation: ExecutionLocation = .local,
+        status: ReviewSessionStatus,
+        updatedAt: TimeInterval
+    ) -> ReviewSessionRecord {
+        let target = ReviewSessionTarget.branch(
+            worktreeID: WorkspaceReviewSessionIdentity.worktreeID(
+                projectID: projectID,
+                executionLocation: executionLocation,
+                repositoryPath: worktreeID
+            ),
+            repositoryPath: URL(fileURLWithPath: worktreeID),
+            base: "main",
+            head: "feature",
+            title: "Review \(id)"
+        )
         return ReviewSessionRecord(id: ReviewSessionID(rawValue: id), target: target, status: status, createdAt: Date(timeIntervalSince1970: 1), updatedAt: Date(timeIntervalSince1970: updatedAt))
     }
 
