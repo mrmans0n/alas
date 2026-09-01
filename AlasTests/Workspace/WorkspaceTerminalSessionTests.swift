@@ -190,6 +190,35 @@ struct WorkspaceTerminalSessionTests {
     }
 
     @MainActor
+    @Test func checkoutStopperIncludesPersistedTerminalLeavesWithoutLiveSessions() {
+        let tabs = TabsManager(store: WorkspaceTerminalMemoryStore())
+        let state = AppState(store: WorkspaceTerminalMemoryStore(), tabsManager: tabs)
+        let checkout = WorkspaceCheckout(
+            id: checkoutID,
+            workspaceID: nil,
+            fallbackWorkspaceName: "Shared",
+            executionLocation: .local,
+            branch: "feature/shared",
+            rootPath: "/work/checkout",
+            members: []
+        )
+        let owner = SessionOwnerID.workspaceCheckout(checkoutID, .local)
+        let tab = tabs.appendTerminal(owner: owner, title: "Terminal", sessionId: "first")
+        _ = tabs.splitFocusedLeaf(
+            owner: owner,
+            tabId: tab.id,
+            axis: .vertical,
+            newLeafId: "second",
+            newSessionId: "second"
+        )
+
+        let persisted = state.persistedWorkspaceCheckoutTerminalSessionsForTesting(checkout)
+
+        #expect(Set(persisted.map(\.leafId)) == ["first", "second"])
+        #expect(persisted.allSatisfy { $0.owner == owner })
+    }
+
+    @MainActor
     @Test func checkoutSplitPersistsItsExecutionLocationWithTheNewLeaf() {
         let tabs = TabsManager(store: WorkspaceTerminalMemoryStore())
         let owner = SessionOwnerID.workspaceCheckout(checkoutID, .ssh("build-host"))

@@ -3,6 +3,7 @@ import Foundation
 struct FileSearchRankingSource: Sendable {
     let worktreeId: String
     let projectId: String
+    var workspaceCheckoutMemberID: UUID? = nil
     let entries: [FileIndex.Entry]
     let backendResults: [FileSearchBackendResult]?
     let statuses: [String: GitStatusBadge]
@@ -22,6 +23,7 @@ actor FileSearchRanker {
                     FileSearchResult(
                         worktreeId: source.worktreeId,
                         projectId: source.projectId,
+                        workspaceCheckoutMemberID: source.workspaceCheckoutMemberID,
                         relativePath: row.relativePath,
                         ext: (row.relativePath as NSString).pathExtension.lowercased(),
                         statusBadge: source.statuses[row.relativePath],
@@ -45,6 +47,7 @@ actor FileSearchRanker {
                     rows.append(FileSearchResult(
                         worktreeId: source.worktreeId,
                         projectId: source.projectId,
+                        workspaceCheckoutMemberID: source.workspaceCheckoutMemberID,
                         relativePath: entry.relativePath,
                         ext: entry.ext,
                         statusBadge: badge,
@@ -60,6 +63,7 @@ actor FileSearchRanker {
                     rows.append(FileSearchResult(
                         worktreeId: source.worktreeId,
                         projectId: source.projectId,
+                        workspaceCheckoutMemberID: source.workspaceCheckoutMemberID,
                         relativePath: entry.relativePath,
                         ext: entry.ext,
                         statusBadge: badge,
