@@ -123,6 +123,21 @@ struct WorkspaceMemberReviewRollupTests {
         #expect(rollup.members.first?.reviews.map(\.id.rawValue) == ["builder-review"])
     }
 
+    @Test func defaultReviewReaderIncludesLegacyRawMemberWorktreeRecords() throws {
+        let path = "/srv/checkouts/release/shared"
+        let checkout = WorkspaceCheckout(workspaceID: UUID(), fallbackWorkspaceName: "Release", executionLocation: .ssh("builder.example"), branch: "shared-branch", rootPath: "/srv/checkouts/release", members: [
+            Self.member(id: uuid(1), projectID: "remote-project", name: "Remote", worktreeID: path),
+        ])
+        let qualified = Self.record(id: "qualified-review", projectID: "remote-project", worktreeID: path, executionLocation: .ssh("builder.example"), status: .active, updatedAt: 2)
+        let legacy = Self.rawRecord(id: "legacy-review", worktreeID: path, status: .active, updatedAt: 1)
+        let wrongPath = Self.rawRecord(id: "wrong-path", worktreeID: path, repositoryPath: "/srv/other", status: .active, updatedAt: 3)
+        let reviews = InMemoryWorkspaceReviewSessionReader(records: [qualified, legacy, wrongPath])
+
+        let rollup = try MemberReviewRollupBuilder(reviews: reviews, gg: InMemoryWorkspaceGGStackReader(stacks: [:])).build(for: checkout)
+
+        #expect(rollup.members.first?.reviews.map(\.id.rawValue) == ["qualified-review", "legacy-review"])
+    }
+
     private static func member(id: UUID, projectID: String, name: String, worktreeID: String, availability: WorkspaceCheckoutMemberAvailability = .available) -> WorkspaceCheckoutMember {
         WorkspaceCheckoutMember(id: id, workspaceMemberID: UUID(), projectID: projectID, fallbackProjectName: name, fallbackRepositoryRoot: "/repos/\(projectID)", worktreePath: worktreeID, availability: availability, checkpoint: .setupComplete)
     }
@@ -142,6 +157,23 @@ struct WorkspaceMemberReviewRollupTests {
                 repositoryPath: worktreeID
             ),
             repositoryPath: URL(fileURLWithPath: worktreeID),
+            base: "main",
+            head: "feature",
+            title: "Review \(id)"
+        )
+        return ReviewSessionRecord(id: ReviewSessionID(rawValue: id), target: target, status: status, createdAt: Date(timeIntervalSince1970: 1), updatedAt: Date(timeIntervalSince1970: updatedAt))
+    }
+
+    private static func rawRecord(
+        id: String,
+        worktreeID: String,
+        repositoryPath: String? = nil,
+        status: ReviewSessionStatus,
+        updatedAt: TimeInterval
+    ) -> ReviewSessionRecord {
+        let target = ReviewSessionTarget.branch(
+            worktreeID: worktreeID,
+            repositoryPath: URL(fileURLWithPath: repositoryPath ?? worktreeID),
             base: "main",
             head: "feature",
             title: "Review \(id)"
