@@ -85,6 +85,11 @@ final class ACPTerminal: ObservableObject {
         let microseconds: Int64
     }
 
+    private struct ProcessIdentity {
+        let parentPid: pid_t
+        let startedAt: ProcessStartTime
+    }
+
     init(id: String,
          command: String,
          args: [String],
@@ -337,9 +342,9 @@ final class ACPTerminal: ObservableObject {
         var queue: [pid_t] = [root]
         while let parent = queue.popLast() {
             for child in childPids(of: parent) {
-                if let startedAt = processStartTime(of: child) {
-                    out.append(DescendantKey(pid: child, startedAt: startedAt))
-                }
+                guard let identity = processIdentity(of: child),
+                      identity.parentPid == parent else { continue }
+                out.append(DescendantKey(pid: child, startedAt: identity.startedAt))
                 queue.append(child)
             }
         }
@@ -420,6 +425,10 @@ final class ACPTerminal: ObservableObject {
     /// data rather than a locale/timezone-formatted, second-precision
     /// wall-clock string.
     nonisolated private static func processStartTime(of pid: pid_t) -> ProcessStartTime? {
+        processIdentity(of: pid)?.startedAt
+    }
+
+    nonisolated private static func processIdentity(of pid: pid_t) -> ProcessIdentity? {
         var info = proc_bsdinfo()
         let size = MemoryLayout<proc_bsdinfo>.stride
         let result = withUnsafeMutablePointer(to: &info) { pointer in
@@ -428,8 +437,11 @@ final class ACPTerminal: ObservableObject {
             }
         }
         guard result == Int32(size) else { return nil }
-        return ProcessStartTime(seconds: Int64(info.pbi_start_tvsec),
-                                microseconds: Int64(info.pbi_start_tvusec))
+        return ProcessIdentity(
+            parentPid: pid_t(info.pbi_ppid),
+            startedAt: ProcessStartTime(seconds: Int64(info.pbi_start_tvsec),
+                                        microseconds: Int64(info.pbi_start_tvusec))
+        )
     }
 
     /// Marks the terminal as released. Per the ACP spec the id can no
