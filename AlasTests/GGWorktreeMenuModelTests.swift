@@ -99,12 +99,11 @@ struct GGWorktreeMenuModelTests {
         #expect(model.showsStatusIndicator)
     }
 
-    @Test func ggModeMenuItemsExposeStableLabelsAndSelectionState() {
+    @Test func ggModeMenuItemsMarkTheSelectedMode() {
         let items = WorktreeRowView.ggModeMenuItems(selectedMode: .on)
 
         #expect(items.map(\.mode) == [.inherit, .on, .off])
-        #expect(items.map(\.title) == ["Inherit repository default", "On", "Off"])
-        #expect(items.map(\.isSelected) == [false, true, false])
+        #expect(items.map(\.title) == ["Inherit repository default", "✓ On", "Off"])
     }
 
     private func menuModel(

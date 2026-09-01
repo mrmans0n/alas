@@ -50,7 +50,6 @@ struct WorktreeRowView: View {
     struct GGModeMenuItem: Equatable, Identifiable {
         let mode: GGWorktreeMode
         let title: String
-        let isSelected: Bool
 
         var id: GGWorktreeMode { mode }
     }
@@ -59,18 +58,15 @@ struct WorktreeRowView: View {
         [
             GGModeMenuItem(
                 mode: .inherit,
-                title: "Inherit repository default",
-                isSelected: selectedMode == .inherit
+                title: selectedMode == .inherit ? "✓ Inherit repository default" : "Inherit repository default"
             ),
             GGModeMenuItem(
                 mode: .on,
-                title: "On",
-                isSelected: selectedMode == .on
+                title: selectedMode == .on ? "✓ On" : "On"
             ),
             GGModeMenuItem(
                 mode: .off,
-                title: "Off",
-                isSelected: selectedMode == .off
+                title: selectedMode == .off ? "✓ Off" : "Off"
             )
         ]
     }
@@ -293,13 +289,10 @@ struct WorktreeRowView: View {
                 if ggMenuModel.isVisible {
                     Menu(Self.ggModeMenuTitle) {
                         ForEach(Self.ggModeMenuItems(selectedMode: ggMenuModel.selectedMode)) { item in
-                            Toggle(item.title, isOn: Binding(
-                                get: { item.isSelected },
-                                set: { isOn in
-                                    guard isOn, item.mode != ggMenuModel.selectedMode else { return }
-                                    onSetGGWorktreeMode(item.mode)
-                                }
-                            ))
+                            Button(item.title) {
+                                guard item.mode != ggMenuModel.selectedMode else { return }
+                                onSetGGWorktreeMode(item.mode)
+                            }
                         }
                     }
                     if let explanation = ggMenuModel.inactiveExplanation {
