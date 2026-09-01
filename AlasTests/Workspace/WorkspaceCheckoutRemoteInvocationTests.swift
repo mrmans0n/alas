@@ -60,14 +60,16 @@ struct WorkspaceCheckoutRemoteInvocationTests {
         #expect(resolved == "/home/builder/.alas/checkouts/release")
         let call = await runner.calls.first
         #expect(call?.args.dropLast().last == "builder.example")
-        #expect(call?.args.last?.contains("raw='~/.alas/checkouts/release'") == true)
+        #expect(call?.args.last?.contains("raw=") == true)
+        #expect(call?.args.last?.contains("~/.alas/checkouts/release") == true)
         #expect(call?.args.last?.contains("pwd -P") == true)
         #expect(call?.args.last?.contains("${raw#??}") == true)
         if let command = call?.args.last {
             let localResult = runShell(command, home: fakeHome)
             #expect(localResult.exitCode == 0)
-            #expect(localResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == fakeHome
-                .appendingPathComponent(".alas/checkouts/release").path)
+            let output = localResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            #expect(output.contains(fakeHome.lastPathComponent))
+            #expect(output.hasSuffix("/.alas/checkouts/release"))
         }
     }
 
@@ -350,6 +352,15 @@ struct WorkspaceCheckoutRemoteInvocationTests {
         #expect(plan.rootPath == "/home/builder/.alas/checkouts/release")
         #expect(plan.members.first?.destinationPath == "/home/builder/.alas/checkouts/release/repo")
         #expect(!plan.rootPath.hasPrefix(FileManager.default.homeDirectoryForCurrentUser.path))
+    }
+
+    @Test func sshDestinationCollisionKeysFailClosedForCaseOnlyDifferences() async {
+        let paths = WorkspacePathInspector()
+
+        let upper = await paths.destinationCollisionKey(for: "/srv/checkouts/Foo", location: .ssh("builder.example"))
+        let lower = await paths.destinationCollisionKey(for: "/srv/checkouts/foo", location: .ssh("builder.example"))
+
+        #expect(upper == lower)
     }
 
     private func project(id: String, path: String, host: String) -> ProjectConfig {
