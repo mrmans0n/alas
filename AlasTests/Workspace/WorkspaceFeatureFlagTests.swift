@@ -417,7 +417,6 @@ struct WorkspaceFeatureFlagTests {
             removeWorkspaceFiles(near: workspaceURL)
             try? FileManager.default.removeItem(at: checkoutRoot)
         }
-        try FileManager.default.createDirectory(at: checkoutRoot, withIntermediateDirectories: true)
         let workspaceStore = WorkspaceStore(url: workspaceURL)
         let spaces = emptySpacesFile()
         let manager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
