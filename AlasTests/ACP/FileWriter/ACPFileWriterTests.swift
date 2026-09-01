@@ -66,4 +66,22 @@ struct ACPFileWriterTests {
         let resolved = try writer.resolveInsideWorktree(path: target)
         #expect(resolved.path == target)
     }
+
+    @Test("resolveInsideWorktree preserves symlinked worktree spelling after boundary validation")
+    func resolveInsidePreservesSymlinkedWorktreePath() throws {
+        let physical = try makeWorktree()
+        let symlink = physical.deletingLastPathComponent().appendingPathComponent("wt-link-\(UUID())")
+        defer {
+            try? FileManager.default.removeItem(at: symlink)
+            try? FileManager.default.removeItem(at: physical)
+        }
+        try FileManager.default.createSymbolicLink(at: symlink, withDestinationURL: physical)
+        let requested = symlink.appendingPathComponent("inside.txt").path
+        let writer = ACPFileWriter(worktreeRoot: symlink)
+
+        let resolved = try writer.resolveInsideWorktree(path: requested)
+
+        #expect(resolved.path == requested)
+        #expect(resolved.path != physical.appendingPathComponent("inside.txt").path)
+    }
 }
