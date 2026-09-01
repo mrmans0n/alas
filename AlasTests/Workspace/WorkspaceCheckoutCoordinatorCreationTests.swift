@@ -315,6 +315,56 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
         #expect(await store.load() == .missing)
     }
 
+    @Test func rejectsDuplicateWorkspaceMemberIDsBeforePersistingOrCallingGit() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-coordinator-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let duplicatedMemberID = UUID()
+        let members = [
+            WorkspaceMember(id: duplicatedMemberID, projectID: "project-a", fallbackProjectName: "A", fallbackRepositoryRoot: "/repos/a"),
+            WorkspaceMember(id: duplicatedMemberID, projectID: "project-b", fallbackProjectName: "B", fallbackRepositoryRoot: "/repos/b"),
+        ]
+        let workspace = Workspace(name: "Release", executionLocation: .local, members: members)
+        let plan = FrozenWorkspaceCheckoutPlan(
+            checkoutID: UUID(),
+            workspaceID: workspace.id,
+            executionLocation: .local,
+            branch: "release/1091",
+            rootPath: "/checkouts/release",
+            members: [
+                .init(
+                    checkoutMemberID: UUID(),
+                    workspaceMemberID: duplicatedMemberID,
+                    projectID: "project-a",
+                    sourceRepositoryPath: "/repos/a",
+                    destinationPath: "/checkouts/release/a",
+                    baseReference: "main",
+                    baseCommit: "commit-a",
+                    branchIntent: .create(atCommit: "commit-a")
+                ),
+                .init(
+                    checkoutMemberID: UUID(),
+                    workspaceMemberID: duplicatedMemberID,
+                    projectID: "project-b",
+                    sourceRepositoryPath: "/repos/b",
+                    destinationPath: "/checkouts/release/b",
+                    baseReference: "main",
+                    baseCommit: "commit-b",
+                    branchIntent: .create(atCommit: "commit-b")
+                ),
+            ]
+        )
+        let git = CountingWorkspaceGit()
+        let store = WorkspaceStore(url: url)
+        let coordinator = WorkspaceCheckoutCoordinator(store: store, git: git, scripts: NoopWorkspaceScriptRunner(), projectMutationGate: ProjectMutationGate())
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.incompletePlan) {
+            try await coordinator.create(workspace: workspace, plan: plan)
+        }
+
+        #expect(await git.callCount == 0)
+        #expect(await store.load() == .missing)
+    }
+
     @Test func persistsFrozenPreflightWarningsWithTheCheckoutSnapshot() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-coordinator-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: url) }

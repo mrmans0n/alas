@@ -1019,11 +1019,11 @@ actor WorkspaceCheckoutCoordinator {
               case .valid = GitNameValidator.validateBranchName(plan.branch)
         else { throw WorkspaceCheckoutCoordinatorError.incompletePlan }
         guard plan.members.count == workspace.members.count else { throw WorkspaceCheckoutCoordinatorError.incompletePlan }
-        let workspaceMembers = Dictionary(uniqueKeysWithValues: workspace.members.map { ($0.id, $0) })
-        guard workspaceMembers.count == workspace.members.count,
+        guard Set(workspace.members.map(\.id)).count == workspace.members.count,
               Set(plan.members.map(\.workspaceMemberID)).count == plan.members.count,
               Set(plan.members.map(\.checkoutMemberID)).count == plan.members.count
         else { throw WorkspaceCheckoutCoordinatorError.incompletePlan }
+        let workspaceMembers = Dictionary(uniqueKeysWithValues: workspace.members.map { ($0.id, $0) })
         let members = try plan.members.map { planned -> WorkspaceCheckoutMember in
             guard let source = workspaceMembers[planned.workspaceMemberID] else {
                 throw WorkspaceCheckoutCoordinatorError.planDoesNotMatchWorkspaceMember(planned.workspaceMemberID)

@@ -4223,6 +4223,21 @@ final class AppState {
                 }
             }
         }
+        for checkout in workspacesManager.checkouts {
+            let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+            for tab in tabs.tabs(for: owner) {
+                guard case .terminal(let state) = tab else { continue }
+                if state.root.leaves().contains(where: { $0.id == leafId }) {
+                    // Harness notifications still require a legacy
+                    // (projectId, worktreeId) tuple before they are emitted.
+                    // Checkout-owned notifications carry the typed owner too,
+                    // and click-through routes through that owner, so this
+                    // synthetic tuple is only the compatibility key that keeps
+                    // persisted checkout leaves observable before lazy restore.
+                    return (checkout.workspaceID?.uuidString ?? "", owner.storageKey)
+                }
+            }
+        }
         return nil
     }
 
