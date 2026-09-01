@@ -1799,11 +1799,17 @@ final class AppState {
             throw WorkspaceStoreError.recoveryRequired
         }
         let coordinator = workspaceCoordinator()
-        let checkout = try await coordinator.createPersisted(
-            workspace: workspace,
-            plan: plan,
-            configurationSnapshot: workspaceConfigurationSnapshot(for: workspace, plan: plan)
-        )
+        let checkout: WorkspaceCheckout
+        do {
+            checkout = try await coordinator.createPersisted(
+                workspace: workspace,
+                plan: plan,
+                configurationSnapshot: workspaceConfigurationSnapshot(for: workspace, plan: plan)
+            )
+        } catch {
+            await workspacesManager.refreshCheckoutSnapshots()
+            throw error
+        }
         await workspacesManager.refreshCheckoutSnapshots()
         guard workspaceMutationAvailable else { return checkout }
         selectWorkspaceCheckout(id: checkout.id)
