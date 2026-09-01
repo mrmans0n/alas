@@ -377,7 +377,7 @@ struct WorkspacePathInspector: WorkspacePathInspecting {
             raw=\(SSHCommand.shellQuote(trimmed))
             case "$raw" in
               "~") p="$HOME" ;;
-              "~/"*) p="$HOME/${raw#~/}" ;;
+              "~/"*) p="$HOME/${raw#??}" ;;
               /*) p="$raw" ;;
               *) p="$PWD/$raw" ;;
             esac

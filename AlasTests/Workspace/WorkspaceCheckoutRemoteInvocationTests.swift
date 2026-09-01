@@ -41,6 +41,13 @@ struct WorkspaceCheckoutRemoteInvocationTests {
     }
 
     @Test func remoteRootResolutionRunsOnTheWorkspaceHost() async {
+        let fakeHome = FileManager.default.temporaryDirectory
+            .appendingPathComponent("workspace-remote-home-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: fakeHome) }
+        try? FileManager.default.createDirectory(
+            at: fakeHome.appendingPathComponent(".alas/checkouts", isDirectory: true),
+            withIntermediateDirectories: true
+        )
         let runner = RecordingWorkspaceSSHRunner(results: [
             .init(exitCode: 0, stdout: "/home/builder/.alas/checkouts/release\n", stderr: "")
         ])
@@ -55,6 +62,13 @@ struct WorkspaceCheckoutRemoteInvocationTests {
         #expect(call?.args.dropLast().last == "builder.example")
         #expect(call?.args.last?.contains("raw='~/.alas/checkouts/release'") == true)
         #expect(call?.args.last?.contains("pwd -P") == true)
+        #expect(call?.args.last?.contains("${raw#??}") == true)
+        if let command = call?.args.last {
+            let localResult = runShell(command, home: fakeHome)
+            #expect(localResult.exitCode == 0)
+            #expect(localResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == fakeHome
+                .appendingPathComponent(".alas/checkouts/release").path)
+        }
     }
 
     @Test func manifestWriterUsesIdenticalVersionedBytesForLocalAndRemote() async throws {
@@ -385,6 +399,28 @@ private actor CachedFallbackGit: WorkspaceGitInspecting {
 }
 
 private enum CachedFallbackError: Error { case unavailable }
+
+private func runShell(_ command: String, home: URL) -> ProcessResult {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/bin/sh")
+    process.arguments = ["-c", command]
+    process.environment = ["HOME": home.path, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin"]
+    let output = Pipe()
+    let error = Pipe()
+    process.standardOutput = output
+    process.standardError = error
+    do {
+        try process.run()
+        process.waitUntilExit()
+        return ProcessResult(
+            exitCode: process.terminationStatus,
+            stdout: String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "",
+            stderr: String(data: error.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        )
+    } catch {
+        return ProcessResult(exitCode: 127, stdout: "", stderr: String(describing: error))
+    }
+}
 
 private actor CapturingLocationGit: WorkspaceGitInspecting {
     private(set) var locations: [ExecutionLocation] = []
