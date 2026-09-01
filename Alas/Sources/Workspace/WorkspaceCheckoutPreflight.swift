@@ -18,6 +18,13 @@ enum WorkspaceBranchDisposition: Equatable, Sendable {
 protocol WorkspacePathInspecting: Sendable {
     func exists(at path: String, location: ExecutionLocation) async -> Bool
     func isCreatableDirectory(at path: String, location: ExecutionLocation) async -> Bool
+    func destinationCollisionKey(for path: String, location: ExecutionLocation) async -> String
+}
+
+extension WorkspacePathInspecting {
+    func destinationCollisionKey(for path: String, location: ExecutionLocation) async -> String {
+        path
+    }
 }
 
 struct WorkspaceCheckoutRequest: Sendable {
@@ -168,9 +175,10 @@ struct WorkspaceCheckoutPreflight: Sendable {
             // changing a Project's label must not change a durable checkout layout.
             let destinationName = URL(fileURLWithPath: item.1.path).lastPathComponent
             let destination = URL(fileURLWithPath: rootPath).appendingPathComponent(destinationName).path
+            let destinationKey = await paths.destinationCollisionKey(for: destination, location: location)
             let memberIndex = request.workspace.members.firstIndex(where: { $0.id == item.0.id })! + 1
             var memberHasError = false
-            if !destinations.insert(destination).inserted {
+            if !destinations.insert(destinationKey).inserted {
                 messages.append("Workspace member \(memberIndex) has a duplicate destination '\(destination)'.")
                 memberHasError = true
             }
@@ -368,5 +376,30 @@ struct WorkspacePathInspector: WorkspacePathInspecting {
             guard let result = try? await remote.run(host: host, command: command) else { return false }
             return result.exitCode == 0
         }
+    }
+
+    func destinationCollisionKey(for path: String, location: ExecutionLocation) async -> String {
+        switch location.normalized {
+        case .local:
+            return Self.localVolumeSupportsCaseSensitiveNames(for: path) ? path : path.lowercased()
+        case .ssh:
+            return path
+        }
+    }
+
+    private static func localVolumeSupportsCaseSensitiveNames(for path: String) -> Bool {
+        var candidate = URL(fileURLWithPath: path).deletingLastPathComponent().standardizedFileURL
+        var isDirectory = ObjCBool(false)
+        while !FileManager.default.fileExists(atPath: candidate.path, isDirectory: &isDirectory) {
+            let next = candidate.deletingLastPathComponent()
+            guard next.path != candidate.path else { return true }
+            candidate = next
+            isDirectory = false
+        }
+        guard isDirectory.boolValue,
+              let values = try? candidate.resourceValues(forKeys: [.volumeSupportsCaseSensitiveNamesKey]),
+              let caseSensitive = values.volumeSupportsCaseSensitiveNames
+        else { return true }
+        return caseSensitive
     }
 }

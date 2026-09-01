@@ -4924,6 +4924,33 @@ final class AppState {
     /// restored leaves this instance owns.
     @discardableResult
     func terminateAllTerminalSessions() -> Bool {
+        let snapshot = terminalTerminationSnapshot()
+        let alert = NSAlert()
+        alert.messageText = "Terminate All Terminal Sessions"
+        alert.informativeText = "Terminate \(snapshot.sessionCount) terminal session(s)? This will kill any agent or process currently running in them."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Terminate")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return false }
+
+        terminateAllTerminalSessionsAfterConfirmation(snapshot: snapshot)
+        return true
+    }
+
+#if DEBUG
+    func terminateAllTerminalSessionsAfterConfirmationForTesting() {
+        terminateAllTerminalSessionsAfterConfirmation(snapshot: terminalTerminationSnapshot())
+    }
+#endif
+
+    private struct TerminalTerminationSnapshot {
+        var terminalTabs: [(worktreeId: String, tabId: TabID)]
+        var checkoutTerminalTabs: [(owner: SessionOwnerID, tabId: TabID)]
+        var persistedSessions: [TerminalSessionIdentity]
+        var sessionCount: Int
+    }
+
+    private func terminalTerminationSnapshot() -> TerminalTerminationSnapshot {
         // Snapshot which terminal tabs exist so the confirm sheet count stays
         // accurate even if state changes between rendering and confirming.
         let terminalTabs: [(worktreeId: String, tabId: TabID)] = projects
@@ -4932,6 +4959,14 @@ final class AppState {
                 tabs.tabs(forWorktree: worktree.id).compactMap { tab -> (String, TabID)? in
                     guard case .terminal = tab else { return nil }
                     return (worktree.id, tab.id)
+                }
+            }
+        let checkoutTerminalTabs: [(owner: SessionOwnerID, tabId: TabID)] = workspacesManager.checkouts
+            .flatMap { checkout in
+                let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+                return tabs.tabs(for: owner).compactMap { tab -> (SessionOwnerID, TabID)? in
+                    guard case .terminal = tab else { return nil }
+                    return (owner, tab.id)
                 }
             }
         let persistedSessions = allPersistedTerminalSessions()
@@ -4944,24 +4979,27 @@ final class AppState {
             })
             .count
 
-        let alert = NSAlert()
-        alert.messageText = "Terminate All Terminal Sessions"
-        alert.informativeText = "Terminate \(sessionCount) terminal session(s)? This will kill any agent or process currently running in them."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Terminate")
-        alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return false }
+        return TerminalTerminationSnapshot(
+            terminalTabs: terminalTabs,
+            checkoutTerminalTabs: checkoutTerminalTabs,
+            persistedSessions: persistedSessions,
+            sessionCount: sessionCount
+        )
+    }
 
-        for (worktreeId, tabId) in terminalTabs {
+    private func terminateAllTerminalSessionsAfterConfirmation(snapshot: TerminalTerminationSnapshot) {
+        for (worktreeId, tabId) in snapshot.terminalTabs {
             closeTab(worktreeId: worktreeId, tabId: tabId)
+        }
+        for (owner, tabId) in snapshot.checkoutTerminalTabs {
+            closeSharedSessionTab(owner: owner, tabID: tabId)
         }
         // Also kill persisted leaves whose tab the user never displayed
         // this run — closeTab only handles registered sessions, but we
         // own those persisted leaves too. Scoped to OUR instance's known
         // leaves so we don't trample sessions owned by a concurrently-
         // running Alas process under the same ZMX_DIR.
-        terminal.terminateAll(additionalSessions: persistedSessions)
-        return true
+        terminal.terminateAll(additionalSessions: snapshot.persistedSessions)
     }
 
     /// All terminal sessions persisted under this Alas instance's projects.
