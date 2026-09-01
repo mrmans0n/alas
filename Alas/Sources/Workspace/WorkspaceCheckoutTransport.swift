@@ -78,6 +78,15 @@ struct WorkspaceCheckoutManifest: Codable, Equatable, Sendable {
     var rootPath: String
     var branch: String
     var members: [Member]
+
+    static func jsonStringNeedle(key: String, value: String) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: [key: value], options: [.sortedKeys]),
+              var object = String(data: data, encoding: .utf8)
+        else { return "\"\(key)\":\"\(value)\"" }
+        if object.first == "{" { object.removeFirst() }
+        if object.last == "}" { object.removeLast() }
+        return object
+    }
 }
 
 enum WorkspaceCheckoutManifestError: Error, Equatable, Sendable {
@@ -147,7 +156,7 @@ struct WorkspaceCheckoutManifestWriter: WorkspaceCheckoutManifestWriting, Sendab
             let temporary = "\(target).tmp-\(UUID().uuidString)"
             let payload = String(decoding: data, as: UTF8.self)
             let expectedCheckoutID = "\"checkoutID\":\"\(manifest.checkoutID.uuidString)\""
-            let expectedRootPath = "\"rootPath\":\"\(rootPath)\""
+            let expectedRootPath = WorkspaceCheckoutManifest.jsonStringNeedle(key: "rootPath", value: rootPath)
             let parentPath = URL(fileURLWithPath: rootPath).deletingLastPathComponent().path
             let command = """
             umask 077

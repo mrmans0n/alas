@@ -1682,7 +1682,7 @@ final class AppState {
                 && Self.canonicalWorktreePath(manifest.rootPath) == Self.canonicalWorktreePath(checkout.rootPath)
         case .ssh(let host):
             let expectedCheckoutID = "\"checkoutID\":\"\(checkout.id.uuidString)\""
-            let expectedRootPath = "\"rootPath\":\"\(checkout.rootPath)\""
+            let expectedRootPath = WorkspaceCheckoutManifest.jsonStringNeedle(key: "rootPath", value: checkout.rootPath)
             let command = """
             test -s \(SSHCommand.shellQuote(manifestPath)) \
             && grep -F \(SSHCommand.shellQuote(expectedCheckoutID)) \(SSHCommand.shellQuote(manifestPath)) >/dev/null \
@@ -1702,6 +1702,33 @@ final class AppState {
               await workspaceCheckoutManifestMatches(authoritative)
         else { return nil }
         return authoritative
+    }
+
+    func mcpServersForACPToolbar(worktree: Worktree, owner: SessionOwnerID?) -> [ProjectMCPServer] {
+        if let owner,
+           case .workspaceCheckout(let checkoutID, _) = owner,
+           let checkout = workspacesManager.checkout(id: checkoutID) {
+            return workspaceFrozenMCPServers(for: checkout)
+        }
+        return projects.first(where: { $0.id == worktree.projectId })?.mcpServers ?? []
+    }
+
+    private func currentWorkspaceCheckoutSnapshot(_ checkout: WorkspaceCheckout) -> WorkspaceCheckout {
+        workspacesManager.checkout(id: checkout.id) ?? checkout
+    }
+
+    private func workspaceFrozenMCPAttachments(for checkout: WorkspaceCheckout) -> (descriptors: [WorkspaceMCPServerDescriptor], unavailableDescriptorIDs: Set<String>)? {
+        guard let frozenConfiguration = checkout.configurationSnapshot else { return nil }
+        let unavailableMemberIDs = Set(checkout.members.filter { $0.availability != .available }.map(\.workspaceMemberID.uuidString))
+        let descriptors = frozenConfiguration.members.values.flatMap(\.mcpServers)
+        let unavailableDescriptors = Set(descriptors.compactMap { descriptor in
+            unavailableMemberIDs.contains(where: { descriptor.id.hasPrefix($0 + ":") }) ? descriptor.id : nil
+        })
+        return (descriptors, unavailableDescriptors)
+    }
+
+    private func workspaceFrozenMCPServers(for checkout: WorkspaceCheckout) -> [ProjectMCPServer] {
+        workspaceFrozenMCPAttachments(for: checkout)?.descriptors.map(\.server) ?? []
     }
 
     private func authoritativeCheckoutMember(
@@ -8114,18 +8141,46 @@ final class AppState {
                 let resourceURL = Bundle.main.resourceURL ?? Bundle.main.bundleURL
                 return try await LocalACPBrokerServicePool.shared.service(resourceURL: resourceURL)
             },
-            builtInMCPProvider: { [weak self] worktreePath, sessionId, _ in
+            builtInMCPProvider: { [weak self] worktreePath, sessionId, adapterSupportsHTTP in
                 guard let self,
                       let binaryPath = (try? TerminalCLIInjection.installExecutables())?
                           .appendingPathComponent(TerminalCLIInjection.executableName).path
                 else { return nil }
-                let current = self.workspacesManager.checkout(id: checkout.id) ?? checkout
-                let configuredServers = current.configurationSnapshot?.members.values.flatMap { $0.mcpServers.map(\.server) } ?? []
+                let current = self.currentWorkspaceCheckoutSnapshot(checkout)
+                let configuredServers = self.workspaceFrozenMCPServers(for: current)
                 let context = BuiltInAlasMCP.WorkspaceContext(
                     checkoutID: current.id,
                     rootPath: current.rootPath,
                     members: current.members.map { .init(id: $0.id, availability: $0.availability) }
                 )
+                if self.config.harness.alasMCPTransport == .http,
+                   adapterSupportsHTTP,
+                   let socketPath = self.harness.socketServer.socketPath,
+                   BuiltInAlasMCP.shouldInject(
+                       enabled: self.config.harness.exposeAlasMCP,
+                       configuredServers: configuredServers,
+                       binaryPath: binaryPath,
+                       socketPath: socketPath
+                   ),
+                   let endpoint = await self.mcpHTTPSupervisor.endpoint(
+                       binaryPath: binaryPath,
+                       socketPath: socketPath,
+                       worktreePath: worktreePath,
+                       sessionId: sessionId,
+                       parentSessionId: nil
+                   ) {
+                    return BuiltInAlasMCP.injection(
+                        enabled: self.config.harness.exposeAlasMCP,
+                        configuredServers: configuredServers,
+                        binaryPath: binaryPath,
+                        socketPath: self.harness.socketServer.socketPath,
+                        worktreePath: worktreePath,
+                        sessionId: sessionId,
+                        httpEndpoint: endpoint,
+                        workspaceContext: context
+                    )
+                }
+                self.mcpHTTPSupervisor.end(sessionId: sessionId)
                 return BuiltInAlasMCP.injection(
                     enabled: self.config.harness.exposeAlasMCP,
                     configuredServers: configuredServers,
@@ -8137,16 +8192,68 @@ final class AppState {
                 )
             },
             frozenMCPAttachmentProvider: { [weak self] in
-                let current = self?.workspacesManager.checkout(id: checkout.id) ?? checkout
-                guard let frozenConfiguration = current.configurationSnapshot else { return nil }
-                let unavailableMemberIDs = Set(current.members.filter { $0.availability != .available }.map(\.workspaceMemberID.uuidString))
-                let descriptors = frozenConfiguration.members.values.flatMap(\.mcpServers)
-                let unavailableDescriptors = Set(descriptors.compactMap { descriptor in
-                    unavailableMemberIDs.contains(where: { descriptor.id.hasPrefix($0 + ":") }) ? descriptor.id : nil
-                })
-                return (descriptors, unavailableDescriptors)
+                guard let self else { return nil }
+                return self.workspaceFrozenMCPAttachments(for: self.currentWorkspaceCheckoutSnapshot(checkout))
             }
         )
+        manager.alasCLIEnvProvider = { [weak self] worktreePath, sessionId -> [String: String]? in
+            guard let self else { return nil }
+            let binDirPath = (try? TerminalCLIInjection.installExecutables())?.path
+            return AlasCLIEnvInjection.environment(
+                enabled: self.config.harness.exposeAlasMCP,
+                binDirPath: binDirPath,
+                socketPath: self.harness.socketServer.socketPath,
+                worktreePath: worktreePath,
+                sessionId: sessionId,
+                parentSessionId: nil,
+                basePATH: ACPProcessEnvironment.augmented()["PATH"]
+            )
+        }
+        manager.externalMCPStatusProvider = { [weak self] worktreePath -> (
+            adapterState: PiMCPAdapterInspector.State,
+            configOutcome: PiMCPConfigWriter.Outcome?,
+            userServerNames: [String],
+            skippedServerStatuses: [MCPAttachmentServerStatus]
+        ) in
+            guard let self else { return (.unknown, nil, [], []) }
+            let current = self.currentWorkspaceCheckoutSnapshot(checkout)
+            let attachments = self.workspaceFrozenMCPAttachments(for: current)
+            let descriptors = attachments?.descriptors ?? []
+            let plan = MCPAttachmentPlanner.plan(.init(
+                configuredServers: [],
+                projectDirectory: current.rootPath,
+                worktreeDirectory: worktreePath,
+                environment: ACPProcessEnvironment.sanitizedForACP(extra: [:]),
+                capabilities: ACPMCPServerCapabilities(http: true, sse: true),
+                frozenServerDescriptors: descriptors,
+                unavailableFrozenDescriptorIDs: attachments?.unavailableDescriptorIDs ?? []
+            ))
+            let userServerNames = plan.wireServers.map(\.name)
+            let skippedServerStatuses = plan.statuses.filter {
+                if case .skipped = $0.disposition { return true }
+                return false
+            }
+            let worktreeURL = URL(fileURLWithPath: worktreePath)
+            let adapterState = PiMCPAdapterInspector.state(worktreeURL: worktreeURL)
+            guard adapterState == .installed else {
+                return (adapterState, nil, userServerNames, skippedServerStatuses)
+            }
+            let fingerprint = MCPAttachmentPlanner.resolvedConfigurationFingerprint(for: plan.wireServers)
+            let configOutcome: PiMCPConfigWriter.Outcome
+            do {
+                configOutcome = try PiMCPConfigWriter.sync(
+                    worktreeURL: worktreeURL,
+                    servers: plan.wireServers,
+                    fingerprint: fingerprint
+                )
+            } catch {
+                configOutcome = .failed
+            }
+            if Self.shouldExcludePiDirectory(after: configOutcome) {
+                await self.excludePiDirectoryFromGit(worktreeURL: worktreeURL)
+            }
+            return (adapterState, configOutcome, userServerNames, skippedServerStatuses)
+        }
         acpManagers[owner] = manager
         acpHarnessBridge.attach(manager: manager)
         #if DEBUG
