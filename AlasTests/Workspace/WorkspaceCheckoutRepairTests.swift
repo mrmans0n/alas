@@ -136,6 +136,100 @@ struct WorkspaceCheckoutRepairTests {
         #expect(await WorkspaceCheckoutObserver().observe(member, in: checkout) == .identityConflict(nil))
     }
 
+    @Test func localSymlinkToMovedWorktreeOutsideRootIsIdentityConflict() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-symlink-root-\(UUID().uuidString)")
+        let moved = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-moved-member-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: moved, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: moved)
+        }
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: moved)
+        let lineage = "lineage-\(UUID().uuidString)"
+        try lineage.write(
+            to: moved.appendingPathComponent(".git/alas-worktree-lineage"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let destination = root.appendingPathComponent("member")
+        try FileManager.default.createSymbolicLink(at: destination, withDestinationURL: moved)
+        let memberID = UUID()
+        let member = WorkspaceCheckoutMember(
+            id: memberID,
+            workspaceMemberID: UUID(),
+            projectID: "project-a",
+            fallbackProjectName: "A",
+            fallbackRepositoryRoot: "/repos/a",
+            worktreePath: destination.path,
+            gitLineageID: lineage,
+            availability: .available,
+            checkpoint: .setupComplete,
+            cleanupOwnership: .init(worktreeCreated: true, branchOwnership: .created),
+            plan: .init(
+                checkoutMemberID: memberID,
+                projectID: "project-a",
+                sourceRepositoryPath: "/repos/a",
+                destinationPath: destination.path,
+                baseReference: "main",
+                baseCommit: "abc",
+                branchIntent: .create(atCommit: "abc")
+            )
+        )
+        let checkout = WorkspaceCheckout(
+            workspaceID: UUID(),
+            fallbackWorkspaceName: "Release",
+            executionLocation: .local,
+            branch: "feature",
+            rootPath: root.path,
+            members: [member]
+        )
+
+        #expect(await WorkspaceCheckoutObserver().observe(member, in: checkout) == .identityConflict(nil))
+    }
+
+    @Test func sshObservationChecksCanonicalDestinationContainment() async throws {
+        let memberID = UUID()
+        let member = WorkspaceCheckoutMember(
+            id: memberID,
+            workspaceMemberID: UUID(),
+            projectID: "project-a",
+            fallbackProjectName: "A",
+            fallbackRepositoryRoot: "/repos/a",
+            worktreePath: "/remote/checkouts/a",
+            gitLineageID: "lineage-a",
+            availability: .available,
+            checkpoint: .setupComplete,
+            cleanupOwnership: .init(worktreeCreated: true, branchOwnership: .created),
+            plan: .init(
+                checkoutMemberID: memberID,
+                projectID: "project-a",
+                sourceRepositoryPath: "/remote/repos/a",
+                destinationPath: "/remote/checkouts/a",
+                baseReference: "main",
+                baseCommit: "abc",
+                branchIntent: .create(atCommit: "abc")
+            )
+        )
+        let checkout = WorkspaceCheckout(
+            workspaceID: UUID(),
+            fallbackWorkspaceName: "Release",
+            executionLocation: .ssh("ssh-host"),
+            branch: "feature",
+            rootPath: "/remote/checkouts",
+            members: [member]
+        )
+        let commands = CommandRecorder()
+        let observer = WorkspaceCheckoutObserver(remote: .init { _, args, _ in
+            await commands.record(args.joined(separator: "\n"))
+            return ProcessResult(exitCode: 7, stdout: "", stderr: "")
+        })
+
+        let expected: WorkspaceCheckoutMemberObservation = .identityConflict(nil)
+        #expect(await observer.observe(member, in: checkout) == expected)
+        #expect(await commands.values.first?.contains("pwd -P") == true)
+    }
+
     @Test func retrySetupUsesTheFrozenWorktreeAndNeverRepeatsASuccess() async throws {
         let fixture = try await persistedFixture(checkpoint: .worktreeCreated, worktreeCreated: true, lineageID: "lineage-a")
         let scripts = RepairScriptRunner()
@@ -158,7 +252,8 @@ struct WorkspaceCheckoutRepairTests {
                 shared: .init(
                     sessionOpenScript: "",
                     worktreeCreateScript: "echo global",
-                    creationLaunchPreference: .inherit
+                    creationLaunchPreference: .inherit,
+                    globalWorktreeCreateScript: "echo global"
                 ),
                 members: [
                     member.workspaceMemberID: .init(
@@ -776,6 +871,14 @@ private actor NonMissingCompletedGit: WorkspaceGitOperating {
     func frozenWorktreeIsMissing(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> Bool {
         missingChecks.append(operation.destinationPath)
         return nonMissingDestinations.contains(operation.destinationPath) == false
+    }
+}
+
+private actor CommandRecorder {
+    private(set) var values: [String] = []
+
+    func record(_ value: String) {
+        values.append(value)
     }
 }
 

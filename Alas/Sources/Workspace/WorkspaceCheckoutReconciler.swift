@@ -65,13 +65,17 @@ struct WorkspaceCheckoutObserver: WorkspaceCheckoutObserving {
         case .local:
             let destination = URL(fileURLWithPath: plan.destinationPath)
             guard Self.pathEntryExistsOrIsSymlink(destination.path) else { return .missing }
+            guard Self.resolvedPath(destination.path, isContainedIn: checkout.rootPath) else {
+                return .identityConflict(nil)
+            }
             guard let lineage = WorktreeService.existingLocalLineageID(forWorktreeAt: destination) else {
                 return .identityConflict(nil)
             }
             return member.gitLineageID == lineage ? .exactLineage(lineage) : .identityConflict(lineage)
         case .ssh(let host):
             let path = SSHCommand.shellQuote(plan.destinationPath)
-            let command = "p=\(path); test -e \"$p\" || test -L \"$p\" || exit 2; d=$(git -C \"$p\" rev-parse --absolute-git-dir) || exit 3; f=\"$d/alas-worktree-lineage\"; test -s \"$f\" || exit 4; head -n 1 \"$f\""
+            let root = SSHCommand.shellQuote(checkout.rootPath)
+            let command = "root=\(root); p=\(path); test -e \"$p\" || test -L \"$p\" || exit 2; root_real=$(cd \"$root\" && pwd -P) || exit 5; p_real=$(cd \"$p\" && pwd -P) || exit 6; case \"$p_real\" in \"$root_real\"|\"$root_real\"/*) ;; *) exit 7 ;; esac; d=$(git -C \"$p\" rev-parse --absolute-git-dir) || exit 3; f=\"$d/alas-worktree-lineage\"; test -s \"$f\" || exit 4; head -n 1 \"$f\""
             guard let result = try? await remote.run(host: host, command: command) else {
                 return .unavailable("Could not inspect Workspace member on \(host).")
             }
@@ -89,5 +93,17 @@ struct WorkspaceCheckoutObserver: WorkspaceCheckoutObserving {
     private static func pathEntryExistsOrIsSymlink(_ path: String) -> Bool {
         if FileManager.default.fileExists(atPath: path) { return true }
         return (try? FileManager.default.destinationOfSymbolicLink(atPath: path)) != nil
+    }
+
+    private static func resolvedPath(_ path: String, isContainedIn rootPath: String) -> Bool {
+        let root = URL(fileURLWithPath: rootPath)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+            .path
+        let candidate = URL(fileURLWithPath: path)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+            .path
+        return candidate == root || candidate.hasPrefix(root + "/")
     }
 }
