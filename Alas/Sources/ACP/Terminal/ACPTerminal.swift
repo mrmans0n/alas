@@ -332,7 +332,7 @@ final class ACPTerminal: ObservableObject {
     /// this uses libproc's ppid index instead of spawning `/bin/ps -ax`, so
     /// `kill()` can capture children before signaling a fast-exiting root
     /// without doing a full process-table scan on the main actor.
-    nonisolated private static func collectChildDescendants(of root: pid_t) -> [DescendantKey] {
+    nonisolated static func collectChildDescendants(of root: pid_t) -> [DescendantKey] {
         var out: [DescendantKey] = []
         var queue: [pid_t] = [root]
         while let parent = queue.popLast() {
@@ -405,7 +405,7 @@ final class ACPTerminal: ObservableObject {
     /// match the current process table. Used to skip stale cached PIDs
     /// whose original process has exited and whose PID may have been
     /// reused for an unrelated process.
-    nonisolated private static func currentlyMatching(_ keys: Set<DescendantKey>) -> Set<DescendantKey> {
+    nonisolated static func currentlyMatching(_ keys: Set<DescendantKey>) -> Set<DescendantKey> {
         guard !keys.isEmpty else { return [] }
         var current: Set<DescendantKey> = []
         for key in keys {
