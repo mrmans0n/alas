@@ -29,9 +29,17 @@ extension WorkspaceReviewSessionReading {
             executionLocation: executionLocation,
             repositoryPath: repositoryPath
         )
-        return try list(worktreeID: qualifiedWorktreeID).filter {
+        let normalizedPath = URL(fileURLWithPath: repositoryPath).standardizedFileURL.path
+        let qualified = try list(worktreeID: qualifiedWorktreeID).filter {
+            $0.target.repositoryPath.standardizedFileURL.path == normalizedPath
+        }
+        let legacy = try list(worktreeID: worktreeID).filter {
             $0.target.repositoryPath.standardizedFileURL.path == URL(fileURLWithPath: repositoryPath).standardizedFileURL.path
         }
+        var seen: Set<ReviewSessionID> = []
+        return (qualified + legacy).filter { record in
+            seen.insert(record.id).inserted
+        }.sorted { $0.updatedAt > $1.updatedAt }
     }
 }
 
