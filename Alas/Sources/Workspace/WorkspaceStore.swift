@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 struct WorkspaceRecoveryState: Codable, Equatable, Sendable {
     var originalFilePath: String
@@ -29,6 +30,20 @@ actor WorkspaceStore {
     }
 
     func load() -> WorkspaceStoreLoadResult {
+        do {
+            return try withExclusiveLock {
+                loadUnlocked()
+            }
+        } catch {
+            return WorkspaceStoreLoadResult.unreadable(WorkspaceRecoveryState(
+                originalFilePath: url.path,
+                quarantinedFilePath: nil,
+                message: "Workspace state could not be locked: \(error)"
+            ))
+        }
+    }
+
+    private func loadUnlocked() -> WorkspaceStoreLoadResult {
         if let recovery = readRecoveryState() {
             return .unreadable(recovery)
         }
@@ -51,10 +66,12 @@ actor WorkspaceStore {
     }
 
     func checkpoint(_ state: WorkspaceStateFile) throws {
-        if case .unreadable = load() {
-            throw WorkspaceStoreError.recoveryRequired
+        try withExclusiveLock {
+            if case .unreadable = loadUnlocked() {
+                throw WorkspaceStoreError.recoveryRequired
+            }
+            try checkpointLoaded(state)
         }
-        try checkpointLoaded(state)
     }
 
     /// Performs a whole-state update under the store actor. Checkout member
@@ -63,70 +80,78 @@ actor WorkspaceStore {
     func mutate<Value: Sendable>(
         _ update: (inout WorkspaceStateFile) throws -> Value
     ) throws -> Value {
-        var state: WorkspaceStateFile
-        switch load() {
-        case .missing:
-            state = WorkspaceStateFile()
-        case .loaded(let loaded):
-            state = loaded
-        case .unreadable:
-            throw WorkspaceStoreError.recoveryRequired
+        try withExclusiveLock {
+            var state: WorkspaceStateFile
+            switch loadUnlocked() {
+            case .missing:
+                state = WorkspaceStateFile()
+            case .loaded(let loaded):
+                state = loaded
+            case .unreadable:
+                throw WorkspaceStoreError.recoveryRequired
+            }
+            let value = try update(&state)
+            try checkpointLoaded(state)
+            return value
         }
-        let value = try update(&state)
-        try checkpointLoaded(state)
-        return value
     }
 
     /// Reconciles legacy Space membership and checkpoints the resulting typed
     /// layout in one actor-isolated read-modify-write operation.
     func reconcileSpaceLayouts(with spacesFile: SpacesFile) throws -> SpacesFile? {
-        switch load() {
-        case .missing:
-            return nil
-        case .unreadable:
-            throw WorkspaceStoreError.recoveryRequired
-        case .loaded(var state):
-            let originalState = state
-            let reconciled = state.reconcileSpaceLayouts(with: spacesFile)
-            guard state != originalState else {
+        try withExclusiveLock {
+            switch loadUnlocked() {
+            case .missing:
+                return nil
+            case .unreadable:
+                throw WorkspaceStoreError.recoveryRequired
+            case .loaded(var state):
+                let originalState = state
+                let reconciled = state.reconcileSpaceLayouts(with: spacesFile)
+                guard state != originalState else {
+                    return reconciled == spacesFile ? nil : reconciled
+                }
+                try checkpointLoaded(state)
                 return reconciled == spacesFile ? nil : reconciled
             }
-            try checkpointLoaded(state)
-            return reconciled == spacesFile ? nil : reconciled
         }
     }
 
     /// Records a typed Space layout after its legacy projection has been
     /// written. The entire read-modify-write is serialized by this actor.
     func checkpointSpaceLayouts(afterWriting spacesFile: SpacesFile) throws {
-        switch load() {
-        case .missing:
-            return
-        case .unreadable:
-            throw WorkspaceStoreError.recoveryRequired
-        case .loaded(var state):
-            let originalState = state
-            state.checkpointSpaceLayouts(from: spacesFile)
-            guard state != originalState else { return }
-            try checkpointLoaded(state)
+        try withExclusiveLock {
+            switch loadUnlocked() {
+            case .missing:
+                return
+            case .unreadable:
+                throw WorkspaceStoreError.recoveryRequired
+            case .loaded(var state):
+                let originalState = state
+                state.checkpointSpaceLayouts(from: spacesFile)
+                guard state != originalState else { return }
+                try checkpointLoaded(state)
+            }
         }
     }
 
     func discardUnreadableState() throws {
-        let fileManager = FileManager.default
-        let recovery = readRecoveryState()
-        if let quarantinedFileURL = recovery?.quarantinedFileURL,
-           fileManager.fileExists(atPath: quarantinedFileURL.path) {
-            try fileManager.removeItem(at: quarantinedFileURL)
-        }
-        if recovery != nil, fileManager.fileExists(atPath: url.path) {
-            try fileManager.removeItem(at: url)
-        }
-        for artifact in quarantineArtifactURLs() where fileManager.fileExists(atPath: artifact.path) {
-            try fileManager.removeItem(at: artifact)
-        }
-        if fileManager.fileExists(atPath: recoveryURL.path) {
-            try fileManager.removeItem(at: recoveryURL)
+        try withExclusiveLock {
+            let fileManager = FileManager.default
+            let recovery = readRecoveryState()
+            if let quarantinedFileURL = recovery?.quarantinedFileURL,
+               fileManager.fileExists(atPath: quarantinedFileURL.path) {
+                try fileManager.removeItem(at: quarantinedFileURL)
+            }
+            if recovery != nil, fileManager.fileExists(atPath: url.path) {
+                try fileManager.removeItem(at: url)
+            }
+            for artifact in quarantineArtifactURLs() where fileManager.fileExists(atPath: artifact.path) {
+                try fileManager.removeItem(at: artifact)
+            }
+            if fileManager.fileExists(atPath: recoveryURL.path) {
+                try fileManager.removeItem(at: recoveryURL)
+            }
         }
     }
 
@@ -140,6 +165,26 @@ actor WorkspaceStore {
 
     private func checkpointLoaded(_ state: WorkspaceStateFile) throws {
         try store.write(try state.validated(), to: url)
+    }
+
+    private func withExclusiveLock<Value>(_ body: () throws -> Value) throws -> Value {
+        try Paths.ensureDirectoryExists(url.deletingLastPathComponent())
+        let lockURL = url.appendingPathExtension("lock")
+        if !FileManager.default.fileExists(atPath: lockURL.path) {
+            _ = FileManager.default.createFile(atPath: lockURL.path, contents: nil)
+        }
+        let handle = try FileHandle(forUpdating: lockURL)
+        let fileDescriptor = handle.fileDescriptor
+        guard flock(fileDescriptor, LOCK_EX) == 0 else {
+            let error = errno
+            try? handle.close()
+            throw POSIXError(POSIXErrorCode(rawValue: error) ?? .EIO)
+        }
+        defer {
+            _ = flock(fileDescriptor, LOCK_UN)
+            try? handle.close()
+        }
+        return try body()
     }
 
     private func readRecoveryState() -> WorkspaceRecoveryState? {
