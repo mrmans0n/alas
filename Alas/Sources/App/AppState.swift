@@ -618,7 +618,7 @@ final class AppState {
         runScriptCompletionWaiter: @escaping RunScriptCompletionWaiter = RunScriptCompletionMonitor.wait(for:),
         tabsManager: TabsManager? = nil,
         restoreActiveTabsOnStartup: Bool = true,
-        workspaceSpacePersistenceBridge: WorkspaceSpacePersistenceBridge = WorkspaceSpacePersistenceBridge(),
+        workspaceSpacePersistenceBridge: WorkspaceSpacePersistenceBridge? = nil,
         workspacesManager: WorkspacesManager? = nil,
         workspaceStore: WorkspaceStore = WorkspaceStore()
     ) {
@@ -639,7 +639,8 @@ final class AppState {
         self.remoteAccelerationPreparer = remoteAccelerationPreparer
         self.projectGitWatcherFactory = projectGitWatcherFactory
         self.runScriptCompletionWaiter = runScriptCompletionWaiter
-        self.workspacesManager = workspacesManager ?? WorkspacesManager(bridge: workspaceSpacePersistenceBridge)
+        let workspaceBridge = workspaceSpacePersistenceBridge ?? WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore)
+        self.workspacesManager = workspacesManager ?? WorkspacesManager(bridge: workspaceBridge)
         let config = (try? store.readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? AppConfig.defaults
         let projectsFile = (try? store.readIfExists(ProjectsFile.self, from: Paths.projectsFile)) ?? ProjectsFile(projects: [])
         let spacesFile = try? store.readIfExists(SpacesFile.self, from: Paths.spacesFile)

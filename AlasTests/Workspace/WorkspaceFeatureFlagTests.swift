@@ -50,6 +50,29 @@ struct WorkspaceFeatureFlagTests {
         #expect(persistedState.spaceLayouts == [])
     }
 
+    @Test func appStateDefaultBridgeUsesTheInjectedWorkspaceStore() async throws {
+        let url = temporaryURL()
+        defer { removeWorkspaceFiles(near: url) }
+        let workspace = Workspace(name: "Release", executionLocation: .local, members: [])
+        let workspaceStore = WorkspaceStore(url: url)
+        try await workspaceStore.checkpoint(.init(workspaces: [workspace]))
+        let state = AppState(
+            store: RecordingSpacesStore(spacesFile: emptySpacesFile()),
+            persistenceErrorHandler: { _, _ in },
+            restoreActiveTabsOnStartup: false,
+            workspaceStore: workspaceStore
+        )
+
+        await state.setWorkspacesEnabled(true, persistConfig: false)
+
+        #expect(state.workspacesManager.workspaces.map(\.id) == [workspace.id])
+        guard case .loaded(let loadedState) = state.workspacesManager.loadState else {
+            Issue.record("Expected AppState Workspace manager to load from the injected store")
+            return
+        }
+        #expect(loadedState.workspaces.map(\.id) == [workspace.id])
+    }
+
     @Test func enabledManagerPresentsReconciledMemberAvailabilityWithoutMutatingStorage() async throws {
         let url = temporaryURL()
         defer { removeWorkspaceFiles(near: url) }
