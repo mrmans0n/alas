@@ -45,11 +45,19 @@ struct WorkspaceAutomationServiceTests {
         ]))
         var selectedCheckout: UUID?
         var focusedMember: (checkout: UUID, member: UUID)?
+        var events: [String] = []
         let service = WorkspaceAutomationService(
             store: store,
             isEnabled: { true },
-            selectCheckout: { selectedCheckout = $0 },
-            focusMember: { focusedMember = ($0, $1) },
+            refreshNavigation: { events.append("refresh") },
+            selectCheckout: {
+                events.append("select")
+                selectedCheckout = $0
+            },
+            focusMember: {
+                events.append("focus")
+                focusedMember = ($0, $1)
+            },
             observer: AutomationObserver(results: [
                 available: .exactLineage("available-lineage"),
                 unavailable: .missing,
@@ -64,6 +72,7 @@ struct WorkspaceAutomationServiceTests {
         #expect(target.memberID == available)
         #expect(selectedCheckout == checkoutID)
         #expect(focusedMember?.member == available)
+        #expect(events == ["refresh", "select", "refresh", "focus"])
         await #expect(throws: WorkspaceAutomationError.memberUnavailable) {
             try await service.focusMember(checkoutID: checkoutID, memberID: unavailable)
         }
