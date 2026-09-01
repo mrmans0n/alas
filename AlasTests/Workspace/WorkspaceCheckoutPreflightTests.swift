@@ -59,7 +59,7 @@ struct WorkspaceCheckoutPreflightTests {
         let member = WorkspaceMember(projectID: "one", fallbackProjectName: "One", fallbackRepositoryRoot: "/repos/one")
         let workspace = Workspace(name: "Release", executionLocation: .local, members: [member])
         let git = GitProbe(
-            resolutions: ["/repos/one": "base-commit"],
+            refResolutions: ["/repos/one": ["origin/stable": "base-commit"]],
             branches: ["/repos/one": .reusable("base-commit")]
         )
         let preflight = WorkspaceCheckoutPreflight(projects: [project(id: "one", name: "Renamed", path: "/repos/one")], git: git, paths: PathProbe())
@@ -80,6 +80,32 @@ struct WorkspaceCheckoutPreflightTests {
         #expect(plannedMember.baseCommit == "base-commit")
         #expect(plannedMember.branchIntent == .reuse)
         #expect(plannedMember.destinationPath == "/checkouts/release/one")
+    }
+
+    @Test func unresolvedRemoteTrackingBaseDoesNotFallBackToSameNamedLocalBranch() async {
+        let member = WorkspaceMember(projectID: "one", fallbackProjectName: "One", fallbackRepositoryRoot: "/repos/one")
+        let workspace = Workspace(name: "Release", executionLocation: .local, members: [member])
+        let git = GitProbe(
+            refResolutions: ["/repos/one": ["stable": "local-stable-commit"]],
+            branches: ["/repos/one": .available]
+        )
+
+        let result = await WorkspaceCheckoutPreflight(
+            projects: [project(id: "one", name: "One", path: "/repos/one")],
+            git: git,
+            paths: PathProbe()
+        ).prepare(.init(
+            workspace: workspace,
+            branch: "release/1091",
+            rootPath: "/checkouts/release",
+            baseReference: "origin/stable"
+        ))
+
+        guard case .failure(let diagnostics) = result else {
+            Issue.record("Expected unresolved remote-tracking base to fail")
+            return
+        }
+        #expect(diagnostics.map(\.message).contains("Workspace member 1 could not resolve base 'origin/stable'."))
     }
 
     @Test func derivesDestinationFromResolvedProjectPathInsteadOfStaleFallback() async {
@@ -319,15 +345,23 @@ private actor GitProbe: WorkspaceGitInspecting {
     enum Branch: Sendable { case available, reusable(String), checkedOut, unsafeReuse }
 
     let resolutions: [String: String]
+    let refResolutions: [String: [String: String]]
     let branches: [String: Branch]
     private(set) var mutationCount = 0
 
-    init(resolutions: [String: String] = [:], branches: [String: Branch] = [:]) {
+    init(
+        resolutions: [String: String] = [:],
+        refResolutions: [String: [String: String]] = [:],
+        branches: [String: Branch] = [:]
+    ) {
         self.resolutions = resolutions
+        self.refResolutions = refResolutions
         self.branches = branches
     }
 
     func resolveRevision(at repositoryPath: String, location: ExecutionLocation, ref: String) async throws -> String {
+        if let value = refResolutions[repositoryPath]?[ref] { return value }
+        if refResolutions[repositoryPath] != nil { throw ProbeError.unresolved }
         guard let value = resolutions[repositoryPath] else { throw ProbeError.unresolved }
         return value
     }

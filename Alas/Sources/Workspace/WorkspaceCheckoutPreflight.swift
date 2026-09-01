@@ -246,7 +246,7 @@ struct WorkspaceCheckoutPreflight: Sendable {
 
     private static func cachedFallback(for ref: String) -> String? {
         guard ref.hasPrefix("origin/"), ref.count > "origin/".count else { return nil }
-        return String(ref.dropFirst("origin/".count))
+        return "refs/remotes/\(ref)"
     }
 }
 

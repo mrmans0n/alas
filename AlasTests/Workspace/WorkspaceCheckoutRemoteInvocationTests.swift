@@ -140,7 +140,7 @@ struct WorkspaceCheckoutRemoteInvocationTests {
         }
         #expect(plan.members.first?.baseReference == "origin/main")
         #expect(plan.members.first?.baseCommit == "cached-main-commit")
-        #expect(plan.warnings.map(\.message) == ["Workspace member 1 is using cached ref 'main' for 'origin/main'."])
+        #expect(plan.warnings.map(\.message) == ["Workspace member 1 is using cached ref 'refs/remotes/origin/main' for 'origin/main'."])
     }
 
     @Test func workspacePreflightPassesTheExactSSHLocationToGitInspection() async {
@@ -194,7 +194,7 @@ private struct EmptyWorkspacePaths: WorkspacePathInspecting {
 
 private actor CachedFallbackGit: WorkspaceGitInspecting {
     func resolveRevision(at repositoryPath: String, location: ExecutionLocation, ref: String) async throws -> String {
-        if ref == "main" { return "cached-main-commit" }
+        if ref == "refs/remotes/origin/main" { return "cached-main-commit" }
         throw CachedFallbackError.unavailable
     }
     func branchDisposition(named branch: String, at repositoryPath: String, location: ExecutionLocation) async throws -> WorkspaceBranchDisposition { .available }
