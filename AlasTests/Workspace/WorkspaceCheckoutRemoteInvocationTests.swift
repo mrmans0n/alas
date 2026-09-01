@@ -63,6 +63,30 @@ struct WorkspaceCheckoutRemoteInvocationTests {
         #expect(call.args.last?.contains(String(data: local, encoding: .utf8)!) == true)
     }
 
+    @Test func manifestWriterDoesNotOverwriteADifferentCheckoutClaim() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-manifest-claim-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let writer = WorkspaceCheckoutManifestWriter()
+        let first = WorkspaceCheckoutManifest(checkoutID: UUID(), rootPath: root.path, branch: "release/1091", members: [])
+        let second = WorkspaceCheckoutManifest(checkoutID: UUID(), rootPath: root.path, branch: "release/other", members: [])
+
+        try await writer.write(first, to: root.path, location: .local)
+        await #expect(throws: WorkspaceCheckoutManifestError.checkoutRootAlreadyClaimed(root.path)) {
+            try await writer.write(second, to: root.path, location: .local)
+        }
+
+        let manifestURL = root.appendingPathComponent(WorkspaceCheckoutManifest.fileName)
+        let retained = try JSONDecoder().decode(WorkspaceCheckoutManifest.self, from: Data(contentsOf: manifestURL))
+        #expect(retained.checkoutID == first.checkoutID)
+        #expect(retained.branch == "release/1091")
+
+        let refreshed = WorkspaceCheckoutManifest(checkoutID: first.checkoutID, rootPath: root.path, branch: "release/refreshed", members: [])
+        try await writer.write(refreshed, to: root.path, location: .local)
+        let updated = try JSONDecoder().decode(WorkspaceCheckoutManifest.self, from: Data(contentsOf: manifestURL))
+        #expect(updated.checkoutID == first.checkoutID)
+        #expect(updated.branch == "release/refreshed")
+    }
+
     @Test func remoteLineageInspectionUsesTheExactWorkspaceHost() async {
         let memberID = UUID()
         let member = WorkspaceCheckoutMember(

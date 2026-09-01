@@ -81,6 +81,7 @@ struct WorkspaceCheckoutManifest: Codable, Equatable, Sendable {
 }
 
 enum WorkspaceCheckoutManifestError: Error, Equatable, Sendable {
+    case checkoutRootAlreadyClaimed(String)
     case writeFailed(String)
 }
 
@@ -105,13 +106,46 @@ struct WorkspaceCheckoutManifestWriter: WorkspaceCheckoutManifestWriting, Sendab
         switch location.normalized {
         case .local:
             try FileManager.default.createDirectory(atPath: rootPath, withIntermediateDirectories: true)
-            try data.write(to: URL(fileURLWithPath: target), options: .atomic)
+            let targetURL = URL(fileURLWithPath: target)
+            if try existingManifestAtTargetBelongsToCheckout(targetURL, checkoutID: manifest.checkoutID) {
+                try data.write(to: targetURL, options: .atomic)
+            } else {
+                do {
+                    try data.write(to: targetURL, options: .withoutOverwriting)
+                } catch {
+                    guard try existingManifestAtTargetBelongsToCheckout(targetURL, checkoutID: manifest.checkoutID) else {
+                        throw WorkspaceCheckoutManifestError.checkoutRootAlreadyClaimed(rootPath)
+                    }
+                    try data.write(to: targetURL, options: .atomic)
+                }
+            }
         case .ssh(let host):
             let temporary = "\(target).tmp-\(UUID().uuidString)"
             let payload = String(decoding: data, as: UTF8.self)
-            let command = "mkdir -p \(SSHCommand.shellQuote(rootPath)) && umask 077 && printf %s \(SSHCommand.shellQuote(payload)) > \(SSHCommand.shellQuote(temporary)) && mv \(SSHCommand.shellQuote(temporary)) \(SSHCommand.shellQuote(target))"
+            let expectedCheckoutID = "\"checkoutID\":\"\(manifest.checkoutID.uuidString)\""
+            let command = """
+            mkdir -p \(SSHCommand.shellQuote(rootPath)) && umask 077
+            if [ -e \(SSHCommand.shellQuote(target)) ]; then
+              grep -F \(SSHCommand.shellQuote(expectedCheckoutID)) \(SSHCommand.shellQuote(target)) >/dev/null 2>&1 || exit 73
+              printf %s \(SSHCommand.shellQuote(payload)) > \(SSHCommand.shellQuote(temporary))
+              mv \(SSHCommand.shellQuote(temporary)) \(SSHCommand.shellQuote(target))
+            else
+              printf %s \(SSHCommand.shellQuote(payload)) > \(SSHCommand.shellQuote(temporary))
+              if ln \(SSHCommand.shellQuote(temporary)) \(SSHCommand.shellQuote(target)) 2>/dev/null; then
+                rm -f \(SSHCommand.shellQuote(temporary))
+              elif [ -e \(SSHCommand.shellQuote(target)) ] && grep -F \(SSHCommand.shellQuote(expectedCheckoutID)) \(SSHCommand.shellQuote(target)) >/dev/null 2>&1; then
+                mv \(SSHCommand.shellQuote(temporary)) \(SSHCommand.shellQuote(target))
+              else
+                rm -f \(SSHCommand.shellQuote(temporary))
+                exit 73
+              fi
+            fi
+            """
             let result = try await remote.run(host: host, command: command)
             guard result.exitCode == 0 else {
+                if result.exitCode == 73 {
+                    throw WorkspaceCheckoutManifestError.checkoutRootAlreadyClaimed(rootPath)
+                }
                 throw WorkspaceCheckoutManifestError.writeFailed(result.stderr)
             }
         }
@@ -127,6 +161,22 @@ struct WorkspaceCheckoutManifestWriter: WorkspaceCheckoutManifestWriting, Sendab
             }
         )
         try await write(manifest, to: checkout.rootPath, location: checkout.executionLocation)
+    }
+}
+
+private func existingManifestAtTargetBelongsToCheckout(_ targetURL: URL, checkoutID: UUID) throws -> Bool {
+    guard FileManager.default.fileExists(atPath: targetURL.path) else { return false }
+    do {
+        let data = try Data(contentsOf: targetURL)
+        let existing = try JSONDecoder().decode(WorkspaceCheckoutManifest.self, from: data)
+        guard existing.checkoutID == checkoutID else {
+            throw WorkspaceCheckoutManifestError.checkoutRootAlreadyClaimed(targetURL.deletingLastPathComponent().path)
+        }
+        return true
+    } catch let error as WorkspaceCheckoutManifestError {
+        throw error
+    } catch {
+        throw WorkspaceCheckoutManifestError.checkoutRootAlreadyClaimed(targetURL.deletingLastPathComponent().path)
     }
 }
 
