@@ -1219,6 +1219,7 @@
 		C7AD6F2DDAE9E11920277D41 /* RemoteSessionGateway.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDE49D2437D7E6AC9D67F136 /* RemoteSessionGateway.swift */; };
 		C7EC6D85810513194F831F13 /* ACPConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4C4BEC7F392AF938F468B1F /* ACPConnection.swift */; };
 		C82A2082E6E61069068B8FAB /* SQLiteStatement.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A442AC7909A919582DF4372 /* SQLiteStatement.swift */; };
+		C82BB2F2CC0C46604C74D972 /* GGStreamingProcessTree.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04F003E5F05AD5F1039736D1 /* GGStreamingProcessTree.swift */; };
 		C85FF0853DE69CE2EB59633E /* ACPRecoveryPill.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE35206EEBD7E3A35C3421EA /* ACPRecoveryPill.swift */; };
 		C893CA3167A5CC6637FCD8C8 /* light.json in Resources */ = {isa = PBXBuildFile; fileRef = 1688AB1B49758FAB5BF0AF2F /* light.json */; };
 		C8BF4593D35403A93FC05D50 /* ACPAdapterInstallCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60C99F8D1A0A37DC4A6DBAEE /* ACPAdapterInstallCoordinator.swift */; };
@@ -1626,6 +1627,7 @@
 		0452819DD42784CF60D466A4 /* AlasApplicationDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasApplicationDelegate.swift; sourceTree = "<group>"; };
 		04601C00F293AAB0EE4209E1 /* RunScriptStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunScriptStore.swift; sourceTree = "<group>"; };
 		04B44F1DD775D2543439D508 /* ACPTranscriptMarkdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPTranscriptMarkdown.swift; sourceTree = "<group>"; };
+		04F003E5F05AD5F1039736D1 /* GGStreamingProcessTree.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGStreamingProcessTree.swift; sourceTree = "<group>"; };
 		0535D92433898E76670B9FF0 /* ACPUserScrollEventTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPUserScrollEventTests.swift; sourceTree = "<group>"; };
 		0544FCFB9BC3E26FDB57CC96 /* HarnessPill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessPill.swift; sourceTree = "<group>"; };
 		0582531788CE9D1D49769F6B /* ACPVisibleRowsCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPVisibleRowsCache.swift; sourceTree = "<group>"; };
@@ -5677,6 +5679,7 @@
 				86CE36A9A7301E6863CEDFCC /* GGStackModels.swift */,
 				4D59124348BCE765816A0C6C /* GGStackReadinessModel.swift */,
 				B67F46F592EB999B0FEBFCDB /* GGStackSummaryStore.swift */,
+				04F003E5F05AD5F1039736D1 /* GGStreamingProcessTree.swift */,
 				724A473AB9439DAA535B33F8 /* GGUndoMarkerStore.swift */,
 				A02E6B12C5EC8FAA50202EEA /* GGUnstackSheet.swift */,
 				59C7BDB3BEEB5B23DCE7F2C0 /* GGWorktreeContext.swift */,
@@ -6448,6 +6451,7 @@
 				93CE39FC58076587CC85F489 /* GGStackModels.swift in Sources */,
 				8ADC05EBB9FE7D278508A941 /* GGStackReadinessModel.swift in Sources */,
 				DB1877ECE26010476924369F /* GGStackSummaryStore.swift in Sources */,
+				C82BB2F2CC0C46604C74D972 /* GGStreamingProcessTree.swift in Sources */,
 				318F74C3CB02BFF1D06DF7DA /* GGUndoMarkerStore.swift in Sources */,
 				270146424B271EBDB8886DD2 /* GGUnstackSheet.swift in Sources */,
 				C964306024B5EF69D7D4ED6D /* GGWorktreeContext.swift in Sources */,

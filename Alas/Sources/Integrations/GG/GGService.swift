@@ -102,6 +102,7 @@ struct ProcessGGCommandRunner: GGCommandRunning {
             let buffer = LineBuffer()
             let stderrAccum = StderrAccumulator()
             let timeoutState = GGStreamingTimeoutState()
+            let processTree = GGStreamingProcessTree(process: process)
             // `terminationHandler` and these readability handlers are two
             // independent dispatch mechanisms with no ordering guarantee
             // between them: the child exiting does not imply the kernel has
@@ -138,8 +139,10 @@ struct ProcessGGCommandRunner: GGCommandRunning {
                 }
             }
             process.terminationHandler = { proc in
+                processTree.rootDidExit()
                 let status = proc.terminationStatus
                 Task {
+                    processTree.waitForActiveTermination()
                     // Bound the wait the same way `Process+Git.swift` does:
                     // a stuck handler (e.g. a wedged dispatch queue) must
                     // not hang the stream forever.
@@ -157,7 +160,7 @@ struct ProcessGGCommandRunner: GGCommandRunning {
             }
             do {
                 try process.run()
-                _ = setpgid(process.processIdentifier, process.processIdentifier)
+                processTree.start()
             } catch {
                 outPipe.fileHandleForReading.readabilityHandler = nil
                 errPipe.fileHandleForReading.readabilityHandler = nil
@@ -173,7 +176,7 @@ struct ProcessGGCommandRunner: GGCommandRunning {
                         "[Process watchdog] \(timeout)s timeout — terminating: \(executable) \(args.joined(separator: " "))\n",
                         stderr
                     )
-                    forceTerminateGGStreamingProcessTree(process)
+                    processTree.terminateAndWait()
                 }
             }
             // Close the parent's copy of the pipe write ends now that the
@@ -186,25 +189,12 @@ struct ProcessGGCommandRunner: GGCommandRunning {
             try? errPipe.fileHandleForWriting.close()
             continuation.onTermination = { _ in
                 watchdog.cancel()
-                if process.isRunning {
-                    forceTerminateGGStreamingProcessTree(process)
-                    process.waitUntilExit()
-                }
+                processTree.terminateAndWait()
                 outPipe.fileHandleForReading.readabilityHandler = nil
                 errPipe.fileHandleForReading.readabilityHandler = nil
             }
         }
     }
-}
-
-private func forceTerminateGGStreamingProcessTree(_ process: Process) {
-    let pid = process.processIdentifier
-    _ = Darwin.kill(-pid, SIGKILL)
-    let descendants = Set(ACPTerminal.collectChildDescendants(of: pid))
-    for descendant in ACPTerminal.currentlyMatching(descendants) {
-        kill(descendant.pid, SIGKILL)
-    }
-    if process.isRunning { kill(pid, SIGKILL) }
 }
 
 private final class GGStreamingTimeoutState: @unchecked Sendable {

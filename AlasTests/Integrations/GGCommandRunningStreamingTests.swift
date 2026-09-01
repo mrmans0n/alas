@@ -71,6 +71,26 @@ struct GGCommandRunningStreamingTests {
         }
     }
 
+    @Test func watchdogAllowsGracefulTerminationBeforeKilling() async throws {
+        let marker = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-gg-term-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: marker) }
+        var env = ProcessInfo.processInfo.environment
+        env["TERM_MARKER"] = marker.path
+        let stream = ProcessGGCommandRunner.streamProcess(
+            executable: "/bin/sh",
+            args: ["-c", "trap 'echo term > \"$TERM_MARKER\"; exit 0' TERM; while :; do sleep 0.05; done"],
+            cwd: nil,
+            env: env,
+            timeout: 0.1
+        )
+
+        await #expect(throws: ProcessError.self) {
+            _ = try await collectWithTimeout(stream)
+        }
+        #expect(FileManager.default.fileExists(atPath: marker.path))
+    }
+
     @Test func cancelingStreamKillsProcessThatIgnoresTermination() async throws {
         let pidFile = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-gg-stream-\(UUID().uuidString).pid")
