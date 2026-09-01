@@ -15,7 +15,7 @@ struct ACPTabView: View {
     var onStartupRecoveryReady: () -> Void = {}
 
     var body: some View {
-        if let manager = owner.flatMap({ state.acpManager(for: $0) }) ?? state.acpManager(for: worktree) {
+        if let manager = managerForOwnerBoundary {
             ACPManagedTabView(
                 sessionId: sessionId,
                 state: state,
@@ -27,6 +27,13 @@ struct ACPTabView: View {
         } else {
             unavailable
         }
+    }
+
+    private var managerForOwnerBoundary: ACPSessionManager? {
+        if let owner {
+            return state.acpManager(for: owner)
+        }
+        return state.acpManager(for: worktree)
     }
 
     private var unavailable: some View {
