@@ -219,6 +219,43 @@ struct WorkspaceTerminalSessionTests {
     }
 
     @MainActor
+    @Test func harnessLookupIncludesPersistedCheckoutTerminalLeaves() async throws {
+        let workspaceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("workspace-terminal-harness-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: workspaceURL) }
+        let workspaceID = UUID()
+        let workspaceStore = WorkspaceStore(url: workspaceURL)
+        let checkout = WorkspaceCheckout(
+            id: checkoutID,
+            workspaceID: workspaceID,
+            fallbackWorkspaceName: "Shared",
+            executionLocation: .ssh("devbox"),
+            branch: "feature/shared",
+            rootPath: "/work/checkout",
+            members: []
+        )
+        try await workspaceStore.checkpoint(.init(checkouts: [checkout]))
+        let bridge = WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore)
+        let manager = WorkspacesManager(bridge: bridge)
+        _ = await manager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "space", spaces: [
+            SpaceConfig(id: "space", name: "Default", emoji: "folder", projectIds: [], lastSelectedWorktreeId: nil, createdAt: .distantPast)
+        ]))
+        let tabs = TabsManager(store: WorkspaceTerminalMemoryStore())
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+        _ = tabs.appendTerminal(owner: owner, title: "Shared", sessionId: "checkout-leaf")
+        let state = AppState(
+            store: WorkspaceTerminalMemoryStore(),
+            tabsManager: tabs,
+            workspacesManager: manager,
+            workspaceStore: workspaceStore
+        )
+
+        let lookup = try #require(state.persistedLeafLocation(leafId: "checkout-leaf"))
+        #expect(lookup.projectId == workspaceID.uuidString)
+        #expect(lookup.worktreeId == owner.storageKey)
+    }
+
+    @MainActor
     @Test func checkoutSplitPersistsItsExecutionLocationWithTheNewLeaf() {
         let tabs = TabsManager(store: WorkspaceTerminalMemoryStore())
         let owner = SessionOwnerID.workspaceCheckout(checkoutID, .ssh("build-host"))
