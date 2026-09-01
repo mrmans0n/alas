@@ -5405,7 +5405,7 @@ final class AppState {
         case .worktree(let worktreeID):
             return try await restoreTerminalTabIfNeededAsync(worktreeId: worktreeID, tabId: tabId)
         case .workspaceCheckout(let checkoutID, _):
-            return try restoreCheckoutTerminalTabIfNeeded(checkoutID: checkoutID, owner: owner, tabID: tabId)
+            return try await restoreCheckoutTerminalTabIfNeeded(checkoutID: checkoutID, owner: owner, tabID: tabId)
         }
     }
 
@@ -5414,8 +5414,12 @@ final class AppState {
         checkoutID: UUID,
         owner: SessionOwnerID,
         tabID: TabID
-    ) throws -> Tab? {
-        guard let checkout = workspacesManager.checkout(id: checkoutID) else { return nil }
+    ) async throws -> Tab? {
+        guard let checkout = await workspaceStore.checkout(id: checkoutID),
+              checkout.archivedAt == nil,
+              checkout.operation == .idle,
+              owner == SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+        else { return nil }
         guard let tab = tabs.tabs(for: owner).first(where: { $0.id == tabID }),
               case .terminal(let state) = tab else { return nil }
 
