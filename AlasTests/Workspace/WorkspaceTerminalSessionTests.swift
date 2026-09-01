@@ -159,6 +159,135 @@ struct WorkspaceTerminalSessionTests {
     }
 
     @MainActor
+    @Test func checkoutTerminalLaunchRequiresMatchingManifest() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-terminal-root-\(UUID().uuidString)")
+        let workspaceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("workspace-terminal-manifest-\(UUID().uuidString).json")
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: workspaceURL)
+        }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let checkout = WorkspaceCheckout(
+            id: checkoutID,
+            workspaceID: nil,
+            fallbackWorkspaceName: "Shared",
+            executionLocation: .local,
+            branch: "feature/shared",
+            rootPath: root.path,
+            operation: .idle,
+            members: []
+        )
+        let workspaceStore = WorkspaceStore(url: workspaceURL)
+        try await workspaceStore.checkpoint(.init(checkouts: [checkout]))
+        let tabs = TabsManager(store: WorkspaceTerminalMemoryStore())
+        let state = AppState(
+            store: WorkspaceTerminalMemoryStore(),
+            tabsManager: tabs,
+            workspaceStore: workspaceStore
+        )
+        state.config.workspacesEnabled = true
+
+        await #expect(throws: (any Error).self) {
+            try await state.openWorkspaceCheckoutTerminalTab(checkout)
+        }
+        #expect(tabs.tabs(for: SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)).isEmpty)
+    }
+
+    @MainActor
+    @Test func checkoutAgentLaunchRejectsWorktreeOutsideFrozenMemberSet() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-agent-root-\(UUID().uuidString)")
+        let memberPath = root.appendingPathComponent("member")
+        let workspaceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("workspace-agent-guard-\(UUID().uuidString).json")
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: workspaceURL)
+        }
+        try FileManager.default.createDirectory(at: memberPath, withIntermediateDirectories: true)
+        let checkoutMemberID = UUID()
+        let member = WorkspaceCheckoutMember(
+            id: checkoutMemberID,
+            workspaceMemberID: UUID(),
+            projectID: "project-a",
+            fallbackProjectName: "Project A",
+            fallbackRepositoryRoot: memberPath.path,
+            worktreePath: memberPath.path,
+            availability: .available,
+            checkpoint: .setupComplete
+        )
+        let checkout = WorkspaceCheckout(
+            id: checkoutID,
+            workspaceID: nil,
+            fallbackWorkspaceName: "Shared",
+            executionLocation: .local,
+            branch: "feature/shared",
+            rootPath: root.path,
+            operation: .idle,
+            members: [member]
+        )
+        let manifest = WorkspaceCheckoutManifest(
+            checkoutID: checkout.id,
+            rootPath: checkout.rootPath,
+            branch: checkout.branch,
+            members: [.init(id: member.id, projectID: member.projectID, path: member.worktreePath, availability: member.availability)]
+        )
+        try JSONEncoder().encode(manifest)
+            .write(to: root.appendingPathComponent(WorkspaceCheckoutManifest.fileName))
+        let workspaceStore = WorkspaceStore(url: workspaceURL)
+        try await workspaceStore.checkpoint(.init(checkouts: [checkout]))
+        let wrongProject = ProjectConfig(
+            id: "project-b",
+            name: "Project B",
+            path: memberPath.path,
+            color: "#000000",
+            addedAt: .distantPast,
+            cachedWorktrees: []
+        )
+        let tabs = TabsManager(store: WorkspaceTerminalMemoryStore())
+        let state = AppState(
+            store: WorkspaceTerminalMemoryStore(projectsFile: .init(projects: [wrongProject])),
+            tabsManager: tabs,
+            workspaceStore: workspaceStore
+        )
+        state.config.workspacesEnabled = true
+        state.agentRegistry = AgentRegistry(
+            builtinState: [:],
+            customs: [AgentDefinition(
+                id: "test-agent",
+                displayName: "Test Agent",
+                binary: "test-agent",
+                binaryOverride: nil,
+                promptModeArgs: ["-p"],
+                bypassPermissionsFlag: nil,
+                extraTerminalArgs: nil,
+                isBuiltin: false,
+                isEnabled: true,
+                builtinLogoAssetName: nil
+            )],
+            installedIds: ["test-agent"]
+        )
+        let wrongProjectWorktree = Worktree(
+            id: "wrong",
+            projectId: "project-b",
+            name: "main",
+            branch: "main",
+            path: memberPath,
+            status: .clean,
+            lastActivity: .distantPast
+        )
+
+        await #expect(throws: AppState.AgentTerminalLaunchError.projectUnavailable) {
+            try await state.openWorkspaceCheckoutAgentTerminalTab(
+                checkout,
+                focusedMemberWorktree: wrongProjectWorktree,
+                agentId: "test-agent"
+            )
+        }
+        #expect(tabs.tabs(for: SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)).isEmpty)
+    }
+
+    @MainActor
     @Test func archivingCheckoutStopsOnlyItsOwnedSessionsAndPreservesSavedTabs() async {
         let tabs = TabsManager(store: WorkspaceTerminalMemoryStore())
         let state = AppState(store: WorkspaceTerminalMemoryStore(), tabsManager: tabs)
@@ -485,7 +614,16 @@ struct WorkspaceTerminalSessionTests {
 }
 
 private final class WorkspaceTerminalMemoryStore: PersistenceStoreProtocol {
+    private let projectsFile: ProjectsFile
+
+    init(projectsFile: ProjectsFile = .init(projects: [])) {
+        self.projectsFile = projectsFile
+    }
+
     func read<T>(_ type: T.Type, from url: URL) throws -> T where T: Decodable { throw CocoaError(.fileNoSuchFile) }
-    func readIfExists<T>(_ type: T.Type, from url: URL) throws -> T? where T: Decodable { nil }
+    func readIfExists<T>(_ type: T.Type, from url: URL) throws -> T? where T: Decodable {
+        if type == ProjectsFile.self { return projectsFile as? T }
+        return nil
+    }
     func write<T>(_ value: T, to url: URL) throws where T: Encodable {}
 }
