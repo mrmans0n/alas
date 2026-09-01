@@ -152,12 +152,12 @@ struct WorkspaceCheckoutManifestWriter: WorkspaceCheckoutManifestWriting, Sendab
             umask 077
             if [ -e \(SSHCommand.shellQuote(target)) ]; then
               grep -F \(SSHCommand.shellQuote(expectedCheckoutID)) \(SSHCommand.shellQuote(target)) >/dev/null 2>&1 || exit 73
-              printf %s \(SSHCommand.shellQuote(payload)) > \(SSHCommand.shellQuote(temporary))
+              printf %s \(SSHCommand.shellQuote(payload)) > \(SSHCommand.shellQuote(temporary)) || { rm -f \(SSHCommand.shellQuote(temporary)); exit 74; }
               mv \(SSHCommand.shellQuote(temporary)) \(SSHCommand.shellQuote(target))
             else
               mkdir -p \(SSHCommand.shellQuote(parentPath)) || exit 74
               mkdir \(SSHCommand.shellQuote(rootPath)) 2>/dev/null || exit 73
-              printf %s \(SSHCommand.shellQuote(payload)) > \(SSHCommand.shellQuote(temporary))
+              printf %s \(SSHCommand.shellQuote(payload)) > \(SSHCommand.shellQuote(temporary)) || { rm -f \(SSHCommand.shellQuote(temporary)); rmdir \(SSHCommand.shellQuote(rootPath)) 2>/dev/null; exit 74; }
               if ln \(SSHCommand.shellQuote(temporary)) \(SSHCommand.shellQuote(target)) 2>/dev/null; then
                 rm -f \(SSHCommand.shellQuote(temporary))
               elif [ -e \(SSHCommand.shellQuote(target)) ] && grep -F \(SSHCommand.shellQuote(expectedCheckoutID)) \(SSHCommand.shellQuote(target)) >/dev/null 2>&1; then

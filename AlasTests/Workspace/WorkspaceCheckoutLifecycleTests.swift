@@ -474,7 +474,7 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(branchRemoved == false)
         #expect(root.leftovers == ["notes.txt"])
         let commands = await runner.commands.joined(separator: "\n")
-        #expect(commands.contains("worktree remove -f --"))
+        #expect(commands.contains("worktree remove -f -f --"))
         #expect(commands.contains("branch -d"))
         #expect(commands.contains("m=$(cd") == false)
     }
