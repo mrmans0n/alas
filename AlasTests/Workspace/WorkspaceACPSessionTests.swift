@@ -219,6 +219,84 @@ struct WorkspaceACPSessionTests {
     }
 
     @MainActor
+    @Test func restoringCheckoutACPRevalidatesAfterRemoteLocationProbe() async throws {
+        let workspaceURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString + ".json")
+        let tabsDirectory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        defer {
+            try? FileManager.default.removeItem(at: workspaceURL)
+            try? FileManager.default.removeItem(at: tabsDirectory)
+        }
+        let checkout = WorkspaceCheckout(
+            workspaceID: nil,
+            fallbackWorkspaceName: "Workspace",
+            executionLocation: .ssh("checkout-host"),
+            branch: "topic",
+            rootPath: "/srv/checkouts/topic",
+            members: []
+        )
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+        let workspaceStore = WorkspaceStore(url: workspaceURL)
+        try await workspaceStore.checkpoint(.init(checkouts: [checkout]))
+        let tabs = TabsManager(store: PersistenceStore(), tabsDirectory: tabsDirectory)
+        _ = tabs.append(acpSession: .init(sessionId: "saved-acp", title: "Saved ACP"), to: owner)
+        let workspacesManager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
+        let state = AppState(
+            store: MemoryStore(),
+            tabsManager: tabs,
+            restoreActiveTabsOnStartup: false,
+            workspacesManager: workspacesManager,
+            workspaceStore: workspaceStore,
+            workspaceRemoteTransport: .init(runner: { _, _, _ in
+                try await workspaceStore.mutate { file in
+                    guard let index = file.checkouts.firstIndex(where: { $0.id == checkout.id }) else { return }
+                    file.checkouts[index].archivedAt = Date(timeIntervalSince1970: 1)
+                    file.checkouts[index].operation = .archiving
+                }
+                return .init(exitCode: 0, stdout: "/srv/checkouts/topic\n", stderr: "")
+            })
+        )
+        state.config.workspacesEnabled = true
+        _ = await workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+
+        let restored = await state.restoreWorkspaceCheckoutACPSessions(checkout)
+
+        #expect(restored == false)
+        #expect(state.acpManager(for: owner) == nil)
+    }
+
+    @MainActor
+    @Test func concurrentRemoteCheckoutACPManagerRequestsReuseTheFirstManagerAfterProbe() async throws {
+        let checkout = WorkspaceCheckout(
+            workspaceID: nil,
+            fallbackWorkspaceName: "Workspace",
+            executionLocation: .ssh("checkout-host"),
+            branch: "topic",
+            rootPath: "/srv/checkouts/topic",
+            members: []
+        )
+        let runner = CountingRemoteProbeRunner()
+        let state = AppState(
+            store: MemoryStore(),
+            workspaceRemoteTransport: .init(runner: { executable, args, timeout in
+                await runner.run(executable: executable, args: args, timeout: timeout)
+            })
+        )
+
+        async let first = state.workspaceACPManager(for: checkout)
+        async let second = state.workspaceACPManager(for: checkout)
+
+        guard case let .ready(firstManager) = await first,
+              case let .ready(secondManager) = await second
+        else {
+            Issue.record("Expected both manager requests to resolve")
+            return
+        }
+        #expect(firstManager === secondManager)
+        #expect(await runner.callCount == 2)
+        #expect(state.acpManager(for: SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)) === firstManager)
+    }
+
+    @MainActor
     @Test func openingExistingCheckoutACPSessionUsesTheOwnerBucket() async throws {
         let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -288,8 +366,8 @@ struct WorkspaceACPSessionTests {
         state.config.workspacesEnabled = true
 
         state.reloadTabs()
-        for _ in 0 ..< 40 where state.acpManager(for: owner) == nil {
-            try await Task.sleep(nanoseconds: 25_000_000)
+        for _ in 0 ..< 100 where state.acpManager(for: owner) == nil {
+            try await Task.sleep(nanoseconds: 50_000_000)
         }
 
         #expect(state.tabs.tabs(for: owner).count == 1)
@@ -342,5 +420,15 @@ struct WorkspaceACPSessionTests {
     private struct MemoryStore: PersistenceStoreProtocol {
         func write<T: Encodable>(_: T, to _: URL) throws {}
         func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
+    }
+}
+
+private actor CountingRemoteProbeRunner {
+    private(set) var callCount = 0
+
+    func run(executable _: String, args _: [String], timeout _: TimeInterval) async -> ProcessResult {
+        callCount += 1
+        try? await Task.sleep(nanoseconds: 25_000_000)
+        return .init(exitCode: 0, stdout: "/srv/checkouts/topic\n", stderr: "")
     }
 }

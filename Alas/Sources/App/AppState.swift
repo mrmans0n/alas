@@ -80,6 +80,7 @@ final class AppState {
     var spacesManager: SpacesManager
     var workspacesManager: WorkspacesManager
     @ObservationIgnored private let workspaceStore: WorkspaceStore
+    @ObservationIgnored private let workspaceRemoteTransport: WorkspaceRemoteTransport
     @ObservationIgnored private var workspaceCheckoutCoordinator: WorkspaceCheckoutCoordinator?
     /// Recovery information for a Workspace state file that could not be read.
     /// Observable so Settings and future Workspace navigation can keep the
@@ -633,10 +634,12 @@ final class AppState {
         restoreActiveTabsOnStartup: Bool = true,
         workspaceSpacePersistenceBridge: WorkspaceSpacePersistenceBridge? = nil,
         workspacesManager: WorkspacesManager? = nil,
-        workspaceStore: WorkspaceStore = WorkspaceStore()
+        workspaceStore: WorkspaceStore = WorkspaceStore(),
+        workspaceRemoteTransport: WorkspaceRemoteTransport = .init()
     ) {
         self.store = store
         self.workspaceStore = workspaceStore
+        self.workspaceRemoteTransport = workspaceRemoteTransport
         restoreActiveTabsOnNextReload = restoreActiveTabsOnStartup
         suppressesRestoredRightPaneAfterAbandonedStartup = !restoreActiveTabsOnStartup
         _tabs = tabsManager
@@ -8105,7 +8108,7 @@ final class AppState {
         case .ssh(let destination):
             pinnedRemoteHost = destination
             guard !destination.isEmpty else { return .pendingRootOrLocation }
-            guard let result = try? await WorkspaceRemoteTransport().run(
+            guard let result = try? await workspaceRemoteTransport.run(
                 host: destination,
                 cwd: checkout.rootPath,
                 command: "pwd"
@@ -8113,6 +8116,7 @@ final class AppState {
                 return .pendingRootOrLocation
             }
         }
+        if let existing = acpManagers[owner] { return .ready(existing) }
 
         let dbURL = Paths.acpSessionsDB(for: owner)
         let checkoutMemberWorktreeID: (String) -> String? = { [weak self] absolutePath in
@@ -8390,10 +8394,14 @@ final class AppState {
     /// persisted and visibly pending for a later explicit restore.
     @discardableResult
     func restoreWorkspaceCheckoutACPSessions(_ checkout: WorkspaceCheckout) async -> Bool {
-        guard workspaceMutationAvailable else { return false }
+        guard let checkout = await authoritativeCheckoutForWorkspaceACPSessionCreation(checkout) else { return false }
         let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
         tabs.load(owner: owner, restoringActiveTabs: true)
         guard case let .ready(manager) = await workspaceACPManager(for: checkout) else { return false }
+        guard await authoritativeCheckoutForWorkspaceACPSessionCreation(checkout) != nil else {
+            await disposeACPManagerAndWait(owner: owner)
+            return false
+        }
         for tab in tabs.tabs(for: owner) {
             guard case let .acpSession(state) = tab else { continue }
             guard manager.placeholderSession(id: state.sessionId) != nil else { continue }
