@@ -39,10 +39,10 @@ final class GGStreamingProcessTree: @unchecked Sendable {
     func rootDidExit() {
         condition.lock()
         rootHasExited = true
-        let tracker = tracker
-        self.tracker = nil
-        let sources = Array(forkSources.values)
-        forkSources.removeAll()
+        let tracker = terminationInProgress ? nil : tracker
+        if !terminationInProgress { self.tracker = nil }
+        let sources = terminationInProgress ? [] : Array(forkSources.values)
+        if !terminationInProgress { forkSources.removeAll() }
         condition.broadcast()
         condition.unlock()
         tracker?.cancel()
@@ -63,22 +63,29 @@ final class GGStreamingProcessTree: @unchecked Sendable {
 
         let pid = process.processIdentifier
         guard pid > 0 else {
+            stopTracking()
             finishTermination()
             return
         }
-        stopTracking()
-        let descendants = terminationTargets(rootPID: pid)
+        var descendants = terminationTargets(rootPID: pid)
         signalRootAndGroup(pid, signal: SIGTERM)
         signal(descendants, with: SIGTERM)
 
         let deadline = DispatchTime.now().uptimeNanoseconds + graceNanoseconds
         while DispatchTime.now().uptimeNanoseconds < deadline {
+            refreshDescendants()
+            let refreshed = terminationTargets(rootPID: pid)
+            signal(refreshed.subtracting(descendants), with: SIGTERM)
+            descendants.formUnion(refreshed)
             if !process.isRunning, ACPTerminal.currentlyMatching(descendants).isEmpty {
                 break
             }
             usleep(20_000)
         }
 
+        refreshDescendants()
+        descendants.formUnion(terminationTargets(rootPID: pid))
+        stopTracking()
         signalRootAndGroup(pid, signal: SIGKILL)
         signal(descendants, with: SIGKILL)
         if process.isRunning {
@@ -126,16 +133,23 @@ final class GGStreamingProcessTree: @unchecked Sendable {
         refreshLock.lock()
         defer { refreshLock.unlock() }
         condition.lock()
-        let shouldStop = rootHasExited || terminationInProgress
+        let shouldStop = rootHasExited && !terminationInProgress
+        let rootAlive = !rootHasExited
         let cached = descendants
         condition.unlock()
-        guard !shouldStop, process.isRunning else { return }
+        guard !shouldStop else { return }
 
-        let live = Set(ACPTerminal.collectChildDescendants(of: process.processIdentifier))
         let retained = ACPTerminal.currentlyMatching(cached)
+        var live: Set<ACPTerminal.DescendantKey> = []
+        if rootAlive, process.isRunning {
+            live.formUnion(ACPTerminal.collectChildDescendants(of: process.processIdentifier))
+        }
+        for descendant in retained {
+            live.formUnion(ACPTerminal.collectChildDescendants(of: descendant.pid))
+        }
         let tracked = retained.union(live)
         condition.lock()
-        guard !rootHasExited, !terminationInProgress else {
+        guard !rootHasExited || terminationInProgress else {
             condition.unlock()
             return
         }
@@ -147,7 +161,7 @@ final class GGStreamingProcessTree: @unchecked Sendable {
     private func observeForks(from pids: [pid_t]) {
         for pid in pids where pid > 0 {
             condition.lock()
-            let shouldCreate = forkSources[pid] == nil && !rootHasExited && !terminationInProgress
+            let shouldCreate = forkSources[pid] == nil && (!rootHasExited || terminationInProgress)
             condition.unlock()
             guard shouldCreate else { continue }
 
@@ -160,7 +174,7 @@ final class GGStreamingProcessTree: @unchecked Sendable {
                 self?.refreshDescendants()
             }
             condition.lock()
-            if forkSources[pid] == nil, !rootHasExited, !terminationInProgress {
+            if forkSources[pid] == nil, !rootHasExited || terminationInProgress {
                 forkSources[pid] = source
                 condition.unlock()
                 source.resume()
