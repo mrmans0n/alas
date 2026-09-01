@@ -263,12 +263,14 @@ struct AppStateKeepSessionsAliveTests {
         try await state.projectsManager.refreshWorktrees(projectId: projectID)
         state.selectWorkspaceCheckout(id: checkout.id)
 
-        state.openWorkspaceCheckoutSearchResult(
+        let opened = state.openWorkspaceCheckoutSearchResult(
             relativePath: "README.md",
             worktreeId: worktree.id,
+            checkoutID: checkout.id,
             memberID: checkoutMemberID
         )
 
+        #expect(opened)
         #expect(state.workspaceNavigationState.selectedCheckoutID == checkout.id)
         #expect(state.workspaceNavigationState.focusedCheckoutMemberID == checkoutMemberID)
         #expect(state.selectedWorktreeId == worktree.id)

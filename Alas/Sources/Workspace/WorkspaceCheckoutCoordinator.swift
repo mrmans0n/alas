@@ -49,7 +49,7 @@ protocol WorkspaceCheckoutLifecycleOperating: Sendable {
     /// Removes only the worktree. Branch deletion is intentionally disabled.
     func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan, force: Bool, forceTwice: Bool) async throws
     /// Removes checkout-owned root artifacts after all member worktrees are gone.
-    func removeCheckoutRootArtifacts(_ plan: WorkspaceCheckoutCleanupPlan) async throws
+    func removeCheckoutRootArtifacts(for checkout: WorkspaceCheckout) async throws
     /// Attempts a normal merged-only branch deletion for an attempt-created
     /// branch. `false` means it was retained (for example, unmerged).
     func deleteMergedBranch(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool
@@ -538,9 +538,7 @@ actor WorkspaceCheckoutCoordinator {
             state.checkouts[index].operation = .deleting
         }
         await sessions.stopSessions(for: checkoutID)
-        if let rootPlan = checkout.members.compactMap({ $0.cleanup?.plan }).first {
-            try await lifecycle.removeCheckoutRootArtifacts(rootPlan)
-        }
+        try await lifecycle.removeCheckoutRootArtifacts(for: checkout)
         try await store.mutate { state in state.checkouts.removeAll { $0.id == checkoutID } }
     }
 
@@ -1635,15 +1633,15 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
         }
     }
 
-    func removeCheckoutRootArtifacts(_ plan: WorkspaceCheckoutCleanupPlan) async throws {
-        switch plan.executionLocation.normalized {
+    func removeCheckoutRootArtifacts(for checkout: WorkspaceCheckout) async throws {
+        switch checkout.executionLocation.normalized {
         case .local:
-            let rootURL = URL(fileURLWithPath: plan.rootPath)
+            let rootURL = URL(fileURLWithPath: checkout.rootPath)
             let manifestURL = rootURL.appendingPathComponent(WorkspaceCheckoutManifest.fileName)
             if FileManager.default.fileExists(atPath: manifestURL.path) {
                 let data = try Data(contentsOf: manifestURL)
                 let manifest = try JSONDecoder().decode(WorkspaceCheckoutManifest.self, from: data)
-                guard manifest.checkoutID == plan.checkoutID else {
+                guard manifest.checkoutID == checkout.id else {
                     throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict
                 }
                 try FileManager.default.removeItem(at: manifestURL)
@@ -1652,9 +1650,9 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
                 try? FileManager.default.removeItem(at: rootURL)
             }
         case .ssh(let host):
-            let root = SSHCommand.shellQuote(plan.rootPath)
-            let manifest = SSHCommand.shellQuote(URL(fileURLWithPath: plan.rootPath).appendingPathComponent(WorkspaceCheckoutManifest.fileName).path)
-            let expectedCheckoutID = SSHCommand.shellQuote("\"checkoutID\":\"\(plan.checkoutID.uuidString)\"")
+            let root = SSHCommand.shellQuote(checkout.rootPath)
+            let manifest = SSHCommand.shellQuote(URL(fileURLWithPath: checkout.rootPath).appendingPathComponent(WorkspaceCheckoutManifest.fileName).path)
+            let expectedCheckoutID = SSHCommand.shellQuote("\"checkoutID\":\"\(checkout.id.uuidString)\"")
             let command = """
             if [ -e \(manifest) ]; then
               grep -F \(expectedCheckoutID) \(manifest) >/dev/null 2>&1 || exit 73

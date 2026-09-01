@@ -188,8 +188,10 @@ struct SearchModelTests {
     }
 
     @Test func workspaceCheckoutFileResultsCarryMemberIdentity() async {
+        let checkoutID = UUID()
         let memberID = UUID()
         var member = wt("member", projectId: "p1")
+        member.workspaceCheckoutID = checkoutID
         member.workspaceCheckoutMemberID = memberID
         let env = makeEnv(
             files: ["member": [.init(relativePath: "Sources/App.swift", ext: "swift")]],
@@ -201,7 +203,48 @@ struct SearchModelTests {
         model.query = "App"
         await model.waitForIdle()
 
+        #expect(model.results.fileResults.first?.workspaceCheckoutID == checkoutID)
         #expect(model.results.fileResults.first?.workspaceCheckoutMemberID == memberID)
+    }
+
+    @Test func workspaceCheckoutContentResultsCarryCheckoutAndMemberIdentity() async {
+        let checkoutID = UUID()
+        let memberID = UUID()
+        var member = wt("member", projectId: "p1")
+        member.workspaceCheckoutID = checkoutID
+        member.workspaceCheckoutMemberID = memberID
+        let env = makeEnv(
+            contentSearch: { _, _, targets in
+                let target = targets[0]
+                return AsyncThrowingStream { continuation in
+                    continuation.yield(ContentSearchHit(
+                        worktreeId: target.id,
+                        projectId: target.projectId,
+                        workspaceCheckoutID: target.workspaceCheckoutID,
+                        workspaceCheckoutMemberID: target.workspaceCheckoutMemberID,
+                        relativePath: "Sources/App.swift",
+                        line: 1,
+                        column: 1,
+                        revealColumn: nil,
+                        snippet: "match",
+                        matchCharRange: nil
+                    ))
+                    continuation.finish()
+                }
+            },
+            workspaceCheckoutWorktrees: { [member] }
+        )
+        let model = SearchModel(environment: env)
+        model.open()
+        model.scope = SearchScope.workspaceCheckout
+        model.kind = SearchKind.content
+        model.query = "match"
+        await model.waitForIdle()
+
+        #expect(model.results.contentGroups.first?.workspaceCheckoutID == checkoutID)
+        #expect(model.results.contentGroups.first?.workspaceCheckoutMemberID == memberID)
+        #expect(model.results.contentGroups.first?.hits.first?.workspaceCheckoutID == checkoutID)
+        #expect(model.results.contentGroups.first?.hits.first?.workspaceCheckoutMemberID == memberID)
     }
 
     @Test func emptyQueryInFilesModeShowsAllInThisWorktree() async {

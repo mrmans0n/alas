@@ -1192,17 +1192,20 @@ final class AppState {
     func openWorkspaceCheckoutSearchResult(
         relativePath: String,
         worktreeId: String,
+        checkoutID: UUID,
         memberID: UUID,
         revealLine: Int? = nil,
         revealEndLine: Int? = nil,
         revealCharacter: Int? = nil
-    ) {
-        guard config.workspacesEnabled, workspacesManager.canMutate else { return }
+    ) -> Bool {
+        guard config.workspacesEnabled, workspacesManager.canMutate else { return false }
+        selectWorkspaceCheckout(id: checkoutID)
         guard let checkout = selectedWorkspaceCheckout,
+              checkout.id == checkoutID,
               checkout.members.contains(where: { $0.id == memberID })
-        else { return }
+        else { return false }
         focusWorkspaceCheckoutMember(id: memberID)
-        guard selectedWorktreeId == worktreeId else { return }
+        guard selectedWorktreeId == worktreeId else { return false }
         openFile(
             relativePath: relativePath,
             worktreeId: worktreeId,
@@ -1210,6 +1213,7 @@ final class AppState {
             revealEndLine: revealEndLine,
             revealCharacter: revealCharacter
         )
+        return true
     }
 
     private func workspaceMemberWorktreeIDs(_ checkout: WorkspaceCheckout) -> [UUID: String] {
@@ -6592,6 +6596,7 @@ final class AppState {
                             displayName: worktree.branch,
                             absolutePath: worktree.path,
                             executionLocation: checkout.executionLocation,
+                            workspaceCheckoutID: checkout.id,
                             workspaceCheckoutMemberID: member.id
                         )
                     }
