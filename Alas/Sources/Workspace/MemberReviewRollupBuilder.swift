@@ -161,6 +161,15 @@ struct WorkspaceCachedGGStackReader: WorkspaceGGStackReading {
     func stack(worktreeID: String) throws -> GGStack? {
         stacksByWorktreeID[worktreeID]
     }
+
+    func stack(worktreeID: String, projectID: String, executionLocation: ExecutionLocation, repositoryPath: String) throws -> GGStack? {
+        let qualifiedWorktreeID = WorkspaceReviewSessionIdentity.worktreeID(
+            projectID: projectID,
+            executionLocation: executionLocation,
+            repositoryPath: repositoryPath
+        )
+        return stacksByWorktreeID[qualifiedWorktreeID]
+    }
 }
 
 private struct EmptyWorkspaceGGStackReader: WorkspaceGGStackReading {
