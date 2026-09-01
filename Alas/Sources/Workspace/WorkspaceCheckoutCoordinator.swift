@@ -799,10 +799,7 @@ actor WorkspaceCheckoutCoordinator {
                     state.checkouts[checkoutIndex].members[memberIndex].cleanup = nil
                     return checkpoint
                 case .failed where current.cleanupOwnership.worktreeCreated:
-                    state.checkouts[checkoutIndex].members[memberIndex].checkpoint = .worktreeCreating
-                    state.checkouts[checkoutIndex].members[memberIndex].availability = .pending
-                    state.checkouts[checkoutIndex].members[memberIndex].cleanup = nil
-                    return .worktreeCreating
+                    return nil
                 default:
                     return nil
                 }
