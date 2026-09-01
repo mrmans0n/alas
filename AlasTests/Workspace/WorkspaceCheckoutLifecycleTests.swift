@@ -649,6 +649,40 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(FileManager.default.fileExists(atPath: root.path) == false)
     }
 
+    @Test func localRootCleanupRejectsCopiedManifestWithDifferentRoot() async throws {
+        let checkoutID = UUID()
+        let originalRoot = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-cleanup-original-\(UUID().uuidString)")
+        let copiedRoot = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-cleanup-copy-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: originalRoot)
+            try? FileManager.default.removeItem(at: copiedRoot)
+        }
+        try FileManager.default.createDirectory(at: originalRoot, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: copiedRoot, withIntermediateDirectories: true)
+        let manifest = WorkspaceCheckoutManifest(
+            checkoutID: checkoutID,
+            rootPath: originalRoot.path,
+            branch: "feature",
+            members: []
+        )
+        try JSONEncoder().encode(manifest).write(to: copiedRoot.appendingPathComponent(WorkspaceCheckoutManifest.fileName))
+        let checkout = WorkspaceCheckout(
+            id: checkoutID,
+            workspaceID: nil,
+            fallbackWorkspaceName: "Release",
+            executionLocation: .local,
+            branch: "feature",
+            rootPath: copiedRoot.path,
+            members: []
+        )
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict) {
+            try await WorkspaceCheckoutLifecycleOperator().removeCheckoutRootArtifacts(for: checkout)
+        }
+
+        #expect(FileManager.default.fileExists(atPath: copiedRoot.appendingPathComponent(WorkspaceCheckoutManifest.fileName).path))
+    }
+
     private struct Fixture {
         let store: WorkspaceStore
         let checkout: WorkspaceCheckout
