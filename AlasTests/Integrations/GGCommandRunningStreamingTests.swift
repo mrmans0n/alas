@@ -103,16 +103,8 @@ struct GGCommandRunningStreamingTests {
 
         consumer.cancel()
         _ = try? await consumer.value
-
-        var isRunning = true
-        for _ in 0 ..< 150 {
-            if kill(processID, 0) == -1, errno == ESRCH {
-                isRunning = false
-                break
-            }
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
-        #expect(!isRunning)
+        #expect(kill(processID, 0) == -1)
+        #expect(errno == ESRCH)
     }
 
     @Test func nonZeroExitSurfacesCommandFailedWithAccumulatedStderr() async throws {

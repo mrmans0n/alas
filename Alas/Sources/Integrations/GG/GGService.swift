@@ -185,7 +185,10 @@ struct ProcessGGCommandRunner: GGCommandRunning {
             try? errPipe.fileHandleForWriting.close()
             continuation.onTermination = { _ in
                 watchdog.cancel()
-                if process.isRunning { terminateGGStreamingProcessWithEscalation(process) }
+                if process.isRunning {
+                    terminateGGStreamingProcessWithEscalation(process)
+                    process.waitUntilExit()
+                }
                 outPipe.fileHandleForReading.readabilityHandler = nil
                 errPipe.fileHandleForReading.readabilityHandler = nil
             }
