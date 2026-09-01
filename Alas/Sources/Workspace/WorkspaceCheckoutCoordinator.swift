@@ -626,6 +626,22 @@ actor WorkspaceCheckoutCoordinator {
         }
     }
 
+    func stopPendingCreationBeforeStart(checkoutID: UUID) async throws -> WorkspaceCheckout {
+        pendingCreationPlans.removeValue(forKey: checkoutID)
+        try await mutateCheckout(checkoutID) { current in
+            guard current.operation == .creating,
+                  current.members.allSatisfy({ $0.checkpoint == .planPersisted })
+            else { return }
+            current.operation = .idle
+            current.stopAfterCurrentOperations = false
+            current.diagnostics.append(.init(
+                severity: .warning,
+                message: "Workspace checkout creation was stopped before Git operations started. Use Resume Creation to continue."
+            ))
+        }
+        return try await checkout(id: checkoutID)
+    }
+
     func awaitCreationCompletion(checkoutID: UUID) async {
         await creationTasks[checkoutID]?.value
     }

@@ -586,6 +586,8 @@ final class AppState {
     private let statusCache = GitStatusCache()
     @ObservationIgnored
     private var workspaceDisableInProgress = false
+    @ObservationIgnored
+    private var workspacePreviewToggleGeneration = 0
 
     var lsp: WorkspaceLSPManager {
         if let lspManager { return lspManager }
@@ -1323,10 +1325,13 @@ final class AppState {
     }
 
     func setWorkspacesEnabled(_ enabled: Bool, persistConfig: Bool = true) async {
+        workspacePreviewToggleGeneration += 1
+        let generation = workspacePreviewToggleGeneration
         if !enabled, config.workspacesEnabled {
             workspaceDisableInProgress = true
             await quiesceWorkspaceCheckoutCreationBeforeDisable()
         }
+        guard generation == workspacePreviewToggleGeneration else { return }
         config.workspacesEnabled = enabled
         if enabled || !config.workspacesEnabled {
             workspaceDisableInProgress = false
@@ -1334,6 +1339,7 @@ final class AppState {
         if persistConfig { _ = saveConfig() }
         let legacySpaces = spacesManager.file
         let reconciled = await workspacesManager.setEnabled(enabled, spacesFile: legacySpaces)
+        guard generation == workspacePreviewToggleGeneration else { return }
         reconcileWorkspaceNavigationSelection()
         workspaceRecoveryError = workspacesManager.recoveryState
         if let recovery = workspaceRecoveryError {
@@ -1933,7 +1939,9 @@ final class AppState {
             throw error
         }
         await workspacesManager.refreshCheckoutSnapshots()
-        guard workspaceMutationAvailable else { return checkout }
+        guard workspaceMutationAvailable else {
+            return try await coordinator.stopPendingCreationBeforeStart(checkoutID: checkout.id)
+        }
         selectWorkspaceCheckout(id: checkout.id)
         await coordinator.beginCreation(checkoutID: checkout.id)
         Task { @MainActor [weak self, weak coordinator] in
