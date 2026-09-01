@@ -3,6 +3,7 @@ import SwiftUI
 struct AgentLauncherDialog: View {
     @Bindable var appState: AppState
     let selectedWorktree: () -> Worktree?
+    var selectedWorkspaceCheckout: () -> WorkspaceCheckout? = { nil }
     @Environment(\.theme) private var theme
     @FocusState private var inputFocused: Bool
     @State private var chatAgent: AgentDefinition?
@@ -494,7 +495,15 @@ struct AgentLauncherDialog: View {
             guard let worktree = selectedWorktree() else { close()
             return }
             Task { @MainActor in
-                _ = try? await appState.openAgentTerminalTabPreparingRemoteZmxIfNeeded(for: worktree, agentId: agent.id)
+                if let checkout = selectedWorkspaceCheckout() {
+                    _ = try? await appState.openWorkspaceCheckoutAgentTerminalTab(
+                        checkout,
+                        focusedMemberWorktree: worktree,
+                        agentId: agent.id
+                    )
+                } else {
+                    _ = try? await appState.openAgentTerminalTabPreparingRemoteZmxIfNeeded(for: worktree, agentId: agent.id)
+                }
             }
         case .acp:
             beginSessionBrowser(for: agent)
@@ -504,6 +513,21 @@ struct AgentLauncherDialog: View {
     }
 
     private func beginSessionBrowser(for agent: AgentDefinition) {
+        if let checkout = selectedWorkspaceCheckout() {
+            Task { @MainActor in
+                guard case let .ready(manager) = await appState.workspaceACPManager(for: checkout) else {
+                    _ = await appState.openWorkspaceCheckoutACPSession(checkout: checkout, agentID: agent.id)
+                    close()
+                    return
+                }
+                chatAgent = agent
+                appState.agentLauncher.query = ""
+                selectedSessionIndex = 0
+                startDiscovery(for: agent, manager: manager)
+                requestInputFocus()
+            }
+            return
+        }
         guard let worktree = selectedWorktree(),
               appState.acpManager(for: worktree) != nil
         else {
@@ -522,6 +546,10 @@ struct AgentLauncherDialog: View {
         guard let worktree = selectedWorktree(),
               let manager = appState.acpManager(for: worktree)
         else { return }
+        startDiscovery(for: agent, manager: manager)
+    }
+
+    private func startDiscovery(for agent: AgentDefinition, manager: ACPSessionManager) {
         let prior = discoveryModel
         let model = ACPSessionDiscoveryModel()
         discoveryModel = model
@@ -542,17 +570,33 @@ struct AgentLauncherDialog: View {
 
     private func launchNewChat() {
         guard let chatAgent else { return }
-        appState.openNewACPSession(agentID: chatAgent.id)
+        if let checkout = selectedWorkspaceCheckout() {
+            Task { @MainActor in
+                _ = await appState.openWorkspaceCheckoutACPSession(checkout: checkout, agentID: chatAgent.id)
+            }
+        } else {
+            appState.openNewACPSession(agentID: chatAgent.id)
+        }
         close()
     }
 
     private func openDiscoveredSession(_ session: ACPDiscoveredSession) {
         guard let capabilities = discoveryModel?.capabilities else { return }
         Task {
-            guard await appState.openDiscoveredACPSession(
-                session,
-                capabilities: capabilities
-            ) else { return }
+            let opened: Bool
+            if let checkout = selectedWorkspaceCheckout() {
+                opened = await appState.openDiscoveredACPSession(
+                    session,
+                    owner: SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation),
+                    capabilities: capabilities
+                )
+            } else {
+                opened = await appState.openDiscoveredACPSession(
+                    session,
+                    capabilities: capabilities
+                )
+            }
+            guard opened else { return }
             close()
         }
     }
@@ -561,8 +605,7 @@ struct AgentLauncherDialog: View {
         _ request: ACPSessionDeletionRequest,
         removeLocalHistory: Bool = false
     ) {
-        guard let worktree = selectedWorktree(),
-              let manager = appState.acpManager(for: worktree),
+        guard let manager = selectedACPManagerForLauncher(),
               let discoveryModel
         else { return }
         deletionRequest = nil
@@ -584,6 +627,14 @@ struct AgentLauncherDialog: View {
                 deletionError = error.localizedDescription
             }
         }
+    }
+
+    private func selectedACPManagerForLauncher() -> ACPSessionManager? {
+        if let checkout = selectedWorkspaceCheckout() {
+            return appState.acpManager(for: SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation))
+        }
+        guard let worktree = selectedWorktree() else { return nil }
+        return appState.acpManager(for: worktree)
     }
 
     private func backToAgents() {

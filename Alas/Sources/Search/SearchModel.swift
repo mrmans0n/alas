@@ -135,7 +135,11 @@ final class SearchModel {
         query = ""
         kind = .files
         selectedIndex = 0
-        scope = (env.currentWorktreeId() != nil) ? .thisWorktree : .allRepos
+        if !env.workspaceCheckoutWorktrees().isEmpty {
+            scope = .workspaceCheckout
+        } else {
+            scope = (env.currentWorktreeId() != nil) ? .thisWorktree : .allRepos
+        }
         results = SearchResults()
         reschedule()
     }

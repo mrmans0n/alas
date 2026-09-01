@@ -138,6 +138,19 @@ struct SearchModelTests {
         #expect(model2.scope == .allRepos)
     }
 
+    @Test func openPrefersWorkspaceCheckoutScopeWhenCheckoutMembersAreAvailable() async {
+        let member = wt("member", projectId: "p1")
+        let env = makeEnv(
+            worktrees: [wt("focused", projectId: "p2")],
+            workspaceCheckoutWorktrees: { [member] }
+        )
+        let model = SearchModel(environment: env)
+
+        model.open()
+
+        #expect(model.scope == .workspaceCheckout)
+    }
+
     @Test func workspaceCheckoutScopeSearchesOnlyExplicitCheckoutMembersAndReportsPartialFailures() async {
         let member = wt("member", projectId: "p1")
         let outside = wt("outside", projectId: "p2")

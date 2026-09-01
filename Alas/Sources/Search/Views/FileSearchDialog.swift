@@ -19,7 +19,8 @@ struct FileSearchDialog: View {
                     SearchInputRow(model: appState.search, inputFocused: $inputFocused)
                     ScopeRow(
                         model: appState.search,
-                        isThisWorktreeAvailable: appState.selectedWorktreeId != nil
+                        isThisWorktreeAvailable: appState.selectedWorktreeId != nil,
+                        isWorkspaceCheckoutAvailable: appState.selectedWorkspaceCheckout != nil
                     )
                     if let banner = appState.search.results.partialFailureMessage {
                         BannerRow(text: banner)

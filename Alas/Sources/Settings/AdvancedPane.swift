@@ -31,10 +31,17 @@ struct AdvancedPane: View {
                         ))
                     }
                     if let recovery = state.workspaceRecoveryError {
-                        Text("Workspace recovery required: \(recovery.message)")
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(theme.color("warn"))
-                            .padding(.top, 8)
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Workspace recovery required: \(recovery.message)")
+                                .font(.system(size: 11.5))
+                                .foregroundStyle(theme.color("warn"))
+                            AlasButton(title: "Discard Quarantined Workspace State", icon: "trash", style: .normal) {
+                                Task { @MainActor in
+                                    await state.discardWorkspaceRecoveryState()
+                                }
+                            }
+                        }
+                        .padding(.top, 8)
                     }
                     SettingsRow(
                         name: "AppKit Changes scroller",

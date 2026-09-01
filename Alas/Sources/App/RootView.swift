@@ -100,7 +100,11 @@ struct RootView: View {
             mainContent
             FileSearchDialog(appState: state)
             RepoSelectorDialog(appState: state)
-            AgentLauncherDialog(appState: state, selectedWorktree: selectedWorktree)
+            AgentLauncherDialog(
+                appState: state,
+                selectedWorktree: selectedWorktree,
+                selectedWorkspaceCheckout: { state.selectedWorkspaceCheckout }
+            )
             ReviewTargetDialog(appState: state)
             RunScriptDialog(appState: state, selectedWorktree: selectedWorktree)
         }
@@ -784,7 +788,11 @@ private struct RootBaseHandlers: ViewModifier {
             }
         let e = d
             .onReceive(NotificationCenter.default.publisher(for: .alasNewTerminalTab)) { _ in
-                if let wt = selectedWorktree() {
+                if let checkout = state.selectedWorkspaceCheckout {
+                    Task { @MainActor in
+                        _ = try? await state.openWorkspaceCheckoutTerminalTab(checkout)
+                    }
+                } else if let wt = selectedWorktree() {
                     Task { @MainActor in
                         _ = try? await state.openTerminalTabPreparingRemoteZmxIfNeeded(for: wt)
                     }

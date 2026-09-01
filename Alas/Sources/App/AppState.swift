@@ -1328,6 +1328,19 @@ final class AppState {
         spacesManager.replace(file: reconciled)
     }
 
+    func discardWorkspaceRecoveryState() async {
+        do {
+            try await workspaceStore.discardUnreadableState()
+            workspaceRecoveryError = nil
+            if config.workspacesEnabled {
+                _ = await workspacesManager.setEnabled(true, spacesFile: spacesManager.file)
+                workspaceRecoveryError = workspacesManager.recoveryState
+            }
+        } catch {
+            persistenceErrorHandler("Workspace Recovery Failed", error.localizedDescription)
+        }
+    }
+
     private func quiesceWorkspaceCheckoutCreationBeforeDisable() async {
         guard workspacesManager.canMutate else { return }
         let checkouts = workspacesManager.checkouts
@@ -8687,6 +8700,29 @@ final class AppState {
         else { return false }
 
         await openExistingACPSession(sessionId: row.id)
+        return true
+    }
+
+    @discardableResult
+    func openDiscoveredACPSession(
+        _ discovered: ACPDiscoveredSession,
+        owner: SessionOwnerID,
+        capabilities: ACPSessionDiscoveryCapabilities
+    ) async -> Bool {
+        guard let manager = acpManager(for: owner) else { return false }
+
+        if let localSessionId = discovered.localSessionId {
+            await openExistingACPSession(sessionId: localSessionId, owner: owner)
+            return true
+        }
+        guard capabilities.canOpenRemoteSession,
+              let row = await manager.materializeDiscoveredSession(
+                  discovered,
+                  autoRunDefault: config.harness.acpAutoRunByDefault
+              )
+        else { return false }
+
+        await openExistingACPSession(sessionId: row.id, owner: owner)
         return true
     }
 

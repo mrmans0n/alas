@@ -225,6 +225,37 @@ struct WorkspaceFeatureFlagTests {
         #expect(state.workspaceRecoveryError != nil)
     }
 
+    @Test func appStateCanDiscardQuarantinedWorkspaceRecoveryState() async throws {
+        let url = temporaryURL()
+        defer { removeWorkspaceFiles(near: url) }
+        try Data("not JSON".utf8).write(to: url)
+        let workspaceStore = WorkspaceStore(url: url)
+        let manager = WorkspacesManager(
+            bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore)
+        )
+        let state = AppState(
+            store: MemoryStore(),
+            persistenceErrorHandler: { _, _ in },
+            restoreActiveTabsOnStartup: false,
+            workspacesManager: manager,
+            workspaceStore: workspaceStore
+        )
+
+        await state.setWorkspacesEnabled(true, persistConfig: false)
+        #expect(state.workspaceRecoveryError != nil)
+
+        await state.discardWorkspaceRecoveryState()
+
+        #expect(state.workspaceRecoveryError == nil)
+        #expect(state.workspacesManager.canMutate == true)
+        #expect(await workspaceStore.load() == .missing)
+        let siblingFiles = (try? FileManager.default.contentsOfDirectory(
+            at: url.deletingLastPathComponent(),
+            includingPropertiesForKeys: nil
+        )) ?? []
+        #expect(!siblingFiles.contains { $0.lastPathComponent.hasPrefix("\(url.lastPathComponent).broken-") })
+    }
+
     @Test func enablingReupgradeDoesNotWriteLegacySpaces() async throws {
         let url = temporaryURL()
         defer { removeWorkspaceFiles(near: url) }
