@@ -265,6 +265,45 @@ struct WorkspaceACPSessionTests {
     }
 
     @MainActor
+    @Test func openingCheckoutACPRevalidatesAfterRemoteLocationProbe() async throws {
+        let workspaceURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString + ".json")
+        defer { try? FileManager.default.removeItem(at: workspaceURL) }
+        let checkout = WorkspaceCheckout(
+            workspaceID: nil,
+            fallbackWorkspaceName: "Workspace",
+            executionLocation: .ssh("checkout-host"),
+            branch: "topic",
+            rootPath: "/srv/checkouts/topic",
+            members: []
+        )
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+        let workspaceStore = WorkspaceStore(url: workspaceURL)
+        try await workspaceStore.checkpoint(.init(checkouts: [checkout]))
+        let workspacesManager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
+        let state = AppState(
+            store: MemoryStore(),
+            workspacesManager: workspacesManager,
+            workspaceStore: workspaceStore,
+            workspaceRemoteTransport: .init(runner: { _, _, _ in
+                try await workspaceStore.mutate { file in
+                    guard let index = file.checkouts.firstIndex(where: { $0.id == checkout.id }) else { return }
+                    file.checkouts[index].archivedAt = Date(timeIntervalSince1970: 1)
+                    file.checkouts[index].operation = .archiving
+                }
+                return .init(exitCode: 0, stdout: "/srv/checkouts/topic\n", stderr: "")
+            })
+        )
+        state.config.workspacesEnabled = true
+        _ = await workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+
+        let tab = await state.openWorkspaceCheckoutACPSession(checkout: checkout, agentID: "test")
+
+        #expect(tab == nil)
+        #expect(state.acpManager(for: owner) == nil)
+        #expect(state.tabs.tabs(for: owner).isEmpty)
+    }
+
+    @MainActor
     @Test func concurrentRemoteCheckoutACPManagerRequestsReuseTheFirstManagerAfterProbe() async throws {
         let checkout = WorkspaceCheckout(
             workspaceID: nil,

@@ -1538,6 +1538,9 @@ final class AppState {
         else {
             throw NSError(domain: "AppState", code: 2, userInfo: [NSLocalizedDescriptionKey: "Workspaces are disabled."])
         }
+        guard await workspaceCheckoutManifestMatches(authoritative) else {
+            throw NSError(domain: "AppState", code: 3, userInfo: [NSLocalizedDescriptionKey: "The Workspace checkout root is not owned by this checkout."])
+        }
         let context = WorkspaceTerminalContext(
             checkoutID: authoritative.id,
             executionLocation: authoritative.executionLocation,
@@ -1571,7 +1574,13 @@ final class AppState {
         else {
             throw NSError(domain: "AppState", code: 2, userInfo: [NSLocalizedDescriptionKey: "Workspaces are disabled."])
         }
-        guard let project = projects.first(where: { $0.id == focusedMemberWorktree.projectId }) else {
+        guard await workspaceCheckoutManifestMatches(authoritative),
+              let focusedMember = authoritativeCheckoutMember(
+                for: focusedMemberWorktree,
+                in: authoritative
+              ),
+              let project = projects.first(where: { $0.id == focusedMember.projectID })
+        else {
             throw AgentTerminalLaunchError.projectUnavailable
         }
         guard let agent = agentRegistry.enabled().first(where: { $0.id == agentId }) else {
@@ -1664,6 +1673,47 @@ final class AppState {
             manifestPath: URL(fileURLWithPath: checkout.rootPath).appendingPathComponent(WorkspaceCheckoutManifest.fileName).path,
             startupScript: checkout.configurationSnapshot?.shared.sessionOpenScript ?? ""
         )
+    }
+
+    private func workspaceCheckoutManifestMatches(_ checkout: WorkspaceCheckout) async -> Bool {
+        let manifestPath = URL(fileURLWithPath: checkout.rootPath)
+            .appendingPathComponent(WorkspaceCheckoutManifest.fileName).path
+        switch checkout.executionLocation.normalized {
+        case .local:
+            let manifestURL = URL(fileURLWithPath: manifestPath)
+            guard let data = try? Data(contentsOf: manifestURL),
+                  let manifest = try? JSONDecoder().decode(WorkspaceCheckoutManifest.self, from: data)
+            else { return false }
+            return manifest.checkoutID == checkout.id
+                && Self.canonicalWorktreePath(manifest.rootPath) == Self.canonicalWorktreePath(checkout.rootPath)
+        case .ssh(let host):
+            let expectedCheckoutID = "\"checkoutID\":\"\(checkout.id.uuidString)\""
+            let expectedRootPath = "\"rootPath\":\"\(checkout.rootPath)\""
+            let command = """
+            test -s \(SSHCommand.shellQuote(manifestPath)) \
+            && grep -F \(SSHCommand.shellQuote(expectedCheckoutID)) \(SSHCommand.shellQuote(manifestPath)) >/dev/null \
+            && grep -F \(SSHCommand.shellQuote(expectedRootPath)) \(SSHCommand.shellQuote(manifestPath)) >/dev/null
+            """
+            guard let result = try? await workspaceRemoteTransport.run(host: host, command: command) else { return false }
+            return result.exitCode == 0
+        }
+    }
+
+    private func authoritativeCheckoutMember(
+        for worktree: Worktree,
+        in checkout: WorkspaceCheckout
+    ) -> WorkspaceCheckoutMember? {
+        let worktreePath = Self.canonicalWorktreePath(worktree.path.path)
+        return checkout.members.first { member in
+            guard member.availability == .available,
+                  member.projectID == worktree.projectId,
+                  Self.canonicalWorktreePath(member.worktreePath) == worktreePath
+            else { return false }
+            if let plannedDestination = member.plan?.destinationPath {
+                return Self.canonicalWorktreePath(plannedDestination) == worktreePath
+            }
+            return true
+        }
     }
 
     /// Restores checkout tabs under their checkout owner. A saved cwd without
@@ -5453,6 +5503,7 @@ final class AppState {
         else { return nil }
         guard let tab = tabs.tabs(for: owner).first(where: { $0.id == tabID }),
               case .terminal(let state) = tab else { return nil }
+        guard await workspaceCheckoutManifestMatches(checkout) else { return nil }
 
         if !config.terminal.keepSessionsAlive {
             let hasLiveLeaf = state.root.leaves()
@@ -8246,13 +8297,18 @@ final class AppState {
         initialPrompt: String? = nil
     ) async -> ACPSessionTabState? {
         guard let checkout = await authoritativeCheckoutForWorkspaceACPSessionCreation(checkout) else { return nil }
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
         guard case let .ready(manager) = await workspaceACPManager(for: checkout) else { return nil }
+        guard await authoritativeCheckoutForWorkspaceACPSessionCreation(checkout) != nil else {
+            await disposeACPManagerAndWait(owner: owner)
+            return nil
+        }
         let session = manager.createSession(agentId: agentID, autoRunDefault: config.harness.acpAutoRunByDefault)
         if let initialPrompt, !initialPrompt.isEmpty {
             manager.persistComposerDraft(.init(segments: [.text(initialPrompt)]), for: session)
         }
         let state = ACPSessionTabState(sessionId: session.id, title: session.title)
-        tabs.append(acpSession: state, to: SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation))
+        tabs.append(acpSession: state, to: owner)
         return state
     }
 
