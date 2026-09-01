@@ -445,7 +445,7 @@ struct WorkspacePathInspector: WorkspacePathInspecting {
         case .local:
             return Self.localVolumeSupportsCaseSensitiveNames(for: path) ? path : path.lowercased()
         case .ssh:
-            return path
+            return path.lowercased()
         }
     }
 
