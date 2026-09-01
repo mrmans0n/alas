@@ -40,6 +40,39 @@ struct WorkspaceStoreTests {
         #expect(!FileManager.default.fileExists(atPath: url.appendingPathExtension("tmp").path))
     }
 
+    @Test func concurrentStoreInstancesDoNotLoseMutations() async throws {
+        let url = temporaryURL()
+        defer { removeWorkspaceFiles(near: url) }
+        let first = WorkspaceStore(url: url)
+        let second = WorkspaceStore(url: url)
+        let count = 40
+
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for index in 0 ..< count {
+                let store = index.isMultiple(of: 2) ? first : second
+                group.addTask {
+                    try await store.mutate { state in
+                        state.workspaces.append(Workspace(
+                            name: "Workspace \(index)",
+                            executionLocation: .local,
+                            createdAt: Date(timeIntervalSince1970: TimeInterval(1_700_000_000 + index)),
+                            updatedAt: Date(timeIntervalSince1970: TimeInterval(1_700_000_000 + index)),
+                            members: []
+                        ))
+                    }
+                }
+            }
+            try await group.waitForAll()
+        }
+
+        guard case .loaded(let state) = await WorkspaceStore(url: url).load() else {
+            Issue.record("Expected loaded Workspace state")
+            return
+        }
+        #expect(state.workspaces.count == count)
+        #expect(Set(state.workspaces.map(\.name)).count == count)
+    }
+
     @Test func ordinaryCheckpointIsBlockedAfterUnreadableStorage() async throws {
         let url = temporaryURL()
         defer { removeWorkspaceFiles(near: url) }
