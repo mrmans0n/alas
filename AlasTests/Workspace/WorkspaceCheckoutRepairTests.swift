@@ -498,6 +498,28 @@ struct WorkspaceCheckoutRepairTests {
         #expect(await git.createCount == 0)
     }
 
+    @Test func resumeCreationRetriesFailedWorktreeCreationWhenTheFrozenPathIsMissing() async throws {
+        let fixture = try await persistedFixture(
+            checkpoint: .failed,
+            worktreeCreated: true,
+            lineageID: "lineage-a",
+            branchOwnership: .created,
+            operation: .creating
+        )
+        let git = MissingFailedCreateGit()
+        let scripts = RepairScriptRunner()
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: git, scripts: scripts, projectMutationGate: ProjectMutationGate())
+
+        let checkout = try await coordinator.resumeCreation(checkoutID: fixture.checkout.id)
+
+        #expect(checkout.operation == .idle)
+        #expect(checkout.members[0].checkpoint == .setupComplete)
+        #expect(checkout.members[0].availability == .available)
+        #expect(checkout.members[0].gitLineageID == "lineage-a")
+        #expect(await git.calls == ["existing", "missing", "existing", "create"])
+        #expect(await scripts.paths == ["/checkouts/a"])
+    }
+
     @Test func resumeCreationNeverReplaysGitAfterASetupFailure() async throws {
         let fixture = try await persistedFixture(checkpoint: .failed, worktreeCreated: true, lineageID: "lineage-a")
         try await fixture.store.mutate { state in
@@ -894,6 +916,29 @@ private actor CountingResumeGit: WorkspaceGitOperating {
         existingLineageChecks += 1
         calls.append("existing")
         return existingLineage
+    }
+}
+
+private actor MissingFailedCreateGit: WorkspaceGitOperating {
+    private(set) var calls: [String] = []
+
+    func prepareBranch(_ operation: WorkspaceFrozenWorktreeOperation) async throws {
+        calls.append("prepare")
+    }
+
+    func existingCreatedWorktreeLineage(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? {
+        calls.append("existing")
+        return nil
+    }
+
+    func frozenWorktreeIsMissing(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> Bool {
+        calls.append("missing")
+        return true
+    }
+
+    func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? {
+        calls.append("create")
+        return "lineage-a"
     }
 }
 
