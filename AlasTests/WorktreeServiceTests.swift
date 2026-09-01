@@ -114,6 +114,38 @@ struct WorktreeServiceTests {
         #expect(worktree.lineageID == WorktreeService.existingLocalLineageID(forWorktreeAt: destination))
     }
 
+    @Test func removeLockedWorktreeUsesDoubleForceWhenRequested() async throws {
+        let repo = try await makeRepo()
+        let destination = repo.deletingLastPathComponent().appendingPathComponent("\(repo.lastPathComponent)-locked")
+        defer {
+            try? FileManager.default.removeItem(at: destination)
+            try? FileManager.default.removeItem(at: repo)
+        }
+        _ = try await Process.git(["branch", "locked"], cwd: repo)
+        _ = try await Process.git(["worktree", "add", "-q", destination.path, "locked"], cwd: repo)
+        _ = try await Process.git(["worktree", "lock", destination.path], cwd: repo)
+        let worktree = Worktree(
+            id: Worktree.makeId(path: destination),
+            projectId: "p",
+            name: "locked",
+            branch: "locked",
+            path: destination,
+            status: .clean,
+            lastActivity: .distantPast
+        )
+
+        try await WorktreeService().remove(
+            repoPath: repo,
+            worktree: worktree,
+            deleteBranchIfMerged: false,
+            force: true,
+            forceTwice: true,
+            usesRemoteHostRegistry: false
+        )
+
+        #expect(!FileManager.default.fileExists(atPath: destination.path))
+    }
+
     @Test func addRecreatesAPrunableWorktreeRegistration() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }

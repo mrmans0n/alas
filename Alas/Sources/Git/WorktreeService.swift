@@ -701,10 +701,15 @@ struct WorktreeService {
         worktree: Worktree,
         deleteBranchIfMerged: Bool,
         force: Bool = false,
+        forceTwice: Bool = false,
         usesRemoteHostRegistry: Bool = true
     ) async throws {
         var args = ["worktree", "remove", worktree.path.path]
-        if force { args.append("--force") }
+        if forceTwice {
+            args.append(contentsOf: ["--force", "--force"])
+        } else if force {
+            args.append("--force")
+        }
         var result = try await Process.git(args, cwd: repoPath, usesRemoteHostRegistry: usesRemoteHostRegistry, timeout: 90)
         if result.exitCode != 0 {
             if Self.looksLikeMissingLFS(result.stderr) {

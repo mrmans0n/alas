@@ -47,7 +47,7 @@ protocol WorkspaceCheckoutLifecycleOperating: Sendable {
     func inspectRoot(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutCleanupRootObservation
     func verifyCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutMemberObservation
     /// Removes only the worktree. Branch deletion is intentionally disabled.
-    func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan, force: Bool) async throws
+    func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan, force: Bool, forceTwice: Bool) async throws
     /// Attempts a normal merged-only branch deletion for an attempt-created
     /// branch. `false` means it was retained (for example, unmerged).
     func deleteMergedBranch(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool
@@ -308,8 +308,9 @@ actor WorkspaceCheckoutCoordinator {
                 guard !preflight.requiresForce || confirmingRisks else {
                     throw WorkspaceCheckoutCoordinatorError.cleanupConfirmationRequired
                 }
+                let forceTwice = confirmingRisks && preflight.reasons.contains(.locked)
                 try await projectMutationGate.withMutation(projectID: member.projectID) {
-                    try await lifecycle.removeWorktree(plan, force: confirmingRisks)
+                    try await lifecycle.removeWorktree(plan, force: confirmingRisks, forceTwice: forceTwice)
                 }
                 try await mutateMember(checkoutID: checkoutID, memberID: memberID) {
                     $0.cleanup?.worktreeRemoved = true
@@ -1592,7 +1593,7 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
         return await WorkspaceCheckoutObserver().observe(member, in: checkout)
     }
 
-    func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan, force: Bool) async throws {
+    func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan, force: Bool, forceTwice: Bool) async throws {
         switch plan.executionLocation.normalized {
         case .local:
             let path = URL(fileURLWithPath: plan.worktreePath)
@@ -1606,6 +1607,7 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
                 worktree: worktree,
                 deleteBranchIfMerged: false,
                 force: force,
+                forceTwice: forceTwice,
                 usesRemoteHostRegistry: false
             )
         case .ssh(let host):
