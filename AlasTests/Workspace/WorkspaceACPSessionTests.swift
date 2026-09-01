@@ -44,16 +44,19 @@ struct WorkspaceACPSessionTests {
             store: try ACPSessionStore(path: path.path),
             remoteHost: "checkout-host",
             setupEvaluator: { _ in .ready },
+            remoteAdapterResolver: { _, _, _ in
+                .ready(.init(adapterPath: "/tmp/claude-agent-acp", nodeBinDirectory: ""))
+            },
             connectionFactory: { spec, host, _ in
                 capturedSpec = spec
                 capturedHost = host
                 return ACPConnection(client: client)
             },
             launchSpecTransformer: { spec in
-                spec.agentID == "codex" ? spec.prependingArguments(["--dangerously-bypass-approvals-and-sandbox"]) : spec
+                spec.agentID == "claude" ? spec.prependingArguments(["--dangerously-bypass-approvals-and-sandbox"]) : spec
             }
         )
-        let session = manager.createSession(agentId: "codex")
+        let session = manager.createSession(agentId: "claude")
 
         await manager.attach(to: session.id, freshlyCreated: true)
 
@@ -180,6 +183,76 @@ struct WorkspaceACPSessionTests {
     }
 
     @MainActor
+    @Test func openingCheckoutACPSessionRejectsStaleArchivedSnapshots() async throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        let workspaceURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString + ".json")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: workspaceURL)
+        }
+        let stale = WorkspaceCheckout(
+            workspaceID: nil,
+            fallbackWorkspaceName: "Workspace",
+            executionLocation: .local,
+            branch: "topic",
+            rootPath: root.path,
+            members: []
+        )
+        var archived = stale
+        archived.archivedAt = Date(timeIntervalSince1970: 1)
+        let workspaceStore = WorkspaceStore(url: workspaceURL)
+        try await workspaceStore.checkpoint(.init(checkouts: [archived]))
+        let workspacesManager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
+        let state = AppState(
+            store: MemoryStore(),
+            workspacesManager: workspacesManager,
+            workspaceStore: workspaceStore
+        )
+        state.config.workspacesEnabled = true
+        _ = await workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+
+        let tab = await state.openWorkspaceCheckoutACPSession(checkout: stale, agentID: "test")
+
+        #expect(tab == nil)
+        #expect(state.acpManager(for: SessionOwnerID.workspaceCheckout(stale.id, .local)) == nil)
+    }
+
+    @MainActor
+    @Test func openingExistingCheckoutACPSessionUsesTheOwnerBucket() async throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let checkout = WorkspaceCheckout(
+            workspaceID: nil,
+            fallbackWorkspaceName: "Workspace",
+            executionLocation: .local,
+            branch: "topic",
+            rootPath: root.path,
+            members: []
+        )
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, .local)
+        let dbURL = Paths.acpSessionsDB(for: owner)
+        defer { try? FileManager.default.removeItem(at: dbURL) }
+        let state = AppState(store: MemoryStore())
+        guard case let .ready(manager) = await state.workspaceACPManager(for: checkout) else {
+            Issue.record("Expected checkout manager")
+            return
+        }
+        let session = manager.createSession(id: "checkout-existing", agentId: "test")
+        manager.persistComposerDraft(.init(segments: [.text("draft")]), for: session)
+        await manager.flushPersistence()
+
+        await state.openExistingACPSession(sessionId: session.id, owner: owner)
+
+        #expect(state.tabs.tabs(for: owner).compactMap { tab -> ACPSession.ID? in
+            guard case let .acpSession(state) = tab else { return nil }
+            return state.sessionId
+        } == [session.id])
+        #expect(state.tabs.tabs(forWorktree: "member-worktree").isEmpty)
+    }
+
+    @MainActor
     @Test func reloadTabsRestoresCheckoutOwnedACPManagers() async throws {
         let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
         let workspaceURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString + ".json")
@@ -216,7 +289,7 @@ struct WorkspaceACPSessionTests {
 
         state.reloadTabs()
         for _ in 0 ..< 40 where state.acpManager(for: owner) == nil {
-            await Task.yield()
+            try await Task.sleep(nanoseconds: 25_000_000)
         }
 
         #expect(state.tabs.tabs(for: owner).count == 1)
