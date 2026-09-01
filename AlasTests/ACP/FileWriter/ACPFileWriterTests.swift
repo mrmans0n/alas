@@ -84,4 +84,21 @@ struct ACPFileWriterTests {
         #expect(resolved.path == requested)
         #expect(resolved.path != physical.appendingPathComponent("inside.txt").path)
     }
+
+    @Test("writes through contained symlinks without replacing the link")
+    func writeThroughContainedSymlink() throws {
+        let wt = try makeWorktree()
+        defer { try? FileManager.default.removeItem(at: wt) }
+        let target = wt.appendingPathComponent("target.txt")
+        let link = wt.appendingPathComponent("link.txt")
+        try "old\n".write(to: target, atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: "target.txt")
+        let writer = ACPFileWriter(worktreeRoot: wt)
+
+        let result = try writer.write(path: link.path, content: "new\n")
+
+        #expect(result.path == link.path)
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: link.path) == "target.txt")
+        #expect(try String(contentsOf: target, encoding: .utf8) == "new\n")
+    }
 }
