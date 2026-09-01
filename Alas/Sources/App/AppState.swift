@@ -4517,6 +4517,9 @@ final class AppState {
                 guard let self else { return false }
                 return self.config.workspacesEnabled
             },
+            refreshNavigation: { [weak self] in
+                await self?.workspacesManager.refreshCheckoutSnapshots()
+            },
             selectCheckout: { [weak self] id in
                 self?.selectWorkspaceCheckout(id: id)
             },

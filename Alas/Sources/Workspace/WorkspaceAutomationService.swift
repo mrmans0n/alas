@@ -95,6 +95,7 @@ struct WorkspaceAutomationTarget: Codable, Equatable, Sendable {
 struct WorkspaceAutomationService {
     var store: WorkspaceStore
     var isEnabled: () -> Bool
+    var refreshNavigation: @MainActor () async -> Void
     var selectCheckout: @MainActor (UUID) -> Void
     var focusMember: @MainActor (UUID, UUID) -> Void
     var observer: any WorkspaceCheckoutObserving
@@ -102,12 +103,14 @@ struct WorkspaceAutomationService {
     init(
         store: WorkspaceStore,
         isEnabled: @escaping () -> Bool,
+        refreshNavigation: @escaping @MainActor () async -> Void = {},
         selectCheckout: @escaping @MainActor (UUID) -> Void = { _ in },
         focusMember: @escaping @MainActor (UUID, UUID) -> Void = { _, _ in },
         observer: any WorkspaceCheckoutObserving = WorkspaceCheckoutObserver()
     ) {
         self.store = store
         self.isEnabled = isEnabled
+        self.refreshNavigation = refreshNavigation
         self.selectCheckout = selectCheckout
         self.focusMember = focusMember
         self.observer = observer
@@ -130,12 +133,14 @@ struct WorkspaceAutomationService {
     @MainActor
     func selectCheckout(id: UUID) async throws {
         _ = try await checkout(id: id)
+        await refreshNavigation()
         selectCheckout(id)
     }
 
     @MainActor
     func focusMember(checkoutID: UUID, memberID: UUID) async throws {
         _ = try await memberTarget(checkoutID: checkoutID, memberID: memberID)
+        await refreshNavigation()
         focusMember(checkoutID, memberID)
     }
 
