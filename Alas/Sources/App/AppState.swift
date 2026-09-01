@@ -1738,7 +1738,8 @@ final class AppState {
     }
 
     private func workspaceFrozenMCPServers(for checkout: WorkspaceCheckout) -> [ProjectMCPServer] {
-        workspaceFrozenMCPAttachments(for: checkout)?.descriptors.map(\.server) ?? []
+        guard let descriptors = workspaceFrozenMCPAttachments(for: checkout)?.descriptors else { return [] }
+        return MCPAttachmentPlanner.normalizedFrozenServerDescriptors(for: descriptors).map(\.server)
     }
 
     private func authoritativeCheckoutMember(

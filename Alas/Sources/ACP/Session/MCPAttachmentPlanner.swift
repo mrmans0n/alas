@@ -164,6 +164,10 @@ enum MCPAttachmentPlanner {
                 .init(id: String(index), server: server, projectDirectory: input.projectDirectory, worktreeDirectory: input.worktreeDirectory)
             }
         }
+        return normalizedFrozenServerDescriptors(for: frozenServerDescriptors)
+    }
+
+    static func normalizedFrozenServerDescriptors(for frozenServerDescriptors: [WorkspaceMCPServerDescriptor]) -> [WorkspaceMCPServerDescriptor] {
         let nameCounts = Dictionary(
             grouping: frozenServerDescriptors.map { $0.server.name.trimmingCharacters(in: .whitespacesAndNewlines) },
             by: { $0 }
