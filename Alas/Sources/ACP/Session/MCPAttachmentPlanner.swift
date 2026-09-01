@@ -110,9 +110,7 @@ enum MCPAttachmentPlanner {
         case missingVariable(String)
     }
     static func plan(_ input: MCPAttachmentPlannerInput) -> MCPAttachmentPlan {
-        let descriptors = input.frozenServerDescriptors ?? input.configuredServers.enumerated().map { index, server in
-            .init(id: String(index), server: server, projectDirectory: input.projectDirectory, worktreeDirectory: input.worktreeDirectory)
-        }
+        let descriptors = descriptors(for: input)
         let validationIssues = ProjectMCPValidation.validate(descriptors.map(\.server))
         var wireServers: [ACPMCPServer] = []
         var statuses: [MCPAttachmentServerStatus] = []
@@ -158,6 +156,33 @@ enum MCPAttachmentPlanner {
             statuses: statuses,
             configurationFingerprint: configurationFingerprint(for: descriptors.map(\.server))
         )
+    }
+
+    private static func descriptors(for input: MCPAttachmentPlannerInput) -> [WorkspaceMCPServerDescriptor] {
+        guard let frozenServerDescriptors = input.frozenServerDescriptors else {
+            return input.configuredServers.enumerated().map { index, server in
+                .init(id: String(index), server: server, projectDirectory: input.projectDirectory, worktreeDirectory: input.worktreeDirectory)
+            }
+        }
+        let nameCounts = Dictionary(
+            grouping: frozenServerDescriptors.map { $0.server.name.trimmingCharacters(in: .whitespacesAndNewlines) },
+            by: { $0 }
+        ).mapValues(\.count)
+        return frozenServerDescriptors.map { descriptor in
+            let name = descriptor.server.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard name.isEmpty == false,
+                  (nameCounts[name] ?? 0) > 1
+            else { return descriptor }
+            var server = descriptor.server
+            server.name = "\(name) (\(descriptor.id))"
+            return .init(
+                id: descriptor.id,
+                server: server,
+                projectDirectory: descriptor.projectDirectory,
+                worktreeDirectory: descriptor.worktreeDirectory,
+                checkoutRoot: descriptor.checkoutRoot
+            )
+        }
     }
 
     static func configurationFingerprint(for servers: [ProjectMCPServer]) -> String {

@@ -277,6 +277,40 @@ struct MCPAttachmentPlannerTests {
         #expect(result.statuses.first?.disposition == .skipped(.unavailableMember))
     }
 
+    @Test("duplicate frozen member MCP names are qualified before validation")
+    func duplicateFrozenMemberServersAreQualifiedInsteadOfSkipped() {
+        let first = WorkspaceMCPServerDescriptor(
+            id: "member-a:filesystem",
+            server: .stdio(name: "filesystem", command: "${WORKTREE_DIR}/mcp"),
+            projectDirectory: "/project-a",
+            worktreeDirectory: "/checkout/a",
+            checkoutRoot: "/checkout"
+        )
+        let second = WorkspaceMCPServerDescriptor(
+            id: "member-b:filesystem",
+            server: .stdio(name: "filesystem", command: "${WORKTREE_DIR}/mcp"),
+            projectDirectory: "/project-b",
+            worktreeDirectory: "/checkout/b",
+            checkoutRoot: "/checkout"
+        )
+
+        let result = MCPAttachmentPlanner.plan(.init(
+            configuredServers: [],
+            projectDirectory: "/live-project",
+            worktreeDirectory: "/live-worktree",
+            environment: [:],
+            capabilities: .init(),
+            frozenServerDescriptors: [first, second]
+        ))
+
+        #expect(result.wireServers.count == 2)
+        #expect(result.statuses.map(\.disposition) == [.requested, .requested])
+        #expect(result.statuses.map(\.name) == [
+            "filesystem (member-a:filesystem)",
+            "filesystem (member-b:filesystem)",
+        ])
+    }
+
     private func plan(
         _ servers: [ProjectMCPServer],
         environment: [String: String] = [:],
