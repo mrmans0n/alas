@@ -2045,7 +2045,12 @@ final class AppState {
             guard let worktreeID = workspaceMemberWorktreeIDs(checkout)[member.id],
                   let stack = rightPaneStore.activeState(worktreeId: worktreeID)?.ggStack
             else { continue }
-            stacks[worktreeID] = stack
+            let qualifiedWorktreeID = WorkspaceReviewSessionIdentity.worktreeID(
+                projectID: member.projectID,
+                executionLocation: checkout.executionLocation,
+                repositoryPath: member.worktreePath
+            )
+            stacks[qualifiedWorktreeID] = stack
         }
         return MemberReviewRollupBuilder(gg: WorkspaceCachedGGStackReader(stacksByWorktreeID: stacks))
     }

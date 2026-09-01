@@ -100,6 +100,28 @@ struct WorkspaceCheckoutRemoteInvocationTests {
         #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent(WorkspaceCheckoutManifest.fileName).path))
     }
 
+    @Test func manifestWriterRemovesNewEmptyRootWhenInitialWriteFails() async throws {
+        enum InjectedWriteError: Error { case failed }
+
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-manifest-partial-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let manifest = WorkspaceCheckoutManifest(checkoutID: UUID(), rootPath: root.path, branch: "release/1091", members: [])
+        let failingWriter = WorkspaceCheckoutManifestWriter(localWrite: { _, _, options in
+            if options.contains(.withoutOverwriting) {
+                throw InjectedWriteError.failed
+            }
+        })
+
+        await #expect(throws: (any Error).self) {
+            try await failingWriter.write(manifest, to: root.path, location: .local)
+        }
+
+        #expect(!FileManager.default.fileExists(atPath: root.path))
+
+        try await WorkspaceCheckoutManifestWriter().write(manifest, to: root.path, location: .local)
+        #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent(WorkspaceCheckoutManifest.fileName).path))
+    }
+
     @Test func remoteManifestWriterAtomicallyClaimsTheCheckoutRoot() async throws {
         let root = "/srv/checkouts/release"
         let manifest = WorkspaceCheckoutManifest(checkoutID: UUID(), rootPath: root, branch: "release/1091", members: [])

@@ -123,6 +123,48 @@ struct WorkspaceMemberReviewRollupTests {
         #expect(rollup.members.first?.reviews.map(\.id.rawValue) == ["builder-review"])
     }
 
+    @Test func cachedGGStackReaderDoesNotMixSamePathAcrossSSHHosts() throws {
+        let path = "/srv/checkouts/release/shared"
+        let checkout = WorkspaceCheckout(workspaceID: UUID(), fallbackWorkspaceName: "Release", executionLocation: .ssh("builder.example"), branch: "shared-branch", rootPath: "/srv/checkouts/release", members: [
+            Self.member(id: uuid(1), projectID: "remote-project", name: "Remote", worktreeID: path),
+        ])
+        let builderKey = WorkspaceReviewSessionIdentity.worktreeID(
+            projectID: "remote-project",
+            executionLocation: .ssh("builder.example"),
+            repositoryPath: path
+        )
+        let otherHostKey = WorkspaceReviewSessionIdentity.worktreeID(
+            projectID: "remote-project",
+            executionLocation: .ssh("other.example"),
+            repositoryPath: path
+        )
+        let rollup = try MemberReviewRollupBuilder(
+            reviews: InMemoryWorkspaceReviewSessionReader(records: []),
+            gg: WorkspaceCachedGGStackReader(stacksByWorktreeID: [
+                otherHostKey: Self.stack(name: "wrong-host"),
+                builderKey: Self.stack(name: "builder-host"),
+                path: Self.stack(name: "legacy-raw")
+            ])
+        ).build(for: checkout)
+
+        #expect(rollup.members.first?.ggStack?.name == "builder-host")
+    }
+
+    @Test func cachedGGStackReaderDoesNotFallBackToRawPathForCheckoutMembers() throws {
+        let path = "/srv/checkouts/release/shared"
+        let checkout = WorkspaceCheckout(workspaceID: UUID(), fallbackWorkspaceName: "Release", executionLocation: .ssh("builder.example"), branch: "shared-branch", rootPath: "/srv/checkouts/release", members: [
+            Self.member(id: uuid(1), projectID: "remote-project", name: "Remote", worktreeID: path),
+        ])
+        let rollup = try MemberReviewRollupBuilder(
+            reviews: InMemoryWorkspaceReviewSessionReader(records: []),
+            gg: WorkspaceCachedGGStackReader(stacksByWorktreeID: [
+                path: Self.stack(name: "legacy-raw")
+            ])
+        ).build(for: checkout)
+
+        #expect(rollup.members.first?.ggStack == nil)
+    }
+
     @Test func defaultReviewReaderIncludesLegacyRawMemberWorktreeRecords() throws {
         let path = "/srv/checkouts/release/shared"
         let checkout = WorkspaceCheckout(workspaceID: UUID(), fallbackWorkspaceName: "Release", executionLocation: .ssh("builder.example"), branch: "shared-branch", rootPath: "/srv/checkouts/release", members: [
@@ -179,6 +221,12 @@ struct WorkspaceMemberReviewRollupTests {
             title: "Review \(id)"
         )
         return ReviewSessionRecord(id: ReviewSessionID(rawValue: id), target: target, status: status, createdAt: Date(timeIntervalSince1970: 1), updatedAt: Date(timeIntervalSince1970: updatedAt))
+    }
+
+    private static func stack(name: String) -> GGStack {
+        GGStack(name: name, base: "main", totalCommits: 1, syncedCommits: 1, currentPosition: 1, behindBase: 0, entries: [
+            GGStackEntry(position: 1, sha: "aaa", title: name, prNumber: nil, prState: nil, approved: false, ciStatus: nil)
+        ])
     }
 
     private func uuid(_ value: Int) -> UUID {

@@ -95,9 +95,16 @@ struct NoopWorkspaceCheckoutManifestWriter: WorkspaceCheckoutManifestWriting {
 
 struct WorkspaceCheckoutManifestWriter: WorkspaceCheckoutManifestWriting, Sendable {
     private let remote: WorkspaceRemoteTransport
+    private let localWrite: @Sendable (Data, URL, Data.WritingOptions) throws -> Void
 
-    init(remote: WorkspaceRemoteTransport = .init()) {
+    init(
+        remote: WorkspaceRemoteTransport = .init(),
+        localWrite: @escaping @Sendable (Data, URL, Data.WritingOptions) throws -> Void = { data, url, options in
+            try data.write(to: url, options: options)
+        }
+    ) {
         self.remote = remote
+        self.localWrite = localWrite
     }
 
     func write(_ manifest: WorkspaceCheckoutManifest, to rootPath: String, location: ExecutionLocation) async throws {
@@ -108,7 +115,7 @@ struct WorkspaceCheckoutManifestWriter: WorkspaceCheckoutManifestWriting, Sendab
             let rootURL = URL(fileURLWithPath: rootPath)
             let targetURL = URL(fileURLWithPath: target)
             if try existingManifestAtTargetBelongsToCheckout(targetURL, checkoutID: manifest.checkoutID) {
-                try data.write(to: targetURL, options: .atomic)
+                try localWrite(data, targetURL, .atomic)
             } else {
                 if FileManager.default.fileExists(atPath: rootURL.path) {
                     throw WorkspaceCheckoutManifestError.checkoutRootAlreadyClaimed(rootPath)
@@ -123,12 +130,17 @@ struct WorkspaceCheckoutManifestWriter: WorkspaceCheckoutManifestWriting, Sendab
                     throw WorkspaceCheckoutManifestError.writeFailed(error.localizedDescription)
                 }
                 do {
-                    try data.write(to: targetURL, options: .withoutOverwriting)
+                    try localWrite(data, targetURL, .withoutOverwriting)
                 } catch {
-                    guard try existingManifestAtTargetBelongsToCheckout(targetURL, checkoutID: manifest.checkoutID) else {
+                    if try existingManifestAtTargetBelongsToCheckout(targetURL, checkoutID: manifest.checkoutID) {
+                        try localWrite(data, targetURL, .atomic)
+                        return
+                    }
+                    guard !FileManager.default.fileExists(atPath: targetURL.path) else {
                         throw WorkspaceCheckoutManifestError.checkoutRootAlreadyClaimed(rootPath)
                     }
-                    try data.write(to: targetURL, options: .atomic)
+                    removeEmptyDirectory(rootURL)
+                    throw WorkspaceCheckoutManifestError.writeFailed(error.localizedDescription)
                 }
             }
         case .ssh(let host):
@@ -193,6 +205,13 @@ private func existingManifestAtTargetBelongsToCheckout(_ targetURL: URL, checkou
     } catch {
         throw WorkspaceCheckoutManifestError.checkoutRootAlreadyClaimed(targetURL.deletingLastPathComponent().path)
     }
+}
+
+private func removeEmptyDirectory(_ url: URL) {
+    guard let contents = try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil),
+          contents.isEmpty
+    else { return }
+    try? FileManager.default.removeItem(at: url)
 }
 
 private extension JSONEncoder {
