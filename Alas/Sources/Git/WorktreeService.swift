@@ -569,6 +569,9 @@ struct WorktreeService {
         },
         remoteRun: @escaping @Sendable (String, String) async throws -> ProcessResult = { host, command in
             try await RemoteExec.run(host: host, cwd: nil, command: command)
+        },
+        localLineage: @Sendable (URL, String) -> String? = { destination, candidateID in
+            WorktreeService.localLineageID(forWorktreeAt: destination, candidateID: candidateID)
         }
     ) async throws -> Worktree {
         switch GitNameValidator.validateBranchName(branch) {
@@ -642,7 +645,12 @@ struct WorktreeService {
             }
             worktree.lineageID = identifier
         } else {
-            guard let lineageID = Self.localLineageID(forWorktreeAt: destination, candidateID: expectedLineageID ?? UUID().uuidString.lowercased()) else {
+            guard let lineageID = localLineage(destination, expectedLineageID ?? UUID().uuidString.lowercased()) else {
+                _ = try? await Process.git(
+                    ["worktree", "remove", "-f", "-f", "--", destination.path],
+                    cwd: repoPath,
+                    usesRemoteHostRegistry: usesRemoteHostRegistry
+                )
                 throw WorktreeError.gitFailed("Could not record local Workspace worktree lineage.")
             }
             worktree.lineageID = lineageID

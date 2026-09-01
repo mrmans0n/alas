@@ -114,6 +114,34 @@ struct WorktreeServiceTests {
         #expect(worktree.lineageID == WorktreeService.existingLocalLineageID(forWorktreeAt: destination))
     }
 
+    @Test func addFrozenRollsBackTheLocalWorktreeWhenLineageRecordingFails() async throws {
+        let repo = try await makeRepo()
+        let destination = repo.deletingLastPathComponent().appendingPathComponent("\(repo.lastPathComponent)-frozen-lineage-fail")
+        defer {
+            try? FileManager.default.removeItem(at: destination)
+            try? FileManager.default.removeItem(at: repo)
+        }
+        let base = try await Process.git(["rev-parse", "HEAD"], cwd: repo)
+        let commit = base.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let service = WorktreeService()
+        try await service.prepareFrozenBranch(repoPath: repo, branch: "frozen/lineage-fail", intent: .create(atCommit: commit))
+
+        await #expect(throws: (any Error).self) {
+            try await service.addFrozen(
+                repoPath: repo,
+                branch: "frozen/lineage-fail",
+                destination: destination,
+                projectId: "p",
+                intent: .create(atCommit: commit),
+                localLineage: { _, _ in nil }
+            )
+        }
+
+        #expect(!FileManager.default.fileExists(atPath: destination.path))
+        let registrations = try await Process.git(["worktree", "list", "--porcelain"], cwd: repo)
+        #expect(!registrations.stdout.contains(destination.path))
+    }
+
     @Test func remoteAddFrozenRollsBackTheWorktreeWhenLineageRecordingFails() async throws {
         let service = WorktreeService()
         let runner = FrozenRemoteRunner(results: [
