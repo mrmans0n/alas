@@ -549,6 +549,7 @@ struct WorkspaceCheckoutLifecycleTests {
             .init(exitCode: 0, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "worktree /checkout/a\nHEAD abc\nbranch refs/heads/feature\n", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
             .init(exitCode: 1, stdout: "", stderr: "not merged"),
             .init(exitCode: 0, stdout: ".alas-workspace-checkout.json\nnotes.txt\n", stderr: ""),
         ])
@@ -563,6 +564,7 @@ struct WorkspaceCheckoutLifecycleTests {
             sourceRepositoryPath: "/repo",
             baseReference: "main",
             baseCommit: "abc",
+            branchCommit: "abc",
             rootPath: "/checkout",
             managedMemberPaths: ["/checkout/a"],
             worktreePath: "/checkout/a",
@@ -581,8 +583,47 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(root.leftovers == ["notes.txt"])
         let commands = await runner.commands.joined(separator: "\n")
         #expect(commands.contains("worktree remove -f -f --"))
+        #expect(commands.contains("rev-parse --verify"))
         #expect(commands.contains("branch -d"))
         #expect(commands.contains("m=$(cd") == false)
+    }
+
+    @Test func concreteLifecycleRefusesToDeleteAReplacedOwnedBranch() async throws {
+        let repo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("workspace-cleanup-branch-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "base"], cwd: repo)
+        let original = try await Process.git(["rev-parse", "HEAD"], cwd: repo)
+        let originalCommit = original.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        _ = try await Process.git(["branch", "feature/workspace", originalCommit], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "replacement"], cwd: repo)
+        let replacement = try await Process.git(["rev-parse", "HEAD"], cwd: repo)
+        let replacementCommit = replacement.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        _ = try await Process.git(["branch", "-f", "feature/workspace", replacementCommit], cwd: repo)
+        let plan = WorkspaceCheckoutCleanupPlan(
+            checkoutID: UUID(),
+            memberID: UUID(),
+            executionLocation: .local,
+            projectID: "project",
+            sourceRepositoryPath: repo.path,
+            baseReference: "main",
+            baseCommit: originalCommit,
+            branchCommit: originalCommit,
+            rootPath: repo.deletingLastPathComponent().path,
+            managedMemberPaths: [],
+            worktreePath: repo.path,
+            branch: "feature/workspace",
+            expectedLineageID: "lineage",
+            branchOwnership: .created
+        )
+
+        let removed = try await WorkspaceCheckoutLifecycleOperator().deleteMergedBranch(plan)
+
+        #expect(removed == false)
+        let current = try await Process.git(["rev-parse", "feature/workspace"], cwd: repo)
+        #expect(current.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == replacementCommit)
     }
 
     @Test func localRootInspectionIgnoresTheManagedCheckoutManifest() async throws {

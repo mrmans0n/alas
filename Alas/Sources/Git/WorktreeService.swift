@@ -563,7 +563,13 @@ struct WorktreeService {
         intent: FrozenBranchIntent,
         expectedLineageID: String? = nil,
         remoteHost: String? = nil,
-        usesRemoteHostRegistry: Bool = true
+        usesRemoteHostRegistry: Bool = true,
+        remoteExistence: @escaping @Sendable (String, String) async -> RemotePathExistence = { host, path in
+            await RemoteFileAccess.existence(host: host, path: path)
+        },
+        remoteRun: @escaping @Sendable (String, String) async throws -> ProcessResult = { host, command in
+            try await RemoteExec.run(host: host, cwd: nil, command: command)
+        }
     ) async throws -> Worktree {
         switch GitNameValidator.validateBranchName(branch) {
         case .valid: break
@@ -571,7 +577,7 @@ struct WorktreeService {
         }
         let pinnedRemoteHost = remoteHost ?? (usesRemoteHostRegistry ? RemoteHostRegistry.shared.host(forPath: repoPath.path) : nil)
         if let host = pinnedRemoteHost {
-            if await RemoteFileAccess.existence(host: host, path: destination.path) != .missing {
+            if await remoteExistence(host, destination.path) != .missing {
                 throw WorktreeError.gitFailed("Frozen Workspace destination already exists.")
             }
         } else if FileManager.default.fileExists(atPath: destination.path) {
@@ -579,10 +585,9 @@ struct WorktreeService {
         }
         let registrations: ProcessResult
         if let host = pinnedRemoteHost {
-            registrations = try await RemoteExec.run(
-                host: host,
-                cwd: nil,
-                command: "git -C \(SSHCommand.shellQuote(repoPath.path)) worktree list --porcelain"
+            registrations = try await remoteRun(
+                host,
+                "git -C \(SSHCommand.shellQuote(repoPath.path)) worktree list --porcelain"
             )
         } else {
             registrations = try await Process.git(["worktree", "list", "--porcelain"], cwd: repoPath, usesRemoteHostRegistry: usesRemoteHostRegistry)
@@ -597,10 +602,9 @@ struct WorktreeService {
         }
         let ref: ProcessResult
         if let host = pinnedRemoteHost {
-            ref = try await RemoteExec.run(
-                host: host,
-                cwd: nil,
-                command: "git -C \(SSHCommand.shellQuote(repoPath.path)) rev-parse --verify \(SSHCommand.shellQuote("\(branch)^{commit}"))"
+            ref = try await remoteRun(
+                host,
+                "git -C \(SSHCommand.shellQuote(repoPath.path)) rev-parse --verify \(SSHCommand.shellQuote("\(branch)^{commit}"))"
             )
         } else {
             ref = try await Process.git(["rev-parse", "--verify", "\(branch)^{commit}"], cwd: repoPath, usesRemoteHostRegistry: usesRemoteHostRegistry)
@@ -613,10 +617,9 @@ struct WorktreeService {
         }
         let result: ProcessResult
         if let host = pinnedRemoteHost {
-            result = try await RemoteExec.run(
-                host: host,
-                cwd: nil,
-                command: "git -C \(SSHCommand.shellQuote(repoPath.path)) worktree add \(SSHCommand.shellQuote(destination.path)) \(SSHCommand.shellQuote(branch))"
+            result = try await remoteRun(
+                host,
+                "git -C \(SSHCommand.shellQuote(repoPath.path)) worktree add \(SSHCommand.shellQuote(destination.path)) \(SSHCommand.shellQuote(branch))"
             )
         } else {
             result = try await Process.git(["worktree", "add", destination.path, branch], cwd: repoPath, usesRemoteHostRegistry: usesRemoteHostRegistry)
@@ -624,14 +627,19 @@ struct WorktreeService {
         guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
         var worktree = makeWorktree(destination: destination, branch: branch, projectId: projectId)
         if let host = pinnedRemoteHost {
-            let lineage = try await RemoteExec.run(
-                host: host,
-                cwd: nil,
-                    command: Self.remoteLineageIDCommand(path: destination.path, candidateID: expectedLineageID ?? UUID().uuidString.lowercased())
-                )
+            let lineage = try await remoteRun(
+                host,
+                Self.remoteLineageIDCommand(path: destination.path, candidateID: expectedLineageID ?? UUID().uuidString.lowercased())
+            )
             guard lineage.exitCode == 0,
                   let identifier = Self.normalizedLineageID(lineage.stdout)
-            else { throw WorktreeError.gitFailed("Could not record remote Workspace worktree lineage.") }
+            else {
+                _ = try? await remoteRun(
+                    host,
+                    "git -C \(SSHCommand.shellQuote(repoPath.path)) worktree remove -f -f -- \(SSHCommand.shellQuote(destination.path))"
+                )
+                throw WorktreeError.gitFailed("Could not record remote Workspace worktree lineage.")
+            }
             worktree.lineageID = identifier
         } else {
             guard let lineageID = Self.localLineageID(forWorktreeAt: destination, candidateID: expectedLineageID ?? UUID().uuidString.lowercased()) else {

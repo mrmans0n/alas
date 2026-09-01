@@ -83,6 +83,12 @@ enum FrozenBranchIntent: Equatable, Sendable {
         case .reuse: self = .reuse(atCommit: baseCommit)
         }
     }
+
+    var commit: String {
+        switch self {
+        case .create(let atCommit), .reuse(let atCommit): atCommit
+        }
+    }
 }
 
 struct WorkspaceCheckoutSetupOperation: Sendable {
@@ -1376,6 +1382,7 @@ actor WorkspaceCheckoutCoordinator {
             sourceRepositoryPath: plan.sourceRepositoryPath,
             baseReference: plan.baseReference,
             baseCommit: plan.baseCommit,
+            branchCommit: plan.branchIntent.cleanupCommit(defaulting: plan.baseCommit),
             rootPath: checkout.rootPath,
             managedMemberPaths: checkout.members.map(\.worktreePath),
             worktreePath: plan.destinationPath,
@@ -1650,11 +1657,26 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
     }
 
     func deleteMergedBranch(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool {
+        guard let branchCommit = plan.branchCommit, !branchCommit.isEmpty else { return false }
         switch plan.executionLocation.normalized {
         case .local:
+            let ref = try await Process.git(
+                ["rev-parse", "--verify", "\(plan.branch)^{commit}"],
+                cwd: URL(fileURLWithPath: plan.sourceRepositoryPath),
+                usesRemoteHostRegistry: false
+            )
+            guard ref.exitCode == 0,
+                  ref.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == branchCommit
+            else { return false }
             let result = try await Process.git(["branch", "-d", plan.branch], cwd: URL(fileURLWithPath: plan.sourceRepositoryPath), usesRemoteHostRegistry: false)
             return result.exitCode == 0
         case .ssh(let host):
+            let repo = SSHCommand.shellQuote(plan.sourceRepositoryPath)
+            let branch = SSHCommand.shellQuote(plan.branch)
+            let expected = SSHCommand.shellQuote(branchCommit)
+            let verify = "test \"$(git -C \(repo) rev-parse --verify \(branch)^{commit})\" = \(expected)"
+            let verified = try await remote.run(host: host, command: verify)
+            guard verified.exitCode == 0 else { return false }
             let command = "git -C \(SSHCommand.shellQuote(plan.sourceRepositoryPath)) branch -d -- \(SSHCommand.shellQuote(plan.branch))"
             let result = try await remote.run(host: host, command: command)
             return result.exitCode == 0
