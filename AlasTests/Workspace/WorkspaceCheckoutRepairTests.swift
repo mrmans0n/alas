@@ -335,6 +335,28 @@ struct WorkspaceCheckoutRepairTests {
         #expect(await fixture.store.load().loadedCheckout(id: fixture.checkout.id) == nil)
     }
 
+    @Test func deleteSnapshotRevalidatesMemberStateAfterObservedConflict() async throws {
+        let fixture = try await persistedFixture(checkpoint: .failed, worktreeCreated: true, lineageID: "lineage-a")
+        let lifecycle = RepairedDuringConflictVerificationLifecycle(store: fixture.store, checkoutID: fixture.checkout.id, memberID: fixture.checkout.members[0].id)
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: fixture.store,
+            git: RepairGit(),
+            scripts: RepairScriptRunner(),
+            projectMutationGate: ProjectMutationGate(),
+            lifecycle: lifecycle
+        )
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict) {
+            try await coordinator.deleteMemberSnapshot(checkoutID: fixture.checkout.id, memberID: fixture.checkout.members[0].id)
+        }
+
+        let checkout = await fixture.store.load().loadedCheckout(id: fixture.checkout.id)
+        #expect(checkout?.members[0].availability == .available)
+        #expect(checkout?.members[0].checkpoint == .setupComplete)
+        #expect(checkout?.members[0].gitLineageID == "lineage-a")
+        #expect(checkout?.members[0].cleanupOwnership.worktreeCreated == true)
+    }
+
     @Test func retrySetupDoesNotRunWhileCheckoutDeletionIsInProgress() async throws {
         let fixture = try await persistedFixture(
             checkpoint: .failed,
@@ -792,6 +814,43 @@ private actor RepairLifecycle: WorkspaceCheckoutLifecycleOperating {
 
     func removeCheckoutRootArtifacts(for checkout: WorkspaceCheckout) async throws {}
 
+    func deleteMergedBranch(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool { true }
+}
+
+private actor RepairedDuringConflictVerificationLifecycle: WorkspaceCheckoutLifecycleOperating {
+    let store: WorkspaceStore
+    let checkoutID: UUID
+    let memberID: UUID
+
+    init(store: WorkspaceStore, checkoutID: UUID, memberID: UUID) {
+        self.store = store
+        self.checkoutID = checkoutID
+        self.memberID = memberID
+    }
+
+    func deletePreflight(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> WorktreeDeletePreflight {
+        .init(reasons: [], submoduleLocalState: .none)
+    }
+
+    func inspectRoot(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutCleanupRootObservation {
+        .init(isContained: true, leftovers: [])
+    }
+
+    func verifyCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutMemberObservation {
+        try? await store.mutate { state in
+            guard let checkoutIndex = state.checkouts.firstIndex(where: { $0.id == checkoutID }),
+                  let memberIndex = state.checkouts[checkoutIndex].members.firstIndex(where: { $0.id == memberID })
+            else { return }
+            state.checkouts[checkoutIndex].members[memberIndex].availability = .available
+            state.checkouts[checkoutIndex].members[memberIndex].checkpoint = .setupComplete
+            state.checkouts[checkoutIndex].members[memberIndex].gitLineageID = "lineage-a"
+            state.checkouts[checkoutIndex].members[memberIndex].cleanupOwnership.worktreeCreated = true
+        }
+        return .identityConflict("replacement-lineage")
+    }
+
+    func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan, force: Bool, forceTwice: Bool) async throws {}
+    func removeCheckoutRootArtifacts(for checkout: WorkspaceCheckout) async throws {}
     func deleteMergedBranch(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool { true }
 }
 
