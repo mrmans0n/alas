@@ -1464,6 +1464,10 @@ final class AppState {
 
     func activateWorktreeCenterTab(worktreeId: String, tabId: TabID) {
         tabs.activate(worktreeId: worktreeId, tabId: tabId)
+        if let checkout = selectedWorkspaceCheckout,
+           workspaceMemberWorktreeIDs(checkout).values.contains(worktreeId) {
+            tabs.clearActiveTab(owner: .workspaceCheckout(checkout.id, checkout.executionLocation))
+        }
     }
 
     /// Composes checkout-owned session tabs with the repository tabs of the

@@ -262,6 +262,9 @@ struct AppStateKeepSessionsAliveTests {
         state.config.workspacesEnabled = true
         try await state.projectsManager.refreshWorktrees(projectId: projectID)
         state.selectWorkspaceCheckout(id: checkout.id)
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+        let shared = state.tabs.appendTerminal(owner: owner, title: "Shared", sessionId: "checkout-shared")
+        #expect(state.tabs.activeTabId(for: owner) == shared.id)
 
         let opened = state.openWorkspaceCheckoutSearchResult(
             relativePath: "README.md",
@@ -274,6 +277,8 @@ struct AppStateKeepSessionsAliveTests {
         #expect(state.workspaceNavigationState.selectedCheckoutID == checkout.id)
         #expect(state.workspaceNavigationState.focusedCheckoutMemberID == checkoutMemberID)
         #expect(state.selectedWorktreeId == worktree.id)
+        #expect(state.tabs.activeTabId(for: owner) == nil)
+        #expect(state.tabs.activeTabId(forWorktree: worktree.id) != nil)
     }
 
     private struct MemoryStore: PersistenceStoreProtocol {
