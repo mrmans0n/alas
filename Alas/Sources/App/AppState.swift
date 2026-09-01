@@ -4465,6 +4465,7 @@ final class AppState {
         )
         return AlasCLICommandRouter(
             sessionWorktreeId: sessionWorktreeLookup,
+            sessionOwner: sessionOwnerLookup,
             sessionCwdWorktree: { [weak self] sessionId, cwd in
                 guard let self else { return nil }
                 return self.workspaceCheckoutWorktree(for: sessionOwnerLookup(sessionId), cwd: cwd)
@@ -4563,10 +4564,11 @@ final class AppState {
             providerReviewOriginalPath: { [weak self] sessionID, relativePath in
                 await self?.reviewRequestOriginalPath(forDraftSessionID: sessionID, relativePath: relativePath) ?? nil
             },
-            notifySession: { [weak self] sessionId, origin, body, title, level in
+            notifySession: { [weak self] sessionId, owner, origin, body, title, level in
                 guard let self else { return .error("Alas is not available.") }
                 return self.cliNotify(
                     sessionId: sessionId,
+                    owner: owner,
                     origin: origin,
                     body: body,
                     title: title,
@@ -4638,6 +4640,7 @@ final class AppState {
 
     private func cliNotify(
         sessionId: String?,
+        owner: SessionOwnerID?,
         origin: Worktree,
         body: String,
         title: String?,
@@ -4654,7 +4657,8 @@ final class AppState {
             agent: agent,
             projectId: resolved.project.id,
             worktreeId: resolved.worktree.id,
-            sessionId: notificationSessionId
+            sessionId: notificationSessionId,
+            owner: owner
         )
         if level == .attention, let sessionId {
             harness.setExternalActivity(sessionId: sessionId, agent: agent, state: .awaitingInput)

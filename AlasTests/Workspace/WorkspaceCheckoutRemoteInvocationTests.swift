@@ -91,6 +91,39 @@ struct WorkspaceCheckoutRemoteInvocationTests {
         #expect(updated.branch == "release/refreshed")
     }
 
+    @Test func manifestWriterRejectsCopiedManifestFromDifferentRoot() async throws {
+        let originalRoot = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-manifest-original-\(UUID().uuidString)")
+        let copiedRoot = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-manifest-copy-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: originalRoot)
+            try? FileManager.default.removeItem(at: copiedRoot)
+        }
+        let writer = WorkspaceCheckoutManifestWriter()
+        let checkoutID = UUID()
+        let original = WorkspaceCheckoutManifest(
+            checkoutID: checkoutID,
+            rootPath: originalRoot.path,
+            branch: "release/original",
+            members: []
+        )
+        try await writer.write(original, to: originalRoot.path, location: .local)
+        try FileManager.default.createDirectory(at: copiedRoot, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(
+            at: originalRoot.appendingPathComponent(WorkspaceCheckoutManifest.fileName),
+            to: copiedRoot.appendingPathComponent(WorkspaceCheckoutManifest.fileName)
+        )
+
+        let refresh = WorkspaceCheckoutManifest(
+            checkoutID: checkoutID,
+            rootPath: copiedRoot.path,
+            branch: "release/copied",
+            members: []
+        )
+        await #expect(throws: WorkspaceCheckoutManifestError.checkoutRootAlreadyClaimed(copiedRoot.path)) {
+            try await writer.write(refresh, to: copiedRoot.path, location: .local)
+        }
+    }
+
     @Test func manifestWriterRejectsRootCreatedAfterPreflight() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-manifest-race-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
