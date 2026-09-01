@@ -475,16 +475,14 @@ struct GGService {
                         )
                         var sawSummary = false
                         for try await line in lines {
-                            guard !sawSummary else {
-                                throw GGServiceError.malformedOutput(
-                                    "gg sync emitted data after a terminal event."
-                                )
-                            }
                             let events = GGSyncEvent.parseEvents(line: line)
                             for event in events {
                                 continuation.yield(event)
                             }
-                            if events.contains(.summary) { sawSummary = true }
+                            if events.contains(.summary) {
+                                sawSummary = true
+                                break
+                            }
                         }
                         guard sawSummary else {
                             throw GGServiceError.malformedOutput(
