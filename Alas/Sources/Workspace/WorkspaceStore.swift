@@ -113,7 +113,18 @@ actor WorkspaceStore {
     }
 
     func discardUnreadableState() throws {
-        try? FileManager.default.removeItem(at: recoveryURL)
+        let fileManager = FileManager.default
+        let recovery = readRecoveryState()
+        if let quarantinedFileURL = recovery?.quarantinedFileURL,
+           fileManager.fileExists(atPath: quarantinedFileURL.path) {
+            try fileManager.removeItem(at: quarantinedFileURL)
+        }
+        for artifact in quarantineArtifactURLs() where fileManager.fileExists(atPath: artifact.path) {
+            try fileManager.removeItem(at: artifact)
+        }
+        if fileManager.fileExists(atPath: recoveryURL.path) {
+            try fileManager.removeItem(at: recoveryURL)
+        }
     }
 
     private var recoveryURL: URL {
@@ -150,13 +161,17 @@ actor WorkspaceStore {
     }
 
     private func quarantineArtifactURL() -> URL? {
+        quarantineArtifactURLs().first
+    }
+
+    private func quarantineArtifactURLs() -> [URL] {
         let prefix = "\(url.lastPathComponent).broken-"
-        return try? FileManager.default.contentsOfDirectory(
+        return (try? FileManager.default.contentsOfDirectory(
             at: url.deletingLastPathComponent(),
             includingPropertiesForKeys: nil,
             options: [.skipsHiddenFiles]
         )
-        .first(where: { $0.lastPathComponent.hasPrefix(prefix) })
+        .filter { $0.lastPathComponent.hasPrefix(prefix) }) ?? []
     }
 
     private func quarantine(error: Error) -> WorkspaceRecoveryState {
