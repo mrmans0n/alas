@@ -352,6 +352,7 @@ final class ContentSearcher: Sendable {
         return ContentSearchHit(
             worktreeId: worktree.id,
             projectId: worktree.projectId,
+            workspaceCheckoutID: worktree.workspaceCheckoutID,
             workspaceCheckoutMemberID: worktree.workspaceCheckoutMemberID,
             relativePath: parsed.path,
             line: parsed.line,
@@ -462,6 +463,7 @@ final class ContentSearcher: Sendable {
         return ContentSearchHit(
             worktreeId: worktree.id,
             projectId: worktree.projectId,
+            workspaceCheckoutID: worktree.workspaceCheckoutID,
             workspaceCheckoutMemberID: worktree.workspaceCheckoutMemberID,
             relativePath: pathBlob,
             line: lineNumber,

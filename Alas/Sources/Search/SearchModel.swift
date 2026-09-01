@@ -9,6 +9,7 @@ struct SearchWorktree: Equatable, Sendable, Identifiable {
     let displayName: String
     let absolutePath: URL
     var executionLocation: ExecutionLocation? = nil
+    var workspaceCheckoutID: UUID? = nil
     var workspaceCheckoutMemberID: UUID? = nil
 
     var remoteHost: String? {
@@ -275,6 +276,7 @@ final class SearchModel {
             sources.append(FileSearchRankingSource(
                 worktreeId: wt.id,
                 projectId: wt.projectId,
+                workspaceCheckoutID: wt.workspaceCheckoutID,
                 workspaceCheckoutMemberID: wt.workspaceCheckoutMemberID,
                 entries: entries,
                 backendResults: backendResults,
@@ -355,6 +357,7 @@ final class SearchModel {
                     let newGroup = ContentSearchGroup(
                         worktreeId: hit.worktreeId,
                         projectId: hit.projectId,
+                        workspaceCheckoutID: hit.workspaceCheckoutID,
                         workspaceCheckoutMemberID: hit.workspaceCheckoutMemberID,
                         relativePath: hit.relativePath,
                         hits: [hit]

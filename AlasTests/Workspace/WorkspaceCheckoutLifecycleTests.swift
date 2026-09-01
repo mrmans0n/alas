@@ -449,6 +449,26 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(await lifecycle.removedRootArtifacts == [fixture.checkout.id])
     }
 
+    @Test func forgetRemovesOwnedCheckoutRootArtifactsEvenWithoutMemberCleanupPlan() async throws {
+        let fixture = try await Fixture.make(branchOwnership: .reused)
+        try await fixture.store.mutate { state in
+            state.checkouts[0].members[0].cleanup = nil
+            state.checkouts[0].members[0].cleanupOwnership = .init()
+            state.checkouts[0].members[0].availability = .explicitlyDeleted
+        }
+        let lifecycle = FixtureLifecycle()
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+
+        try await coordinator.forget(checkoutID: fixture.checkout.id, confirmedPreserveArtifacts: true)
+
+        #expect(await lifecycle.removedRootArtifacts == [fixture.checkout.id])
+        guard case .loaded(let state) = await fixture.store.load() else {
+            Issue.record("Expected Workspace state to remain readable")
+            return
+        }
+        #expect(state.checkouts.contains(where: { $0.id == fixture.checkout.id }) == false)
+    }
+
     @Test func forgettingARetainedAttemptCreatedBranchRequiresSeparateConfirmation() async throws {
         let fixture = try await Fixture.make()
         let lifecycle = FixtureLifecycle(branchRemoved: false)
@@ -555,23 +575,17 @@ struct WorkspaceCheckoutLifecycleTests {
             ]
         )
         try JSONEncoder().encode(manifest).write(to: root.appendingPathComponent(WorkspaceCheckoutManifest.fileName))
-        let plan = WorkspaceCheckoutCleanupPlan(
-            checkoutID: checkoutID,
-            memberID: memberID,
+        let checkout = WorkspaceCheckout(
+            id: checkoutID,
+            workspaceID: nil,
+            fallbackWorkspaceName: "Release",
             executionLocation: .local,
-            projectID: "project",
-            sourceRepositoryPath: "/repo",
-            baseReference: "main",
-            baseCommit: "abc",
-            rootPath: root.path,
-            managedMemberPaths: [root.appendingPathComponent("a").path],
-            worktreePath: root.appendingPathComponent("a").path,
             branch: "feature",
-            expectedLineageID: "lineage",
-            branchOwnership: .reused
+            rootPath: root.path,
+            members: []
         )
 
-        try await WorkspaceCheckoutLifecycleOperator().removeCheckoutRootArtifacts(plan)
+        try await WorkspaceCheckoutLifecycleOperator().removeCheckoutRootArtifacts(for: checkout)
 
         #expect(FileManager.default.fileExists(atPath: root.path) == false)
     }
@@ -637,7 +651,7 @@ private actor FixtureLifecycle: WorkspaceCheckoutLifecycleOperating {
     func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan, force: Bool, forceTwice: Bool) async throws { if failingMember == plan.memberID { throw TestLifecycleError.failed }
     removeForces.append((force, forceTwice))
     removedMembers.append(plan.memberID) }
-    func removeCheckoutRootArtifacts(_ plan: WorkspaceCheckoutCleanupPlan) async throws { removedRootArtifacts.append(plan.checkoutID) }
+    func removeCheckoutRootArtifacts(for checkout: WorkspaceCheckout) async throws { removedRootArtifacts.append(checkout.id) }
     func deleteMergedBranch(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool { deletedBranches.append(plan.memberID)
     return branchRemoved }
 }
@@ -670,7 +684,7 @@ private actor StoreInspectingLifecycle: WorkspaceCheckoutLifecycleOperating {
         }
     }
 
-    func removeCheckoutRootArtifacts(_ plan: WorkspaceCheckoutCleanupPlan) async throws {}
+    func removeCheckoutRootArtifacts(for checkout: WorkspaceCheckout) async throws {}
 
     func deleteMergedBranch(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool {
         true
@@ -690,7 +704,7 @@ private actor PersistedCleanupLifecycle: WorkspaceCheckoutLifecycleOperating {
               state.checkouts.first(where: { $0.id == checkoutID })?.members.first?.cleanup?.plan == plan else { return }
         sawPersistedCleanupPlan = true
     }
-    func removeCheckoutRootArtifacts(_ plan: WorkspaceCheckoutCleanupPlan) async throws {}
+    func removeCheckoutRootArtifacts(for checkout: WorkspaceCheckout) async throws {}
     func deleteMergedBranch(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool { true }
 }
 private enum TestLifecycleError: Error { case failed }
@@ -724,7 +738,7 @@ private actor BlockingLifecycle: WorkspaceCheckoutLifecycleOperating {
         }
     }
 
-    func removeCheckoutRootArtifacts(_ plan: WorkspaceCheckoutCleanupPlan) async throws {}
+    func removeCheckoutRootArtifacts(for checkout: WorkspaceCheckout) async throws {}
 
     func deleteMergedBranch(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool { true }
 

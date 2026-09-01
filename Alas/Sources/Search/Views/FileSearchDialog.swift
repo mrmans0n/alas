@@ -127,14 +127,16 @@ struct FileSearchDialog: View {
     }
 
     private func openContent(_ hit: ContentSearchHit) {
-        if let memberID = hit.workspaceCheckoutMemberID {
-            appState.openWorkspaceCheckoutSearchResult(
+        if let checkoutID = hit.workspaceCheckoutID,
+           let memberID = hit.workspaceCheckoutMemberID {
+            guard appState.openWorkspaceCheckoutSearchResult(
                 relativePath: hit.relativePath,
                 worktreeId: hit.worktreeId,
+                checkoutID: checkoutID,
                 memberID: memberID,
                 revealLine: hit.revealLine,
                 revealCharacter: hit.revealCharacter
-            )
+            ) else { return }
             close()
             return
         }
@@ -199,12 +201,14 @@ struct FileSearchDialog: View {
     }
 
     private func open(_ r: FileSearchResult) {
-        if let memberID = r.workspaceCheckoutMemberID {
-            appState.openWorkspaceCheckoutSearchResult(
+        if let checkoutID = r.workspaceCheckoutID,
+           let memberID = r.workspaceCheckoutMemberID {
+            guard appState.openWorkspaceCheckoutSearchResult(
                 relativePath: r.relativePath,
                 worktreeId: r.worktreeId,
+                checkoutID: checkoutID,
                 memberID: memberID
-            )
+            ) else { return }
             close()
             return
         }
