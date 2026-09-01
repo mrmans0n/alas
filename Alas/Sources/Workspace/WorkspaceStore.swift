@@ -32,10 +32,10 @@ actor WorkspaceStore {
         if let recovery = readRecoveryState() {
             return .unreadable(recovery)
         }
-        if let recovery = recoveryFromQuarantineArtifact() {
-            return .unreadable(recovery)
-        }
         guard FileManager.default.fileExists(atPath: url.path) else {
+            if let recovery = recoveryFromQuarantineArtifact() {
+                return .unreadable(recovery)
+            }
             return .missing
         }
         do {
@@ -118,6 +118,9 @@ actor WorkspaceStore {
         if let quarantinedFileURL = recovery?.quarantinedFileURL,
            fileManager.fileExists(atPath: quarantinedFileURL.path) {
             try fileManager.removeItem(at: quarantinedFileURL)
+        }
+        if recovery != nil, fileManager.fileExists(atPath: url.path) {
+            try fileManager.removeItem(at: url)
         }
         for artifact in quarantineArtifactURLs() where fileManager.fileExists(atPath: artifact.path) {
             try fileManager.removeItem(at: artifact)

@@ -98,6 +98,29 @@ struct WorkspaceStoreTests {
         }
     }
 
+    @Test func discardUnreadableStateRemovesRetainedOriginalWhenQuarantineDidNotMoveIt() async throws {
+        let url = temporaryURL()
+        defer { removeWorkspaceFiles(near: url) }
+        try Data("not JSON".utf8).write(to: url)
+        let recovery = WorkspaceRecoveryState(
+            originalFilePath: url.path,
+            quarantinedFilePath: nil,
+            message: "retained original"
+        )
+        try JSONEncoder.workspace.encode(recovery).write(to: url.appendingPathExtension("recovery"))
+        let store = WorkspaceStore(url: url)
+
+        guard case .unreadable = await store.load() else {
+            Issue.record("Expected recovery marker to block loading")
+            return
+        }
+        try await store.discardUnreadableState()
+
+        #expect(await store.load() == .missing)
+        #expect(!FileManager.default.fileExists(atPath: url.path))
+        #expect(!FileManager.default.fileExists(atPath: url.appendingPathExtension("recovery").path))
+    }
+
     @Test func unsupportedVersionIsQuarantinedAndBlocksCheckpoint() async throws {
         let url = temporaryURL()
         defer { removeWorkspaceFiles(near: url) }

@@ -438,6 +438,17 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(state.checkouts.contains(where: { $0.id == fixture.checkout.id }) == false)
     }
 
+    @Test func forgetRemovesOwnedCheckoutRootArtifactsBeforeDroppingTheRecord() async throws {
+        let fixture = try await Fixture.make(branchOwnership: .reused)
+        let lifecycle = FixtureLifecycle()
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+        _ = try await coordinator.deleteMember(checkoutID: fixture.checkout.id, memberID: fixture.member.id)
+
+        try await coordinator.forget(checkoutID: fixture.checkout.id)
+
+        #expect(await lifecycle.removedRootArtifacts == [fixture.checkout.id])
+    }
+
     @Test func forgettingARetainedAttemptCreatedBranchRequiresSeparateConfirmation() async throws {
         let fixture = try await Fixture.make()
         let lifecycle = FixtureLifecycle(branchRemoved: false)
@@ -524,6 +535,47 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(inspection.leftovers == ["notes.txt"])
     }
 
+    @Test func localRootCleanupRemovesOwnedManifestAndEmptyRoot() async throws {
+        let checkoutID = UUID()
+        let memberID = UUID()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-cleanup-root-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let manifest = WorkspaceCheckoutManifest(
+            checkoutID: checkoutID,
+            rootPath: root.path,
+            branch: "feature",
+            members: [
+                .init(
+                    id: memberID,
+                    projectID: "project",
+                    path: root.appendingPathComponent("a").path,
+                    availability: .explicitlyDeleted
+                )
+            ]
+        )
+        try JSONEncoder().encode(manifest).write(to: root.appendingPathComponent(WorkspaceCheckoutManifest.fileName))
+        let plan = WorkspaceCheckoutCleanupPlan(
+            checkoutID: checkoutID,
+            memberID: memberID,
+            executionLocation: .local,
+            projectID: "project",
+            sourceRepositoryPath: "/repo",
+            baseReference: "main",
+            baseCommit: "abc",
+            rootPath: root.path,
+            managedMemberPaths: [root.appendingPathComponent("a").path],
+            worktreePath: root.appendingPathComponent("a").path,
+            branch: "feature",
+            expectedLineageID: "lineage",
+            branchOwnership: .reused
+        )
+
+        try await WorkspaceCheckoutLifecycleOperator().removeCheckoutRootArtifacts(plan)
+
+        #expect(FileManager.default.fileExists(atPath: root.path) == false)
+    }
+
     private struct Fixture {
         let store: WorkspaceStore
         let checkout: WorkspaceCheckout
@@ -566,6 +618,7 @@ private actor FixtureLifecycle: WorkspaceCheckoutLifecycleOperating {
     private(set) var removedMembers: [UUID] = []
     private(set) var deletedBranches: [UUID] = []
     private(set) var removeForces: [(force: Bool, forceTwice: Bool)] = []
+    private(set) var removedRootArtifacts: [UUID] = []
     let preflight: WorktreeDeletePreflight
     let leftovers: [String]
     let failingMember: UUID?
@@ -584,6 +637,7 @@ private actor FixtureLifecycle: WorkspaceCheckoutLifecycleOperating {
     func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan, force: Bool, forceTwice: Bool) async throws { if failingMember == plan.memberID { throw TestLifecycleError.failed }
     removeForces.append((force, forceTwice))
     removedMembers.append(plan.memberID) }
+    func removeCheckoutRootArtifacts(_ plan: WorkspaceCheckoutCleanupPlan) async throws { removedRootArtifacts.append(plan.checkoutID) }
     func deleteMergedBranch(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool { deletedBranches.append(plan.memberID)
     return branchRemoved }
 }
@@ -616,6 +670,8 @@ private actor StoreInspectingLifecycle: WorkspaceCheckoutLifecycleOperating {
         }
     }
 
+    func removeCheckoutRootArtifacts(_ plan: WorkspaceCheckoutCleanupPlan) async throws {}
+
     func deleteMergedBranch(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool {
         true
     }
@@ -634,6 +690,7 @@ private actor PersistedCleanupLifecycle: WorkspaceCheckoutLifecycleOperating {
               state.checkouts.first(where: { $0.id == checkoutID })?.members.first?.cleanup?.plan == plan else { return }
         sawPersistedCleanupPlan = true
     }
+    func removeCheckoutRootArtifacts(_ plan: WorkspaceCheckoutCleanupPlan) async throws {}
     func deleteMergedBranch(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool { true }
 }
 private enum TestLifecycleError: Error { case failed }
@@ -666,6 +723,8 @@ private actor BlockingLifecycle: WorkspaceCheckoutLifecycleOperating {
             }
         }
     }
+
+    func removeCheckoutRootArtifacts(_ plan: WorkspaceCheckoutCleanupPlan) async throws {}
 
     func deleteMergedBranch(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool { true }
 
