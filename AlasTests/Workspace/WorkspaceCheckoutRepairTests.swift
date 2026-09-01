@@ -305,6 +305,36 @@ struct WorkspaceCheckoutRepairTests {
         #expect(await lifecycle.observationCount == 1)
     }
 
+    @Test func deleteSnapshotCanDiscardAPlanlessIdentityConflictWithConfirmation() async throws {
+        let fixture = try await persistedFixture(checkpoint: .failed)
+        try await fixture.store.mutate { state in
+            state.checkouts[0].members[0].plan = nil
+            state.checkouts[0].members[0].availability = .pending
+        }
+        let lifecycle = RepairLifecycle(result: .exactLineage("lineage-a"))
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: fixture.store,
+            git: RepairGit(),
+            scripts: RepairScriptRunner(),
+            projectMutationGate: ProjectMutationGate(),
+            lifecycle: lifecycle
+        )
+
+        let checkout = try await coordinator.deleteMemberSnapshot(
+            checkoutID: fixture.checkout.id,
+            memberID: fixture.checkout.members[0].id
+        )
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.cleanupIncomplete) {
+            try await coordinator.forget(checkoutID: fixture.checkout.id)
+        }
+        try await coordinator.forget(checkoutID: fixture.checkout.id, confirmedPreserveArtifacts: true)
+
+        #expect(checkout.members[0].availability == .explicitlyDeleted)
+        #expect(checkout.members[0].cleanup == nil)
+        #expect(await lifecycle.observationCount == 0)
+        #expect(await fixture.store.load().loadedCheckout(id: fixture.checkout.id) == nil)
+    }
+
     @Test func retrySetupDoesNotRunWhileCheckoutDeletionIsInProgress() async throws {
         let fixture = try await persistedFixture(
             checkpoint: .failed,
@@ -469,13 +499,26 @@ struct WorkspaceCheckoutRepairTests {
     }
 
     @Test func resumeCreationNeverReplaysGitAfterASetupFailure() async throws {
-        let fixture = try await persistedFixture(checkpoint: .failed, worktreeCreated: true)
+        let fixture = try await persistedFixture(checkpoint: .failed, worktreeCreated: true, lineageID: "lineage-a")
+        try await fixture.store.mutate { state in
+            state.checkouts[0].diagnostics.append(.init(severity: .error, message: "Workspace setup failed for A."))
+        }
         let git = ResumeGit()
-        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: git, scripts: RepairScriptRunner(), projectMutationGate: ProjectMutationGate())
+        let scripts = RepairScriptRunner()
+        let lifecycle = RepairLifecycle(result: .exactLineage("lineage-a"))
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: fixture.store,
+            git: git,
+            scripts: scripts,
+            projectMutationGate: ProjectMutationGate(),
+            lifecycle: lifecycle
+        )
 
-        _ = try await coordinator.resumeCreation(checkoutID: fixture.checkout.id)
+        let checkout = try await coordinator.resumeCreation(checkoutID: fixture.checkout.id)
 
         #expect(await git.operations.isEmpty)
+        #expect(await scripts.paths == ["/checkouts/a"])
+        #expect(checkout.members[0].checkpoint == .setupComplete)
     }
 
     @Test func resumeCreationRecreatesACompletedMemberWhoseFrozenWorktreeIsMissing() async throws {

@@ -382,7 +382,7 @@ actor WorkspaceCheckoutCoordinator {
                 observedConflict = false
             }
         } else {
-            observedConflict = false
+            observedConflict = frozenMember(from: member) == nil
         }
         guard observedConflict else { throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict }
         do {
@@ -508,8 +508,13 @@ actor WorkspaceCheckoutCoordinator {
         let checkout = try await self.checkout(id: checkoutID)
         guard checkout.operation == .idle,
               checkout.members.allSatisfy({ member in
-                  guard let cleanup = member.cleanup,
-                        cleanup.worktreeRemoved,
+                  guard let cleanup = member.cleanup else {
+                      return confirmedPreserveArtifacts
+                          && member.availability == .explicitlyDeleted
+                          && member.cleanupOwnership.worktreeCreated == false
+                          && member.cleanupOwnership.branchOwnership != .created
+                  }
+                  guard cleanup.worktreeRemoved,
                         cleanup.sharedRootLeftovers.isEmpty || confirmedPreserveArtifacts
                   else { return false }
                   return cleanup.plan.branchOwnership != .created || cleanup.branchRemoved || confirmedPreserveArtifacts
@@ -746,7 +751,10 @@ actor WorkspaceCheckoutCoordinator {
                   let frozenMember = frozenMember(from: member)
             else { continue }
             let plan = member.plan!
-            let setupResumeVerified = if member.checkpoint == .setupRunning || member.checkpoint == .worktreeCreated {
+            let setupResumeVerified = if member.checkpoint == .setupRunning
+                || member.checkpoint == .worktreeCreated
+                || failedDuringSetup(checkout: checkout, member: member)
+            {
                 await setupResumeHasExactLineage(checkout: checkout, member: member)
             } else {
                 true
@@ -799,7 +807,18 @@ actor WorkspaceCheckoutCoordinator {
                     state.checkouts[checkoutIndex].members[memberIndex].cleanup = nil
                     return checkpoint
                 case .failed where current.cleanupOwnership.worktreeCreated:
-                    return nil
+                    if failedDuringSetup(checkout: state.checkouts[checkoutIndex], member: current) {
+                        guard setupResumeVerified else { return nil }
+                        state.checkouts[checkoutIndex].members[memberIndex].checkpoint = .setupRunning
+                        state.checkouts[checkoutIndex].members[memberIndex].availability = .pending
+                        state.checkouts[checkoutIndex].members[memberIndex].cleanup = nil
+                        return .setupRunning
+                    } else {
+                        state.checkouts[checkoutIndex].members[memberIndex].checkpoint = .worktreeCreating
+                        state.checkouts[checkoutIndex].members[memberIndex].availability = .pending
+                        state.checkouts[checkoutIndex].members[memberIndex].cleanup = nil
+                        return .worktreeCreating
+                    }
                 default:
                     return nil
                 }
@@ -824,6 +843,7 @@ actor WorkspaceCheckoutCoordinator {
                         }
                         await runSetup(member: frozenMember, checkout: checkout)
                     } else {
+                        guard member.gitLineageID == nil else { continue }
                         await execute(member: frozenMember, checkout: checkout)
                     }
                 } catch {
@@ -849,6 +869,15 @@ actor WorkspaceCheckoutCoordinator {
             await finishIfAllMembersTerminal(checkoutID: checkoutID, owning: .repairing)
         }
         return try await self.checkout(id: checkoutID)
+    }
+
+    private func failedDuringSetup(checkout: WorkspaceCheckout, member: WorkspaceCheckoutMember) -> Bool {
+        guard member.checkpoint == .failed,
+              member.cleanupOwnership.worktreeCreated,
+              member.gitLineageID != nil
+        else { return false }
+        let expectedMessage = "Workspace setup failed for \(member.fallbackProjectName)."
+        return checkout.diagnostics.contains { $0.message == expectedMessage }
     }
 
     private func setupResumeHasExactLineage(checkout: WorkspaceCheckout, member: WorkspaceCheckoutMember) async -> Bool {
@@ -1632,7 +1661,11 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
         guard let result = try? await remote.run(host: host, command: command),
               result.exitCode == 0
         else { return .init(isContained: false, leftovers: []) }
-        let leftovers = result.stdout.split(separator: "\n").map(String.init).filter { !$0.isEmpty }.sorted()
+        let leftovers = result.stdout
+            .split(separator: "\n")
+            .map(String.init)
+            .filter { !$0.isEmpty && !managedNames.contains($0) }
+            .sorted()
         return .init(isContained: true, leftovers: leftovers)
     }
 }
