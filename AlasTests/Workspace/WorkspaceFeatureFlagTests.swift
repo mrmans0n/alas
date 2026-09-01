@@ -307,7 +307,12 @@ struct WorkspaceFeatureFlagTests {
             bridge: WorkspaceSpacePersistenceBridge(workspaceStore: WorkspaceStore(url: managerURL))
         )
         _ = await manager.setEnabled(true, spacesFile: spaces)
-        let persistence = RecordingSpacesStore(spacesFile: spaces)
+        let persistence = RecordingSpacesStore(
+            spacesFile: spaces,
+            projectsFile: ProjectsFile(projects: [
+                ProjectConfig(id: "project", name: "Project", path: "/repos/project", color: "#ffffff", addedAt: .distantPast),
+            ])
+        )
         let state = AppState(
             store: persistence,
             persistenceErrorHandler: { _, _ in },
@@ -316,15 +321,17 @@ struct WorkspaceFeatureFlagTests {
             workspaceStore: WorkspaceStore(url: URL(fileURLWithPath: "/dev/null/workspaces.json"))
         )
         state.config.workspacesEnabled = true
+        let originalSpacesFile = state.spacesManager.file
+        let originalSpacesWriteCount = persistence.spacesWriteCount
         let workspace = Workspace(name: "Release", executionLocation: .local, members: [])
 
         await #expect(throws: WorkspaceDefinitionSaveError.workspacePersistenceFailed) {
             try await state.saveWorkspaceDefinition(workspace)
         }
 
-        #expect(persistence.spacesWriteCount == 2)
-        #expect(persistence.writtenSpaces.last == spaces)
-        #expect(state.spacesManager.file == spaces)
+        #expect(persistence.spacesWriteCount == originalSpacesWriteCount + 2)
+        #expect(persistence.writtenSpaces.last == originalSpacesFile)
+        #expect(state.spacesManager.file == originalSpacesFile)
         #expect(state.workspacesManager.workspaces.isEmpty)
     }
 
@@ -443,6 +450,86 @@ struct WorkspaceFeatureFlagTests {
             return false
         }
         #expect(acpTabs.count == 1)
+    }
+
+    @Test @MainActor func deletingWorkspaceDefinitionRemovesSpacePlacementAndKeepsFormerCheckoutSnapshot() async throws {
+        let workspaceURL = temporaryURL()
+        defer { removeWorkspaceFiles(near: workspaceURL) }
+        let workspace = Workspace(name: "Release", executionLocation: .local, members: [])
+        let memberID = UUID()
+        let checkout = WorkspaceCheckout(
+            workspaceID: workspace.id,
+            fallbackWorkspaceName: workspace.name,
+            executionLocation: .local,
+            branch: "release/1091",
+            rootPath: "/checkouts/release",
+            members: [
+                WorkspaceCheckoutMember(
+                    id: memberID,
+                    workspaceMemberID: UUID(),
+                    projectID: "project",
+                    fallbackProjectName: "Project",
+                    fallbackRepositoryRoot: "/repos/project",
+                    worktreePath: "/checkouts/release/project",
+                    gitLineageID: "lineage",
+                    availability: .available,
+                    checkpoint: .setupComplete,
+                    cleanupOwnership: .init(worktreeCreated: true, branchOwnership: .created),
+                    plan: .init(
+                        checkoutMemberID: memberID,
+                        projectID: "project",
+                        sourceRepositoryPath: "/repos/project",
+                        destinationPath: "/checkouts/release/project",
+                        baseReference: "main",
+                        baseCommit: "abc",
+                        branchIntent: .create(atCommit: "abc")
+                    )
+                ),
+            ]
+        )
+        let workspaceStore = WorkspaceStore(url: workspaceURL)
+        try await workspaceStore.checkpoint(.init(workspaces: [workspace], checkouts: [checkout]))
+        let spaces = SpacesFile(activeSpaceId: "space", spaces: [
+            SpaceConfig(
+                id: "space",
+                name: "Default",
+                emoji: "folder",
+                projectIds: ["project"],
+                members: [.project("project"), .workspace(workspace.id)],
+                lastSelectedWorktreeId: nil,
+                createdAt: .distantPast
+            ),
+        ])
+        let persistence = RecordingSpacesStore(
+            spacesFile: spaces,
+            projectsFile: ProjectsFile(projects: [
+                ProjectConfig(id: "project", name: "Project", path: "/repos/project", color: "#ffffff", addedAt: .distantPast),
+            ])
+        )
+        let manager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
+        _ = await manager.setEnabled(true, spacesFile: spaces)
+        let state = AppState(
+            store: persistence,
+            persistenceErrorHandler: { _, _ in },
+            restoreActiveTabsOnStartup: false,
+            workspacesManager: manager,
+            workspaceStore: workspaceStore
+        )
+        state.config.workspacesEnabled = true
+        state.selectWorkspace(id: workspace.id)
+
+        try await state.deleteWorkspaceDefinition(id: workspace.id)
+
+        #expect(state.spacesManager.activeSpace?.members == [.project("project")])
+        #expect(persistence.writtenSpaces.last?.spaces.first?.members == [.project("project")])
+        guard case .loaded(let stored) = await workspaceStore.load() else {
+            Issue.record("Expected stored Workspace state")
+            return
+        }
+        #expect(stored.workspaces.isEmpty)
+        #expect(stored.checkouts.first?.workspaceID == nil)
+        #expect(stored.checkouts.first?.fallbackWorkspaceName == "Release")
+        #expect(state.workspaceNavigationState.selectedWorkspaceID == nil)
     }
 
     private final class ThrowingSpacesStore: PersistenceStoreProtocol, @unchecked Sendable {

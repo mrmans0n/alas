@@ -215,6 +215,16 @@ pub enum SessionWorktreeTarget {
     },
 }
 
+fn is_workspace_command(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::WorkspaceList
+            | Command::WorkspaceShow { .. }
+            | Command::WorkspaceSwitch { .. }
+            | Command::WorkspaceFocus { .. }
+    )
+}
+
 /// Build the wire request for a command, attaching whichever addressing the
 /// caller resolved (`session_id` inside Alas, else `cwd`).
 pub fn build_request(
@@ -443,10 +453,14 @@ pub fn build_request(
             r.params = Some(serde_json::json!({ "checkout_id": checkout_id }));
             r
         }
-        Command::WorkspaceFocus { checkout_id, member_id } => {
+        Command::WorkspaceFocus {
+            checkout_id,
+            member_id,
+        } => {
             let mut r = Request::new("workspace");
             r.subcommand = Some("focus".into());
-            r.params = Some(serde_json::json!({ "checkout_id": checkout_id, "member_id": member_id }));
+            r.params =
+                Some(serde_json::json!({ "checkout_id": checkout_id, "member_id": member_id }));
             r
         }
         Command::Resolve => Request::new("resolve"),
@@ -665,6 +679,15 @@ pub fn dispatch_to_sockets(
     };
     if sockets.is_empty() {
         return Err(DispatchError::NoAlas);
+    }
+    if is_workspace_command(command) {
+        return match sockets {
+            [socket] => {
+                let req = build_request(command, None, Some(cwd.clone()));
+                send(socket, &req).map_err(DispatchError::Transport)
+            }
+            _ => Err(DispatchError::Ambiguous),
+        };
     }
 
     // Probe every live socket with a non-mutating resolve first, then send
@@ -885,7 +908,14 @@ mod tests {
 
     #[test]
     fn builds_review_local_and_provider() {
-        let local = build_request(&Command::Review { target: None, worktree: None }, Some("s1".into()), None);
+        let local = build_request(
+            &Command::Review {
+                target: None,
+                worktree: None,
+            },
+            Some("s1".into()),
+            None,
+        );
         assert_eq!(local.command, "review");
         assert!(local.target.is_none());
         let provider = build_request(
@@ -1084,13 +1114,22 @@ mod tests {
         assert_eq!(list.subcommand.as_deref(), Some("list"));
         assert_eq!(list.cwd.as_deref(), Some("/repo"));
 
-        let show = build_request(&Command::WorkspaceShow { checkout_id: checkout.clone() }, Some("s1".into()), None);
+        let show = build_request(
+            &Command::WorkspaceShow {
+                checkout_id: checkout.clone(),
+            },
+            Some("s1".into()),
+            None,
+        );
         assert_eq!(show.command, "workspace");
         assert_eq!(show.subcommand.as_deref(), Some("show"));
         assert_eq!(show.params.as_ref().unwrap()["checkout_id"], checkout);
 
         let focus = build_request(
-            &Command::WorkspaceFocus { checkout_id: checkout.clone(), member_id: member.clone() },
+            &Command::WorkspaceFocus {
+                checkout_id: checkout.clone(),
+                member_id: member.clone(),
+            },
             Some("s1".into()),
             None,
         );

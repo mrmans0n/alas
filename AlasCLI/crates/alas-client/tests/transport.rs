@@ -66,13 +66,12 @@ fn dispatch_directory_single_owner_sends_command() {
     // `resolve`) before sending the real command, so the single-instance and
     // multi-instance paths agree on exit codes for "not in a worktree".
     let (path, handle) = stub_multi_server(vec![r#"{"ok":true}"#, r#"{"ok":true}"#]);
-    let target = Target::Directory { cwd: "/repo".into() };
+    let target = Target::Directory {
+        cwd: "/repo".into(),
+    };
     // One explicit socket via the test-only entry point.
-    let resp = alas_client::dispatch_to_sockets(
-        &Command::WtList,
-        &target,
-        std::slice::from_ref(&path),
-    );
+    let resp =
+        alas_client::dispatch_to_sockets(&Command::WtList, &target, std::slice::from_ref(&path));
     assert!(matches!(resp, Ok(r) if r.ok));
 
     let received = handle.join().unwrap();
@@ -86,9 +85,59 @@ fn dispatch_directory_single_owner_sends_command() {
 
 #[test]
 fn dispatch_directory_no_sockets_is_no_alas() {
-    let target = Target::Directory { cwd: "/repo".into() };
+    let target = Target::Directory {
+        cwd: "/repo".into(),
+    };
     let resp = alas_client::dispatch_to_sockets(&Command::WtList, &target, &[]);
     assert!(matches!(resp, Err(DispatchError::NoAlas)));
+}
+
+#[test]
+fn dispatch_directory_workspace_command_bypasses_worktree_probe_for_single_instance() {
+    let (path, handle) = stub_multi_server(vec![r#"{"ok":true}"#]);
+    let target = Target::Directory {
+        cwd: "/outside".into(),
+    };
+
+    let resp = alas_client::dispatch_to_sockets(
+        &Command::WorkspaceList,
+        &target,
+        std::slice::from_ref(&path),
+    );
+
+    assert!(matches!(resp, Ok(r) if r.ok));
+    let received = handle.join().unwrap();
+    assert_eq!(
+        received.len(),
+        1,
+        "workspace command should not probe worktree ownership"
+    );
+    assert_eq!(parsed(&received[0])["command"], "workspace");
+    assert_eq!(parsed(&received[0])["subcommand"], "list");
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn dispatch_directory_workspace_command_is_ambiguous_with_multiple_instances() {
+    let (path_a, handle_a) = stub_multi_server(vec![]);
+    let (path_b, handle_b) = stub_multi_server(vec![]);
+    let target = Target::Directory {
+        cwd: "/outside".into(),
+    };
+
+    let resp = alas_client::dispatch_to_sockets(
+        &Command::WorkspaceList,
+        &target,
+        &[path_a.clone(), path_b.clone()],
+    );
+
+    assert!(matches!(resp, Err(DispatchError::Ambiguous)));
+    assert!(handle_a.join().unwrap().is_empty());
+    assert!(handle_b.join().unwrap().is_empty());
+
+    let _ = std::fs::remove_file(&path_a);
+    let _ = std::fs::remove_file(&path_b);
 }
 
 /// A stub server that accepts `replies.len()` sequential connections on one
@@ -136,13 +185,13 @@ fn parsed(bytes: &[u8]) -> serde_json::Value {
 #[test]
 fn dispatch_directory_multi_socket_unique_owner_sends_command_once() {
     // Owner: replies "ok" to the resolve probe, then to the real command.
-    let (owner_path, owner_handle) =
-        stub_multi_server(vec![r#"{"ok":true}"#, r#"{"ok":true}"#]);
+    let (owner_path, owner_handle) = stub_multi_server(vec![r#"{"ok":true}"#, r#"{"ok":true}"#]);
     // Non-owner: replies "not mine" to the probe and is never contacted again.
-    let (other_path, other_handle) =
-        stub_multi_server(vec![r#"{"ok":false,"error":"not mine"}"#]);
+    let (other_path, other_handle) = stub_multi_server(vec![r#"{"ok":false,"error":"not mine"}"#]);
 
-    let target = Target::Directory { cwd: "/repo".into() };
+    let target = Target::Directory {
+        cwd: "/repo".into(),
+    };
     let resp = alas_client::dispatch_to_sockets(
         &Command::WtList,
         &target,
@@ -151,13 +200,21 @@ fn dispatch_directory_multi_socket_unique_owner_sends_command_once() {
     assert!(matches!(resp, Ok(r) if r.ok));
 
     let owner_received = owner_handle.join().unwrap();
-    assert_eq!(owner_received.len(), 2, "owner should see probe + real command");
+    assert_eq!(
+        owner_received.len(),
+        2,
+        "owner should see probe + real command"
+    );
     assert_eq!(parsed(&owner_received[0])["command"], "resolve");
     assert_eq!(parsed(&owner_received[1])["command"], "wt");
     assert_eq!(parsed(&owner_received[1])["subcommand"], "list");
 
     let other_received = other_handle.join().unwrap();
-    assert_eq!(other_received.len(), 1, "non-owner should see only the probe");
+    assert_eq!(
+        other_received.len(),
+        1,
+        "non-owner should see only the probe"
+    );
     assert_eq!(parsed(&other_received[0])["command"], "resolve");
 
     let _ = std::fs::remove_file(&owner_path);
@@ -169,7 +226,9 @@ fn dispatch_directory_multi_socket_zero_owners_is_not_in_worktree() {
     let (path_a, handle_a) = stub_multi_server(vec![r#"{"ok":false}"#]);
     let (path_b, handle_b) = stub_multi_server(vec![r#"{"ok":false}"#]);
 
-    let target = Target::Directory { cwd: "/repo".into() };
+    let target = Target::Directory {
+        cwd: "/repo".into(),
+    };
     let resp = alas_client::dispatch_to_sockets(
         &Command::WtList,
         &target,
@@ -208,7 +267,9 @@ fn dispatch_directory_slow_non_owner_does_not_stall_dispatch() {
         thread::sleep(std::time::Duration::from_secs(5));
     });
 
-    let target = Target::Directory { cwd: "/repo".into() };
+    let target = Target::Directory {
+        cwd: "/repo".into(),
+    };
     let started = std::time::Instant::now();
     let resp = alas_client::dispatch_to_sockets(
         &Command::WtList,
@@ -224,7 +285,11 @@ fn dispatch_directory_slow_non_owner_does_not_stall_dispatch() {
     );
 
     let owner_received = owner_handle.join().unwrap();
-    assert_eq!(owner_received.len(), 2, "owner should see probe + real command");
+    assert_eq!(
+        owner_received.len(),
+        2,
+        "owner should see probe + real command"
+    );
 
     let _ = std::fs::remove_file(&owner_path);
     let _ = std::fs::remove_file(&wedged_path);
@@ -237,7 +302,9 @@ fn dispatch_directory_multi_socket_multiple_owners_is_ambiguous() {
     let (path_a, handle_a) = stub_multi_server(vec![r#"{"ok":true}"#]);
     let (path_b, handle_b) = stub_multi_server(vec![r#"{"ok":true}"#]);
 
-    let target = Target::Directory { cwd: "/repo".into() };
+    let target = Target::Directory {
+        cwd: "/repo".into(),
+    };
     let resp = alas_client::dispatch_to_sockets(
         &Command::WtList,
         &target,

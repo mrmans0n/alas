@@ -11,6 +11,7 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
     @State private var creatingCheckout: Workspace?
     @State private var lifecycleError: String?
     @State private var deletionConfirmation: PendingDeletionConfirmation?
+    @State private var workspaceDeletionConfirmation: PendingWorkspaceDefinitionDeletion?
     @State private var repairPlan: PendingRepairPlan?
 
     var body: some View {
@@ -44,6 +45,9 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                         Spacer()
                         Button("Create Checkout") { creatingCheckout = workspace }.buttonStyle(.plain)
                         Button("Edit") { editingWorkspace = workspace }.buttonStyle(.plain)
+                        Button("Delete", role: .destructive) {
+                            workspaceDeletionConfirmation = .init(id: id, name: workspace.name)
+                        }.buttonStyle(.plain)
                     }.padding(.horizontal, 12)
                 }
             case .formerWorkspace:
@@ -110,6 +114,24 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                 useRepairCandidate(candidate, checkoutID: pending.checkoutID, memberID: pending.memberID)
             }
         }
+        .confirmationDialog(
+            "Delete Workspace?",
+            isPresented: Binding(
+                get: { workspaceDeletionConfirmation != nil },
+                set: { if !$0 { workspaceDeletionConfirmation = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Delete Workspace", role: .destructive) {
+                if let pending = workspaceDeletionConfirmation {
+                    deleteWorkspace(id: pending.id)
+                }
+            }
+            Button("Cancel", role: .cancel) { workspaceDeletionConfirmation = nil }
+        } message: {
+            let name = workspaceDeletionConfirmation?.name ?? "this Workspace"
+            Text("Delete \(name)? Existing checkouts are retained as Former Workspace checkouts.")
+        }
     }
 
     private func perform(_ action: WorkspaceCheckoutActionKind, checkoutID: UUID, memberID: UUID?) {
@@ -121,7 +143,12 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                 case .unarchive:
                     _ = try await state.unarchiveWorkspaceCheckout(id: checkoutID)
                 case .deleteCheckout:
-                    _ = try await state.deleteWorkspaceCheckout(id: checkoutID)
+                    let confirmation = try await state.workspaceCheckoutDeletionConfirmation(checkoutID: checkoutID)
+                    if confirmation.requiresConfirmation {
+                        deletionConfirmation = PendingDeletionConfirmation(checkoutID: checkoutID, memberID: nil, model: confirmation)
+                    } else {
+                        _ = try await state.deleteWorkspaceCheckout(id: checkoutID)
+                    }
                 case .forgetCheckout:
                     let confirmation = try state.workspaceForgetConfirmation(checkoutID: checkoutID)
                     if confirmation.requiresConfirmation {
@@ -177,6 +204,9 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
         Task { @MainActor in
             do {
                 switch action {
+                case .deleteCheckout(let confirmingRisks):
+                    _ = try await state.deleteWorkspaceCheckout(id: checkoutID, confirmingRisks: confirmingRisks)
+                    deletionConfirmation = nil
                 case .deleteMember(let confirmingRisks):
                     if let memberID {
                         _ = try await state.deleteWorkspaceCheckoutMember(checkoutID: checkoutID, memberID: memberID, confirmingRisks: confirmingRisks)
@@ -202,6 +232,22 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
             }
         }
     }
+
+    private func deleteWorkspace(id: UUID) {
+        Task { @MainActor in
+            do {
+                try await state.deleteWorkspaceDefinition(id: id)
+                workspaceDeletionConfirmation = nil
+            } catch {
+                lifecycleError = error.localizedDescription
+            }
+        }
+    }
+}
+
+private struct PendingWorkspaceDefinitionDeletion {
+    var id: UUID
+    var name: String
 }
 
 private struct PendingDeletionConfirmation: Identifiable {
