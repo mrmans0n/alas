@@ -79,4 +79,28 @@ struct FileIndexTests {
         let entries = try await FileIndex().entries(forWorktreePath: repo)
         #expect(entries.contains(where: { $0.relativePath == nonAscii }))
     }
+
+    @Test func invalidatesLocationQualifiedLocalCacheKey() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try write("hi", to: repo.appendingPathComponent("first.txt"))
+        _ = try await Process.git(["add", "."], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "init"], cwd: repo)
+        let index = FileIndex()
+        let worktree = SearchWorktree(
+            id: repo.path,
+            projectId: "project",
+            displayName: "Repo",
+            absolutePath: repo,
+            executionLocation: .local
+        )
+
+        let first = try await index.entries(for: worktree)
+        try write("hi", to: repo.appendingPathComponent("second.txt"))
+        await index.invalidate(forWorktreePath: repo)
+        let second = try await index.entries(for: worktree)
+
+        #expect(first.map(\.relativePath) == ["first.txt"])
+        #expect(second.map(\.relativePath).contains("second.txt"))
+    }
 }

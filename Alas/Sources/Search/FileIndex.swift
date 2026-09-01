@@ -77,7 +77,12 @@ actor FileIndex {
     }
 
     func invalidate(forWorktreePath worktree: URL) {
-        cache.removeValue(forKey: worktree.path)
+        let path = worktree.path
+        cache = cache.filter { key, _ in
+            key != path
+                && key != "local:\(path)"
+                && !key.hasSuffix(":\(path)")
+        }
     }
 
     func invalidateAll() {

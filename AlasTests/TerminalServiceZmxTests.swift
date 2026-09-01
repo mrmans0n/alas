@@ -426,10 +426,9 @@ struct TerminalServiceZmxTests {
         service.terminateAll(additionalSessions: [
             TerminalSessionIdentity(owner: owner, leafId: leafID),
         ])
-        await waitForCalls(recorder, count: 2) { $0.calls.count }
+        await waitForCalls(recorder, count: 1) { $0.calls.count }
 
         #expect(Set(recorder.calls.map(\.args)) == Set([
-            ["ls"],
             ["kill", ZmxSessionName.derive(owner: owner, leafId: leafID)],
         ]))
     }

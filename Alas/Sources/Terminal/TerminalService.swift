@@ -547,7 +547,8 @@ final class TerminalService {
                 client.killSession(name: name)
             }
             let localAdditionalSessions = additionalSessions.filter {
-                Self.remoteHostForCleanup(session: $0) == nil
+                guard case .worktree = $0.owner else { return false }
+                return Self.remoteHostForCleanup(session: $0) == nil
             }
             let localLegacySessionInfos = localAdditionalSessions.isEmpty ? [] : client.listSessionInfos()
             for session in localAdditionalSessions {
@@ -569,6 +570,9 @@ final class TerminalService {
                 }
             }
             let remoteAdditionalSessionsByHost = Dictionary(grouping: additionalSessions.compactMap { session -> (String, TerminalSessionIdentity)? in
+                guard case .worktree = session.owner else {
+                    return nil
+                }
                 guard let host = Self.remoteHostForCleanup(session: session) else {
                     return nil
                 }
