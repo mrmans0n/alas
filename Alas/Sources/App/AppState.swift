@@ -8213,6 +8213,12 @@ final class AppState {
         guard let worktreeId = selectedWorktreeId,
               let worktree = worktree(withId: worktreeId) else { return }
         guard let mgr = acpManager(for: worktree) else { return }
+        openNewACPSession(agentID: agentID, owner: mgr.owner, initialPrompt: initialPrompt)
+    }
+
+    @discardableResult
+    func openNewACPSession(agentID: String, owner: SessionOwnerID, initialPrompt: String? = nil) -> ACPSessionTabState? {
+        guard let mgr = acpManager(for: owner) else { return nil }
         let session = mgr.createSession(agentId: agentID, autoRunDefault: config.harness.acpAutoRunByDefault)
         if let initialPrompt, !initialPrompt.isEmpty {
             mgr.persistComposerDraft(
@@ -8221,7 +8227,8 @@ final class AppState {
             )
         }
         let state = ACPSessionTabState(sessionId: session.id, title: session.title)
-        tabs.append(acpSession: state, to: worktree.id)
+        tabs.append(acpSession: state, to: owner)
+        return state
     }
 
     /// Opens a checkout-owned shared ACP tab. This is intentionally separate

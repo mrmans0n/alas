@@ -8,6 +8,7 @@ struct AgentLauncherDialog: View {
     @FocusState private var inputFocused: Bool
     @State private var chatAgent: AgentDefinition?
     @State private var discoveryModel: ACPSessionDiscoveryModel?
+    @State private var discoveryOwner: SessionOwnerID?
     @State private var selectedSessionIndex = 0
     @State private var loadingMore = false
     @State private var deletionRequest: ACPSessionDeletionRequest?
@@ -553,6 +554,7 @@ struct AgentLauncherDialog: View {
         let prior = discoveryModel
         let model = ACPSessionDiscoveryModel()
         discoveryModel = model
+        discoveryOwner = manager.owner
         Task {
             await prior?.stop()
             await model.start(manager: manager, agentId: agent.id)
@@ -570,32 +572,27 @@ struct AgentLauncherDialog: View {
 
     private func launchNewChat() {
         guard let chatAgent else { return }
-        if let checkout = selectedWorkspaceCheckout() {
-            Task { @MainActor in
-                _ = await appState.openWorkspaceCheckoutACPSession(checkout: checkout, agentID: chatAgent.id)
+        let owner = discoveryOwner
+        Task { @MainActor in
+            if let owner {
+                _ = appState.openNewACPSession(agentID: chatAgent.id, owner: owner)
+            } else {
+                appState.openNewACPSession(agentID: chatAgent.id)
             }
-        } else {
-            appState.openNewACPSession(agentID: chatAgent.id)
         }
         close()
     }
 
     private func openDiscoveredSession(_ session: ACPDiscoveredSession) {
-        guard let capabilities = discoveryModel?.capabilities else { return }
+        guard let capabilities = discoveryModel?.capabilities,
+              let owner = discoveryOwner
+        else { return }
         Task {
-            let opened: Bool
-            if let checkout = selectedWorkspaceCheckout() {
-                opened = await appState.openDiscoveredACPSession(
-                    session,
-                    owner: SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation),
-                    capabilities: capabilities
-                )
-            } else {
-                opened = await appState.openDiscoveredACPSession(
-                    session,
-                    capabilities: capabilities
-                )
-            }
+            let opened = await appState.openDiscoveredACPSession(
+                session,
+                owner: owner,
+                capabilities: capabilities
+            )
             guard opened else { return }
             close()
         }
@@ -630,8 +627,8 @@ struct AgentLauncherDialog: View {
     }
 
     private func selectedACPManagerForLauncher() -> ACPSessionManager? {
-        if let checkout = selectedWorkspaceCheckout() {
-            return appState.acpManager(for: SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation))
+        if let discoveryOwner {
+            return appState.acpManager(for: discoveryOwner)
         }
         guard let worktree = selectedWorktree() else { return nil }
         return appState.acpManager(for: worktree)
@@ -652,6 +649,7 @@ struct AgentLauncherDialog: View {
     private func resetSessionBrowser() {
         let prior = discoveryModel
         discoveryModel = nil
+        discoveryOwner = nil
         chatAgent = nil
         selectedSessionIndex = 0
         loadingMore = false
