@@ -101,9 +101,10 @@ struct GGCommandRunningStreamingTests {
         var env = ProcessInfo.processInfo.environment
         env["PID_FILE"] = pidFile.path
         env["CHILD_PID_FILE"] = childPIDFile.path
+        env["PYTHON_CODE"] = #"import os,signal,time; time.sleep(0.2); pid=os.fork(); time.sleep(0.2) if pid else None; os._exit(0) if pid else None; os.setsid(); signal.signal(signal.SIGTERM, signal.SIG_IGN); f=open(os.environ['CHILD_PID_FILE'],'w'); f.write(str(os.getpid())); f.flush(); time.sleep(30)"#
         let stream = ProcessGGCommandRunner.streamProcess(
             executable: "/bin/sh",
-            args: ["-c", "sh -c 'trap \"\" TERM; while :; do :; done' & echo $! > \"$CHILD_PID_FILE\"; echo $$ > \"$PID_FILE\"; wait"],
+            args: ["-c", #"/usr/bin/python3 -c "$PYTHON_CODE"; while [ ! -s "$CHILD_PID_FILE" ]; do sleep 0.01; done; echo $$ > "$PID_FILE"; while :; do sleep 1; done"#],
             cwd: nil,
             env: env
         )
