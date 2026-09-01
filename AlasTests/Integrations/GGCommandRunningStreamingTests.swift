@@ -71,6 +71,50 @@ struct GGCommandRunningStreamingTests {
         }
     }
 
+    @Test func cancelingStreamKillsProcessThatIgnoresTermination() async throws {
+        let pidFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-gg-stream-\(UUID().uuidString).pid")
+        defer { try? FileManager.default.removeItem(at: pidFile) }
+        var env = ProcessInfo.processInfo.environment
+        env["PID_FILE"] = pidFile.path
+        let stream = ProcessGGCommandRunner.streamProcess(
+            executable: "/bin/sh",
+            args: ["-c", "trap '' TERM; echo $$ > \"$PID_FILE\"; while :; do :; done"],
+            cwd: nil,
+            env: env
+        )
+        let consumer = Task {
+            for try await _ in stream {}
+        }
+        defer { consumer.cancel() }
+
+        var discoveredProcessID: pid_t?
+        for _ in 0 ..< 50 {
+            if let text = try? String(contentsOf: pidFile, encoding: .utf8),
+               let pid = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines))
+            {
+                discoveredProcessID = pid
+                break
+            }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let processID = try #require(discoveredProcessID)
+        defer { kill(processID, SIGKILL) }
+
+        consumer.cancel()
+        _ = try? await consumer.value
+
+        var isRunning = true
+        for _ in 0 ..< 150 {
+            if kill(processID, 0) == -1, errno == ESRCH {
+                isRunning = false
+                break
+            }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(!isRunning)
+    }
+
     @Test func nonZeroExitSurfacesCommandFailedWithAccumulatedStderr() async throws {
         let script = "echo boom 1>&2; exit 3"
         let stream = ProcessGGCommandRunner.streamProcess(
