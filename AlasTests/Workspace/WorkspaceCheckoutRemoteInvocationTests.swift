@@ -87,6 +87,19 @@ struct WorkspaceCheckoutRemoteInvocationTests {
         #expect(updated.branch == "release/refreshed")
     }
 
+    @Test func manifestWriterRejectsRootCreatedAfterPreflight() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-manifest-race-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let manifest = WorkspaceCheckoutManifest(checkoutID: UUID(), rootPath: root.path, branch: "release/1091", members: [])
+
+        await #expect(throws: WorkspaceCheckoutManifestError.checkoutRootAlreadyClaimed(root.path)) {
+            try await WorkspaceCheckoutManifestWriter().write(manifest, to: root.path, location: .local)
+        }
+
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent(WorkspaceCheckoutManifest.fileName).path))
+    }
+
     @Test func remoteLineageInspectionUsesTheExactWorkspaceHost() async {
         let memberID = UUID()
         let member = WorkspaceCheckoutMember(

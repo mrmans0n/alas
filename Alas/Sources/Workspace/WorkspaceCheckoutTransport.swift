@@ -105,11 +105,23 @@ struct WorkspaceCheckoutManifestWriter: WorkspaceCheckoutManifestWriting, Sendab
         let target = URL(fileURLWithPath: rootPath).appendingPathComponent(WorkspaceCheckoutManifest.fileName).path
         switch location.normalized {
         case .local:
-            try FileManager.default.createDirectory(atPath: rootPath, withIntermediateDirectories: true)
+            let rootURL = URL(fileURLWithPath: rootPath)
             let targetURL = URL(fileURLWithPath: target)
             if try existingManifestAtTargetBelongsToCheckout(targetURL, checkoutID: manifest.checkoutID) {
                 try data.write(to: targetURL, options: .atomic)
             } else {
+                if FileManager.default.fileExists(atPath: rootURL.path) {
+                    throw WorkspaceCheckoutManifestError.checkoutRootAlreadyClaimed(rootPath)
+                }
+                do {
+                    try FileManager.default.createDirectory(at: rootURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: false)
+                } catch {
+                    if (error as? CocoaError)?.code == .fileWriteFileExists {
+                        throw WorkspaceCheckoutManifestError.checkoutRootAlreadyClaimed(rootPath)
+                    }
+                    throw WorkspaceCheckoutManifestError.writeFailed(error.localizedDescription)
+                }
                 do {
                     try data.write(to: targetURL, options: .withoutOverwriting)
                 } catch {

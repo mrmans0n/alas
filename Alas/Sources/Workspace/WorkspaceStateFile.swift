@@ -32,7 +32,30 @@ struct WorkspaceStateFile: Codable, Equatable, Sendable {
         guard version == Self.currentVersion else {
             throw WorkspaceStateFileError.unsupportedVersion(version)
         }
+        try validateUniqueIDs()
         return self
+    }
+
+    private func validateUniqueIDs() throws {
+        guard Set(workspaces.map(\.id)).count == workspaces.count else {
+            throw WorkspaceStateFileError.duplicateIdentity("workspace")
+        }
+        for workspace in workspaces {
+            guard Set(workspace.members.map(\.id)).count == workspace.members.count else {
+                throw WorkspaceStateFileError.duplicateIdentity("workspaceMember")
+            }
+        }
+        guard Set(checkouts.map(\.id)).count == checkouts.count else {
+            throw WorkspaceStateFileError.duplicateIdentity("checkout")
+        }
+        for checkout in checkouts {
+            guard Set(checkout.members.map(\.id)).count == checkout.members.count else {
+                throw WorkspaceStateFileError.duplicateIdentity("checkoutMember")
+            }
+        }
+        guard Set(spaceLayouts.map(\.spaceID)).count == spaceLayouts.count else {
+            throw WorkspaceStateFileError.duplicateIdentity("spaceLayout")
+        }
     }
 
     mutating func reconcileSpaceLayouts(with spacesFile: SpacesFile) -> SpacesFile {
@@ -53,6 +76,7 @@ struct WorkspaceStateFile: Codable, Equatable, Sendable {
 
 enum WorkspaceStateFileError: Error, Equatable, Sendable {
     case unsupportedVersion(Int)
+    case duplicateIdentity(String)
 }
 
 extension JSONEncoder {
