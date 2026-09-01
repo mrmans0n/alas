@@ -60,6 +60,24 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(checkout.members[0].cleanup?.worktreeRemoved == true)
     }
 
+    @Test func deletionPreviewAllowsMissingAttemptOwnedMembers() async throws {
+        let fixture = try await Fixture.make()
+        try await fixture.store.mutate { state in
+            state.checkouts[0].members[0].availability = .missing
+        }
+        let lifecycle = FixtureLifecycle(
+            verification: .missing,
+            preflight: .init(reasons: [.dirty], submoduleLocalState: .none)
+        )
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+
+        let preview = try await coordinator.previewMemberDeletion(checkoutID: fixture.checkout.id, memberID: fixture.member.id)
+
+        #expect(preview.member.availability == .missing)
+        #expect(preview.preflight.reasons.isEmpty)
+        #expect(preview.plan.expectedLineageID == fixture.member.gitLineageID)
+    }
+
     @Test func interruptedDeletingCheckoutCanResumeFromPersistedCleanup() async throws {
         let fixture = try await Fixture.make()
         let plan = WorkspaceCheckoutCleanupPlan(
