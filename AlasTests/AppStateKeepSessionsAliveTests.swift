@@ -155,4 +155,42 @@ struct AppStateKeepSessionsAliveTests {
 
         #expect(state.tabs.tabs(forWorktree: trees[0].id).map(\.id) == [term.id])
     }
+
+    @Test func terminateAllTerminalSessionsClosesCheckoutOwnedTerminalTabs() async throws {
+        let workspaceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-terminate-checkout-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: workspaceURL) }
+
+        let workspaceStore = WorkspaceStore(url: workspaceURL)
+        let checkout = WorkspaceCheckout(
+            workspaceID: nil,
+            fallbackWorkspaceName: "Release",
+            executionLocation: .local,
+            branch: "release/1091",
+            rootPath: "/checkouts/release",
+            members: []
+        )
+        try await workspaceStore.checkpoint(.init(checkouts: [checkout]))
+        let bridge = WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore)
+        let workspaces = WorkspacesManager(bridge: bridge)
+        _ = await workspaces.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+        let tabs = TabsManager(store: MemoryStore())
+        _ = tabs.appendTerminal(owner: owner, title: "Shared", sessionId: "checkout-leaf")
+        let state = AppState(
+            store: MemoryStore(),
+            tabsManager: tabs,
+            workspacesManager: workspaces,
+            workspaceStore: workspaceStore
+        )
+
+        state.terminateAllTerminalSessionsAfterConfirmationForTesting()
+
+        #expect(tabs.tabs(for: owner).isEmpty)
+    }
+
+    private struct MemoryStore: PersistenceStoreProtocol {
+        func write<T: Encodable>(_: T, to _: URL) throws {}
+        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
+    }
 }

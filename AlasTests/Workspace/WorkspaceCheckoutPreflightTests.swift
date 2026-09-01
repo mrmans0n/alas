@@ -245,6 +245,35 @@ struct WorkspaceCheckoutPreflightTests {
         #expect(unsafeDiagnostics.map(\.message).contains("Workspace member 1 cannot safely reuse branch 'release/1091'."))
     }
 
+    @Test func detectsDestinationCollisionsUsingCaseInsensitiveVolumeSemantics() async {
+        let first = WorkspaceMember(projectID: "first", fallbackProjectName: "First", fallbackRepositoryRoot: "/repos/Foo")
+        let second = WorkspaceMember(projectID: "second", fallbackProjectName: "Second", fallbackRepositoryRoot: "/repos/foo")
+        let workspace = Workspace(name: "Release", executionLocation: .local, members: [first, second])
+        let git = GitProbe(
+            resolutions: ["/repos/Foo": "first-commit", "/repos/foo": "second-commit"],
+            branches: ["/repos/Foo": .available, "/repos/foo": .available]
+        )
+        let result = await WorkspaceCheckoutPreflight(
+            projects: [
+                project(id: "first", name: "First", path: "/repos/Foo"),
+                project(id: "second", name: "Second", path: "/repos/foo"),
+            ],
+            git: git,
+            paths: PathProbe(caseSensitiveDestinations: false)
+        ).prepare(.init(
+            workspace: workspace,
+            branch: "release/1091",
+            rootPath: "/checkouts/release",
+            baseReference: "main"
+        ))
+
+        guard case .failure(let diagnostics) = result else {
+            Issue.record("Expected case-insensitive duplicate destination failure")
+            return
+        }
+        #expect(diagnostics.map(\.message).contains("Workspace member 2 has a duplicate destination '/checkouts/release/foo'."))
+    }
+
     @Test func gitBranchProbeFailsClosedForUnexpectedShowRefFailure() async {
         await #expect(throws: Error.self) {
             try await GitService().branchDisposition(named: "release/1091", at: "/path/that/does/not/exist")
@@ -315,9 +344,13 @@ private actor GitProbe: WorkspaceGitInspecting {
 
 private final class PathProbe: WorkspacePathInspecting, @unchecked Sendable {
     let existing: Set<String>
+    let caseSensitiveDestinations: Bool
     private(set) var mutationCount = 0
 
-    init(existing: Set<String> = []) { self.existing = existing }
+    init(existing: Set<String> = [], caseSensitiveDestinations: Bool = true) {
+        self.existing = existing
+        self.caseSensitiveDestinations = caseSensitiveDestinations
+    }
 
     func exists(at path: String, location: ExecutionLocation) async -> Bool {
         existing.contains(path)
@@ -325,6 +358,10 @@ private final class PathProbe: WorkspacePathInspecting, @unchecked Sendable {
 
     func isCreatableDirectory(at path: String, location: ExecutionLocation) async -> Bool {
         !existing.contains(path)
+    }
+
+    func destinationCollisionKey(for path: String, location: ExecutionLocation) async -> String {
+        caseSensitiveDestinations ? path : path.lowercased()
     }
 }
 
