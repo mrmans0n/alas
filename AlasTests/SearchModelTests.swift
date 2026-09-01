@@ -174,6 +174,23 @@ struct SearchModelTests {
         #expect(model.results.partialFailureMessage == "Couldn't read files for wt-member")
     }
 
+    @Test func workspaceCheckoutFileResultsCarryMemberIdentity() async {
+        let memberID = UUID()
+        var member = wt("member", projectId: "p1")
+        member.workspaceCheckoutMemberID = memberID
+        let env = makeEnv(
+            files: ["member": [.init(relativePath: "Sources/App.swift", ext: "swift")]],
+            workspaceCheckoutWorktrees: { [member] }
+        )
+        let model = SearchModel(environment: env)
+        model.open()
+        model.scope = .workspaceCheckout
+        model.query = "App"
+        await model.waitForIdle()
+
+        #expect(model.results.fileResults.first?.workspaceCheckoutMemberID == memberID)
+    }
+
     @Test func emptyQueryInFilesModeShowsAllInThisWorktree() async {
         let env = makeEnv(
             worktrees: [wt("a")],

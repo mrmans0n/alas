@@ -6,6 +6,7 @@ import Foundation
 struct FileSearchResult: Identifiable, Equatable, Sendable {
     let worktreeId: String
     let projectId: String
+    var workspaceCheckoutMemberID: UUID? = nil
     /// Repo-relative path (e.g., `crates/alas-gui/src/main.rs`).
     let relativePath: String
     /// Filename extension without leading dot, lowercased (e.g., `rs`, `toml`).
@@ -32,6 +33,7 @@ enum GitStatusBadge: String, Sendable {
 struct ContentSearchHit: Identifiable, Equatable, Sendable {
     let worktreeId: String
     let projectId: String
+    var workspaceCheckoutMemberID: UUID? = nil
     let relativePath: String
     let line: Int
     let column: Int
@@ -52,6 +54,7 @@ struct ContentSearchHit: Identifiable, Equatable, Sendable {
 struct ContentSearchGroup: Identifiable, Equatable, Sendable {
     let worktreeId: String
     let projectId: String
+    var workspaceCheckoutMemberID: UUID? = nil
     let relativePath: String
     var hits: [ContentSearchHit]
 

@@ -1185,6 +1185,29 @@ final class AppState {
         selectedWorktreeId = workspaceNavigationState.repositoryFocusWorktreeID
     }
 
+    func openWorkspaceCheckoutSearchResult(
+        relativePath: String,
+        worktreeId: String,
+        memberID: UUID,
+        revealLine: Int? = nil,
+        revealEndLine: Int? = nil,
+        revealCharacter: Int? = nil
+    ) {
+        guard config.workspacesEnabled, workspacesManager.canMutate else { return }
+        guard let checkout = selectedWorkspaceCheckout,
+              checkout.members.contains(where: { $0.id == memberID })
+        else { return }
+        focusWorkspaceCheckoutMember(id: memberID)
+        guard selectedWorktreeId == worktreeId else { return }
+        openFile(
+            relativePath: relativePath,
+            worktreeId: worktreeId,
+            revealLine: revealLine,
+            revealEndLine: revealEndLine,
+            revealCharacter: revealCharacter
+        )
+    }
+
     private func workspaceMemberWorktreeIDs(_ checkout: WorkspaceCheckout) -> [UUID: String] {
         WorkspaceMemberWorktreeResolver.resolvedWorktreeIDs(
             checkout: checkout,
@@ -1457,13 +1480,29 @@ final class AppState {
     /// calls this when archiving a checkout.
     func stopWorkspaceCheckoutSessions(_ checkout: WorkspaceCheckout) async {
         let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+        let persistedTerminalSessions = persistedWorkspaceCheckoutTerminalSessions(checkout)
         // The registry is authoritative for live sessions, including a
         // freshly opened terminal whose tab has not been persisted yet.
         // Persisted checkout-owned tab records are archived only after live
         // sessions have drained, so unarchive cannot expose stale processes.
         terminal.stopSessions(owner: owner)
+        terminal.terminateAll(additionalSessions: persistedTerminalSessions)
         await terminal.drainPendingKills(timeout: 5)
         await disposeACPManagerAndWait(owner: owner)
+    }
+
+#if DEBUG
+    func persistedWorkspaceCheckoutTerminalSessionsForTesting(_ checkout: WorkspaceCheckout) -> [TerminalSessionIdentity] {
+        persistedWorkspaceCheckoutTerminalSessions(checkout)
+    }
+#endif
+
+    private func persistedWorkspaceCheckoutTerminalSessions(_ checkout: WorkspaceCheckout) -> [TerminalSessionIdentity] {
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+        return tabs.tabs(for: owner).flatMap { tab -> [TerminalSessionIdentity] in
+            guard case .terminal(let state) = tab else { return [] }
+            return state.root.leaves().map { TerminalSessionIdentity(owner: owner, leafId: $0.id) }
+        }
     }
 
     /// Opens a terminal in the checkout root with the startup script frozen
@@ -6433,7 +6472,8 @@ final class AppState {
                             projectId: worktree.projectId,
                             displayName: worktree.branch,
                             absolutePath: worktree.path,
-                            executionLocation: checkout.executionLocation
+                            executionLocation: checkout.executionLocation,
+                            workspaceCheckoutMemberID: member.id
                         )
                     }
                 }
