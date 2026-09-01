@@ -296,6 +296,31 @@ struct WorkspaceCheckoutRemoteInvocationTests {
         #expect(await git.locations == [.ssh("builder.example"), .ssh("builder.example")])
     }
 
+    @Test func sshCheckoutRootPreservesRemoteHomeRelativePath() async {
+        let member = WorkspaceMember(projectID: "one", fallbackProjectName: "One", fallbackRepositoryRoot: "/srv/repo")
+        let workspace = Workspace(name: "Release", executionLocation: .ssh("builder.example"), members: [member])
+
+        let result = await WorkspaceCheckoutPreflight(
+            projects: [project(id: "one", path: "/srv/repo", host: "builder.example")],
+            git: FixedWorkspaceGit(),
+            paths: EmptyWorkspacePaths(),
+            remoteValidator: NoopWorkspaceRemoteRepositoryValidator()
+        ).prepare(.init(
+            workspace: workspace,
+            branch: "release/1091",
+            rootPath: "~/.alas/checkouts/release",
+            baseReference: "main"
+        ))
+
+        guard case .success(let plan) = result else {
+            Issue.record("Expected SSH preflight success")
+            return
+        }
+        #expect(plan.rootPath == "~/.alas/checkouts/release")
+        #expect(plan.members.first?.destinationPath == "~/.alas/checkouts/release/repo")
+        #expect(!plan.rootPath.hasPrefix(FileManager.default.homeDirectoryForCurrentUser.path))
+    }
+
     private func project(id: String, path: String, host: String) -> ProjectConfig {
         .init(id: id, name: id, path: path, color: "blue", addedAt: .distantPast, host: host)
     }

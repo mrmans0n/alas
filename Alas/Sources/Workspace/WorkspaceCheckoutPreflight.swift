@@ -100,7 +100,8 @@ struct WorkspaceCheckoutPreflight: Sendable {
     }
 
     func prepare(_ request: WorkspaceCheckoutRequest) async -> WorkspaceCheckoutPreflightResult {
-        let rootPath = Self.normalizedPath(request.rootPath)
+        let location = request.workspace.executionLocation.normalized
+        let rootPath = Self.normalizedPath(request.rootPath, location: location)
         var messages: [String] = []
         if case .invalid = GitNameValidator.validateBranchName(request.branch) {
             messages.append("Branch '\(request.branch)' is invalid.")
@@ -117,7 +118,6 @@ struct WorkspaceCheckoutPreflight: Sendable {
             messages.append("Workspace member \(index + 1) duplicates Project '\(member.projectID)'.")
         }
 
-        let location = request.workspace.executionLocation.normalized
         var resolved: [(WorkspaceMember, ProjectConfig, String, String)] = []
         var warnings: [WorkspaceDiagnostic] = []
         for (index, member) in request.workspace.members.enumerated() {
@@ -173,8 +173,8 @@ struct WorkspaceCheckoutPreflight: Sendable {
         for (index, item) in resolved.enumerated() {
             // The checkout path is repository-root-derived, not display-name-derived:
             // changing a Project's label must not change a durable checkout layout.
-            let destinationName = URL(fileURLWithPath: item.1.path).lastPathComponent
-            let destination = URL(fileURLWithPath: rootPath).appendingPathComponent(destinationName).path
+            let destinationName = Self.lastPathComponent(item.1.path, location: location)
+            let destination = Self.appendingPathComponent(destinationName, to: rootPath, location: location)
             let destinationKey = await paths.destinationCollisionKey(for: destination, location: location)
             let memberIndex = request.workspace.members.firstIndex(where: { $0.id == item.0.id })! + 1
             var memberHasError = false
@@ -239,9 +239,32 @@ struct WorkspaceCheckoutPreflight: Sendable {
         project.host.map { .ssh($0) } ?? .local
     }
 
-    private static func normalizedPath(_ path: String) -> String {
+    private static func normalizedPath(_ path: String, location: ExecutionLocation) -> String {
         guard !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "" }
-        return URL(fileURLWithPath: path).standardizedFileURL.path
+        switch location.normalized {
+        case .local:
+            return URL(fileURLWithPath: path).standardizedFileURL.path
+        case .ssh:
+            return path.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+    }
+
+    private static func lastPathComponent(_ path: String, location: ExecutionLocation) -> String {
+        switch location.normalized {
+        case .local:
+            return URL(fileURLWithPath: path).lastPathComponent
+        case .ssh:
+            return path.split(separator: "/", omittingEmptySubsequences: true).last.map(String.init) ?? path
+        }
+    }
+
+    private static func appendingPathComponent(_ component: String, to rootPath: String, location: ExecutionLocation) -> String {
+        switch location.normalized {
+        case .local:
+            return URL(fileURLWithPath: rootPath).appendingPathComponent(component).path
+        case .ssh:
+            return rootPath.hasSuffix("/") ? rootPath + component : rootPath + "/" + component
+        }
     }
 
     private static func cachedFallback(for ref: String) -> String? {
