@@ -434,6 +434,25 @@ struct TerminalServiceZmxTests {
     }
 
     @Test
+    func terminateSessionsKillsOnlyTheSuppliedCheckoutOwnerLeaves() async {
+        let checkoutID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        let owner = SessionOwnerID.workspaceCheckout(checkoutID, .local)
+        let recorder = RecordingRunner()
+        let service = TerminalService(
+            zmxClient: ZmxClient(env: makeZmxEnv(available: true), runner: recorder.runner())
+        )
+
+        service.terminateSessions([
+            TerminalSessionIdentity(owner: owner, leafId: "checkout-leaf"),
+        ])
+        await waitForCalls(recorder, count: 1) { $0.calls.count }
+
+        #expect(recorder.calls.map(\.args) == [
+            ["kill", ZmxSessionName.derive(owner: owner, leafId: "checkout-leaf")],
+        ])
+    }
+
+    @Test
     func terminateAllDeduplicatesRegistryAndAdditional() async {
         let recorder = RecordingRunner()
         recorder.resultsByFirstArg["ls"] = .init(exitCode: 0, stdout: "", stderr: "")

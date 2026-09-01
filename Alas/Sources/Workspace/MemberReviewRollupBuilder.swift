@@ -24,7 +24,12 @@ extension WorkspaceReviewSessionReading {
         executionLocation: ExecutionLocation,
         repositoryPath: String
     ) throws -> [ReviewSessionRecord] {
-        try list(worktreeID: worktreeID).filter {
+        let qualifiedWorktreeID = WorkspaceReviewSessionIdentity.worktreeID(
+            projectID: projectID,
+            executionLocation: executionLocation,
+            repositoryPath: repositoryPath
+        )
+        return try list(worktreeID: qualifiedWorktreeID).filter {
             $0.target.repositoryPath.standardizedFileURL.path == URL(fileURLWithPath: repositoryPath).standardizedFileURL.path
         }
     }
@@ -33,6 +38,18 @@ extension WorkspaceReviewSessionReading {
 extension WorkspaceGGStackReading {
     func stack(worktreeID: String, projectID: String, executionLocation: ExecutionLocation, repositoryPath: String) throws -> GGStack? {
         try stack(worktreeID: worktreeID)
+    }
+}
+
+enum WorkspaceReviewSessionIdentity {
+    static func worktreeID(projectID: String, executionLocation: ExecutionLocation, repositoryPath: String) -> String {
+        let normalizedPath = URL(fileURLWithPath: repositoryPath).standardizedFileURL.path
+        switch executionLocation.normalized {
+        case .local:
+            return "workspace-review:local:\(projectID):\(normalizedPath)"
+        case .ssh(let host):
+            return "workspace-review:ssh:\(host):\(projectID):\(normalizedPath)"
+        }
     }
 }
 
