@@ -27,7 +27,7 @@ final class GGStreamingProcessTree: @unchecked Sendable {
             }
         }
         condition.lock()
-        if rootHasExited {
+        if terminationCompleted {
             condition.unlock()
             tracker.cancel()
         } else {
@@ -37,16 +37,11 @@ final class GGStreamingProcessTree: @unchecked Sendable {
     }
 
     func rootDidExit() {
+        refreshDescendants(includeExitedRoot: true)
         condition.lock()
         rootHasExited = true
-        let tracker = terminationInProgress ? nil : tracker
-        if !terminationInProgress { self.tracker = nil }
-        let sources = terminationInProgress ? [] : Array(forkSources.values)
-        if !terminationInProgress { forkSources.removeAll() }
         condition.broadcast()
         condition.unlock()
-        tracker?.cancel()
-        for source in sources { source.cancel() }
     }
 
     func terminateAndWait(graceNanoseconds: UInt64 = 2_000_000_000) {
@@ -94,14 +89,6 @@ final class GGStreamingProcessTree: @unchecked Sendable {
         finishTermination()
     }
 
-    func waitForActiveTermination() {
-        condition.lock()
-        while terminationInProgress {
-            condition.wait()
-        }
-        condition.unlock()
-    }
-
     private func signalRootAndGroup(_ pid: pid_t, signal: Int32) {
         condition.lock()
         if !rootHasExited, process.isRunning {
@@ -129,11 +116,11 @@ final class GGStreamingProcessTree: @unchecked Sendable {
         return retained.union(ACPTerminal.collectChildDescendants(of: rootPID))
     }
 
-    private func refreshDescendants() {
+    private func refreshDescendants(includeExitedRoot: Bool = false) {
         refreshLock.lock()
         defer { refreshLock.unlock() }
         condition.lock()
-        let shouldStop = rootHasExited && !terminationInProgress
+        let shouldStop = terminationCompleted
         let rootAlive = !rootHasExited
         let cached = descendants
         condition.unlock()
@@ -141,7 +128,7 @@ final class GGStreamingProcessTree: @unchecked Sendable {
 
         let retained = ACPTerminal.currentlyMatching(cached)
         var live: Set<ACPTerminal.DescendantKey> = []
-        if rootAlive, process.isRunning {
+        if rootAlive || includeExitedRoot {
             live.formUnion(ACPTerminal.collectChildDescendants(of: process.processIdentifier))
         }
         for descendant in retained {
@@ -149,7 +136,7 @@ final class GGStreamingProcessTree: @unchecked Sendable {
         }
         let tracked = retained.union(live)
         condition.lock()
-        guard !rootHasExited || terminationInProgress else {
+        guard !terminationCompleted else {
             condition.unlock()
             return
         }
@@ -161,7 +148,7 @@ final class GGStreamingProcessTree: @unchecked Sendable {
     private func observeForks(from pids: [pid_t]) {
         for pid in pids where pid > 0 {
             condition.lock()
-            let shouldCreate = forkSources[pid] == nil && (!rootHasExited || terminationInProgress)
+            let shouldCreate = forkSources[pid] == nil && !terminationCompleted
             condition.unlock()
             guard shouldCreate else { continue }
 
@@ -174,7 +161,7 @@ final class GGStreamingProcessTree: @unchecked Sendable {
                 self?.refreshDescendants()
             }
             condition.lock()
-            if forkSources[pid] == nil, !rootHasExited || terminationInProgress {
+            if forkSources[pid] == nil, !terminationCompleted {
                 forkSources[pid] = source
                 condition.unlock()
                 source.resume()

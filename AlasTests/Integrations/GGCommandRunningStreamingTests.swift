@@ -116,6 +116,27 @@ struct GGCommandRunningStreamingTests {
         #expect(kill(childPID, 0) == -1 && errno == ESRCH)
     }
 
+    @Test func naturalExitKillsLastMinuteDetachedChild() async throws {
+        let childPIDFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-gg-exit-child-\(UUID().uuidString).pid")
+        defer { try? FileManager.default.removeItem(at: childPIDFile) }
+        var env = ProcessInfo.processInfo.environment
+        env["CHILD_PID_FILE"] = childPIDFile.path
+        let script = #"import os,signal,time; time.sleep(0.2); pid=os.fork(); time.sleep(0.05) if pid else None; os._exit(0) if pid else None; os.setsid(); signal.signal(signal.SIGTERM, signal.SIG_IGN); open(os.environ['CHILD_PID_FILE'],'w').write(str(os.getpid())); time.sleep(30)"#
+        let stream = ProcessGGCommandRunner.streamProcess(
+            executable: "/usr/bin/python3",
+            args: ["-c", script],
+            cwd: nil,
+            env: env
+        )
+
+        _ = try await collectWithTimeout(stream)
+        let childPID = try #require(pid_t(try String(contentsOf: childPIDFile, encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines)))
+        defer { kill(childPID, SIGKILL) }
+        #expect(kill(childPID, 0) == -1 && errno == ESRCH)
+    }
+
     @Test func cancelingStreamKillsProcessThatIgnoresTermination() async throws {
         let pidFile = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-gg-stream-\(UUID().uuidString).pid")

@@ -142,7 +142,7 @@ struct ProcessGGCommandRunner: GGCommandRunning {
                 processTree.rootDidExit()
                 let status = proc.terminationStatus
                 Task {
-                    processTree.waitForActiveTermination()
+                    processTree.terminateAndWait()
                     // Bound the wait the same way `Process+Git.swift` does:
                     // a stuck handler (e.g. a wedged dispatch queue) must
                     // not hang the stream forever.
