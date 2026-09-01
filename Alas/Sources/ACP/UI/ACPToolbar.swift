@@ -6,6 +6,7 @@ struct ACPToolbar: View {
     let agentLookup: (String) -> AgentDefinition?
     let state: AppState
     let worktree: Worktree
+    var owner: SessionOwnerID? = nil
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -15,6 +16,7 @@ struct ACPToolbar: View {
                 manager: manager,
                 state: state,
                 worktree: worktree,
+                owner: owner,
                 agentLookup: agentLookup
             )
             ACPMCPStatusControl(

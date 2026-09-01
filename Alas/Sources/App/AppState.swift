@@ -8216,7 +8216,7 @@ final class AppState {
         agentID: String,
         initialPrompt: String? = nil
     ) async -> ACPSessionTabState? {
-        guard workspaceMutationAvailable, checkout.archivedAt == nil else { return nil }
+        guard let checkout = await authoritativeCheckoutForWorkspaceACPSessionCreation(checkout) else { return nil }
         guard case let .ready(manager) = await workspaceACPManager(for: checkout) else { return nil }
         let session = manager.createSession(agentId: agentID, autoRunDefault: config.harness.acpAutoRunByDefault)
         if let initialPrompt, !initialPrompt.isEmpty {
@@ -8225,6 +8225,14 @@ final class AppState {
         let state = ACPSessionTabState(sessionId: session.id, title: session.title)
         tabs.append(acpSession: state, to: SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation))
         return state
+    }
+
+    private func authoritativeCheckoutForWorkspaceACPSessionCreation(_ checkout: WorkspaceCheckout) async -> WorkspaceCheckout? {
+        guard workspaceMutationAvailable else { return nil }
+        guard let authoritative = await workspaceStore.checkout(id: checkout.id) else { return nil }
+        guard authoritative.executionLocation.normalized == checkout.executionLocation.normalized else { return nil }
+        guard authoritative.archivedAt == nil, authoritative.operation == .idle else { return nil }
+        return authoritative
     }
 
     /// Restores saved checkout-owned ACP tabs without creating a replacement
@@ -8374,6 +8382,38 @@ final class AppState {
         }
     }
 
+    func forkACPSession(
+        owner: SessionOwnerID,
+        sourceSessionID: ACPSession.ID,
+        boundary: ACPForkMessageBoundary,
+        targetAgentID: String
+    ) {
+        guard let manager = acpManager(for: owner) else { return }
+        Task { @MainActor in
+            do {
+                let target = try await manager.createFork(
+                    sourceSessionID: sourceSessionID,
+                    boundary: boundary,
+                    targetAgentID: targetAgentID,
+                    autoRunDefault: config.harness.acpAutoRunByDefault
+                )
+                let tabState = ACPSessionTabState(sessionId: target.id, title: target.title)
+                let tab = tabs.append(acpSession: tabState, to: owner)
+                tabs.activate(owner: owner, tabId: tab.id)
+                if let selectedWorktreeId {
+                    tabs.clearActiveTab(worktreeId: selectedWorktreeId)
+                }
+                await manager.attach(
+                    to: target.id,
+                    freshlyCreated: true
+                )
+            } catch {
+                manager.liveSession(for: sourceSessionID)?.lastError =
+                    "Could not create fork: \(error.localizedDescription)"
+            }
+        }
+    }
+
     /// Route a prepared handoff into the active ACP tab when its composer is
     /// safely empty; otherwise preserve the current draft and open a new tab.
     func openACPHandoff(agentID: String, initialPrompt: String) {
@@ -8480,6 +8520,43 @@ final class AppState {
         await deliverPendingDelegatedMessages(to: sessionId, manager: mgr)
         let state = ACPSessionTabState(sessionId: sessionId, title: title)
         tabs.append(acpSession: state, to: worktree.id)
+    }
+
+    /// Reopen a persisted ACP session inside a typed session-owner bucket.
+    /// Checkout-owned sessions must not fall back to Repository Focus because
+    /// their database, tabs, and lifecycle are tied to the checkout owner.
+    func openExistingACPSession(sessionId: ACPSession.ID, owner: SessionOwnerID) async {
+        guard let mgr = acpManager(for: owner) else { return }
+
+        let tabIdToFocus: TabID? = tabs.tabs(for: owner).compactMap { tab -> TabID? in
+            if case .acpSession(let state) = tab, state.sessionId == sessionId { return tab.id }
+            return nil
+        }.first
+        if let id = tabIdToFocus {
+            tabs.activate(owner: owner, tabId: id)
+            if let selectedWorktreeId {
+                tabs.clearActiveTab(worktreeId: selectedWorktreeId)
+            }
+            return
+        }
+
+        let title: String
+        if let liveTitle = mgr.liveSession(for: sessionId)?.title {
+            title = liveTitle
+        } else if let row = await mgr.persistedSessionRow(id: sessionId) {
+            title = row.title
+        } else {
+            title = "ACP session"
+        }
+        _ = mgr.placeholderSession(id: sessionId)
+        await mgr.hydrateIfNeeded(id: sessionId)
+        await deliverPendingDelegatedMessages(to: sessionId, manager: mgr)
+        let state = ACPSessionTabState(sessionId: sessionId, title: title)
+        let tab = tabs.append(acpSession: state, to: owner)
+        tabs.activate(owner: owner, tabId: tab.id)
+        if let selectedWorktreeId {
+            tabs.clearActiveTab(worktreeId: selectedWorktreeId)
+        }
     }
 
     private func deliverPendingDelegatedMessages(to sessionId: String, manager: ACPSessionManager) async {
