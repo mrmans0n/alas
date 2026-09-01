@@ -24,17 +24,16 @@ struct ACPFileWriter {
     }
 
     /// Throws `outsideWorktree` if `path` resolves outside the
-    /// worktree root after symlink expansion. Returned URL is the
-    /// resolved absolute target — safe to read or write. Used by both
-    /// the write path AND the read path so the worktree boundary is
-    /// enforced symmetrically.
+    /// worktree root after symlink expansion. The returned URL preserves
+    /// the requested standardized path so editor live-buffer lookups keep
+    /// using the same worktree spelling as the UI.
     func resolveInsideWorktree(path: String) throws -> URL {
         let target = URL(fileURLWithPath: path).standardizedFileURL
         let boundary = WorkspaceCheckoutBoundary(rootPath: worktreeRoot.path)
-        guard let resolved = try? boundary.managedURL(for: target.path) else {
+        guard (try? boundary.managedURL(for: target.path)) != nil else {
             throw Error.outsideWorktree(path: target.path)
         }
-        return resolved
+        return target
     }
 
     /// Cheap +N/-M counts via line-set symmetric difference. Good enough for the
