@@ -489,6 +489,16 @@ struct GGService {
                                 "gg sync ended without a summary event."
                             )
                         }
+                        try await withThrowingTaskGroup(of: Void.self) { group in
+                            group.addTask {
+                                for try await _ in lines {}
+                            }
+                            group.addTask {
+                                try await Task.sleep(nanoseconds: 100_000_000)
+                            }
+                            defer { group.cancelAll() }
+                            _ = try await group.next()
+                        }
                     } else {
                         let result = try await runChecked(
                             args: ["sync", "--json"],

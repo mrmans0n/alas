@@ -203,6 +203,19 @@ struct GGServiceActionsTests {
         }
     }
 
+    @Test func syncJSONLPreservesNonzeroExitAfterSummary() async {
+        let runner = RecordingGGRunner(
+            stdout: #"{"event":"summary"}"#,
+            exitCode: 1,
+            stderr: "sync failed"
+        )
+        let service = GGService(runner: runner)
+
+        await #expect(throws: GGServiceError.commandFailed(stderr: "sync failed")) {
+            for try await _ in service.sync(worktreePath: "/tmp/wt", supportsJSONL: true) {}
+        }
+    }
+
     @Test func cleanContinueAbortCheckoutSendExpectedArgs() async throws {
         let runner = RecordingGGRunner(stdout: #"{"version":1,"clean":{"cleaned":[],"skipped":[]}}"#)
         let service = GGService(runner: runner)
