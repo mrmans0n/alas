@@ -174,9 +174,78 @@ struct WorkspaceStoreTests {
         }
     }
 
+    @Test func duplicatePersistedIdentitiesAreQuarantinedAndBlockCheckpoint() async throws {
+        let url = temporaryURL()
+        defer { removeWorkspaceFiles(near: url) }
+        let workspaceID = UUID()
+        let memberID = UUID()
+        let checkoutID = UUID()
+        let checkoutMemberID = UUID()
+        let state = WorkspaceStateFile(
+            workspaces: [
+                Workspace(
+                    id: workspaceID,
+                    name: "One",
+                    executionLocation: .local,
+                    members: [WorkspaceMember(id: memberID, projectID: "one", fallbackProjectName: "One", fallbackRepositoryRoot: "/repos/one")]
+                ),
+                Workspace(
+                    id: workspaceID,
+                    name: "Two",
+                    executionLocation: .local,
+                    members: [WorkspaceMember(projectID: "two", fallbackProjectName: "Two", fallbackRepositoryRoot: "/repos/two")]
+                ),
+            ],
+            checkouts: [
+                WorkspaceCheckout(
+                    id: checkoutID,
+                    workspaceID: workspaceID,
+                    fallbackWorkspaceName: "One",
+                    executionLocation: .local,
+                    branch: "feature/one",
+                    rootPath: "/tmp/one",
+                    members: [checkoutMember(id: checkoutMemberID, projectID: "one")]
+                ),
+                WorkspaceCheckout(
+                    id: checkoutID,
+                    workspaceID: workspaceID,
+                    fallbackWorkspaceName: "Two",
+                    executionLocation: .local,
+                    branch: "feature/two",
+                    rootPath: "/tmp/two",
+                    members: [checkoutMember(projectID: "two")]
+                ),
+            ]
+        )
+        try JSONEncoder.workspace.encode(state).write(to: url)
+        let store = WorkspaceStore(url: url)
+
+        guard case .unreadable(let recovery) = await store.load() else {
+            Issue.record("Expected duplicate identities to quarantine Workspace state")
+            return
+        }
+        #expect(recovery.message.contains("duplicateIdentity"))
+        await #expect(throws: WorkspaceStoreError.recoveryRequired) {
+            try await store.checkpoint(WorkspaceStateFile())
+        }
+    }
+
     private func temporaryURL() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-workspaces-\(UUID().uuidString).json")
+    }
+
+    private func checkoutMember(id: UUID = UUID(), projectID: String) -> WorkspaceCheckoutMember {
+        WorkspaceCheckoutMember(
+            id: id,
+            workspaceMemberID: UUID(),
+            projectID: projectID,
+            fallbackProjectName: projectID,
+            fallbackRepositoryRoot: "/repos/\(projectID)",
+            worktreePath: "/tmp/\(projectID)",
+            availability: .available,
+            checkpoint: .setupComplete
+        )
     }
 
     private func removeWorkspaceFiles(near url: URL) {
