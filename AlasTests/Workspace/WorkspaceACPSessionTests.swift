@@ -510,9 +510,10 @@ struct WorkspaceACPSessionTests {
         let workspaceURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString + ".json")
         defer { try? FileManager.default.removeItem(at: workspaceURL) }
         let memberID = UUID()
+        let secondMemberID = UUID()
         let frozenServer = ProjectMCPServer(
             id: "frozen-server",
-            name: "frozen-filesystem",
+            name: "filesystem",
             transport: .stdio(command: "frozen-mcp", args: [], environment: [])
         )
         let liveServer = ProjectMCPServer(
@@ -539,6 +540,19 @@ struct WorkspaceACPSessionTests {
                                 server: frozenServer,
                                 projectDirectory: "/repo",
                                 worktreeDirectory: "/checkout/repo",
+                                checkoutRoot: "/checkout"
+                            ),
+                        ]
+                    ),
+                    secondMemberID: .init(
+                        setupScript: "",
+                        ggMode: .auto,
+                        mcpServers: [
+                            .init(
+                                id: "\(secondMemberID.uuidString):frozen-server",
+                                server: frozenServer,
+                                projectDirectory: "/repo-two",
+                                worktreeDirectory: "/checkout/repo-two",
                                 checkoutRoot: "/checkout"
                             ),
                         ]
@@ -576,7 +590,10 @@ struct WorkspaceACPSessionTests {
         )
         let owner = SessionOwnerID.workspaceCheckout(checkout.id, .local)
 
-        #expect(state.mcpServersForACPToolbar(worktree: worktree, owner: owner).map(\.name) == ["frozen-filesystem"])
+        #expect(state.mcpServersForACPToolbar(worktree: worktree, owner: owner).map(\.name) == [
+            "filesystem (\(memberID.uuidString):frozen-server)",
+            "filesystem (\(secondMemberID.uuidString):frozen-server)",
+        ])
         #expect(state.mcpServersForACPToolbar(worktree: worktree, owner: nil).map(\.name) == ["live-filesystem"])
     }
 
