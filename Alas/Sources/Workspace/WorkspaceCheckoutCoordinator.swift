@@ -416,7 +416,10 @@ actor WorkspaceCheckoutCoordinator {
                       state.checkouts[checkoutIndex].operation == .idle,
                       let memberIndex = state.checkouts[checkoutIndex].members.firstIndex(where: { $0.id == memberID })
                 else { throw WorkspaceCheckoutCoordinatorError.operationInProgress }
-                guard observedConflict || state.checkouts[checkoutIndex].members[memberIndex].availability == .identityConflict else {
+                let currentMember = state.checkouts[checkoutIndex].members[memberIndex]
+                guard currentMember.availability == .identityConflict
+                    || (observedConflict && currentMember == member)
+                else {
                     throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict
                 }
                 state.checkouts[checkoutIndex].members[memberIndex].availability = .explicitlyDeleted
