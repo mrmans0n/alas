@@ -176,6 +176,33 @@ struct WorktreeServiceTests {
         #expect(commands[4].contains("/checkout/member"))
     }
 
+    @Test func remoteAddFrozenRollsBackTheWorktreeWhenLineageRecordingThrows() async throws {
+        let service = WorktreeService()
+        let runner = ThrowingFrozenRemoteRunner()
+
+        await #expect(throws: (any Error).self) {
+            try await service.addFrozen(
+                repoPath: URL(fileURLWithPath: "/repo"),
+                branch: "feature/workspace",
+                destination: URL(fileURLWithPath: "/checkout/member"),
+                projectId: "p",
+                intent: .create(atCommit: "abc"),
+                expectedLineageID: "lineage",
+                remoteHost: "builder.example",
+                remoteExistence: { _, _ in .missing },
+                remoteRun: { host, command in
+                    try await runner.run(host: host, command: command)
+                }
+            )
+        }
+
+        let commands = await runner.commands
+        #expect(commands.count == 5)
+        #expect(commands[2].contains("worktree add"))
+        #expect(commands[3].contains("alas-worktree-lineage"))
+        #expect(commands[4].contains("worktree remove -f -f --"))
+    }
+
     @Test func removeLockedWorktreeUsesDoubleForceWhenRequested() async throws {
         let repo = try await makeRepo()
         let destination = repo.deletingLastPathComponent().appendingPathComponent("\(repo.lastPathComponent)-locked")
@@ -387,6 +414,28 @@ private actor FrozenRemoteRunner {
     func run(host: String, command: String) -> ProcessResult {
         commands.append(command)
         return results.isEmpty ? .init(exitCode: 1, stdout: "", stderr: "") : results.removeFirst()
+    }
+}
+
+private enum FrozenRemoteError: Error { case transport }
+
+private actor ThrowingFrozenRemoteRunner {
+    private(set) var commands: [String] = []
+
+    func run(host: String, command: String) throws -> ProcessResult {
+        commands.append(command)
+        switch commands.count {
+        case 1:
+            return .init(exitCode: 0, stdout: "", stderr: "")
+        case 2:
+            return .init(exitCode: 0, stdout: "abc\n", stderr: "")
+        case 3:
+            return .init(exitCode: 0, stdout: "", stderr: "")
+        case 4:
+            throw FrozenRemoteError.transport
+        default:
+            return .init(exitCode: 0, stdout: "", stderr: "")
+        }
     }
 }
 

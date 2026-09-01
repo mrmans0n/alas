@@ -16,12 +16,17 @@ enum WorkspaceBranchDisposition: Equatable, Sendable {
 
 /// Read-only filesystem facts needed by checkout preflight.
 protocol WorkspacePathInspecting: Sendable {
+    func resolvedRootPath(_ path: String, location: ExecutionLocation) async -> String?
     func exists(at path: String, location: ExecutionLocation) async -> Bool
     func isCreatableDirectory(at path: String, location: ExecutionLocation) async -> Bool
     func destinationCollisionKey(for path: String, location: ExecutionLocation) async -> String
 }
 
 extension WorkspacePathInspecting {
+    func resolvedRootPath(_ path: String, location: ExecutionLocation) async -> String? {
+        WorkspaceCheckoutPreflight.normalizedPath(path, location: location)
+    }
+
     func destinationCollisionKey(for path: String, location: ExecutionLocation) async -> String {
         path
     }
@@ -101,7 +106,7 @@ struct WorkspaceCheckoutPreflight: Sendable {
 
     func prepare(_ request: WorkspaceCheckoutRequest) async -> WorkspaceCheckoutPreflightResult {
         let location = request.workspace.executionLocation.normalized
-        let rootPath = Self.normalizedPath(request.rootPath, location: location)
+        let rootPath = await paths.resolvedRootPath(request.rootPath, location: location) ?? ""
         var messages: [String] = []
         if case .invalid = GitNameValidator.validateBranchName(request.branch) {
             messages.append("Branch '\(request.branch)' is invalid.")
@@ -239,7 +244,7 @@ struct WorkspaceCheckoutPreflight: Sendable {
         project.host.map { .ssh($0) } ?? .local
     }
 
-    private static func normalizedPath(_ path: String, location: ExecutionLocation) -> String {
+    fileprivate static func normalizedPath(_ path: String, location: ExecutionLocation) -> String {
         guard !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "" }
         switch location.normalized {
         case .local:
@@ -359,6 +364,40 @@ struct WorkspacePathInspector: WorkspacePathInspecting {
 
     init(remote: WorkspaceRemoteTransport = .init()) {
         self.remote = remote
+    }
+
+    func resolvedRootPath(_ path: String, location: ExecutionLocation) async -> String? {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        switch location.normalized {
+        case .local:
+            return URL(fileURLWithPath: trimmed).standardizedFileURL.path
+        case .ssh(let host):
+            let command = """
+            raw=\(SSHCommand.shellQuote(trimmed))
+            case "$raw" in
+              "~") p="$HOME" ;;
+              "~/"*) p="$HOME/${raw#~/}" ;;
+              /*) p="$raw" ;;
+              *) p="$PWD/$raw" ;;
+            esac
+            suffix=
+            while [ ! -e "$p" ] && [ ! -L "$p" ]; do
+              base=$(basename "$p") || exit 2
+              suffix="/$base$suffix"
+              next=$(dirname "$p") || exit 2
+              [ "$next" = "$p" ] && exit 2
+              p="$next"
+            done
+            resolved=$(cd "$p" 2>/dev/null && pwd -P) || exit 2
+            printf '%s\\n' "$resolved$suffix"
+            """
+            guard let result = try? await remote.run(host: host, command: command),
+                  result.exitCode == 0
+            else { return nil }
+            let resolved = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            return resolved.isEmpty ? nil : resolved
+        }
     }
 
     func exists(at path: String, location: ExecutionLocation) async -> Bool {

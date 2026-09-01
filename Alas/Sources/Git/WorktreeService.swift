@@ -630,10 +630,19 @@ struct WorktreeService {
         guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
         var worktree = makeWorktree(destination: destination, branch: branch, projectId: projectId)
         if let host = pinnedRemoteHost {
-            let lineage = try await remoteRun(
-                host,
-                Self.remoteLineageIDCommand(path: destination.path, candidateID: expectedLineageID ?? UUID().uuidString.lowercased())
-            )
+            let lineage: ProcessResult
+            do {
+                lineage = try await remoteRun(
+                    host,
+                    Self.remoteLineageIDCommand(path: destination.path, candidateID: expectedLineageID ?? UUID().uuidString.lowercased())
+                )
+            } catch {
+                _ = try? await remoteRun(
+                    host,
+                    "git -C \(SSHCommand.shellQuote(repoPath.path)) worktree remove -f -f -- \(SSHCommand.shellQuote(destination.path))"
+                )
+                throw error
+            }
             guard lineage.exitCode == 0,
                   let identifier = Self.normalizedLineageID(lineage.stdout)
             else {

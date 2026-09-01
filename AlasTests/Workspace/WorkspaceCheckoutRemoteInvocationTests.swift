@@ -40,6 +40,23 @@ struct WorkspaceCheckoutRemoteInvocationTests {
         #expect(await runner.calls.count == 1)
     }
 
+    @Test func remoteRootResolutionRunsOnTheWorkspaceHost() async {
+        let runner = RecordingWorkspaceSSHRunner(results: [
+            .init(exitCode: 0, stdout: "/home/builder/.alas/checkouts/release\n", stderr: "")
+        ])
+        let inspector = WorkspacePathInspector(remote: .init(runner: { executable, args, timeout in
+            await runner.run(executable: executable, args: args, timeout: timeout)
+        }))
+
+        let resolved = await inspector.resolvedRootPath("~/.alas/checkouts/release", location: .ssh("builder.example"))
+
+        #expect(resolved == "/home/builder/.alas/checkouts/release")
+        let call = await runner.calls.first
+        #expect(call?.args.dropLast().last == "builder.example")
+        #expect(call?.args.last?.contains("raw='~/.alas/checkouts/release'") == true)
+        #expect(call?.args.last?.contains("pwd -P") == true)
+    }
+
     @Test func manifestWriterUsesIdenticalVersionedBytesForLocalAndRemote() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-manifest-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -296,14 +313,14 @@ struct WorkspaceCheckoutRemoteInvocationTests {
         #expect(await git.locations == [.ssh("builder.example"), .ssh("builder.example")])
     }
 
-    @Test func sshCheckoutRootPreservesRemoteHomeRelativePath() async {
+    @Test func sshCheckoutRootResolvesRemoteHomeRelativePathBeforeFreezing() async {
         let member = WorkspaceMember(projectID: "one", fallbackProjectName: "One", fallbackRepositoryRoot: "/srv/repo")
         let workspace = Workspace(name: "Release", executionLocation: .ssh("builder.example"), members: [member])
 
         let result = await WorkspaceCheckoutPreflight(
             projects: [project(id: "one", path: "/srv/repo", host: "builder.example")],
             git: FixedWorkspaceGit(),
-            paths: EmptyWorkspacePaths(),
+            paths: ResolvingWorkspacePaths(resolved: "/home/builder/.alas/checkouts/release"),
             remoteValidator: NoopWorkspaceRemoteRepositoryValidator()
         ).prepare(.init(
             workspace: workspace,
@@ -316,8 +333,8 @@ struct WorkspaceCheckoutRemoteInvocationTests {
             Issue.record("Expected SSH preflight success")
             return
         }
-        #expect(plan.rootPath == "~/.alas/checkouts/release")
-        #expect(plan.members.first?.destinationPath == "~/.alas/checkouts/release/repo")
+        #expect(plan.rootPath == "/home/builder/.alas/checkouts/release")
+        #expect(plan.members.first?.destinationPath == "/home/builder/.alas/checkouts/release/repo")
         #expect(!plan.rootPath.hasPrefix(FileManager.default.homeDirectoryForCurrentUser.path))
     }
 
@@ -347,6 +364,14 @@ private actor FixedWorkspaceGit: WorkspaceGitInspecting {
 }
 
 private struct EmptyWorkspacePaths: WorkspacePathInspecting {
+    func exists(at path: String, location: ExecutionLocation) async -> Bool { false }
+    func isCreatableDirectory(at path: String, location: ExecutionLocation) async -> Bool { true }
+}
+
+private struct ResolvingWorkspacePaths: WorkspacePathInspecting {
+    var resolved: String
+
+    func resolvedRootPath(_ path: String, location: ExecutionLocation) async -> String? { resolved }
     func exists(at path: String, location: ExecutionLocation) async -> Bool { false }
     func isCreatableDirectory(at path: String, location: ExecutionLocation) async -> Bool { true }
 }
