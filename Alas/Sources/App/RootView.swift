@@ -12,7 +12,13 @@ private struct CommitReviewSessionLaunchError: Identifiable, Equatable {
 }
 
 enum RootWorkspaceVisibilityPolicy {
-    static func showsWorkspace(hasProjects: Bool) -> Bool { hasProjects }
+    static func showsWorkspace(
+        hasProjects: Bool,
+        workspacesEnabled: Bool = false,
+        hasWorkspaceContent: Bool = false
+    ) -> Bool {
+        hasProjects || (workspacesEnabled && hasWorkspaceContent)
+    }
 }
 
 struct RootView: View {
@@ -118,7 +124,11 @@ struct RootView: View {
 
     @ViewBuilder
     private var mainContent: some View {
-        if !RootWorkspaceVisibilityPolicy.showsWorkspace(hasProjects: !state.projects.isEmpty) {
+        if !RootWorkspaceVisibilityPolicy.showsWorkspace(
+            hasProjects: !state.projects.isEmpty,
+            workspacesEnabled: state.config.workspacesEnabled,
+            hasWorkspaceContent: !state.workspacesManager.workspaces.isEmpty || !state.workspacesManager.checkouts.isEmpty
+        ) {
             EmptyState(
                 canCreateWorktree: false,
                 onAddProject: { showNewProject = true },
