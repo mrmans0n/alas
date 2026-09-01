@@ -40,7 +40,12 @@ import Testing
     }
 
     @Test func presentsArchivedAndFormerWorkspaceWithoutRepositoryMutationActions() {
-        var archived = checkout(archivedAt: Date(timeIntervalSince1970: 10), members: [member(name: "App", availability: .available, checkpoint: .setupComplete)])
+        var archived = checkout(archivedAt: Date(timeIntervalSince1970: 10), members: [
+            member(name: "Available", availability: .available, checkpoint: .setupComplete),
+            member(name: "Missing", availability: .missing, checkpoint: .setupComplete),
+            member(name: "Failed", availability: .available, checkpoint: .failed),
+            member(name: "Deleted", availability: .explicitlyDeleted, checkpoint: .setupComplete),
+        ])
         archived.workspaceID = nil
         let model = WorkspaceCheckoutDetailModel(checkout: archived)
 
@@ -48,6 +53,7 @@ import Testing
         #expect(model.headerBadges.contains(.archived))
         #expect(model.headerBadges.contains(.formerWorkspace))
         #expect(model.primaryActions.map(\.kind) == [.unarchive])
+        #expect(model.memberRows.allSatisfy { $0.actions.isEmpty })
     }
 
     @Test func reportsLiveProgressAndStopBoundary() {

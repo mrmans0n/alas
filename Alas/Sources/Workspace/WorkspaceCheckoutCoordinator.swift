@@ -229,7 +229,9 @@ actor WorkspaceCheckoutCoordinator {
 
     func previewMemberDeletion(checkoutID: UUID, memberID: UUID) async throws -> WorkspaceMemberDeletionPreview {
         let checkout = try await checkout(id: checkoutID)
-        guard checkout.operation == .idle else { throw WorkspaceCheckoutCoordinatorError.operationInProgress }
+        guard checkout.archivedAt == nil,
+              checkout.operation == .idle
+        else { throw WorkspaceCheckoutCoordinatorError.operationInProgress }
         guard let member = checkout.members.first(where: { $0.id == memberID }),
               let plan = makeCleanupPlan(checkout: checkout, member: member)
         else { throw WorkspaceCheckoutCoordinatorError.cleanupUnavailable }
@@ -271,7 +273,9 @@ actor WorkspaceCheckoutCoordinator {
             notifyLiveOperationWaiters(checkoutID: checkoutID)
         }
         let checkout = try await checkout(id: checkoutID)
-        guard checkout.operation == .idle || checkout.operation == .deleting else { throw WorkspaceCheckoutCoordinatorError.operationInProgress }
+        guard checkout.archivedAt == nil,
+              checkout.operation == .idle || checkout.operation == .deleting
+        else { throw WorkspaceCheckoutCoordinatorError.operationInProgress }
         guard let member = checkout.members.first(where: { $0.id == memberID }),
               let cleanupPlan = member.cleanup?.plan ?? makeCleanupPlan(checkout: checkout, member: member)
         else { throw WorkspaceCheckoutCoordinatorError.cleanupUnavailable }
@@ -279,6 +283,7 @@ actor WorkspaceCheckoutCoordinator {
         // await. A retry retains its original plan/checkpoints verbatim.
         try await store.mutate { state in
             guard let index = state.checkouts.firstIndex(where: { $0.id == checkoutID }),
+                  state.checkouts[index].archivedAt == nil,
                   state.checkouts[index].operation == .idle || state.checkouts[index].operation == .deleting,
                   let memberIndex = state.checkouts[index].members.firstIndex(where: { $0.id == memberID })
             else { throw WorkspaceCheckoutCoordinatorError.operationInProgress }
@@ -379,6 +384,7 @@ actor WorkspaceCheckoutCoordinator {
     /// frozen member.
     func deleteMemberSnapshot(checkoutID: UUID, memberID: UUID) async throws -> WorkspaceCheckout {
         let checkout = try await self.checkout(id: checkoutID)
+        guard checkout.archivedAt == nil else { throw WorkspaceCheckoutCoordinatorError.operationInProgress }
         guard let member = checkout.members.first(where: { $0.id == memberID }) else {
             throw WorkspaceCheckoutCoordinatorError.checkoutMissing
         }
@@ -400,6 +406,7 @@ actor WorkspaceCheckoutCoordinator {
         do {
             try await store.mutate { state in
                 guard let checkoutIndex = state.checkouts.firstIndex(where: { $0.id == checkoutID }),
+                      state.checkouts[checkoutIndex].archivedAt == nil,
                       state.checkouts[checkoutIndex].operation == .idle,
                       let memberIndex = state.checkouts[checkoutIndex].members.firstIndex(where: { $0.id == memberID })
                 else { throw WorkspaceCheckoutCoordinatorError.operationInProgress }
@@ -440,6 +447,7 @@ actor WorkspaceCheckoutCoordinator {
         guard candidate.isExactMatch else { throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict }
         try await store.mutate { state in
             guard let checkoutIndex = state.checkouts.firstIndex(where: { $0.id == checkoutID }),
+                  state.checkouts[checkoutIndex].archivedAt == nil,
                   state.checkouts[checkoutIndex].operation == .idle,
                   let memberIndex = state.checkouts[checkoutIndex].members.firstIndex(where: { $0.id == memberID })
             else { throw WorkspaceCheckoutCoordinatorError.operationInProgress }
@@ -478,7 +486,9 @@ actor WorkspaceCheckoutCoordinator {
             guard let index = state.checkouts.firstIndex(where: { $0.id == checkoutID }) else {
                 throw WorkspaceCheckoutCoordinatorError.checkoutMissing
             }
-            guard state.checkouts[index].operation == .idle || state.checkouts[index].operation == .deleting else {
+            guard state.checkouts[index].archivedAt == nil,
+                  state.checkouts[index].operation == .idle || state.checkouts[index].operation == .deleting
+            else {
                 throw WorkspaceCheckoutCoordinatorError.operationInProgress
             }
             state.checkouts[index].operation = .deleting
@@ -523,6 +533,7 @@ actor WorkspaceCheckoutCoordinator {
             notifyLiveOperationWaiters(checkoutID: checkoutID)
         }
         let checkout = try await self.checkout(id: checkoutID)
+        guard checkout.archivedAt == nil else { throw WorkspaceCheckoutCoordinatorError.operationInProgress }
         guard (checkout.operation == .idle || checkout.operation == .deleting),
               checkout.members.allSatisfy({ member in
                   guard let cleanup = member.cleanup else {
@@ -541,7 +552,9 @@ actor WorkspaceCheckoutCoordinator {
             guard let index = state.checkouts.firstIndex(where: { $0.id == checkoutID }) else {
                 throw WorkspaceCheckoutCoordinatorError.checkoutMissing
             }
-            guard state.checkouts[index].operation == .idle || state.checkouts[index].operation == .deleting else {
+            guard state.checkouts[index].archivedAt == nil,
+                  state.checkouts[index].operation == .idle || state.checkouts[index].operation == .deleting
+            else {
                 throw WorkspaceCheckoutCoordinatorError.operationInProgress
             }
             state.checkouts[index].operation = .deleting
@@ -650,6 +663,7 @@ actor WorkspaceCheckoutCoordinator {
             notifyLiveOperationWaiters(checkoutID: checkoutID)
         }
         let checkout = try await self.checkout(id: checkoutID)
+        guard checkout.archivedAt == nil else { throw WorkspaceCheckoutCoordinatorError.operationInProgress }
         guard checkout.members.contains(where: { $0.id == memberID }) else {
             throw WorkspaceCheckoutCoordinatorError.checkoutMissing
         }
@@ -663,7 +677,9 @@ actor WorkspaceCheckoutCoordinator {
             guard let checkoutIndex = state.checkouts.firstIndex(where: { $0.id == checkoutID }),
                   let memberIndex = state.checkouts[checkoutIndex].members.firstIndex(where: { $0.id == memberID })
             else { throw WorkspaceCheckoutCoordinatorError.checkoutMissing }
-            guard state.checkouts[checkoutIndex].operation == .idle else {
+            guard state.checkouts[checkoutIndex].archivedAt == nil,
+                  state.checkouts[checkoutIndex].operation == .idle
+            else {
                 throw WorkspaceCheckoutCoordinatorError.operationInProgress
             }
             let member = state.checkouts[checkoutIndex].members[memberIndex]
@@ -734,6 +750,7 @@ actor WorkspaceCheckoutCoordinator {
             notifyLiveOperationWaiters(checkoutID: checkoutID)
         }
         let checkout = try await self.checkout(id: checkoutID)
+        guard checkout.archivedAt == nil else { throw WorkspaceCheckoutCoordinatorError.operationInProgress }
         if let memberIDs {
             let checkoutMemberIDs = Set(checkout.members.map(\.id))
             guard memberIDs.isSubset(of: checkoutMemberIDs) else {
@@ -744,7 +761,9 @@ actor WorkspaceCheckoutCoordinator {
             guard let index = state.checkouts.firstIndex(where: { $0.id == checkoutID }) else {
                 throw WorkspaceCheckoutCoordinatorError.checkoutMissing
             }
-            guard state.checkouts[index].operation == .idle || state.checkouts[index].operation == .creating || state.checkouts[index].operation == .repairing else {
+            guard state.checkouts[index].archivedAt == nil,
+                  state.checkouts[index].operation == .idle || state.checkouts[index].operation == .creating || state.checkouts[index].operation == .repairing
+            else {
                 throw WorkspaceCheckoutCoordinatorError.operationInProgress
             }
             state.checkouts[index].operation = .repairing

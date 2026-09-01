@@ -167,7 +167,7 @@ struct WorkspaceCheckoutDetailModel: Equatable, Sendable {
                 title: member.fallbackProjectName,
                 detail: detail(for: member),
                 status: status(for: member),
-                actions: actions(for: member)
+                actions: checkout.archivedAt == nil ? actions(for: member) : []
             )
         }
     }

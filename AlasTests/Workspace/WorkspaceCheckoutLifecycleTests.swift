@@ -33,6 +33,47 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(await sessions.stopped.isEmpty)
     }
 
+    @Test func archivedCheckoutsRejectMemberMutationEntryPoints() async throws {
+        let fixture = try await Fixture.make()
+        try await fixture.store.mutate { state in
+            state.checkouts[0].archivedAt = Date(timeIntervalSince1970: 1_000)
+            state.checkouts[0].members[0].availability = .missing
+            state.checkouts[0].members[0].checkpoint = .failed
+        }
+        let lifecycle = FixtureLifecycle()
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.operationInProgress) {
+            try await coordinator.previewMemberDeletion(checkoutID: fixture.checkout.id, memberID: fixture.member.id)
+        }
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.operationInProgress) {
+            try await coordinator.deleteMember(checkoutID: fixture.checkout.id, memberID: fixture.member.id)
+        }
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.operationInProgress) {
+            try await coordinator.deleteMemberSnapshot(checkoutID: fixture.checkout.id, memberID: fixture.member.id)
+        }
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.operationInProgress) {
+            try await coordinator.useExistingVerifiedCandidate(
+                checkoutID: fixture.checkout.id,
+                memberID: fixture.member.id,
+                candidate: .init(path: fixture.member.worktreePath, lineageID: fixture.member.gitLineageID ?? "", isExactMatch: true)
+            )
+        }
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.operationInProgress) {
+            try await coordinator.deleteCheckout(checkoutID: fixture.checkout.id)
+        }
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.operationInProgress) {
+            try await coordinator.forget(checkoutID: fixture.checkout.id, confirmedPreserveArtifacts: true)
+        }
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.operationInProgress) {
+            try await coordinator.retrySetup(checkoutID: fixture.checkout.id, memberID: fixture.member.id)
+        }
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.operationInProgress) {
+            try await coordinator.resumeCreation(checkoutID: fixture.checkout.id)
+        }
+        #expect(await lifecycle.removedMembers.isEmpty)
+    }
+
     @Test func interruptedArchivingCheckoutCanResumeAndFinalize() async throws {
         let fixture = try await Fixture.make(operation: .archiving)
         let sessions = LifecycleSessions()
