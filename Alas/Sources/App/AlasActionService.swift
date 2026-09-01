@@ -34,7 +34,7 @@ struct AlasActionService {
     var now: () -> Date = Date.init
     var gitStatus: (URL) async throws -> [ChangedFile] = { try await GitService().status(worktreePath: $0) }
     var providerReviewOriginalPath: (ReviewDraftSessionID, String) async -> String? = { _, _ in nil }
-    var notifySession: (String?, Worktree, String, String?, AlasCLINotifyLevel) -> AlasCLIResponse = { _, _, _, _, _ in
+    var notifySession: (String?, SessionOwnerID?, Worktree, String, String?, AlasCLINotifyLevel) -> AlasCLIResponse = { _, _, _, _, _, _ in
         .error("Notifications from the terminal are not available yet.")
     }
     var listDelegatedSessions: (ACPOrchestrationSessionOrigin) async -> AlasCLIResponse = { _ in
@@ -140,12 +140,13 @@ struct AlasActionService {
 
     func notify(
         sessionId: String?,
+        owner: SessionOwnerID?,
         origin: Worktree,
         body: String,
         title: String?,
         level: AlasCLINotifyLevel
     ) -> AlasCLIResponse {
-        notifySession(sessionId, origin, body, title, level)
+        notifySession(sessionId, owner, origin, body, title, level)
     }
 
     func sessionList(origin: ACPOrchestrationSessionOrigin) async -> AlasCLIResponse {

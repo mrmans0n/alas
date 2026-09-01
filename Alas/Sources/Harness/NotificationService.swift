@@ -96,14 +96,16 @@ final class NotificationService {
     }
 
     func notifyAlas(body: String, title: String?, agent: AgentKind,
-                    projectId: String, worktreeId: String, sessionId: String) {
+                    projectId: String, worktreeId: String, sessionId: String,
+                    owner: SessionOwnerID? = nil) {
         let content = buildContent(
             agent: agent,
             body: body,
             title: title ?? "Alas",
             projectId: projectId,
             worktreeId: worktreeId,
-            sessionId: sessionId
+            sessionId: sessionId,
+            owner: owner
         )
         let req = UNNotificationRequest(
             identifier: "\(sessionId)-notify-\(UUID().uuidString)",

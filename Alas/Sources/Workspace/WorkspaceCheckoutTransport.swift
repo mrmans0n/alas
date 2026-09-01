@@ -114,7 +114,7 @@ struct WorkspaceCheckoutManifestWriter: WorkspaceCheckoutManifestWriting, Sendab
         case .local:
             let rootURL = URL(fileURLWithPath: rootPath)
             let targetURL = URL(fileURLWithPath: target)
-            if try existingManifestAtTargetBelongsToCheckout(targetURL, checkoutID: manifest.checkoutID) {
+            if try existingManifestAtTargetBelongsToCheckout(targetURL, checkoutID: manifest.checkoutID, rootPath: rootPath) {
                 try localWrite(data, targetURL, .atomic)
             } else {
                 if FileManager.default.fileExists(atPath: rootURL.path) {
@@ -132,7 +132,7 @@ struct WorkspaceCheckoutManifestWriter: WorkspaceCheckoutManifestWriting, Sendab
                 do {
                     try localWrite(data, targetURL, .withoutOverwriting)
                 } catch {
-                    if try existingManifestAtTargetBelongsToCheckout(targetURL, checkoutID: manifest.checkoutID) {
+                    if try existingManifestAtTargetBelongsToCheckout(targetURL, checkoutID: manifest.checkoutID, rootPath: rootPath) {
                         try localWrite(data, targetURL, .atomic)
                         return
                     }
@@ -191,12 +191,15 @@ struct WorkspaceCheckoutManifestWriter: WorkspaceCheckoutManifestWriting, Sendab
     }
 }
 
-private func existingManifestAtTargetBelongsToCheckout(_ targetURL: URL, checkoutID: UUID) throws -> Bool {
+private func existingManifestAtTargetBelongsToCheckout(_ targetURL: URL, checkoutID: UUID, rootPath: String) throws -> Bool {
     guard FileManager.default.fileExists(atPath: targetURL.path) else { return false }
     do {
         let data = try Data(contentsOf: targetURL)
         let existing = try JSONDecoder().decode(WorkspaceCheckoutManifest.self, from: data)
-        guard existing.checkoutID == checkoutID else {
+        guard existing.checkoutID == checkoutID,
+              URL(fileURLWithPath: existing.rootPath).standardizedFileURL.resolvingSymlinksInPath().path
+              == URL(fileURLWithPath: rootPath).standardizedFileURL.resolvingSymlinksInPath().path
+        else {
             throw WorkspaceCheckoutManifestError.checkoutRootAlreadyClaimed(targetURL.deletingLastPathComponent().path)
         }
         return true
