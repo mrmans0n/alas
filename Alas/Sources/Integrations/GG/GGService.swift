@@ -173,7 +173,7 @@ struct ProcessGGCommandRunner: GGCommandRunning {
                         "[Process watchdog] \(timeout)s timeout — terminating: \(executable) \(args.joined(separator: " "))\n",
                         stderr
                     )
-                    terminateGGStreamingProcessWithEscalation(process)
+                    forceTerminateGGStreamingProcessTree(process)
                 }
             }
             // Close the parent's copy of the pipe write ends now that the
@@ -187,10 +187,8 @@ struct ProcessGGCommandRunner: GGCommandRunning {
             continuation.onTermination = { _ in
                 watchdog.cancel()
                 if process.isRunning {
-                    let processGroup = process.processIdentifier
-                    terminateGGStreamingProcessWithEscalation(process)
+                    forceTerminateGGStreamingProcessTree(process)
                     process.waitUntilExit()
-                    _ = Darwin.kill(-processGroup, SIGKILL)
                 }
                 outPipe.fileHandleForReading.readabilityHandler = nil
                 errPipe.fileHandleForReading.readabilityHandler = nil
@@ -199,16 +197,10 @@ struct ProcessGGCommandRunner: GGCommandRunning {
     }
 }
 
-private func terminateGGStreamingProcessWithEscalation(_ process: Process) {
+private func forceTerminateGGStreamingProcessTree(_ process: Process) {
     let pid = process.processIdentifier
-    _ = Darwin.kill(-pid, SIGTERM)
-    process.terminate()
-    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 2) {
-        if process.isRunning {
-            _ = Darwin.kill(-pid, SIGKILL)
-            kill(pid, SIGKILL)
-        }
-    }
+    _ = Darwin.kill(-pid, SIGKILL)
+    if process.isRunning { kill(pid, SIGKILL) }
 }
 
 private final class GGStreamingTimeoutState: @unchecked Sendable {
