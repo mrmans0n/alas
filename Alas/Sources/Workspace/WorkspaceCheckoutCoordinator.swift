@@ -48,6 +48,8 @@ protocol WorkspaceCheckoutLifecycleOperating: Sendable {
     func verifyCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutMemberObservation
     /// Removes only the worktree. Branch deletion is intentionally disabled.
     func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan, force: Bool, forceTwice: Bool) async throws
+    /// Removes checkout-owned root artifacts after all member worktrees are gone.
+    func removeCheckoutRootArtifacts(_ plan: WorkspaceCheckoutCleanupPlan) async throws
     /// Attempts a normal merged-only branch deletion for an attempt-created
     /// branch. `false` means it was retained (for example, unmerged).
     func deleteMergedBranch(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool
@@ -536,6 +538,9 @@ actor WorkspaceCheckoutCoordinator {
             state.checkouts[index].operation = .deleting
         }
         await sessions.stopSessions(for: checkoutID)
+        if let rootPlan = checkout.members.compactMap({ $0.cleanup?.plan }).first {
+            try await lifecycle.removeCheckoutRootArtifacts(rootPlan)
+        }
         try await store.mutate { state in state.checkouts.removeAll { $0.id == checkoutID } }
     }
 
@@ -834,8 +839,7 @@ actor WorkspaceCheckoutCoordinator {
             if claimedCheckpoint == .setupRunning {
                 await runSetup(member: frozenMember, checkout: checkout)
             } else if claimedCheckpoint == .worktreeCreating {
-                var operation = frozenWorktreeOperation(checkout: checkout, member: frozenMember)
-                operation.canRecordMissingLineage = true
+                let operation = frozenWorktreeOperation(checkout: checkout, member: frozenMember)
                 do {
                     if let lineageID = try await git.existingCreatedWorktreeLineage(operation) {
                         try await updateMember(checkoutID: checkout.id, memberID: plan.checkoutMemberID) { current in
@@ -1289,6 +1293,11 @@ actor WorkspaceCheckoutCoordinator {
         guard case .loaded(let state) = await store.load(),
               let checkout = state.checkouts.first(where: { $0.id == checkoutID })
         else { return }
+        if manifests is WorkspaceCheckoutManifestWriter,
+           checkout.executionLocation.normalized == .local {
+            let manifestURL = URL(fileURLWithPath: checkout.rootPath).appendingPathComponent(WorkspaceCheckoutManifest.fileName)
+            guard FileManager.default.fileExists(atPath: manifestURL.path) else { return }
+        }
         do {
             try await manifests.writeManifest(for: checkout)
         } catch {
@@ -1489,16 +1498,12 @@ struct WorkspaceFrozenGitOperator: WorkspaceGitOperating {
             if let lineage = WorktreeService.existingLocalLineageID(forWorktreeAt: destination) {
                 return operation.expectedLineageID.map { $0 == lineage ? lineage : nil } ?? lineage
             }
-            guard operation.canRecordMissingLineage else { return nil }
-            guard let expectedLineageID = operation.expectedLineageID else { return nil }
-            return WorktreeService.localLineageID(forWorktreeAt: destination, candidateID: expectedLineageID)
+            return nil
         case .ssh(let host):
             let path = SSHCommand.shellQuote(operation.destinationPath)
             let branch = SSHCommand.shellQuote(operation.branch)
             let commit = SSHCommand.shellQuote(operation.baseCommit)
-            let markerCommand = operation.canRecordMissingLineage
-                ? WorktreeService.remoteLineageIDCommand(path: operation.destinationPath, candidateID: operation.expectedLineageID ?? UUID().uuidString.lowercased())
-                : "d=$(git -C \"$p\" rev-parse --absolute-git-dir) || exit 5; f=\"$d/alas-worktree-lineage\"; test -s \"$f\" || exit 6; head -n 1 \"$f\""
+            let markerCommand = "d=$(git -C \"$p\" rev-parse --absolute-git-dir) || exit 5; f=\"$d/alas-worktree-lineage\"; test -s \"$f\" || exit 6; head -n 1 \"$f\""
             let command = "p=\(path); b=\(branch); c=\(commit); test -d \"$p\" || exit 2; [ \"$(git -C \"$p\" rev-parse --verify HEAD^{commit})\" = \"$c\" ] || exit 3; [ \"$(git -C \"$p\" rev-parse --abbrev-ref HEAD)\" = \"$b\" ] || exit 4; \(markerCommand)"
             let result = try await WorkspaceRemoteTransport().run(host: host, command: command)
             guard result.exitCode == 0 else { return nil }
@@ -1627,6 +1632,43 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
             let command = "git -C \(SSHCommand.shellQuote(plan.sourceRepositoryPath)) branch -d -- \(SSHCommand.shellQuote(plan.branch))"
             let result = try await remote.run(host: host, command: command)
             return result.exitCode == 0
+        }
+    }
+
+    func removeCheckoutRootArtifacts(_ plan: WorkspaceCheckoutCleanupPlan) async throws {
+        switch plan.executionLocation.normalized {
+        case .local:
+            let rootURL = URL(fileURLWithPath: plan.rootPath)
+            let manifestURL = rootURL.appendingPathComponent(WorkspaceCheckoutManifest.fileName)
+            if FileManager.default.fileExists(atPath: manifestURL.path) {
+                let data = try Data(contentsOf: manifestURL)
+                let manifest = try JSONDecoder().decode(WorkspaceCheckoutManifest.self, from: data)
+                guard manifest.checkoutID == plan.checkoutID else {
+                    throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict
+                }
+                try FileManager.default.removeItem(at: manifestURL)
+            }
+            if ((try? FileManager.default.contentsOfDirectory(at: rootURL, includingPropertiesForKeys: nil)) ?? []).isEmpty {
+                try? FileManager.default.removeItem(at: rootURL)
+            }
+        case .ssh(let host):
+            let root = SSHCommand.shellQuote(plan.rootPath)
+            let manifest = SSHCommand.shellQuote(URL(fileURLWithPath: plan.rootPath).appendingPathComponent(WorkspaceCheckoutManifest.fileName).path)
+            let expectedCheckoutID = SSHCommand.shellQuote("\"checkoutID\":\"\(plan.checkoutID.uuidString)\"")
+            let command = """
+            if [ -e \(manifest) ]; then
+              grep -F \(expectedCheckoutID) \(manifest) >/dev/null 2>&1 || exit 73
+              rm -f \(manifest) || exit 74
+            fi
+            rmdir \(root) 2>/dev/null || true
+            """
+            let result = try await remote.run(host: host, command: command)
+            guard result.exitCode == 0 else {
+                if result.exitCode == 73 {
+                    throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict
+                }
+                throw WorktreeService.WorktreeError.gitFailed(result.stderr)
+            }
         }
     }
 

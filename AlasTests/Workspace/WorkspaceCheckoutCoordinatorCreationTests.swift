@@ -608,7 +608,7 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
         #expect(repaired.members[0].checkpoint == .setupComplete)
         #expect(repaired.members[0].gitLineageID == expectedLineage)
         #expect(await git.createCount == 1)
-        #expect(await git.existingLineageAllowedRecording)
+        #expect(await git.existingLineageAllowedRecording == false)
     }
 
     @Test func manifestRefreshesWithMemberAvailabilityAfterCreationCompletes() async throws {
@@ -815,6 +815,7 @@ private actor BlockingCleanupLifecycle: WorkspaceCheckoutLifecycleOperating {
     }
 
     func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan, force: Bool, forceTwice: Bool) async throws {}
+    func removeCheckoutRootArtifacts(_ plan: WorkspaceCheckoutCleanupPlan) async throws {}
     func deleteMergedBranch(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool { true }
 
     func waitUntilPreflightStarted() async {
@@ -881,7 +882,8 @@ private actor LineageFailureThenRecoveryGit: WorkspaceGitOperating {
 
     func existingCreatedWorktreeLineage(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? {
         existingLineageAllowedRecording = operation.canRecordMissingLineage
-        return operation.canRecordMissingLineage ? operation.expectedLineageID : nil
+        guard createCount > 0 else { return nil }
+        return operation.expectedLineageID
     }
 }
 
