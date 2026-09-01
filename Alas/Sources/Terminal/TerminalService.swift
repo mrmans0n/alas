@@ -110,8 +110,15 @@ final class TerminalService {
               let savedPath,
               !savedPath.isEmpty
         else { return nil }
-        let root = URL(fileURLWithPath: context.rootPath).standardizedFileURL.path
-        let candidate = URL(fileURLWithPath: savedPath).standardizedFileURL.path
+        guard case .local = context.executionLocation else { return nil }
+        let root = URL(fileURLWithPath: context.rootPath)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+            .path
+        let candidate = URL(fileURLWithPath: savedPath)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+            .path
         guard candidate == root || candidate.hasPrefix(root + "/") else { return nil }
         return URL(fileURLWithPath: candidate)
     }

@@ -278,14 +278,25 @@ struct RootView: View {
         case .loadingProject:
             LoadingProjectView()
         case .empty:
-            EmptyTabView(
-                onNewTerminal: {},
-                onNewAgentInChat: {},
-                onNewAgentInTerminal: {},
-                newTerminalShortcut: nil,
-                newAgentInChatShortcut: nil,
-                newAgentInTerminalShortcut: nil
-            )
+            if let checkout = state.selectedWorkspaceCheckout,
+               let fallback = state.sharedSessionFallbackWorktreeForSelectedWorkspaceCheckout() {
+                CenterPaneView(
+                    state: state,
+                    worktree: fallback,
+                    sharedSessionOwner: SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation),
+                    allowsPaneFocus: !state.isKeyboardOverlayOpen,
+                    effectiveRightPaneVisible: effectiveRightPaneVisible
+                )
+            } else {
+                EmptyTabView(
+                    onNewTerminal: {},
+                    onNewAgentInChat: {},
+                    onNewAgentInTerminal: {},
+                    newTerminalShortcut: nil,
+                    newAgentInChatShortcut: nil,
+                    newAgentInTerminalShortcut: nil
+                )
+            }
         }
     }
 

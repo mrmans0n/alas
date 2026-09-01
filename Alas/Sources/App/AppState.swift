@@ -1171,6 +1171,24 @@ final class AppState {
         )
     }
 
+    func sharedSessionFallbackWorktreeForSelectedWorkspaceCheckout() -> Worktree? {
+        guard let checkout = selectedWorkspaceCheckout,
+              workspaceNavigationState.repositoryFocusWorktreeID == nil
+        else { return nil }
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+        guard !tabs.tabs(for: owner).isEmpty else { return nil }
+        return Worktree(
+            id: "workspace-checkout:\(owner.storageKey)",
+            projectId: "workspace-checkout",
+            name: checkout.fallbackWorkspaceName,
+            branch: checkout.branch,
+            path: URL(fileURLWithPath: checkout.rootPath),
+            status: .clean,
+            lastActivity: checkout.createdAt,
+            createdAt: checkout.createdAt
+        )
+    }
+
     func selectWorkspace(id: UUID) {
         guard config.workspacesEnabled, workspacesManager.canMutate else { return }
         workspaceNavigationState.selectWorkspace(id)
