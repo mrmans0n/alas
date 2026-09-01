@@ -156,6 +156,9 @@ struct WorkspaceCheckoutCleanupPlan: Codable, Equatable, Sendable {
     var sourceRepositoryPath: String
     var baseReference: String
     var baseCommit: String
+    /// The exact owned branch commit observed when cleanup was planned. Branch
+    /// deletion must verify this value immediately before deleting by name.
+    var branchCommit: String?
     var rootPath: String
     var managedMemberPaths: [String]
     var worktreePath: String
@@ -288,6 +291,13 @@ struct WorkspaceCheckoutMember: Codable, Equatable, Identifiable, Sendable {
 enum WorkspaceBranchIntent: Codable, Equatable, Sendable {
     case create(atCommit: String)
     case reuse
+
+    func cleanupCommit(defaulting baseCommit: String) -> String {
+        switch self {
+        case .create(let atCommit): atCommit
+        case .reuse: baseCommit
+        }
+    }
 }
 
 struct WorkspaceCheckoutMemberPlan: Codable, Equatable, Sendable {

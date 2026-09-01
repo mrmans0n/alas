@@ -114,6 +114,40 @@ struct WorktreeServiceTests {
         #expect(worktree.lineageID == WorktreeService.existingLocalLineageID(forWorktreeAt: destination))
     }
 
+    @Test func remoteAddFrozenRollsBackTheWorktreeWhenLineageRecordingFails() async throws {
+        let service = WorktreeService()
+        let runner = FrozenRemoteRunner(results: [
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "abc\n", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 6, stdout: "", stderr: "marker failed"),
+            .init(exitCode: 0, stdout: "", stderr: "")
+        ])
+
+        await #expect(throws: (any Error).self) {
+            try await service.addFrozen(
+                repoPath: URL(fileURLWithPath: "/repo"),
+                branch: "feature/workspace",
+                destination: URL(fileURLWithPath: "/checkout/member"),
+                projectId: "p",
+                intent: .create(atCommit: "abc"),
+                expectedLineageID: "lineage",
+                remoteHost: "builder.example",
+                remoteExistence: { _, _ in .missing },
+                remoteRun: { host, command in
+                    await runner.run(host: host, command: command)
+                }
+            )
+        }
+
+        let commands = await runner.commands
+        #expect(commands.count == 5)
+        #expect(commands[2].contains("worktree add"))
+        #expect(commands[3].contains("alas-worktree-lineage"))
+        #expect(commands[4].contains("worktree remove -f -f --"))
+        #expect(commands[4].contains("/checkout/member"))
+    }
+
     @Test func removeLockedWorktreeUsesDoubleForceWhenRequested() async throws {
         let repo = try await makeRepo()
         let destination = repo.deletingLastPathComponent().appendingPathComponent("\(repo.lastPathComponent)-locked")
@@ -311,6 +345,20 @@ struct WorktreeServiceTests {
         // would have silently no-op'd via try? and `feat/rm` would still exist.
         let branches = try await Process.git(["branch", "--list", "feat/rm"], cwd: repo)
         #expect(branches.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+}
+
+private actor FrozenRemoteRunner {
+    private var results: [ProcessResult]
+    private(set) var commands: [String] = []
+
+    init(results: [ProcessResult]) {
+        self.results = results
+    }
+
+    func run(host: String, command: String) -> ProcessResult {
+        commands.append(command)
+        return results.isEmpty ? .init(exitCode: 1, stdout: "", stderr: "") : results.removeFirst()
     }
 }
 
