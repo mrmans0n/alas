@@ -901,7 +901,9 @@ actor WorkspaceCheckoutCoordinator {
                         }
                         await runSetup(member: frozenMember, checkout: checkout)
                     } else {
-                        guard member.gitLineageID == nil else { continue }
+                        if member.gitLineageID != nil {
+                            guard try await git.frozenWorktreeIsMissing(operation) else { continue }
+                        }
                         await execute(member: frozenMember, checkout: checkout)
                     }
                 } catch {
