@@ -109,7 +109,27 @@ struct WorkspaceTerminalSessionTests {
             forcedCwd: URL(fileURLWithPath: "/srv/checkout/member"),
             forcedCwdLocation: .ssh("build-host"),
             context: remote
-        )?.path == "/srv/checkout/member")
+        ) == nil)
+    }
+
+    @Test func checkoutRestoreRejectsSymlinkedLocalCwdOutsideTheFrozenRoot() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-terminal-symlink-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let root = directory.appendingPathComponent("checkout", isDirectory: true)
+        let outside = directory.appendingPathComponent("outside", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        let link = root.appendingPathComponent("member", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
+        let context = WorkspaceTerminalContext(
+            checkoutID: checkoutID,
+            executionLocation: .local,
+            rootPath: root.path,
+            branch: "feature/shared",
+            manifestPath: root.appendingPathComponent(".alas-workspace-checkout.json").path
+        )
+
+        #expect(TerminalService.checkoutRestorationCwd(savedPath: link.path, context: context, savedLocation: .local) == nil)
     }
 
     @MainActor

@@ -184,6 +184,50 @@ struct OwnerTabsManagerTests {
         }
         #expect(stateAfter.focusedLeafId == "second")
     }
+
+    @Test func selectedCheckoutWithNoFocusedMemberStillHasASharedSessionFallback() async throws {
+        let workspaceURL = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-owner-fallback-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: workspaceURL) }
+        let store = WorkspaceStore(url: workspaceURL)
+        let checkout = WorkspaceCheckout(
+            workspaceID: nil,
+            fallbackWorkspaceName: "Workspace",
+            executionLocation: .local,
+            branch: "topic",
+            rootPath: "/checkout",
+            members: [
+                WorkspaceCheckoutMember(
+                    workspaceMemberID: UUID(),
+                    projectID: "project",
+                    fallbackProjectName: "Project",
+                    fallbackRepositoryRoot: "/repo",
+                    worktreePath: "/checkout/project",
+                    availability: .missing
+                )
+            ]
+        )
+        try await store.checkpoint(.init(checkouts: [checkout]))
+        let workspacesManager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: store))
+        let manager = TabsManager(store: OwnerTabsMemoryStore())
+        let state = AppState(
+            store: OwnerTabsMemoryStore(),
+            tabsManager: manager,
+            workspacesManager: workspacesManager,
+            workspaceStore: store
+        )
+        state.config.workspacesEnabled = true
+        _ = await workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+        state.selectWorkspaceCheckout(id: checkout.id)
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, .local)
+        _ = manager.appendTerminal(owner: owner, title: "Shared", sessionId: "shared")
+
+        let fallback = try #require(state.sharedSessionFallbackWorktreeForSelectedWorkspaceCheckout())
+        let composition = state.centerTabComposition(focusedWorktreeID: fallback.id, sharedSessionOwner: owner)
+
+        #expect(state.selectedWorktreeId == nil)
+        #expect(fallback.path.path == "/checkout")
+        #expect(composition.tabs.count == 1)
+    }
 }
 
 private final class OwnerTabsMemoryStore: PersistenceStoreProtocol {
