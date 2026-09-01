@@ -251,6 +251,49 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(state.checkouts.isEmpty)
     }
 
+    @Test func forgettingCanResumeAfterPersistedDeletingClaim() async throws {
+        let fixture = try await Fixture.make()
+        try await fixture.store.mutate { state in
+            state.checkouts[0].operation = .deleting
+            state.checkouts[0].members[0].cleanup = .init(
+                plan: WorkspaceCheckoutCleanupPlan(
+                    checkoutID: fixture.checkout.id,
+                    memberID: fixture.member.id,
+                    executionLocation: .local,
+                    projectID: "a",
+                    sourceRepositoryPath: "/repo/a",
+                    baseReference: "main",
+                    baseCommit: "abc",
+                    rootPath: "/checkout",
+                    managedMemberPaths: ["/checkout/a"],
+                    worktreePath: "/checkout/a",
+                    branch: "feature/a",
+                    expectedLineageID: "lineage-a",
+                    branchOwnership: .created
+                ),
+                worktreeRemoved: true,
+                branchRemoved: true
+            )
+        }
+        let sessions = LifecycleSessions()
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: fixture.store,
+            git: FixtureGit(),
+            scripts: FixtureScripts(),
+            sessions: sessions,
+            lifecycle: FixtureLifecycle()
+        )
+
+        try await coordinator.forget(checkoutID: fixture.checkout.id)
+
+        #expect(await sessions.stopped == [fixture.checkout.id])
+        guard case .loaded(let state) = await fixture.store.load() else {
+            Issue.record("Expected loaded Workspace state")
+            return
+        }
+        #expect(state.checkouts.isEmpty)
+    }
+
     @Test func deletionNeverRemovesAReusedBranch() async throws {
         let fixture = try await Fixture.make(branchOwnership: .reused)
         let lifecycle = FixtureLifecycle()

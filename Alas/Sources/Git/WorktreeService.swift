@@ -634,7 +634,10 @@ struct WorktreeService {
             else { throw WorktreeError.gitFailed("Could not record remote Workspace worktree lineage.") }
             worktree.lineageID = identifier
         } else {
-            worktree.lineageID = Self.localLineageID(forWorktreeAt: destination, candidateID: expectedLineageID ?? UUID().uuidString.lowercased())
+            guard let lineageID = Self.localLineageID(forWorktreeAt: destination, candidateID: expectedLineageID ?? UUID().uuidString.lowercased()) else {
+                throw WorktreeError.gitFailed("Could not record local Workspace worktree lineage.")
+            }
+            worktree.lineageID = lineageID
         }
         return worktree
     }

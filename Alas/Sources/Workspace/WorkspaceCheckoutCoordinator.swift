@@ -511,7 +511,7 @@ actor WorkspaceCheckoutCoordinator {
             notifyLiveOperationWaiters(checkoutID: checkoutID)
         }
         let checkout = try await self.checkout(id: checkoutID)
-        guard checkout.operation == .idle,
+        guard (checkout.operation == .idle || checkout.operation == .deleting),
               checkout.members.allSatisfy({ member in
                   guard let cleanup = member.cleanup else {
                       return confirmedPreserveArtifacts
@@ -529,7 +529,7 @@ actor WorkspaceCheckoutCoordinator {
             guard let index = state.checkouts.firstIndex(where: { $0.id == checkoutID }) else {
                 throw WorkspaceCheckoutCoordinatorError.checkoutMissing
             }
-            guard state.checkouts[index].operation == .idle else {
+            guard state.checkouts[index].operation == .idle || state.checkouts[index].operation == .deleting else {
                 throw WorkspaceCheckoutCoordinatorError.operationInProgress
             }
             state.checkouts[index].operation = .deleting
