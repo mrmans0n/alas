@@ -443,6 +443,45 @@ struct WorkspaceTerminalSessionTests {
         #expect(tabs.tabs(for: owner).map(\.id) == [saved.id])
         #expect(tabs.activeTabId(for: owner) == saved.id)
     }
+
+    @MainActor
+    @Test func checkoutTerminalRestoreUsesAuthoritativeOperationState() async throws {
+        let workspaceURL = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-tabs-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: workspaceURL) }
+        let workspaceStore = WorkspaceStore(url: workspaceURL)
+        var checkout = WorkspaceCheckout(
+            id: checkoutID,
+            workspaceID: nil,
+            fallbackWorkspaceName: "Shared",
+            executionLocation: .local,
+            branch: "feature/shared",
+            rootPath: "/work/checkout",
+            members: []
+        )
+        try await workspaceStore.checkpoint(.init(checkouts: [checkout]))
+        let bridge = WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore)
+        let manager = WorkspacesManager(bridge: bridge)
+        _ = await manager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "space", spaces: [
+            SpaceConfig(id: "space", name: "Default", emoji: "folder", projectIds: [], lastSelectedWorktreeId: nil, createdAt: .distantPast)
+        ]))
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+        let tabs = TabsManager(store: WorkspaceTerminalMemoryStore())
+        let tab = tabs.appendTerminal(owner: owner, title: "Shared", sessionId: "checkout-leaf")
+        let state = AppState(
+            store: WorkspaceTerminalMemoryStore(),
+            tabsManager: tabs,
+            workspacesManager: manager,
+            workspaceStore: workspaceStore
+        )
+        checkout.operation = .archiving
+        try await workspaceStore.checkpoint(.init(checkouts: [checkout]))
+
+        let restored = try await state.restoreTerminalTabIfNeededAsync(owner: owner, tabId: tab.id)
+
+        #expect(restored == nil)
+        #expect(state.terminal.registry.session(for: "checkout-leaf") == nil)
+        #expect(tabs.tabs(for: owner).map(\.id) == [tab.id])
+    }
 }
 
 private final class WorkspaceTerminalMemoryStore: PersistenceStoreProtocol {
