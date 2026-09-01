@@ -135,13 +135,16 @@ struct WorkspaceCheckoutManifestWriter: WorkspaceCheckoutManifestWriting, Sendab
             let temporary = "\(target).tmp-\(UUID().uuidString)"
             let payload = String(decoding: data, as: UTF8.self)
             let expectedCheckoutID = "\"checkoutID\":\"\(manifest.checkoutID.uuidString)\""
+            let parentPath = URL(fileURLWithPath: rootPath).deletingLastPathComponent().path
             let command = """
-            mkdir -p \(SSHCommand.shellQuote(rootPath)) && umask 077
+            umask 077
             if [ -e \(SSHCommand.shellQuote(target)) ]; then
               grep -F \(SSHCommand.shellQuote(expectedCheckoutID)) \(SSHCommand.shellQuote(target)) >/dev/null 2>&1 || exit 73
               printf %s \(SSHCommand.shellQuote(payload)) > \(SSHCommand.shellQuote(temporary))
               mv \(SSHCommand.shellQuote(temporary)) \(SSHCommand.shellQuote(target))
             else
+              mkdir -p \(SSHCommand.shellQuote(parentPath)) || exit 74
+              mkdir \(SSHCommand.shellQuote(rootPath)) 2>/dev/null || exit 73
               printf %s \(SSHCommand.shellQuote(payload)) > \(SSHCommand.shellQuote(temporary))
               if ln \(SSHCommand.shellQuote(temporary)) \(SSHCommand.shellQuote(target)) 2>/dev/null; then
                 rm -f \(SSHCommand.shellQuote(temporary))

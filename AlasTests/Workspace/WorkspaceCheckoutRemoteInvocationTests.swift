@@ -100,6 +100,26 @@ struct WorkspaceCheckoutRemoteInvocationTests {
         #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent(WorkspaceCheckoutManifest.fileName).path))
     }
 
+    @Test func remoteManifestWriterAtomicallyClaimsTheCheckoutRoot() async throws {
+        let root = "/srv/checkouts/release"
+        let manifest = WorkspaceCheckoutManifest(checkoutID: UUID(), rootPath: root, branch: "release/1091", members: [])
+        let runner = RecordingWorkspaceSSHRunner(results: [.init(exitCode: 73, stdout: "", stderr: "")])
+
+        await #expect(throws: WorkspaceCheckoutManifestError.checkoutRootAlreadyClaimed(root)) {
+            try await WorkspaceCheckoutManifestWriter(remote: .init(runner: { executable, args, timeout in
+                await runner.run(executable: executable, args: args, timeout: timeout)
+            })).write(manifest, to: root, location: .ssh("builder.example"))
+        }
+
+        let command = try #require(await runner.calls.first?.args.last)
+        #expect(command.contains("mkdir -p"))
+        #expect(command.contains("/srv/checkouts"))
+        #expect(command.contains("mkdir"))
+        #expect(command.contains("/srv/checkouts/release"))
+        #expect(command.contains("2>/dev/null || exit 73"))
+        #expect(!command.contains("mkdir -p '\\''/srv/checkouts/release"))
+    }
+
     @Test func remoteLineageInspectionUsesTheExactWorkspaceHost() async {
         let memberID = UUID()
         let member = WorkspaceCheckoutMember(
