@@ -1106,9 +1106,12 @@ final class AppState {
         }
     }
 
-    private func workspaceCheckoutTerminalLeafIDsByOwner() -> [SessionOwnerID: Set<String>] {
+    func workspaceCheckoutTerminalLeafIDsByOwner() -> [SessionOwnerID: Set<String>] {
         Dictionary(uniqueKeysWithValues: workspacesManager.checkouts.map { checkout in
             let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+            guard checkout.archivedAt == nil, checkout.operation != .archiving else {
+                return (owner, [])
+            }
             let leafIDs = tabs.tabs(for: owner).flatMap { tab -> [String] in
                 guard case .terminal(let state) = tab else { return [] }
                 return state.root.leaves().map(\.id)

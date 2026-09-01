@@ -300,6 +300,41 @@ struct WorkspaceTerminalSessionTests {
     }
 
     @MainActor
+    @Test func archivedCheckoutOwnerKeepsPrefixButContributesNoKnownLeavesToStartupSweep() async throws {
+        let workspaceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("workspace-archived-sweep-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: workspaceURL) }
+        let workspaceStore = WorkspaceStore(url: workspaceURL)
+        let checkout = WorkspaceCheckout(
+            id: checkoutID,
+            workspaceID: nil,
+            fallbackWorkspaceName: "Shared",
+            executionLocation: .local,
+            branch: "feature/shared",
+            rootPath: "/work/checkout",
+            archivedAt: Date(timeIntervalSince1970: 10),
+            members: []
+        )
+        try await workspaceStore.checkpoint(.init(checkouts: [checkout]))
+        let bridge = WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore)
+        let manager = WorkspacesManager(bridge: bridge)
+        _ = await manager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "space", spaces: [
+            SpaceConfig(id: "space", name: "Default", emoji: "folder", projectIds: [], lastSelectedWorktreeId: nil, createdAt: .distantPast)
+        ]))
+        let tabs = TabsManager(store: WorkspaceTerminalMemoryStore())
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+        _ = tabs.appendTerminal(owner: owner, title: "Shared", sessionId: "retained-leaf")
+        let state = AppState(
+            store: WorkspaceTerminalMemoryStore(),
+            tabsManager: tabs,
+            workspacesManager: manager,
+            workspaceStore: workspaceStore
+        )
+
+        #expect(state.workspaceCheckoutTerminalLeafIDsByOwner()[owner] == [])
+    }
+
+    @MainActor
     @Test func reloadTabsLoadsCheckoutOwnedTabsAfterWorkspaceStateLoads() async throws {
         let workspaceURL = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-tabs-\(UUID().uuidString).json")
         let tabsDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-tabs-\(UUID().uuidString)")
