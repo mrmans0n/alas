@@ -524,6 +524,19 @@ struct GGStackReadinessModelTests {
         #expect(progress.showsSpinner)
     }
 
+    @Test func summaryOnlySyncCompletesEveryPhaseBeforeRefresh() throws {
+        let action = GGStackActionState()
+        _ = action.beginAction(.sync)
+        action.appendSyncEvent(.summary)
+
+        let progress = try #require(GGStackReadinessModel.make(
+            stack: stack([entry(position: 1, prState: .open)]),
+            action: action
+        ).syncProgress)
+
+        #expect(progress.steps.map(\.state) == [.complete, .complete, .complete, .current])
+    }
+
     @Test func idleFailedSyncRetainsProgressWhileLastErrorIsSet() throws {
         let action = GGStackActionState()
         _ = action.beginAction(.sync)

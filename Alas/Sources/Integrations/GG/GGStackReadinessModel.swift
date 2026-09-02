@@ -442,13 +442,13 @@ struct GGStackReadinessModel: Equatable {
                 id: "prepare",
                 title: "Preparing stack",
                 detail: preparationDetails,
-                state: sawStart ? .complete : activeFailureState
+                state: sawStart || sawSummary ? .complete : activeFailureState
             ),
             GGSyncProgressPresentation.Step(
                 id: "commits",
                 title: "Syncing commits",
-                detail: sawStart ? (liveStatus ?? countStatus()) : "Waiting for stack preparation",
-                state: !sawStart ? .pending : (sawSummary ? .complete : activeFailureState)
+                detail: sawStart || sawSummary ? (liveStatus ?? countStatus()) : "Waiting for stack preparation",
+                state: sawSummary ? .complete : (sawStart ? activeFailureState : .pending)
             ),
             GGSyncProgressPresentation.Step(
                 id: "reviews",
