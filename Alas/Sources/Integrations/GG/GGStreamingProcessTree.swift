@@ -195,7 +195,7 @@ final class GGStreamingProcessTree: @unchecked Sendable {
             live.formUnion(ACPTerminal.collectChildDescendants(of: rootIdentity))
         }
         for descendant in retained {
-            live.formUnion(ACPTerminal.collectChildDescendants(of: descendant.pid))
+            live.formUnion(ACPTerminal.collectChildDescendants(of: descendant))
         }
         let tracked = retained.union(live)
         condition.lock()

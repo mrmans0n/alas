@@ -496,8 +496,8 @@ struct GGService {
                                 for try await _ in lines {}
                             }
                             group.addTask {
-                                // `streamProcess` may spend up to two seconds draining pipes after exit.
-                                try await Task.sleep(nanoseconds: 2_500_000_000)
+                                // Cleanup and pipe draining may each take up to two seconds after exit.
+                                try await Task.sleep(nanoseconds: 4_500_000_000)
                             }
                             defer { group.cancelAll() }
                             _ = try await group.next()
