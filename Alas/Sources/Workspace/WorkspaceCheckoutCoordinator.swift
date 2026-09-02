@@ -158,6 +158,7 @@ actor WorkspaceCheckoutCoordinator {
     private let sessions: any WorkspaceCheckoutSessionStopping
     private let lifecycle: any WorkspaceCheckoutLifecycleOperating
     private let manifests: any WorkspaceCheckoutManifestWriting
+    private let observer: any WorkspaceCheckoutObserving
     private var creationTasks: [UUID: Task<Void, Never>] = [:]
     private var pendingCreationPlans: [UUID: (WorkspaceCheckout, FrozenWorkspaceCheckoutPlan)] = [:]
     private var activeArchives = Set<UUID>()
@@ -175,6 +176,7 @@ actor WorkspaceCheckoutCoordinator {
         projectMutationGate: ProjectMutationGate = .shared,
         sessions: any WorkspaceCheckoutSessionStopping = NoopWorkspaceCheckoutSessionStopper(),
         lifecycle: any WorkspaceCheckoutLifecycleOperating = WorkspaceCheckoutLifecycleOperator(),
+        observer: any WorkspaceCheckoutObserving = WorkspaceCheckoutObserver(),
         manifests: (any WorkspaceCheckoutManifestWriting)? = nil
     ) {
         self.store = store
@@ -183,6 +185,7 @@ actor WorkspaceCheckoutCoordinator {
         self.projectMutationGate = projectMutationGate
         self.sessions = sessions
         self.lifecycle = lifecycle
+        self.observer = observer
         // Production uses the concrete Git operator and writes the manifest.
         // Narrow test operators opt into a writer explicitly, avoiding any
         // filesystem side effects from synthetic frozen paths.
@@ -454,6 +457,24 @@ actor WorkspaceCheckoutCoordinator {
         candidate: WorkspaceRepairCandidate
     ) async throws -> WorkspaceCheckout {
         guard candidate.isExactMatch else { throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict }
+        let currentCheckout = try await checkout(id: checkoutID)
+        guard currentCheckout.archivedAt == nil,
+              currentCheckout.operation == .idle
+        else { throw WorkspaceCheckoutCoordinatorError.operationInProgress }
+        guard let currentMember = currentCheckout.members.first(where: { $0.id == memberID }),
+              let currentPlan = currentMember.plan,
+              currentPlan.checkoutMemberID == currentMember.id,
+              currentPlan.destinationPath == candidate.path,
+              currentMember.worktreePath == candidate.path,
+              currentMember.gitLineageID == candidate.lineageID
+        else {
+            throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict
+        }
+        guard case .exactLineage(let observedLineage) = await observer.observe(currentMember, in: currentCheckout),
+              observedLineage == candidate.lineageID
+        else {
+            throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict
+        }
         try await store.mutate { state in
             guard let checkoutIndex = state.checkouts.firstIndex(where: { $0.id == checkoutID }),
                   state.checkouts[checkoutIndex].archivedAt == nil,
