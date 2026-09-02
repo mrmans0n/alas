@@ -48,7 +48,7 @@ private struct SummaryThenDelayedFailureGGRunner: GGCommandRunning {
         AsyncThrowingStream { continuation in
             continuation.yield(#"{"event":"summary"}"#)
             Task {
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                try? await Task.sleep(nanoseconds: 5_200_000_000)
                 continuation.finish(throwing: GGServiceError.commandFailed(stderr: "sync failed"))
             }
         }
@@ -95,7 +95,7 @@ struct GGServiceActionsTests {
                 return events
             }
             group.addTask {
-                try await Task.sleep(nanoseconds: 6_000_000_000)
+                try await Task.sleep(nanoseconds: 7_000_000_000)
                 throw CancellationError()
             }
             let events = try await group.next()!
