@@ -140,12 +140,14 @@ struct GGCommandRunningStreamingTests {
             range: wrapperIdentity.upperBound ..< serviceSource.endIndex
         ))
         let release = try #require(serviceSource.range(of: "launchGate.fileHandleForWriting.write", range: start.upperBound ..< serviceSource.endIndex))
+        let cleanup = try #require(serviceSource.range(of: "continuation.onTermination ="))
         #expect(run.lowerBound < identity.lowerBound)
         #expect(closeWriter.lowerBound < launchedPID.lowerBound)
         #expect(launchedPID.lowerBound < identity.lowerBound)
         #expect(identity.lowerBound < start.lowerBound)
         #expect(wrapperIdentity.lowerBound < start.lowerBound)
         #expect(start.lowerBound < release.lowerBound)
+        #expect(cleanup.lowerBound < release.lowerBound)
     }
 
     @Test func streamingCommandLaunchesAsProcessGroupLeader() async throws {

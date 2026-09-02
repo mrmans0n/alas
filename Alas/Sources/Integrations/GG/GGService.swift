@@ -177,6 +177,24 @@ struct ProcessGGCommandRunner: GGCommandRunning {
                     }
                 }
             }
+            let watchdog = Task {
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                if Task.isCancelled { return }
+                if process.isRunning {
+                    timeoutState.markTimedOut()
+                    fputs(
+                        "[Process watchdog] \(timeout)s timeout — terminating: \(executable) \(args.joined(separator: " "))\n",
+                        stderr
+                    )
+                    processTree.terminateAndWait()
+                }
+            }
+            continuation.onTermination = { _ in
+                watchdog.cancel()
+                processTree.terminateAndWait()
+                outPipe.fileHandleForReading.readabilityHandler = nil
+                errPipe.fileHandleForReading.readabilityHandler = nil
+            }
             do {
                 try process.run()
                 // An early wrapper exit must make the synchronous PID read see EOF.
@@ -209,24 +227,6 @@ struct ProcessGGCommandRunner: GGCommandRunning {
                 errPipe.fileHandleForReading.readabilityHandler = nil
                 continuation.finish(throwing: GGServiceError.commandFailed(stderr: error.localizedDescription))
                 return
-            }
-            let watchdog = Task {
-                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                if Task.isCancelled { return }
-                if process.isRunning {
-                    timeoutState.markTimedOut()
-                    fputs(
-                        "[Process watchdog] \(timeout)s timeout — terminating: \(executable) \(args.joined(separator: " "))\n",
-                        stderr
-                    )
-                    processTree.terminateAndWait()
-                }
-            }
-            continuation.onTermination = { _ in
-                watchdog.cancel()
-                processTree.terminateAndWait()
-                outPipe.fileHandleForReading.readabilityHandler = nil
-                errPipe.fileHandleForReading.readabilityHandler = nil
             }
         }
     }
