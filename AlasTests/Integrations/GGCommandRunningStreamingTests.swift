@@ -95,6 +95,25 @@ struct GGCommandRunningStreamingTests {
         #expect(source.contains("forkSources.removeValue(forKey: pid)"))
     }
 
+    @Test func startRejectsAnAlreadyExitedRoot() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appendingPathComponent("Alas/Sources/Integrations/GG/GGStreamingProcessTree.swift"),
+            encoding: .utf8
+        )
+        let start = try #require(source.range(of: "func start()"))
+        let end = try #require(source.range(of: "func rootDidExit()", range: start.upperBound ..< source.endIndex))
+        let helper = source[start.lowerBound ..< end.lowerBound]
+        let running = try #require(helper.range(of: "guard pid > 0, process.isRunning else { return }"))
+        let identity = try #require(helper.range(of: "ACPTerminal.processKey(of: pid)"))
+        let exited = try #require(helper.range(of: "guard !rootHasExited, process.isRunning else"))
+        #expect(running.lowerBound < identity.lowerBound)
+        #expect(identity.lowerBound < exited.lowerBound)
+    }
+
     @Test func streamsStdoutLinesInOrderAndFinishesOnCleanExit() async throws {
         let script = "printf 'one\\ntwo\\nthree\\n'"
         let stream = ProcessGGCommandRunner.streamProcess(
