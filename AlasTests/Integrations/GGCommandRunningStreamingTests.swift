@@ -65,6 +65,23 @@ struct GGCommandRunningStreamingTests {
         #expect(tail[..<stop.lowerBound].contains("repeat {"))
     }
 
+    @Test func rootIdentityIsValidatedBeforeGroupSignals() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appendingPathComponent("Alas/Sources/Integrations/GG/GGStreamingProcessTree.swift"),
+            encoding: .utf8
+        )
+        let start = try #require(source.range(of: "private func signalRootAndGroup"))
+        let end = try #require(source.range(of: "private func rootExitSnapshot", range: start.upperBound ..< source.endIndex))
+        let helper = source[start.lowerBound ..< end.lowerBound]
+        let validation = try #require(helper.range(of: "ACPTerminal.currentlyMatching(Set([rootIdentity])).contains(rootIdentity)"))
+        let groupSignal = try #require(helper.range(of: "Darwin.kill(-pid, signal)"))
+        #expect(validation.lowerBound < groupSignal.lowerBound)
+    }
+
     @Test func streamsStdoutLinesInOrderAndFinishesOnCleanExit() async throws {
         let script = "printf 'one\\ntwo\\nthree\\n'"
         let stream = ProcessGGCommandRunner.streamProcess(

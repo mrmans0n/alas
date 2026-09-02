@@ -128,7 +128,11 @@ final class GGStreamingProcessTree: @unchecked Sendable {
 
     private func signalRootAndGroup(_ pid: pid_t, signal: Int32) {
         condition.lock()
-        if !rootHasExited, process.isRunning {
+        if !rootHasExited,
+           let rootIdentity,
+           rootIdentity.pid == pid,
+           ACPTerminal.currentlyMatching(Set([rootIdentity])).contains(rootIdentity)
+        {
             _ = Darwin.kill(-pid, signal)
             _ = Darwin.kill(pid, signal)
         }
