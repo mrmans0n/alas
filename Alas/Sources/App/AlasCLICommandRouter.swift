@@ -4,7 +4,7 @@ import Foundation
 struct AlasCLICommandRouter {
     var sessionWorktreeId: (String) -> String?
     var sessionOwner: (String) -> SessionOwnerID? = { _ in nil }
-    var sessionCwdWorktree: (String, String) -> Worktree? = { _, _ in nil }
+    var sessionCwdWorktree: (String, String) async -> Worktree? = { _, _ in nil }
     var resolveACPSessionOrigin: (String) -> ACPOrchestrationSessionOrigin? = { _ in nil }
     var originatingWorktree: (String) -> Worktree?
     var visibleWorktrees: () -> [Worktree]
@@ -32,6 +32,9 @@ struct AlasCLICommandRouter {
     var gitStatus: (URL) async throws -> [ChangedFile] = { try await GitService().status(worktreePath: $0) }
     var providerReviewOriginalPath: (ReviewDraftSessionID, String) async -> String? = { _, _ in nil }
     var notifySession: (String?, SessionOwnerID?, Worktree, String, String?, AlasCLINotifyLevel) -> AlasCLIResponse = { _, _, _, _, _, _ in
+        .error("Notifications from the terminal are not available yet.")
+    }
+    var notifyOwnedSession: (String, SessionOwnerID, String, String?, AlasCLINotifyLevel) -> AlasCLIResponse = { _, _, _, _, _ in
         .error("Notifications from the terminal are not available yet.")
     }
     var listDelegatedSessions: (ACPOrchestrationSessionOrigin) async -> AlasCLIResponse = { _ in
@@ -124,18 +127,28 @@ struct AlasCLICommandRouter {
         // Resolve the origin worktree: exact legacy session first, else cwd.
         // Checkout-owned terminal sessions intentionally do not collapse to a
         // synthetic worktree ID; their repository target is the current cwd.
+        let requestOwner = request.sessionId.flatMap(sessionOwner)
+        if case .notify(let body, let title, let level) = request.command,
+           let sessionId = request.sessionId,
+           let owner = requestOwner,
+           case .workspaceCheckout = owner {
+            return notifyOwnedSession(sessionId, owner, body, title, level)
+        }
         let origin: Worktree
         let originOwner: SessionOwnerID?
         if let sessionId = request.sessionId,
            let worktreeId = sessionWorktreeId(sessionId),
            let resolved = originatingWorktree(worktreeId) {
             origin = resolved
-            originOwner = sessionOwner(sessionId) ?? .worktree(resolved.id)
+            originOwner = requestOwner ?? .worktree(resolved.id)
         } else if let sessionId = request.sessionId,
                   let cwd = request.cwd,
-                  let resolved = sessionCwdWorktree(sessionId, cwd) {
+                  let resolved = await sessionCwdWorktree(sessionId, cwd) {
             origin = resolved
-            originOwner = sessionOwner(sessionId)
+            originOwner = requestOwner
+        } else if let owner = requestOwner,
+                  case .workspaceCheckout = owner {
+            return .error("Unknown Alas terminal session.")
         } else if let cwd = request.cwd, let resolved = service.resolveWorktree(forDirectory: cwd) {
             origin = resolved
             originOwner = .worktree(resolved.id)

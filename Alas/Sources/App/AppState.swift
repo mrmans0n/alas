@@ -4588,7 +4588,7 @@ final class AppState {
             sessionOwner: sessionOwnerLookup,
             sessionCwdWorktree: { [weak self] sessionId, cwd in
                 guard let self else { return nil }
-                return self.workspaceCheckoutWorktree(for: sessionOwnerLookup(sessionId), cwd: cwd)
+                return await self.workspaceCheckoutWorktree(for: sessionOwnerLookup(sessionId), cwd: cwd)
             },
             resolveACPSessionOrigin: { [weak self] sessionId in
                 guard let self,
@@ -4695,6 +4695,16 @@ final class AppState {
                     level: level
                 )
             },
+            notifyOwnedSession: { [weak self] sessionId, owner, body, title, level in
+                guard let self else { return .error("Alas is not available.") }
+                return self.cliNotifyOwned(
+                    sessionId: sessionId,
+                    owner: owner,
+                    body: body,
+                    title: title,
+                    level: level
+                )
+            },
             listDelegatedSessions: { origin in
                 await orchestration.list(origin: origin)
             },
@@ -4792,6 +4802,27 @@ final class AppState {
             owner: owner
         )
         if level == .attention, let sessionId {
+            harness.setExternalActivity(sessionId: sessionId, agent: agent, state: .awaitingInput)
+        }
+        return .ok
+    }
+
+    private func cliNotifyOwned(
+        sessionId: String,
+        owner: SessionOwnerID,
+        body: String,
+        title: String?,
+        level: AlasCLINotifyLevel
+    ) -> AlasCLIResponse {
+        let agent = agentKindForNotifySession(sessionId) ?? .codex
+        harness.notifications.notifyAlas(
+            body: body,
+            title: title,
+            agent: agent,
+            sessionId: sessionId,
+            owner: owner
+        )
+        if level == .attention {
             harness.setExternalActivity(sessionId: sessionId, agent: agent, state: .awaitingInput)
         }
         return .ok
@@ -6563,22 +6594,53 @@ final class AppState {
         return (checkout, member, worktree)
     }
 
-    private func workspaceCheckoutWorktree(for owner: SessionOwnerID?, cwd: String) -> Worktree? {
+    private func workspaceCheckoutWorktree(for owner: SessionOwnerID?, cwd: String) async -> Worktree? {
         guard case .workspaceCheckout(let checkoutID, let location) = owner,
               let checkout = workspacesManager.checkout(id: checkoutID),
               checkout.archivedAt == nil,
               checkout.executionLocation.normalized == location.normalized
         else { return nil }
-        let cwdPath = URL(fileURLWithPath: cwd).standardizedFileURL.path
+        let cwdPath: String
+        switch location.normalized {
+        case .local:
+            cwdPath = URL(fileURLWithPath: cwd).resolvingSymlinksInPath().standardizedFileURL.path
+        case .ssh(let host):
+            guard let resolved = await remotePhysicalPath(cwd, host: host) else { return nil }
+            cwdPath = resolved
+        }
         for member in checkout.members where member.availability == .available {
-            let memberPath = URL(fileURLWithPath: member.worktreePath).standardizedFileURL.path
+            let memberPath: String
+            switch location.normalized {
+            case .local:
+                memberPath = URL(fileURLWithPath: member.worktreePath).resolvingSymlinksInPath().standardizedFileURL.path
+            case .ssh(let host):
+                guard let resolved = await remotePhysicalPath(member.worktreePath, host: host) else { continue }
+                memberPath = resolved
+            }
             guard cwdPath == memberPath || cwdPath.hasPrefix(memberPath + "/") else { continue }
             guard let worktree = projectsManager.worktrees(projectId: member.projectID).first(where: {
-                $0.path.standardizedFileURL.path == memberPath
+                let worktreePath: String
+                switch location.normalized {
+                case .local:
+                    worktreePath = $0.path.resolvingSymlinksInPath().standardizedFileURL.path
+                case .ssh:
+                    worktreePath = $0.path.standardizedFileURL.path
+                }
+                return worktreePath == memberPath
             }) else { continue }
             return worktree
         }
         return nil
+    }
+
+    private func remotePhysicalPath(_ path: String, host: String) async -> String? {
+        let result = try? await workspaceRemoteTransport.run(
+            host: host,
+            command: "cd \(SSHCommand.shellQuote(path)) 2>/dev/null && pwd -P"
+        )
+        guard result?.exitCode == 0 else { return nil }
+        let resolved = result?.stdout.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return resolved.isEmpty ? nil : resolved
     }
 
     private func acpQuestionNotificationBody(from params: ACPQuestionRequestParams) -> String? {

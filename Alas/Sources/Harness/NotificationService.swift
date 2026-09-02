@@ -115,6 +115,25 @@ final class NotificationService {
         notificationAdder(req)
     }
 
+    func notifyAlas(body: String, title: String?, agent: AgentKind,
+                    sessionId: String, owner: SessionOwnerID) {
+        let content = buildContent(
+            agent: agent,
+            body: body,
+            title: title ?? "Alas",
+            projectId: nil,
+            worktreeId: nil,
+            sessionId: sessionId,
+            owner: owner
+        )
+        let req = UNNotificationRequest(
+            identifier: "\(sessionId)-notify-\(UUID().uuidString)",
+            content: content,
+            trigger: nil
+        )
+        notificationAdder(req)
+    }
+
     // MARK: - Private helpers
 
     private func questionBody(_ body: String?) -> String {
@@ -123,17 +142,21 @@ final class NotificationService {
     }
 
     private func buildContent(agent: AgentKind, body: String, title: String,
-                              projectId: String, worktreeId: String, sessionId: String,
+                              projectId: String?, worktreeId: String?, sessionId: String,
                               owner: SessionOwnerID? = nil) -> UNMutableNotificationContent {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
         content.sound = .default
         var userInfo: [String: Any] = [
-            "projectId": projectId,
-            "worktreeId": worktreeId,
             "sessionId": sessionId
         ]
+        if let projectId {
+            userInfo["projectId"] = projectId
+        }
+        if let worktreeId {
+            userInfo["worktreeId"] = worktreeId
+        }
         if let owner {
             switch owner {
             case .worktree(let id):
