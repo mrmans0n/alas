@@ -106,10 +106,16 @@ final class GGStreamingProcessTree: @unchecked Sendable {
         descendants.formUnion(environmentTargets(rootPID: pid))
         signalRootAndGroup(pid, signal: SIGKILL)
         signal(descendants, with: SIGKILL)
-        refreshDescendants()
-        descendants.formUnion(terminationTargets(rootPID: pid))
-        descendants.formUnion(environmentTargets(rootPID: pid))
-        signal(descendants, with: SIGKILL)
+        let killSweepDeadline = DispatchTime.now().uptimeNanoseconds + 1_000_000_000
+        repeat {
+            refreshDescendants()
+            descendants.formUnion(terminationTargets(rootPID: pid))
+            descendants.formUnion(environmentTargets(rootPID: pid))
+            let live = ACPTerminal.currentlyMatching(descendants)
+            signal(live, with: SIGKILL)
+            if live.isEmpty { break }
+            usleep(20_000)
+        } while DispatchTime.now().uptimeNanoseconds < killSweepDeadline
         stopTracking()
         if !rootExitSnapshot() {
             process.waitUntilExit()

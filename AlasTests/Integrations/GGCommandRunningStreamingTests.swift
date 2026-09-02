@@ -62,6 +62,7 @@ struct GGCommandRunningStreamingTests {
         let sweep = try #require(tail.range(of: "refreshDescendants()"))
         let stop = try #require(tail.range(of: "stopTracking()"))
         #expect(sweep.lowerBound < stop.lowerBound)
+        #expect(tail[..<stop.lowerBound].contains("repeat {"))
     }
 
     @Test func streamsStdoutLinesInOrderAndFinishesOnCleanExit() async throws {
