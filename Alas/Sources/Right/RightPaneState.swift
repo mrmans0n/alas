@@ -762,6 +762,13 @@ final class RightPaneState: GGSplitCommitServicing {
         refreshedCommitsKey == currentCommitsKey
     }
 
+    nonisolated static func shouldForceGGStackRefresh(
+        forceRemote: Bool,
+        deferredUntilSyncEnds: Bool
+    ) -> Bool {
+        forceRemote || deferredUntilSyncEnds
+    }
+
     @discardableResult
     @MainActor
     func refresh(forceReviewLoopRemote: Bool = false) async -> Bool {
@@ -902,10 +909,13 @@ final class RightPaneState: GGSplitCommitServicing {
             let ggStackSourceCommitsChanged = self.ggStackSourceCommits != nextGGStackSourceCommits
             self.ggStackSourceCommits = nextGGStackSourceCommits
             if Self.shouldScheduleGGStackRefresh(inFlightAction: ggActionState.inFlightAction) {
-                ggStackRefreshDeferredUntilSyncEnds = false
+                let forceGGStackRemote = Self.shouldForceGGStackRefresh(
+                    forceRemote: forceReviewLoopRemote,
+                    deferredUntilSyncEnds: ggStackRefreshDeferredUntilSyncEnds
+                )
                 ggStackRefreshTask?.cancel()
                 ggStackRefreshTask = Task { @MainActor [weak self] in
-                    await self?.refreshGGStack(forceRemote: forceReviewLoopRemote)
+                    await self?.refreshGGStack(forceRemote: forceGGStackRemote)
                 }
             } else if Self.shouldDeferGGStackRefresh(
                 inFlightAction: ggActionState.inFlightAction,
@@ -1295,7 +1305,6 @@ final class RightPaneState: GGSplitCommitServicing {
         guard ggStackRefreshDeferredUntilSyncEnds,
               ggActionState.inFlightAction != .sync
         else { return }
-        ggStackRefreshDeferredUntilSyncEnds = false
         ggStackRefreshTask?.cancel()
         ggStackRefreshTask = Task { @MainActor [weak self] in
             await self?.refreshGGStack(forceRemote: true)

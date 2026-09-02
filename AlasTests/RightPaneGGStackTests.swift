@@ -679,6 +679,21 @@ struct RightPaneGGRefreshSchedulingTests {
             currentCommitsKey: "main|def"
         ))
     }
+
+    @Test func deferredRefreshForcesTheNextStackLoad() {
+        #expect(RightPaneState.shouldForceGGStackRefresh(
+            forceRemote: false,
+            deferredUntilSyncEnds: true
+        ))
+        #expect(RightPaneState.shouldForceGGStackRefresh(
+            forceRemote: true,
+            deferredUntilSyncEnds: false
+        ))
+        #expect(!RightPaneState.shouldForceGGStackRefresh(
+            forceRemote: false,
+            deferredUntilSyncEnds: false
+        ))
+    }
 }
 
 @MainActor
