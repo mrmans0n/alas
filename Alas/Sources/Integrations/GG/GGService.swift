@@ -178,6 +178,9 @@ struct ProcessGGCommandRunner: GGCommandRunning {
             }
             do {
                 try process.run()
+                // An early wrapper exit must make the synchronous PID read see EOF.
+                try? outPipe.fileHandleForWriting.close()
+                try? errPipe.fileHandleForWriting.close()
                 try? launchGate.fileHandleForReading.close()
                 guard let launchedPID = Self.readLaunchPID(from: outPipe.fileHandleForReading),
                       let rootIdentity = ACPTerminal.childProcessKey(
@@ -214,14 +217,6 @@ struct ProcessGGCommandRunner: GGCommandRunning {
                     processTree.terminateAndWait()
                 }
             }
-            // Close the parent's copy of the pipe write ends now that the
-            // child has dup'd them. Without this, the kernel keeps
-            // reporting "writers still open" on the read side and the
-            // readability handlers never see EOF after the child exits —
-            // the stream would hang forever waiting for a termination that
-            // already happened.
-            try? outPipe.fileHandleForWriting.close()
-            try? errPipe.fileHandleForWriting.close()
             continuation.onTermination = { _ in
                 watchdog.cancel()
                 processTree.terminateAndWait()

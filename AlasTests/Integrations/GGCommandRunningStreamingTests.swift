@@ -114,9 +114,13 @@ struct GGCommandRunningStreamingTests {
         #expect(serviceSource.contains("child=$!; set +m"))
         #expect(serviceSource.contains(#"IFS= read -r _ || exit; exec "$@""#))
         let run = try #require(serviceSource.range(of: "try process.run()"))
+        let closeWriter = try #require(serviceSource.range(
+            of: "outPipe.fileHandleForWriting.close()",
+            range: run.upperBound ..< serviceSource.endIndex
+        ))
         let launchedPID = try #require(serviceSource.range(
             of: "readLaunchPID(from: outPipe.fileHandleForReading)",
-            range: run.upperBound ..< serviceSource.endIndex
+            range: closeWriter.upperBound ..< serviceSource.endIndex
         ))
         let identity = try #require(serviceSource.range(
             of: "ACPTerminal.childProcessKey(",
@@ -125,6 +129,7 @@ struct GGCommandRunningStreamingTests {
         let start = try #require(serviceSource.range(of: "processTree.start(rootIdentity: rootIdentity)", range: identity.upperBound ..< serviceSource.endIndex))
         let release = try #require(serviceSource.range(of: "launchGate.fileHandleForWriting.write", range: start.upperBound ..< serviceSource.endIndex))
         #expect(run.lowerBound < identity.lowerBound)
+        #expect(closeWriter.lowerBound < launchedPID.lowerBound)
         #expect(launchedPID.lowerBound < identity.lowerBound)
         #expect(identity.lowerBound < start.lowerBound)
         #expect(start.lowerBound < release.lowerBound)
