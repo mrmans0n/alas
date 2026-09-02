@@ -89,12 +89,14 @@ struct ProcessGGCommandRunner: GGCommandRunning {
         timeout: TimeInterval = Process.defaultTimeout
     ) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
+            let processTreeID = UUID().uuidString
+            let launchGate = Pipe()
             let process = Process()
-            process.executableURL = URL(fileURLWithPath: executable)
-            process.arguments = args
+            process.executableURL = URL(fileURLWithPath: "/bin/sh")
+            process.arguments = ["-c", #"IFS= read -r _; exec "$@""#, "alas-launch-gate-\(processTreeID)", executable] + args
+            process.standardInput = launchGate
             if let cwd { process.currentDirectoryURL = cwd }
             var processEnvironment = env ?? ProcessInfo.processInfo.environment
-            let processTreeID = UUID().uuidString
             processEnvironment["ALAS_GG_PROCESS_TREE_ID"] = processTreeID
             process.environment = processEnvironment
             let outPipe = Pipe()
@@ -167,8 +169,22 @@ struct ProcessGGCommandRunner: GGCommandRunning {
             }
             do {
                 try process.run()
-                processTree.start()
+                try? launchGate.fileHandleForReading.close()
+                guard let rootIdentity = ACPTerminal.childProcessKey(
+                    of: process.processIdentifier,
+                    parentPID: getpid()
+                ) else {
+                    try? launchGate.fileHandleForWriting.close()
+                    process.terminate()
+                    continuation.finish(throwing: GGServiceError.commandFailed(stderr: "Failed to capture launched process identity"))
+                    return
+                }
+                processTree.start(rootIdentity: rootIdentity)
+                try? launchGate.fileHandleForWriting.write(contentsOf: Data([0x0A]))
+                try? launchGate.fileHandleForWriting.close()
             } catch {
+                try? launchGate.fileHandleForReading.close()
+                try? launchGate.fileHandleForWriting.close()
                 outPipe.fileHandleForReading.readabilityHandler = nil
                 errPipe.fileHandleForReading.readabilityHandler = nil
                 continuation.finish(throwing: GGServiceError.commandFailed(stderr: error.localizedDescription))

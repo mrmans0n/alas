@@ -95,23 +95,32 @@ struct GGCommandRunningStreamingTests {
         #expect(source.contains("forkSources.removeValue(forKey: pid)"))
     }
 
-    @Test func startRejectsAnAlreadyExitedRoot() throws {
+    @Test func trackingUsesLaunchGatedRootIdentity() throws {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-        let source = try String(
+        let treeSource = try String(
             contentsOf: root.appendingPathComponent("Alas/Sources/Integrations/GG/GGStreamingProcessTree.swift"),
             encoding: .utf8
         )
-        let start = try #require(source.range(of: "func start()"))
-        let end = try #require(source.range(of: "func rootDidExit()", range: start.upperBound ..< source.endIndex))
-        let helper = source[start.lowerBound ..< end.lowerBound]
-        let running = try #require(helper.range(of: "guard pid > 0, process.isRunning else { return }"))
-        let identity = try #require(helper.range(of: "ACPTerminal.childProcessKey(of: pid, parentPID: getpid())"))
-        let exited = try #require(helper.range(of: "guard !rootHasExited, process.isRunning else"))
-        #expect(running.lowerBound < identity.lowerBound)
-        #expect(identity.lowerBound < exited.lowerBound)
+        #expect(treeSource.contains("func start(rootIdentity: ACPTerminal.DescendantKey)"))
+
+        let serviceSource = try String(
+            contentsOf: root.appendingPathComponent("Alas/Sources/Integrations/GG/GGService.swift"),
+            encoding: .utf8
+        )
+        #expect(serviceSource.contains(#"IFS= read -r _; exec "$@""#))
+        let run = try #require(serviceSource.range(of: "try process.run()"))
+        let identity = try #require(serviceSource.range(
+            of: "ACPTerminal.childProcessKey(",
+            range: run.upperBound ..< serviceSource.endIndex
+        ))
+        let start = try #require(serviceSource.range(of: "processTree.start(rootIdentity: rootIdentity)", range: identity.upperBound ..< serviceSource.endIndex))
+        let release = try #require(serviceSource.range(of: "launchGate.fileHandleForWriting.write", range: start.upperBound ..< serviceSource.endIndex))
+        #expect(run.lowerBound < identity.lowerBound)
+        #expect(identity.lowerBound < start.lowerBound)
+        #expect(start.lowerBound < release.lowerBound)
     }
 
     @Test func streamsStdoutLinesInOrderAndFinishesOnCleanExit() async throws {
