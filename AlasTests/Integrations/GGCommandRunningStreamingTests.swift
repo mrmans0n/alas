@@ -147,6 +147,65 @@ struct GGCommandRunningStreamingTests {
         #expect(kill(childPID, 0) == -1 && errno == ESRCH)
     }
 
+    @Test func watchdogGracefullyTerminatesLateDetachedChild() async throws {
+        let termMarker = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-gg-late-term-\(UUID().uuidString)")
+        let launcherReady = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-gg-late-launcher-\(UUID().uuidString)")
+        let childPIDFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-gg-late-term-\(UUID().uuidString).pid")
+        defer { try? FileManager.default.removeItem(at: termMarker) }
+        defer { try? FileManager.default.removeItem(at: launcherReady) }
+        defer { try? FileManager.default.removeItem(at: childPIDFile) }
+        var env = ProcessInfo.processInfo.environment
+        env["TERM_MARKER"] = termMarker.path
+        env["LAUNCHER_READY"] = launcherReady.path
+        env["CHILD_PID_FILE"] = childPIDFile.path
+        let script = #"""
+        import os, signal, time
+        def cleanup(*_):
+            open(os.environ['TERM_MARKER'], 'w').write('term')
+            os._exit(0)
+        def spawn_helper(*_):
+            signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
+            if os.fork():
+                signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM})
+                return
+            os.setsid()
+            if os.fork():
+                os._exit(0)
+            signal.signal(signal.SIGTERM, cleanup)
+            open(os.environ['CHILD_PID_FILE'], 'w').write(str(os.getpid()))
+            signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM})
+            time.sleep(30)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        if os.fork() == 0:
+            os.setsid()
+            if os.fork():
+                os._exit(0)
+            signal.signal(signal.SIGTERM, spawn_helper)
+            open(os.environ['LAUNCHER_READY'], 'w').write('ready')
+            time.sleep(30)
+        while not os.path.exists(os.environ['LAUNCHER_READY']):
+            time.sleep(0.01)
+        time.sleep(30)
+        """#
+        let stream = ProcessGGCommandRunner.streamProcess(
+            executable: "/usr/bin/python3",
+            args: ["-c", script],
+            cwd: nil,
+            env: env,
+            timeout: 0.2
+        )
+
+        _ = try? await collectWithTimeout(stream)
+        let childPID = try #require(pid_t(try String(contentsOf: childPIDFile, encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines)))
+        defer { kill(childPID, SIGKILL) }
+        #expect(FileManager.default.fileExists(atPath: termMarker.path))
+        #expect(kill(childPID, 0) == -1 && errno == ESRCH)
+    }
+
     @Test func naturalExitKillsLastMinuteDetachedChild() async throws {
         let childPIDFile = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-gg-exit-child-\(UUID().uuidString).pid")

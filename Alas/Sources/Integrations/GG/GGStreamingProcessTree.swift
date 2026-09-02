@@ -75,6 +75,7 @@ final class GGStreamingProcessTree: @unchecked Sendable {
         let deadline = DispatchTime.now().uptimeNanoseconds + graceNanoseconds
         var rootExitObservedAt: UInt64?
         var scannedAfterRootExit = false
+        var nextEnvironmentScanAt: UInt64 = 0
         while DispatchTime.now().uptimeNanoseconds < deadline {
             refreshDescendants()
             var refreshed = terminationTargets(rootPID: pid)
@@ -83,12 +84,14 @@ final class GGStreamingProcessTree: @unchecked Sendable {
             if rootHasExited, rootExitObservedAt == nil {
                 rootExitObservedAt = now
             }
-            if !scannedAfterRootExit,
-               let rootExitObservedAt,
-               now - rootExitObservedAt >= 50_000_000
-            {
+            if now >= nextEnvironmentScanAt {
                 refreshed.formUnion(environmentTargets(rootPID: pid))
-                scannedAfterRootExit = true
+                nextEnvironmentScanAt = now + 100_000_000
+                if let rootExitObservedAt,
+                   now - rootExitObservedAt >= 50_000_000
+                {
+                    scannedAfterRootExit = true
+                }
             }
             signal(refreshed.subtracting(descendants), with: SIGTERM)
             descendants.formUnion(refreshed)
