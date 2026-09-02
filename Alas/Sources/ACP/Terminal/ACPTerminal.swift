@@ -338,13 +338,23 @@ final class ACPTerminal: ObservableObject {
     /// `kill()` can capture children before signaling a fast-exiting root
     /// without doing a full process-table scan on the main actor.
     nonisolated static func collectChildDescendants(of root: pid_t) -> [DescendantKey] {
+        guard let root = processKey(of: root) else { return [] }
+        return collectChildDescendants(of: root)
+    }
+
+    nonisolated static func collectChildDescendants(of root: DescendantKey) -> [DescendantKey] {
         var out: [DescendantKey] = []
-        var queue: [pid_t] = [root]
+        var queue: [DescendantKey] = [root]
         while let parent = queue.popLast() {
-            for child in childPids(of: parent) {
+            guard processStartTime(of: parent.pid) == parent.startedAt else { continue }
+            let children = childPids(of: parent.pid)
+            guard processStartTime(of: parent.pid) == parent.startedAt else { continue }
+            for child in children {
                 guard let identity = processIdentity(of: child),
-                      identity.parentPid == parent else { continue }
-                out.append(DescendantKey(pid: child, startedAt: identity.startedAt))
+                      identity.parentPid == parent.pid,
+                      processStartTime(of: parent.pid) == parent.startedAt else { continue }
+                let child = DescendantKey(pid: child, startedAt: identity.startedAt)
+                out.append(child)
                 queue.append(child)
             }
         }
@@ -360,13 +370,6 @@ final class ACPTerminal: ObservableObject {
         guard let identity = processIdentity(of: pid),
               identity.parentPid == parentPID else { return nil }
         return DescendantKey(pid: pid, startedAt: identity.startedAt)
-    }
-
-    nonisolated static func collectChildDescendants(of root: DescendantKey) -> [DescendantKey] {
-        guard processStartTime(of: root.pid) == root.startedAt else { return [] }
-        let descendants = collectChildDescendants(of: root.pid)
-        guard processStartTime(of: root.pid) == root.startedAt else { return [] }
-        return descendants
     }
 
     nonisolated private static func childPids(of parent: pid_t) -> [pid_t] {
