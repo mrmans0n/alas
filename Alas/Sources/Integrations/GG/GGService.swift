@@ -144,7 +144,8 @@ struct ProcessGGCommandRunner: GGCommandRunning {
                     stderrAccum.append(data)
                 }
             }
-            process.terminationHandler = { proc in
+            process.terminationHandler = { [weak processTree] proc in
+                guard let processTree else { return }
                 processTree.rootDidExit()
                 let status = proc.terminationStatus
                 Task {

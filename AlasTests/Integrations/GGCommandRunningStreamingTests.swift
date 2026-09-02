@@ -34,6 +34,18 @@ struct GGCommandRunningStreamingTests {
 
     private struct TimeoutError: Error {}
 
+    @Test func terminationHandlerDoesNotRetainProcessTree() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appendingPathComponent("Alas/Sources/Integrations/GG/GGService.swift"),
+            encoding: .utf8
+        )
+        #expect(source.contains("process.terminationHandler = { [weak processTree] proc in"))
+    }
+
     @Test func streamsStdoutLinesInOrderAndFinishesOnCleanExit() async throws {
         let script = "printf 'one\\ntwo\\nthree\\n'"
         let stream = ProcessGGCommandRunner.streamProcess(
