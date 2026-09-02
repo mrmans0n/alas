@@ -3,6 +3,13 @@ import Testing
 @testable import Alas
 
 struct ChangesPreparationModelTests {
+    @Test func syncStepAccessibilityStatesAreExplicit() {
+        #expect(ChangesPreparationCardText.syncStepState(.pending) == "Pending")
+        #expect(ChangesPreparationCardText.syncStepState(.current) == "In progress")
+        #expect(ChangesPreparationCardText.syncStepState(.complete) == "Complete")
+        #expect(ChangesPreparationCardText.syncStepState(.failed) == "Failed")
+    }
+
     private typealias Action = ReviewReadinessModel.Action
     private let stagedOnlyCapabilities = GGCapabilities(
         structuredSplit: false,
@@ -112,6 +119,22 @@ struct ChangesPreparationModelTests {
         )
 
         #expect(model.mutationError == "Unstaged changes detected.")
+        #expect(model.isVisible)
+    }
+
+    @Test func syncProgressKeepsEmptyGGPreparationVisible() {
+        let model = ChangesPreparationModel.makeGG(
+            staged: .zero,
+            hasDraft: false,
+            capabilities: stagedOnlyCapabilities,
+            syncProgress: GGSyncProgressPresentation(
+                liveStatus: "Refreshing Changes…",
+                showsSpinner: true,
+                steps: [],
+                rows: []
+            )
+        )
+
         #expect(model.isVisible)
     }
 

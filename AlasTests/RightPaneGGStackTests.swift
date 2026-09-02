@@ -382,7 +382,6 @@ private actor StaleMutationFailureRunner: GGCommandRunning {
         stderr: ""
     )
     private var stackReadCount = 0
-    private var syncCount = 0
     private var firstRefreshSuspended = false
     private var secondSyncSuspended = false
     private var firstRefreshWaiters: [CheckedContinuation<Void, Never>] = []
@@ -394,11 +393,10 @@ private actor StaleMutationFailureRunner: GGCommandRunning {
         if args == ["sync", "--help"] {
             return ProcessResult(exitCode: 0, stdout: "--jsonl", stderr: "")
         }
+        if args == ["restack", "--json"] {
+            return ProcessResult(exitCode: 1, stdout: "", stderr: "mutation A failed")
+        }
         if args == ["sync", "--json"] || args == ["sync", "--jsonl"] {
-            syncCount += 1
-            if syncCount == 1 {
-                return ProcessResult(exitCode: 1, stdout: "", stderr: "mutation A failed")
-            }
             return try await withCheckedThrowingContinuation { continuation in
                 secondSyncSuspended = true
                 secondSyncContinuation = continuation
@@ -645,6 +643,56 @@ struct RightPaneGGStackErrorPresentationTests {
             loadState: state.ggStackLoadState
         )?.detail == "boom")
         #expect(state.ggStackCommitsKey == nil)
+    }
+}
+
+@MainActor
+struct RightPaneGGRefreshSchedulingTests {
+    @Test func watcherStackRefreshIsSuppressedOnlyDuringSync() {
+        #expect(!RightPaneState.shouldScheduleGGStackRefresh(inFlightAction: .sync))
+        #expect(RightPaneState.shouldScheduleGGStackRefresh(inFlightAction: .rebase))
+        #expect(RightPaneState.shouldScheduleGGStackRefresh(inFlightAction: nil))
+    }
+
+    @Test func refreshWorkDefersOnlyDuringSync() {
+        #expect(RightPaneState.shouldDeferGGStackRefresh(
+            inFlightAction: .sync,
+            refreshRequired: true
+        ))
+        #expect(!RightPaneState.shouldDeferGGStackRefresh(
+            inFlightAction: .sync,
+            refreshRequired: false
+        ))
+        #expect(!RightPaneState.shouldDeferGGStackRefresh(
+            inFlightAction: .rebase,
+            refreshRequired: true
+        ))
+    }
+
+    @Test func refreshPublishesOnlyForItsCommitSnapshot() {
+        #expect(RightPaneState.shouldPublishGGStackRefresh(
+            refreshedCommitsKey: "main|abc",
+            currentCommitsKey: "main|abc"
+        ))
+        #expect(!RightPaneState.shouldPublishGGStackRefresh(
+            refreshedCommitsKey: "main|abc",
+            currentCommitsKey: "main|def"
+        ))
+    }
+
+    @Test func deferredRefreshForcesTheNextStackLoad() {
+        #expect(RightPaneState.shouldForceGGStackRefresh(
+            forceRemote: false,
+            deferredUntilSyncEnds: true
+        ))
+        #expect(RightPaneState.shouldForceGGStackRefresh(
+            forceRemote: true,
+            deferredUntilSyncEnds: false
+        ))
+        #expect(!RightPaneState.shouldForceGGStackRefresh(
+            forceRemote: false,
+            deferredUntilSyncEnds: false
+        ))
     }
 }
 
@@ -2203,6 +2251,77 @@ struct RightPaneGGStackTests {
         #expect(GGStackSummaryStore.shared.summaries[worktree.path.path] == nil)
     }
 
+    @Test func headInvalidationKeepsLoadedStackVisibleDuringSync() async {
+        let worktree = makeWorktree()
+        let state = makeState(worktree: worktree)
+        let staleSnapshot = GGStackModelsTests.fixture.replacingOccurrences(
+            of: "agent-inbox",
+            with: "stale-stack"
+        )
+        let finalSnapshot = GGStackModelsTests.fixture.replacingOccurrences(
+            of: "agent-inbox",
+            with: "final-stack"
+        )
+        let runner = ControlledStackGGRunner(
+            stackResults: [
+                ("stale-stack", ProcessResult(exitCode: 0, stdout: staleSnapshot, stderr: "")),
+                ("final-stack", ProcessResult(exitCode: 0, stdout: finalSnapshot, stderr: "")),
+                ("final-stack", ProcessResult(exitCode: 0, stdout: finalSnapshot, stderr: "")),
+            ],
+            suspendedCalls: [1, 2]
+        )
+        state.ggService = GGService(runner: runner)
+        state.ggCapabilities = {
+            GGCapabilities(
+                structuredSplit: false,
+                keepCurrentUnstack: false,
+                localStackSnapshot: false
+            )
+        }
+        state.ggContextProvider = { _ in .active(stackName: "feature") }
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "a", count: 40), stackShaped: true)]
+        state.ggContext = .active(stackName: "feature")
+        state.ggStack = GGStack(
+            name: "feature",
+            base: "main",
+            totalCommits: 1,
+            syncedCommits: 0,
+            currentPosition: 1,
+            behindBase: nil,
+            entries: [GGStackEntry(position: 1, sha: "abc1234", title: "Change", isCurrent: true)]
+        )
+        state.ggStackLoadState = .loaded
+        state.ggStackCommitsKey = state.currentGGStackCommitsKey
+
+        let staleRefresh = Task { @MainActor in await state.refreshGGStack(forceRemote: true) }
+        await runner.waitUntilCall(1)
+        _ = state.ggActionState.beginAction(.sync)
+        state.supersedeGGStackRefreshForSync()
+
+        let refresh = state.invalidateGGPresentation(startingRefresh: false)
+
+        #expect(refresh == nil)
+        #expect(state.ggStackRefreshDeferredUntilSyncEnds)
+        #expect(state.ggStackLoadState == .loaded)
+        #expect(state.ggStack?.name == "feature")
+        #expect(state.ggStackCommitsKey == state.currentGGStackCommitsKey)
+
+        await runner.complete(call: 1)
+        await staleRefresh.value
+        #expect(state.ggStack?.name == "feature")
+
+        let finalRefresh = Task { @MainActor in await state.refreshGGStack(forceRemote: true) }
+        await runner.waitUntilCall(2)
+        _ = state.invalidateGGPresentation(startingRefresh: false)
+        await runner.complete(call: 2)
+        await finalRefresh.value
+        #expect(state.ggStack?.name == "final-stack")
+        #expect(state.ggStackRefreshDeferredUntilSyncEnds)
+
+        await state.refreshGGStack(forceRemote: true)
+        #expect(!state.ggStackRefreshDeferredUntilSyncEnds)
+    }
+
     @Test func activeHeadInvalidationReplacesInFlightColdDetachedRecovery() async throws {
         let worktree = makeWorktree()
         defer { GGStackSummaryStore.shared.summaries[worktree.path.path] = nil }
@@ -2415,6 +2534,34 @@ struct RightPaneGGStackTests {
         #expect(hydrationInvocation == 2)
         #expect(state.ggStackCommitsKey == nil)
         #expect(GGStackSummaryStore.shared.summaries[worktree.path.path] == nil)
+    }
+
+    @Test func refreshDoesNotPublishAfterLiveCommitKeyChanges() async {
+        let worktree = makeWorktree()
+        let result = ProcessResult(
+            exitCode: 0,
+            stdout: GGStackModelsTests.fixture,
+            stderr: ""
+        )
+        let runner = DelayedStackGGRunner(staleResult: result, freshResult: result)
+        let state = makeState(worktree: worktree)
+        installFakeGGStackLoader(on: state)
+        state.ggService = GGService(runner: runner)
+        state.ggContextProvider = { _ in .active(stackName: "agent-inbox") }
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "a", count: 40), stackShaped: true)]
+
+        let staleRefresh = Task { @MainActor in await state.refreshGGStack() }
+        while runner.callCount == 0 { await Task.yield() }
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "b", count: 40), stackShaped: true)]
+        await staleRefresh.value
+
+        #expect(state.ggStack == nil)
+        #expect(state.ggStackCommitsKey == nil)
+
+        await state.refreshGGStack()
+        #expect(state.ggStack?.name == "agent-inbox")
+        #expect(state.ggStackCommitsKey == state.currentGGStackCommitsKey)
+        #expect(runner.callCount == 3)
     }
 
     @Test func cancelledFirstStackLoadBecomesRetryableFailure() async {
@@ -2924,7 +3071,7 @@ struct RightPaneGGStackTests {
             commit(sha: String(repeating: "s", count: 40), stackShaped: true),
         ]
 
-        let mutationA = try #require(state.runGGMutation(.sync))
+        let mutationA = try #require(state.runGGMutation(.restack))
         await runner.waitUntilFirstRefreshSuspends()
 
         let mutationB = try #require(state.runGGMutation(.sync))

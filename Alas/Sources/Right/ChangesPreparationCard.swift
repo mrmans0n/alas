@@ -12,6 +12,15 @@ enum ChangesPreparationCardText {
         let staged = stagedCount == 1 ? "1 staged" : "\(stagedCount) staged"
         return "\(staged) · +\(additions) −\(deletions)"
     }
+
+    static func syncStepState(_ state: GGSyncProgressPresentation.Step.State) -> String {
+        switch state {
+        case .pending: "Pending"
+        case .current: "In progress"
+        case .complete: "Complete"
+        case .failed: "Failed"
+        }
+    }
 }
 
 struct ChangesPreparationReconciliationPresentation: Equatable {
@@ -41,30 +50,34 @@ struct ChangesPreparationCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
             header
-            if let reviewAction = model.reviewAction {
-                primaryReviewButton(reviewAction)
-            }
-            if let reconciliationAction = model.reconciliationAction {
-                ggReconciliationButton(reconciliationAction)
-            }
-            if !model.ggActions.isEmpty {
-                HStack(spacing: 6) {
-                    ForEach(model.ggActions, id: \.kind) { action in
-                        ggDestinationButton(action)
+            if let syncProgress = model.syncProgress {
+                syncProgressView(syncProgress)
+            } else {
+                if let reviewAction = model.reviewAction {
+                    primaryReviewButton(reviewAction)
+                }
+                if let reconciliationAction = model.reconciliationAction {
+                    ggReconciliationButton(reconciliationAction)
+                }
+                if !model.ggActions.isEmpty {
+                    HStack(spacing: 6) {
+                        ForEach(model.ggActions, id: \.kind) { action in
+                            ggDestinationButton(action)
+                        }
+                    }
+                } else if model.draftAction != nil || !model.reviewRequestActions.isEmpty {
+                    ViewThatFits(in: .horizontal) {
+                        secondaryActionsHorizontal
+                        secondaryActionsVertical
                     }
                 }
-                if let error = model.mutationError {
-                    Text(error)
-                        .font(.system(size: 11))
-                        .foregroundStyle(theme.color("warn"))
-                        .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityIdentifier("changes-preparation-gg-error")
-                }
-            } else if model.draftAction != nil || !model.reviewRequestActions.isEmpty {
-                ViewThatFits(in: .horizontal) {
-                    secondaryActionsHorizontal
-                    secondaryActionsVertical
-                }
+            }
+            if let error = model.mutationError {
+                Text(error)
+                    .font(.system(size: 11))
+                    .foregroundStyle(theme.color("warn"))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("changes-preparation-gg-error")
             }
         }
         .padding(10)
@@ -80,6 +93,48 @@ struct ChangesPreparationCard: View {
         .padding(.top, 8)
         .padding(.bottom, 6)
         .accessibilityIdentifier("changes-preparation-card")
+    }
+
+    private func syncProgressView(_ progress: GGSyncProgressPresentation) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(progress.steps) { step in
+                HStack(spacing: 7) {
+                    syncStepIcon(step.state)
+                        .frame(width: 12, height: 12)
+                        .accessibilityHidden(true)
+                    Text(step.title)
+                        .font(.system(size: 11, weight: step.state == .current ? .semibold : .regular))
+                        .foregroundStyle(theme.color(step.state == .pending ? "fg-faint" : "fg"))
+                    Spacer(minLength: 6)
+                    Text(step.detail)
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(theme.color("fg-faint"))
+                        .lineLimit(1)
+                }
+                .frame(height: 20)
+                .accessibilityElement(children: .combine)
+                .accessibilityValue(ChangesPreparationCardText.syncStepState(step.state))
+            }
+        }
+        .accessibilityIdentifier("changes-preparation-gg-sync-progress")
+    }
+
+    @ViewBuilder
+    private func syncStepIcon(_ state: GGSyncProgressPresentation.Step.State) -> some View {
+        switch state {
+        case .pending:
+            Circle().stroke(theme.color("line"), lineWidth: 1).frame(width: 8, height: 8)
+        case .current:
+            Spinner(lineWidth: 1.4, duration: 0.8).frame(width: 10, height: 10)
+        case .complete:
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 10))
+                .foregroundStyle(theme.color("add"))
+        case .failed:
+            Image(systemName: "xmark.circle.fill")
+                .font(.system(size: 10))
+                .foregroundStyle(theme.color("warn"))
+        }
     }
 
     private var header: some View {

@@ -301,8 +301,13 @@ final class GGMutationCoordinator {
             )
             recordSummary(for: request, result: result)
             reconcilePausedState(after: request, error: nil)
-            releaseAction()
-            await refresh(after: request, result: result)
+            if request == .sync {
+                await refresh(after: request, result: result)
+                releaseAction()
+            } else {
+                releaseAction()
+                await refresh(after: request, result: result)
+            }
             if case .undo(let operationID) = request {
                 clearUndoCandidate(forOperationID: operationID)
             }
@@ -321,16 +326,26 @@ final class GGMutationCoordinator {
                 }
                 if actionState.lastError == nil { actionState.setError(error.userMessage) }
             }
-            releaseAction()
-            await refresh(after: request, result: .none)
+            if request == .sync {
+                await refresh(after: request, result: .none)
+                releaseAction()
+            } else {
+                releaseAction()
+                await refresh(after: request, result: .none)
+            }
             if toleratesMalformedRemoteOutput { return }
             throw error
         } catch {
             reconcilePausedState(after: request, error: error)
             if request == .sync { actionState.markSyncTerminalFailure() }
             actionState.setError(error.localizedDescription)
-            releaseAction()
-            await refresh(after: request, result: .none)
+            if request == .sync {
+                await refresh(after: request, result: .none)
+                releaseAction()
+            } else {
+                releaseAction()
+                await refresh(after: request, result: .none)
+            }
             throw error
         }
     }

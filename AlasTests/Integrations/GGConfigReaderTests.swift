@@ -72,13 +72,13 @@ struct GGConfigReaderTests {
     @Test func effectiveConfigReadsGlobalValues() throws {
         let repo = try makeRepo(configJSON: nil)
         let global = try makeGlobal(
-            configJSON: #"{"defaults":{"sync_auto_rebase":true,"sync_behind_threshold":4}}"#
+            configJSON: #"{"defaults":{"sync_auto_rebase":true,"sync_auto_lint":true,"sync_behind_threshold":4}}"#
         )
 
-        #expect(
-            GGConfigReader.effectiveConfig(repoPath: repo, globalConfigPath: global)
-                == GGEffectiveConfig(syncAutoRebase: true, syncBehindThreshold: 4)
-        )
+        let config = GGConfigReader.effectiveConfig(repoPath: repo, globalConfigPath: global)
+        #expect(config.syncAutoRebase)
+        #expect(config.syncBehindThreshold == 4)
+        #expect(config.syncAutoLint)
     }
 
     @Test func effectiveConfigLocalDefaultsReplaceGlobalDefaults() throws {

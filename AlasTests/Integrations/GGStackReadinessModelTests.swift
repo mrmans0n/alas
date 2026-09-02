@@ -175,6 +175,11 @@ struct GGStackReadinessModelTests {
             selectedBaseBranch: "release",
             behindBase: behind
         ) == nil)
+        #expect(GGStackReadinessProjection.effectiveBehindBase(
+            stack: stack,
+            selectedBaseBranch: "release",
+            behindBase: behind
+        ) == 0)
     }
 
     @Test func blockingGitOperationDisablesStackMutations() {
@@ -377,15 +382,37 @@ struct GGStackReadinessModelTests {
         _ = action.beginAction(.sync)
 
         let model = GGStackReadinessModel.make(
-            stack: stack([entry(position: 1, prState: .open)]),
-            action: action
+            stack: stack([entry(position: 1, prState: .open)], behind: 2),
+            action: action,
+            effectiveConfig: .init(syncAutoRebase: true, syncBehindThreshold: 1, syncAutoLint: true)
         )
 
-        #expect(model.syncProgress == GGSyncProgressPresentation(
-            liveStatus: "Preparing sync…",
-            showsSpinner: true,
-            rows: []
-        ))
+        #expect(model.syncProgress?.liveStatus == "Preparing stack…")
+        #expect(model.syncProgress?.showsSpinner == true)
+        #expect(model.syncProgress?.steps.map(\.title) == [
+            "Preparing stack",
+            "Syncing commits",
+            "Updating pull requests",
+            "Refreshing Changes",
+        ])
+        #expect(
+            model.syncProgress?.steps.first?.detail
+                == "Checking base · Rebase onto main if needed · Run configured lint"
+        )
+    }
+
+    @Test func restoredPausedSyncDoesNotShowAnActivePhase() throws {
+        let action = GGStackActionState()
+        action.setPaused(GGPausedOperation(pausedBy: .sync))
+
+        let progress = try #require(GGStackReadinessModel.make(
+            stack: stack([entry(position: 1, prState: .open)]),
+            action: action
+        ).syncProgress)
+
+        #expect(progress.liveStatus == nil)
+        #expect(progress.showsSpinner == false)
+        #expect(progress.steps.allSatisfy { $0.state == .pending })
     }
 
     @Test func syncProgressUpdatesOneStableRowPerPosition() throws {
@@ -408,6 +435,7 @@ struct GGStackReadinessModelTests {
             .init(position: 2, text: "[2] Pushed · PR #22 updated"),
         ])
         #expect(progress.liveStatus == "Syncing 2 of 2 commits…")
+        #expect(progress.steps.filter { $0.state == .current }.map(\.id) == ["commits"])
     }
 
     @Test func prUpdatedMapsKnownActionsAndUsesNeutralFallback() throws {
@@ -482,6 +510,7 @@ struct GGStackReadinessModelTests {
         #expect(progress.rows == [.init(position: 1, text: "[1] Failed to push")])
         #expect(progress.liveStatus == nil)
         #expect(!progress.showsSpinner)
+        #expect(progress.steps.map(\.state) == [.complete, .failed, .pending, .pending])
     }
 
     @Test func pausedOnSyncKeepsProgressAndOffersContinueAbort() throws {
@@ -504,7 +533,7 @@ struct GGStackReadinessModelTests {
         #expect(!progress.showsSpinner)
     }
 
-    @Test func terminalSummaryRemovesLiveStatus() throws {
+    @Test func terminalSummaryMovesToChangesRefresh() throws {
         let action = GGStackActionState()
         _ = action.beginAction(.sync)
         action.appendSyncEvent(.start(totalEntries: 1))
@@ -512,8 +541,39 @@ struct GGStackReadinessModelTests {
         action.appendSyncEvent(.summary)
         let model = GGStackReadinessModel.make(stack: stack([entry(position: 1, prState: .open)]), action: action)
         let progress = try #require(model.syncProgress)
-        #expect(progress.liveStatus == nil)
-        #expect(!progress.showsSpinner)
+        #expect(progress.liveStatus == "Refreshing Changes…")
+        #expect(progress.showsSpinner)
+    }
+
+    @Test func summaryOnlySyncCompletesEveryPhaseBeforeRefresh() throws {
+        let action = GGStackActionState()
+        _ = action.beginAction(.sync)
+        action.appendSyncEvent(.summary)
+
+        let progress = try #require(GGStackReadinessModel.make(
+            stack: stack([entry(position: 1, prState: .open)]),
+            action: action
+        ).syncProgress)
+
+        #expect(progress.steps.map(\.state) == [.complete, .complete, .complete, .current])
+        #expect(progress.steps[1].detail == "Commit sync complete")
+        #expect(progress.steps[2].detail == "Pull request updates complete")
+    }
+
+    @Test func postSummaryCommandFailureKeepsFailedSyncPhase() throws {
+        let action = GGStackActionState()
+        _ = action.beginAction(.sync)
+        action.appendSyncEvent(.summary)
+        action.markSyncTerminalFailure()
+        action.setError("sync exited unsuccessfully")
+        action.endAction(.sync)
+
+        let progress = try #require(GGStackReadinessModel.make(
+            stack: stack([entry(position: 1, prState: .open)]),
+            action: action
+        ).syncProgress)
+
+        #expect(progress.steps.map(\.state) == [.complete, .failed, .pending, .pending])
     }
 
     @Test func idleFailedSyncRetainsProgressWhileLastErrorIsSet() throws {
