@@ -93,7 +93,14 @@ struct ProcessGGCommandRunner: GGCommandRunning {
             let launchGate = Pipe()
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/bin/sh")
-            process.arguments = ["-c", #"IFS= read -r _; exec "$@""#, "alas-launch-gate-\(processTreeID)", executable] + args
+            // Job control assigns the gated child its own process group before
+            // exec; the outer shell only reports its PID and waits for it.
+            process.arguments = [
+                "-c",
+                #"set -m; /bin/sh -c 'IFS= read -r _ || exit; exec "$@"' alas-launch-gate "$@" & child=$!; set +m; printf '%s\n' "$child"; wait "$child"; exit $?"#,
+                "alas-launch-wrapper-\(processTreeID)",
+                executable,
+            ] + args
             process.standardInput = launchGate
             if let cwd { process.currentDirectoryURL = cwd }
             var processEnvironment = env ?? ProcessInfo.processInfo.environment
@@ -122,14 +129,16 @@ struct ProcessGGCommandRunner: GGCommandRunning {
             // a silent no-op, so that last line is dropped, not delayed.
             // Mirrors `Process+Git.swift`'s `ByteAccumulator` EOF latch.
             let stdoutEOF = EOFLatch()
-            outPipe.fileHandleForReading.readabilityHandler = { handle in
-                let data = handle.availableData
-                if data.isEmpty {
-                    handle.readabilityHandler = nil
-                    if let tail = buffer.flush() { continuation.yield(tail) }
-                    stdoutEOF.markClosed()
-                } else {
-                    for line in buffer.feed(data) { continuation.yield(line) }
+            let installStdoutHandler = {
+                outPipe.fileHandleForReading.readabilityHandler = { handle in
+                    let data = handle.availableData
+                    if data.isEmpty {
+                        handle.readabilityHandler = nil
+                        if let tail = buffer.flush() { continuation.yield(tail) }
+                        stdoutEOF.markClosed()
+                    } else {
+                        for line in buffer.feed(data) { continuation.yield(line) }
+                    }
                 }
             }
             // Drain stderr incrementally as it arrives rather than blocking
@@ -170,16 +179,19 @@ struct ProcessGGCommandRunner: GGCommandRunning {
             do {
                 try process.run()
                 try? launchGate.fileHandleForReading.close()
-                guard let rootIdentity = ACPTerminal.childProcessKey(
-                    of: process.processIdentifier,
-                    parentPID: getpid()
-                ) else {
+                guard let launchedPID = Self.readLaunchPID(from: outPipe.fileHandleForReading),
+                      let rootIdentity = ACPTerminal.childProcessKey(
+                          of: launchedPID,
+                          parentPID: process.processIdentifier
+                      )
+                else {
                     try? launchGate.fileHandleForWriting.close()
                     process.terminate()
                     continuation.finish(throwing: GGServiceError.commandFailed(stderr: "Failed to capture launched process identity"))
                     return
                 }
                 processTree.start(rootIdentity: rootIdentity)
+                installStdoutHandler()
                 try? launchGate.fileHandleForWriting.write(contentsOf: Data([0x0A]))
                 try? launchGate.fileHandleForWriting.close()
             } catch {
@@ -217,6 +229,17 @@ struct ProcessGGCommandRunner: GGCommandRunning {
                 errPipe.fileHandleForReading.readabilityHandler = nil
             }
         }
+    }
+
+    private static func readLaunchPID(from handle: FileHandle) -> pid_t? {
+        var data = Data()
+        while data.count < 20 {
+            guard let byte = try? handle.read(upToCount: 1), !byte.isEmpty else { return nil }
+            if byte[0] == 0x0A { break }
+            data.append(byte)
+        }
+        guard let text = String(data: data, encoding: .utf8), let pid = pid_t(text), pid > 0 else { return nil }
+        return pid
     }
 }
 

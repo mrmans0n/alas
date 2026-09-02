@@ -110,17 +110,37 @@ struct GGCommandRunningStreamingTests {
             contentsOf: root.appendingPathComponent("Alas/Sources/Integrations/GG/GGService.swift"),
             encoding: .utf8
         )
-        #expect(serviceSource.contains(#"IFS= read -r _; exec "$@""#))
+        #expect(serviceSource.contains("set -m;"))
+        #expect(serviceSource.contains("child=$!; set +m"))
+        #expect(serviceSource.contains(#"IFS= read -r _ || exit; exec "$@""#))
         let run = try #require(serviceSource.range(of: "try process.run()"))
+        let launchedPID = try #require(serviceSource.range(
+            of: "readLaunchPID(from: outPipe.fileHandleForReading)",
+            range: run.upperBound ..< serviceSource.endIndex
+        ))
         let identity = try #require(serviceSource.range(
             of: "ACPTerminal.childProcessKey(",
-            range: run.upperBound ..< serviceSource.endIndex
+            range: launchedPID.upperBound ..< serviceSource.endIndex
         ))
         let start = try #require(serviceSource.range(of: "processTree.start(rootIdentity: rootIdentity)", range: identity.upperBound ..< serviceSource.endIndex))
         let release = try #require(serviceSource.range(of: "launchGate.fileHandleForWriting.write", range: start.upperBound ..< serviceSource.endIndex))
         #expect(run.lowerBound < identity.lowerBound)
+        #expect(launchedPID.lowerBound < identity.lowerBound)
         #expect(identity.lowerBound < start.lowerBound)
         #expect(start.lowerBound < release.lowerBound)
+    }
+
+    @Test func streamingCommandLaunchesAsProcessGroupLeader() async throws {
+        let script = #"printf '%s %s\n' "$$" "$(ps -o pgid= -p $$ | tr -d ' ')""#
+        let stream = ProcessGGCommandRunner.streamProcess(
+            executable: "/bin/sh",
+            args: ["-c", script],
+            cwd: nil,
+            env: nil
+        )
+        let fields = try #require(try await collectWithTimeout(stream).first?.split(separator: " "))
+        #expect(fields.count == 2)
+        #expect(fields[0] == fields[1])
     }
 
     @Test func streamsStdoutLinesInOrderAndFinishesOnCleanExit() async throws {

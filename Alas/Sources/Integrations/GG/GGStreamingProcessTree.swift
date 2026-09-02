@@ -19,8 +19,8 @@ final class GGStreamingProcessTree: @unchecked Sendable {
     }
 
     func start(rootIdentity: ACPTerminal.DescendantKey) {
-        let pid = process.processIdentifier
-        guard rootIdentity.pid == pid,
+        let pid = rootIdentity.pid
+        guard pid > 0,
               ACPTerminal.currentlyMatching(Set([rootIdentity])).contains(rootIdentity) else { return }
         condition.lock()
         guard !rootHasExited, process.isRunning else {
@@ -29,7 +29,6 @@ final class GGStreamingProcessTree: @unchecked Sendable {
         }
         self.rootIdentity = rootIdentity
         condition.unlock()
-        _ = setpgid(pid, pid)
         observeForks(from: [pid])
         refreshDescendants()
         let tracker = Task.detached(priority: .utility) { [weak self] in
@@ -67,8 +66,7 @@ final class GGStreamingProcessTree: @unchecked Sendable {
         terminationInProgress = true
         condition.unlock()
 
-        let pid = process.processIdentifier
-        guard pid > 0 else {
+        guard let pid = rootPIDSnapshot() else {
             stopTracking()
             finishTermination()
             return
@@ -133,8 +131,7 @@ final class GGStreamingProcessTree: @unchecked Sendable {
 
     private func signalRootAndGroup(_ pid: pid_t, signal: Int32) {
         condition.lock()
-        if !rootHasExited,
-           let rootIdentity,
+        if let rootIdentity,
            rootIdentity.pid == pid,
            ACPTerminal.currentlyMatching(Set([rootIdentity])).contains(rootIdentity)
         {
@@ -150,6 +147,12 @@ final class GGStreamingProcessTree: @unchecked Sendable {
         return rootHasExited
     }
 
+    private func rootPIDSnapshot() -> pid_t? {
+        condition.lock()
+        defer { condition.unlock() }
+        return rootIdentity?.pid
+    }
+
     private func signal(_ descendants: Set<ACPTerminal.DescendantKey>, with signal: Int32) {
         for descendant in ACPTerminal.currentlyMatching(descendants) {
             _ = Darwin.kill(descendant.pid, signal)
@@ -160,17 +163,18 @@ final class GGStreamingProcessTree: @unchecked Sendable {
         refreshLock.lock()
         defer { refreshLock.unlock() }
         condition.lock()
-        let rootAlive = !rootHasExited
         let rootIdentity = rootIdentity
         let cached = descendants
         condition.unlock()
         let retained = ACPTerminal.currentlyMatching(cached)
-        guard rootAlive, let rootIdentity, rootIdentity.pid == rootPID else { return retained }
+        guard let rootIdentity,
+              rootIdentity.pid == rootPID,
+              ACPTerminal.currentlyMatching(Set([rootIdentity])).contains(rootIdentity) else { return retained }
         return retained.union(ACPTerminal.collectChildDescendants(of: rootIdentity))
     }
 
     private func environmentTargets(rootPID: pid_t) -> Set<ACPTerminal.DescendantKey> {
-        let candidates = environmentPIDs().subtracting([rootPID])
+        let candidates = environmentPIDs().subtracting([rootPID, process.processIdentifier])
         let identities = Set(candidates.compactMap(ACPTerminal.processKey(of:)))
         let confirmed = environmentPIDs()
         return Set(ACPTerminal.currentlyMatching(identities).filter { confirmed.contains($0.pid) })
@@ -205,7 +209,6 @@ final class GGStreamingProcessTree: @unchecked Sendable {
         defer { refreshLock.unlock() }
         condition.lock()
         let shouldStop = terminationCompleted
-        let rootAlive = !rootHasExited
         let rootIdentity = rootIdentity
         let cached = descendants
         condition.unlock()
@@ -213,7 +216,9 @@ final class GGStreamingProcessTree: @unchecked Sendable {
 
         let retained = ACPTerminal.currentlyMatching(cached)
         var live: Set<ACPTerminal.DescendantKey> = []
-        if rootAlive, let rootIdentity {
+        if let rootIdentity,
+           ACPTerminal.currentlyMatching(Set([rootIdentity])).contains(rootIdentity)
+        {
             live.formUnion(ACPTerminal.collectChildDescendants(of: rootIdentity))
         }
         for descendant in retained {
