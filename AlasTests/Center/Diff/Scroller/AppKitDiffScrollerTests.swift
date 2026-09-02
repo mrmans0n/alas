@@ -9,7 +9,8 @@ struct AppKitDiffScrollerTests {
     private typealias Stack = (
         window: NSWindow,
         scrollView: AppKitDiffScrollView,
-        coordinator: AppKitDiffScroller.Coordinator
+        coordinator: AppKitDiffScroller.Coordinator,
+        cleanup: TestWindowCleanup
     )
 
     private func makeStack(
@@ -27,7 +28,7 @@ struct AppKitDiffScrollerTests {
         window.contentView = scrollView
         window.makeKeyAndOrderFront(nil)
         scrollView.layoutSubtreeIfNeeded()
-        return (window, scrollView, coordinator)
+        return (window, scrollView, coordinator, TestWindowCleanup(window))
     }
 
     private func plan(count: Int = 100) -> AppKitDiffRowPlan {

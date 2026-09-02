@@ -102,7 +102,9 @@ struct DiffPaneAppKitScrollerTests {
         .environment(\.theme, theme())
     }
 
-    private func mount<Content: View>(_ content: Content) -> (NSWindow, NSHostingController<Content>) {
+    private func mount<Content: View>(
+        _ content: Content
+    ) -> (NSWindow, NSHostingController<Content>, TestWindowCleanup) {
         let controller = NSHostingController(rootView: content)
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 900, height: 480),
@@ -112,7 +114,7 @@ struct DiffPaneAppKitScrollerTests {
         window.contentView = controller.view
         window.makeKeyAndOrderFront(nil)
         controller.view.layoutSubtreeIfNeeded()
-        return (window, controller)
+        return (window, controller, TestWindowCleanup(window))
     }
 
     private func allSubviews(of view: NSView) -> [NSView] {

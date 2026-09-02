@@ -11,7 +11,8 @@ struct AppKitDiffScrollerReconcilerTests {
         scrollView: AppKitDiffScrollView,
         tiling: AppKitDiffTilingController,
         pool: AppKitDiffRowHostingPool,
-        reconciler: AppKitDiffScrollerReconciler
+        reconciler: AppKitDiffScrollerReconciler,
+        cleanup: TestWindowCleanup
     )
 
     private func makeStack() -> Stack {
@@ -26,7 +27,7 @@ struct AppKitDiffScrollerReconcilerTests {
         window.contentView = scrollView
         window.makeKeyAndOrderFront(nil)
         scrollView.layoutSubtreeIfNeeded()
-        return (window, scrollView, tiling, pool, reconciler)
+        return (window, scrollView, tiling, pool, reconciler, TestWindowCleanup(window))
     }
 
     private func spec(

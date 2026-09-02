@@ -3,6 +3,42 @@ import SwiftUI
 import AppKit
 @testable import Alas
 
+@MainActor
+final class TestWindowCleanup {
+    private let window: NSWindow
+
+    init(_ window: NSWindow) {
+        self.window = window
+    }
+
+    deinit {
+        MainActor.assumeIsolated {
+            window.orderOut(nil)
+        }
+    }
+}
+
+@MainActor
+@Suite(.serialized)
+struct TestWindowCleanupTests {
+    @Test func ordersWindowOutWhenReleased() {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 100, height: 100),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.makeKeyAndOrderFront(nil)
+        var cleanup: TestWindowCleanup? = TestWindowCleanup(window)
+
+        #expect(window.isVisible)
+        cleanup = nil
+
+        #expect(!window.isVisible)
+        _ = cleanup
+    }
+}
+
 @Suite(.serialized)
 @MainActor
 struct CommitMessageEditorViewTests {
@@ -84,6 +120,7 @@ struct CommitMessageEditorViewTests {
         let model = CommitComposerModel(subject: "subject", body: "body")
         let controller = NSHostingController(rootView: CommitComposerHarness(model: model, theme: currentTheme()))
         let window = attach(controller)
+        defer { window.orderOut(nil) }
         await drain(controller.view)
 
         let subject = try #require(firstSubview(of: PairedTextFieldBackingView.self, in: controller.view))
@@ -102,14 +139,13 @@ struct CommitMessageEditorViewTests {
             body.insertText("`", replacementRange: NSRange(location: NSNotFound, length: 0))
         }
         #expect(model.body == "`body`")
-
-        window.orderOut(nil)
     }
 
     @Test func subjectKeepsFocusAcrossRepeatedTextUpdates() async throws {
         let model = CommitComposerModel(subject: "", body: "")
         let controller = NSHostingController(rootView: CommitComposerHarness(model: model, theme: currentTheme()))
         let window = attach(controller)
+        defer { window.orderOut(nil) }
         await drain(controller.view)
 
         let subject = try #require(firstSubview(of: PairedTextFieldBackingView.self, in: controller.view))
@@ -125,8 +161,6 @@ struct CommitMessageEditorViewTests {
             #expect(window.firstResponder === editor)
         }
         #expect(model.subject == "abc")
-
-        window.orderOut(nil)
     }
 
     private func attach<Content: View>(_ controller: NSHostingController<Content>) -> NSWindow {

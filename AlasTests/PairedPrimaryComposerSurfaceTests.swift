@@ -10,6 +10,7 @@ struct PairedPrimaryComposerSurfaceTests {
         let model = ReviewRequestComposerModel(title: "Review title", body: "Review body")
         let controller = NSHostingController(rootView: ReviewRequestComposerHarness(model: model, theme: try! ThemeStore().current))
         let window = attach(controller)
+        defer { window.orderOut(nil) }
         await drain(controller.view)
 
         let title = try #require(firstSubview(of: PairedTextFieldBackingView.self, in: controller.view))
@@ -28,8 +29,6 @@ struct PairedPrimaryComposerSurfaceTests {
             body.insertText("`", replacementRange: NSRange(location: NSNotFound, length: 0))
         }
         #expect(model.body == "`Review body`")
-
-        window.orderOut(nil)
     }
 
     @Test func ggSplitCardInvokesDraftChangeAfterPairedEdit() async throws {
@@ -56,6 +55,7 @@ struct PairedPrimaryComposerSurfaceTests {
         )
         .environment(\.theme, try! ThemeStore().current))
         let window = attach(controller)
+        defer { window.orderOut(nil) }
         await drain(controller.view)
         await drain(controller.view)
         draftChanges.removeAll()
@@ -72,7 +72,6 @@ struct PairedPrimaryComposerSurfaceTests {
 
         #expect(model.firstMessage == "`First commit`")
         #expect(draftChanges == ["`First commit`"])
-        window.orderOut(nil)
     }
 
     private func attach<Content: View>(_ controller: NSHostingController<Content>) -> NSWindow {

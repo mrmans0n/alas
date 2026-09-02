@@ -11,12 +11,12 @@ struct PairedAuthoredContentSurfaceTests {
         let model = PromptDraftCapture(text: "prompt command")
         let controller = NSHostingController(rootView: PromptEditorHarness(model: model))
         let window = attach(controller)
+        defer { window.orderOut(nil) }
         await drain(controller.view)
 
         wrapSelection(in: try #require(textView(containing: "prompt command", in: controller.view)))
 
         #expect(model.text == "`prompt command`")
-        window.orderOut(nil)
     }
 
     @Test func terminalStartupScriptBindingWrapsSelectedCommand() async throws {
@@ -25,24 +25,24 @@ struct PairedAuthoredContentSurfaceTests {
         let controller = NSHostingController(rootView: TerminalPane(state: state)
             .environment(\.theme, try! ThemeStore().current))
         let window = attach(controller, height: 620)
+        defer { window.orderOut(nil) }
         await drain(controller.view)
 
         wrapSelection(in: try #require(textView(containing: "terminal command", in: controller.view)))
 
         #expect(state.config.terminal.startupScript == "`terminal command`")
-        window.orderOut(nil)
     }
 
     @Test func projectStartupScriptBindingWrapsSelectedCommandBeforeSave() async throws {
         let model = ProjectStartupScriptCapture(text: "project command")
         let controller = NSHostingController(rootView: ProjectStartupScriptHarness(model: model))
         let window = attach(controller)
+        defer { window.orderOut(nil) }
         await drain(controller.view)
 
         wrapSelection(in: try #require(textView(containing: "project command", in: controller.view)))
 
         #expect(model.text == "`project command`")
-        window.orderOut(nil)
     }
 
     private func attach<Content: View>(
