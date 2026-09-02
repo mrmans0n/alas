@@ -6,6 +6,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.27] - 2026-09-02
+
+### ✨ Features
+
+- Add file and image review comments (#1104).
+- Show GitGud sync progress (#1102).
+
+### 🐛 Fixes
+
+- Hide removal actions for main worktrees (#1101).
+
+### 🏗️ Internal
+
+- Clean up test windows (#1103).
+
 ## [0.14.26] - 2026-09-02
 
 ### 🐛 Fixes
