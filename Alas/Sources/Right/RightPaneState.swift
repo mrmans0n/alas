@@ -755,7 +755,7 @@ final class RightPaneState: GGSplitCommitServicing {
         inFlightAction == .sync && sourceCommitsChanged
     }
 
-    nonisolated static func shouldClearDeferredGGStackRefresh(
+    nonisolated static func shouldPublishGGStackRefresh(
         refreshedCommitsKey: String,
         currentCommitsKey: String
     ) -> Bool {
@@ -1131,7 +1131,11 @@ final class RightPaneState: GGSplitCommitServicing {
             // writing here would race it with a stale result.
             if Task.isCancelled { return }
             guard snapshotGeneration == snapshotInvalidationGeneration,
-                  refreshGeneration == ggStackRefreshGeneration
+                  refreshGeneration == ggStackRefreshGeneration,
+                  Self.shouldPublishGGStackRefresh(
+                      refreshedCommitsKey: key,
+                      currentCommitsKey: currentGGStackCommitsKey
+                  )
             else { return }
             let resolvedContext: GGWorktreeContext
             if branchContext.isActive {
@@ -1143,13 +1147,8 @@ final class RightPaneState: GGSplitCommitServicing {
             }
             if ggContext != resolvedContext { ggContext = resolvedContext }
             ggStackRemoteError = nil
-            if Self.shouldClearDeferredGGStackRefresh(
-                refreshedCommitsKey: key,
-                currentCommitsKey: currentGGStackCommitsKey
-            ) {
-                ggStackRefreshDeferredUntilSyncEnds = false
-            }
-            ggStackCommitsKey = currentGGStackCommitsKey
+            ggStackRefreshDeferredUntilSyncEnds = false
+            ggStackCommitsKey = key
             if ggStack != stack { ggStack = stack }
             ggStackDisplayCommits = displayCommits
             let stackIsEmpty = stack.map { $0.totalCommits == 0 || $0.entries.isEmpty } ?? true
@@ -1175,7 +1174,11 @@ final class RightPaneState: GGSplitCommitServicing {
             // so drop it and retry on the next refresh.
             if Task.isCancelled { return }
             guard snapshotGeneration == snapshotInvalidationGeneration,
-                  refreshGeneration == ggStackRefreshGeneration
+                  refreshGeneration == ggStackRefreshGeneration,
+                  Self.shouldPublishGGStackRefresh(
+                      refreshedCommitsKey: key,
+                      currentCommitsKey: currentGGStackCommitsKey
+                  )
             else { return }
             if keepsPreviousPresentation, key == currentGGStackCommitsKey {
                 ggStackRemoteError = (error as? GGServiceError)?.userMessage ?? error.localizedDescription

@@ -669,12 +669,12 @@ struct RightPaneGGRefreshSchedulingTests {
         ))
     }
 
-    @Test func successfulRefreshClearsDeferralOnlyForItsCommitSnapshot() {
-        #expect(RightPaneState.shouldClearDeferredGGStackRefresh(
+    @Test func refreshPublishesOnlyForItsCommitSnapshot() {
+        #expect(RightPaneState.shouldPublishGGStackRefresh(
             refreshedCommitsKey: "main|abc",
             currentCommitsKey: "main|abc"
         ))
-        #expect(!RightPaneState.shouldClearDeferredGGStackRefresh(
+        #expect(!RightPaneState.shouldPublishGGStackRefresh(
             refreshedCommitsKey: "main|abc",
             currentCommitsKey: "main|def"
         ))
@@ -2506,6 +2506,34 @@ struct RightPaneGGStackTests {
         #expect(hydrationInvocation == 2)
         #expect(state.ggStackCommitsKey == nil)
         #expect(GGStackSummaryStore.shared.summaries[worktree.path.path] == nil)
+    }
+
+    @Test func refreshDoesNotPublishAfterLiveCommitKeyChanges() async {
+        let worktree = makeWorktree()
+        let result = ProcessResult(
+            exitCode: 0,
+            stdout: GGStackModelsTests.fixture,
+            stderr: ""
+        )
+        let runner = DelayedStackGGRunner(staleResult: result, freshResult: result)
+        let state = makeState(worktree: worktree)
+        installFakeGGStackLoader(on: state)
+        state.ggService = GGService(runner: runner)
+        state.ggContextProvider = { _ in .active(stackName: "agent-inbox") }
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "a", count: 40), stackShaped: true)]
+
+        let staleRefresh = Task { @MainActor in await state.refreshGGStack() }
+        while runner.callCount == 0 { await Task.yield() }
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "b", count: 40), stackShaped: true)]
+        await staleRefresh.value
+
+        #expect(state.ggStack == nil)
+        #expect(state.ggStackCommitsKey == nil)
+
+        await state.refreshGGStack()
+        #expect(state.ggStack?.name == "agent-inbox")
+        #expect(state.ggStackCommitsKey == state.currentGGStackCommitsKey)
+        #expect(runner.callCount == 3)
     }
 
     @Test func cancelledFirstStackLoadBecomesRetryableFailure() async {
