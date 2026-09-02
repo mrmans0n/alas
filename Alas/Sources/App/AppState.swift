@@ -2293,6 +2293,7 @@ final class AppState {
                     resolvedWorktreeIDs: self?.workspaceMemberWorktreeIDs(checkout) ?? [:]
                 )
                 self?.selectedWorktreeId = self?.workspaceNavigationState.repositoryFocusWorktreeID
+                self?.tabs.clearActiveTab(owner: .workspaceCheckout(checkout.id, checkout.executionLocation))
             }
         }).open(action)
     }

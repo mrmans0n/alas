@@ -5,6 +5,7 @@ struct NewWorkspaceDialog: View {
     @Binding var presented: Bool
     @State private var model: WorkspaceDefinitionDialogModel
     @State private var error: String?
+    @State private var isSaving = false
 
     init(state: AppState, presented: Binding<Bool>) {
         self.state = state
@@ -27,11 +28,23 @@ struct NewWorkspaceDialog: View {
             }
             ForEach(model.eligibleProjects) { project in Button("Add \(project.name)") { _ = model.add(project: project) } }
             if let error { Text(error).foregroundStyle(.red) }
-        }, cancelTitle: "Cancel", confirmTitle: model.saveTitle, confirmStyle: .primary, onCancel: { presented = false }, onConfirm: save, confirmEnabled: !model.trimmedName.isEmpty && !model.members.isEmpty)
+        }, cancelTitle: "Cancel", confirmTitle: model.saveTitle, confirmStyle: .primary, onCancel: { presented = false }, onConfirm: save, confirmEnabled: !isSaving && !model.trimmedName.isEmpty && !model.members.isEmpty)
     }
-    private func save() { let definition = model.definition()
-    Task { @MainActor in do { try await state.saveWorkspaceDefinition(definition)
-    presented = false } catch { self.error = error.localizedDescription } } }
+    private func save() {
+        guard !isSaving else { return }
+        isSaving = true
+        error = nil
+        let definition = model.definition()
+        Task { @MainActor in
+            do {
+                try await state.saveWorkspaceDefinition(definition)
+                presented = false
+            } catch {
+                self.error = error.localizedDescription
+                isSaving = false
+            }
+        }
+    }
     @ViewBuilder private var executionLocationControls: some View { HStack { Text("Execution location")
     Button("Local") { model.executionLocation = .local }
     ForEach(Array(Set(state.projects.compactMap(\.host))).sorted(), id: \.self) { host in Button(host) { model.executionLocation = .ssh(host) } } } }
