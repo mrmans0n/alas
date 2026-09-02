@@ -421,7 +421,8 @@ struct GGStackReadinessModel: Equatable {
             }
         }
 
-        let terminalFailure = hasTerminalFailure || hasTerminalEventError || (sawSummary && hasEntryError)
+        let summaryEntryFailure = sawSummary && hasEntryError
+        let terminalFailure = hasTerminalFailure || hasTerminalEventError || summaryEntryFailure
         if sawSummary && isInFlight && !terminalFailure {
             liveStatus = "Refreshing Changes…"
         } else if !isInFlight || terminalFailure {
@@ -448,19 +449,21 @@ struct GGStackReadinessModel: Equatable {
                 id: "commits",
                 title: "Syncing commits",
                 detail: sawStart || sawSummary ? (liveStatus ?? countStatus()) : "Waiting for stack preparation",
-                state: sawSummary ? .complete : (sawStart ? activeFailureState : .pending)
+                state: summaryEntryFailure ? .failed : (sawSummary ? .complete :
+                    (sawStart ? activeFailureState : .pending))
             ),
             GGSyncProgressPresentation.Step(
                 id: "reviews",
                 title: "Updating pull requests",
                 detail: sawPREvent ? "Publishing review state" : "Waiting for pushed commits",
-                state: sawSummary ? .complete : (sawPREvent ? activeFailureState : .pending)
+                state: summaryEntryFailure ? .pending : (sawSummary ? .complete :
+                    (sawPREvent ? activeFailureState : .pending))
             ),
             GGSyncProgressPresentation.Step(
                 id: "refresh",
                 title: "Refreshing Changes",
                 detail: "Reloading Git and provider status",
-                state: sawSummary ? (isInFlight ? activeFailureState : .complete) : .pending
+                state: sawSummary && !terminalFailure ? (isInFlight ? .current : .complete) : .pending
             ),
         ]
         return GGSyncProgressPresentation(

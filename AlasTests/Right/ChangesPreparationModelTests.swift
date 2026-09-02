@@ -115,6 +115,22 @@ struct ChangesPreparationModelTests {
         #expect(model.isVisible)
     }
 
+    @Test func syncProgressKeepsEmptyGGPreparationVisible() {
+        let model = ChangesPreparationModel.makeGG(
+            staged: .zero,
+            hasDraft: false,
+            capabilities: stagedOnlyCapabilities,
+            syncProgress: GGSyncProgressPresentation(
+                liveStatus: "Refreshing Changes…",
+                showsSpinner: true,
+                steps: [],
+                rows: []
+            )
+        )
+
+        #expect(model.isVisible)
+    }
+
     @Test func emptyGGPreparationIsHiddenButKeepsStableDestinations() {
         let model = ChangesPreparationModel.makeGG(
             staged: .zero,

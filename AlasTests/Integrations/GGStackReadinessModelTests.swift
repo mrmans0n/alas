@@ -490,6 +490,7 @@ struct GGStackReadinessModelTests {
         #expect(progress.rows == [.init(position: 1, text: "[1] Failed to push")])
         #expect(progress.liveStatus == nil)
         #expect(!progress.showsSpinner)
+        #expect(progress.steps.map(\.state) == [.complete, .failed, .pending, .pending])
     }
 
     @Test func pausedOnSyncKeepsProgressAndOffersContinueAbort() throws {

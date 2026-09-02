@@ -65,6 +65,7 @@ struct ChangesPreparationModel: Equatable {
         if !ggActions.isEmpty {
             return mutationError != nil
                 || reconciliationAction != nil
+                || syncProgress != nil
                 || reviewAction != nil
                 || ggAction(.newStackCommit)?.isEnabled == true
         }
