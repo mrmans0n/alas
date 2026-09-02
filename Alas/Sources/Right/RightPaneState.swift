@@ -193,6 +193,7 @@ final class RightPaneState: GGSplitCommitServicing {
     /// Off-critical-path gg stack load. Cancelled+restarted per refresh so a
     /// slow `gg ls --json` never blocks the Changes-pane snapshot.
     @ObservationIgnored private var ggStackRefreshTask: Task<Void, Never>? = nil
+    @ObservationIgnored private var ggStackRefreshDeferredUntilSyncEnds = false
     /// A refresh result may still arrive after its task was cancelled. Only
     /// the most recently started GG refresh may publish snapshot-derived
     /// stack state.
@@ -524,6 +525,7 @@ final class RightPaneState: GGSplitCommitServicing {
         remoteEventDebouncer.cancel()
         ggStackRefreshTask?.cancel()
         ggStackRefreshTask = nil
+        ggStackRefreshDeferredUntilSyncEnds = false
     }
 
     private func startRemoteHelperWatching() {
@@ -746,6 +748,13 @@ final class RightPaneState: GGSplitCommitServicing {
         inFlightAction != .sync
     }
 
+    nonisolated static func shouldDeferGGStackRefresh(
+        inFlightAction: GGStackActionKind?,
+        sourceCommitsChanged: Bool
+    ) -> Bool {
+        inFlightAction == .sync && sourceCommitsChanged
+    }
+
     @discardableResult
     @MainActor
     func refresh(forceReviewLoopRemote: Bool = false) async -> Bool {
@@ -882,12 +891,20 @@ final class RightPaneState: GGSplitCommitServicing {
             let mergedFileTree = Self.preservingLazyChildren(fresh: tree, previous: self.fileTree)
             if self.fileTree != mergedFileTree { self.fileTree = mergedFileTree }
             if self.commits != commits { self.commits = commits }
-            self.ggStackSourceCommits = reviewLoopBaseResult?.commits ?? commits
+            let nextGGStackSourceCommits = reviewLoopBaseResult?.commits ?? commits
+            let ggStackSourceCommitsChanged = self.ggStackSourceCommits != nextGGStackSourceCommits
+            self.ggStackSourceCommits = nextGGStackSourceCommits
             if Self.shouldScheduleGGStackRefresh(inFlightAction: ggActionState.inFlightAction) {
+                ggStackRefreshDeferredUntilSyncEnds = false
                 ggStackRefreshTask?.cancel()
                 ggStackRefreshTask = Task { @MainActor [weak self] in
                     await self?.refreshGGStack(forceRemote: forceReviewLoopRemote)
                 }
+            } else if Self.shouldDeferGGStackRefresh(
+                inFlightAction: ggActionState.inFlightAction,
+                sourceCommitsChanged: ggStackSourceCommitsChanged
+            ) {
+                ggStackRefreshDeferredUntilSyncEnds = true
             }
             if self.comparisonRef != ref { self.comparisonRef = ref }
             let preferredCommitRemoteRef = ref ?? baseBranch
@@ -1251,9 +1268,21 @@ final class RightPaneState: GGSplitCommitServicing {
     }
 
     func supersedeGGStackRefreshForSync() {
+        ggStackRefreshDeferredUntilSyncEnds = false
         ggStackRefreshGeneration &+= 1
         ggStackRefreshTask?.cancel()
         ggStackRefreshTask = nil
+    }
+
+    private func scheduleDeferredGGStackRefreshIfNeeded() {
+        guard ggStackRefreshDeferredUntilSyncEnds,
+              ggActionState.inFlightAction != .sync
+        else { return }
+        ggStackRefreshDeferredUntilSyncEnds = false
+        ggStackRefreshTask?.cancel()
+        ggStackRefreshTask = Task { @MainActor [weak self] in
+            await self?.refreshGGStack(forceRemote: true)
+        }
     }
 
     /// Re-run the gg gate immediately (e.g. after a Settings toggle) rather
@@ -1780,6 +1809,7 @@ final class RightPaneState: GGSplitCommitServicing {
         if request == .sync { supersedeGGStackRefreshForSync() }
         let actionGeneration = ggActionState.actionGeneration
         return Task { @MainActor in
+            defer { scheduleDeferredGGStackRefreshIfNeeded() }
             do {
                 try await operation.value
             } catch {
@@ -1794,6 +1824,7 @@ final class RightPaneState: GGSplitCommitServicing {
         if prepared.request == .sync { supersedeGGStackRefreshForSync() }
         let actionGeneration = ggActionState.actionGeneration
         return Task { @MainActor in
+            defer { scheduleDeferredGGStackRefreshIfNeeded() }
             do {
                 try await operation.value
             } catch {

@@ -653,6 +653,21 @@ struct RightPaneGGRefreshSchedulingTests {
         #expect(RightPaneState.shouldScheduleGGStackRefresh(inFlightAction: .rebase))
         #expect(RightPaneState.shouldScheduleGGStackRefresh(inFlightAction: nil))
     }
+
+    @Test func changedCommitSnapshotDefersRefreshOnlyDuringSync() {
+        #expect(RightPaneState.shouldDeferGGStackRefresh(
+            inFlightAction: .sync,
+            sourceCommitsChanged: true
+        ))
+        #expect(!RightPaneState.shouldDeferGGStackRefresh(
+            inFlightAction: .sync,
+            sourceCommitsChanged: false
+        ))
+        #expect(!RightPaneState.shouldDeferGGStackRefresh(
+            inFlightAction: .rebase,
+            sourceCommitsChanged: true
+        ))
+    }
 }
 
 @MainActor
