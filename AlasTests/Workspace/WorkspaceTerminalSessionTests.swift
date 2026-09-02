@@ -110,6 +110,18 @@ struct WorkspaceTerminalSessionTests {
             forcedCwdLocation: .ssh("build-host"),
             context: remote
         ) == nil)
+        #expect(TerminalService.checkoutWorkingDirectory(
+            forcedCwd: URL(fileURLWithPath: "/srv/checkout/member"),
+            forcedCwdLocation: .ssh("build-host"),
+            context: remote,
+            remoteCwdAlreadyValidated: true
+        )?.path == "/srv/checkout/member")
+        #expect(TerminalService.checkoutWorkingDirectory(
+            forcedCwd: URL(fileURLWithPath: "/srv/checkout/member"),
+            forcedCwdLocation: .ssh("other-host"),
+            context: remote,
+            remoteCwdAlreadyValidated: true
+        ) == nil)
     }
 
     @Test func checkoutRestoreRejectsSymlinkedLocalCwdOutsideTheFrozenRoot() throws {
@@ -130,6 +142,31 @@ struct WorkspaceTerminalSessionTests {
         )
 
         #expect(TerminalService.checkoutRestorationCwd(savedPath: link.path, context: context, savedLocation: .local) == nil)
+    }
+
+    @Test func remoteCheckoutCwdContainmentRejectsSymlinkEscapes() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("workspace-terminal-remote-cwd-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let root = directory.appendingPathComponent("checkout", isDirectory: true)
+        let inside = root.appendingPathComponent("member", isDirectory: true)
+        let outside = directory.appendingPathComponent("outside", isDirectory: true)
+        try FileManager.default.createDirectory(at: inside, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        let link = root.appendingPathComponent("escape", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
+
+        let accepted = try await Process.run(
+            "/bin/sh",
+            args: ["-c", AppState.remoteCheckoutCwdContainmentCommand(rootPath: root.path, savedPath: inside.path)]
+        )
+        #expect(accepted.exitCode == 0)
+
+        let rejected = try await Process.run(
+            "/bin/sh",
+            args: ["-c", AppState.remoteCheckoutCwdContainmentCommand(rootPath: root.path, savedPath: link.path)]
+        )
+        #expect(rejected.exitCode != 0)
     }
 
     @MainActor
