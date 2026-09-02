@@ -187,14 +187,18 @@ struct ProcessGGCommandRunner: GGCommandRunning {
                       let rootIdentity = ACPTerminal.childProcessKey(
                           of: launchedPID,
                           parentPID: process.processIdentifier
-                      )
+                      ),
+                      let wrapperIdentity = ACPTerminal.processKey(of: process.processIdentifier)
                 else {
                     try? launchGate.fileHandleForWriting.close()
                     process.terminate()
                     continuation.finish(throwing: GGServiceError.commandFailed(stderr: "Failed to capture launched process identity"))
                     return
                 }
-                processTree.start(rootIdentity: rootIdentity)
+                processTree.start(
+                    rootIdentity: rootIdentity,
+                    wrapperIdentity: wrapperIdentity
+                )
                 installStdoutHandler()
                 try? launchGate.fileHandleForWriting.write(contentsOf: Data([0x0A]))
                 try? launchGate.fileHandleForWriting.close()

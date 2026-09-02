@@ -9,6 +9,7 @@ final class GGStreamingProcessTree: @unchecked Sendable {
     private var terminationInProgress = false
     private var terminationCompleted = false
     private var rootIdentity: ACPTerminal.DescendantKey?
+    private var wrapperIdentity: ACPTerminal.DescendantKey?
     private var descendants: Set<ACPTerminal.DescendantKey> = []
     private var forkSources: [pid_t: DispatchSourceProcess] = [:]
     private var tracker: Task<Void, Never>?
@@ -18,16 +19,20 @@ final class GGStreamingProcessTree: @unchecked Sendable {
         self.environmentMarker = environmentMarker
     }
 
-    func start(rootIdentity: ACPTerminal.DescendantKey) {
+    func start(
+        rootIdentity: ACPTerminal.DescendantKey,
+        wrapperIdentity: ACPTerminal.DescendantKey
+    ) {
         let pid = rootIdentity.pid
         guard pid > 0,
-              ACPTerminal.currentlyMatching(Set([rootIdentity])).contains(rootIdentity) else { return }
+              ACPTerminal.currentlyMatching(Set([rootIdentity, wrapperIdentity])).count == 2 else { return }
         condition.lock()
         guard !rootHasExited, process.isRunning else {
             condition.unlock()
             return
         }
         self.rootIdentity = rootIdentity
+        self.wrapperIdentity = wrapperIdentity
         condition.unlock()
         observeForks(from: [pid])
         refreshDescendants()
@@ -174,7 +179,15 @@ final class GGStreamingProcessTree: @unchecked Sendable {
     }
 
     private func environmentTargets(rootPID: pid_t) -> Set<ACPTerminal.DescendantKey> {
-        let candidates = environmentPIDs().subtracting([rootPID, process.processIdentifier])
+        condition.lock()
+        let rootIdentity = rootIdentity
+        let wrapperIdentity = wrapperIdentity
+        condition.unlock()
+        var excludedPIDs: Set<pid_t> = []
+        if let rootIdentity, let wrapperIdentity {
+            excludedPIDs = Set(ACPTerminal.currentlyMatching(Set([rootIdentity, wrapperIdentity])).map(\.pid))
+        }
+        let candidates = environmentPIDs().subtracting(excludedPIDs)
         let identities = Set(candidates.compactMap(ACPTerminal.processKey(of:)))
         let confirmed = environmentPIDs()
         return Set(ACPTerminal.currentlyMatching(identities).filter { confirmed.contains($0.pid) })

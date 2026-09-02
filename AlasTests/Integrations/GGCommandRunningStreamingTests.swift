@@ -104,7 +104,8 @@ struct GGCommandRunningStreamingTests {
             contentsOf: root.appendingPathComponent("Alas/Sources/Integrations/GG/GGStreamingProcessTree.swift"),
             encoding: .utf8
         )
-        #expect(treeSource.contains("func start(rootIdentity: ACPTerminal.DescendantKey)"))
+        #expect(treeSource.contains("func start(\n        rootIdentity: ACPTerminal.DescendantKey,\n        wrapperIdentity: ACPTerminal.DescendantKey"))
+        #expect(treeSource.contains("ACPTerminal.currentlyMatching(Set([rootIdentity, wrapperIdentity]))"))
 
         let serviceSource = try String(
             contentsOf: root.appendingPathComponent("Alas/Sources/Integrations/GG/GGService.swift"),
@@ -128,12 +129,20 @@ struct GGCommandRunningStreamingTests {
             of: "ACPTerminal.childProcessKey(",
             range: launchedPID.upperBound ..< serviceSource.endIndex
         ))
-        let start = try #require(serviceSource.range(of: "processTree.start(rootIdentity: rootIdentity)", range: identity.upperBound ..< serviceSource.endIndex))
+        let wrapperIdentity = try #require(serviceSource.range(
+            of: "ACPTerminal.processKey(of: process.processIdentifier)",
+            range: identity.upperBound ..< serviceSource.endIndex
+        ))
+        let start = try #require(serviceSource.range(
+            of: "processTree.start(\n                    rootIdentity: rootIdentity,\n                    wrapperIdentity: wrapperIdentity",
+            range: wrapperIdentity.upperBound ..< serviceSource.endIndex
+        ))
         let release = try #require(serviceSource.range(of: "launchGate.fileHandleForWriting.write", range: start.upperBound ..< serviceSource.endIndex))
         #expect(run.lowerBound < identity.lowerBound)
         #expect(closeWriter.lowerBound < launchedPID.lowerBound)
         #expect(launchedPID.lowerBound < identity.lowerBound)
         #expect(identity.lowerBound < start.lowerBound)
+        #expect(wrapperIdentity.lowerBound < start.lowerBound)
         #expect(start.lowerBound < release.lowerBound)
     }
 
