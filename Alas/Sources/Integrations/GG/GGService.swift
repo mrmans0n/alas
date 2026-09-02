@@ -237,13 +237,14 @@ struct ProcessGGCommandRunner: GGCommandRunning {
             + UInt64(launchPIDTimeoutMilliseconds) * 1_000_000
         while data.count < 20 {
             let now = DispatchTime.now().uptimeNanoseconds
-            guard now < deadline else { return nil }
             var descriptor = pollfd(
                 fd: handle.fileDescriptor,
                 events: Int16(POLLIN | POLLHUP),
                 revents: 0
             )
-            let remaining = Int32(max(1, (deadline - now) / 1_000_000))
+            let remaining = now < deadline
+                ? Int32(max(1, (deadline - now) / 1_000_000))
+                : 0
             var result: Int32
             repeat {
                 result = poll(&descriptor, 1, remaining)
