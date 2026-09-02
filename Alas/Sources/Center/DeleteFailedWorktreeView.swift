@@ -3,6 +3,7 @@ import SwiftUI
 struct DeleteFailedWorktreeView: View {
     let worktree: Worktree
     let message: String
+    let allowsRemovalActions: Bool
     let onRetry: () -> Void
     let onArchive: () -> Void
     let onCopyError: () -> Void
@@ -34,8 +35,10 @@ struct DeleteFailedWorktreeView: View {
                 .padding(.horizontal, 24)
             HStack(spacing: 10) {
                 AlasButton(title: "Copy Error", icon: "doc.on.doc", style: .normal, action: onCopyError)
-                AlasButton(title: "Archive", icon: "archivebox", style: .normal, action: onArchive)
-                AlasButton(title: "Retry Delete", icon: "arrow.clockwise", style: .primary, action: onRetry)
+                if allowsRemovalActions {
+                    AlasButton(title: "Archive", icon: "archivebox", style: .normal, action: onArchive)
+                    AlasButton(title: "Retry Delete", icon: "arrow.clockwise", style: .primary, action: onRetry)
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
