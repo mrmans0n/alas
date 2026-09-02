@@ -177,24 +177,6 @@ struct ProcessGGCommandRunner: GGCommandRunning {
                     }
                 }
             }
-            let watchdog = Task {
-                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                if Task.isCancelled { return }
-                if process.isRunning {
-                    timeoutState.markTimedOut()
-                    fputs(
-                        "[Process watchdog] \(timeout)s timeout — terminating: \(executable) \(args.joined(separator: " "))\n",
-                        stderr
-                    )
-                    processTree.terminateAndWait()
-                }
-            }
-            continuation.onTermination = { _ in
-                watchdog.cancel()
-                processTree.terminateAndWait()
-                outPipe.fileHandleForReading.readabilityHandler = nil
-                errPipe.fileHandleForReading.readabilityHandler = nil
-            }
             do {
                 try process.run()
                 // An early wrapper exit must make the synchronous PID read see EOF.
@@ -217,6 +199,24 @@ struct ProcessGGCommandRunner: GGCommandRunning {
                     rootIdentity: rootIdentity,
                     wrapperIdentity: wrapperIdentity
                 )
+                let watchdog = Task {
+                    try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                    if Task.isCancelled { return }
+                    if process.isRunning {
+                        timeoutState.markTimedOut()
+                        fputs(
+                            "[Process watchdog] \(timeout)s timeout — terminating: \(executable) \(args.joined(separator: " "))\n",
+                            stderr
+                        )
+                        processTree.terminateAndWait()
+                    }
+                }
+                continuation.onTermination = { _ in
+                    watchdog.cancel()
+                    processTree.terminateAndWait()
+                    outPipe.fileHandleForReading.readabilityHandler = nil
+                    errPipe.fileHandleForReading.readabilityHandler = nil
+                }
                 installStdoutHandler()
                 try? launchGate.fileHandleForWriting.write(contentsOf: Data([0x0A]))
                 try? launchGate.fileHandleForWriting.close()

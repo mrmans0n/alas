@@ -147,6 +147,7 @@ struct GGCommandRunningStreamingTests {
         #expect(identity.lowerBound < start.lowerBound)
         #expect(wrapperIdentity.lowerBound < start.lowerBound)
         #expect(start.lowerBound < release.lowerBound)
+        #expect(start.lowerBound < cleanup.lowerBound)
         #expect(cleanup.lowerBound < release.lowerBound)
     }
 
