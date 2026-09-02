@@ -649,6 +649,15 @@ struct RightPaneGGStackErrorPresentationTests {
 }
 
 @MainActor
+struct RightPaneGGRefreshSchedulingTests {
+    @Test func watcherStackRefreshIsSuppressedOnlyDuringSync() {
+        #expect(!RightPaneState.shouldScheduleGGStackRefresh(inFlightAction: .sync))
+        #expect(RightPaneState.shouldScheduleGGStackRefresh(inFlightAction: .rebase))
+        #expect(RightPaneState.shouldScheduleGGStackRefresh(inFlightAction: nil))
+    }
+}
+
+@MainActor
 struct RightPaneGGStackTests {
     private struct MemoryStore: PersistenceStoreProtocol {
         var projectsFile: ProjectsFile?

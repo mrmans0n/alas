@@ -742,6 +742,10 @@ final class RightPaneState: GGSplitCommitServicing {
         baseCommits?.count ?? displayCommits.count
     }
 
+    nonisolated static func shouldScheduleGGStackRefresh(inFlightAction: GGStackActionKind?) -> Bool {
+        inFlightAction != .sync
+    }
+
     @discardableResult
     @MainActor
     func refresh(forceReviewLoopRemote: Bool = false) async -> Bool {
@@ -879,9 +883,11 @@ final class RightPaneState: GGSplitCommitServicing {
             if self.fileTree != mergedFileTree { self.fileTree = mergedFileTree }
             if self.commits != commits { self.commits = commits }
             self.ggStackSourceCommits = reviewLoopBaseResult?.commits ?? commits
-            ggStackRefreshTask?.cancel()
-            ggStackRefreshTask = Task { @MainActor [weak self] in
-                await self?.refreshGGStack(forceRemote: forceReviewLoopRemote)
+            if Self.shouldScheduleGGStackRefresh(inFlightAction: ggActionState.inFlightAction) {
+                ggStackRefreshTask?.cancel()
+                ggStackRefreshTask = Task { @MainActor [weak self] in
+                    await self?.refreshGGStack(forceRemote: forceReviewLoopRemote)
+                }
             }
             if self.comparisonRef != ref { self.comparisonRef = ref }
             let preferredCommitRemoteRef = ref ?? baseBranch
