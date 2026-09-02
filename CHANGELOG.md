@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.26] - 2026-09-02
+
+### 🐛 Fixes
+
+- Finish GitGud sync when the terminal prints its summary (#1100).
+- Show stacked diff modes correctly in worktree rows (#1099).
+- Avoid refreshing GitGud state before commit dialogs open (#1098).
+
 ## [0.14.25] - 2026-08-31
 
 ### ✨ Features
