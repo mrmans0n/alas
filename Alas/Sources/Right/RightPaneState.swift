@@ -1223,9 +1223,6 @@ final class RightPaneState: GGSplitCommitServicing {
         // GG rewrites refs throughout sync. Keep the last coherent stack
         // mounted until the coordinator performs its final refresh.
         if ggActionState.inFlightAction == .sync, ggStackLoadState == .loaded {
-            ggStackRefreshGeneration &+= 1
-            ggStackRefreshTask?.cancel()
-            ggStackRefreshTask = nil
             return nil
         }
         // Advance ownership before cancellation: a direct/untracked caller may
@@ -1251,6 +1248,12 @@ final class RightPaneState: GGSplitCommitServicing {
         }
         ggStackRefreshTask = task
         return task
+    }
+
+    func supersedeGGStackRefreshForSync() {
+        ggStackRefreshGeneration &+= 1
+        ggStackRefreshTask?.cancel()
+        ggStackRefreshTask = nil
     }
 
     /// Re-run the gg gate immediately (e.g. after a Settings toggle) rather
@@ -1774,6 +1777,7 @@ final class RightPaneState: GGSplitCommitServicing {
             request,
             confirmedAgainst: identity
         ) else { return nil }
+        if request == .sync { supersedeGGStackRefreshForSync() }
         let actionGeneration = ggActionState.actionGeneration
         return Task { @MainActor in
             do {
@@ -1787,6 +1791,7 @@ final class RightPaneState: GGSplitCommitServicing {
     @discardableResult
     func runGGMutation(_ prepared: GGPreparedMutation) -> Task<Void, Never>? {
         guard let operation = ggMutationCoordinator.startApplying(prepared) else { return nil }
+        if prepared.request == .sync { supersedeGGStackRefreshForSync() }
         let actionGeneration = ggActionState.actionGeneration
         return Task { @MainActor in
             do {

@@ -2217,9 +2217,16 @@ struct RightPaneGGStackTests {
             of: "agent-inbox",
             with: "stale-stack"
         )
+        let finalSnapshot = GGStackModelsTests.fixture.replacingOccurrences(
+            of: "agent-inbox",
+            with: "final-stack"
+        )
         let runner = ControlledStackGGRunner(
-            stackResults: [("stale-stack", ProcessResult(exitCode: 0, stdout: staleSnapshot, stderr: ""))],
-            suspendedCalls: [1]
+            stackResults: [
+                ("stale-stack", ProcessResult(exitCode: 0, stdout: staleSnapshot, stderr: "")),
+                ("final-stack", ProcessResult(exitCode: 0, stdout: finalSnapshot, stderr: "")),
+            ],
+            suspendedCalls: [1, 2]
         )
         state.ggService = GGService(runner: runner)
         state.ggContextProvider = { _ in .active(stackName: "feature") }
@@ -2240,6 +2247,7 @@ struct RightPaneGGStackTests {
         let staleRefresh = Task { @MainActor in await state.refreshGGStack(forceRemote: true) }
         await runner.waitUntilCall(1)
         _ = state.ggActionState.beginAction(.sync)
+        state.supersedeGGStackRefreshForSync()
 
         let refresh = state.invalidateGGPresentation(startingRefresh: false)
 
@@ -2251,6 +2259,13 @@ struct RightPaneGGStackTests {
         await runner.complete(call: 1)
         await staleRefresh.value
         #expect(state.ggStack?.name == "feature")
+
+        let finalRefresh = Task { @MainActor in await state.refreshGGStack(forceRemote: true) }
+        await runner.waitUntilCall(2)
+        _ = state.invalidateGGPresentation(startingRefresh: false)
+        await runner.complete(call: 2)
+        await finalRefresh.value
+        #expect(state.ggStack?.name == "final-stack")
     }
 
     @Test func activeHeadInvalidationReplacesInFlightColdDetachedRecovery() async throws {
