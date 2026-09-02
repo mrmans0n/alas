@@ -6,6 +6,11 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct WorktreeRowHeightTests {
+    @Test func mainWorktreeDoesNotShowRemovalActions() {
+        #expect(!WorktreeRowView.showsRemovalActions(isMain: true))
+        #expect(WorktreeRowView.showsRemovalActions(isMain: false))
+    }
+
     @Test func ggModeMenuUsesStackedDiffsName() {
         #expect(WorktreeRowView.ggModeMenuTitle == "Stacked Diffs Mode")
     }

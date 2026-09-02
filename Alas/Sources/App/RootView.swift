@@ -246,6 +246,8 @@ struct RootView: View {
             DeleteFailedWorktreeView(
                 worktree: wt,
                 message: message,
+                allowsRemovalActions: state.projects.first(where: { $0.id == wt.projectId })
+                    .map { !state.projectsManager.isMain(wt, in: $0) } ?? false,
                 onRetry: { state.deleteWorktree(wt) },
                 onArchive: { state.archiveWorktree(wt) },
                 onCopyError: {
