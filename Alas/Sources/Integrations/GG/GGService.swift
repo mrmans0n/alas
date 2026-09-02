@@ -46,6 +46,7 @@ struct ProcessGGCommandRunner: GGCommandRunning {
     ) async throws -> ProcessResult
 
     private static let commandTimeout: TimeInterval = 600
+    private static let launchPIDTimeoutMilliseconds: Int32 = 1_000
     private let processLaunch: ProcessLaunch
 
     init(
@@ -228,7 +229,22 @@ struct ProcessGGCommandRunner: GGCommandRunning {
 
     private static func readLaunchPID(from handle: FileHandle) -> pid_t? {
         var data = Data()
+        let deadline = DispatchTime.now().uptimeNanoseconds
+            + UInt64(launchPIDTimeoutMilliseconds) * 1_000_000
         while data.count < 20 {
+            let now = DispatchTime.now().uptimeNanoseconds
+            guard now < deadline else { return nil }
+            var descriptor = pollfd(
+                fd: handle.fileDescriptor,
+                events: Int16(POLLIN | POLLHUP),
+                revents: 0
+            )
+            let remaining = Int32(max(1, (deadline - now) / 1_000_000))
+            var result: Int32
+            repeat {
+                result = poll(&descriptor, 1, remaining)
+            } while result < 0 && errno == EINTR
+            guard result > 0 else { return nil }
             guard let byte = try? handle.read(upToCount: 1), !byte.isEmpty else { return nil }
             if byte[0] == 0x0A { break }
             data.append(byte)

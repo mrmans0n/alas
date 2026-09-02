@@ -113,6 +113,8 @@ struct GGCommandRunningStreamingTests {
         #expect(serviceSource.contains("set -m;"))
         #expect(serviceSource.contains("child=$!; set +m"))
         #expect(serviceSource.contains(#"IFS= read -r _ || exit; exec "$@""#))
+        #expect(serviceSource.contains("private static let launchPIDTimeoutMilliseconds: Int32 = 1_000"))
+        #expect(serviceSource.contains("poll(&descriptor"))
         let run = try #require(serviceSource.range(of: "try process.run()"))
         let closeWriter = try #require(serviceSource.range(
             of: "outPipe.fileHandleForWriting.close()",
