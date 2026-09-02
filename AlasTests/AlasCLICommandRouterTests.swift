@@ -152,7 +152,7 @@ struct AlasCLICommandRouterTests {
             visibleWorktrees: { [member] },
             openRelativeFile: { _, _ in },
             openExternalFile: { _, _ in },
-            notifySession: { _, owner, _, _, _, _ in
+            notifyOwnedSession: { _, owner, _, _, _ in
                 capturedOwner = owner
                 return .ok
             },
@@ -168,6 +168,40 @@ struct AlasCLICommandRouterTests {
 
         #expect(response == .ok)
         #expect(capturedOwner == checkoutOwner)
+    }
+
+    @Test func checkoutOwnedNotifyDoesNotRequireRepositoryTarget() async throws {
+        let checkoutOwner = SessionOwnerID.workspaceCheckout(
+            UUID(uuidString: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")!,
+            .local
+        )
+        var captured: (sessionId: String, owner: SessionOwnerID, body: String)?
+        let router = AlasCLICommandRouter(
+            sessionWorktreeId: { _ in nil },
+            sessionOwner: { $0 == "checkout-leaf" ? checkoutOwner : nil },
+            sessionCwdWorktree: { _, _ in nil },
+            originatingWorktree: { _ in nil },
+            visibleWorktrees: { [] },
+            openRelativeFile: { _, _ in },
+            openExternalFile: { _, _ in },
+            notifyOwnedSession: { sessionId, owner, body, _, _ in
+                captured = (sessionId, owner, body)
+                return .ok
+            },
+            activateApp: {}
+        )
+
+        let response = await router.handle(.init(
+            version: 1,
+            sessionId: "checkout-leaf",
+            cwd: "/workspace/checkout-root",
+            command: .notify(body: "Blocked", title: nil, level: .attention)
+        ))
+
+        #expect(response == .ok)
+        #expect(captured?.sessionId == "checkout-leaf")
+        #expect(captured?.owner == checkoutOwner)
+        #expect(captured?.body == "Blocked")
     }
 
     @Test func resolvesOriginFromSymlinkedWorktreeRootCwd() async throws {
