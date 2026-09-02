@@ -46,6 +46,7 @@ struct ProcessGGCommandRunner: GGCommandRunning {
     ) async throws -> ProcessResult
 
     private static let commandTimeout: TimeInterval = 600
+    private static let launchPIDTimeoutMilliseconds: Int32 = 1_000
     private let processLaunch: ProcessLaunch
 
     init(
@@ -89,11 +90,23 @@ struct ProcessGGCommandRunner: GGCommandRunning {
         timeout: TimeInterval = Process.defaultTimeout
     ) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
+            let processTreeID = UUID().uuidString
+            let launchGate = Pipe()
             let process = Process()
-            process.executableURL = URL(fileURLWithPath: executable)
-            process.arguments = args
+            process.executableURL = URL(fileURLWithPath: "/bin/sh")
+            // Job control assigns the gated child its own process group before
+            // exec; the outer shell only reports its PID and waits for it.
+            process.arguments = [
+                "-c",
+                #"set -m; /bin/sh -c 'IFS= read -r _ || exit; exec "$@"' alas-launch-gate "$@" & child=$!; set +m; printf '%s\n' "$child"; wait "$child"; exit $?"#,
+                "alas-launch-wrapper-\(processTreeID)",
+                executable,
+            ] + args
+            process.standardInput = launchGate
             if let cwd { process.currentDirectoryURL = cwd }
-            if let env { process.environment = env }
+            var processEnvironment = env ?? ProcessInfo.processInfo.environment
+            processEnvironment["ALAS_GG_PROCESS_TREE_ID"] = processTreeID
+            process.environment = processEnvironment
             let outPipe = Pipe()
             let errPipe = Pipe()
             process.standardOutput = outPipe
@@ -102,6 +115,10 @@ struct ProcessGGCommandRunner: GGCommandRunning {
             let buffer = LineBuffer()
             let stderrAccum = StderrAccumulator()
             let timeoutState = GGStreamingTimeoutState()
+            let processTree = GGStreamingProcessTree(
+                process: process,
+                environmentMarker: "ALAS_GG_PROCESS_TREE_ID=\(processTreeID)"
+            )
             // `terminationHandler` and these readability handlers are two
             // independent dispatch mechanisms with no ordering guarantee
             // between them: the child exiting does not imply the kernel has
@@ -113,14 +130,16 @@ struct ProcessGGCommandRunner: GGCommandRunning {
             // a silent no-op, so that last line is dropped, not delayed.
             // Mirrors `Process+Git.swift`'s `ByteAccumulator` EOF latch.
             let stdoutEOF = EOFLatch()
-            outPipe.fileHandleForReading.readabilityHandler = { handle in
-                let data = handle.availableData
-                if data.isEmpty {
-                    handle.readabilityHandler = nil
-                    if let tail = buffer.flush() { continuation.yield(tail) }
-                    stdoutEOF.markClosed()
-                } else {
-                    for line in buffer.feed(data) { continuation.yield(line) }
+            let installStdoutHandler = {
+                outPipe.fileHandleForReading.readabilityHandler = { handle in
+                    let data = handle.availableData
+                    if data.isEmpty {
+                        handle.readabilityHandler = nil
+                        if let tail = buffer.flush() { continuation.yield(tail) }
+                        stdoutEOF.markClosed()
+                    } else {
+                        for line in buffer.feed(data) { continuation.yield(line) }
+                    }
                 }
             }
             // Drain stderr incrementally as it arrives rather than blocking
@@ -137,9 +156,12 @@ struct ProcessGGCommandRunner: GGCommandRunning {
                     stderrAccum.append(data)
                 }
             }
-            process.terminationHandler = { proc in
+            process.terminationHandler = { [weak processTree] proc in
+                guard let processTree else { return }
+                processTree.rootDidExit()
                 let status = proc.terminationStatus
                 Task {
+                    processTree.terminateAndWait()
                     // Bound the wait the same way `Process+Git.swift` does:
                     // a stuck handler (e.g. a wedged dispatch queue) must
                     // not hang the stream forever.
@@ -157,47 +179,83 @@ struct ProcessGGCommandRunner: GGCommandRunning {
             }
             do {
                 try process.run()
+                // An early wrapper exit must make the synchronous PID read see EOF.
+                try? outPipe.fileHandleForWriting.close()
+                try? errPipe.fileHandleForWriting.close()
+                try? launchGate.fileHandleForReading.close()
+                guard let launchedPID = Self.readLaunchPID(from: outPipe.fileHandleForReading),
+                      let rootIdentity = ACPTerminal.childProcessKey(
+                          of: launchedPID,
+                          parentPID: process.processIdentifier
+                      ),
+                      let wrapperIdentity = ACPTerminal.processKey(of: process.processIdentifier)
+                else {
+                    try? launchGate.fileHandleForWriting.close()
+                    process.terminate()
+                    continuation.finish(throwing: GGServiceError.commandFailed(stderr: "Failed to capture launched process identity"))
+                    return
+                }
+                processTree.start(
+                    rootIdentity: rootIdentity,
+                    wrapperIdentity: wrapperIdentity
+                )
+                let watchdog = Task {
+                    try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                    if Task.isCancelled { return }
+                    if process.isRunning {
+                        timeoutState.markTimedOut()
+                        fputs(
+                            "[Process watchdog] \(timeout)s timeout — terminating: \(executable) \(args.joined(separator: " "))\n",
+                            stderr
+                        )
+                        processTree.terminateAndWait()
+                    }
+                }
+                continuation.onTermination = { _ in
+                    watchdog.cancel()
+                    processTree.terminateAndWait()
+                    outPipe.fileHandleForReading.readabilityHandler = nil
+                    errPipe.fileHandleForReading.readabilityHandler = nil
+                }
+                installStdoutHandler()
+                try? launchGate.fileHandleForWriting.write(contentsOf: Data([0x0A]))
+                try? launchGate.fileHandleForWriting.close()
             } catch {
+                try? launchGate.fileHandleForReading.close()
+                try? launchGate.fileHandleForWriting.close()
                 outPipe.fileHandleForReading.readabilityHandler = nil
                 errPipe.fileHandleForReading.readabilityHandler = nil
                 continuation.finish(throwing: GGServiceError.commandFailed(stderr: error.localizedDescription))
                 return
             }
-            let watchdog = Task {
-                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                if Task.isCancelled { return }
-                if process.isRunning {
-                    timeoutState.markTimedOut()
-                    fputs(
-                        "[Process watchdog] \(timeout)s timeout — terminating: \(executable) \(args.joined(separator: " "))\n",
-                        stderr
-                    )
-                    terminateGGStreamingProcessWithEscalation(process)
-                }
-            }
-            // Close the parent's copy of the pipe write ends now that the
-            // child has dup'd them. Without this, the kernel keeps
-            // reporting "writers still open" on the read side and the
-            // readability handlers never see EOF after the child exits —
-            // the stream would hang forever waiting for a termination that
-            // already happened.
-            try? outPipe.fileHandleForWriting.close()
-            try? errPipe.fileHandleForWriting.close()
-            continuation.onTermination = { _ in
-                watchdog.cancel()
-                if process.isRunning { process.terminate() }
-                outPipe.fileHandleForReading.readabilityHandler = nil
-                errPipe.fileHandleForReading.readabilityHandler = nil
-            }
         }
     }
-}
 
-private func terminateGGStreamingProcessWithEscalation(_ process: Process) {
-    process.terminate()
-    let pid = process.processIdentifier
-    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 2) {
-        if process.isRunning { kill(pid, SIGKILL) }
+    private static func readLaunchPID(from handle: FileHandle) -> pid_t? {
+        var data = Data()
+        let deadline = DispatchTime.now().uptimeNanoseconds
+            + UInt64(launchPIDTimeoutMilliseconds) * 1_000_000
+        while data.count < 20 {
+            let now = DispatchTime.now().uptimeNanoseconds
+            var descriptor = pollfd(
+                fd: handle.fileDescriptor,
+                events: Int16(POLLIN | POLLHUP),
+                revents: 0
+            )
+            let remaining = now < deadline
+                ? Int32(max(1, (deadline - now) / 1_000_000))
+                : 0
+            var result: Int32
+            repeat {
+                result = poll(&descriptor, 1, remaining)
+            } while result < 0 && errno == EINTR
+            guard result > 0 else { return nil }
+            guard let byte = try? handle.read(upToCount: 1), !byte.isEmpty else { return nil }
+            if byte[0] == 0x0A { break }
+            data.append(byte)
+        }
+        guard let text = String(data: data, encoding: .utf8), let pid = pid_t(text), pid > 0 else { return nil }
+        return pid
     }
 }
 
@@ -475,21 +533,33 @@ struct GGService {
                         )
                         var sawSummary = false
                         for try await line in lines {
-                            guard !sawSummary else {
-                                throw GGServiceError.malformedOutput(
-                                    "gg sync emitted data after a terminal event."
-                                )
-                            }
                             let events = GGSyncEvent.parseEvents(line: line)
                             for event in events {
                                 continuation.yield(event)
                             }
-                            if events.contains(.summary) { sawSummary = true }
+                            if events.contains(.summary) {
+                                sawSummary = true
+                                break
+                            }
                         }
                         guard sawSummary else {
                             throw GGServiceError.malformedOutput(
                                 "gg sync ended without a summary event."
                             )
+                        }
+                        try await withThrowingTaskGroup(of: Void.self) { group in
+                            group.addTask {
+                                for try await _ in lines {}
+                            }
+                            group.addTask {
+                                // Cleanup may take three seconds, followed by up to two seconds draining pipes.
+                                try await Task.sleep(nanoseconds: 6_000_000_000)
+                                throw GGServiceError.commandFailed(
+                                    stderr: "gg sync did not exit after summary."
+                                )
+                            }
+                            defer { group.cancelAll() }
+                            _ = try await group.next()
                         }
                     } else {
                         let result = try await runChecked(

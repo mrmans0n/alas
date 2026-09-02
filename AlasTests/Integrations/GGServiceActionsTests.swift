@@ -24,6 +24,37 @@ private final class RecordingGGRunner: GGCommandRunning, @unchecked Sendable {
     }
 }
 
+private final class SummaryThenHangingGGRunner: GGCommandRunning, @unchecked Sendable {
+    private var continuation: AsyncThrowingStream<String, Error>.Continuation?
+
+    func run(args: [String], cwd: URL?) async throws -> ProcessResult {
+        ProcessResult(exitCode: 1, stdout: "", stderr: "unexpected buffered run")
+    }
+
+    func runStreaming(args: [String], cwd: URL?) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            self.continuation = continuation
+            continuation.yield(#"{"event":"summary"}"#)
+        }
+    }
+}
+
+private struct SummaryThenDelayedFailureGGRunner: GGCommandRunning {
+    func run(args: [String], cwd: URL?) async throws -> ProcessResult {
+        ProcessResult(exitCode: 1, stdout: "", stderr: "unexpected buffered run")
+    }
+
+    func runStreaming(args: [String], cwd: URL?) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.yield(#"{"event":"summary"}"#)
+            Task {
+                try? await Task.sleep(nanoseconds: 5_200_000_000)
+                continuation.finish(throwing: GGServiceError.commandFailed(stderr: "sync failed"))
+            }
+        }
+    }
+}
+
 struct GGServiceActionsTests {
     @Test func syncStreamsParsedEventsFromDefaultRunner() async throws {
         // The default runStreaming splits buffered stdout into lines, so a
@@ -50,6 +81,26 @@ struct GGServiceActionsTests {
         ])
         #expect(runner.calls == [["sync", "--jsonl"]])
         #expect(runner.lastCwd == URL(fileURLWithPath: "/tmp/wt"))
+    }
+
+    @Test func syncFailsWhenProcessDoesNotExitAfterTerminalSummary() async {
+        let service = GGService(runner: SummaryThenHangingGGRunner())
+
+        await #expect(throws: GGServiceError.commandFailed(
+            stderr: "gg sync did not exit after summary."
+        )) {
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    for try await _ in service.sync(worktreePath: "/tmp/wt", supportsJSONL: true) {}
+                }
+                group.addTask {
+                    try await Task.sleep(nanoseconds: 7_000_000_000)
+                    throw CancellationError()
+                }
+                defer { group.cancelAll() }
+                try await group.next()!
+            }
+        }
     }
 
     @Test func syncFallsBackToJSONWhenJSONLIsUnsupported() async throws {
@@ -165,16 +216,23 @@ struct GGServiceActionsTests {
         }
     }
 
-    @Test func syncJSONLRejectsEventsAfterSummary() async {
-        let runner = RecordingGGRunner(stdout: [
-            #"{"event":"summary"}"#,
-            #"{"event":"push_done","position":1,"forced":false}"#,
-        ].joined(separator: "\n"))
+    @Test func syncJSONLPreservesNonzeroExitAfterSummary() async {
+        let runner = RecordingGGRunner(
+            stdout: #"{"event":"summary"}"#,
+            exitCode: 1,
+            stderr: "sync failed"
+        )
         let service = GGService(runner: runner)
 
-        await #expect(throws: GGServiceError.malformedOutput(
-            "gg sync emitted data after a terminal event."
-        )) {
+        await #expect(throws: GGServiceError.commandFailed(stderr: "sync failed")) {
+            for try await _ in service.sync(worktreePath: "/tmp/wt", supportsJSONL: true) {}
+        }
+    }
+
+    @Test func syncJSONLPreservesDelayedNonzeroExitAfterSummary() async {
+        let service = GGService(runner: SummaryThenDelayedFailureGGRunner())
+
+        await #expect(throws: GGServiceError.commandFailed(stderr: "sync failed")) {
             for try await _ in service.sync(worktreePath: "/tmp/wt", supportsJSONL: true) {}
         }
     }

@@ -85,6 +85,11 @@ final class ACPTerminal: ObservableObject {
         let microseconds: Int64
     }
 
+    private struct ProcessIdentity {
+        let parentPid: pid_t
+        let startedAt: ProcessStartTime
+    }
+
     init(id: String,
          command: String,
          args: [String],
@@ -332,18 +337,39 @@ final class ACPTerminal: ObservableObject {
     /// this uses libproc's ppid index instead of spawning `/bin/ps -ax`, so
     /// `kill()` can capture children before signaling a fast-exiting root
     /// without doing a full process-table scan on the main actor.
-    nonisolated private static func collectChildDescendants(of root: pid_t) -> [DescendantKey] {
+    nonisolated static func collectChildDescendants(of root: pid_t) -> [DescendantKey] {
+        guard let root = processKey(of: root) else { return [] }
+        return collectChildDescendants(of: root)
+    }
+
+    nonisolated static func collectChildDescendants(of root: DescendantKey) -> [DescendantKey] {
         var out: [DescendantKey] = []
-        var queue: [pid_t] = [root]
+        var queue: [DescendantKey] = [root]
         while let parent = queue.popLast() {
-            for child in childPids(of: parent) {
-                if let startedAt = processStartTime(of: child) {
-                    out.append(DescendantKey(pid: child, startedAt: startedAt))
-                }
+            guard processStartTime(of: parent.pid) == parent.startedAt else { continue }
+            let children = childPids(of: parent.pid)
+            guard processStartTime(of: parent.pid) == parent.startedAt else { continue }
+            for child in children {
+                guard let identity = processIdentity(of: child),
+                      identity.parentPid == parent.pid,
+                      processStartTime(of: parent.pid) == parent.startedAt else { continue }
+                let child = DescendantKey(pid: child, startedAt: identity.startedAt)
+                out.append(child)
                 queue.append(child)
             }
         }
         return out
+    }
+
+    nonisolated static func processKey(of pid: pid_t) -> DescendantKey? {
+        guard let startedAt = processStartTime(of: pid) else { return nil }
+        return DescendantKey(pid: pid, startedAt: startedAt)
+    }
+
+    nonisolated static func childProcessKey(of pid: pid_t, parentPID: pid_t) -> DescendantKey? {
+        guard let identity = processIdentity(of: pid),
+              identity.parentPid == parentPID else { return nil }
+        return DescendantKey(pid: pid, startedAt: identity.startedAt)
     }
 
     nonisolated private static func childPids(of parent: pid_t) -> [pid_t] {
@@ -405,7 +431,7 @@ final class ACPTerminal: ObservableObject {
     /// match the current process table. Used to skip stale cached PIDs
     /// whose original process has exited and whose PID may have been
     /// reused for an unrelated process.
-    nonisolated private static func currentlyMatching(_ keys: Set<DescendantKey>) -> Set<DescendantKey> {
+    nonisolated static func currentlyMatching(_ keys: Set<DescendantKey>) -> Set<DescendantKey> {
         guard !keys.isEmpty else { return [] }
         var current: Set<DescendantKey> = []
         for key in keys {
@@ -420,6 +446,10 @@ final class ACPTerminal: ObservableObject {
     /// data rather than a locale/timezone-formatted, second-precision
     /// wall-clock string.
     nonisolated private static func processStartTime(of pid: pid_t) -> ProcessStartTime? {
+        processIdentity(of: pid)?.startedAt
+    }
+
+    nonisolated private static func processIdentity(of pid: pid_t) -> ProcessIdentity? {
         var info = proc_bsdinfo()
         let size = MemoryLayout<proc_bsdinfo>.stride
         let result = withUnsafeMutablePointer(to: &info) { pointer in
@@ -428,8 +458,11 @@ final class ACPTerminal: ObservableObject {
             }
         }
         guard result == Int32(size) else { return nil }
-        return ProcessStartTime(seconds: Int64(info.pbi_start_tvsec),
-                                microseconds: Int64(info.pbi_start_tvusec))
+        return ProcessIdentity(
+            parentPid: pid_t(info.pbi_ppid),
+            startedAt: ProcessStartTime(seconds: Int64(info.pbi_start_tvsec),
+                                        microseconds: Int64(info.pbi_start_tvusec))
+        )
     }
 
     /// Marks the terminal as released. Per the ACP spec the id can no
