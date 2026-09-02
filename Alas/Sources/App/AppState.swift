@@ -1448,6 +1448,10 @@ final class AppState {
         }
     }
 
+    func waitForWorkspaceSpaceCheckpoint() async {
+        await workspaceSpaceCheckpointTask?.value
+    }
+
     private func scheduleSpacesSave() {
         scheduledSpacesSave?.cancel()
         scheduledSpacesSave = Task { @MainActor [weak self] in
@@ -1855,6 +1859,9 @@ final class AppState {
                 spacesManager.replace(file: originalSpacesFile)
                 do {
                     try store.write(originalSpacesFile, to: Paths.spacesFile)
+                    if config.workspacesEnabled {
+                        enqueueWorkspaceSpaceCheckpoint(afterWriting: originalSpacesFile)
+                    }
                 } catch {
                     persistenceErrorHandler("Spaces Save Failed", error.localizedDescription)
                     throw WorkspaceDefinitionSaveError.spacePlacementRollbackFailed
@@ -1908,6 +1915,9 @@ final class AppState {
                 spacesManager.replace(file: originalSpacesFile)
                 do {
                     try store.write(originalSpacesFile, to: Paths.spacesFile)
+                    if config.workspacesEnabled {
+                        enqueueWorkspaceSpaceCheckpoint(afterWriting: originalSpacesFile)
+                    }
                 } catch {
                     persistenceErrorHandler("Spaces Save Failed", error.localizedDescription)
                     throw WorkspaceDefinitionSaveError.spacePlacementRollbackFailed
