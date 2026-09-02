@@ -151,7 +151,7 @@ struct AppKitDiffReviewRowInput {
         self.inlineFeedbackScrollTargetID = inlineFeedbackScrollTargetID
         self.focusedDraftCommentID = focusedDraftCommentID
         self.allowsDraftCommentCreation = allowsDraftCommentCreation
-        self.allowsNonLineDraftCommentCreation = allowsNonLineDraftCommentCreation
+        self.allowsNonLineDraftCommentCreation = allowsDraftCommentCreation && allowsNonLineDraftCommentCreation
         self.actionPresence = actionPresence
         self.lspContext = lspContext
         self.reviewFeedbackTarget = reviewFeedbackTarget
@@ -178,6 +178,7 @@ struct AppKitDiffReviewRowInput {
     }
 
     private func beginNonLineDraft(_ anchor: ReviewDraftCommentAnchor) {
+        guard allowsNonLineDraftCommentCreation else { return }
         state.pendingDraftAnchor = nil
         state.pendingNonLineDraftAnchor = anchor
         state.pendingDraftBody = ""
@@ -197,6 +198,10 @@ struct AppKitDiffReviewRowInput {
         let body = state.pendingDraftBody.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty else { return }
         if let anchor = state.pendingNonLineDraftAnchor {
+            guard allowsNonLineDraftCommentCreation else {
+                clearPendingDraft()
+                return
+            }
             clearPendingDraft()
             state.actionRelay.saveDraftComment(anchor, body: body)
             return
@@ -382,7 +387,8 @@ enum AppKitDiffReviewRowPlanBuilder {
             append(&rows, id: headerID, input: input, signature: headerSignature(input), height: 45) {
                 AnyView(AppKitDiffReviewHeaderRowBody(input: input))
             }
-            if input.state.pendingNonLineDraftAnchor == .file {
+            if input.allowsNonLineDraftCommentCreation,
+               input.state.pendingNonLineDraftAnchor == .file {
                 appendComposer(scopeID: "file", input: input, rows: &rows)
             }
             if let contextLoadError = input.state.contextLoadError {
@@ -407,6 +413,9 @@ enum AppKitDiffReviewRowPlanBuilder {
             let isDeferred = (!input.automaticallyRendersDiff || !automaticallyRendersByAggregateBudget || individuallyDeferred)
                 && !input.state.showFullDiffOverride
             if isDeferred || (input.file.displayModel == nil && input.file.imageProvider == nil) {
+                if input.file.displayModel == nil && input.file.imageProvider == nil {
+                    appendFileAccessories(input, context: nil, rows: &rows, fallbacks: &fallbackByTargetID)
+                }
                 let placeholderID = AppKitDiffReviewRowID.placeholder(fileID: fileID)
                 placeholderByFileID[fileID] = placeholderID
                 append(
@@ -430,7 +439,8 @@ enum AppKitDiffReviewRowPlanBuilder {
                 append(&rows, id: imageID, input: input, signature: imageSignature(input), height: 360) {
                     AnyView(AppKitDiffReviewImageRowBody(input: input, loadsImage: true))
                 }
-                if case .image = input.state.pendingNonLineDraftAnchor {
+                if input.allowsNonLineDraftCommentCreation,
+                   case .image = input.state.pendingNonLineDraftAnchor {
                     appendComposer(scopeID: "image", input: input, rows: &rows)
                 }
                 for comment in ReviewDraftCommentPlacement.position(input.draftComments, in: []).image {
@@ -934,7 +944,11 @@ struct AppKitDiffReviewHeaderRowBody: View {
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
             }
             if let pair = displayedImagePair {
-                ImageDiffControls(pair: pair, state: input.state.imageState.presentation)
+                ImageDiffControls(
+                    pair: pair,
+                    state: input.state.imageState.presentation,
+                    allowsModeSwitching: !input.allowsNonLineDraftCommentCreation
+                )
                     .background(DiffReviewAccessibilityMarker(
                         identifier: "diff-review-image-header-\(input.file.id.rawValue)",
                         label: "Image diff controls"
@@ -1264,26 +1278,29 @@ struct AppKitDiffReviewImageRowBody: View {
     }
 
     private func annotationPresentation(for pair: ImageDiffPair) -> ImageDiffAnnotationPresentation? {
+        Self.annotationPresentation(input: input, pair: pair)
+    }
+
+    @MainActor
+    static func annotationPresentation(
+        input: AppKitDiffReviewRowInput,
+        pair: ImageDiffPair
+    ) -> ImageDiffAnnotationPresentation? {
         guard input.allowsNonLineDraftCommentCreation else { return nil }
-        let side: DiffReviewInlineFeedbackSide = pair.kind == .deleted ? .old : .new
         let comments = ReviewDraftCommentPlacement.position(input.draftComments, in: []).image
-        let markers = comments.enumerated().compactMap { index, comment -> ImageDiffAnnotationMarker? in
-            guard case .image(let commentSide, let x, let y) = comment.anchor, commentSide == side else { return nil }
-            return .init(id: comment.id, number: index + 1, normalizedX: x, normalizedY: y)
-        }
-        let pendingPoint: CGPoint?
-        if case .image(let pendingSide, let x, let y) = input.state.pendingNonLineDraftAnchor,
-           pendingSide == side {
-            pendingPoint = CGPoint(x: x, y: y)
-        } else {
-            pendingPoint = nil
+        let markersBySide = Dictionary(grouping: comments.enumerated().compactMap { index, comment -> (DiffReviewInlineFeedbackSide, ImageDiffAnnotationMarker)? in
+            guard case .image(let side, let x, let y) = comment.anchor else { return nil }
+            return (side, .init(id: comment.id, number: index + 1, normalizedX: x, normalizedY: y))
+        }, by: \.0).mapValues { $0.map(\.1) }
+        var pendingPointBySide: [DiffReviewInlineFeedbackSide: CGPoint] = [:]
+        if case .image(let side, let x, let y) = input.state.pendingNonLineDraftAnchor {
+            pendingPointBySide[side] = CGPoint(x: x, y: y)
         }
         return ImageDiffAnnotationPresentation(
-            side: side,
-            markers: markers,
-            pendingPoint: pendingPoint,
+            markersBySide: markersBySide,
+            pendingPointBySide: pendingPointBySide,
             focusedMarkerID: input.state.hoveredDraftCommentID ?? input.focusedDraftCommentID,
-            onPointSelected: { input.beginImageDraft(side: side, point: $0) },
+            onPointSelected: { side, point in input.beginImageDraft(side: side, point: point) },
             onMarkerSelected: { id in
                 guard let comment = comments.first(where: { $0.id == id }) else { return }
                 input.state.actionRelay.selectDraftComment(comment)

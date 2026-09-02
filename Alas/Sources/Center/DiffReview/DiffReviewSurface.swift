@@ -155,7 +155,7 @@ struct DiffReviewSurface: View {
         self.showsRailDisplayControls = showsRailDisplayControls
         self.showsDraftSummaryRail = showsDraftSummaryRail
         self.allowsDraftCommentCreation = allowsDraftCommentCreation
-        self.allowsNonLineDraftCommentCreation = allowsNonLineDraftCommentCreation
+        self.allowsNonLineDraftCommentCreation = allowsDraftCommentCreation && allowsNonLineDraftCommentCreation
         self.lspContextForFile = lspContextForFile
         self.inlineFeedbackByFileID = inlineFeedbackByFileID
         self.focusedFeedbackID = focusedFeedbackID

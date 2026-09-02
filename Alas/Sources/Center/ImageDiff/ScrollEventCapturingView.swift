@@ -27,7 +27,29 @@ struct ScrollEventCapturingView: NSViewRepresentable {
 
     final class Backing: NSView {
         var onScroll: ((CGFloat, CGFloat, Bool) -> Void)?
+        private var eventMonitor: Any?
         override var acceptsFirstResponder: Bool { true }
+
+        override init(frame frameRect: NSRect) {
+            super.init(frame: frameRect)
+            installEventMonitor()
+        }
+
+        required init?(coder: NSCoder) {
+            super.init(coder: coder)
+            installEventMonitor()
+        }
+
+        deinit {
+            if let eventMonitor {
+                NSEvent.removeMonitor(eventMonitor)
+            }
+        }
+
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            nil
+        }
+
         override func scrollWheel(with event: NSEvent) {
             guard ScrollEventCapturingView.shouldCaptureScroll(
                 modifierFlags: event.modifierFlags
@@ -41,6 +63,18 @@ struct ScrollEventCapturingView: NSViewRepresentable {
                 event.scrollingDeltaY,
                 true
             )
+        }
+
+        private func installEventMonitor() {
+            eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+                guard let self,
+                      event.window === self.window,
+                      bounds.contains(convert(event.locationInWindow, from: nil)),
+                      ScrollEventCapturingView.shouldCaptureScroll(modifierFlags: event.modifierFlags)
+                else { return event }
+                onScroll?(event.scrollingDeltaX, event.scrollingDeltaY, true)
+                return nil
+            }
         }
     }
 }

@@ -79,12 +79,19 @@ struct ImageDiffAnnotationMarker: Identifiable {
 }
 
 struct ImageDiffAnnotationPresentation {
-    let side: DiffReviewInlineFeedbackSide
-    let markers: [ImageDiffAnnotationMarker]
-    let pendingPoint: CGPoint?
+    let markersBySide: [DiffReviewInlineFeedbackSide: [ImageDiffAnnotationMarker]]
+    let pendingPointBySide: [DiffReviewInlineFeedbackSide: CGPoint]
     let focusedMarkerID: String?
-    let onPointSelected: (CGPoint) -> Void
+    let onPointSelected: (DiffReviewInlineFeedbackSide, CGPoint) -> Void
     let onMarkerSelected: (String) -> Void
+
+    func markers(for side: DiffReviewInlineFeedbackSide) -> [ImageDiffAnnotationMarker] {
+        markersBySide[side] ?? []
+    }
+
+    func pendingPoint(for side: DiffReviewInlineFeedbackSide) -> CGPoint? {
+        pendingPointBySide[side]
+    }
 }
 
 struct ImageDiffSideBySideView: View {
@@ -148,13 +155,13 @@ struct ImageDiffSideBySideView: View {
                 }
                 .contentShape(Rectangle())
                 .gesture(SpatialTapGesture().onEnded { value in
-                    guard annotation?.side == role, case .image(let image, _) = side,
+                    guard annotation != nil, case .image(let image, _) = side,
                           let point = geometry(imageSize: image.size, viewportSize: proxy.size)
                             .normalizedPoint(at: value.location) else { return }
-                    annotation?.onPointSelected(point)
+                    annotation?.onPointSelected(role, point)
                 })
-                if annotation?.side == role, case .image(let image, _) = side {
-                    markers(imageSize: image.size, viewportSize: proxy.size)
+                if annotation != nil, case .image(let image, _) = side {
+                    markers(side: role, imageSize: image.size, viewportSize: proxy.size)
                 }
             }
         }
@@ -173,9 +180,9 @@ struct ImageDiffSideBySideView: View {
     }
 
     @ViewBuilder
-    private func markers(imageSize: CGSize, viewportSize: CGSize) -> some View {
+    private func markers(side: DiffReviewInlineFeedbackSide, imageSize: CGSize, viewportSize: CGSize) -> some View {
         let geometry = geometry(imageSize: imageSize, viewportSize: viewportSize)
-        ForEach(annotation?.markers ?? []) { marker in
+        ForEach(annotation?.markers(for: side) ?? []) { marker in
             if let point = geometry.displayPoint(normalizedX: marker.normalizedX, normalizedY: marker.normalizedY) {
                 Button { annotation?.onMarkerSelected(marker.id) } label: {
                     Text("\(marker.number)")
@@ -191,7 +198,7 @@ struct ImageDiffSideBySideView: View {
                 .accessibilityLabel("Image comment \(marker.number)")
             }
         }
-        if let pending = annotation?.pendingPoint,
+        if let pending = annotation?.pendingPoint(for: side),
            let point = geometry.displayPoint(normalizedX: pending.x, normalizedY: pending.y) {
             Circle().fill(Color.accentColor).overlay(Circle().stroke(.white, lineWidth: 1))
                 .frame(width: 14, height: 14).position(point)

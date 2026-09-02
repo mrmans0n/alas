@@ -3,6 +3,7 @@ import Foundation
 import CoreFoundation
 @testable import Alas
 
+@MainActor
 struct ImageDiffSideBySideViewTests {
     @Test func failedSideUsesFailureMessageAsItsPlaceholder() {
         let side = ImageDiffSide.failed(ImageDiffLoadFailure(message: "Could not decode image"))
@@ -53,6 +54,13 @@ struct ImageDiffSideBySideViewTests {
         #expect(
             ScrollEventCapturingView.shouldCaptureScroll(modifierFlags: [.command])
         )
+    }
+
+    @Test func scrollCaptureViewDoesNotBlockMouseHitTesting() {
+        let view = ScrollEventCapturingView.Backing()
+        view.frame = CGRect(x: 0, y: 0, width: 100, height: 100)
+
+        #expect(view.hitTest(CGPoint(x: 50, y: 50)) == nil)
     }
 
     @Test func annotationGeometryMapsBetweenDisplayAndNormalizedCoordinates() throws {

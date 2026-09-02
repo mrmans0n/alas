@@ -81,6 +81,18 @@ struct AppKitDiffReviewRowPlanTests {
         ])
     }
 
+    @Test func nonLineDraftComposerFollowsDraftCreationGate() {
+        let file = textFile()
+        let state = AppKitDiffReviewFileState()
+        state.pendingNonLineDraftAnchor = .file
+
+        let ids = AppKitDiffReviewRowPlanBuilder.build(inputs: [
+            .init(file: file, state: state, theme: theme, allowsDraftCommentCreation: false),
+        ]).corePlan.rows.map(\.id)
+
+        #expect(!ids.contains(AppKitDiffReviewRowID.composer(fileID: file.id, segmentID: "file")))
+    }
+
     @Test func imageComposerAndCoordinateCardsAreBelowImage() throws {
         let file = imageFile()
         let state = AppKitDiffReviewFileState()
@@ -98,6 +110,53 @@ struct AppKitDiffReviewRowPlanTests {
         #expect(Array(ids.dropFirst(imageIndex + 1).prefix(2)) == [
             AppKitDiffReviewRowID.composer(fileID: file.id, segmentID: "image"),
             AppKitDiffReviewRowID.draftComment(.targetID(commentID: comment.id, fileID: file.id)),
+        ])
+    }
+
+    @Test func imageAnnotationPresentationIncludesOldAndNewSideMarkers() throws {
+        let file = imageFile()
+        let state = AppKitDiffReviewFileState()
+        let oldComment = draftComment(
+            id: "old-draft",
+            fileID: file.id,
+            anchor: .image(side: .old, normalizedX: 0.25, normalizedY: 0.75)
+        )
+        let newComment = draftComment(
+            id: "new-draft",
+            fileID: file.id,
+            anchor: .image(side: .new, normalizedX: 0.5, normalizedY: 0.5)
+        )
+        let pair = ImageDiffPair(
+            before: .image(NSImage(size: CGSize(width: 20, height: 20)), frameCount: 1),
+            after: .image(NSImage(size: CGSize(width: 20, height: 20)), frameCount: 1),
+            oldPath: file.summary.path,
+            kind: .modified
+        )
+        let input = AppKitDiffReviewRowInput(
+            file: file,
+            draftComments: [oldComment, newComment],
+            state: state,
+            theme: theme
+        )
+
+        let annotation = try #require(AppKitDiffReviewImageRowBody.annotationPresentation(input: input, pair: pair))
+
+        #expect(annotation.markers(for: .old).map(\.id) == ["old-draft"])
+        #expect(annotation.markers(for: .new).map(\.id) == ["new-draft"])
+    }
+
+    @Test func unavailableFilesShowWholeFileDraftsBeforePlaceholder() {
+        let file = placeholderFile()
+        let draft = draftComment(fileID: file.id, anchor: .file)
+
+        let ids = AppKitDiffReviewRowPlanBuilder.build(inputs: [
+            .init(file: file, draftComments: [draft], state: AppKitDiffReviewFileState(), theme: theme),
+        ]).corePlan.rows.map(\.id)
+
+        #expect(ids == [
+            AppKitDiffReviewRowID.header(fileID: file.id),
+            AppKitDiffReviewRowID.draftComment(.targetID(commentID: draft.id, fileID: file.id)),
+            AppKitDiffReviewRowID.placeholder(fileID: file.id),
         ])
     }
 
@@ -743,13 +802,14 @@ struct AppKitDiffReviewRowPlanTests {
     }
 
     private func draftComment(
+        id: String = "draft",
         fileID: DiffReviewFileID,
         anchor: ReviewDraftCommentAnchor = .line(
             side: .new, startLine: 1, endLine: nil, selectedText: "let new = 1"
         )
     ) -> ReviewDraftComment {
         .init(
-            id: "draft", sessionID: .commit(worktreeID: "wt", repositoryPath: URL(fileURLWithPath: "/repo"), sha: "abc"),
+            id: id, sessionID: .commit(worktreeID: "wt", repositoryPath: URL(fileURLWithPath: "/repo"), sha: "abc"),
             fileID: fileID, path: fileID.path, originalPath: nil, anchor: anchor, bodyMarkdown: "Please revisit.",
             state: .active, createdAt: Date(timeIntervalSince1970: 1), updatedAt: Date(timeIntervalSince1970: 2)
         )
