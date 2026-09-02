@@ -61,6 +61,7 @@ struct DiffReviewSurface: View {
     var showsRailDisplayControls: Bool = false
     var showsDraftSummaryRail: Bool = false
     var allowsDraftCommentCreation: Bool = true
+    var allowsNonLineDraftCommentCreation: Bool = true
     var lspContextForFile: (DiffReviewFileSectionModel) -> DiffPaneLSPContext? = { _ in nil }
     var inlineFeedbackByFileID: [DiffReviewFileID: [DiffReviewInlineFeedback]] = [:]
     var focusedFeedbackID: String? = nil
@@ -73,7 +74,7 @@ struct DiffReviewSurface: View {
     var draftCommentScrollCommand: DiffReviewDraftCommentScrollCommand? = nil
     var draftCommentActions = ReviewDraftCommentActions()
     var onSelectDraftComment: (ReviewDraftComment) -> Void = { _ in }
-    var onSaveDraftComment: (DiffReviewFileID, String?, DiffReviewLineAnchor, String) -> Void = { _, _, _, _ in }
+    var onSaveDraftComment: (DiffReviewFileID, String, String?, ReviewDraftCommentAnchor, String) -> Void = { _, _, _, _, _ in }
     var threads: [ReviewThread] = []
     var onReply: (DiffInlineCommentThread, String) -> Void = { _, _ in }
     var onResolve: (DiffInlineCommentThread) -> Void = { _ in }
@@ -115,6 +116,7 @@ struct DiffReviewSurface: View {
         showsRailDisplayControls: Bool = false,
         showsDraftSummaryRail: Bool = false,
         allowsDraftCommentCreation: Bool = true,
+        allowsNonLineDraftCommentCreation: Bool = true,
         lspContextForFile: @escaping (DiffReviewFileSectionModel) -> DiffPaneLSPContext? = { _ in nil },
         inlineFeedbackByFileID: [DiffReviewFileID: [DiffReviewInlineFeedback]] = [:],
         focusedFeedbackID: String? = nil,
@@ -127,7 +129,7 @@ struct DiffReviewSurface: View {
         draftCommentScrollCommand: DiffReviewDraftCommentScrollCommand? = nil,
         draftCommentActions: ReviewDraftCommentActions = ReviewDraftCommentActions(),
         onSelectDraftComment: @escaping (ReviewDraftComment) -> Void = { _ in },
-        onSaveDraftComment: @escaping (DiffReviewFileID, String?, DiffReviewLineAnchor, String) -> Void = { _, _, _, _ in },
+        onSaveDraftComment: @escaping (DiffReviewFileID, String, String?, ReviewDraftCommentAnchor, String) -> Void = { _, _, _, _, _ in },
         threads: [ReviewThread] = [],
         onReply: @escaping (DiffInlineCommentThread, String) -> Void = { _, _ in },
         onResolve: @escaping (DiffInlineCommentThread) -> Void = { _ in },
@@ -153,6 +155,7 @@ struct DiffReviewSurface: View {
         self.showsRailDisplayControls = showsRailDisplayControls
         self.showsDraftSummaryRail = showsDraftSummaryRail
         self.allowsDraftCommentCreation = allowsDraftCommentCreation
+        self.allowsNonLineDraftCommentCreation = allowsDraftCommentCreation && allowsNonLineDraftCommentCreation
         self.lspContextForFile = lspContextForFile
         self.inlineFeedbackByFileID = inlineFeedbackByFileID
         self.focusedFeedbackID = focusedFeedbackID
@@ -386,7 +389,7 @@ struct DiffReviewSurface: View {
                 draftCommentActions: draftCommentActions,
                 onSelectDraftComment: onSelectDraftComment,
                 onSaveDraftComment: { anchor, body in
-                    onSaveDraftComment(file.id, file.summary.originalPath, anchor, body)
+                    onSaveDraftComment(file.id, file.summary.path, file.summary.originalPath, anchor, body)
                 },
                 onContextExpansionActivated: { contextExpandedFileIDs.insert(file.id) },
                 onReply: onReply,
@@ -434,6 +437,7 @@ struct DiffReviewSurface: View {
                 inlineFeedbackScrollTargetID: inlineFeedbackScrollTargetID(for: file.id),
                 focusedDraftCommentID: focusedDraftCommentID,
                 allowsDraftCommentCreation: allowsDraftCommentCreation,
+                allowsNonLineDraftCommentCreation: allowsNonLineDraftCommentCreation,
                 actionPresence: .init(
                     canOpenFile: file.openFile != nil,
                     canUnstageFile: file.stagedMutationActions?.unstageFile != nil,
@@ -482,9 +486,10 @@ struct DiffReviewSurface: View {
                 draftCommentActions: draftCommentActions,
                 onSelectDraftComment: onSelectDraftComment,
                 onSaveDraftComment: { anchor, body in
-                    onSaveDraftComment(file.id, file.summary.originalPath, anchor, body)
+                    onSaveDraftComment(file.id, file.summary.path, file.summary.originalPath, anchor, body)
                 },
                 allowsDraftCommentCreation: allowsDraftCommentCreation,
+                allowsNonLineDraftCommentCreation: allowsNonLineDraftCommentCreation,
                 onContextExpansionActivated: {
                     contextExpandedFileIDs.insert(file.id)
                 },

@@ -30,6 +30,7 @@ final class AppKitDiffReviewFileState: ObservableObject {
     let actionRelay = AppKitDiffReviewActionRelay()
     let hunkPresentationState = DiffPanePresentationState()
     @Published var pendingDraftAnchor: DiffReviewLineAnchor? { didSet { structuralDidChange.send() } }
+    @Published var pendingNonLineDraftAnchor: ReviewDraftCommentAnchor? { didSet { structuralDidChange.send() } }
     @Published var pendingDraftBody = ""
     @Published var draftComposerFocusRequestGeneration = 0 { didSet { structuralDidChange.send() } }
     @Published var quoteInsertionGeneration = 0 { didSet { structuralDidChange.send() } }
@@ -116,6 +117,7 @@ final class AppKitDiffReviewFileState: ObservableObject {
 
     func clearPendingDraft() {
         pendingDraftAnchor = nil
+        pendingNonLineDraftAnchor = nil
         pendingDraftBody = ""
     }
 
@@ -193,7 +195,7 @@ final class AppKitDiffReviewActionRelay {
     private var onSelectInlineFeedback: (DiffReviewInlineFeedback) -> Void = { _ in }
     private var draftCommentActions = ReviewDraftCommentActions()
     private var onSelectDraftComment: (ReviewDraftComment) -> Void = { _ in }
-    private var onSaveDraftComment: (DiffReviewLineAnchor, String) -> Void = { _, _ in }
+    private var onSaveDraftComment: (ReviewDraftCommentAnchor, String) -> Void = { _, _ in }
     private var onContextExpansionActivated: () -> Void = {}
     private var onReply: (DiffInlineCommentThread, String) -> Void = { _, _ in }
     private var onResolve: (DiffInlineCommentThread) -> Void = { _ in }
@@ -209,7 +211,7 @@ final class AppKitDiffReviewActionRelay {
         onSelectInlineFeedback: @escaping (DiffReviewInlineFeedback) -> Void,
         draftCommentActions: ReviewDraftCommentActions,
         onSelectDraftComment: @escaping (ReviewDraftComment) -> Void,
-        onSaveDraftComment: @escaping (DiffReviewLineAnchor, String) -> Void,
+        onSaveDraftComment: @escaping (ReviewDraftCommentAnchor, String) -> Void,
         onContextExpansionActivated: @escaping () -> Void,
         onReply: @escaping (DiffInlineCommentThread, String) -> Void,
         onResolve: @escaping (DiffInlineCommentThread) -> Void,
@@ -298,7 +300,7 @@ final class AppKitDiffReviewActionRelay {
     }
 
     func selectDraftComment(_ comment: ReviewDraftComment) { onSelectDraftComment(comment) }
-    func saveDraftComment(_ anchor: DiffReviewLineAnchor, body: String) { onSaveDraftComment(anchor, body) }
+    func saveDraftComment(_ anchor: ReviewDraftCommentAnchor, body: String) { onSaveDraftComment(anchor, body) }
     func contextExpansionActivated() { onContextExpansionActivated() }
     func reply(to thread: DiffInlineCommentThread, body: String) { onReply(thread, body) }
     func stageReply(to thread: DiffInlineCommentThread, body: String) { onStageReply(thread, body) }

@@ -101,7 +101,10 @@ enum ProviderReviewPublishPlanner {
         if draft.state != .active {
             return "draft is \(draft.state.providerPublishDescription)."
         }
-        if draft.side == .unknown || draft.normalizedLineRange.lowerBound <= 0 {
+        guard let lineRange = draft.normalizedLineRange else {
+            return "missing line anchor."
+        }
+        if draft.side == .unknown || lineRange.lowerBound <= 0 {
             return "missing line anchor."
         }
         if draft.bodyMarkdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {

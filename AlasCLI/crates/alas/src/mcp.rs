@@ -239,7 +239,7 @@ pub fn tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "review_comments",
-            "description": "List review comments from the user's Alas review pane for this worktree, as a JSON array. Each comment has an id, path, line range, side, state (active/resolved/dismissed), author, body, and replies. Defaults to active comments only.",
+            "description": "List review comments from the user's Alas review pane for this worktree, as a JSON array. Each comment has an id, path, anchor_kind (line/file/image), side, state (active/resolved/dismissed), author, body, and replies. Line anchors include start_line and optional end_line. Image anchors include x_percent and y_percent. Defaults to active comments only.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

@@ -166,16 +166,41 @@ struct ReviewDraftProviderError: Codable, Equatable, Hashable, Sendable {
     let occurredAt: Date
 }
 
+enum ReviewDraftCommentAnchor: Codable, Equatable, Hashable, Sendable {
+    case file
+    case line(
+        side: DiffReviewInlineFeedbackSide,
+        startLine: Int,
+        endLine: Int?,
+        selectedText: String?
+    )
+    case image(
+        side: DiffReviewInlineFeedbackSide,
+        normalizedX: Double,
+        normalizedY: Double
+    )
+
+    var side: DiffReviewInlineFeedbackSide {
+        switch self {
+        case .file: .unknown
+        case .line(let side, _, _, _), .image(let side, _, _): side
+        }
+    }
+
+    var lineRange: ClosedRange<Int>? {
+        guard case .line(_, let startLine, let endLine, _) = self else { return nil }
+        let end = endLine ?? startLine
+        return min(startLine, end)...max(startLine, end)
+    }
+}
+
 struct ReviewDraftComment: Codable, Equatable, Hashable, Identifiable, Sendable {
     var id: String
     var sessionID: ReviewDraftSessionID
     var fileID: DiffReviewFileID
     var path: String
     var originalPath: String?
-    var side: DiffReviewInlineFeedbackSide
-    var startLine: Int
-    var endLine: Int?
-    var selectedText: String?
+    var anchor: ReviewDraftCommentAnchor
     var bodyMarkdown: String
     var state: ReviewDraftCommentState
     var createdAt: Date
@@ -186,12 +211,160 @@ struct ReviewDraftComment: Codable, Equatable, Hashable, Identifiable, Sendable 
     var replies: [ReviewCommentReply]? = nil
     var resolvedBy: ReviewDraftCommentAuthor? = nil
 
-    var normalizedLineRange: ClosedRange<Int> {
-        let end = endLine ?? startLine
-        return min(startLine, end)...max(startLine, end)
+    var side: DiffReviewInlineFeedbackSide { anchor.side }
+    var normalizedLineRange: ClosedRange<Int>? { anchor.lineRange }
+    var startLine: Int {
+        guard case .line(_, let startLine, _, _) = anchor else { return 0 }
+        return startLine
+    }
+    var endLine: Int? {
+        guard case .line(_, _, let endLine, _) = anchor else { return nil }
+        return endLine
+    }
+    var selectedText: String? {
+        get {
+            guard case .line(_, _, _, let selectedText) = anchor else { return nil }
+            return selectedText
+        }
+        set {
+            guard case .line(let side, let startLine, let endLine, _) = anchor else { return }
+            anchor = .line(side: side, startLine: startLine, endLine: endLine, selectedText: newValue)
+        }
     }
 
     var isActive: Bool { state == .active }
     var effectiveAuthor: ReviewDraftCommentAuthor { author ?? .user }
     var allReplies: [ReviewCommentReply] { replies ?? [] }
+
+    init(
+        id: String,
+        sessionID: ReviewDraftSessionID,
+        fileID: DiffReviewFileID,
+        path: String,
+        originalPath: String? = nil,
+        anchor: ReviewDraftCommentAnchor,
+        bodyMarkdown: String,
+        state: ReviewDraftCommentState,
+        createdAt: Date,
+        updatedAt: Date,
+        providerPublish: ReviewDraftProviderPublish? = nil,
+        providerError: ReviewDraftProviderError? = nil,
+        author: ReviewDraftCommentAuthor? = nil,
+        replies: [ReviewCommentReply]? = nil,
+        resolvedBy: ReviewDraftCommentAuthor? = nil
+    ) {
+        self.id = id
+        self.sessionID = sessionID
+        self.fileID = fileID
+        self.path = path
+        self.originalPath = originalPath
+        self.anchor = anchor
+        self.bodyMarkdown = bodyMarkdown
+        self.state = state
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.providerPublish = providerPublish
+        self.providerError = providerError
+        self.author = author
+        self.replies = replies
+        self.resolvedBy = resolvedBy
+    }
+
+    init(
+        id: String,
+        sessionID: ReviewDraftSessionID,
+        fileID: DiffReviewFileID,
+        path: String,
+        originalPath: String? = nil,
+        side: DiffReviewInlineFeedbackSide,
+        startLine: Int,
+        endLine: Int? = nil,
+        selectedText: String? = nil,
+        bodyMarkdown: String,
+        state: ReviewDraftCommentState,
+        createdAt: Date,
+        updatedAt: Date,
+        providerPublish: ReviewDraftProviderPublish? = nil,
+        providerError: ReviewDraftProviderError? = nil,
+        author: ReviewDraftCommentAuthor? = nil,
+        replies: [ReviewCommentReply]? = nil,
+        resolvedBy: ReviewDraftCommentAuthor? = nil
+    ) {
+        self.init(
+            id: id,
+            sessionID: sessionID,
+            fileID: fileID,
+            path: path,
+            originalPath: originalPath,
+            anchor: .line(
+                side: side,
+                startLine: startLine,
+                endLine: endLine,
+                selectedText: selectedText
+            ),
+            bodyMarkdown: bodyMarkdown,
+            state: state,
+            createdAt: createdAt,
+            updatedAt: updatedAt,
+            providerPublish: providerPublish,
+            providerError: providerError,
+            author: author,
+            replies: replies,
+            resolvedBy: resolvedBy
+        )
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, sessionID, fileID, path, originalPath, anchor
+        case side, startLine, endLine, selectedText
+        case bodyMarkdown, state, createdAt, updatedAt
+        case providerPublish, providerError, author, replies, resolvedBy
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        sessionID = try container.decode(ReviewDraftSessionID.self, forKey: .sessionID)
+        fileID = try container.decode(DiffReviewFileID.self, forKey: .fileID)
+        path = try container.decode(String.self, forKey: .path)
+        originalPath = try container.decodeIfPresent(String.self, forKey: .originalPath)
+        if let decodedAnchor = try container.decodeIfPresent(ReviewDraftCommentAnchor.self, forKey: .anchor) {
+            anchor = decodedAnchor
+        } else {
+            anchor = .line(
+                side: try container.decode(DiffReviewInlineFeedbackSide.self, forKey: .side),
+                startLine: try container.decode(Int.self, forKey: .startLine),
+                endLine: try container.decodeIfPresent(Int.self, forKey: .endLine),
+                selectedText: try container.decodeIfPresent(String.self, forKey: .selectedText)
+            )
+        }
+        bodyMarkdown = try container.decode(String.self, forKey: .bodyMarkdown)
+        state = try container.decode(ReviewDraftCommentState.self, forKey: .state)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        providerPublish = try container.decodeIfPresent(ReviewDraftProviderPublish.self, forKey: .providerPublish)
+        providerError = try container.decodeIfPresent(ReviewDraftProviderError.self, forKey: .providerError)
+        author = try container.decodeIfPresent(ReviewDraftCommentAuthor.self, forKey: .author)
+        replies = try container.decodeIfPresent([ReviewCommentReply].self, forKey: .replies)
+        resolvedBy = try container.decodeIfPresent(ReviewDraftCommentAuthor.self, forKey: .resolvedBy)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(sessionID, forKey: .sessionID)
+        try container.encode(fileID, forKey: .fileID)
+        try container.encode(path, forKey: .path)
+        try container.encodeIfPresent(originalPath, forKey: .originalPath)
+        try container.encode(anchor, forKey: .anchor)
+        try container.encode(bodyMarkdown, forKey: .bodyMarkdown)
+        try container.encode(state, forKey: .state)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encode(updatedAt, forKey: .updatedAt)
+        try container.encodeIfPresent(providerPublish, forKey: .providerPublish)
+        try container.encodeIfPresent(providerError, forKey: .providerError)
+        try container.encodeIfPresent(author, forKey: .author)
+        try container.encodeIfPresent(replies, forKey: .replies)
+        try container.encodeIfPresent(resolvedBy, forKey: .resolvedBy)
+    }
 }

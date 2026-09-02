@@ -53,7 +53,6 @@ struct ReviewFeedbackBundle: Equatable, Sendable {
         let sortedFiles = commentsByFile.keys.sorted()
         for fileContext in sortedFiles {
             guard let comments = commentsByFile[fileContext] else { continue }
-            let path = fileContext.path
             lines.append("")
             lines.append("## \(fileContext.heading)")
 
@@ -92,11 +91,17 @@ struct ReviewFeedbackBundle: Equatable, Sendable {
             if lhs.path != rhs.path {
                 return lhs.path.localizedStandardCompare(rhs.path) == .orderedAscending
             }
-            if lhs.normalizedLineRange.lowerBound != rhs.normalizedLineRange.lowerBound {
-                return lhs.normalizedLineRange.lowerBound < rhs.normalizedLineRange.lowerBound
-            }
-            if lhs.normalizedLineRange.upperBound != rhs.normalizedLineRange.upperBound {
-                return lhs.normalizedLineRange.upperBound < rhs.normalizedLineRange.upperBound
+            if let lhsRange = lhs.normalizedLineRange, let rhsRange = rhs.normalizedLineRange {
+                if lhsRange.lowerBound != rhsRange.lowerBound {
+                    return lhsRange.lowerBound < rhsRange.lowerBound
+                }
+                if lhsRange.upperBound != rhsRange.upperBound {
+                    return lhsRange.upperBound < rhsRange.upperBound
+                }
+            } else if lhs.normalizedLineRange != nil {
+                return false
+            } else if rhs.normalizedLineRange != nil {
+                return true
             }
             if lhs.createdAt != rhs.createdAt {
                 return lhs.createdAt < rhs.createdAt
@@ -133,11 +138,19 @@ private struct ReviewFeedbackFileContext: Hashable, Comparable {
     }
 
     func reference(for comment: ReviewDraftComment) -> String {
-        let line = ReviewFeedbackFileContext.lineDescription(for: comment)
-        guard shouldDisplayNamespace else {
-            return "\(path):\(line) (\(comment.side.rawValue))"
+        let suffix = shouldDisplayNamespace ? ", \(namespace)" : ""
+        switch comment.anchor {
+        case .file:
+            return "\(path) (whole file\(suffix))"
+        case .line(let side, _, _, _):
+            let line = ReviewFeedbackFileContext.lineDescription(for: comment)
+            return "\(path):\(line) (\(side.rawValue)\(suffix))"
+        case .image(let side, let x, let y):
+            return String(
+                format: "%@ (%@ image, %.1f%% from left, %.1f%% from top%@)",
+                path, side.rawValue, x * 100, y * 100, suffix
+            )
         }
-        return "\(path):\(line) (\(comment.side.rawValue), \(namespace))"
     }
 
     static func < (lhs: ReviewFeedbackFileContext, rhs: ReviewFeedbackFileContext) -> Bool {
@@ -153,7 +166,7 @@ private struct ReviewFeedbackFileContext: Hashable, Comparable {
     }
 
     private static func lineDescription(for comment: ReviewDraftComment) -> String {
-        let range = comment.normalizedLineRange
+        guard let range = comment.normalizedLineRange else { return "" }
         if range.lowerBound == range.upperBound {
             return "\(range.lowerBound)"
         }

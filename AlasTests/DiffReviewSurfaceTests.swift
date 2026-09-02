@@ -5274,7 +5274,7 @@ private final class AppKitPostedDraftHarnessModel {
         input(theme: theme).savePendingDraft()
     }
 
-    private func post(anchor: DiffReviewLineAnchor, body: String) {
+    private func post(anchor: ReviewDraftCommentAnchor, body: String) {
         comments = [ReviewDraftComment(
             id: "new-draft",
             sessionID: .commit(
@@ -5283,12 +5283,9 @@ private final class AppKitPostedDraftHarnessModel {
                 sha: "abc123"
             ),
             fileID: file.id,
-            path: anchor.path,
+            path: file.summary.path,
             originalPath: nil,
-            side: anchor.side,
-            startLine: anchor.line,
-            endLine: anchor.endLine,
-            selectedText: anchor.selectedText,
+            anchor: anchor,
             bodyMarkdown: body,
             state: .active,
             createdAt: Date(timeIntervalSince1970: 1),

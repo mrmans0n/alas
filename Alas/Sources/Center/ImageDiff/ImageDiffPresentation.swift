@@ -72,6 +72,7 @@ final class ImageDiffPresentationState {
 struct ImageDiffControls: View {
     let pair: ImageDiffPair
     @Bindable var state: ImageDiffPresentationState
+    var allowsModeSwitching = true
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -88,7 +89,9 @@ struct ImageDiffControls: View {
                     .clipShape(RoundedRectangle(cornerRadius: 3))
             }
             Spacer()
-            modeSwitcher
+            if allowsModeSwitching {
+                modeSwitcher
+            }
             if state.mode == .sideBySide {
                 resetButton
             }
@@ -177,17 +180,19 @@ struct ImageDiffComparisonContent: View {
     let pair: ImageDiffPair
     @Bindable var state: ImageDiffPresentationState
     var boundedHeight: CGFloat? = nil
+    var annotation: ImageDiffAnnotationPresentation? = nil
 
     var body: some View {
         Group {
-            switch state.mode {
+            switch annotation == nil ? state.mode : .sideBySide {
             case .sideBySide:
                 ImageDiffSideBySideView(
                     before: pair.before,
                     after: pair.after,
                     beforeLabel: "Before",
                     afterLabel: "After",
-                    transform: $state.transform
+                    transform: $state.transform,
+                    annotation: annotation
                 )
             case .overlay:
                 if let before = pair.beforeImage, let after = pair.afterImage {

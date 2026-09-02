@@ -3,6 +3,7 @@ import Foundation
 import CoreFoundation
 @testable import Alas
 
+@MainActor
 struct ImageDiffSideBySideViewTests {
     @Test func failedSideUsesFailureMessageAsItsPlaceholder() {
         let side = ImageDiffSide.failed(ImageDiffLoadFailure(message: "Could not decode image"))
@@ -53,5 +54,38 @@ struct ImageDiffSideBySideViewTests {
         #expect(
             ScrollEventCapturingView.shouldCaptureScroll(modifierFlags: [.command])
         )
+    }
+
+    @Test func scrollCaptureViewDoesNotBlockMouseHitTesting() {
+        let view = ScrollEventCapturingView.Backing()
+        view.frame = CGRect(x: 0, y: 0, width: 100, height: 100)
+
+        #expect(view.hitTest(CGPoint(x: 50, y: 50)) == nil)
+    }
+
+    @Test func annotationGeometryMapsBetweenDisplayAndNormalizedCoordinates() throws {
+        let geometry = ImageDiffAnnotationGeometry(
+            imageSize: CGSize(width: 400, height: 200),
+            viewportSize: CGSize(width: 300, height: 300),
+            transform: ImageDiffTransform(scale: 2, offset: CGSize(width: 10, height: -20))
+        )
+
+        let displayPoint = try #require(geometry.displayPoint(normalizedX: 0.75, normalizedY: 0.25))
+        #expect(displayPoint.x == 310)
+        #expect(displayPoint.y == 55)
+        let normalized = try #require(geometry.normalizedPoint(at: displayPoint))
+        #expect(abs(normalized.x - 0.75) < 0.0001)
+        #expect(abs(normalized.y - 0.25) < 0.0001)
+    }
+
+    @Test func annotationGeometryIgnoresClicksInLetterbox() {
+        let geometry = ImageDiffAnnotationGeometry(
+            imageSize: CGSize(width: 400, height: 200),
+            viewportSize: CGSize(width: 300, height: 300),
+            transform: ImageDiffTransform()
+        )
+
+        #expect(geometry.normalizedPoint(at: CGPoint(x: 150, y: 25)) == nil)
+        #expect(geometry.normalizedPoint(at: CGPoint(x: 150, y: 150)) != nil)
     }
 }

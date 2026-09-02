@@ -102,11 +102,17 @@ struct ReviewDraftCommentStore {
         if lhs.path != rhs.path {
             return lhs.path.localizedStandardCompare(rhs.path) == .orderedAscending
         }
-        if lhs.normalizedLineRange.lowerBound != rhs.normalizedLineRange.lowerBound {
-            return lhs.normalizedLineRange.lowerBound < rhs.normalizedLineRange.lowerBound
-        }
-        if lhs.normalizedLineRange.upperBound != rhs.normalizedLineRange.upperBound {
-            return lhs.normalizedLineRange.upperBound < rhs.normalizedLineRange.upperBound
+        if let lhsRange = lhs.normalizedLineRange, let rhsRange = rhs.normalizedLineRange {
+            if lhsRange.lowerBound != rhsRange.lowerBound {
+                return lhsRange.lowerBound < rhsRange.lowerBound
+            }
+            if lhsRange.upperBound != rhsRange.upperBound {
+                return lhsRange.upperBound < rhsRange.upperBound
+            }
+        } else if lhs.normalizedLineRange != nil {
+            return false
+        } else if rhs.normalizedLineRange != nil {
+            return true
         }
         if lhs.createdAt != rhs.createdAt {
             return lhs.createdAt < rhs.createdAt

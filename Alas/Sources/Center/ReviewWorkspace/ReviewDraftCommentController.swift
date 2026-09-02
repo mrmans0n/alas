@@ -51,17 +51,35 @@ final class ReviewDraftCommentController {
         originalPath: String? = nil,
         bodyMarkdown: String
     ) throws {
+        try add(
+            anchor: .line(
+                side: anchor.side,
+                startLine: anchor.line,
+                endLine: anchor.endLine,
+                selectedText: anchor.selectedText
+            ),
+            path: anchor.path,
+            fileID: fileID,
+            originalPath: originalPath,
+            bodyMarkdown: bodyMarkdown
+        )
+    }
+
+    func add(
+        anchor: ReviewDraftCommentAnchor,
+        path: String,
+        fileID: DiffReviewFileID,
+        originalPath: String? = nil,
+        bodyMarkdown: String
+    ) throws {
         let timestamp = now()
         let comment = ReviewDraftComment(
             id: UUID().uuidString,
             sessionID: sessionID,
             fileID: fileID,
-            path: anchor.path,
+            path: path,
             originalPath: originalPath,
-            side: anchor.side,
-            startLine: anchor.line,
-            endLine: anchor.endLine,
-            selectedText: anchor.selectedText,
+            anchor: anchor,
             bodyMarkdown: bodyMarkdown,
             state: .active,
             createdAt: timestamp,

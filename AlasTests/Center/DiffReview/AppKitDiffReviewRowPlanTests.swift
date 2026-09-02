@@ -66,6 +66,103 @@ struct AppKitDiffReviewRowPlanTests {
         #expect(!ids.contains { $0.contains(":group:") || $0.contains(":segment:") })
     }
 
+    @Test func wholeFileComposerIsImmediatelyBelowHeader() {
+        let file = textFile()
+        let state = AppKitDiffReviewFileState()
+        state.pendingNonLineDraftAnchor = .file
+
+        let ids = AppKitDiffReviewRowPlanBuilder.build(inputs: [
+            .init(file: file, state: state, theme: theme),
+        ]).corePlan.rows.map(\.id)
+
+        #expect(ids.prefix(2) == [
+            AppKitDiffReviewRowID.header(fileID: file.id),
+            AppKitDiffReviewRowID.composer(fileID: file.id, segmentID: "file"),
+        ])
+    }
+
+    @Test func nonLineDraftComposerFollowsDraftCreationGate() {
+        let file = textFile()
+        let state = AppKitDiffReviewFileState()
+        state.pendingNonLineDraftAnchor = .file
+
+        let ids = AppKitDiffReviewRowPlanBuilder.build(inputs: [
+            .init(file: file, state: state, theme: theme, allowsDraftCommentCreation: false),
+        ]).corePlan.rows.map(\.id)
+
+        #expect(!ids.contains(AppKitDiffReviewRowID.composer(fileID: file.id, segmentID: "file")))
+    }
+
+    @Test func imageComposerAndCoordinateCardsAreBelowImage() throws {
+        let file = imageFile()
+        let state = AppKitDiffReviewFileState()
+        state.pendingNonLineDraftAnchor = .image(side: .new, normalizedX: 0.25, normalizedY: 0.75)
+        let comment = draftComment(
+            fileID: file.id,
+            anchor: .image(side: .new, normalizedX: 0.5, normalizedY: 0.5)
+        )
+
+        let ids = AppKitDiffReviewRowPlanBuilder.build(inputs: [
+            .init(file: file, draftComments: [comment], state: state, theme: theme),
+        ]).corePlan.rows.map(\.id)
+        let imageIndex = try #require(ids.firstIndex(of: AppKitDiffReviewRowID.image(fileID: file.id)))
+
+        #expect(Array(ids.dropFirst(imageIndex + 1).prefix(2)) == [
+            AppKitDiffReviewRowID.composer(fileID: file.id, segmentID: "image"),
+            AppKitDiffReviewRowID.draftComment(.targetID(commentID: comment.id, fileID: file.id)),
+        ])
+    }
+
+    @Test func imageAnnotationPresentationIncludesOldAndNewSideMarkers() throws {
+        let file = imageFile()
+        let state = AppKitDiffReviewFileState()
+        let oldComment = draftComment(
+            id: "old-draft",
+            fileID: file.id,
+            anchor: .image(side: .old, normalizedX: 0.25, normalizedY: 0.75)
+        )
+        let newComment = draftComment(
+            id: "new-draft",
+            fileID: file.id,
+            anchor: .image(side: .new, normalizedX: 0.5, normalizedY: 0.5)
+        )
+        let pair = ImageDiffPair(
+            before: .image(NSImage(size: CGSize(width: 20, height: 20)), frameCount: 1),
+            after: .image(NSImage(size: CGSize(width: 20, height: 20)), frameCount: 1),
+            oldPath: file.summary.path,
+            kind: .modified
+        )
+        let input = AppKitDiffReviewRowInput(
+            file: file,
+            draftComments: [oldComment, newComment],
+            state: state,
+            theme: theme
+        )
+
+        let annotation = try #require(AppKitDiffReviewImageRowBody.annotationPresentation(input: input, pair: pair))
+
+        #expect(annotation.markers(for: .old).map(\.id) == ["old-draft"])
+        #expect(annotation.markers(for: .new).map(\.id) == ["new-draft"])
+    }
+
+    @Test func unavailableFilesShowWholeFileDraftsBeforePlaceholder() {
+        let file = placeholderFile()
+        let draft = draftComment(fileID: file.id, anchor: .file)
+
+        let plan = AppKitDiffReviewRowPlanBuilder.build(inputs: [
+            .init(file: file, draftComments: [draft], state: AppKitDiffReviewFileState(), theme: theme),
+        ])
+        let ids = plan.corePlan.rows.map(\.id)
+
+        #expect(ids == [
+            AppKitDiffReviewRowID.header(fileID: file.id),
+            AppKitDiffReviewRowID.draftComment(.targetID(commentID: draft.id, fileID: file.id)),
+            AppKitDiffReviewRowID.placeholder(fileID: file.id),
+        ])
+        let draftID = AppKitDiffReviewRowID.draftComment(.targetID(commentID: draft.id, fileID: file.id))
+        #expect(plan.fallbackByTargetID[draftID] == draftID)
+    }
+
     @Test func unavailableFilesEmitHeaderAndPlaceholder() {
         let file = placeholderFile()
         let input = AppKitDiffReviewRowInput(file: file, state: AppKitDiffReviewFileState(), theme: theme)
@@ -707,11 +804,16 @@ struct AppKitDiffReviewRowPlanTests {
         )
     }
 
-    private func draftComment(fileID: DiffReviewFileID) -> ReviewDraftComment {
+    private func draftComment(
+        id: String = "draft",
+        fileID: DiffReviewFileID,
+        anchor: ReviewDraftCommentAnchor = .line(
+            side: .new, startLine: 1, endLine: nil, selectedText: "let new = 1"
+        )
+    ) -> ReviewDraftComment {
         .init(
-            id: "draft", sessionID: .commit(worktreeID: "wt", repositoryPath: URL(fileURLWithPath: "/repo"), sha: "abc"),
-            fileID: fileID, path: fileID.path, originalPath: nil, side: .new,
-            startLine: 1, endLine: nil, selectedText: "let new = 1", bodyMarkdown: "Please revisit.",
+            id: id, sessionID: .commit(worktreeID: "wt", repositoryPath: URL(fileURLWithPath: "/repo"), sha: "abc"),
+            fileID: fileID, path: fileID.path, originalPath: nil, anchor: anchor, bodyMarkdown: "Please revisit.",
             state: .active, createdAt: Date(timeIntervalSince1970: 1), updatedAt: Date(timeIntervalSince1970: 2)
         )
     }

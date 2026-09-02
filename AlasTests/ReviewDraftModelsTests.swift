@@ -90,8 +90,46 @@ struct ReviewDraftModelsTests {
         let comment = try JSONDecoder().decode(ReviewDraftComment.self, from: json)
 
         #expect(comment.id == "legacy")
+        #expect(comment.anchor == .line(
+            side: .new,
+            startLine: 8,
+            endLine: nil,
+            selectedText: "let value = 1"
+        ))
         #expect(comment.providerPublish == nil)
         #expect(comment.providerError == nil)
+    }
+
+    @Test func draftCommentRoundTripsFileAndImageAnchors() throws {
+        let anchors: [ReviewDraftCommentAnchor] = [
+            .file,
+            .image(side: .new, normalizedX: 0.625, normalizedY: 0.25),
+        ]
+
+        for (index, anchor) in anchors.enumerated() {
+            let comment = ReviewDraftComment(
+                id: "anchor-\(index)",
+                sessionID: .localChanges(
+                    worktreeID: "wt",
+                    worktreePath: URL(fileURLWithPath: "/repo"),
+                    scope: .all
+                ),
+                fileID: DiffReviewFileID(namespace: "unstaged", path: "image.png"),
+                path: "image.png",
+                originalPath: nil,
+                anchor: anchor,
+                bodyMarkdown: "Check this.",
+                state: .active,
+                createdAt: Date(timeIntervalSince1970: 1),
+                updatedAt: Date(timeIntervalSince1970: 2)
+            )
+
+            let data = try JSONEncoder().encode(comment)
+            let decoded = try JSONDecoder().decode(ReviewDraftComment.self, from: data)
+
+            #expect(decoded.anchor == anchor)
+            #expect(decoded.normalizedLineRange == nil)
+        }
     }
 
     @Test func draftCommentRoundTripsProviderPublishAndErrorMetadata() throws {
