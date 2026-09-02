@@ -3,8 +3,13 @@ import Foundation
 struct GGEffectiveConfig: Equatable, Sendable {
     var syncAutoRebase: Bool
     var syncBehindThreshold: Int
+    var syncAutoLint: Bool = false
 
-    static let defaults = GGEffectiveConfig(syncAutoRebase: false, syncBehindThreshold: 1)
+    static let defaults = GGEffectiveConfig(
+        syncAutoRebase: false,
+        syncBehindThreshold: 1,
+        syncAutoLint: false
+    )
 }
 
 struct GGCapabilities: Equatable, Sendable {

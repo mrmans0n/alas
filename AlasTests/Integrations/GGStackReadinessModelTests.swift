@@ -377,15 +377,23 @@ struct GGStackReadinessModelTests {
         _ = action.beginAction(.sync)
 
         let model = GGStackReadinessModel.make(
-            stack: stack([entry(position: 1, prState: .open)]),
-            action: action
+            stack: stack([entry(position: 1, prState: .open)], behind: 2),
+            action: action,
+            effectiveConfig: .init(syncAutoRebase: true, syncBehindThreshold: 1, syncAutoLint: true)
         )
 
-        #expect(model.syncProgress == GGSyncProgressPresentation(
-            liveStatus: "Preparing sync…",
-            showsSpinner: true,
-            rows: []
-        ))
+        #expect(model.syncProgress?.liveStatus == "Preparing stack…")
+        #expect(model.syncProgress?.showsSpinner == true)
+        #expect(model.syncProgress?.steps.map(\.title) == [
+            "Preparing stack",
+            "Syncing commits",
+            "Updating pull requests",
+            "Refreshing Changes",
+        ])
+        #expect(
+            model.syncProgress?.steps.first?.detail
+                == "Checking base · Rebase onto main if needed · Run configured lint"
+        )
     }
 
     @Test func syncProgressUpdatesOneStableRowPerPosition() throws {
@@ -504,7 +512,7 @@ struct GGStackReadinessModelTests {
         #expect(!progress.showsSpinner)
     }
 
-    @Test func terminalSummaryRemovesLiveStatus() throws {
+    @Test func terminalSummaryMovesToChangesRefresh() throws {
         let action = GGStackActionState()
         _ = action.beginAction(.sync)
         action.appendSyncEvent(.start(totalEntries: 1))
@@ -512,8 +520,8 @@ struct GGStackReadinessModelTests {
         action.appendSyncEvent(.summary)
         let model = GGStackReadinessModel.make(stack: stack([entry(position: 1, prState: .open)]), action: action)
         let progress = try #require(model.syncProgress)
-        #expect(progress.liveStatus == nil)
-        #expect(!progress.showsSpinner)
+        #expect(progress.liveStatus == "Refreshing Changes…")
+        #expect(progress.showsSpinner)
     }
 
     @Test func idleFailedSyncRetainsProgressWhileLastErrorIsSet() throws {

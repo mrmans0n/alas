@@ -677,7 +677,7 @@ struct GGMutationCoordinatorTests {
         #expect(harness.actionState.syncProgress.isEmpty)
     }
 
-    @Test func terminalSyncSummaryDoesNotRegressToPreparingDuringRefresh() async throws {
+    @Test func terminalSyncSummaryKeepsRefreshProgressVisibleUntilRefreshCompletes() async throws {
         let harness = GGMutationHarness(stacks: [stack(head: "a")])
         var refreshStarted = false
         var resumeRefresh: CheckedContinuation<Void, Never>?
@@ -695,15 +695,17 @@ struct GGMutationCoordinatorTests {
             stack: try #require(harness.stacks[0].stack),
             action: harness.actionState
         )
-        #expect(harness.coordinator.activeRequest == nil)
-        #expect(harness.actionState.inFlightAction == nil)
+        #expect(harness.coordinator.activeRequest == .sync)
+        #expect(harness.actionState.inFlightAction == .sync)
         #expect(harness.actionState.lastActionSummary == "Synced")
-        #expect(harness.actionState.syncProgress.isEmpty)
-        #expect(model.syncProgress == nil)
-        #expect(model.primaryActions.first(where: { $0.kind == .sync })?.isInFlight == false)
+        #expect(!harness.actionState.syncProgress.isEmpty)
+        #expect(model.syncProgress?.liveStatus == "Refreshing Changes…")
+        #expect(model.primaryActions.first(where: { $0.kind == .sync })?.isInFlight == true)
 
         resumeRefresh?.resume()
         try await task.value
+        #expect(harness.coordinator.activeRequest == nil)
+        #expect(harness.actionState.inFlightAction == nil)
         #expect(harness.actionState.syncProgress.isEmpty)
     }
 
@@ -767,7 +769,7 @@ struct GGMutationCoordinatorTests {
             stack: try #require(harness.stacks[0].stack),
             action: harness.actionState
         )
-        #expect(model.syncProgress?.liveStatus == "Preparing sync…")
+        #expect(model.syncProgress?.liveStatus == "Preparing stack…")
 
         try await waitUntil { !harness.service.requests.isEmpty }
         harness.service.resumeExecution()

@@ -1,6 +1,15 @@
 import Foundation
 
 struct GGSyncProgressPresentation: Equatable {
+    struct Step: Equatable, Identifiable {
+        enum State: Equatable { case pending, current, complete, failed }
+
+        let id: String
+        let title: String
+        let detail: String
+        let state: State
+    }
+
     struct Row: Equatable, Identifiable {
         let position: Int
         let text: String
@@ -9,6 +18,7 @@ struct GGSyncProgressPresentation: Equatable {
 
     let liveStatus: String?
     let showsSpinner: Bool
+    let steps: [Step]
     let rows: [Row]
 }
 
@@ -212,7 +222,10 @@ struct GGStackReadinessModel: Equatable {
                 ? makeSyncProgress(
                     events: action.syncProgress,
                     isInFlight: inFlight == .sync,
-                    hasTerminalFailure: action.syncHasTerminalFailure
+                    hasTerminalFailure: action.syncHasTerminalFailure,
+                    base: stack.base,
+                    behindBase: behind,
+                    effectiveConfig: effectiveConfig
                 )
                 : nil,
             isRetainedSyncFailure: isRetainedSyncFailure,
@@ -245,7 +258,10 @@ struct GGStackReadinessModel: Equatable {
                 ? makeSyncProgress(
                     events: action.syncProgress,
                     isInFlight: inFlight == .sync,
-                    hasTerminalFailure: action.syncHasTerminalFailure
+                    hasTerminalFailure: action.syncHasTerminalFailure,
+                    base: "base",
+                    behindBase: 0,
+                    effectiveConfig: .defaults
                 )
                 : nil,
             isRetainedSyncFailure: false,
@@ -290,17 +306,47 @@ struct GGStackReadinessModel: Equatable {
         var row: String?
     }
 
+    @MainActor
+    static func syncProgress(
+        action: GGStackActionState,
+        base: String,
+        behindBase: Int,
+        effectiveConfig: GGEffectiveConfig
+    ) -> GGSyncProgressPresentation? {
+        let isRetainedFailure = action.inFlightAction == nil
+            && action.lastError != nil
+            && !action.syncProgress.isEmpty
+        guard action.inFlightAction == .sync
+                || action.pausedOperation?.pausedBy == .sync
+                || isRetainedFailure
+        else { return nil }
+        return makeSyncProgress(
+            events: action.syncProgress,
+            isInFlight: action.inFlightAction == .sync,
+            hasTerminalFailure: action.syncHasTerminalFailure,
+            base: base,
+            behindBase: behindBase,
+            effectiveConfig: effectiveConfig
+        )
+    }
+
     private static func makeSyncProgress(
         events: [GGSyncEvent],
         isInFlight: Bool,
-        hasTerminalFailure: Bool
+        hasTerminalFailure: Bool,
+        base: String,
+        behindBase: Int,
+        effectiveConfig: GGEffectiveConfig
     ) -> GGSyncProgressPresentation {
         var entries: [Int: SyncEntryProgress] = [:]
         var completed: Set<Int> = []
         var totalEntries: Int?
-        var liveStatus: String? = events.isEmpty && isInFlight ? "Preparing sync…" : nil
+        var liveStatus: String? = events.isEmpty && isInFlight ? "Preparing stack…" : nil
         var sawSummary = false
         var hasTerminalEventError = false
+        var hasEntryError = false
+        var sawStart = false
+        var sawPREvent = false
 
         func titledStatus(_ verb: String, position: Int) -> String {
             guard let title = entries[position]?.title else { return "\(verb) [\(position)]…" }
@@ -319,6 +365,7 @@ struct GGStackReadinessModel: Equatable {
         for event in events {
             switch event {
             case .start(let total):
+                sawStart = true
                 totalEntries = total
                 liveStatus = "Syncing 0 of \(total) commit\(total == 1 ? "" : "s")…"
             case .entryStarted(let position, let title):
@@ -331,11 +378,13 @@ struct GGStackReadinessModel: Equatable {
                 entries[position, default: .init()].row = "[\(position)] Pushed"
                 liveStatus = titledStatus("Finishing", position: position)
             case .prCreated(let position, let number, _, _):
+                sawPREvent = true
                 let prefix = pushedPrefix(position: position)
                 entries[position, default: .init()].row = "[\(position)] \(prefix)PR #\(number) created"
                 completed.insert(position)
                 liveStatus = countStatus()
             case .prUpdated(let position, let number, let action):
+                sawPREvent = true
                 let result = switch action {
                 case "updated": " updated"
                 case "unchanged", "up_to_date": " up to date"
@@ -347,12 +396,14 @@ struct GGStackReadinessModel: Equatable {
                 completed.insert(position)
                 liveStatus = countStatus()
             case .prSkippedClosed(let position, let number):
+                sawPREvent = true
                 let prefix = pushedPrefix(position: position)
                 entries[position, default: .init()].row = "[\(position)] \(prefix)PR #\(number) already closed"
                 completed.insert(position)
                 liveStatus = countStatus()
             case .error(let position, let operation, _):
                 if let position {
+                    hasEntryError = true
                     var entry = entries[position, default: .init()]
                     entry.failedToPush = entry.failedToPush || operation == "push"
                     let failure = entry.failedToPush ? "Failed to push" : "Failed"
@@ -370,10 +421,52 @@ struct GGStackReadinessModel: Equatable {
             }
         }
 
-        if !isInFlight || hasTerminalFailure || hasTerminalEventError { liveStatus = nil }
+        let terminalFailure = hasTerminalFailure || hasTerminalEventError || (sawSummary && hasEntryError)
+        if sawSummary && isInFlight && !terminalFailure {
+            liveStatus = "Refreshing Changes…"
+        } else if !isInFlight || terminalFailure {
+            liveStatus = nil
+        }
+        let preparationDetails = [
+            "Checking base",
+            effectiveConfig.syncAutoRebase
+                && effectiveConfig.syncBehindThreshold > 0
+                && behindBase >= effectiveConfig.syncBehindThreshold
+                ? "Rebase onto \(base) if needed"
+                : nil,
+            effectiveConfig.syncAutoLint ? "Run configured lint" : nil,
+        ].compactMap { $0 }.joined(separator: " · ")
+        let activeFailureState: GGSyncProgressPresentation.Step.State = terminalFailure ? .failed : .current
+        let steps = [
+            GGSyncProgressPresentation.Step(
+                id: "prepare",
+                title: "Preparing stack",
+                detail: preparationDetails,
+                state: sawStart ? .complete : activeFailureState
+            ),
+            GGSyncProgressPresentation.Step(
+                id: "commits",
+                title: "Syncing commits",
+                detail: sawStart ? (liveStatus ?? countStatus()) : "Waiting for stack preparation",
+                state: !sawStart ? .pending : (sawSummary ? .complete : activeFailureState)
+            ),
+            GGSyncProgressPresentation.Step(
+                id: "reviews",
+                title: "Updating pull requests",
+                detail: sawPREvent ? "Publishing review state" : "Waiting for pushed commits",
+                state: sawSummary ? .complete : (sawPREvent ? activeFailureState : .pending)
+            ),
+            GGSyncProgressPresentation.Step(
+                id: "refresh",
+                title: "Refreshing Changes",
+                detail: "Reloading Git and provider status",
+                state: sawSummary ? (isInFlight ? activeFailureState : .complete) : .pending
+            ),
+        ]
         return GGSyncProgressPresentation(
             liveStatus: liveStatus,
-            showsSpinner: isInFlight && !sawSummary && !hasTerminalFailure && !hasTerminalEventError,
+            showsSpinner: isInFlight && !terminalFailure,
+            steps: steps,
             rows: entries.compactMap { position, entry in
                 entry.row.map { .init(position: position, text: $0) }
             }.sorted { $0.position < $1.position }

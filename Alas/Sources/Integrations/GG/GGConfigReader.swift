@@ -57,7 +57,9 @@ enum GGConfigReader {
             syncAutoRebase: effectiveDefaults?.syncAutoRebase
                 ?? GGEffectiveConfig.defaults.syncAutoRebase,
             syncBehindThreshold: effectiveDefaults?.syncBehindThreshold.flatMap { $0 >= 0 ? $0 : nil }
-                ?? GGEffectiveConfig.defaults.syncBehindThreshold
+                ?? GGEffectiveConfig.defaults.syncBehindThreshold,
+            syncAutoLint: effectiveDefaults?.syncAutoLint
+                ?? GGEffectiveConfig.defaults.syncAutoLint
         )
     }
 
@@ -90,16 +92,19 @@ enum GGConfigReader {
     private struct EffectiveDefaults: Decodable {
         var syncAutoRebase: Bool?
         var syncBehindThreshold: Int?
+        var syncAutoLint: Bool?
 
         private enum CodingKeys: String, CodingKey {
             case syncAutoRebase = "sync_auto_rebase"
             case syncBehindThreshold = "sync_behind_threshold"
+            case syncAutoLint = "sync_auto_lint"
         }
 
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             syncAutoRebase = try? container.decode(Bool.self, forKey: .syncAutoRebase)
             syncBehindThreshold = try? container.decode(Int.self, forKey: .syncBehindThreshold)
+            syncAutoLint = try? container.decode(Bool.self, forKey: .syncAutoLint)
         }
     }
 }

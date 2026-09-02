@@ -55,6 +55,7 @@ struct ChangesPreparationModel: Equatable {
     let draftAction: DraftAction?
     let reviewRequestActions: [ReviewRequestAction]
     let reconciliationAction: GGStackReadinessModel.Action?
+    let syncProgress: GGSyncProgressPresentation?
     let ggActions: [GGAction]
     let mutationError: String?
 
@@ -107,6 +108,7 @@ struct ChangesPreparationModel: Equatable {
         reviewAction = builtReviewAction
         draftAction = builtDraftAction
         reconciliationAction = nil
+        syncProgress = nil
         ggActions = []
         mutationError = nil
         let builtActions = Self.compactReviewRequestActions(from: readinessActions)
@@ -128,7 +130,8 @@ struct ChangesPreparationModel: Equatable {
         mutationDisabledReason: String? = nil,
         newCommitDisabledReason: String? = nil,
         mutationError: String? = nil,
-        reconciliationAction: GGStackReadinessModel.Action? = nil
+        reconciliationAction: GGStackReadinessModel.Action? = nil,
+        syncProgress: GGSyncProgressPresentation? = nil
     ) -> ChangesPreparationModel {
         let summary = ReviewChangesTriggerSummary.summary(for: changes)
         let stagedChanges = changes.filter { $0.stage == .staged }
@@ -146,6 +149,7 @@ struct ChangesPreparationModel: Equatable {
             newCommitDisabledReason: newCommitDisabledReason,
             mutationError: mutationError,
             reconciliationAction: reconciliationAction,
+            syncProgress: syncProgress,
             reviewSummary: summary
         )
     }
@@ -158,7 +162,8 @@ struct ChangesPreparationModel: Equatable {
         mutationDisabledReason: String? = nil,
         newCommitDisabledReason: String? = nil,
         mutationError: String? = nil,
-        reconciliationAction: GGStackReadinessModel.Action? = nil
+        reconciliationAction: GGStackReadinessModel.Action? = nil,
+        syncProgress: GGSyncProgressPresentation? = nil
     ) -> ChangesPreparationModel {
         let summary = staged.hasChanges
             ? ReviewChangesTriggerSummary(
@@ -176,6 +181,7 @@ struct ChangesPreparationModel: Equatable {
             newCommitDisabledReason: newCommitDisabledReason,
             mutationError: mutationError,
             reconciliationAction: reconciliationAction,
+            syncProgress: syncProgress,
             reviewSummary: summary
         )
     }
@@ -193,6 +199,7 @@ struct ChangesPreparationModel: Equatable {
         newCommitDisabledReason: String?,
         mutationError: String?,
         reconciliationAction: GGStackReadinessModel.Action?,
+        syncProgress: GGSyncProgressPresentation?,
         reviewSummary: ReviewChangesTriggerSummary?
     ) -> ChangesPreparationModel {
         let reviewAction = reviewSummary.map {
@@ -217,6 +224,7 @@ struct ChangesPreparationModel: Equatable {
         return ChangesPreparationModel(
             reviewAction: reviewAction,
             reconciliationAction: reconciliationAction,
+            syncProgress: syncProgress,
             mutationError: mutationError,
             ggActions: [
                 GGAction(
@@ -247,6 +255,7 @@ struct ChangesPreparationModel: Equatable {
     private init(
         reviewAction: ReviewAction?,
         reconciliationAction: GGStackReadinessModel.Action?,
+        syncProgress: GGSyncProgressPresentation?,
         mutationError: String?,
         ggActions: [GGAction]
     ) {
@@ -254,6 +263,7 @@ struct ChangesPreparationModel: Equatable {
         draftAction = nil
         reviewRequestActions = []
         self.reconciliationAction = reconciliationAction
+        self.syncProgress = syncProgress
         self.mutationError = mutationError
         self.ggActions = ggActions
     }

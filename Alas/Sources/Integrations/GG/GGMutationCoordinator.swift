@@ -301,8 +301,13 @@ final class GGMutationCoordinator {
             )
             recordSummary(for: request, result: result)
             reconcilePausedState(after: request, error: nil)
-            releaseAction()
-            await refresh(after: request, result: result)
+            if request == .sync {
+                await refresh(after: request, result: result)
+                releaseAction()
+            } else {
+                releaseAction()
+                await refresh(after: request, result: result)
+            }
             if case .undo(let operationID) = request {
                 clearUndoCandidate(forOperationID: operationID)
             }

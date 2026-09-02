@@ -36,7 +36,13 @@ struct ChangesTabView: View {
                     currentHeadSHA: rps.currentHeadSHA
                 ),
                 mutationError: rps.ggActionState.lastError,
-                reconciliationAction: Self.reconciliationAction(from: ggReadinessModel)
+                reconciliationAction: Self.reconciliationAction(from: ggReadinessModel),
+                syncProgress: GGStackReadinessModel.syncProgress(
+                    action: rps.ggActionState,
+                    base: rps.ggStack?.base ?? rps.baseBranch,
+                    behindBase: rps.behindBase?.count ?? rps.ggStack?.behindBase ?? 0,
+                    effectiveConfig: rps.ggEffectiveConfig
+                )
             )
         }
         let readiness = ReviewReadinessModel(

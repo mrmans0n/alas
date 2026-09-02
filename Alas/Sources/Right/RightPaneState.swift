@@ -1214,6 +1214,11 @@ final class RightPaneState: GGSplitCommitServicing {
     func invalidateGGPresentation(
         startingRefresh shouldRefresh: Bool
     ) -> Task<Void, Never>? {
+        // GG rewrites refs throughout sync. Keep the last coherent stack
+        // mounted until the coordinator performs its final refresh.
+        if ggActionState.inFlightAction == .sync, ggStackLoadState == .loaded {
+            return nil
+        }
         // Advance ownership before cancellation: a direct/untracked caller may
         // ignore cancellation, but its generation guard must still reject the
         // response after this presentation is invalidated.

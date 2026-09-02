@@ -2203,6 +2203,31 @@ struct RightPaneGGStackTests {
         #expect(GGStackSummaryStore.shared.summaries[worktree.path.path] == nil)
     }
 
+    @Test func headInvalidationKeepsLoadedStackVisibleDuringSync() {
+        let worktree = makeWorktree()
+        let state = makeState(worktree: worktree)
+        state.ggContext = .active(stackName: "feature")
+        state.ggStack = GGStack(
+            name: "feature",
+            base: "main",
+            totalCommits: 1,
+            syncedCommits: 0,
+            currentPosition: 1,
+            behindBase: nil,
+            entries: [GGStackEntry(position: 1, sha: "abc1234", title: "Change", isCurrent: true)]
+        )
+        state.ggStackLoadState = .loaded
+        state.ggStackCommitsKey = "feature|abc1234"
+        _ = state.ggActionState.beginAction(.sync)
+
+        let refresh = state.invalidateGGPresentation(startingRefresh: false)
+
+        #expect(refresh == nil)
+        #expect(state.ggStackLoadState == .loaded)
+        #expect(state.ggStack?.name == "feature")
+        #expect(state.ggStackCommitsKey == "feature|abc1234")
+    }
+
     @Test func activeHeadInvalidationReplacesInFlightColdDetachedRecovery() async throws {
         let worktree = makeWorktree()
         defer { GGStackSummaryStore.shared.summaries[worktree.path.path] = nil }
