@@ -423,6 +423,7 @@ struct GGStackReadinessModel: Equatable {
 
         let summaryEntryFailure = sawSummary && hasEntryError
         let terminalFailure = hasTerminalFailure || hasTerminalEventError || summaryEntryFailure
+        let summaryFailure = sawSummary && terminalFailure
         if sawSummary && isInFlight && !terminalFailure {
             liveStatus = "Refreshing Changes…"
         } else if !isInFlight || terminalFailure {
@@ -438,6 +439,12 @@ struct GGStackReadinessModel: Equatable {
             effectiveConfig.syncAutoLint ? "Run configured lint" : nil,
         ].compactMap { $0 }.joined(separator: " · ")
         let activeFailureState: GGSyncProgressPresentation.Step.State = terminalFailure ? .failed : .current
+        let commitsDetail = summaryFailure ? "Sync failed" :
+            (sawSummary ? "Commit sync complete" :
+                (sawStart ? (liveStatus ?? countStatus()) : "Waiting for stack preparation"))
+        let reviewsDetail = summaryFailure ? "Not completed" :
+            (sawSummary ? "Pull request updates complete" :
+                (sawPREvent ? "Publishing review state" : "Waiting for pushed commits"))
         let steps = [
             GGSyncProgressPresentation.Step(
                 id: "prepare",
@@ -448,15 +455,15 @@ struct GGStackReadinessModel: Equatable {
             GGSyncProgressPresentation.Step(
                 id: "commits",
                 title: "Syncing commits",
-                detail: sawStart || sawSummary ? (liveStatus ?? countStatus()) : "Waiting for stack preparation",
-                state: summaryEntryFailure ? .failed : (sawSummary ? .complete :
+                detail: commitsDetail,
+                state: summaryFailure ? .failed : (sawSummary ? .complete :
                     (sawStart ? activeFailureState : .pending))
             ),
             GGSyncProgressPresentation.Step(
                 id: "reviews",
                 title: "Updating pull requests",
-                detail: sawPREvent ? "Publishing review state" : "Waiting for pushed commits",
-                state: summaryEntryFailure ? .pending : (sawSummary ? .complete :
+                detail: reviewsDetail,
+                state: summaryFailure ? .pending : (sawSummary ? .complete :
                     (sawPREvent ? activeFailureState : .pending))
             ),
             GGSyncProgressPresentation.Step(

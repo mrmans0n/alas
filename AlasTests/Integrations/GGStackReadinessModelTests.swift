@@ -536,6 +536,24 @@ struct GGStackReadinessModelTests {
         ).syncProgress)
 
         #expect(progress.steps.map(\.state) == [.complete, .complete, .complete, .current])
+        #expect(progress.steps[1].detail == "Commit sync complete")
+        #expect(progress.steps[2].detail == "Pull request updates complete")
+    }
+
+    @Test func postSummaryCommandFailureKeepsFailedSyncPhase() throws {
+        let action = GGStackActionState()
+        _ = action.beginAction(.sync)
+        action.appendSyncEvent(.summary)
+        action.markSyncTerminalFailure()
+        action.setError("sync exited unsuccessfully")
+        action.endAction(.sync)
+
+        let progress = try #require(GGStackReadinessModel.make(
+            stack: stack([entry(position: 1, prState: .open)]),
+            action: action
+        ).syncProgress)
+
+        #expect(progress.steps.map(\.state) == [.complete, .failed, .pending, .pending])
     }
 
     @Test func idleFailedSyncRetainsProgressWhileLastErrorIsSet() throws {
