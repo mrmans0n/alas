@@ -1223,6 +1223,9 @@ final class RightPaneState: GGSplitCommitServicing {
         // GG rewrites refs throughout sync. Keep the last coherent stack
         // mounted until the coordinator performs its final refresh.
         if ggActionState.inFlightAction == .sync, ggStackLoadState == .loaded {
+            ggStackRefreshGeneration &+= 1
+            ggStackRefreshTask?.cancel()
+            ggStackRefreshTask = nil
             return nil
         }
         // Advance ownership before cancellation: a direct/untracked caller may

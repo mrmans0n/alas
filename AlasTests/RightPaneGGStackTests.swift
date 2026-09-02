@@ -382,7 +382,6 @@ private actor StaleMutationFailureRunner: GGCommandRunning {
         stderr: ""
     )
     private var stackReadCount = 0
-    private var syncCount = 0
     private var firstRefreshSuspended = false
     private var secondSyncSuspended = false
     private var firstRefreshWaiters: [CheckedContinuation<Void, Never>] = []
@@ -394,11 +393,10 @@ private actor StaleMutationFailureRunner: GGCommandRunning {
         if args == ["sync", "--help"] {
             return ProcessResult(exitCode: 0, stdout: "--jsonl", stderr: "")
         }
+        if args == ["restack", "--json"] {
+            return ProcessResult(exitCode: 1, stdout: "", stderr: "mutation A failed")
+        }
         if args == ["sync", "--json"] || args == ["sync", "--jsonl"] {
-            syncCount += 1
-            if syncCount == 1 {
-                return ProcessResult(exitCode: 1, stdout: "", stderr: "mutation A failed")
-            }
             return try await withCheckedThrowingContinuation { continuation in
                 secondSyncSuspended = true
                 secondSyncContinuation = continuation
@@ -2212,9 +2210,20 @@ struct RightPaneGGStackTests {
         #expect(GGStackSummaryStore.shared.summaries[worktree.path.path] == nil)
     }
 
-    @Test func headInvalidationKeepsLoadedStackVisibleDuringSync() {
+    @Test func headInvalidationKeepsLoadedStackVisibleDuringSync() async {
         let worktree = makeWorktree()
         let state = makeState(worktree: worktree)
+        let staleSnapshot = GGStackModelsTests.fixture.replacingOccurrences(
+            of: "agent-inbox",
+            with: "stale-stack"
+        )
+        let runner = ControlledStackGGRunner(
+            stackResults: [("stale-stack", ProcessResult(exitCode: 0, stdout: staleSnapshot, stderr: ""))],
+            suspendedCalls: [1]
+        )
+        state.ggService = GGService(runner: runner)
+        state.ggContextProvider = { _ in .active(stackName: "feature") }
+        state.ggStackSourceCommits = [commit(sha: String(repeating: "a", count: 40), stackShaped: true)]
         state.ggContext = .active(stackName: "feature")
         state.ggStack = GGStack(
             name: "feature",
@@ -2226,7 +2235,10 @@ struct RightPaneGGStackTests {
             entries: [GGStackEntry(position: 1, sha: "abc1234", title: "Change", isCurrent: true)]
         )
         state.ggStackLoadState = .loaded
-        state.ggStackCommitsKey = "feature|abc1234"
+        state.ggStackCommitsKey = state.currentGGStackCommitsKey
+
+        let staleRefresh = Task { @MainActor in await state.refreshGGStack(forceRemote: true) }
+        await runner.waitUntilCall(1)
         _ = state.ggActionState.beginAction(.sync)
 
         let refresh = state.invalidateGGPresentation(startingRefresh: false)
@@ -2234,7 +2246,11 @@ struct RightPaneGGStackTests {
         #expect(refresh == nil)
         #expect(state.ggStackLoadState == .loaded)
         #expect(state.ggStack?.name == "feature")
-        #expect(state.ggStackCommitsKey == "feature|abc1234")
+        #expect(state.ggStackCommitsKey == state.currentGGStackCommitsKey)
+
+        await runner.complete(call: 1)
+        await staleRefresh.value
+        #expect(state.ggStack?.name == "feature")
     }
 
     @Test func activeHeadInvalidationReplacesInFlightColdDetachedRecovery() async throws {
@@ -2958,7 +2974,7 @@ struct RightPaneGGStackTests {
             commit(sha: String(repeating: "s", count: 40), stackShaped: true),
         ]
 
-        let mutationA = try #require(state.runGGMutation(.sync))
+        let mutationA = try #require(state.runGGMutation(.restack))
         await runner.waitUntilFirstRefreshSuspends()
 
         let mutationB = try #require(state.runGGMutation(.sync))
