@@ -46,6 +46,8 @@ protocol WorkspaceCheckoutLifecycleOperating: Sendable {
     func deletePreflight(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> WorktreeDeletePreflight
     func inspectRoot(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutCleanupRootObservation
     func verifyCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutMemberObservation
+    /// Clears stale Git worktree metadata for a missing frozen destination.
+    func clearStaleRegistration(_ plan: WorkspaceCheckoutCleanupPlan) async throws
     /// Removes only the worktree. Branch deletion is intentionally disabled.
     func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan, force: Bool, forceTwice: Bool) async throws
     /// Removes checkout-owned root artifacts after all member worktrees are gone.
@@ -53,6 +55,10 @@ protocol WorkspaceCheckoutLifecycleOperating: Sendable {
     /// Attempts a normal merged-only branch deletion for an attempt-created
     /// branch. `false` means it was retained (for example, unmerged).
     func deleteMergedBranch(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool
+}
+
+extension WorkspaceCheckoutLifecycleOperating {
+    func clearStaleRegistration(_ plan: WorkspaceCheckoutCleanupPlan) async throws {}
 }
 
 struct NoopWorkspaceCheckoutSessionStopper: WorkspaceCheckoutSessionStopping {
@@ -318,6 +324,9 @@ actor WorkspaceCheckoutCoordinator {
             case .exactLineage(let lineage) where lineage == plan.expectedLineageID:
                 break
             case .missing:
+                try await projectMutationGate.withMutation(projectID: member.projectID) {
+                    try await lifecycle.clearStaleRegistration(plan)
+                }
                 worktreeAlreadyRemoved = true
                 try await mutateMember(checkoutID: checkoutID, memberID: memberID) {
                     $0.cleanup?.worktreeRemoved = true
@@ -1673,6 +1682,37 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
         return await WorkspaceCheckoutObserver().observe(member, in: checkout)
     }
 
+    func clearStaleRegistration(_ plan: WorkspaceCheckoutCleanupPlan) async throws {
+        switch plan.executionLocation.normalized {
+        case .local:
+            let repo = URL(fileURLWithPath: plan.sourceRepositoryPath)
+            let destination = URL(fileURLWithPath: plan.worktreePath)
+            let registrations = try await Process.git(["worktree", "list", "--porcelain"], cwd: repo, usesRemoteHostRegistry: false)
+            guard registrations.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(registrations.stderr) }
+            guard Self.porcelainContainsWorktree(registrations.stdout, path: plan.worktreePath) else { return }
+            try await WorktreeService().prune(repoPath: repo)
+            let refreshed = try await Process.git(["worktree", "list", "--porcelain"], cwd: repo, usesRemoteHostRegistry: false)
+            guard refreshed.exitCode == 0,
+                  !Self.porcelainContainsWorktree(refreshed.stdout, path: destination.path)
+            else { throw WorktreeService.WorktreeError.gitFailed(refreshed.stderr) }
+        case .ssh(let host):
+            let repo = SSHCommand.shellQuote(plan.sourceRepositoryPath)
+            let registrations = try await remote.run(host: host, command: "git -C \(repo) worktree list --porcelain")
+            guard registrations.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(registrations.stderr) }
+            guard Self.porcelainContainsWorktree(registrations.stdout, path: plan.worktreePath) else { return }
+            let prune = try await remote.run(host: host, command: "git -C \(repo) worktree prune")
+            guard prune.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(prune.stderr) }
+            let refreshed = try await remote.run(host: host, command: "git -C \(repo) worktree list --porcelain")
+            guard refreshed.exitCode == 0,
+                  !Self.porcelainContainsWorktree(refreshed.stdout, path: plan.worktreePath)
+            else { throw WorktreeService.WorktreeError.gitFailed(refreshed.stderr) }
+        }
+    }
+
+    private static func porcelainContainsWorktree(_ porcelain: String, path: String) -> Bool {
+        porcelain.split(separator: "\n").contains { $0 == "worktree \(path)" }
+    }
+
     func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan, force: Bool, forceTwice: Bool) async throws {
         switch plan.executionLocation.normalized {
         case .local:
@@ -1775,16 +1815,22 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
             reasons.insert(.dirty)
         }
         let submodules = try await remote.run(host: host, command: "git -C \(quotedPath) submodule status --recursive")
+        let submoduleLocalState: SubmoduleLocalState
         let hasSubmodules = submodules.exitCode == 0 && !submodules.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         if hasSubmodules {
             reasons.insert(.containsInitializedSubmodules)
+        }
+        if submodules.exitCode == 0 {
+            submoduleLocalState = hasSubmodules ? .unknown : .none
+        } else {
+            submoduleLocalState = .unknown
         }
         let registrations = try await remote.run(host: host, command: "git -C \(quotedPath) worktree list --porcelain")
         guard registrations.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(registrations.stderr) }
         if WorktreeService.porcelainMarksWorktreeLocked(registrations.stdout, worktreePath: URL(fileURLWithPath: plan.worktreePath)) {
             reasons.insert(.locked)
         }
-        return .init(reasons: reasons, submoduleLocalState: hasSubmodules ? .unknown : .none)
+        return .init(reasons: reasons, submoduleLocalState: submoduleLocalState)
     }
 
     private func remoteInspectRoot(_ plan: WorkspaceCheckoutCleanupPlan, host: String) async -> WorkspaceCheckoutCleanupRootObservation {
