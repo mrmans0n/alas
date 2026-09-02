@@ -670,6 +670,22 @@ struct AlasCLICommandRouterTests {
         )
     }
 
+    @Test func reviewCommentWireDTODescribesNonLineAnchors() {
+        var fileComment = makeDraftComment(id: "file", worktreeID: "wt1")
+        fileComment.anchor = .file
+        var imageComment = makeDraftComment(id: "image", worktreeID: "wt1")
+        imageComment.anchor = .image(side: .new, normalizedX: 0.625, normalizedY: 0.25)
+
+        let file = ReviewCommentWireDTO(fileComment)
+        let image = ReviewCommentWireDTO(imageComment)
+
+        #expect(file.anchorKind == "file")
+        #expect(file.startLine == nil)
+        #expect(image.anchorKind == "image")
+        #expect(image.xPercent == 62.5)
+        #expect(image.yPercent == 25)
+    }
+
     private func makeReviewRouter(
         worktree: Worktree,
         store: ReviewDraftCommentStore,

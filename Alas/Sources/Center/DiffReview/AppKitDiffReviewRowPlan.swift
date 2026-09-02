@@ -100,6 +100,7 @@ struct AppKitDiffReviewRowInput {
     var inlineFeedbackScrollTargetID: String?
     var focusedDraftCommentID: String?
     var allowsDraftCommentCreation = true
+    var allowsNonLineDraftCommentCreation = true
     var actionPresence = AppKitDiffReviewActionPresence()
     var lspContext: DiffPaneLSPContext?
     var reviewFeedbackTarget: ReviewFeedbackTarget?
@@ -124,6 +125,7 @@ struct AppKitDiffReviewRowInput {
         inlineFeedbackScrollTargetID: String? = nil,
         focusedDraftCommentID: String? = nil,
         allowsDraftCommentCreation: Bool = true,
+        allowsNonLineDraftCommentCreation: Bool = true,
         actionPresence: AppKitDiffReviewActionPresence = .init(),
         lspContext: DiffPaneLSPContext? = nil,
         reviewFeedbackTarget: ReviewFeedbackTarget? = nil,
@@ -149,6 +151,7 @@ struct AppKitDiffReviewRowInput {
         self.inlineFeedbackScrollTargetID = inlineFeedbackScrollTargetID
         self.focusedDraftCommentID = focusedDraftCommentID
         self.allowsDraftCommentCreation = allowsDraftCommentCreation
+        self.allowsNonLineDraftCommentCreation = allowsNonLineDraftCommentCreation
         self.actionPresence = actionPresence
         self.lspContext = lspContext
         self.reviewFeedbackTarget = reviewFeedbackTarget
@@ -160,6 +163,23 @@ struct AppKitDiffReviewRowInput {
 
     func beginPendingDraft(at anchor: DiffReviewLineAnchor) {
         state.pendingDraftAnchor = anchor
+        state.pendingNonLineDraftAnchor = nil
+        state.pendingDraftBody = ""
+        state.quoteInsertionGeneration = 0
+        state.draftComposerFocusRequestGeneration &+= 1
+    }
+
+    func beginFileDraft() {
+        beginNonLineDraft(.file)
+    }
+
+    func beginImageDraft(side: DiffReviewInlineFeedbackSide, point: CGPoint) {
+        beginNonLineDraft(.image(side: side, normalizedX: point.x, normalizedY: point.y))
+    }
+
+    private func beginNonLineDraft(_ anchor: ReviewDraftCommentAnchor) {
+        state.pendingDraftAnchor = nil
+        state.pendingNonLineDraftAnchor = anchor
         state.pendingDraftBody = ""
         state.quoteInsertionGeneration = 0
         state.draftComposerFocusRequestGeneration &+= 1
@@ -167,17 +187,23 @@ struct AppKitDiffReviewRowInput {
 
     func clearPendingDraft() {
         state.pendingDraftAnchor = nil
+        state.pendingNonLineDraftAnchor = nil
         state.pendingDraftBody = ""
         state.quoteInsertionGeneration = 0
         state.isDraftComposerFocused = false
     }
 
     func savePendingDraft() {
+        let body = state.pendingDraftBody.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !body.isEmpty else { return }
+        if let anchor = state.pendingNonLineDraftAnchor {
+            clearPendingDraft()
+            state.actionRelay.saveDraftComment(anchor, body: body)
+            return
+        }
         guard let anchor = state.pendingDraftAnchor else { return }
         let groups = currentDisplayGroups
         let canonicalAnchor = ReviewDraftCommentRowSegmentation.canonicalPendingAnchor(anchor, in: groups)
-        let body = state.pendingDraftBody.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !body.isEmpty else { return }
         let rowKeys = Set(groups.flatMap(ReviewDraftCommentPlacement.allRowKeys))
         guard rowKeys.contains(ReviewDraftCommentPlacement.RowKey(
             side: canonicalAnchor.side,
@@ -187,7 +213,15 @@ struct AppKitDiffReviewRowInput {
             return
         }
         clearPendingDraft()
-        state.actionRelay.saveDraftComment(canonicalAnchor, body: body)
+        state.actionRelay.saveDraftComment(
+            .line(
+                side: canonicalAnchor.side,
+                startLine: canonicalAnchor.line,
+                endLine: canonicalAnchor.endLine,
+                selectedText: canonicalAnchor.selectedText
+            ),
+            body: body
+        )
     }
 
     func loadContextAndExpand(
@@ -292,8 +326,10 @@ struct AppKitDiffReviewRowInput {
     private func activeHighlight(for candidate: DiffReviewActiveCommentCandidate) -> DiffReviewCommentHighlight? {
         switch candidate {
         case .draft(let id):
-            guard let comment = draftComments.first(where: { $0.id == id }), comment.state != .dismissed else { return nil }
-            return .init(path: comment.path, side: comment.side, lineRange: comment.normalizedLineRange)
+            guard let comment = draftComments.first(where: { $0.id == id }),
+                  comment.state != .dismissed,
+                  let lineRange = comment.normalizedLineRange else { return nil }
+            return .init(path: comment.path, side: comment.side, lineRange: lineRange)
         case .inlineFeedback(let id):
             guard let item = inlineFeedback.first(where: { $0.id == id }), let line = item.anchor.line else { return nil }
             return .init(path: item.anchor.path, side: item.anchor.side, line: line)
@@ -346,6 +382,9 @@ enum AppKitDiffReviewRowPlanBuilder {
             append(&rows, id: headerID, input: input, signature: headerSignature(input), height: 45) {
                 AnyView(AppKitDiffReviewHeaderRowBody(input: input))
             }
+            if input.state.pendingNonLineDraftAnchor == .file {
+                appendComposer(scopeID: "file", input: input, rows: &rows)
+            }
             if let contextLoadError = input.state.contextLoadError {
                 append(
                     &rows,
@@ -388,8 +427,14 @@ enum AppKitDiffReviewRowPlanBuilder {
                 appendFileAccessories(input, context: nil, rows: &rows, fallbacks: &fallbackByTargetID)
                 appendImageFeedback(input, rows: &rows)
                 let imageID = AppKitDiffReviewRowID.image(fileID: fileID)
-                append(&rows, id: imageID, input: input, signature: input.file.imageProvider?.id.hashValue ?? 0, height: 360) {
+                append(&rows, id: imageID, input: input, signature: imageSignature(input), height: 360) {
                     AnyView(AppKitDiffReviewImageRowBody(input: input, loadsImage: true))
+                }
+                if case .image = input.state.pendingNonLineDraftAnchor {
+                    appendComposer(scopeID: "image", input: input, rows: &rows)
+                }
+                for comment in ReviewDraftCommentPlacement.position(input.draftComments, in: []).image {
+                    appendDraft(comment, contextRows: nil, input: input, rows: &rows, fallbacks: &fallbackByTargetID)
                 }
                 mapTargetsDirectly(input, into: &fallbackByTargetID)
             } else if let context = renderContext(for: input) {
@@ -462,6 +507,24 @@ enum AppKitDiffReviewRowPlanBuilder {
         appendFeedback(feedback, scopeID: "file", contextRows: nil, input: input, rows: &rows, fallbacks: &fallbacks)
     }
 
+    private static func appendComposer(
+        scopeID: String,
+        input: AppKitDiffReviewRowInput,
+        rows: inout [AppKitDiffRowSpec],
+        contextRows: [DiffDisplayRow] = []
+    ) {
+        append(
+            &rows,
+            id: AppKitDiffReviewRowID.composer(fileID: input.file.id, segmentID: scopeID),
+            input: input,
+            signature: composerSignature(input.state),
+            height: 132,
+            retention: input.state.isDraftComposerFocused ? .pinned : .recyclable
+        ) {
+            AnyView(AppKitDiffReviewComposerRowBody(rows: contextRows, input: input))
+        }
+    }
+
     private static func appendTextRows(
         _ context: DiffReviewRenderContext,
         input: AppKitDiffReviewRowInput,
@@ -527,17 +590,7 @@ enum AppKitDiffReviewRowPlanBuilder {
                     appendDraft(comment, contextRows: segment.rows, input: input, rows: &rows, fallbacks: &fallbacks)
                 }
                 if segment.showsComposer {
-                    let composerID = AppKitDiffReviewRowID.composer(fileID: input.file.id, segmentID: segment.id)
-                    append(
-                        &rows,
-                        id: composerID,
-                        input: input,
-                        signature: composerSignature(input.state),
-                        height: 132,
-                        retention: input.state.isDraftComposerFocused ? .pinned : .recyclable
-                    ) {
-                        AnyView(AppKitDiffReviewComposerRowBody(rows: segment.rows, input: input))
-                    }
+                    appendComposer(scopeID: segment.id, input: input, rows: &rows, contextRows: segment.rows)
                 }
             }
         }
@@ -770,6 +823,18 @@ enum AppKitDiffReviewRowPlanBuilder {
         hasher.combine(input.file.summary.deletions)
         hasher.combine(input.showsSourceBadge)
         hasher.combine(input.file.summary.groupTitle)
+        hasher.combine(input.allowsDraftCommentCreation)
+        hasher.combine(input.allowsNonLineDraftCommentCreation)
+        return hasher.finalize()
+    }
+
+    private static func imageSignature(_ input: AppKitDiffReviewRowInput) -> Int {
+        var hasher = Hasher()
+        hasher.combine(input.file.imageProvider?.id)
+        hasher.combine(input.draftComments)
+        hasher.combine(input.state.pendingNonLineDraftAnchor)
+        hasher.combine(input.state.hoveredDraftCommentID)
+        hasher.combine(input.focusedDraftCommentID)
         return hasher.finalize()
     }
 
@@ -847,6 +912,17 @@ struct AppKitDiffReviewHeaderRowBody: View {
                     ))
             }
             Spacer(minLength: 12)
+            if input.allowsNonLineDraftCommentCreation {
+                Button("Comment", action: input.beginFileDraft)
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(input.theme.color("fg-muted"))
+                    .padding(.horizontal, 8).frame(height: 24)
+                    .background(input.theme.color("bg-3"))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .accessibilityIdentifier("diff-review-comment-file-\(input.file.id.rawValue)")
+                    .help("Comment on this file")
+            }
             if shouldShowChangeSummary(
                 additions: input.file.summary.additions,
                 deletions: input.file.summary.deletions
@@ -1145,7 +1221,12 @@ struct AppKitDiffReviewImageRowBody: View {
                     ))
             }
             if let pair = input.state.imageState.pair ?? input.file.imageProvider.flatMap({ DiffReviewImagePairCache.shared.pair(for: $0.id) }) {
-                ImageDiffComparisonContent(pair: pair, state: input.state.imageState.presentation, boundedHeight: 360)
+                ImageDiffComparisonContent(
+                    pair: pair,
+                    state: input.state.imageState.presentation,
+                    boundedHeight: 360,
+                    annotation: annotationPresentation(for: pair)
+                )
                 if let message = failureMessage(in: pair) {
                     HStack(spacing: 10) {
                         Text(message).font(.system(size: 11)).foregroundColor(input.theme.color("warn"))
@@ -1180,6 +1261,34 @@ struct AppKitDiffReviewImageRowBody: View {
             }
             await input.state.imageState.load(provider: provider)
         }
+    }
+
+    private func annotationPresentation(for pair: ImageDiffPair) -> ImageDiffAnnotationPresentation? {
+        guard input.allowsNonLineDraftCommentCreation else { return nil }
+        let side: DiffReviewInlineFeedbackSide = pair.kind == .deleted ? .old : .new
+        let comments = ReviewDraftCommentPlacement.position(input.draftComments, in: []).image
+        let markers = comments.enumerated().compactMap { index, comment -> ImageDiffAnnotationMarker? in
+            guard case .image(let commentSide, let x, let y) = comment.anchor, commentSide == side else { return nil }
+            return .init(id: comment.id, number: index + 1, normalizedX: x, normalizedY: y)
+        }
+        let pendingPoint: CGPoint?
+        if case .image(let pendingSide, let x, let y) = input.state.pendingNonLineDraftAnchor,
+           pendingSide == side {
+            pendingPoint = CGPoint(x: x, y: y)
+        } else {
+            pendingPoint = nil
+        }
+        return ImageDiffAnnotationPresentation(
+            side: side,
+            markers: markers,
+            pendingPoint: pendingPoint,
+            focusedMarkerID: input.state.hoveredDraftCommentID ?? input.focusedDraftCommentID,
+            onPointSelected: { input.beginImageDraft(side: side, point: $0) },
+            onMarkerSelected: { id in
+                guard let comment = comments.first(where: { $0.id == id }) else { return }
+                input.state.actionRelay.selectDraftComment(comment)
+            }
+        )
     }
 
     private func failureMessage(in pair: ImageDiffPair) -> String? {
@@ -1329,6 +1438,7 @@ struct AppKitDiffReviewDraftCommentRowBody: View {
         ReviewDraftCommentCard(
             comment: comment, file: input.file.summary,
             isFocused: comment.id == input.focusedDraftCommentID,
+            markerNumber: markerNumber,
             actions: input.draftCommentActions ?? input.state.actionRelay.draftCommentActionsForRow,
             reviewFeedbackTarget: input.reviewFeedbackTarget ?? .init(
                 title: input.file.summary.path, repositoryPath: nil,
@@ -1348,6 +1458,12 @@ struct AppKitDiffReviewDraftCommentRowBody: View {
             editorState: input.state.bindingForDraftCommentEditor(comment.id)
         )
         .id(DiffReviewDraftCommentTargetID.targetID(commentID: comment.id, fileID: input.file.id))
+    }
+
+    private var markerNumber: Int? {
+        guard case .image = comment.anchor else { return nil }
+        return ReviewDraftCommentPlacement.position(input.draftComments, in: []).image
+            .firstIndex(where: { $0.id == comment.id }).map { $0 + 1 }
     }
 }
 
@@ -1492,13 +1608,15 @@ struct AppKitDiffReviewComposerRowBody: View {
                         .stroke(input.theme.color("accent").opacity(0.65), lineWidth: 0.75))
                     .accessibilityIdentifier("diff-review-draft-composer")
                 HStack {
-                    Button("Quote lines") { input.state.quoteInsertionGeneration &+= 1 }
-                        .buttonStyle(.plain).font(.system(size: 10, weight: .semibold))
-                        .foregroundColor(input.theme.color("fg-muted"))
-                        .padding(.horizontal, 8).frame(height: 24)
-                        .background(input.theme.color("bg-3"))
-                        .clipShape(RoundedRectangle(cornerRadius: 5))
-                        .accessibilityIdentifier("diff-review-draft-composer-quote")
+                    if input.state.pendingDraftAnchor != nil {
+                        Button("Quote lines") { input.state.quoteInsertionGeneration &+= 1 }
+                            .buttonStyle(.plain).font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(input.theme.color("fg-muted"))
+                            .padding(.horizontal, 8).frame(height: 24)
+                            .background(input.theme.color("bg-3"))
+                            .clipShape(RoundedRectangle(cornerRadius: 5))
+                            .accessibilityIdentifier("diff-review-draft-composer-quote")
+                    }
                     Spacer()
                     Button("Cancel", action: input.clearPendingDraft)
                         .buttonStyle(.plain).font(.system(size: 10, weight: .semibold))

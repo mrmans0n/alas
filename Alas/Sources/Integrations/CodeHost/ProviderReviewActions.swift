@@ -26,12 +26,14 @@ struct ProviderReviewDraftComment: Codable, Equatable, Identifiable, Sendable {
     let bodyMarkdown: String
 
     init?(localDraft: ReviewDraftComment) {
-        guard localDraft.state == .active, localDraft.providerPublish == nil else { return nil }
+        guard localDraft.state == .active,
+              localDraft.providerPublish == nil,
+              let lineRange = localDraft.normalizedLineRange else { return nil }
         self.localDraftID = localDraft.id
         self.path = localDraft.path
         self.originalPath = localDraft.originalPath
         self.side = localDraft.side
-        self.lineRange = localDraft.normalizedLineRange
+        self.lineRange = lineRange
         self.selectedText = localDraft.selectedText
         self.bodyMarkdown = localDraft.bodyMarkdown
     }

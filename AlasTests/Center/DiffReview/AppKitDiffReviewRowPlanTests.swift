@@ -66,6 +66,41 @@ struct AppKitDiffReviewRowPlanTests {
         #expect(!ids.contains { $0.contains(":group:") || $0.contains(":segment:") })
     }
 
+    @Test func wholeFileComposerIsImmediatelyBelowHeader() {
+        let file = textFile()
+        let state = AppKitDiffReviewFileState()
+        state.pendingNonLineDraftAnchor = .file
+
+        let ids = AppKitDiffReviewRowPlanBuilder.build(inputs: [
+            .init(file: file, state: state, theme: theme),
+        ]).corePlan.rows.map(\.id)
+
+        #expect(ids.prefix(2) == [
+            AppKitDiffReviewRowID.header(fileID: file.id),
+            AppKitDiffReviewRowID.composer(fileID: file.id, segmentID: "file"),
+        ])
+    }
+
+    @Test func imageComposerAndCoordinateCardsAreBelowImage() throws {
+        let file = imageFile()
+        let state = AppKitDiffReviewFileState()
+        state.pendingNonLineDraftAnchor = .image(side: .new, normalizedX: 0.25, normalizedY: 0.75)
+        let comment = draftComment(
+            fileID: file.id,
+            anchor: .image(side: .new, normalizedX: 0.5, normalizedY: 0.5)
+        )
+
+        let ids = AppKitDiffReviewRowPlanBuilder.build(inputs: [
+            .init(file: file, draftComments: [comment], state: state, theme: theme),
+        ]).corePlan.rows.map(\.id)
+        let imageIndex = try #require(ids.firstIndex(of: AppKitDiffReviewRowID.image(fileID: file.id)))
+
+        #expect(Array(ids.dropFirst(imageIndex + 1).prefix(2)) == [
+            AppKitDiffReviewRowID.composer(fileID: file.id, segmentID: "image"),
+            AppKitDiffReviewRowID.draftComment(.targetID(commentID: comment.id, fileID: file.id)),
+        ])
+    }
+
     @Test func unavailableFilesEmitHeaderAndPlaceholder() {
         let file = placeholderFile()
         let input = AppKitDiffReviewRowInput(file: file, state: AppKitDiffReviewFileState(), theme: theme)
@@ -707,11 +742,15 @@ struct AppKitDiffReviewRowPlanTests {
         )
     }
 
-    private func draftComment(fileID: DiffReviewFileID) -> ReviewDraftComment {
+    private func draftComment(
+        fileID: DiffReviewFileID,
+        anchor: ReviewDraftCommentAnchor = .line(
+            side: .new, startLine: 1, endLine: nil, selectedText: "let new = 1"
+        )
+    ) -> ReviewDraftComment {
         .init(
             id: "draft", sessionID: .commit(worktreeID: "wt", repositoryPath: URL(fileURLWithPath: "/repo"), sha: "abc"),
-            fileID: fileID, path: fileID.path, originalPath: nil, side: .new,
-            startLine: 1, endLine: nil, selectedText: "let new = 1", bodyMarkdown: "Please revisit.",
+            fileID: fileID, path: fileID.path, originalPath: nil, anchor: anchor, bodyMarkdown: "Please revisit.",
             state: .active, createdAt: Date(timeIntervalSince1970: 1), updatedAt: Date(timeIntervalSince1970: 2)
         )
     }

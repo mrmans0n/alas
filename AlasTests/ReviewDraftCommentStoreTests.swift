@@ -112,6 +112,35 @@ return value + other
         #expect(try store.load(sessionID: session).single?.originalPath == "Sources/OldApp.swift")
     }
 
+    @Test @MainActor func controllerPersistsFileAndImageAnchors() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("review-draft-comments.json")
+        let controller = ReviewDraftCommentController(
+            sessionID: .localChanges(
+                worktreeID: "wt",
+                worktreePath: URL(fileURLWithPath: "/repo"),
+                scope: .all
+            ),
+            store: ReviewDraftCommentStore(store: PersistenceStore(), url: url)
+        )
+        let fileID = DiffReviewFileID(namespace: "unstaged", path: "icon.png")
+
+        try controller.load()
+        try controller.add(anchor: .file, path: "icon.png", fileID: fileID, bodyMarkdown: "Whole file")
+        try controller.add(
+            anchor: .image(side: .new, normalizedX: 0.625, normalizedY: 0.25),
+            path: "icon.png",
+            fileID: fileID,
+            bodyMarkdown: "This pixel"
+        )
+
+        #expect(controller.comments.map(\.anchor) == [
+            .file,
+            .image(side: .new, normalizedX: 0.625, normalizedY: 0.25),
+        ])
+    }
+
     @Test func savesLoadsAndDeletesCommentsBySession() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

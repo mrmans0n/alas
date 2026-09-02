@@ -25,6 +25,7 @@ struct DiffReviewContextStateSignature: Equatable {
 
 struct DiffReviewFilePresentationSignature: Equatable {
     let pendingDraftAnchor: DiffReviewLineAnchor?
+    let pendingNonLineDraftAnchor: ReviewDraftCommentAnchor?
     let pendingDraftBody: String
     let draftComposerFocusRequestGeneration: Int
     let quoteInsertionGeneration: Int
@@ -44,6 +45,7 @@ struct DiffReviewFilePresentationSignature: Equatable {
     @MainActor
     init(_ state: AppKitDiffReviewFileState) {
         pendingDraftAnchor = state.pendingDraftAnchor
+        pendingNonLineDraftAnchor = state.pendingNonLineDraftAnchor
         pendingDraftBody = state.pendingDraftBody
         draftComposerFocusRequestGeneration = state.draftComposerFocusRequestGeneration
         quoteInsertionGeneration = state.quoteInsertionGeneration
@@ -146,8 +148,9 @@ struct DiffReviewFileSection: View {
     var onSelectInlineFeedback: (DiffReviewInlineFeedback) -> Void = { _ in }
     var draftCommentActions = ReviewDraftCommentActions()
     var onSelectDraftComment: (ReviewDraftComment) -> Void = { _ in }
-    var onSaveDraftComment: (DiffReviewLineAnchor, String) -> Void = { _, _ in }
+    var onSaveDraftComment: (ReviewDraftCommentAnchor, String) -> Void = { _, _ in }
     var allowsDraftCommentCreation: Bool = true
+    var allowsNonLineDraftCommentCreation: Bool = true
     var onContextExpansionActivated: () -> Void = {}
     var reviewFeedbackTarget: ReviewFeedbackTarget?
     var threads: [DiffInlineCommentThread] = []
@@ -201,6 +204,7 @@ struct DiffReviewFileSection: View {
             focusedFeedbackID: focusedFeedbackID,
             focusedDraftCommentID: focusedDraftCommentID,
             allowsDraftCommentCreation: allowsDraftCommentCreation,
+            allowsNonLineDraftCommentCreation: allowsNonLineDraftCommentCreation,
             actionPresence: .init(
                 canOpenFile: file.openFile != nil,
                 canUnstageFile: file.stagedMutationActions?.unstageFile != nil,
@@ -235,12 +239,21 @@ struct DiffReviewFileSection: View {
         synchronizePresentationState()
         return VStack(spacing: 0) {
             header
+            if state.pendingNonLineDraftAnchor == .file {
+                AppKitDiffReviewComposerRowBody(rows: [], input: focusedRowInput)
+            }
             contextLoadErrorRow
             if file.imageProvider != nil {
                 fileLevelDraftCommentStack(renderContext: nil)
                 fileLevelInlineFeedbackStack(renderContext: nil)
                 imageProviderFeedbackStack
                 imageContent
+                if case .image = state.pendingNonLineDraftAnchor {
+                    AppKitDiffReviewComposerRowBody(rows: [], input: focusedRowInput)
+                }
+                fullWidthDraftCommentStack(
+                    ReviewDraftCommentPlacement.position(draftComments, in: []).image
+                )
             } else if shouldDeferRender {
                 renderBudgetPlaceholder
             } else {
@@ -815,12 +828,13 @@ struct DiffReviewFileSection: View {
 
     private func draftCommentHighlight(id: String) -> DiffReviewCommentHighlight? {
         guard let comment = draftComments.first(where: { $0.id == id }),
-              comment.state != .dismissed
+              comment.state != .dismissed,
+              let lineRange = comment.normalizedLineRange
         else { return nil }
         return DiffReviewCommentHighlight(
             path: comment.path,
             side: comment.side,
-            lineRange: comment.normalizedLineRange
+            lineRange: lineRange
         )
     }
 
@@ -856,7 +870,7 @@ struct DiffReviewFileSection: View {
 
     @ViewBuilder
     private func draftComposer(rows: [DiffDisplayRow]) -> some View {
-        if allowsDraftCommentCreation, let pendingDraftAnchor {
+        if allowsDraftCommentCreation, pendingDraftAnchor != nil {
             AppKitDiffReviewComposerRowBody(rows: rows, input: focusedRowInput)
         }
     }
@@ -1040,6 +1054,7 @@ struct EquatableDiffReviewFileSection: View, Equatable {
             && lhs.section.automaticallyRendersDiff == rhs.section.automaticallyRendersDiff
             && DiffPaneLSPContext.rendersEqual(lhs.section.lspContext, rhs.section.lspContext)
             && lhs.section.allowsDraftCommentCreation == rhs.section.allowsDraftCommentCreation
+            && lhs.section.allowsNonLineDraftCommentCreation == rhs.section.allowsNonLineDraftCommentCreation
             && lhs.section.reviewFeedbackTarget == rhs.section.reviewFeedbackTarget
             && lhs.section.threads == rhs.section.threads
             && lhs.section.annotations == rhs.section.annotations
@@ -1352,6 +1367,7 @@ enum ReviewDraftCommentPlacement {
 
     struct Result: Equatable {
         let fileLevel: [ReviewDraftComment]
+        let image: [ReviewDraftComment]
         let byRowAnchor: [RowKey: [ReviewDraftComment]]
         let groupIDByCommentID: [String: String]
     }
@@ -1363,11 +1379,20 @@ enum ReviewDraftCommentPlacement {
         let visibleKeys = Set(groups.flatMap(allRowKeys))
         let groupIDByKey = firstGroupIDByRowKey(in: groups)
         var fileLevel: [ReviewDraftComment] = []
+        var image: [ReviewDraftComment] = []
         var byRowAnchor: [RowKey: [ReviewDraftComment]] = [:]
         var groupIDByCommentID: [String: String] = [:]
 
         for comment in comments where comment.state != .dismissed {
-            let key = RowKey(side: comment.side, line: comment.normalizedLineRange.upperBound)
+            if case .image = comment.anchor {
+                image.append(comment)
+                continue
+            }
+            guard let lineRange = comment.normalizedLineRange else {
+                fileLevel.append(comment)
+                continue
+            }
+            let key = RowKey(side: comment.side, line: lineRange.upperBound)
             if visibleKeys.contains(key) {
                 byRowAnchor[key, default: []].append(comment)
                 if let groupID = groupIDByKey[key] {
@@ -1380,6 +1405,7 @@ enum ReviewDraftCommentPlacement {
 
         return Result(
             fileLevel: sorted(fileLevel),
+            image: sorted(image),
             byRowAnchor: byRowAnchor.mapValues(sorted),
             groupIDByCommentID: groupIDByCommentID
         )
@@ -1428,11 +1454,17 @@ enum ReviewDraftCommentPlacement {
             if lhs.path != rhs.path {
                 return lhs.path.localizedStandardCompare(rhs.path) == .orderedAscending
             }
-            if lhs.normalizedLineRange.lowerBound != rhs.normalizedLineRange.lowerBound {
-                return lhs.normalizedLineRange.lowerBound < rhs.normalizedLineRange.lowerBound
-            }
-            if lhs.normalizedLineRange.upperBound != rhs.normalizedLineRange.upperBound {
-                return lhs.normalizedLineRange.upperBound < rhs.normalizedLineRange.upperBound
+            if let lhsRange = lhs.normalizedLineRange, let rhsRange = rhs.normalizedLineRange {
+                if lhsRange.lowerBound != rhsRange.lowerBound {
+                    return lhsRange.lowerBound < rhsRange.lowerBound
+                }
+                if lhsRange.upperBound != rhsRange.upperBound {
+                    return lhsRange.upperBound < rhsRange.upperBound
+                }
+            } else if lhs.normalizedLineRange != nil {
+                return false
+            } else if rhs.normalizedLineRange != nil {
+                return true
             }
             if lhs.createdAt != rhs.createdAt {
                 return lhs.createdAt < rhs.createdAt
@@ -1908,6 +1940,7 @@ struct ReviewDraftCommentCard: View {
     let comment: ReviewDraftComment
     let file: DiffReviewFileSummary
     let isFocused: Bool
+    var markerNumber: Int? = nil
     let actions: ReviewDraftCommentActions
     let reviewFeedbackTarget: ReviewFeedbackTarget
     let onSelect: (ReviewDraftComment) -> Void
@@ -1966,6 +1999,12 @@ struct ReviewDraftCommentCard: View {
                     Text(draftLabel)
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundColor(statusColor)
+
+                    if let markerNumber {
+                        Text("#\(markerNumber)")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(theme.color("accent"))
+                    }
 
                     Text(lineDescription)
                         .font(.system(size: 10))
@@ -2291,11 +2330,18 @@ struct ReviewDraftCommentCard: View {
     }
 
     private var lineDescription: String {
-        let range = comment.normalizedLineRange
-        if range.lowerBound == range.upperBound {
-            return "line \(range.lowerBound)"
+        switch comment.anchor {
+        case .file:
+            return "whole file"
+        case .image(let side, let x, let y):
+            return String(format: "%@ image at %.1f%%, %.1f%%", side.rawValue, x * 100, y * 100)
+        case .line(_, let startLine, let endLine, _):
+            let range = min(startLine, endLine ?? startLine)...max(startLine, endLine ?? startLine)
+            if range.lowerBound == range.upperBound {
+                return "line \(range.lowerBound)"
+            }
+            return "lines \(range.lowerBound)-\(range.upperBound)"
         }
-        return "lines \(range.lowerBound)-\(range.upperBound)"
     }
 
     private var draftLabel: String {

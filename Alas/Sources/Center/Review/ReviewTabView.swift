@@ -383,18 +383,20 @@ struct ReviewTabView: View {
             codeFontFamily: appState.config.code.fontFamily,
             codeFontSize: CGFloat(appState.config.code.fontSize),
             showsSourceBadges: true,
+            allowsNonLineDraftCommentCreation: false,
             lspContextForFile: { file in
                 makeLSPContext(relativePath: file.summary.path)
             },
-            onSaveDraftComment: { _, _, anchor, body in
+            onSaveDraftComment: { _, path, _, anchor, body in
                 guard let pr = pendingReview else { return }
+                guard case .line(let side, let line, let endLine, _) = anchor else { return }
                 pr.stage(StagedComment(
                     id: UUID(),
                     threadID: nil,
-                    filePath: anchor.path,
-                    line: anchor.line,
-                    endLine: anchor.endLine,
-                    side: anchor.side,
+                    filePath: path,
+                    line: line,
+                    endLine: endLine,
+                    side: side,
                     body: body,
                     suggestion: nil
                 ))

@@ -177,6 +177,7 @@ struct ImageDiffComparisonContent: View {
     let pair: ImageDiffPair
     @Bindable var state: ImageDiffPresentationState
     var boundedHeight: CGFloat? = nil
+    var annotation: ImageDiffAnnotationPresentation? = nil
 
     var body: some View {
         Group {
@@ -187,7 +188,8 @@ struct ImageDiffComparisonContent: View {
                     after: pair.after,
                     beforeLabel: "Before",
                     afterLabel: "After",
-                    transform: $state.transform
+                    transform: $state.transform,
+                    annotation: annotation
                 )
             case .overlay:
                 if let before = pair.beforeImage, let after = pair.afterImage {

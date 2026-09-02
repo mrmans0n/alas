@@ -526,12 +526,13 @@ struct ReviewChangesTabView: View {
 
     private func saveDraftComment(
         fileID: DiffReviewFileID,
+        path: String,
         originalPath: String?,
-        anchor: DiffReviewLineAnchor,
+        anchor: ReviewDraftCommentAnchor,
         body: String
     ) {
         do {
-            try draftCommentController?.add(anchor: anchor, fileID: fileID, originalPath: originalPath, bodyMarkdown: body)
+            try draftCommentController?.add(anchor: anchor, path: path, fileID: fileID, originalPath: originalPath, bodyMarkdown: body)
         } catch {
             // The controller keeps the non-blocking error state for the review rail.
         }

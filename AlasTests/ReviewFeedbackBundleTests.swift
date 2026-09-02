@@ -89,6 +89,49 @@ struct ReviewFeedbackBundleTests {
         #expect(prompt.contains("This behavior regressed."))
     }
 
+    @Test func promptDescribesWholeFileAndImageAnchors() {
+        let session = ReviewDraftSessionID.localChanges(
+            worktreeID: "wt",
+            worktreePath: URL(fileURLWithPath: "/repo"),
+            scope: .all
+        )
+        let target = ReviewFeedbackTarget(
+            title: "Local changes",
+            repositoryPath: nil,
+            providerDescription: nil,
+            sourceDescription: "local changes"
+        )
+        let file = ReviewDraftComment(
+            id: "file",
+            sessionID: session,
+            fileID: DiffReviewFileID(namespace: "review", path: "README.md"),
+            path: "README.md",
+            originalPath: nil,
+            anchor: .file,
+            bodyMarkdown: "Clarify this file.",
+            state: .active,
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 1)
+        )
+        let image = ReviewDraftComment(
+            id: "image",
+            sessionID: session,
+            fileID: DiffReviewFileID(namespace: "review", path: "icon.png"),
+            path: "icon.png",
+            originalPath: nil,
+            anchor: .image(side: .new, normalizedX: 0.625, normalizedY: 0.25),
+            bodyMarkdown: "Align this mark.",
+            state: .active,
+            createdAt: Date(timeIntervalSince1970: 2),
+            updatedAt: Date(timeIntervalSince1970: 2)
+        )
+
+        let prompt = ReviewFeedbackBundle(target: target, comments: [file, image]).promptMarkdown()
+
+        #expect(prompt.contains("`README.md (whole file)` [comment-id: file]"))
+        #expect(prompt.contains("`icon.png (new image, 62.5% from left, 25.0% from top)` [comment-id: image]"))
+    }
+
     @Test func promptDistinguishesSamePathCommentsFromDifferentNamespaces() {
         let session = ReviewDraftSessionID.localChanges(
             worktreeID: "wt",

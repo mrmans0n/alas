@@ -721,11 +721,18 @@ struct ReviewDraftSummaryRail: View {
     }
 
     private func lineDescription(for comment: ReviewDraftComment) -> String {
-        let range = comment.normalizedLineRange
-        if range.lowerBound == range.upperBound {
-            return "\(sideLabel(for: comment.side)) line \(range.lowerBound)"
+        switch comment.anchor {
+        case .file:
+            return "Whole file"
+        case .image(let side, let x, let y):
+            return String(format: "%@ image · %.1f%%, %.1f%%", sideLabel(for: side), x * 100, y * 100)
+        case .line(let side, let startLine, let endLine, _):
+            let range = min(startLine, endLine ?? startLine)...max(startLine, endLine ?? startLine)
+            if range.lowerBound == range.upperBound {
+                return "\(sideLabel(for: side)) line \(range.lowerBound)"
+            }
+            return "\(sideLabel(for: side)) lines \(range.lowerBound)-\(range.upperBound)"
         }
-        return "\(sideLabel(for: comment.side)) lines \(range.lowerBound)-\(range.upperBound)"
     }
 
     private func accessibilityLabel(for comment: ReviewDraftComment) -> String {
