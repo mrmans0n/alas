@@ -26,6 +26,7 @@ struct PairedReviewComposerSurfaceTests {
             rootView: ReviewDraftComposerCaptureHarness(model: model, theme: try! ThemeStore().current)
         )
         let window = attach(controller)
+        defer { window.orderOut(nil) }
         await drain(controller.view)
 
         let composer = try #require(textView(containing: model.text, in: controller.view))
@@ -34,7 +35,6 @@ struct PairedReviewComposerSurfaceTests {
         await drain(controller.view)
 
         #expect(model.text == "before\n\n\(quote)\n\nafter")
-        window.orderOut(nil)
     }
 
     @Test func reviewDraftComposerWrapsSelectionAndRoutesKeyboardActions() async throws {
@@ -43,6 +43,7 @@ struct PairedReviewComposerSurfaceTests {
             rootView: ReviewDraftComposerCaptureHarness(model: model, theme: try! ThemeStore().current)
         )
         let window = attach(controller)
+        defer { window.orderOut(nil) }
         await drain(controller.view)
 
         let composer = try #require(textView(containing: model.text, in: controller.view) as? PairedDelimiterTextView)
@@ -56,14 +57,13 @@ struct PairedReviewComposerSurfaceTests {
         composer.keyDown(with: try keyEvent(characters: "\u{1b}", modifiers: []))
         #expect(model.saveCount == 1)
         #expect(model.cancelCount == 1)
-
-        window.orderOut(nil)
     }
 
     @Test func inlineReplyAndEditBindingsReceiveWrappedSelections() async throws {
         let model = InlineCommentCardCapture()
         let controller = NSHostingController(rootView: InlineCommentCardCaptureHarness(model: model))
         let window = attach(controller, height: 520)
+        defer { window.orderOut(nil) }
         await drain(controller.view)
 
         let replyEditor = try #require(textView(containing: "reply body", in: controller.view))
@@ -73,27 +73,25 @@ struct PairedReviewComposerSurfaceTests {
         let editEditor = try #require(textView(containing: "edit body", in: controller.view))
         wrapSelection(in: editEditor)
         #expect(model.editState.editDraft == "`edit body`")
-
-        window.orderOut(nil)
     }
 
     @Test func providerReplyBindingReceivesWrappedSelection() async throws {
         let model = ProviderReplyCapture()
         let controller = NSHostingController(rootView: ProviderReplyCaptureHarness(model: model))
         let window = attach(controller)
+        defer { window.orderOut(nil) }
         await drain(controller.view)
 
         let editor = try #require(textView(containing: "provider reply", in: controller.view))
         wrapSelection(in: editor)
         #expect(model.editorState.body == "`provider reply`")
-
-        window.orderOut(nil)
     }
 
     @Test func providerReplyEmptyEditorPreservesReplyLabelAndMinimumHeight() async throws {
         let model = ProviderReplyCapture(body: "")
         let controller = NSHostingController(rootView: ProviderReplyCaptureHarness(model: model))
         let window = attach(controller)
+        defer { window.orderOut(nil) }
         await drain(controller.view)
 
         let replyEditor = try #require(firstEditableTextView(in: controller.view))
@@ -101,7 +99,6 @@ struct PairedReviewComposerSurfaceTests {
 
         #expect(scrollView.frame.height >= 32)
         #expect(replyEditor.accessibilityPlaceholderValue() == "Reply")
-        window.orderOut(nil)
     }
 
     @Test func verdictSummaryEditorWrapsSelectedText() async throws {
@@ -112,6 +109,7 @@ struct PairedReviewComposerSurfaceTests {
             .environment(\.theme, try! ThemeStore().current)
         )
         let window = attach(controller, height: 420)
+        defer { window.orderOut(nil) }
         await drain(controller.view)
 
         let editor = try #require(firstEditableTextView(in: controller.view))
@@ -119,7 +117,6 @@ struct PairedReviewComposerSurfaceTests {
         wrapSelection(in: editor)
 
         #expect(editor.string == "`verdict summary`")
-        window.orderOut(nil)
     }
 
     @Test func verdictSummaryRequestChangesRequiresNonEmptySummary() {
@@ -134,6 +131,7 @@ struct PairedReviewComposerSurfaceTests {
         let model = ProviderPublishCapture()
         let controller = NSHostingController(rootView: ProviderPublishCaptureHarness(model: model))
         let window = attach(controller, height: 420)
+        defer { window.orderOut(nil) }
         await drain(controller.view)
 
         let editor = try #require(textView(containing: "publish summary", in: controller.view))
@@ -144,21 +142,19 @@ struct PairedReviewComposerSurfaceTests {
         model.isPublishing = true
         await drain(controller.view)
         #expect(!editor.isEditable)
-
-        window.orderOut(nil)
     }
 
     @Test func draftSummaryEditingBindingReceivesWrappedSelection() async throws {
         let capture = DraftSummaryEditCapture(body: "draft summary")
         let controller = NSHostingController(rootView: DraftSummaryEditCaptureHarness(capture: capture))
         let window = attach(controller, height: 240)
+        defer { window.orderOut(nil) }
         await drain(controller.view)
 
         let editor = try await waitForTextView(containing: "draft summary", in: controller.view)
         wrapSelection(in: editor)
 
         #expect(capture.body == "`draft summary`")
-        window.orderOut(nil)
     }
 
     private func attach<Content: View>(

@@ -107,12 +107,14 @@ struct AppKitDiffScrollerStressTests {
         #expect(recycledAfterRelease)
     }
 
+    @MainActor
     private final class Stack {
         let window: NSWindow
         let scrollView: AppKitDiffScrollView
         let tiling: AppKitDiffTilingController
         let pool: AppKitDiffRowHostingPool
         let reconciler: AppKitDiffScrollerReconciler
+        private let cleanup: TestWindowCleanup
 
         init(
             window: NSWindow,
@@ -126,6 +128,7 @@ struct AppKitDiffScrollerStressTests {
             self.tiling = tiling
             self.pool = pool
             self.reconciler = reconciler
+            cleanup = TestWindowCleanup(window)
         }
     }
 
