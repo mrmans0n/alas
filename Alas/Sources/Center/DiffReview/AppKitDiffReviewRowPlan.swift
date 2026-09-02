@@ -755,10 +755,12 @@ enum AppKitDiffReviewRowPlanBuilder {
 
     private static func mapTargets(_ input: AppKitDiffReviewRowInput, to rowID: String, into fallbacks: inout [String: String]) {
         for item in input.inlineFeedback {
-            fallbacks[AppKitDiffReviewRowID.inlineFeedback(.targetID(feedbackID: item.id, fileID: input.file.id))] = rowID
+            let id = AppKitDiffReviewRowID.inlineFeedback(.targetID(feedbackID: item.id, fileID: input.file.id))
+            fallbacks[id] = fallbacks[id] ?? rowID
         }
         for comment in input.draftComments {
-            fallbacks[AppKitDiffReviewRowID.draftComment(.targetID(commentID: comment.id, fileID: input.file.id))] = rowID
+            let id = AppKitDiffReviewRowID.draftComment(.targetID(commentID: comment.id, fileID: input.file.id))
+            fallbacks[id] = fallbacks[id] ?? rowID
         }
     }
 

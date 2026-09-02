@@ -149,15 +149,18 @@ struct AppKitDiffReviewRowPlanTests {
         let file = placeholderFile()
         let draft = draftComment(fileID: file.id, anchor: .file)
 
-        let ids = AppKitDiffReviewRowPlanBuilder.build(inputs: [
+        let plan = AppKitDiffReviewRowPlanBuilder.build(inputs: [
             .init(file: file, draftComments: [draft], state: AppKitDiffReviewFileState(), theme: theme),
-        ]).corePlan.rows.map(\.id)
+        ])
+        let ids = plan.corePlan.rows.map(\.id)
 
         #expect(ids == [
             AppKitDiffReviewRowID.header(fileID: file.id),
             AppKitDiffReviewRowID.draftComment(.targetID(commentID: draft.id, fileID: file.id)),
             AppKitDiffReviewRowID.placeholder(fileID: file.id),
         ])
+        let draftID = AppKitDiffReviewRowID.draftComment(.targetID(commentID: draft.id, fileID: file.id))
+        #expect(plan.fallbackByTargetID[draftID] == draftID)
     }
 
     @Test func unavailableFilesEmitHeaderAndPlaceholder() {
