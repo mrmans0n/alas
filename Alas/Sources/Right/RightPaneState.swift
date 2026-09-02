@@ -193,7 +193,7 @@ final class RightPaneState: GGSplitCommitServicing {
     /// Off-critical-path gg stack load. Cancelled+restarted per refresh so a
     /// slow `gg ls --json` never blocks the Changes-pane snapshot.
     @ObservationIgnored private var ggStackRefreshTask: Task<Void, Never>? = nil
-    @ObservationIgnored private var ggStackRefreshDeferredUntilSyncEnds = false
+    @ObservationIgnored var ggStackRefreshDeferredUntilSyncEnds = false
     /// A refresh result may still arrive after its task was cancelled. Only
     /// the most recently started GG refresh may publish snapshot-derived
     /// stack state.
@@ -750,9 +750,9 @@ final class RightPaneState: GGSplitCommitServicing {
 
     nonisolated static func shouldDeferGGStackRefresh(
         inFlightAction: GGStackActionKind?,
-        sourceCommitsChanged: Bool
+        refreshRequired: Bool
     ) -> Bool {
-        inFlightAction == .sync && sourceCommitsChanged
+        inFlightAction == .sync && refreshRequired
     }
 
     nonisolated static func shouldPublishGGStackRefresh(
@@ -909,7 +909,7 @@ final class RightPaneState: GGSplitCommitServicing {
                 }
             } else if Self.shouldDeferGGStackRefresh(
                 inFlightAction: ggActionState.inFlightAction,
-                sourceCommitsChanged: ggStackSourceCommitsChanged
+                refreshRequired: ggStackSourceCommitsChanged
             ) {
                 ggStackRefreshDeferredUntilSyncEnds = true
             }
@@ -1256,6 +1256,7 @@ final class RightPaneState: GGSplitCommitServicing {
         // GG rewrites refs throughout sync. Keep the last coherent stack
         // mounted until the coordinator performs its final refresh.
         if ggActionState.inFlightAction == .sync, ggStackLoadState == .loaded {
+            ggStackRefreshDeferredUntilSyncEnds = true
             return nil
         }
         // Advance ownership before cancellation: a direct/untracked caller may

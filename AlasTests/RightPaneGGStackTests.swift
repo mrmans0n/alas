@@ -654,18 +654,18 @@ struct RightPaneGGRefreshSchedulingTests {
         #expect(RightPaneState.shouldScheduleGGStackRefresh(inFlightAction: nil))
     }
 
-    @Test func changedCommitSnapshotDefersRefreshOnlyDuringSync() {
+    @Test func refreshWorkDefersOnlyDuringSync() {
         #expect(RightPaneState.shouldDeferGGStackRefresh(
             inFlightAction: .sync,
-            sourceCommitsChanged: true
+            refreshRequired: true
         ))
         #expect(!RightPaneState.shouldDeferGGStackRefresh(
             inFlightAction: .sync,
-            sourceCommitsChanged: false
+            refreshRequired: false
         ))
         #expect(!RightPaneState.shouldDeferGGStackRefresh(
             inFlightAction: .rebase,
-            sourceCommitsChanged: true
+            refreshRequired: true
         ))
     }
 
@@ -2255,6 +2255,13 @@ struct RightPaneGGStackTests {
             suspendedCalls: [1, 2]
         )
         state.ggService = GGService(runner: runner)
+        state.ggCapabilities = {
+            GGCapabilities(
+                structuredSplit: false,
+                keepCurrentUnstack: false,
+                localStackSnapshot: false
+            )
+        }
         state.ggContextProvider = { _ in .active(stackName: "feature") }
         state.ggStackSourceCommits = [commit(sha: String(repeating: "a", count: 40), stackShaped: true)]
         state.ggContext = .active(stackName: "feature")
@@ -2278,6 +2285,7 @@ struct RightPaneGGStackTests {
         let refresh = state.invalidateGGPresentation(startingRefresh: false)
 
         #expect(refresh == nil)
+        #expect(state.ggStackRefreshDeferredUntilSyncEnds)
         #expect(state.ggStackLoadState == .loaded)
         #expect(state.ggStack?.name == "feature")
         #expect(state.ggStackCommitsKey == state.currentGGStackCommitsKey)
@@ -2292,6 +2300,7 @@ struct RightPaneGGStackTests {
         await runner.complete(call: 2)
         await finalRefresh.value
         #expect(state.ggStack?.name == "final-stack")
+        #expect(!state.ggStackRefreshDeferredUntilSyncEnds)
     }
 
     @Test func activeHeadInvalidationReplacesInFlightColdDetachedRecovery() async throws {
