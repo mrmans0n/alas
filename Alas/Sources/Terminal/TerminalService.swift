@@ -126,9 +126,16 @@ final class TerminalService {
     nonisolated static func checkoutWorkingDirectory(
         forcedCwd: URL?,
         forcedCwdLocation: ExecutionLocation?,
-        context: WorkspaceTerminalContext
+        context: WorkspaceTerminalContext,
+        remoteCwdAlreadyValidated: Bool = false
     ) -> URL? {
-        checkoutRestorationCwd(
+        if case .ssh = context.executionLocation,
+           remoteCwdAlreadyValidated,
+           forcedCwdLocation?.normalized == context.executionLocation.normalized,
+           let forcedCwd {
+            return forcedCwd
+        }
+        return checkoutRestorationCwd(
             savedPath: forcedCwd?.path,
             context: context,
             savedLocation: forcedCwdLocation
@@ -335,6 +342,7 @@ final class TerminalService {
         theme: Theme,
         forcedCwd: URL? = nil,
         forcedCwdLocation: ExecutionLocation? = nil,
+        remoteCwdAlreadyValidated: Bool = false,
         leafId: String = UUID().uuidString
     ) throws -> TerminalSession {
         try ensureApp(cfg: cfg, theme: theme)
@@ -369,7 +377,8 @@ final class TerminalService {
             let acceptedCwd = Self.checkoutWorkingDirectory(
                 forcedCwd: forcedCwd,
                 forcedCwdLocation: forcedCwdLocation,
-                context: context
+                context: context,
+                remoteCwdAlreadyValidated: remoteCwdAlreadyValidated
             )
             let launch = Self.remoteLaunch(
                 host: remoteHost,
@@ -397,7 +406,12 @@ final class TerminalService {
             args = plan.args
             for (key, value) in plan.envOverrides { env[key] = value }
         }
-        let acceptedCwd = Self.checkoutWorkingDirectory(forcedCwd: forcedCwd, forcedCwdLocation: forcedCwdLocation, context: context)
+        let acceptedCwd = Self.checkoutWorkingDirectory(
+            forcedCwd: forcedCwd,
+            forcedCwdLocation: forcedCwdLocation,
+            context: context,
+            remoteCwdAlreadyValidated: remoteCwdAlreadyValidated
+        )
         let cwd = remoteHost == nil
             ? (acceptedCwd ?? URL(fileURLWithPath: context.rootPath))
             : FileManager.default.homeDirectoryForCurrentUser

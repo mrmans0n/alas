@@ -1651,13 +1651,13 @@ final class AppState {
               let session = terminal.registry.session(for: focused.id)
         else { return }
 
-        let cwd = session.surface.currentWorkingDirectory
-            ?? TerminalService.checkoutRestorationCwd(
-                savedPath: focused.lastCwd,
-                context: context,
-                savedLocation: focused.lastCwdLocation
-            )
-            ?? URL(fileURLWithPath: context.rootPath)
+        let currentCwd = session.surface.currentWorkingDirectory
+        let restoredCwd = await validatedWorkspaceCheckoutRestorationCwd(
+            savedPath: currentCwd?.path ?? focused.lastCwd,
+            context: context,
+            savedLocation: currentCwd == nil ? focused.lastCwdLocation : context.executionLocation
+        )
+        let cwd = restoredCwd ?? URL(fileURLWithPath: context.rootPath)
         do {
             let leafID = UUID().uuidString
             let newSession = try terminal.openCheckoutSession(
@@ -1666,6 +1666,7 @@ final class AppState {
                 theme: themeStore.current,
                 forcedCwd: cwd,
                 forcedCwdLocation: context.executionLocation,
+                remoteCwdAlreadyValidated: restoredCwd != nil,
                 leafId: leafID
             )
             harness.detector.register(sessionId: newSession.id) { [weak newSession] in newSession?.surface.foregroundPid }
@@ -1723,6 +1724,52 @@ final class AppState {
             guard let result = try? await workspaceRemoteTransport.run(host: host, command: command) else { return false }
             return result.exitCode == 0
         }
+    }
+
+    private func validatedWorkspaceCheckoutRestorationCwd(
+        savedPath: String?,
+        context: WorkspaceTerminalContext,
+        savedLocation: ExecutionLocation?
+    ) async -> URL? {
+        guard savedLocation?.normalized == context.executionLocation.normalized,
+              let savedPath,
+              !savedPath.isEmpty
+        else { return nil }
+        switch context.executionLocation.normalized {
+        case .local:
+            return TerminalService.checkoutRestorationCwd(
+                savedPath: savedPath,
+                context: context,
+                savedLocation: savedLocation
+            )
+        case .ssh(let host):
+            let command = Self.remoteCheckoutCwdContainmentCommand(
+                rootPath: context.rootPath,
+                savedPath: savedPath
+            )
+            guard let result = try? await RemoteExec.run(
+                host: host,
+                cwd: nil,
+                command: command,
+                timeout: 10
+            ) else { return nil }
+            return result.exitCode == 0 ? URL(fileURLWithPath: savedPath) : nil
+        }
+    }
+
+    nonisolated static func remoteCheckoutCwdContainmentCommand(rootPath: String, savedPath: String) -> String {
+        """
+        resolve_dir() {
+          [ -d "$1" ] || exit 2
+          (cd "$1" 2>/dev/null && pwd -P) || exit 2
+        }
+        root_resolved=$(resolve_dir \(SSHCommand.shellQuote(rootPath))) || exit 2
+        candidate_resolved=$(resolve_dir \(SSHCommand.shellQuote(savedPath))) || exit 2
+        case "$candidate_resolved" in
+          "$root_resolved"|"$root_resolved"/*) exit 0 ;;
+          *) exit 1 ;;
+        esac
+        """
     }
 
     private func authoritativeCheckoutForWorkspaceTerminal(_ checkout: WorkspaceCheckout) async -> WorkspaceCheckout? {
@@ -4695,7 +4742,18 @@ final class AppState {
                 try await service.selectCheckout(id: checkoutID)
                 return .ok
             case .focus(let checkoutID, let memberID):
-                try await service.focusMember(checkoutID: checkoutID, memberID: memberID)
+                let target = try await service.memberTarget(checkoutID: checkoutID, memberID: memberID)
+                await workspacesManager.refreshCheckoutSnapshots()
+                _ = try? await refreshProjectWorktrees(projectId: target.projectID)
+                await workspacesManager.refreshCheckoutSnapshots()
+                selectWorkspaceCheckout(id: checkoutID)
+                focusWorkspaceCheckoutMember(id: memberID)
+                guard workspaceNavigationState.selectedCheckoutID == checkoutID,
+                      workspaceNavigationState.focusedCheckoutMemberID == memberID,
+                      selectedWorktreeId != nil
+                else {
+                    throw WorkspaceAutomationError.memberUnavailable
+                }
                 return .ok
             }
         } catch let error as WorkspaceAutomationError {
@@ -5594,7 +5652,7 @@ final class AppState {
         let context = workspaceTerminalContext(for: checkout)
         for leaf in state.root.leaves() {
             if terminal.registry.session(for: leaf.id) != nil { continue }
-            let forcedCwd = TerminalService.checkoutRestorationCwd(
+            let forcedCwd = await validatedWorkspaceCheckoutRestorationCwd(
                 savedPath: leaf.lastCwd,
                 context: context,
                 savedLocation: leaf.lastCwdLocation
@@ -5605,6 +5663,7 @@ final class AppState {
                 theme: themeStore.current,
                 forcedCwd: forcedCwd,
                 forcedCwdLocation: leaf.lastCwdLocation,
+                remoteCwdAlreadyValidated: forcedCwd != nil,
                 leafId: leaf.id
             )
             harness.detector.register(sessionId: session.id) { [weak session] in
