@@ -2,21 +2,28 @@ import Foundation
 
 final class GGStreamingProcessTree: @unchecked Sendable {
     private let process: Process
+    private let environmentMarker: String
     private let condition = NSCondition()
     private let refreshLock = NSLock()
     private var rootHasExited = false
     private var terminationInProgress = false
     private var terminationCompleted = false
+    private var rootIdentity: ACPTerminal.DescendantKey?
     private var descendants: Set<ACPTerminal.DescendantKey> = []
     private var forkSources: [pid_t: DispatchSourceProcess] = [:]
     private var tracker: Task<Void, Never>?
 
-    init(process: Process) {
+    init(process: Process, environmentMarker: String) {
         self.process = process
+        self.environmentMarker = environmentMarker
     }
 
     func start() {
         let pid = process.processIdentifier
+        let rootIdentity = ACPTerminal.processKey(of: pid)
+        condition.lock()
+        self.rootIdentity = rootIdentity
+        condition.unlock()
         _ = setpgid(pid, pid)
         observeForks(from: [pid])
         refreshDescendants()
@@ -37,7 +44,6 @@ final class GGStreamingProcessTree: @unchecked Sendable {
     }
 
     func rootDidExit() {
-        refreshDescendants(includeExitedRoot: true)
         condition.lock()
         rootHasExited = true
         condition.broadcast()
@@ -62,17 +68,34 @@ final class GGStreamingProcessTree: @unchecked Sendable {
             finishTermination()
             return
         }
-        var descendants = terminationTargets(rootPID: pid)
+        var descendants = terminationTargets(rootPID: pid).union(environmentTargets(rootPID: pid))
         signalRootAndGroup(pid, signal: SIGTERM)
         signal(descendants, with: SIGTERM)
 
         let deadline = DispatchTime.now().uptimeNanoseconds + graceNanoseconds
+        var rootExitObservedAt: UInt64?
+        var scannedAfterRootExit = false
         while DispatchTime.now().uptimeNanoseconds < deadline {
             refreshDescendants()
-            let refreshed = terminationTargets(rootPID: pid)
+            var refreshed = terminationTargets(rootPID: pid)
+            let now = DispatchTime.now().uptimeNanoseconds
+            let rootHasExited = rootExitSnapshot()
+            if rootHasExited, rootExitObservedAt == nil {
+                rootExitObservedAt = now
+            }
+            if !scannedAfterRootExit,
+               let rootExitObservedAt,
+               now - rootExitObservedAt >= 50_000_000
+            {
+                refreshed.formUnion(environmentTargets(rootPID: pid))
+                scannedAfterRootExit = true
+            }
             signal(refreshed.subtracting(descendants), with: SIGTERM)
             descendants.formUnion(refreshed)
-            if !process.isRunning, ACPTerminal.currentlyMatching(descendants).isEmpty {
+            if rootHasExited,
+               scannedAfterRootExit,
+               ACPTerminal.currentlyMatching(descendants).isEmpty
+            {
                 break
             }
             usleep(20_000)
@@ -80,10 +103,11 @@ final class GGStreamingProcessTree: @unchecked Sendable {
 
         refreshDescendants()
         descendants.formUnion(terminationTargets(rootPID: pid))
+        descendants.formUnion(environmentTargets(rootPID: pid))
         stopTracking()
         signalRootAndGroup(pid, signal: SIGKILL)
         signal(descendants, with: SIGKILL)
-        if process.isRunning {
+        if !rootExitSnapshot() {
             process.waitUntilExit()
         }
         finishTermination()
@@ -98,6 +122,12 @@ final class GGStreamingProcessTree: @unchecked Sendable {
         condition.unlock()
     }
 
+    private func rootExitSnapshot() -> Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        return rootHasExited
+    }
+
     private func signal(_ descendants: Set<ACPTerminal.DescendantKey>, with signal: Int32) {
         for descendant in ACPTerminal.currentlyMatching(descendants) {
             _ = Darwin.kill(descendant.pid, signal)
@@ -109,27 +139,60 @@ final class GGStreamingProcessTree: @unchecked Sendable {
         defer { refreshLock.unlock() }
         condition.lock()
         let rootAlive = !rootHasExited
+        let rootIdentity = rootIdentity
         let cached = descendants
         condition.unlock()
         let retained = ACPTerminal.currentlyMatching(cached)
-        guard rootAlive else { return retained }
-        return retained.union(ACPTerminal.collectChildDescendants(of: rootPID))
+        guard rootAlive, let rootIdentity, rootIdentity.pid == rootPID else { return retained }
+        return retained.union(ACPTerminal.collectChildDescendants(of: rootIdentity))
     }
 
-    private func refreshDescendants(includeExitedRoot: Bool = false) {
+    private func environmentTargets(rootPID: pid_t) -> Set<ACPTerminal.DescendantKey> {
+        let candidates = environmentPIDs().subtracting([rootPID])
+        let identities = Set(candidates.compactMap(ACPTerminal.processKey(of:)))
+        let confirmed = environmentPIDs()
+        return Set(ACPTerminal.currentlyMatching(identities).filter { confirmed.contains($0.pid) })
+    }
+
+    private func environmentPIDs() -> Set<pid_t> {
+        let scanner = Process()
+        scanner.executableURL = URL(fileURLWithPath: "/bin/ps")
+        scanner.arguments = ["eww", "-axo", "pid=,command="]
+        let pipe = Pipe()
+        scanner.standardOutput = pipe
+        scanner.standardError = FileHandle.nullDevice
+        do {
+            try scanner.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            scanner.waitUntilExit()
+            guard let output = String(data: data, encoding: .utf8) else { return [] }
+            return Set(output.split(separator: "\n").compactMap { line in
+                let fields = line.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+                guard fields.count == 2,
+                      fields[1].contains(environmentMarker),
+                      let pid = pid_t(fields[0]) else { return nil }
+                return pid
+            })
+        } catch {
+            return []
+        }
+    }
+
+    private func refreshDescendants() {
         refreshLock.lock()
         defer { refreshLock.unlock() }
         condition.lock()
         let shouldStop = terminationCompleted
         let rootAlive = !rootHasExited
+        let rootIdentity = rootIdentity
         let cached = descendants
         condition.unlock()
         guard !shouldStop else { return }
 
         let retained = ACPTerminal.currentlyMatching(cached)
         var live: Set<ACPTerminal.DescendantKey> = []
-        if rootAlive || includeExitedRoot {
-            live.formUnion(ACPTerminal.collectChildDescendants(of: process.processIdentifier))
+        if rootAlive, let rootIdentity {
+            live.formUnion(ACPTerminal.collectChildDescendants(of: rootIdentity))
         }
         for descendant in retained {
             live.formUnion(ACPTerminal.collectChildDescendants(of: descendant.pid))

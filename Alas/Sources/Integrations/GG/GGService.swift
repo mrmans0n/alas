@@ -93,7 +93,10 @@ struct ProcessGGCommandRunner: GGCommandRunning {
             process.executableURL = URL(fileURLWithPath: executable)
             process.arguments = args
             if let cwd { process.currentDirectoryURL = cwd }
-            if let env { process.environment = env }
+            var processEnvironment = env ?? ProcessInfo.processInfo.environment
+            let processTreeID = UUID().uuidString
+            processEnvironment["ALAS_GG_PROCESS_TREE_ID"] = processTreeID
+            process.environment = processEnvironment
             let outPipe = Pipe()
             let errPipe = Pipe()
             process.standardOutput = outPipe
@@ -102,7 +105,10 @@ struct ProcessGGCommandRunner: GGCommandRunning {
             let buffer = LineBuffer()
             let stderrAccum = StderrAccumulator()
             let timeoutState = GGStreamingTimeoutState()
-            let processTree = GGStreamingProcessTree(process: process)
+            let processTree = GGStreamingProcessTree(
+                process: process,
+                environmentMarker: "ALAS_GG_PROCESS_TREE_ID=\(processTreeID)"
+            )
             // `terminationHandler` and these readability handlers are two
             // independent dispatch mechanisms with no ordering guarantee
             // between them: the child exiting does not imply the kernel has

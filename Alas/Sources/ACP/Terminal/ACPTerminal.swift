@@ -351,6 +351,18 @@ final class ACPTerminal: ObservableObject {
         return out
     }
 
+    nonisolated static func processKey(of pid: pid_t) -> DescendantKey? {
+        guard let startedAt = processStartTime(of: pid) else { return nil }
+        return DescendantKey(pid: pid, startedAt: startedAt)
+    }
+
+    nonisolated static func collectChildDescendants(of root: DescendantKey) -> [DescendantKey] {
+        guard processStartTime(of: root.pid) == root.startedAt else { return [] }
+        let descendants = collectChildDescendants(of: root.pid)
+        guard processStartTime(of: root.pid) == root.startedAt else { return [] }
+        return descendants
+    }
+
     nonisolated private static func childPids(of parent: pid_t) -> [pid_t] {
         var capacity = 16
         while capacity <= 4096 {

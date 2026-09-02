@@ -122,7 +122,7 @@ struct GGCommandRunningStreamingTests {
         defer { try? FileManager.default.removeItem(at: childPIDFile) }
         var env = ProcessInfo.processInfo.environment
         env["CHILD_PID_FILE"] = childPIDFile.path
-        let script = #"import os,signal,time; time.sleep(0.2); pid=os.fork(); time.sleep(0.05) if pid else None; os._exit(0) if pid else None; os.setsid(); signal.signal(signal.SIGTERM, signal.SIG_IGN); open(os.environ['CHILD_PID_FILE'],'w').write(str(os.getpid())); time.sleep(30)"#
+        let script = #"import os,signal,time; pid=os.fork(); os._exit(0) if pid else None; os.setsid(); signal.signal(signal.SIGTERM, signal.SIG_IGN); open(os.environ['CHILD_PID_FILE'],'w').write(str(os.getpid())); time.sleep(30)"#
         let stream = ProcessGGCommandRunner.streamProcess(
             executable: "/usr/bin/python3",
             args: ["-c", script],
