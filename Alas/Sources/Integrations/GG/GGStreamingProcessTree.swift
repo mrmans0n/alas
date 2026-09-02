@@ -104,9 +104,13 @@ final class GGStreamingProcessTree: @unchecked Sendable {
         refreshDescendants()
         descendants.formUnion(terminationTargets(rootPID: pid))
         descendants.formUnion(environmentTargets(rootPID: pid))
-        stopTracking()
         signalRootAndGroup(pid, signal: SIGKILL)
         signal(descendants, with: SIGKILL)
+        refreshDescendants()
+        descendants.formUnion(terminationTargets(rootPID: pid))
+        descendants.formUnion(environmentTargets(rootPID: pid))
+        signal(descendants, with: SIGKILL)
+        stopTracking()
         if !rootExitSnapshot() {
             process.waitUntilExit()
         }

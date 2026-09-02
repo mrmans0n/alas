@@ -46,6 +46,24 @@ struct GGCommandRunningStreamingTests {
         #expect(source.contains("process.terminationHandler = { [weak processTree] proc in"))
     }
 
+    @Test func trackingStopsAfterFinalKillSweep() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appendingPathComponent("Alas/Sources/Integrations/GG/GGStreamingProcessTree.swift"),
+            encoding: .utf8
+        )
+        let helper = try #require(source.range(of: "private func signalRootAndGroup"))
+        let termination = source[..<helper.lowerBound]
+        let kill = try #require(termination.range(of: "signalRootAndGroup(pid, signal: SIGKILL)"))
+        let tail = termination[kill.lowerBound...]
+        let sweep = try #require(tail.range(of: "refreshDescendants()"))
+        let stop = try #require(tail.range(of: "stopTracking()"))
+        #expect(sweep.lowerBound < stop.lowerBound)
+    }
+
     @Test func streamsStdoutLinesInOrderAndFinishesOnCleanExit() async throws {
         let script = "printf 'one\\ntwo\\nthree\\n'"
         let stream = ProcessGGCommandRunner.streamProcess(
