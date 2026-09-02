@@ -82,6 +82,19 @@ struct GGCommandRunningStreamingTests {
         #expect(validation.lowerBound < groupSignal.lowerBound)
     }
 
+    @Test func exitedProcessesReleaseForkSources() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appendingPathComponent("Alas/Sources/Integrations/GG/GGStreamingProcessTree.swift"),
+            encoding: .utf8
+        )
+        #expect(source.contains("eventMask: [.fork, .exit]"))
+        #expect(source.contains("forkSources.removeValue(forKey: pid)"))
+    }
+
     @Test func streamsStdoutLinesInOrderAndFinishesOnCleanExit() async throws {
         let script = "printf 'one\\ntwo\\nthree\\n'"
         let stream = ProcessGGCommandRunner.streamProcess(

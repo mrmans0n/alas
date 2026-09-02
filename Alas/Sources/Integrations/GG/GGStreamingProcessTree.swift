@@ -234,11 +234,11 @@ final class GGStreamingProcessTree: @unchecked Sendable {
 
             let source = DispatchSource.makeProcessSource(
                 identifier: pid,
-                eventMask: .fork,
+                eventMask: [.fork, .exit],
                 queue: .global(qos: .utility)
             )
             source.setEventHandler { [weak self] in
-                self?.refreshDescendants()
+                self?.processEvent(for: pid)
             }
             condition.lock()
             if forkSources[pid] == nil, !terminationCompleted {
@@ -251,6 +251,21 @@ final class GGStreamingProcessTree: @unchecked Sendable {
                 source.cancel()
             }
         }
+    }
+
+    private func processEvent(for pid: pid_t) {
+        condition.lock()
+        guard let source = forkSources[pid] else {
+            condition.unlock()
+            return
+        }
+        let didExit = source.data.contains(.exit)
+        if didExit {
+            forkSources.removeValue(forKey: pid)
+        }
+        condition.unlock()
+        refreshDescendants()
+        if didExit { source.cancel() }
     }
 
     private func stopTracking() {
