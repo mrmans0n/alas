@@ -87,6 +87,10 @@ struct WorktreeRowView: View {
         "fg-faint"
     }
 
+    static func showsRemovalActions(isMain: Bool) -> Bool {
+        !isMain
+    }
+
     private static func stackSummaryText(merged: Int, total: Int) -> String {
         "gg stack · \(merged) of \(total) commit\(total == 1 ? "" : "s") merged"
     }
@@ -308,10 +312,12 @@ struct WorktreeRowView: View {
                     }
                     Divider()
                 }
-                Button("Archive", action: onArchive)
-                Button("Delete Worktree…", role: .destructive, action: onDelete)
-                if showKeepBranchOption {
-                    Button("Delete Worktree, Keep Branch…", role: .destructive, action: onDeleteKeepBranch)
+                if Self.showsRemovalActions(isMain: isMain) {
+                    Button("Archive", action: onArchive)
+                    Button("Delete Worktree…", role: .destructive, action: onDelete)
+                    if showKeepBranchOption {
+                        Button("Delete Worktree, Keep Branch…", role: .destructive, action: onDeleteKeepBranch)
+                    }
                 }
             }
         }
