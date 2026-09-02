@@ -668,6 +668,17 @@ struct RightPaneGGRefreshSchedulingTests {
             sourceCommitsChanged: true
         ))
     }
+
+    @Test func successfulRefreshClearsDeferralOnlyForItsCommitSnapshot() {
+        #expect(RightPaneState.shouldClearDeferredGGStackRefresh(
+            refreshedCommitsKey: "main|abc",
+            currentCommitsKey: "main|abc"
+        ))
+        #expect(!RightPaneState.shouldClearDeferredGGStackRefresh(
+            refreshedCommitsKey: "main|abc",
+            currentCommitsKey: "main|def"
+        ))
+    }
 }
 
 @MainActor

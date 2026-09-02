@@ -755,6 +755,13 @@ final class RightPaneState: GGSplitCommitServicing {
         inFlightAction == .sync && sourceCommitsChanged
     }
 
+    nonisolated static func shouldClearDeferredGGStackRefresh(
+        refreshedCommitsKey: String,
+        currentCommitsKey: String
+    ) -> Bool {
+        refreshedCommitsKey == currentCommitsKey
+    }
+
     @discardableResult
     @MainActor
     func refresh(forceReviewLoopRemote: Bool = false) async -> Bool {
@@ -1136,6 +1143,12 @@ final class RightPaneState: GGSplitCommitServicing {
             }
             if ggContext != resolvedContext { ggContext = resolvedContext }
             ggStackRemoteError = nil
+            if Self.shouldClearDeferredGGStackRefresh(
+                refreshedCommitsKey: key,
+                currentCommitsKey: currentGGStackCommitsKey
+            ) {
+                ggStackRefreshDeferredUntilSyncEnds = false
+            }
             ggStackCommitsKey = currentGGStackCommitsKey
             if ggStack != stack { ggStack = stack }
             ggStackDisplayCommits = displayCommits
