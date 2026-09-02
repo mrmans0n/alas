@@ -549,6 +549,9 @@ struct GGService {
                             group.addTask {
                                 // Cleanup may take three seconds, followed by up to two seconds draining pipes.
                                 try await Task.sleep(nanoseconds: 6_000_000_000)
+                                throw GGServiceError.commandFailed(
+                                    stderr: "gg sync did not exit after summary."
+                                )
                             }
                             defer { group.cancelAll() }
                             _ = try await group.next()

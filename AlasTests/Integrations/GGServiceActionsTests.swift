@@ -83,27 +83,24 @@ struct GGServiceActionsTests {
         #expect(runner.lastCwd == URL(fileURLWithPath: "/tmp/wt"))
     }
 
-    @Test func syncFinishesAtTerminalSummaryWithoutWaitingForProcessEOF() async throws {
+    @Test func syncFailsWhenProcessDoesNotExitAfterTerminalSummary() async {
         let service = GGService(runner: SummaryThenHangingGGRunner())
 
-        let events = try await withThrowingTaskGroup(of: [GGSyncEvent].self) { group in
-            group.addTask {
-                var events: [GGSyncEvent] = []
-                for try await event in service.sync(worktreePath: "/tmp/wt", supportsJSONL: true) {
-                    events.append(event)
+        await #expect(throws: GGServiceError.commandFailed(
+            stderr: "gg sync did not exit after summary."
+        )) {
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    for try await _ in service.sync(worktreePath: "/tmp/wt", supportsJSONL: true) {}
                 }
-                return events
+                group.addTask {
+                    try await Task.sleep(nanoseconds: 7_000_000_000)
+                    throw CancellationError()
+                }
+                defer { group.cancelAll() }
+                try await group.next()!
             }
-            group.addTask {
-                try await Task.sleep(nanoseconds: 7_000_000_000)
-                throw CancellationError()
-            }
-            let events = try await group.next()!
-            group.cancelAll()
-            return events
         }
-
-        #expect(events == [.summary])
     }
 
     @Test func syncFallsBackToJSONWhenJSONLIsUnsupported() async throws {
