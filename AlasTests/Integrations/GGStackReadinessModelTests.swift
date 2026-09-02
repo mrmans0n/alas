@@ -175,6 +175,11 @@ struct GGStackReadinessModelTests {
             selectedBaseBranch: "release",
             behindBase: behind
         ) == nil)
+        #expect(GGStackReadinessProjection.effectiveBehindBase(
+            stack: stack,
+            selectedBaseBranch: "release",
+            behindBase: behind
+        ) == 0)
     }
 
     @Test func blockingGitOperationDisablesStackMutations() {
@@ -430,6 +435,7 @@ struct GGStackReadinessModelTests {
             .init(position: 2, text: "[2] Pushed · PR #22 updated"),
         ])
         #expect(progress.liveStatus == "Syncing 2 of 2 commits…")
+        #expect(progress.steps.filter { $0.state == .current }.map(\.id) == ["commits"])
     }
 
     @Test func prUpdatedMapsKnownActionsAndUsesNeutralFallback() throws {

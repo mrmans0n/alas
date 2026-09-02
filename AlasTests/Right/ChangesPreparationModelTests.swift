@@ -3,6 +3,13 @@ import Testing
 @testable import Alas
 
 struct ChangesPreparationModelTests {
+    @Test func syncStepAccessibilityStatesAreExplicit() {
+        #expect(ChangesPreparationCardText.syncStepState(.pending) == "Pending")
+        #expect(ChangesPreparationCardText.syncStepState(.current) == "In progress")
+        #expect(ChangesPreparationCardText.syncStepState(.complete) == "Complete")
+        #expect(ChangesPreparationCardText.syncStepState(.failed) == "Failed")
+    }
+
     private typealias Action = ReviewReadinessModel.Action
     private let stagedOnlyCapabilities = GGCapabilities(
         structuredSplit: false,

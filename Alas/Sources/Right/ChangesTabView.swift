@@ -40,7 +40,13 @@ struct ChangesTabView: View {
                 syncProgress: GGStackReadinessModel.syncProgress(
                     action: rps.ggActionState,
                     base: rps.ggStack?.base ?? rps.baseBranch,
-                    behindBase: rps.behindBase?.count ?? rps.ggStack?.behindBase ?? 0,
+                    behindBase: rps.ggStack.map {
+                        GGStackReadinessProjection.effectiveBehindBase(
+                            stack: $0,
+                            selectedBaseBranch: rps.baseBranch,
+                            behindBase: rps.behindBase
+                        )
+                    } ?? rps.behindBase?.count ?? 0,
                     effectiveConfig: rps.ggEffectiveConfig
                 )
             )

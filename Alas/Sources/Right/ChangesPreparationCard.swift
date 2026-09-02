@@ -12,6 +12,15 @@ enum ChangesPreparationCardText {
         let staged = stagedCount == 1 ? "1 staged" : "\(stagedCount) staged"
         return "\(staged) · +\(additions) −\(deletions)"
     }
+
+    static func syncStepState(_ state: GGSyncProgressPresentation.Step.State) -> String {
+        switch state {
+        case .pending: "Pending"
+        case .current: "In progress"
+        case .complete: "Complete"
+        case .failed: "Failed"
+        }
+    }
 }
 
 struct ChangesPreparationReconciliationPresentation: Equatable {
@@ -104,6 +113,7 @@ struct ChangesPreparationCard: View {
                 }
                 .frame(height: 20)
                 .accessibilityElement(children: .combine)
+                .accessibilityValue(ChangesPreparationCardText.syncStepState(step.state))
             }
         }
         .accessibilityIdentifier("changes-preparation-gg-sync-progress")

@@ -63,6 +63,18 @@ struct GGStackReadinessProjection {
         return behindBase?.count
     }
 
+    static func effectiveBehindBase(
+        stack: GGStack,
+        selectedBaseBranch: String,
+        behindBase: GitService.BehindStatus?
+    ) -> Int {
+        liveBehindBaseOverride(
+            stack: stack,
+            selectedBaseBranch: selectedBaseBranch,
+            behindBase: behindBase
+        ) ?? stack.behindBase ?? 0
+    }
+
     static func hasBlockingGitOperation(
         mergeOperation: MergeOperation?,
         pausedGGOperation: GGPausedOperation?
@@ -464,8 +476,7 @@ struct GGStackReadinessModel: Equatable {
                 id: "reviews",
                 title: "Updating pull requests",
                 detail: reviewsDetail,
-                state: summaryFailure ? .pending : (sawSummary ? .complete :
-                    (sawPREvent ? activeFailureState : .pending))
+                state: summaryFailure ? .pending : (sawSummary ? .complete : .pending)
             ),
             GGSyncProgressPresentation.Step(
                 id: "refresh",
