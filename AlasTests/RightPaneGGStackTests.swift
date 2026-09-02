@@ -2266,6 +2266,7 @@ struct RightPaneGGStackTests {
             stackResults: [
                 ("stale-stack", ProcessResult(exitCode: 0, stdout: staleSnapshot, stderr: "")),
                 ("final-stack", ProcessResult(exitCode: 0, stdout: finalSnapshot, stderr: "")),
+                ("final-stack", ProcessResult(exitCode: 0, stdout: finalSnapshot, stderr: "")),
             ],
             suspendedCalls: [1, 2]
         )
@@ -2315,6 +2316,9 @@ struct RightPaneGGStackTests {
         await runner.complete(call: 2)
         await finalRefresh.value
         #expect(state.ggStack?.name == "final-stack")
+        #expect(state.ggStackRefreshDeferredUntilSyncEnds)
+
+        await state.refreshGGStack(forceRemote: true)
         #expect(!state.ggStackRefreshDeferredUntilSyncEnds)
     }
 

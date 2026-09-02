@@ -194,6 +194,7 @@ final class RightPaneState: GGSplitCommitServicing {
     /// slow `gg ls --json` never blocks the Changes-pane snapshot.
     @ObservationIgnored private var ggStackRefreshTask: Task<Void, Never>? = nil
     @ObservationIgnored var ggStackRefreshDeferredUntilSyncEnds = false
+    @ObservationIgnored private var ggStackRefreshDeferralGeneration: UInt = 0
     /// A refresh result may still arrive after its task was cancelled. Only
     /// the most recently started GG refresh may publish snapshot-derived
     /// stack state.
@@ -921,7 +922,7 @@ final class RightPaneState: GGSplitCommitServicing {
                 inFlightAction: ggActionState.inFlightAction,
                 refreshRequired: ggStackSourceCommitsChanged
             ) {
-                ggStackRefreshDeferredUntilSyncEnds = true
+                deferGGStackRefreshUntilSyncEnds()
             }
             if self.comparisonRef != ref { self.comparisonRef = ref }
             let preferredCommitRemoteRef = ref ?? baseBranch
@@ -1027,6 +1028,7 @@ final class RightPaneState: GGSplitCommitServicing {
         let snapshotGeneration = snapshotInvalidationGeneration
         ggStackRefreshGeneration &+= 1
         let refreshGeneration = ggStackRefreshGeneration
+        let deferralGeneration = ggStackRefreshDeferralGeneration
         let branchContext = ggContextProvider?(currentBranch) ?? .inactive(reason: .policyOff)
         if branchContext.isActive || !branchContext.permitsCurrentStackQuery || !ggContext.isActive {
             if ggContext != branchContext { ggContext = branchContext }
@@ -1157,7 +1159,9 @@ final class RightPaneState: GGSplitCommitServicing {
             }
             if ggContext != resolvedContext { ggContext = resolvedContext }
             ggStackRemoteError = nil
-            ggStackRefreshDeferredUntilSyncEnds = false
+            if deferralGeneration == ggStackRefreshDeferralGeneration {
+                ggStackRefreshDeferredUntilSyncEnds = false
+            }
             ggStackCommitsKey = key
             if ggStack != stack { ggStack = stack }
             ggStackDisplayCommits = displayCommits
@@ -1266,7 +1270,7 @@ final class RightPaneState: GGSplitCommitServicing {
         // GG rewrites refs throughout sync. Keep the last coherent stack
         // mounted until the coordinator performs its final refresh.
         if ggActionState.inFlightAction == .sync, ggStackLoadState == .loaded {
-            ggStackRefreshDeferredUntilSyncEnds = true
+            deferGGStackRefreshUntilSyncEnds()
             return nil
         }
         // Advance ownership before cancellation: a direct/untracked caller may
@@ -1299,6 +1303,11 @@ final class RightPaneState: GGSplitCommitServicing {
         ggStackRefreshGeneration &+= 1
         ggStackRefreshTask?.cancel()
         ggStackRefreshTask = nil
+    }
+
+    private func deferGGStackRefreshUntilSyncEnds() {
+        ggStackRefreshDeferralGeneration &+= 1
+        ggStackRefreshDeferredUntilSyncEnds = true
     }
 
     private func scheduleDeferredGGStackRefreshIfNeeded() {
