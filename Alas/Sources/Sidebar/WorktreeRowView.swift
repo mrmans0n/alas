@@ -274,8 +274,10 @@ struct WorktreeRowView: View {
                 }
                 Button("Copy Path", action: onCopyPath)
             } else if case .deleteFailed = operationState {
-                Button("Retry Delete", action: onRetryDelete)
-                Button("Archive", action: onArchive)
+                if Self.showsRemovalActions(isMain: isMain) {
+                    Button("Retry Delete", action: onRetryDelete)
+                    Button("Archive", action: onArchive)
+                }
                 Divider()
                 if let errorMessage {
                     Button("Copy Error") { onCopyError(errorMessage) }
