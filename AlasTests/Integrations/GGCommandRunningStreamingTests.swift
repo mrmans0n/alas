@@ -108,7 +108,7 @@ struct GGCommandRunningStreamingTests {
         let end = try #require(source.range(of: "func rootDidExit()", range: start.upperBound ..< source.endIndex))
         let helper = source[start.lowerBound ..< end.lowerBound]
         let running = try #require(helper.range(of: "guard pid > 0, process.isRunning else { return }"))
-        let identity = try #require(helper.range(of: "ACPTerminal.processKey(of: pid)"))
+        let identity = try #require(helper.range(of: "ACPTerminal.childProcessKey(of: pid, parentPID: getpid())"))
         let exited = try #require(helper.range(of: "guard !rootHasExited, process.isRunning else"))
         #expect(running.lowerBound < identity.lowerBound)
         #expect(identity.lowerBound < exited.lowerBound)

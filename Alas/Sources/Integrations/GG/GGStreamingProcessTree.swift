@@ -21,7 +21,7 @@ final class GGStreamingProcessTree: @unchecked Sendable {
     func start() {
         let pid = process.processIdentifier
         guard pid > 0, process.isRunning else { return }
-        guard let rootIdentity = ACPTerminal.processKey(of: pid),
+        guard let rootIdentity = ACPTerminal.childProcessKey(of: pid, parentPID: getpid()),
               ACPTerminal.currentlyMatching(Set([rootIdentity])).contains(rootIdentity)
         else { return }
         condition.lock()
