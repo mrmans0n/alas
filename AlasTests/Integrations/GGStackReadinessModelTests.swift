@@ -396,6 +396,20 @@ struct GGStackReadinessModelTests {
         )
     }
 
+    @Test func restoredPausedSyncDoesNotShowAnActivePhase() throws {
+        let action = GGStackActionState()
+        action.setPaused(GGPausedOperation(pausedBy: .sync))
+
+        let progress = try #require(GGStackReadinessModel.make(
+            stack: stack([entry(position: 1, prState: .open)]),
+            action: action
+        ).syncProgress)
+
+        #expect(progress.liveStatus == nil)
+        #expect(progress.showsSpinner == false)
+        #expect(progress.steps.allSatisfy { $0.state == .pending })
+    }
+
     @Test func syncProgressUpdatesOneStableRowPerPosition() throws {
         let action = GGStackActionState()
         _ = action.beginAction(.sync)

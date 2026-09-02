@@ -438,7 +438,8 @@ struct GGStackReadinessModel: Equatable {
                 : nil,
             effectiveConfig.syncAutoLint ? "Run configured lint" : nil,
         ].compactMap { $0 }.joined(separator: " · ")
-        let activeFailureState: GGSyncProgressPresentation.Step.State = terminalFailure ? .failed : .current
+        let activeFailureState: GGSyncProgressPresentation.Step.State = terminalFailure ? .failed :
+            (isInFlight ? .current : .pending)
         let commitsDetail = summaryFailure ? "Sync failed" :
             (sawSummary ? "Commit sync complete" :
                 (sawStart ? (liveStatus ?? countStatus()) : "Waiting for stack preparation"))

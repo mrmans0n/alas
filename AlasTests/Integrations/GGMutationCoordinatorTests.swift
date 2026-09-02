@@ -729,8 +729,8 @@ struct GGMutationCoordinatorTests {
             stack: try #require(harness.stacks[0].stack),
             action: harness.actionState
         )
-        #expect(harness.coordinator.activeRequest == nil)
-        #expect(harness.actionState.inFlightAction == nil)
+        #expect(harness.coordinator.activeRequest == .sync)
+        #expect(harness.actionState.inFlightAction == .sync)
         #expect(harness.actionState.lastError == "sync failed")
         #expect(harness.actionState.syncHasTerminalFailure)
         #expect(model.syncProgress?.liveStatus == nil)
@@ -740,6 +740,8 @@ struct GGMutationCoordinatorTests {
         await #expect(throws: GGServiceError.commandFailed(stderr: "sync failed")) {
             try await task.value
         }
+        #expect(harness.coordinator.activeRequest == nil)
+        #expect(harness.actionState.inFlightAction == nil)
     }
 
     @Test func syncProtocolViolationsPropagateAndPublishError() async {
