@@ -585,6 +585,56 @@ struct WorkspaceFeatureFlagTests {
         #expect(state.workspaceNavigationState.selectedWorkspaceID == nil)
     }
 
+    @Test @MainActor func failedWorkspaceDeletionRollsBackQueuedTypedSpaceCheckpoint() async throws {
+        let workspaceURL = temporaryURL()
+        defer { removeWorkspaceFiles(near: workspaceURL) }
+        let workspaceStore = WorkspaceStore(url: workspaceURL)
+        let workspaceID = UUID()
+        let originalSpaces = SpacesFile(activeSpaceId: "space", spaces: [
+            SpaceConfig(
+                id: "space",
+                name: "Default",
+                emoji: "folder",
+                projectIds: ["project"],
+                members: [.project("project"), .workspace(workspaceID)],
+                lastSelectedWorktreeId: nil,
+                createdAt: .distantPast
+            ),
+        ])
+        try await workspaceStore.checkpoint(.init(spaceLayouts: WorkspaceSpaceMigration.layouts(for: originalSpaces.spaces)))
+        let manager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
+        _ = await manager.setEnabled(true, spacesFile: originalSpaces)
+        let persistence = RecordingSpacesStore(
+            spacesFile: originalSpaces,
+            projectsFile: ProjectsFile(projects: [
+                ProjectConfig(id: "project", name: "Project", path: "/repos/project", color: "#ffffff", addedAt: .distantPast),
+            ])
+        )
+        let state = AppState(
+            store: persistence,
+            persistenceErrorHandler: { _, _ in },
+            restoreActiveTabsOnStartup: false,
+            workspacesManager: manager,
+            workspaceStore: workspaceStore
+        )
+        state.config.workspacesEnabled = true
+
+        await #expect(throws: WorkspaceDefinitionSaveError.workspacePersistenceFailed) {
+            try await state.deleteWorkspaceDefinition(id: workspaceID)
+        }
+        await state.waitForWorkspaceSpaceCheckpoint()
+
+        #expect(persistence.writtenSpaces.map { $0.spaces.first?.members } == [
+            [.project("project")],
+            [.project("project"), .workspace(workspaceID)],
+        ])
+        guard case .loaded(let stored) = await workspaceStore.load() else {
+            Issue.record("Expected stored Workspace state")
+            return
+        }
+        #expect(stored.spaceLayouts == WorkspaceSpaceMigration.layouts(for: originalSpaces.spaces))
+    }
+
     private final class ThrowingSpacesStore: PersistenceStoreProtocol, @unchecked Sendable {
         let spacesFile: SpacesFile
         init(spacesFile: SpacesFile) { self.spacesFile = spacesFile }
