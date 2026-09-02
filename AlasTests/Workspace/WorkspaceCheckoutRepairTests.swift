@@ -654,7 +654,13 @@ struct WorkspaceCheckoutRepairTests {
         try await fixture.store.mutate { state in
             state.checkouts[0].members[0].availability = .missing
         }
-        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: RepairGit(), scripts: RepairScriptRunner(), projectMutationGate: ProjectMutationGate())
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: fixture.store,
+            git: RepairGit(),
+            scripts: RepairScriptRunner(),
+            projectMutationGate: ProjectMutationGate(),
+            observer: RepairObserver(result: .exactLineage("lineage-a"))
+        )
 
         await #expect(throws: WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict) {
             try await coordinator.useExistingVerifiedCandidate(
@@ -673,6 +679,53 @@ struct WorkspaceCheckoutRepairTests {
         #expect(repaired.members[0].availability == .available)
         #expect(repaired.members[0].checkpoint == .failed)
         #expect(repaired.members[0].cleanupOwnership.worktreeCreated == true)
+    }
+
+    @Test func useExistingRepairCandidateReobservesLineageBeforeCommitting() async throws {
+        let fixture = try await persistedFixture(checkpoint: .failed, worktreeCreated: true, lineageID: "lineage-a")
+        try await fixture.store.mutate { state in
+            state.checkouts[0].members[0].availability = .missing
+        }
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: fixture.store,
+            git: RepairGit(),
+            scripts: RepairScriptRunner(),
+            projectMutationGate: ProjectMutationGate(),
+            observer: RepairObserver(result: .identityConflict("lineage-b"))
+        )
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict) {
+            try await coordinator.useExistingVerifiedCandidate(
+                checkoutID: fixture.checkout.id,
+                memberID: fixture.checkout.members[0].id,
+                candidate: .init(path: "/checkouts/a", lineageID: "lineage-a", isExactMatch: true)
+            )
+        }
+
+        let checkout = try #require(await fixture.store.checkout(id: fixture.checkout.id))
+        #expect(checkout.members[0].availability == .missing)
+    }
+
+    @Test func useExistingRepairCandidateCommitsAfterFreshExactLineage() async throws {
+        let fixture = try await persistedFixture(checkpoint: .failed, worktreeCreated: true, lineageID: "lineage-a")
+        try await fixture.store.mutate { state in
+            state.checkouts[0].members[0].availability = .missing
+        }
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: fixture.store,
+            git: RepairGit(),
+            scripts: RepairScriptRunner(),
+            projectMutationGate: ProjectMutationGate(),
+            observer: RepairObserver(result: .exactLineage("lineage-a"))
+        )
+
+        let repaired = try await coordinator.useExistingVerifiedCandidate(
+            checkoutID: fixture.checkout.id,
+            memberID: fixture.checkout.members[0].id,
+            candidate: .init(path: "/checkouts/a", lineageID: "lineage-a", isExactMatch: true)
+        )
+
+        #expect(repaired.members[0].availability == .available)
     }
 
     @Test func concurrentResumeCreationRejectsTheSecondRepairClaim() async throws {
