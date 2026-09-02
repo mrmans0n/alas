@@ -154,12 +154,16 @@ struct ImageDiffSideBySideView: View {
                     }
                 }
                 .contentShape(Rectangle())
-                .gesture(SpatialTapGesture().onEnded { value in
-                    guard annotation != nil, case .image(let image, _) = side,
-                          let point = geometry(imageSize: image.size, viewportSize: proxy.size)
-                            .normalizedPoint(at: value.location) else { return }
-                    annotation?.onPointSelected(role, point)
-                })
+                .gesture(
+                    SpatialTapGesture(count: 2)
+                        .onEnded { _ in transform.reset() }
+                        .exclusively(before: SpatialTapGesture().onEnded { value in
+                            guard annotation != nil, case .image(let image, _) = side,
+                                  let point = geometry(imageSize: image.size, viewportSize: proxy.size)
+                                    .normalizedPoint(at: value.location) else { return }
+                            annotation?.onPointSelected(role, point)
+                        })
+                )
                 if annotation != nil, case .image(let image, _) = side {
                     markers(side: role, imageSize: image.size, viewportSize: proxy.size)
                 }
