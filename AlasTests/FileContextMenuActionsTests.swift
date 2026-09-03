@@ -84,4 +84,9 @@ struct FileContextMenuActionsTests {
             try AppState.normalizedChildName(name)
         }
     }
+
+    @Test func buildsChildPathsForRootAndNestedDirectories() {
+        #expect(AppState.childPath(name: "README.md", directoryPath: "") == "README.md")
+        #expect(AppState.childPath(name: "App.swift", directoryPath: "Sources") == "Sources/App.swift")
+    }
 }
