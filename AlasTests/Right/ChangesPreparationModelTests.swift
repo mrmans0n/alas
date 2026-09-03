@@ -1,8 +1,25 @@
+import AppKit
 import Foundation
 import Testing
 @testable import Alas
 
 struct ChangesPreparationModelTests {
+    @MainActor
+    @Test func spinnerUsesCoreAnimation() throws {
+        let view = SpinnerAnimationView(
+            lineWidth: 1.4,
+            duration: 0.8,
+            color: .systemBlue
+        )
+
+        let animation = try #require(
+            view.spinnerLayer.animation(forKey: SpinnerAnimationView.rotationAnimationKey)
+                as? CABasicAnimation
+        )
+        #expect(animation.duration == 0.8)
+        #expect(animation.repeatCount == .infinity)
+    }
+
     @Test func syncStepAccessibilityStatesAreExplicit() {
         #expect(ChangesPreparationCardText.syncStepState(.pending) == "Pending")
         #expect(ChangesPreparationCardText.syncStepState(.current) == "In progress")
