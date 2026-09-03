@@ -85,6 +85,16 @@ struct RightPaneView: View {
                                 onFileHistory: { node in
                                     state.openFileHistory(relativePath: node.path, worktreeId: worktree.id)
                                 },
+                                onCreateFile: { path in
+                                    state.newFile(in: worktree.id, directoryPath: path) {
+                                        Task { await rps.refresh() }
+                                    }
+                                },
+                                onCreateFolder: { path in
+                                    state.newFolder(in: worktree.id, directoryPath: path) {
+                                        Task { await rps.refresh() }
+                                    }
+                                },
                                 shouldAutoLoadChildren: { path, childrenState in
                                     rps.shouldAutoLoadFileTreeChildren(path: path, childrenState: childrenState)
                                 },

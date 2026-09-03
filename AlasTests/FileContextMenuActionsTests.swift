@@ -58,7 +58,7 @@ struct FileContextMenuActionsTests {
     @Test func filesTabDirectoryOmitsEditorHistoryAndOpenWith() {
         let target = FileContextMenuTarget(kind: .dir, localURL: URL(fileURLWithPath: "/repo/Sources"))
         #expect(FileContextMenuConfiguration.filesTab(target: target).actions == [
-            .open, .copyRelativePath, .copyFullPath, .revealInFinder
+            .newFile, .newFolder, .open, .copyRelativePath, .copyFullPath, .revealInFinder
         ])
     }
 
@@ -69,7 +69,19 @@ struct FileContextMenuActionsTests {
             .openInAlas, .fileHistory, .copyRelativePath, .copyFullPath
         ])
         #expect(FileContextMenuConfiguration.filesTab(target: directory).actions == [
-            .copyRelativePath, .copyFullPath
+            .newFile, .newFolder, .copyRelativePath, .copyFullPath
         ])
+    }
+
+    @Test(arguments: ["README.md", "New Folder", ".env"])
+    func acceptsChildNames(_ name: String) throws {
+        #expect(try AppState.normalizedChildName("  \(name)  ") == name)
+    }
+
+    @Test(arguments: ["", "   ", ".", "..", "Sources/App.swift", "Sources\\App.swift", "line\nbreak"])
+    func rejectsInvalidChildNames(_ name: String) {
+        #expect(throws: Error.self) {
+            try AppState.normalizedChildName(name)
+        }
     }
 }

@@ -18,7 +18,7 @@ struct FileContextMenuTarget: Equatable {
 }
 
 enum FileContextMenuAction: Hashable {
-    case openInAlas, open, openWith, viewAtHEAD, compareWithHEAD
+    case newFile, newFolder, openInAlas, open, openWith, viewAtHEAD, compareWithHEAD
     case fileHistory, copyRelativePath, copyFullPath, revealInFinder
 }
 
@@ -36,6 +36,7 @@ struct FileContextMenuConfiguration: Equatable {
 
     static func filesTab(target: FileContextMenuTarget) -> Self {
         var actions: [FileContextMenuAction] = []
+        if target.kind == .dir { actions += [.newFile, .newFolder] }
         if target.kind == .file { actions.append(.openInAlas) }
         if target.localURL != nil {
             actions.append(.open)
@@ -50,6 +51,8 @@ struct FileContextMenuConfiguration: Equatable {
 
 struct FileContextMenuActions: View {
     let configuration: FileContextMenuConfiguration
+    var onNewFile: (() -> Void)? = nil
+    var onNewFolder: (() -> Void)? = nil
     var onOpenInAlas: (() -> Void)? = nil
     var openInAlasEnabled = true
     var onViewAtHEAD: (() -> Void)? = nil
@@ -62,6 +65,12 @@ struct FileContextMenuActions: View {
     @ViewBuilder var body: some View {
         ForEach(configuration.actions, id: \.self) { action in
             switch action {
+            case .newFile:
+                Button("New File…") { onNewFile?() }
+                    .disabled(onNewFile == nil)
+            case .newFolder:
+                Button("New Folder…") { onNewFolder?() }
+                    .disabled(onNewFolder == nil)
             case .openInAlas:
                 Button("Open in Alas") { onOpenInAlas?() }
                     .disabled(!openInAlasEnabled || onOpenInAlas == nil)

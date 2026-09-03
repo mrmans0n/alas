@@ -7,6 +7,8 @@ struct FilesTabView: View {
     @Binding var openPaths: Set<String>
     let onSelectFile: (FileTreeNode) -> Void
     let onFileHistory: (FileTreeNode) -> Void
+    let onCreateFile: (String) -> Void
+    let onCreateFolder: (String) -> Void
     let shouldAutoLoadChildren: (String, DirectoryChildrenState) -> Bool
     let onLoadChildren: (String) -> Void
     let showIgnored: Bool
@@ -236,6 +238,14 @@ struct FilesTabView: View {
         )
         FileContextMenuActions(
             configuration: .filesTab(target: target),
+            onNewFile: node.kind == .dir ? {
+                openPaths.insert(node.path)
+                onCreateFile(node.path)
+            } : nil,
+            onNewFolder: node.kind == .dir ? {
+                openPaths.insert(node.path)
+                onCreateFolder(node.path)
+            } : nil,
             onOpenInAlas: node.kind == .file ? { onSelectFile(node) } : nil,
             onFileHistory: node.kind == .file ? { onFileHistory(node) } : nil,
             onCopyRelativePath: { Clipboard.copy(node.path) },

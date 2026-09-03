@@ -21,4 +21,9 @@ enum RemoteFileOps {
         let quotedPath = SSHCommand.shellQuote(path)
         return "\(mkdirCommand(parentOf: path)) && f=\(quotedPath) && [ ! -e \"$f\" ] && [ ! -L \"$f\" ] && (set -C; : > \"$f\")"
     }
+
+    static func createDirectoryCommand(path: String) -> String {
+        let quotedPath = SSHCommand.shellQuote(path)
+        return "d=\(quotedPath); [ ! -e \"$d\" ] && [ ! -L \"$d\" ] && mkdir \"$d\""
+    }
 }

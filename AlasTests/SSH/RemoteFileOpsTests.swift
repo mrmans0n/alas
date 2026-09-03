@@ -21,4 +21,10 @@ struct RemoteFileOpsTests {
             path: "/srv/repo/sub dir/new.txt"
         ) == "mkdir -p '/srv/repo/sub dir' && f='/srv/repo/sub dir/new.txt' && [ ! -e \"$f\" ] && [ ! -L \"$f\" ] && (set -C; : > \"$f\")")
     }
+
+    @Test func createDirectoryCommandDoesNotClobber() {
+        #expect(RemoteFileOps.createDirectoryCommand(
+            path: "/srv/repo/sub dir/new folder"
+        ) == "d='/srv/repo/sub dir/new folder'; [ ! -e \"$d\" ] && [ ! -L \"$d\" ] && mkdir \"$d\"")
+    }
 }
