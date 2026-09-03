@@ -4134,6 +4134,117 @@ final class AppState {
         }
     }
 
+    func newFile(
+        in worktreeId: String,
+        directoryPath: String,
+        onCreated: @escaping @MainActor () -> Void
+    ) {
+        guard let (project, worktree) = projectAndWorktree(withWorktreeId: worktreeId),
+              let name = promptForChildName(title: "New File", defaultValue: "untitled.txt")
+        else { return }
+        let relativePath = "\(directoryPath)/\(name)"
+
+        if let host = project.host {
+            Task { @MainActor [weak self] in
+                do {
+                    try await Self.createRemoteEmptyFile(
+                        host: host,
+                        worktreeRoot: worktree.path,
+                        relativePath: relativePath
+                    )
+                    self?.openFile(relativePath: relativePath, worktreeId: worktreeId)
+                    onCreated()
+                } catch {
+                    self?.showFileActionError(title: "New File Failed", message: error.localizedDescription)
+                }
+            }
+            return
+        }
+
+        let url = worktree.path.appendingPathComponent(relativePath)
+        do {
+            try Data().write(to: url, options: .withoutOverwriting)
+            openFile(relativePath: relativePath, worktreeId: worktreeId)
+            onCreated()
+        } catch {
+            showFileActionError(title: "New File Failed", message: error.localizedDescription)
+        }
+    }
+
+    func newFolder(
+        in worktreeId: String,
+        directoryPath: String,
+        onCreated: @escaping @MainActor () -> Void
+    ) {
+        guard let (project, worktree) = projectAndWorktree(withWorktreeId: worktreeId),
+              let name = promptForChildName(title: "New Folder", defaultValue: "New Folder")
+        else { return }
+        let relativePath = "\(directoryPath)/\(name)"
+
+        if let host = project.host {
+            Task { @MainActor [weak self] in
+                do {
+                    try await Self.createRemoteDirectory(
+                        host: host,
+                        worktreeRoot: worktree.path,
+                        relativePath: relativePath
+                    )
+                    onCreated()
+                } catch {
+                    self?.showFileActionError(title: "New Folder Failed", message: error.localizedDescription)
+                }
+            }
+            return
+        }
+
+        do {
+            try FileManager.default.createDirectory(
+                at: worktree.path.appendingPathComponent(relativePath, isDirectory: true),
+                withIntermediateDirectories: false
+            )
+            onCreated()
+        } catch {
+            showFileActionError(title: "New Folder Failed", message: error.localizedDescription)
+        }
+    }
+
+    nonisolated static func normalizedChildName(_ raw: String) throws -> String {
+        let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty,
+              name != ".",
+              name != "..",
+              !name.contains("/"),
+              !name.contains("\\"),
+              name.rangeOfCharacter(from: .controlCharacters) == nil
+        else {
+            throw NSError(
+                domain: "AppState",
+                code: 7,
+                userInfo: [NSLocalizedDescriptionKey: "Enter a name without path separators."]
+            )
+        }
+        return name
+    }
+
+    private func promptForChildName(title: String, defaultValue: String) -> String? {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = "Enter a name."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Create")
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        field.stringValue = defaultValue
+        alert.accessoryView = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        do {
+            return try Self.normalizedChildName(field.stringValue)
+        } catch {
+            showFileActionError(title: "Invalid Name", message: error.localizedDescription)
+            return nil
+        }
+    }
+
     nonisolated private static func createRemoteEmptyFile(host: String, worktreeRoot: URL, relativePath: String) async throws {
         let path = worktreeRoot.appendingPathComponent(relativePath).path
         try await RemotePathContainment.verifyRemoteContainment(host: host, path: path, worktreeRoot: worktreeRoot.path)
@@ -4145,6 +4256,18 @@ final class AppState {
             if result.exitCode == 1 {
                 throw CocoaError(.fileWriteFileExists)
             }
+            throw RemoteFileAccessError.writeFailed(result.stderr)
+        }
+    }
+
+    nonisolated private static func createRemoteDirectory(host: String, worktreeRoot: URL, relativePath: String) async throws {
+        let path = worktreeRoot.appendingPathComponent(relativePath).path
+        try await RemotePathContainment.verifyRemoteContainment(host: host, path: path, worktreeRoot: worktreeRoot.path)
+        let result = try await RemoteExec.run(host: host, cwd: nil, command: RemoteFileOps.createDirectoryCommand(path: path))
+        if RemoteExec.isConnectionFailure(exitCode: result.exitCode) {
+            throw RemoteFileAccessError.connectionFailed(result.stderr)
+        }
+        guard result.exitCode == 0 else {
             throw RemoteFileAccessError.writeFailed(result.stderr)
         }
     }
