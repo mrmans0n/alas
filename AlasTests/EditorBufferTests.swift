@@ -1178,6 +1178,142 @@ struct EditorBufferTests {
         #expect(!buffer.storage.layoutManagers.contains { $0 === layoutManager })
     }
 
+    @Test func coordinatorRestoresSelectionAndScrollPositionAfterRemount() async throws {
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.txt", String(repeating: "0123456789\n", count: 200))
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+        await buffer.awaitLoadForTesting()
+        let theme = try ThemeStore().current
+
+        func mount() -> (CodeEditorCoordinator, CodeTextView, NSScrollView) {
+            let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 240, height: 120))
+            scrollView.hasVerticalScroller = true
+            scrollView.hasHorizontalScroller = true
+            scrollView.contentView = CodeEditorLeadingClipView(frame: .zero)
+            let layoutManager = NSLayoutManager()
+            let textContainer = NSTextContainer(size: NSSize(width: 1_200, height: 2_400))
+            layoutManager.addTextContainer(textContainer)
+            let textView = CodeTextView(
+                frame: NSRect(x: 0, y: 0, width: 1_200, height: 2_400),
+                textContainer: textContainer
+            )
+            scrollView.documentView = textView
+            let coordinator = CodeEditorCoordinator(appState: AppState())
+            coordinator.attach(
+                textView: textView,
+                buffer: buffer,
+                layoutManager: layoutManager,
+                worktreeId: "wt",
+                worktreeRoot: root,
+                tabId: "t",
+                revealLine: nil,
+                revealCharacter: nil,
+                theme: theme
+            )
+            return (coordinator, textView, scrollView)
+        }
+
+        let first = mount()
+        let expectedSelections = [
+            NSValue(range: NSRange(location: 150, length: 7)),
+            NSValue(range: NSRange(location: 250, length: 0)),
+        ]
+        let expectedOrigin = NSPoint(x: 45, y: 160)
+        first.1.setSelectedRanges(expectedSelections, affinity: .downstream, stillSelecting: false)
+        first.2.contentView.scroll(to: expectedOrigin)
+        #expect(first.2.contentView.bounds.origin == expectedOrigin)
+        first.0.detach()
+
+        let restored = mount()
+        let deadline = Date(timeIntervalSinceNow: 1)
+        while (restored.1.selectedRanges != expectedSelections
+            || restored.2.contentView.bounds.origin != expectedOrigin), Date() < deadline {
+            await Task.yield()
+        }
+
+        #expect(restored.1.selectedRanges == expectedSelections)
+        #expect(restored.2.contentView.bounds.origin == expectedOrigin)
+    }
+
+    @Test func coordinatorRestoresSelectionAndScrollPositionAfterRebind() async throws {
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.txt", String(repeating: "0123456789\n", count: 200))
+        _ = try writeFile(root, "b.txt", String(repeating: "abcdefghij\n", count: 200))
+        let appState = AppState()
+        let buffer = appState.tabs.buffer(worktreeId: "wt", tabId: "a", worktreeRoot: root, relativePath: "a.txt")
+        await buffer.awaitLoadForTesting()
+        _ = appState.tabs.buffer(worktreeId: "wt", tabId: "b", worktreeRoot: root, relativePath: "b.txt")
+        let theme = try ThemeStore().current
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 240, height: 120))
+        scrollView.contentView = CodeEditorLeadingClipView(frame: .zero)
+        let layoutManager = NSLayoutManager()
+        let textContainer = NSTextContainer(size: NSSize(width: 1_200, height: 2_400))
+        layoutManager.addTextContainer(textContainer)
+        let textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 1_200, height: 2_400), textContainer: textContainer)
+        scrollView.documentView = textView
+        let coordinator = CodeEditorCoordinator(appState: appState)
+        coordinator.attach(textView: textView, buffer: buffer, layoutManager: layoutManager, worktreeId: "wt", worktreeRoot: root, tabId: "a", revealLine: nil, revealCharacter: nil, theme: theme)
+
+        let expectedSelections = [
+            NSValue(range: NSRange(location: 150, length: 7)),
+            NSValue(range: NSRange(location: 250, length: 0)),
+        ]
+        let expectedOrigin = NSPoint(x: 45, y: 160)
+        textView.setSelectedRanges(expectedSelections, affinity: .downstream, stillSelecting: false)
+        scrollView.contentView.scroll(to: expectedOrigin)
+        coordinator.updateIfNeeded(worktreeId: "wt", worktreeRoot: root, relativePath: "b.txt", tabId: "b", revealLine: nil, revealCharacter: nil, theme: theme)
+        coordinator.updateIfNeeded(worktreeId: "wt", worktreeRoot: root, relativePath: "a.txt", tabId: "a", revealLine: nil, revealCharacter: nil, theme: theme)
+
+        let deadline = Date(timeIntervalSinceNow: 1)
+        while (textView.selectedRanges != expectedSelections
+            || scrollView.contentView.bounds.origin != expectedOrigin), Date() < deadline {
+            await Task.yield()
+        }
+
+        #expect(textView.selectedRanges == expectedSelections)
+        #expect(scrollView.contentView.bounds.origin == expectedOrigin)
+    }
+
+    @Test func coordinatorKeepsSamePathTabViewStatesIndependent() async throws {
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.txt", String(repeating: "0123456789\n", count: 200))
+        let appState = AppState()
+        let buffer = appState.tabs.buffer(worktreeId: "wt", tabId: "a", worktreeRoot: root, relativePath: "a.txt")
+        await buffer.awaitLoadForTesting()
+        #expect(appState.tabs.buffer(worktreeId: "wt", tabId: "b", worktreeRoot: root, relativePath: "a.txt") === buffer)
+        let theme = try ThemeStore().current
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 240, height: 120))
+        scrollView.contentView = CodeEditorLeadingClipView(frame: .zero)
+        let layoutManager = NSLayoutManager()
+        let textContainer = NSTextContainer(size: NSSize(width: 1_200, height: 2_400))
+        layoutManager.addTextContainer(textContainer)
+        let textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 1_200, height: 2_400), textContainer: textContainer)
+        scrollView.documentView = textView
+        let coordinator = CodeEditorCoordinator(appState: appState)
+        coordinator.attach(textView: textView, buffer: buffer, layoutManager: layoutManager, worktreeId: "wt", worktreeRoot: root, tabId: "a", revealLine: nil, revealCharacter: nil, theme: theme)
+
+        let tabASelections = [NSValue(range: NSRange(location: 150, length: 7))]
+        let tabBSelections = [NSValue(range: NSRange(location: 260, length: 3))]
+        textView.setSelectedRanges(tabASelections, affinity: .downstream, stillSelecting: false)
+        scrollView.contentView.scroll(to: NSPoint(x: 45, y: 160))
+        coordinator.updateIfNeeded(worktreeId: "wt", worktreeRoot: root, relativePath: "a.txt", tabId: "b", revealLine: nil, revealCharacter: nil, theme: theme)
+        #expect(scrollView.contentView.bounds.origin == .zero)
+        textView.setSelectedRanges(tabBSelections, affinity: .downstream, stillSelecting: false)
+        scrollView.contentView.scroll(to: NSPoint(x: 10, y: 20))
+        coordinator.updateIfNeeded(worktreeId: "wt", worktreeRoot: root, relativePath: "a.txt", tabId: "a", revealLine: nil, revealCharacter: nil, theme: theme)
+        coordinator.updateIfNeeded(worktreeId: "wt", worktreeRoot: root, relativePath: "a.txt", tabId: "b", revealLine: nil, revealCharacter: nil, theme: theme)
+        coordinator.updateIfNeeded(worktreeId: "wt", worktreeRoot: root, relativePath: "a.txt", tabId: "a", revealLine: nil, revealCharacter: nil, theme: theme)
+
+        let deadline = Date(timeIntervalSinceNow: 1)
+        while (textView.selectedRanges != tabASelections
+            || scrollView.contentView.bounds.origin != NSPoint(x: 45, y: 160)), Date() < deadline {
+            await Task.yield()
+        }
+
+        #expect(textView.selectedRanges == tabASelections)
+        #expect(scrollView.contentView.bounds.origin == NSPoint(x: 45, y: 160))
+    }
+
     @Test func coordinatorCallsDirectAttachAndDetachCallbacks() async throws {
         let root = tempWorktree()
         _ = try writeFile(root, "a.txt", "v1\n")
