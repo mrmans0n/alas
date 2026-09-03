@@ -28,7 +28,7 @@ struct CodeTextViewCompletionTests {
         #expect(calls == 1)
     }
 
-    @Test func insertTabRoutesAcceptTopAndDoesNotMutateTextWhenHandled() {
+    @Test func insertTabRoutesAcceptSelectedAndDoesNotMutateTextWhenHandled() {
         let textView = makeTextView("let value = open")
         var actions: [CodeTextView.CompletionKeyAction] = []
         textView.completionKeyHandler = { action in
@@ -38,7 +38,7 @@ struct CodeTextViewCompletionTests {
 
         textView.insertTab(nil)
 
-        #expect(actions == [.acceptTop])
+        #expect(actions == [.acceptSelected])
         #expect(textView.string == "let value = open")
     }
 
@@ -54,6 +54,23 @@ struct CodeTextViewCompletionTests {
 
         #expect(actions == [.acceptSelected])
         #expect(textView.string == "let value = open")
+    }
+
+    @Test("Return, Enter, and Tab accept the selected completion")
+    func completionAcceptanceKeysRouteBeforeAppKitEditsText() throws {
+        for (characters, keyCode) in [("\r", UInt16(36)), ("\r", UInt16(76)), ("\t", UInt16(48))] {
+            let textView = makeTextView("let value = open")
+            var actions: [CodeTextView.CompletionKeyAction] = []
+            textView.completionKeyHandler = { action in
+                actions.append(action)
+                return true
+            }
+
+            textView.keyDown(with: try keyEvent(characters: characters, keyCode: keyCode))
+
+            #expect(actions == [.acceptSelected])
+            #expect(textView.string == "let value = open")
+        }
     }
 
     @Test func cancelOperationRoutesDismiss() {
@@ -178,5 +195,20 @@ struct CodeTextViewCompletionTests {
 
         #expect(finalLine.minY > firstLine.minY)
         #expect(finalLine.minX <= firstLine.minX + 1)
+    }
+
+    private func keyEvent(characters: String, keyCode: UInt16) throws -> NSEvent {
+        try #require(NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: characters,
+            charactersIgnoringModifiers: characters,
+            isARepeat: false,
+            keyCode: keyCode
+        ))
     }
 }

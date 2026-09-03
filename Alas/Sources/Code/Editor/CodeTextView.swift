@@ -278,6 +278,19 @@ final class CodeTextView: NSTextView, FontSizeResponder {
 
     // MARK: - Text insertion overrides
 
+    override func keyDown(with event: NSEvent) {
+        let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        if !hasMarkedText(), modifiers.isEmpty {
+            switch event.keyCode {
+            case 36, 76, 48: // Return, keypad Enter, Tab
+                if routeCompletionKey(.acceptSelected) { return }
+            default:
+                break
+            }
+        }
+        super.keyDown(with: event)
+    }
+
     override func didChangeText() {
         super.didChangeText()
         notifyCompletionChanged()
@@ -455,7 +468,7 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     }
 
     override func insertTab(_ sender: Any?) {
-        if routeCompletionKey(.acceptTop) { return }
+        if routeCompletionKey(.acceptSelected) { return }
         super.insertTab(sender)
     }
 
