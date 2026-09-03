@@ -278,6 +278,8 @@ final class CodeEditorCoordinator {
             appState.tabs.ensureExternalLSPOpen(tabId: tabId)
         }
 
+        restoreViewStateIfNeeded(for: buffer, tabId: tabId, revealLine: revealLine, revealCharacter: revealCharacter)
+
         applyRevealIfNeeded(
             tabId: tabId,
             line: revealLine,
@@ -338,6 +340,7 @@ final class CodeEditorCoordinator {
         }
 
         if pathChanged {
+            saveViewState()
             clearRevealHighlight()
             hoverHighlight?.cancelAndClear()
             completion?.cancelAndDismiss()
@@ -425,6 +428,17 @@ final class CodeEditorCoordinator {
             runHighlight(theme: theme)
         }
 
+        if pathChanged, let buffer {
+            restoreViewStateIfNeeded(
+                for: buffer,
+                tabId: tabId,
+                revealLine: revealLine,
+                revealCharacter: revealCharacter,
+                deferred: false,
+                resetScrollWhenMissing: true
+            )
+        }
+
         applyRevealIfNeeded(
             tabId: tabId,
             line: revealLine,
@@ -504,8 +518,68 @@ final class CodeEditorCoordinator {
         }
     }
 
+    private func saveViewState() {
+        guard let textView, let buffer, let currentTabId else { return }
+        buffer.viewStates[currentTabId] = (
+            textView.selectedRanges,
+            textView.enclosingScrollView?.contentView.bounds.origin ?? .zero
+        )
+    }
+
+    private func restoreViewStateIfNeeded(
+        for buffer: EditorBuffer,
+        tabId: TabID,
+        revealLine: Int?,
+        revealCharacter: Int?,
+        deferred: Bool = true,
+        resetScrollWhenMissing: Bool = false
+    ) {
+        guard revealLine == nil || revealCharacter == nil,
+              let textView else { return }
+        guard let viewState = buffer.viewStates[tabId] else {
+            if resetScrollWhenMissing {
+                scroll(textView, to: .zero)
+            }
+            return
+        }
+        if deferred {
+            DispatchQueue.main.async { [weak self, weak textView, weak buffer] in
+                self?.applyViewState(viewState, for: buffer, textView: textView, tabId: tabId)
+            }
+        } else {
+            applyViewState(viewState, for: buffer, textView: textView, tabId: tabId)
+        }
+    }
+
+    private func applyViewState(
+        _ viewState: (selectedRanges: [NSValue], scrollOrigin: NSPoint),
+        for buffer: EditorBuffer?,
+        textView: CodeTextView?,
+        tabId: TabID
+    ) {
+        guard let textView, let buffer,
+              self.textView === textView,
+              self.buffer === buffer,
+              currentTabId == tabId else { return }
+        let ranges = viewState.selectedRanges.map { value in
+            let range = value.rangeValue
+            let location = min(range.location, buffer.storage.length)
+            let length = min(range.length, buffer.storage.length - location)
+            return NSValue(range: NSRange(location: location, length: length))
+        }
+        textView.setSelectedRanges(ranges, affinity: .downstream, stillSelecting: false)
+        scroll(textView, to: viewState.scrollOrigin)
+    }
+
+    private func scroll(_ textView: CodeTextView, to origin: NSPoint) {
+        guard let scrollView = textView.enclosingScrollView else { return }
+        scrollView.contentView.scroll(to: origin)
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+    }
+
     func detach() {
         let detachedTextView = textView
+        saveViewState()
         // LSP open/close for external buffers is managed by TabsManager
         // (tied to the buffer's cached lifetime), not by the coordinator
         // (which is torn down on every tab switch by SwiftUI's dismantleNSView).

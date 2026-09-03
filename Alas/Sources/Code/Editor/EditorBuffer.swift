@@ -130,6 +130,9 @@ final class EditorBuffer {
     /// the view detaches it without releasing it.
     let storage: NSTextStorage
 
+    @ObservationIgnored
+    var viewStates: [TabID: (selectedRanges: [NSValue], scrollOrigin: NSPoint)] = [:]
+
     private(set) var originalText: String = ""
     private(set) var originalMtime: Date = .distantPast
     private(set) var permissions: mode_t = 0o644
