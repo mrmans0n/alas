@@ -356,7 +356,7 @@ struct ChangesPreparationCard: View {
 
     private func ggSubtitle(for action: ChangesPreparationModel.GGAction) -> String {
         if action.isInFlight {
-            switch action.kind {
+            return switch action.kind {
             case .amendCurrent: "Amending…"
             case .absorbIntoStack: "Absorbing…"
             case .newStackCommit: action.title
