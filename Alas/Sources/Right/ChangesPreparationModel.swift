@@ -47,6 +47,7 @@ struct ChangesPreparationModel: Equatable {
         let stats: StagedStats
         let hasNonEmptyDraft: Bool
         let disabledReason: String?
+        let isInFlight: Bool
 
         var isEnabled: Bool { disabledReason == nil }
     }
@@ -67,6 +68,7 @@ struct ChangesPreparationModel: Equatable {
                 || reconciliationAction != nil
                 || syncProgress != nil
                 || reviewAction != nil
+                || ggActions.contains(where: \.isInFlight)
                 || ggAction(.newStackCommit)?.isEnabled == true
         }
         return reviewAction != nil || draftAction != nil || !reviewRequestActions.isEmpty
@@ -129,6 +131,7 @@ struct ChangesPreparationModel: Equatable {
         capabilities: GGCapabilities,
         hasLoadedCommit: Bool = true,
         mutationDisabledReason: String? = nil,
+        inFlightAction: GGStackActionKind? = nil,
         newCommitDisabledReason: String? = nil,
         mutationError: String? = nil,
         reconciliationAction: GGStackReadinessModel.Action? = nil,
@@ -147,6 +150,7 @@ struct ChangesPreparationModel: Equatable {
             capabilities: capabilities,
             hasLoadedCommit: hasLoadedCommit,
             mutationDisabledReason: mutationDisabledReason,
+            inFlightAction: inFlightAction,
             newCommitDisabledReason: newCommitDisabledReason,
             mutationError: mutationError,
             reconciliationAction: reconciliationAction,
@@ -161,6 +165,7 @@ struct ChangesPreparationModel: Equatable {
         capabilities: GGCapabilities,
         hasLoadedCommit: Bool = true,
         mutationDisabledReason: String? = nil,
+        inFlightAction: GGStackActionKind? = nil,
         newCommitDisabledReason: String? = nil,
         mutationError: String? = nil,
         reconciliationAction: GGStackReadinessModel.Action? = nil,
@@ -179,6 +184,7 @@ struct ChangesPreparationModel: Equatable {
             capabilities: capabilities,
             hasLoadedCommit: hasLoadedCommit,
             mutationDisabledReason: mutationDisabledReason,
+            inFlightAction: inFlightAction,
             newCommitDisabledReason: newCommitDisabledReason,
             mutationError: mutationError,
             reconciliationAction: reconciliationAction,
@@ -197,6 +203,7 @@ struct ChangesPreparationModel: Equatable {
         capabilities: GGCapabilities,
         hasLoadedCommit: Bool,
         mutationDisabledReason: String?,
+        inFlightAction: GGStackActionKind?,
         newCommitDisabledReason: String?,
         mutationError: String?,
         reconciliationAction: GGStackReadinessModel.Action?,
@@ -233,21 +240,24 @@ struct ChangesPreparationModel: Equatable {
                     title: "New stack commit",
                     stats: staged,
                     hasNonEmptyDraft: hasDraft,
-                    disabledReason: effectiveNewCommitDisabledReason
+                    disabledReason: effectiveNewCommitDisabledReason,
+                    isInFlight: false
                 ),
                 GGAction(
                     kind: .amendCurrent,
                     title: "Amend current",
                     stats: staged,
                     hasNonEmptyDraft: false,
-                    disabledReason: amendDisabledReason
+                    disabledReason: amendDisabledReason,
+                    isInFlight: inFlightAction == .amendCurrent
                 ),
                 GGAction(
                     kind: .absorbIntoStack,
                     title: "Absorb into stack",
                     stats: staged,
                     hasNonEmptyDraft: false,
-                    disabledReason: rewriteDisabledReason
+                    disabledReason: rewriteDisabledReason,
+                    isInFlight: inFlightAction == .absorbStaged
                 ),
             ]
         )

@@ -245,7 +245,13 @@ struct ChangesPreparationCard: View {
         } label: {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
-                    Icon(name: ggIconName(for: action.kind), size: 10, color: theme.color("fg-dim"))
+                    if action.isInFlight {
+                        Spinner(lineWidth: 1.5, duration: 0.7)
+                            .frame(width: 10, height: 10)
+                            .accessibilityHidden(true)
+                    } else {
+                        Icon(name: ggIconName(for: action.kind), size: 10, color: theme.color("fg-dim"))
+                    }
                     Text(action.title)
                         .font(.system(size: 10.5, weight: .semibold))
                         .foregroundColor(theme.color("fg"))
@@ -265,7 +271,7 @@ struct ChangesPreparationCard: View {
         }
         .buttonStyle(.plain)
         .disabled(!action.isEnabled)
-        .opacity(action.isEnabled ? 1 : 0.5)
+        .opacity(action.isEnabled || action.isInFlight ? 1 : 0.5)
         .background(
             RoundedRectangle(cornerRadius: 6)
                 .fill(theme.color("bg-2").opacity(0.72))
@@ -275,6 +281,7 @@ struct ChangesPreparationCard: View {
                 .strokeBorder(theme.color("line").opacity(0.65), lineWidth: 0.75)
         )
         .help(action.disabledReason ?? action.title)
+        .accessibilityValue(action.isInFlight ? "In progress" : "")
         .accessibilityIdentifier("changes-preparation-gg-\(ggIdentifier(for: action.kind))")
     }
 
@@ -348,6 +355,13 @@ struct ChangesPreparationCard: View {
     }
 
     private func ggSubtitle(for action: ChangesPreparationModel.GGAction) -> String {
+        if action.isInFlight {
+            return switch action.kind {
+            case .amendCurrent: "Amending…"
+            case .absorbIntoStack: "Absorbing…"
+            case .newStackCommit: action.title
+            }
+        }
         if let disabledReason = action.disabledReason {
             return disabledReason
         }

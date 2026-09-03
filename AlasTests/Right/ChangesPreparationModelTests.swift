@@ -150,6 +150,19 @@ struct ChangesPreparationModelTests {
         #expect(!model.isVisible)
     }
 
+    @Test func amendingKeepsPreparationVisible() {
+        let model = ChangesPreparationModel.makeGG(
+            staged: .zero,
+            hasDraft: false,
+            capabilities: stagedOnlyCapabilities,
+            mutationDisabledReason: "Another GG operation is running.",
+            inFlightAction: .amendCurrent
+        )
+
+        #expect(model.isVisible)
+        #expect(model.ggAction(.amendCurrent)?.isInFlight == true)
+    }
+
     @Test func ggReconciliationMakesEmptyPreparationVisible() {
         let reconciliationAction = GGStackReadinessModel.Action(
             kind: .sync,
