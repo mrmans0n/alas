@@ -271,7 +271,7 @@ struct ChangesPreparationCard: View {
         }
         .buttonStyle(.plain)
         .disabled(!action.isEnabled)
-        .opacity(action.isEnabled ? 1 : 0.5)
+        .opacity(action.isEnabled || action.isInFlight ? 1 : 0.5)
         .background(
             RoundedRectangle(cornerRadius: 6)
                 .fill(theme.color("bg-2").opacity(0.72))
@@ -355,6 +355,13 @@ struct ChangesPreparationCard: View {
     }
 
     private func ggSubtitle(for action: ChangesPreparationModel.GGAction) -> String {
+        if action.isInFlight {
+            switch action.kind {
+            case .amendCurrent: "Amending…"
+            case .absorbIntoStack: "Absorbing…"
+            case .newStackCommit: action.title
+            }
+        }
         if let disabledReason = action.disabledReason {
             return disabledReason
         }
