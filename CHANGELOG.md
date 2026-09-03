@@ -6,6 +6,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.28] - 2026-09-03
+
+### ✨ Features
+
+- Add file and folder actions (#1109).
+
+### 🐛 Fixes
+
+- Keep spinners animating while active (#1108).
+- Show GitGud amend progress during amend operations (#1107).
+- Restore editor tab view state correctly (#1105).
+- Accept code editor completions reliably (#1106).
+
 ## [0.14.27] - 2026-09-02
 
 ### ✨ Features
