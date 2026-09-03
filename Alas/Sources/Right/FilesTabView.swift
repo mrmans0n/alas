@@ -42,6 +42,7 @@ struct FilesTabView: View {
                     }
                     .padding(.vertical, 4)
                 }
+                .contextMenu { rootContextMenu }
                 .onChange(of: revealTick) { _, _ in
                     guard let path = revealPath else { return }
                     proxy.scrollTo("file:\(path)", anchor: .top)
@@ -250,6 +251,21 @@ struct FilesTabView: View {
             onFileHistory: node.kind == .file ? { onFileHistory(node) } : nil,
             onCopyRelativePath: { Clipboard.copy(node.path) },
             onCopyFullPath: { Clipboard.copy(worktreePath.appendingPathComponent(node.path).path) }
+        )
+    }
+
+    @ViewBuilder private var rootContextMenu: some View {
+        let target = FileContextMenuTarget.resolve(
+            kind: .dir,
+            worktreePath: worktreePath,
+            relativePath: ""
+        )
+        FileContextMenuActions(
+            configuration: .filesTab(target: target),
+            onNewFile: { onCreateFile("") },
+            onNewFolder: { onCreateFolder("") },
+            onCopyRelativePath: { Clipboard.copy(".") },
+            onCopyFullPath: { Clipboard.copy(worktreePath.path) }
         )
     }
 

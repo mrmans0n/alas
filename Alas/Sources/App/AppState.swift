@@ -4142,7 +4142,7 @@ final class AppState {
         guard let (project, worktree) = projectAndWorktree(withWorktreeId: worktreeId),
               let name = promptForChildName(title: "New File", defaultValue: "untitled.txt")
         else { return }
-        let relativePath = "\(directoryPath)/\(name)"
+        let relativePath = Self.childPath(name: name, directoryPath: directoryPath)
 
         if let host = project.host {
             Task { @MainActor [weak self] in
@@ -4179,7 +4179,7 @@ final class AppState {
         guard let (project, worktree) = projectAndWorktree(withWorktreeId: worktreeId),
               let name = promptForChildName(title: "New Folder", defaultValue: "New Folder")
         else { return }
-        let relativePath = "\(directoryPath)/\(name)"
+        let relativePath = Self.childPath(name: name, directoryPath: directoryPath)
 
         if let host = project.host {
             Task { @MainActor [weak self] in
@@ -4206,6 +4206,10 @@ final class AppState {
         } catch {
             showFileActionError(title: "New Folder Failed", message: error.localizedDescription)
         }
+    }
+
+    nonisolated static func childPath(name: String, directoryPath: String) -> String {
+        directoryPath.isEmpty ? name : "\(directoryPath)/\(name)"
     }
 
     nonisolated static func normalizedChildName(_ raw: String) throws -> String {
