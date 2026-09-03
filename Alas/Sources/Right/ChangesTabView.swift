@@ -29,6 +29,7 @@ struct ChangesTabView: View {
                 capabilities: GGAvailability.shared.capabilities,
                 hasLoadedCommit: rps.ggStackLoadState.hasLoadedCommit,
                 mutationDisabledReason: ggPreparationMutationDisabledReason,
+                inFlightAction: rps.ggActionState.inFlightAction,
                 newCommitDisabledReason: Self.ggNewStackCommitDisabledReason(
                     contextIsActive: rps.ggContext.isActive,
                     stackLoadState: rps.ggStackLoadState,

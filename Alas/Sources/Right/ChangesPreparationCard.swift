@@ -245,7 +245,13 @@ struct ChangesPreparationCard: View {
         } label: {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
-                    Icon(name: ggIconName(for: action.kind), size: 10, color: theme.color("fg-dim"))
+                    if action.isInFlight {
+                        Spinner(lineWidth: 1.5, duration: 0.7)
+                            .frame(width: 10, height: 10)
+                            .accessibilityHidden(true)
+                    } else {
+                        Icon(name: ggIconName(for: action.kind), size: 10, color: theme.color("fg-dim"))
+                    }
                     Text(action.title)
                         .font(.system(size: 10.5, weight: .semibold))
                         .foregroundColor(theme.color("fg"))
@@ -275,6 +281,7 @@ struct ChangesPreparationCard: View {
                 .strokeBorder(theme.color("line").opacity(0.65), lineWidth: 0.75)
         )
         .help(action.disabledReason ?? action.title)
+        .accessibilityValue(action.isInFlight ? "In progress" : "")
         .accessibilityIdentifier("changes-preparation-gg-\(ggIdentifier(for: action.kind))")
     }
 
