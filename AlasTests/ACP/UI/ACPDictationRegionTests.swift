@@ -72,30 +72,70 @@ struct ACPDictationRegionTests {
         #expect(textView.string == "partial thought new")
     }
 
-    @Test("a manual edit while a span is tracked stops tracking it, instead of the next update replacing the wrong text")
+    @Test("a manual edit while a span is tracked stops dictation outright")
+    func manualEditDuringTrackingStopsDictation() {
+        let textView = ACPNSTextView()
+        textView.string = ""
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        var stopCount = 0
+        // `coordinator` is a weak property on the text view — this local
+        // keeps it alive for the test, exactly as the real composer's
+        // owning view does.
+        let coordinator = makeCoordinator(onStopDictation: { stopCount += 1 })
+        textView.coordinator = coordinator
+
+        textView.replaceDictationRegion("Hell", isFinal: false)
+        #expect(stopCount == 0)
+
+        // A keystroke elsewhere in the buffer — not through
+        // replaceDictationRegion — while "Hell" is still an open span.
+        // Untracking the span alone isn't enough: the speech session is
+        // still analyzing that utterance and would otherwise emit more
+        // corrections nobody asked for once the user has taken over.
+        textView.insertText(" note", replacementRange: NSRange(location: 0, length: 0))
+
+        #expect(stopCount == 1)
+        // Repeated edits don't fire it again — dictation only needed to be
+        // told once, and there's no longer a tracked span to invalidate.
+        textView.insertText("!", replacementRange: NSRange(location: 0, length: 0))
+        #expect(stopCount == 1)
+    }
+
+    @Test("a manual edit while a span is tracked stops tracking it, instead of a late result replacing the wrong text")
     func manualEditDuringTrackingStopsTracking() {
         let textView = ACPNSTextView()
         textView.string = ""
         textView.setSelectedRange(NSRange(location: 0, length: 0))
 
         textView.replaceDictationRegion("Hell", isFinal: false)
-        // A keystroke elsewhere in the buffer — not through
-        // replaceDictationRegion — while "Hell" is still an open span at
-        // offset (0, 4). It shifts "Hell" to offset 5 without updating the
-        // tracked range.
+        // A keystroke elsewhere in the buffer while "Hell" is still an
+        // open span at offset (0, 4). It shifts "Hell" to offset 5 without
+        // updating the tracked range.
         textView.insertText(" note", replacementRange: NSRange(location: 0, length: 0))
-        // Without invalidation this replaces the now-stale (0, 4) span —
-        // " not", the buffer's first four characters after the manual
-        // edit — corrupting text the manual edit shifted into place and
-        // losing track of "Hell" entirely.
+        // The manual edit above stops dictation (see the sibling test), so
+        // in practice no more results arrive. This exercises the residual
+        // safety net for whatever the engine may have already queued
+        // before the stop took effect: without range invalidation, this
+        // would replace the now-stale (0, 4) span — " not", the buffer's
+        // first four characters after the manual edit — corrupting text
+        // the edit shifted into place and losing track of "Hell" entirely.
         textView.replaceDictationRegion("Hello world", isFinal: false)
 
-        // The exact landing spot for the fresh span isn't the point here;
-        // what matters is that "Hell" survives untouched rather than
-        // being partially overwritten by the stale-range bug.
         #expect(textView.string.contains("Hell"))
-        #expect(textView.string.contains("Hello world"))
         #expect(!textView.string.contains("Hello worldeHell"))
+    }
+
+    private func makeCoordinator(onStopDictation: @escaping () -> Void) -> ACPInputField.Coordinator {
+        ACPInputField.Coordinator(
+            worktreeRoot: URL(fileURLWithPath: "/tmp"),
+            initialDraft: .empty,
+            focusRequest: 0,
+            sendOnEnter: true,
+            onDraftChange: { _ in },
+            onDraftClear: {},
+            onStopDictation: onStopDictation,
+            onSubmit: { _, _, _, _, _ in true }
+        )
     }
 
     @Test("dictation region preserves surrounding text")

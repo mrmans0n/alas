@@ -675,16 +675,24 @@ final class ACPNSTextView: PairedDelimiterTextView {
         super.didChangeText()
         // Trigger placeholder redraw when text becomes (non-)empty.
         needsDisplay = true
-        // A dictation span's tracked range is only valid until the next
-        // edit — typing elsewhere, pasting, or any other change shifts
-        // offsets without updating it. `replaceDictationRegion` itself
-        // sets `isApplyingDictationUpdate` around its own edit so this
-        // doesn't invalidate the span it just wrote; anything else means
-        // a manual edit landed while a span was open, so the next
-        // transcript update must start fresh rather than replace
-        // characters that moved.
+        // A manual edit while a dictation span is open (typing elsewhere,
+        // pasting) leaves the underlying speech session mid-utterance —
+        // it keeps analyzing and will emit more corrections for that same
+        // utterance, unaware the user just took over. Untracking the span
+        // alone stops those corrections from overwriting the wrong
+        // characters, but not from landing at all: the analyzer's next
+        // "corrected" hypothesis would still be inserted as a fresh span,
+        // duplicating whatever partial text it already committed. Stopping
+        // dictation outright is what actually prevents that — the partial
+        // transcript already applied stays as ordinary editable text, and
+        // nothing more arrives to duplicate it.
+        //
+        // `replaceDictationRegion` sets `isApplyingDictationUpdate` around
+        // its own edit so this doesn't fire in response to dictation's own
+        // writes.
         if dictationRange != nil, !isApplyingDictationUpdate {
             dictationRange = nil
+            coordinator?.onStopDictation()
         }
     }
 

@@ -3,12 +3,33 @@ import Foundation
 import Speech
 import os
 
-/// Counters updated on CoreAudio's realtime thread and reported through
-/// the log; never read for control flow.
+/// Counters updated on CoreAudio's realtime tap thread. `buffers` and
+/// `lastConvertedFrames` are logging-only and only ever touched from that
+/// one thread, so they're plain properties. `peak` is different: the
+/// main-actor silence watchdog reads it too, so writes and reads both go
+/// through `os_unfair_lock` — an uncontended, non-blocking-in-practice lock
+/// safe to take from a realtime thread, unlike a queue or `NSLock`. Without
+/// it this would be a real data race (the compiler's `@unchecked Sendable`
+/// only suppresses the warning; it doesn't provide synchronization), and
+/// the watchdog could read a stale value and report silence over live audio.
 private final class ACPDictationTapStats: @unchecked Sendable {
     var buffers = 0
-    var peak: Float = 0
     var lastConvertedFrames: AVAudioFrameCount = 0
+
+    private var lock = os_unfair_lock_s()
+    private var _peak: Float = 0
+
+    func recordPeak(_ value: Float) {
+        os_unfair_lock_lock(&lock)
+        _peak = max(_peak, value)
+        os_unfair_lock_unlock(&lock)
+    }
+
+    var peak: Float {
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
+        return _peak
+    }
 }
 
 /// Concrete `ACPDictationEngine` backed by macOS 26's on-device
@@ -237,10 +258,14 @@ final class ACPSpeechDictationEngine: ACPDictationEngine {
                 // a different channel.
                 if let channelData = buffer.floatChannelData {
                     let frameCount = Int(buffer.frameLength)
+                    var bufferPeak: Float = 0
                     for c in 0..<Int(buffer.format.channelCount) {
                         let channel = channelData[c]
-                        for i in 0..<frameCount { stats.peak = max(stats.peak, abs(channel[i])) }
+                        for i in 0..<frameCount { bufferPeak = max(bufferPeak, abs(channel[i])) }
                     }
+                    // One lock acquisition per buffer, not per sample —
+                    // this runs on a realtime thread every ~85ms.
+                    stats.recordPeak(bufferPeak)
                 }
                 guard let converted = Self.convert(buffer, using: converter, to: analyzerFormat) else {
                     Self.logger.error("convert returned nil for buffer \(stats.buffers)")
