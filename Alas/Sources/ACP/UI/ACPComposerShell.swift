@@ -311,6 +311,14 @@ struct ACPComposer: View {
                 installedDictationLocales = await dictation.installedLocaleIdentifiers()
             }
             .onChange(of: dictationLocale) { _, newValue in
+                // Settings lives in its own window and can be open next to
+                // an actively dictating composer. Without stopping first,
+                // a language change made there would leave the running
+                // session transcribing under its original locale while the
+                // mic menu already shows the new one — mirrors the same
+                // guard `selectDictationLocale` applies for changes made
+                // through the mic's own menu.
+                dictation.stop()
                 dictation.preferredLocaleIdentifier = newValue
             }
             .onChange(of: composer.revision) { _, _ in
