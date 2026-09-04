@@ -137,8 +137,16 @@ struct GitServiceStagedTests {
             originalPath: "old.txt"
         )
 
-        #expect(diff.hunks.flatMap(\.lines).filter { $0.kind == .add }.count == 1)
-        #expect(diff.hunks.flatMap(\.lines).filter { $0.kind == .delete }.count == 1)
+        // Split into a typed intermediate and explicitly-typed closures —
+        // the single-expression chain occasionally sends the type checker
+        // into a multi-minute timeout under load (observed both locally
+        // and in CI), failing the whole file with "unable to type-check
+        // this expression in reasonable time".
+        let lines: [ParsedDiff.Hunk.Line] = diff.hunks.flatMap(\.lines)
+        let addCount: Int = lines.filter { (line: ParsedDiff.Hunk.Line) -> Bool in line.kind == .add }.count
+        let deleteCount: Int = lines.filter { (line: ParsedDiff.Hunk.Line) -> Bool in line.kind == .delete }.count
+        #expect(addCount == 1)
+        #expect(deleteCount == 1)
     }
 
     /// Renames stage as `D <old>` + `A <new>` in the index. Unstaging both
