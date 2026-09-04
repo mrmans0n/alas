@@ -4551,6 +4551,95 @@ let second = true
         #expect(codeView.rowGeometryComputationCountForTesting == geometryComputations)
     }
 
+    @Test func lineNumberRulerDoesNotPaintOverAdjacentCode() throws {
+        let parent = NSView(frame: NSRect(x: 0, y: 0, width: 600, height: 200))
+        parent.clipsToBounds = true
+        let scrollView = NSScrollView(frame: parent.bounds)
+        let ruler = DiffPaneLineNumberRulerView(scrollView: scrollView)
+        ruler.update(
+            labels: [], lineTones: [], rowHeight: 20, contentTopInset: 0,
+            theme: try Theme.loadBundled(id: "cool-slate"),
+            expansionRequests: [], activeCommentHighlight: nil,
+            onContextExpansion: { _, _, _ in }
+        )
+        parent.addSubview(ruler)
+        ruler.frame = NSRect(x: 0, y: 0, width: 42, height: 200)
+        ruler.clipsToBounds = false
+        #expect(ruler.visibleRect.width > ruler.bounds.width)
+
+        let bitmap = try #require(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: 600, pixelsHigh: 200,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+            isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+        ))
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        NSGraphicsContext.current = try #require(NSGraphicsContext(bitmapImageRep: bitmap))
+        NSColor.magenta.setFill()
+        parent.bounds.fill()
+
+        ruler.drawHashMarksAndLabels(in: parent.bounds)
+
+        let codePixel = try #require(bitmap.colorAt(x: 200, y: 100)?.usingColorSpace(.deviceRGB))
+        #expect(codePixel.redComponent > 0.9)
+        #expect(codePixel.greenComponent < 0.1)
+        #expect(codePixel.blueComponent > 0.9)
+        let gutterPixel = try #require(bitmap.colorAt(x: 20, y: 100)?.usingColorSpace(.deviceRGB))
+        #expect(gutterPixel.redComponent < 0.9)
+    }
+
+    @Test func lineNumberRulerDrawsOnlyDirtyRowsInTallHunks() throws {
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 420, height: 20_000))
+        scrollView.documentView = NSView(frame: scrollView.bounds)
+        let ruler = DiffPaneLineNumberRulerView(scrollView: scrollView)
+        scrollView.verticalRulerView = ruler
+        scrollView.hasVerticalRuler = true
+        scrollView.rulersVisible = true
+        ruler.update(
+            labels: (1...1_000).map(String.init),
+            lineTones: Array(repeating: .context, count: 1_000),
+            rowHeight: 20,
+            contentTopInset: 0,
+            theme: try Theme.loadBundled(id: "cool-slate"),
+            expansionRequests: [],
+            activeCommentHighlight: nil,
+            onContextExpansion: { _, _, _ in }
+        )
+        scrollView.layoutSubtreeIfNeeded()
+        let bitmap = try #require(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: 80, pixelsHigh: 100,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+            isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+        ))
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        NSGraphicsContext.current = try #require(NSGraphicsContext(bitmapImageRep: bitmap))
+
+        ruler.drawHashMarksAndLabels(in: NSRect(x: 0, y: 4_005, width: 60, height: 90))
+
+        #expect(ruler.drawnRowCountForTesting == 5)
+
+        let outerScrollView = AppKitDiffScrollView(frame: NSRect(x: 0, y: 0, width: 420, height: 90))
+        outerScrollView.flippedDocumentView.addSubview(scrollView)
+        outerScrollView.setDocumentHeight(20_000)
+        outerScrollView.layoutSubtreeIfNeeded()
+        outerScrollView.setScrollY(4_005, animated: false)
+        #expect(abs(ruler.visibleRect.minY - 4_005) < 0.5)
+        #expect(ruler.visibleRect.height == 90)
+
+        ruler.drawHashMarksAndLabels(in: ruler.bounds)
+        #expect(ruler.drawnRowCountForTesting == 5)
+
+        ruler.drawHashMarksAndLabels(in: NSRect(x: 0, y: 0, width: 60, height: 90))
+        #expect(ruler.drawnRowCountForTesting == 0)
+
+        scrollView.removeFromSuperview()
+        scrollView.documentView?.setFrameSize(NSSize(width: 1_000, height: 40_000))
+        scrollView.contentView.setBoundsOrigin(NSPoint(x: 100, y: 19_995))
+        ruler.drawHashMarksAndLabels(in: NSRect(x: 0, y: 0, width: 60, height: 90))
+        #expect(ruler.drawnRowCountForTesting == 1)
+    }
+
     @Test func diffPaneLineNumberRulerCachesMappedRowGeometryForVisibleLookups() throws {
         let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
         let lines = (1...80).map { "let value\($0) = \($0)" }

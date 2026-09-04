@@ -2129,6 +2129,10 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
     private var cachedGeometry: RulerGeometry?
     private var rowGeometryComputationCount = 0
 
+    #if DEBUG
+    private(set) var drawnRowCountForTesting = 0
+    #endif
+
     var rowGeometryComputationCountForTesting: Int {
         rowGeometryComputationCount
     }
@@ -2270,16 +2274,28 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
     }
 
     override func drawHashMarksAndLabels(in rect: NSRect) {
+        #if DEBUG
+        drawnRowCountForTesting = 0
+        #endif
+        let dirtyRect = rect.intersection(visibleRect).intersection(bounds)
+        guard !dirtyRect.isEmpty else { return }
         guard let theme else { return }
         NSColor(theme.color("bg-0")).setFill()
-        bounds.fill()
+        dirtyRect.fill()
 
         guard let scrollView, !labels.isEmpty else { return }
         let visible = scrollView.contentView.bounds
         let geometry = rowGeometry()
         let rowRects = geometry.rowRects
         guard !rowRects.isEmpty else { return }
-        let visibleRows = visibleRowIndices(in: visible, rowRects: rowRects)
+        // The inner horizontal scroll view spans the whole hunk. Only the
+        // ruler's exposed dirty region reflects clipping by the review viewport.
+        let dirtyDocumentRect = dirtyRect.offsetBy(dx: 0, dy: visible.minY)
+        let visibleRows = visibleRowIndices(in: dirtyDocumentRect, rowRects: rowRects)
+
+        #if DEBUG
+        drawnRowCountForTesting = visibleRows.count
+        #endif
 
         for index in visibleRows {
             let sourceRowRect = rowRects[index]
