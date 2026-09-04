@@ -189,6 +189,13 @@ final class ACPSpeechDictationEngine: ACPDictationEngine {
         /// aborts cleanly instead of spinning up an engine nobody wants
         /// anymore.
         private var stopped = false
+        /// `removeTap(onBus:)` hits an `AVAudioNode` precondition (a crash,
+        /// not a catchable error) if no tap was ever installed on that bus.
+        /// `audioEngine` is assigned before the format/converter checks
+        /// that can throw ahead of `installTap`, so `stop()` — reached via
+        /// `run()`'s catch on exactly that throw — needs to know whether
+        /// installation actually happened before it tries to remove one.
+        private var tapInstalled = false
         nonisolated private static let logger = Logger(subsystem: "io.nlopez.alas", category: "dictation")
 
         func run(preferredLocaleIdentifier: String?, callbacks: ACPDictationCallbacks) async {
@@ -298,6 +305,7 @@ final class ACPSpeechDictationEngine: ACPDictationEngine {
                 }
                 continuation.yield(AnalyzerInput(buffer: converted))
             }
+            tapInstalled = true
 
             audioEngine.prepare()
             try audioEngine.start()
@@ -372,7 +380,10 @@ final class ACPSpeechDictationEngine: ACPDictationEngine {
             // `run()`'s catch handles.
             runTask?.cancel()
             runTask = nil
-            audioEngine?.inputNode.removeTap(onBus: 0)
+            if tapInstalled {
+                audioEngine?.inputNode.removeTap(onBus: 0)
+                tapInstalled = false
+            }
             audioEngine?.stop()
             audioEngine = nil
             inputContinuation?.finish()
