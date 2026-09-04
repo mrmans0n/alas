@@ -72,6 +72,44 @@ struct ACPSessionAgentStateTests {
 
         #expect(session.currentProviderDisplayName == nil)
     }
+
+    @Test("lone optional provider is hidden — nothing to switch to")
+    func loneOptionalProviderIsHidden() {
+        let session = ACPSession(id: "s1", agentId: "codex", worktreeId: "wt", title: "one")
+        session.providerCapabilities = .init()
+        session.availableProviders = [.init(
+            providerId: "main",
+            name: "main",
+            supported: ["openai"],
+            required: false,
+            current: .init(apiType: "openai", baseUrl: "https://api.openai.com")
+        )]
+        session.agentState = .ready
+
+        #expect(session.currentProviderDisplayName == nil)
+    }
+
+    @Test("a disabled provider alongside the active one doesn't count as a choice")
+    func disabledProviderDoesNotKeepPillVisible() {
+        let session = ACPSession(id: "s1", agentId: "codex", worktreeId: "wt", title: "one")
+        session.providerCapabilities = .init()
+        session.availableProviders = [.init(
+            providerId: "main",
+            name: "main",
+            supported: ["openai"],
+            required: false,
+            current: .init(apiType: "openai", baseUrl: "https://api.openai.com")
+        ), .init(
+            providerId: "gateway",
+            name: "Enterprise Gateway",
+            supported: ["anthropic"],
+            required: false,
+            current: nil
+        )]
+        session.agentState = .ready
+
+        #expect(session.currentProviderDisplayName == nil)
+    }
 }
 
 @MainActor

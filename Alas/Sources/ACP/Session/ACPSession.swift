@@ -197,12 +197,15 @@ final class ACPSession: ObservableObject, Identifiable {
         return availableModels.first { $0.id == id }?.name ?? id
     }
 
+    /// The provider pill is informational, so it only earns composer space when
+    /// the adapter actually offers a choice. A lone active provider — required
+    /// or not, and ignoring any disabled ones sitting alongside it — tells the
+    /// user nothing they can act on, so it stays hidden.
     var currentProviderDisplayName: String? {
         guard agentState == .ready, providerCapabilities != nil else { return nil }
         let currentProviders = availableProviders.filter { $0.current != nil }
-        guard currentProviders.count != 1 || !currentProviders[0].required else { return nil }
-        let names = currentProviders
-            .map { $0.name ?? $0.providerId }
+        guard currentProviders.count > 1 else { return nil }
+        let names = currentProviders.map { $0.name ?? $0.providerId }
         return names.isEmpty ? nil : names.joined(separator: ", ")
     }
 
