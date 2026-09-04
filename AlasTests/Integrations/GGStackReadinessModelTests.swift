@@ -596,6 +596,48 @@ struct GGStackReadinessModelTests {
         #expect(!model.facts.isEmpty)
     }
 
+    @Test func dismissingCompletedSyncFailureClearsRetainedFeedback() {
+        let action = GGStackActionState()
+        _ = action.beginAction(.sync)
+        action.markSyncTerminalFailure()
+        action.endAction(.sync)
+        action.setError("push failed", for: .sync)
+
+        action.dismissCompletedSyncFailure()
+
+        #expect(action.syncProgress.isEmpty)
+        #expect(!action.syncHasTerminalFailure)
+        #expect(action.lastError == nil)
+    }
+
+    @Test func unrelatedErrorDuringSyncCannotBeDismissedAsASyncFailure() {
+        let action = GGStackActionState()
+        _ = action.beginAction(.sync)
+        action.setError("provider failed")
+        action.endAction(.sync)
+
+        #expect(!action.canDismissCompletedSyncFailure)
+        action.dismissCompletedSyncFailure()
+        #expect(action.lastError == "provider failed")
+    }
+
+    @Test func dismissingSyncFailureKeepsALaterUnrelatedError() {
+        let action = GGStackActionState()
+        _ = action.beginAction(.sync)
+        action.markSyncTerminalFailure()
+        action.appendSyncEvent(.start(totalEntries: 1))
+        action.setError("sync failed", for: .sync)
+        action.endAction(.sync)
+        action.setError("provider failed")
+
+        #expect(action.canDismissCompletedSyncFailure)
+        action.dismissCompletedSyncFailure()
+
+        #expect(action.syncProgress.isEmpty)
+        #expect(!action.syncHasTerminalFailure)
+        #expect(action.lastError == "provider failed")
+    }
+
     @Test func actionSummarySurfacesWhenIdleOnly() {
         let action = GGStackActionState()
         action.setActionSummary("Synced · 1 pushed")

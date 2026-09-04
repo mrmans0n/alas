@@ -290,9 +290,17 @@ final class GGMutationCoordinator {
                 supportsSyncJSONL: syncJSONLCapability(),
                 onSyncEvent: { [actionState] event in
                     actionState.appendSyncEvent(event)
-                    if case .error(_, _, let message) = event { actionState.setError(message) }
+                    if case .error(_, _, let message) = event {
+                        actionState.setError(message, for: request.actionKind)
+                    }
                 }
             )
+            if request == .sync, actionState.syncProgress.contains(where: {
+                if case .error = $0 { return true }
+                return false
+            }) {
+                actionState.markSyncTerminalFailure()
+            }
             await recordUndoMarker(
                 after: request,
                 result: result,
@@ -322,9 +330,13 @@ final class GGMutationCoordinator {
             if !toleratesMalformedRemoteOutput {
                 if request == .sync {
                     actionState.markSyncTerminalFailure()
-                    if case .malformedOutput = error { actionState.setError(error.userMessage) }
+                    if case .malformedOutput = error {
+                        actionState.setError(error.userMessage, for: request.actionKind)
+                    }
                 }
-                if actionState.lastError == nil { actionState.setError(error.userMessage) }
+                if actionState.lastErrorAction != request.actionKind {
+                    actionState.setError(error.userMessage, for: request.actionKind)
+                }
             }
             if request == .sync {
                 await refresh(after: request, result: .none)
@@ -338,7 +350,7 @@ final class GGMutationCoordinator {
         } catch {
             reconcilePausedState(after: request, error: error)
             if request == .sync { actionState.markSyncTerminalFailure() }
-            actionState.setError(error.localizedDescription)
+            actionState.setError(error.localizedDescription, for: request.actionKind)
             if request == .sync {
                 await refresh(after: request, result: .none)
                 releaseAction()
