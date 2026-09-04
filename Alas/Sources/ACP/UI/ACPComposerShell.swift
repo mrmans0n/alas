@@ -538,7 +538,6 @@ struct ACPComposer: View {
                 .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.75))
         }
         .buttonStyle(.plain)
-        .disabled(dictation.state == .preparing)
         .accessibilityLabel("Dictate")
         .help(ACPComposerControlPresentation.micHelp(for: dictation.state))
         .contextMenu {

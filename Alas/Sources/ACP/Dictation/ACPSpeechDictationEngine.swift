@@ -40,6 +40,17 @@ final class ACPSpeechDictationEngine: ACPDictationEngine {
         return await DictationTranscriber.installedLocales.map(\.identifier)
     }
 
+    /// True when `format` is a real, capturable hardware format. A Mac with
+    /// no active input device — no built-in mic, external input
+    /// disconnected mid-session — reports a degenerate (zero-rate or
+    /// zero-channel) format on the input node. Installing a tap with that
+    /// format hits an `AVAudioEngine` precondition and crashes the process
+    /// rather than throwing a catchable error, so callers must check this
+    /// first and fail through `onFailure` instead.
+    nonisolated static func isUsableInputFormat(_ format: AVAudioFormat) -> Bool {
+        format.sampleRate > 0 && format.channelCount > 0
+    }
+
     /// Every language the engine can transcribe, including ones whose
     /// assets still need downloading. Used by Settings, which offers the
     /// full list; the mic menu sticks to installed ones.
@@ -58,8 +69,15 @@ final class ACPSpeechDictationEngine: ACPDictationEngine {
         let wrapped = ACPDictationCallbacks(
             onReady: callbacks.onReady,
             onResult: callbacks.onResult,
-            onFailure: { [weak self] message in
-                self?.session = nil
+            onFailure: { [weak self, weak session] message in
+                // A failure that resolves after a newer session has already
+                // replaced this one (e.g. this session was mid-permission-
+                // prompt or mid-download when stopped, and a fresh one was
+                // started before the throw actually landed) must not clear
+                // that newer session or report its own failure as the
+                // current state.
+                guard let self, let session, self.session as? Session === session else { return }
+                self.session = nil
                 callbacks.onFailure(message)
             },
             onSilence: callbacks.onSilence
@@ -179,8 +197,13 @@ final class ACPSpeechDictationEngine: ACPDictationEngine {
             let audioEngine = AVAudioEngine()
             self.audioEngine = audioEngine
             let inputFormat = audioEngine.inputNode.outputFormat(forBus: 0)
-            let converter = AVAudioConverter(from: inputFormat, to: analyzerFormat)
-            Self.logger.info("formats: input=\(inputFormat) analyzer=\(analyzerFormat) converter=\(converter != nil)")
+            guard ACPSpeechDictationEngine.isUsableInputFormat(inputFormat) else {
+                throw DictationError.noInputDevice
+            }
+            guard let converter = AVAudioConverter(from: inputFormat, to: analyzerFormat) else {
+                throw DictationError.noCompatibleAudioFormat
+            }
+            Self.logger.info("formats: input=\(inputFormat) analyzer=\(analyzerFormat)")
 
             let (stream, continuation) = AsyncStream.makeStream(of: AnalyzerInput.self)
             inputContinuation = continuation
@@ -367,6 +390,7 @@ final class ACPSpeechDictationEngine: ACPDictationEngine {
             case speechDenied
             case localeUnsupported
             case noCompatibleAudioFormat
+            case noInputDevice
 
             var message: String {
                 switch self {
@@ -374,6 +398,7 @@ final class ACPSpeechDictationEngine: ACPDictationEngine {
                 case .speechDenied: return "Speech recognition access denied"
                 case .localeUnsupported: return "Dictation isn't supported for this language"
                 case .noCompatibleAudioFormat: return "No compatible audio format found"
+                case .noInputDevice: return "No microphone is available"
                 }
             }
         }
