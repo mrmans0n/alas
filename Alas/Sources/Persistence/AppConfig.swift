@@ -248,12 +248,16 @@ struct AppConfig: Codable, Equatable {
         var exposeAlasMCP: Bool
         /// How the built-in "alas" MCP server is delivered. Default: stdio.
         var alasMCPTransport: AlasMCPTransport
+        /// Language used for composer dictation, as a locale identifier
+        /// (e.g. "en_US"). Empty (the default) means detect automatically
+        /// from the app locale and the user's preferred languages.
+        var acpDictationLocale: String
 
         enum CodingKeys: String, CodingKey {
             case notifyOnFinish, notifyOnAwaiting,
                  dismissedHookInstallNudges, dismissedACPSetupNudges,
                  confirmCloseChatTabs, acpSendOnEnter, acpAutoRunByDefault,
-                 exposeAlasMCP, alasMCPTransport
+                 exposeAlasMCP, alasMCPTransport, acpDictationLocale
         }
 
         init(notifyOnFinish: Bool = true, notifyOnAwaiting: Bool = true,
@@ -263,7 +267,8 @@ struct AppConfig: Codable, Equatable {
              acpSendOnEnter: Bool = true,
              acpAutoRunByDefault: Bool = false,
              exposeAlasMCP: Bool = true,
-             alasMCPTransport: AlasMCPTransport = .stdio)
+             alasMCPTransport: AlasMCPTransport = .stdio,
+             acpDictationLocale: String = "")
         {
             self.notifyOnFinish = notifyOnFinish
             self.notifyOnAwaiting = notifyOnAwaiting
@@ -274,6 +279,7 @@ struct AppConfig: Codable, Equatable {
             self.acpAutoRunByDefault = acpAutoRunByDefault
             self.exposeAlasMCP = exposeAlasMCP
             self.alasMCPTransport = alasMCPTransport
+            self.acpDictationLocale = acpDictationLocale
         }
 
         init(from decoder: Decoder) throws {
@@ -287,6 +293,7 @@ struct AppConfig: Codable, Equatable {
             acpAutoRunByDefault = (try? c.decode(Bool.self, forKey: .acpAutoRunByDefault)) ?? false
             exposeAlasMCP = (try? c.decode(Bool.self, forKey: .exposeAlasMCP)) ?? true
             alasMCPTransport = (try? c.decode(AlasMCPTransport.self, forKey: .alasMCPTransport)) ?? .stdio
+            acpDictationLocale = (try? c.decode(String.self, forKey: .acpDictationLocale)) ?? ""
         }
     }
 

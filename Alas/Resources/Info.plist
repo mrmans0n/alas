@@ -34,7 +34,11 @@
 	<string>15.0</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2026 Nacho Lopez</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Alas uses the microphone to dictate text into the chat composer.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Alas uses on-device speech recognition to transcribe dictated text into the chat composer.</string>
 </dict>
 </plist>

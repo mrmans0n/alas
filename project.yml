@@ -60,6 +60,8 @@ targets:
         LSMinimumSystemVersion: "15.0"
         NSHumanReadableCopyright: "Copyright © 2026 Nacho Lopez"
         NSPrincipalClass: NSApplication
+        NSMicrophoneUsageDescription: "Alas uses the microphone to dictate text into the chat composer."
+        NSSpeechRecognitionUsageDescription: "Alas uses on-device speech recognition to transcribe dictated text into the chat composer."
         LSApplicationCategoryType: public.app-category.developer-tools
         CFBundleIconFile: AppIcon
         CFBundleIconName: AppIcon

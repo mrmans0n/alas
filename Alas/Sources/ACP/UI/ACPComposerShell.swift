@@ -9,6 +9,46 @@ enum ACPComposerControlPresentation {
         isEnabled ? "play.fill" : "play"
     }
 
+    static func micIconName(for state: ACPDictationState) -> String {
+        state == .listening ? "mic.fill" : "mic"
+    }
+
+    /// Entries for the mic button's language menu: the automatic choice
+    /// first, then the installed languages by name. A language the user
+    /// picked in Settings but hasn't downloaded yet is included too, so the
+    /// menu never contradicts the actual setting.
+    static func dictationMenuItems(installed: [String], selected: String) -> [ACPDictationMenuItem] {
+        var identifiers = installed
+        let normalizedSelection = selected.replacingOccurrences(of: "-", with: "_")
+        if !normalizedSelection.isEmpty,
+           !identifiers.contains(where: { $0.replacingOccurrences(of: "-", with: "_") == normalizedSelection }) {
+            identifiers.append(normalizedSelection)
+        }
+        let items = ACPDictationLocaleFormatter.sortedByDisplayName(identifiers).map { identifier in
+            ACPDictationMenuItem(
+                localeIdentifier: identifier,
+                title: ACPDictationLocaleFormatter.displayName(for: identifier),
+                isSelected: identifier.replacingOccurrences(of: "-", with: "_") == normalizedSelection
+            )
+        }
+        let automatic = ACPDictationMenuItem(
+            localeIdentifier: ACPDictationLocaleFormatter.automaticIdentifier,
+            title: ACPDictationLocaleFormatter.displayName(for: ACPDictationLocaleFormatter.automaticIdentifier),
+            isSelected: normalizedSelection.isEmpty
+        )
+        return [automatic] + items
+    }
+
+    static func micHelp(for state: ACPDictationState) -> String {
+        switch state {
+        case .unavailable: return "Dictation unavailable"
+        case .idle: return "Dictate into the composer"
+        case .preparing: return "Preparing dictation…"
+        case .listening: return "Listening — click to stop"
+        case .failed(let message): return message
+        }
+    }
+
     static func fastModeHelp(isEnabled: Bool, canToggle: Bool) -> String {
         guard canToggle else { return "Fast mode cannot be changed" }
         return isEnabled
@@ -100,6 +140,11 @@ struct ACPComposer: View {
     /// `ACPInputField` so its placeholder reflects whichever action ⏎
     /// triggers under the current mapping.
     let sendOnEnter: Bool
+    /// Current value of the `acpDictationLocale` setting. Empty means the
+    /// dictation engine picks a language automatically.
+    let dictationLocale: String
+    /// Persists a language chosen from the mic's context menu.
+    let onSelectDictationLocale: (String) -> Void
     let focusRequest: Int
     let dropRouter: ACPComposerDropRouter
     let placement: ACPComposerPlacement
@@ -112,7 +157,10 @@ struct ACPComposer: View {
     @Environment(\.theme) private var theme
     @State private var inputFocused = false
     @State private var hasText: Bool = false
-    @State private var imageNotice: String?
+    @State private var composerNotice: String?
+    @StateObject private var dictation = ACPDictationService(engine: ACPSpeechDictationEngine())
+    /// Languages ready to use without a download, for the mic's menu.
+    @State private var installedDictationLocales: [String] = []
 
     init(
         session: ACPSession,
@@ -120,6 +168,8 @@ struct ACPComposer: View {
         worktreeRoot: URL,
         agentLookup: @escaping (String) -> AgentDefinition?,
         sendOnEnter: Bool,
+        dictationLocale: String = "",
+        onSelectDictationLocale: @escaping (String) -> Void = { _ in },
         focusRequest: Int = 0,
         dropRouter: ACPComposerDropRouter,
         placement: ACPComposerPlacement = .bottom,
@@ -135,6 +185,8 @@ struct ACPComposer: View {
         self.worktreeRoot = worktreeRoot
         self.agentLookup = agentLookup
         self.sendOnEnter = sendOnEnter
+        self.dictationLocale = dictationLocale
+        self.onSelectDictationLocale = onSelectDictationLocale
         self.focusRequest = focusRequest
         self.dropRouter = dropRouter
         self.placement = placement
@@ -205,8 +257,8 @@ struct ACPComposer: View {
 
     private var pill: some View {
         VStack(spacing: 6) {
-            if let imageNotice {
-                Text(imageNotice)
+            if let composerNotice {
+                Text(composerNotice)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(theme.color("del"))
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -227,11 +279,15 @@ struct ACPComposer: View {
                     hasText = draft.hasContent
                 },
                 onDraftClear: { manager.clearComposerDraft(for: session) },
-                onSubmit: onSubmit,
+                onStopDictation: { dictation.stop() },
+                onSubmit: { text, attachments, intent, draft, completion in
+                    dictation.stop()
+                    return onSubmit(text, attachments, intent, draft, completion)
+                },
                 onImageError: { error in
-                    imageNotice = error.userMessage
+                    composerNotice = error.userMessage
                     DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                        if imageNotice == error.userMessage { imageNotice = nil }
+                        if composerNotice == error.userMessage { composerNotice = nil }
                     }
                 },
                 filesProvider: filesProvider
@@ -239,9 +295,33 @@ struct ACPComposer: View {
             .frame(minHeight: 44, maxHeight: 140)
             .onAppear {
                 hasText = composer.draft.hasContent
+                dictation.onTranscriptUpdate = { text, isFinal in
+                    actions.applyDictationTranscript?(text, isFinal)
+                }
+                dictation.onStop = { actions.cancelDictationRegion?() }
+                dictation.onNotice = { message in
+                    composerNotice = message
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                        if composerNotice == message { composerNotice = nil }
+                    }
+                }
+                dictation.preferredLocaleIdentifier = dictationLocale
+            }
+            .task {
+                installedDictationLocales = await dictation.installedLocaleIdentifiers()
+            }
+            .onChange(of: dictationLocale) { _, newValue in
+                dictation.preferredLocaleIdentifier = newValue
             }
             .onChange(of: composer.revision) { _, _ in
                 hasText = composer.draft.hasContent
+            }
+            .onChange(of: dictation.state) { _, state in
+                guard case .failed(let message) = state else { return }
+                composerNotice = message
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    if composerNotice == message { composerNotice = nil }
+                }
             }
 
             HStack(spacing: 8) {
@@ -249,6 +329,9 @@ struct ACPComposer: View {
                 Spacer()
                 ACPContextUsageButton(usage: session.contextUsage,
                                       modelName: session.currentModelDisplayName)
+                if dictation.state != .unavailable {
+                    micButton
+                }
                 attachButton
                 if let fastMode = fastModeParameter {
                     selectFastModeToggle(fastMode)
@@ -430,6 +513,57 @@ struct ACPComposer: View {
         session.autoRunEnabled
             ? Color.blend(theme.color("caution"), .white, t: 0.55)
             : theme.color("fg-muted")
+    }
+
+    private var micButton: some View {
+        Button {
+            dictation.toggle()
+        } label: {
+            Image(systemName: ACPComposerControlPresentation.micIconName(for: dictation.state))
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(
+                    dictation.state == .listening
+                        ? Color.blend(theme.color("caution"), .white, t: 0.55)
+                        : theme.color("fg-muted")
+                )
+                .frame(width: 28, height: 24)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(
+                            dictation.state == .listening
+                                ? theme.color("caution").opacity(0.55)
+                                : theme.color("bg-3").opacity(0.7)
+                        )
+                )
+                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.75))
+        }
+        .buttonStyle(.plain)
+        .disabled(dictation.state == .preparing)
+        .accessibilityLabel("Dictate")
+        .help(ACPComposerControlPresentation.micHelp(for: dictation.state))
+        .contextMenu {
+            ForEach(ACPComposerControlPresentation.dictationMenuItems(
+                installed: installedDictationLocales,
+                selected: dictationLocale
+            )) { item in
+                Button {
+                    selectDictationLocale(item.localeIdentifier)
+                } label: {
+                    // A checkmark prefix rather than a Toggle: these are
+                    // mutually exclusive and Toggle rows in a context menu
+                    // read as independently switchable.
+                    Text(item.isSelected ? "✓ \(item.title)" : item.title)
+                }
+            }
+        }
+    }
+
+    /// Applies a language picked from the mic's menu. Any active dictation
+    /// stops first, so a session never keeps running under a language the
+    /// menu no longer shows as current.
+    private func selectDictationLocale(_ identifier: String) {
+        dictation.stop()
+        onSelectDictationLocale(identifier)
     }
 
     private var attachButton: some View {
