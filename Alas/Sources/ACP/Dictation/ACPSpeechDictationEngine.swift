@@ -222,9 +222,26 @@ final class ACPSpeechDictationEngine: ACPDictationEngine {
             let onReady = callbacks.onReady
             let onResult = callbacks.onResult
             let onFailure = callbacks.onFailure
+            // Cancelling `runTask` (see `stop()`) can't interrupt this
+            // function directly — it only takes effect at the next `await`
+            // that actually checks cancellation, and none of the calls
+            // below do. A stop requested before this task's first
+            // scheduling quantum — plausible on a fast double-toggle —
+            // would otherwise still prompt for microphone access for a
+            // session that's already over.
+            guard !stopped else { return }
             guard await Self.requestMicrophoneAccess() else {
                 throw DictationError.microphoneDenied
             }
+            // `withCheckedContinuation` (used by both permission requests
+            // below) has no cancellation support — cancelling `runTask`
+            // while this is in flight does nothing until the system's TCC
+            // callback actually fires. If the session was stopped while
+            // waiting on the mic prompt and mic access is then granted,
+            // this must not fall straight into requesting speech access
+            // too and presenting a second unwanted system prompt for a
+            // session that's already over.
+            guard !stopped else { return }
             guard await Self.requestSpeechAuthorization() else {
                 throw DictationError.speechDenied
             }
