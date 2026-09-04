@@ -3,26 +3,35 @@ import Foundation
 import Speech
 import os
 
-/// Counters updated on CoreAudio's realtime tap thread. `buffers` and
-/// `lastConvertedFrames` are logging-only and only ever touched from that
-/// one thread, so they're plain properties. `peak` is different: the
-/// main-actor silence watchdog reads it too, so writes and reads both go
-/// through `os_unfair_lock` — an uncontended, non-blocking-in-practice lock
+/// Counters updated on CoreAudio's realtime tap thread. `lastConvertedFrames`
+/// is only ever read from that same thread (a per-buffer log line), so it's
+/// a plain property. `buffers` and `peak` are different: the main-actor
+/// silence watchdog reads both — in its own log line and in the actual
+/// silence check — so every access to either goes through `os_unfair_lock`,
+/// taken once per buffer via `recordBuffer(peak:)` rather than once per
+/// field. `os_unfair_lock` is an uncontended, non-blocking-in-practice lock
 /// safe to take from a realtime thread, unlike a queue or `NSLock`. Without
-/// it this would be a real data race (the compiler's `@unchecked Sendable`
+/// it these would be real data races (the compiler's `@unchecked Sendable`
 /// only suppresses the warning; it doesn't provide synchronization), and
-/// the watchdog could read a stale value and report silence over live audio.
+/// the watchdog could read stale values and report silence over live audio.
 private final class ACPDictationTapStats: @unchecked Sendable {
-    var buffers = 0
     var lastConvertedFrames: AVAudioFrameCount = 0
 
     private var lock = os_unfair_lock_s()
+    private var _buffers = 0
     private var _peak: Float = 0
 
-    func recordPeak(_ value: Float) {
+    func recordBuffer(peak: Float) {
         os_unfair_lock_lock(&lock)
-        _peak = max(_peak, value)
+        _buffers += 1
+        _peak = max(_peak, peak)
         os_unfair_lock_unlock(&lock)
+    }
+
+    var buffers: Int {
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
+        return _buffers
     }
 
     var peak: Float {
@@ -119,7 +128,7 @@ final class ACPSpeechDictationEngine: ACPDictationEngine {
                 callbacks.onSilence(deviceName)
             }
         )
-        Task {
+        session.runTask = Task {
             await session.run(preferredLocaleIdentifier: preferredLocaleIdentifier, callbacks: wrapped)
         }
     }
@@ -170,6 +179,11 @@ final class ACPSpeechDictationEngine: ACPDictationEngine {
         private var inputContinuation: AsyncStream<AnalyzerInput>.Continuation?
         private var resultsTask: Task<Void, Never>?
         private var silenceTask: Task<Void, Never>?
+        /// The task running `run(preferredLocaleIdentifier:callbacks:)`,
+        /// cancelled by `stop()` so a stop requested mid-setup doesn't
+        /// leave, say, a speech-model download running unattended in the
+        /// background after the user asked to cancel.
+        var runTask: Task<Void, Never>?
         /// Set by `stop()`. Checked after every `await` in `start()` so a
         /// stop requested mid-setup (permission prompts, model download)
         /// aborts cleanly instead of spinning up an engine nobody wants
@@ -181,7 +195,15 @@ final class ACPSpeechDictationEngine: ACPDictationEngine {
             do {
                 try await start(preferredLocaleIdentifier: preferredLocaleIdentifier, callbacks: callbacks)
             } catch {
+                // A stop-triggered cancellation surfaces here as a thrown
+                // `CancellationError` (or any error a cancelled `await`
+                // happened to raise) — `stopped` is already true by the
+                // time it's caught, since `stop()` sets it before
+                // cancelling this task. Reporting that as onFailure would
+                // show a spurious error notice after a deliberate stop.
+                let wasAlreadyStopped = stopped
                 stop()
+                guard !wasAlreadyStopped else { return }
                 callbacks.onFailure(Self.userMessage(for: error))
             }
         }
@@ -250,23 +272,22 @@ final class ACPSpeechDictationEngine: ACPDictationEngine {
             // `continuation.yield` is safe to call from any thread.
             let stats = ACPDictationTapStats()
             audioEngine.inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { buffer, _ in
-                stats.buffers += 1
                 // A multichannel USB/aggregate input may carry the active
                 // microphone on any channel, not just 0 — checking only
                 // channel 0 would report silence (and eventually the false
                 // "no audio" warning) while a working mic was plugged into
                 // a different channel.
+                var bufferPeak: Float = 0
                 if let channelData = buffer.floatChannelData {
                     let frameCount = Int(buffer.frameLength)
-                    var bufferPeak: Float = 0
                     for c in 0..<Int(buffer.format.channelCount) {
                         let channel = channelData[c]
                         for i in 0..<frameCount { bufferPeak = max(bufferPeak, abs(channel[i])) }
                     }
-                    // One lock acquisition per buffer, not per sample —
-                    // this runs on a realtime thread every ~85ms.
-                    stats.recordPeak(bufferPeak)
                 }
+                // One lock acquisition per buffer, not per sample or per
+                // field — this runs on a realtime thread every ~85ms.
+                stats.recordBuffer(peak: bufferPeak)
                 guard let converted = Self.convert(buffer, using: converter, to: analyzerFormat) else {
                     Self.logger.error("convert returned nil for buffer \(stats.buffers)")
                     return
@@ -342,6 +363,15 @@ final class ACPSpeechDictationEngine: ACPDictationEngine {
         func stop() {
             Self.logger.info("stop requested (engine running=\(self.audioEngine?.isRunning ?? false))")
             stopped = true
+            // Cancels whatever `start()` is currently awaiting — permission
+            // prompts, and notably `AssetInstallationRequest.downloadAndInstall()`,
+            // which would otherwise keep fetching an unwanted speech model
+            // in the background after the user asked to stop. The `guard
+            // !stopped` checkpoints in `start()` only run on normal return
+            // from an await; a cancelled await instead throws, which
+            // `run()`'s catch handles.
+            runTask?.cancel()
+            runTask = nil
             audioEngine?.inputNode.removeTap(onBus: 0)
             audioEngine?.stop()
             audioEngine = nil
