@@ -72,6 +72,32 @@ struct ACPDictationRegionTests {
         #expect(textView.string == "partial thought new")
     }
 
+    @Test("a manual edit while a span is tracked stops tracking it, instead of the next update replacing the wrong text")
+    func manualEditDuringTrackingStopsTracking() {
+        let textView = ACPNSTextView()
+        textView.string = ""
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+
+        textView.replaceDictationRegion("Hell", isFinal: false)
+        // A keystroke elsewhere in the buffer — not through
+        // replaceDictationRegion — while "Hell" is still an open span at
+        // offset (0, 4). It shifts "Hell" to offset 5 without updating the
+        // tracked range.
+        textView.insertText(" note", replacementRange: NSRange(location: 0, length: 0))
+        // Without invalidation this replaces the now-stale (0, 4) span —
+        // " not", the buffer's first four characters after the manual
+        // edit — corrupting text the manual edit shifted into place and
+        // losing track of "Hell" entirely.
+        textView.replaceDictationRegion("Hello world", isFinal: false)
+
+        // The exact landing spot for the fresh span isn't the point here;
+        // what matters is that "Hell" survives untouched rather than
+        // being partially overwritten by the stale-range bug.
+        #expect(textView.string.contains("Hell"))
+        #expect(textView.string.contains("Hello world"))
+        #expect(!textView.string.contains("Hello worldeHell"))
+    }
+
     @Test("dictation region preserves surrounding text")
     func dictationRegionPreservesSurroundingText() {
         let textView = ACPNSTextView()

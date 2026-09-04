@@ -675,6 +675,17 @@ final class ACPNSTextView: PairedDelimiterTextView {
         super.didChangeText()
         // Trigger placeholder redraw when text becomes (non-)empty.
         needsDisplay = true
+        // A dictation span's tracked range is only valid until the next
+        // edit — typing elsewhere, pasting, or any other change shifts
+        // offsets without updating it. `replaceDictationRegion` itself
+        // sets `isApplyingDictationUpdate` around its own edit so this
+        // doesn't invalidate the span it just wrote; anything else means
+        // a manual edit landed while a span was open, so the next
+        // transcript update must start fresh rather than replace
+        // characters that moved.
+        if dictationRange != nil, !isApplyingDictationUpdate {
+            dictationRange = nil
+        }
     }
 
     /// A restored draft can already contain an active "/" token before
@@ -727,6 +738,11 @@ final class ACPNSTextView: PairedDelimiterTextView {
                     return
                 }
             case 53:                                    // escape
+                // Harmless no-op when dictation isn't active. Without this,
+                // Esc while the slash panel is open returns here before
+                // `doCommandBy:`'s cancelOperation handling ever runs,
+                // silently skipping the same stop that bare Esc performs.
+                coordinator?.onStopDictation()
                 closeSlashPanel()
                 return
             default: break
@@ -1114,6 +1130,9 @@ final class ACPNSTextView: PairedDelimiterTextView {
     /// (the next volatile update then starts a fresh span after the
     /// committed text) or once dictation stops.
     private var dictationRange: NSRange?
+    /// Set around `replaceDictationRegion`'s own edit so `didChangeText()`
+    /// doesn't mistake it for the manual edit that invalidates the span.
+    private var isApplyingDictationUpdate = false
 
     /// Inserts or replaces the live dictation transcript. Volatile
     /// updates (`isFinal == false`) replace the previous volatile span in
@@ -1135,9 +1154,11 @@ final class ACPNSTextView: PairedDelimiterTextView {
         }
         let attrs = baseTypingAttributes
         typingAttributes = attrs
+        isApplyingDictationUpdate = true
         performNativeTextInsertion {
             insertText(text, replacementRange: target)
         }
+        isApplyingDictationUpdate = false
         typingAttributes = attrs
         let inserted = NSRange(location: target.location, length: (text as NSString).length)
         if isFinal {

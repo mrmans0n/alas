@@ -66,21 +66,37 @@ final class ACPSpeechDictationEngine: ACPDictationEngine {
         }
         let session = Session()
         self.session = session
+        // Every callback must check it's still hearing from the session
+        // `self.session` currently points to. A session can keep running
+        // asynchronously (mid-permission-prompt, mid-download, or a
+        // straggling result) after being superseded by a fresh one — e.g.
+        // stop() followed immediately by start() — and an unscoped callback
+        // would let the stale session mark the new one ready, splice its
+        // transcript into the new one's, or report its own failure as the
+        // current state.
+        //
+        // All four closures capture `self` and `session` weakly: they're
+        // held by `session` for as long as it runs, so a strong capture of
+        // either would keep this engine (and every session it ever
+        // started) alive until the app quits.
         let wrapped = ACPDictationCallbacks(
-            onReady: callbacks.onReady,
-            onResult: callbacks.onResult,
+            onReady: { [weak self, weak session] in
+                guard let self, let session, self.session as? Session === session else { return }
+                callbacks.onReady()
+            },
+            onResult: { [weak self, weak session] text, isFinal in
+                guard let self, let session, self.session as? Session === session else { return }
+                callbacks.onResult(text, isFinal)
+            },
             onFailure: { [weak self, weak session] message in
-                // A failure that resolves after a newer session has already
-                // replaced this one (e.g. this session was mid-permission-
-                // prompt or mid-download when stopped, and a fresh one was
-                // started before the throw actually landed) must not clear
-                // that newer session or report its own failure as the
-                // current state.
                 guard let self, let session, self.session as? Session === session else { return }
                 self.session = nil
                 callbacks.onFailure(message)
             },
-            onSilence: callbacks.onSilence
+            onSilence: { [weak self, weak session] deviceName in
+                guard let self, let session, self.session as? Session === session else { return }
+                callbacks.onSilence(deviceName)
+            }
         )
         Task {
             await session.run(preferredLocaleIdentifier: preferredLocaleIdentifier, callbacks: wrapped)
@@ -214,8 +230,17 @@ final class ACPSpeechDictationEngine: ACPDictationEngine {
             let stats = ACPDictationTapStats()
             audioEngine.inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { buffer, _ in
                 stats.buffers += 1
-                if let channel = buffer.floatChannelData?[0] {
-                    for i in 0..<Int(buffer.frameLength) { stats.peak = max(stats.peak, abs(channel[i])) }
+                // A multichannel USB/aggregate input may carry the active
+                // microphone on any channel, not just 0 — checking only
+                // channel 0 would report silence (and eventually the false
+                // "no audio" warning) while a working mic was plugged into
+                // a different channel.
+                if let channelData = buffer.floatChannelData {
+                    let frameCount = Int(buffer.frameLength)
+                    for c in 0..<Int(buffer.format.channelCount) {
+                        let channel = channelData[c]
+                        for i in 0..<frameCount { stats.peak = max(stats.peak, abs(channel[i])) }
+                    }
                 }
                 guard let converted = Self.convert(buffer, using: converter, to: analyzerFormat) else {
                     Self.logger.error("convert returned nil for buffer \(stats.buffers)")
