@@ -1490,6 +1490,7 @@ struct GGMutationCoordinatorTests {
         }
 
         #expect(harness.actionState.lastError == "push rejected by protected branch")
+        #expect(harness.actionState.syncHasTerminalFailure)
         let progress = GGStackReadinessModel.make(
             stack: stack(head: "a").stack!,
             action: harness.actionState
@@ -1500,6 +1501,20 @@ struct GGMutationCoordinatorTests {
         ])
         #expect(progress?.liveStatus == nil)
         #expect(progress?.showsSpinner == false)
+    }
+
+    @Test func streamedSyncErrorBecomesTerminalOnlyAfterSyncCompletes() async throws {
+        let harness = GGMutationHarness(stacks: [stack(head: "a")])
+        harness.service.syncEvents = [.error(position: 1, operation: "push", message: "push failed")]
+        harness.service.blockExecution = true
+
+        let task = try #require(harness.coordinator.startApplying(.sync, confirmedAgainst: nil))
+        try await waitUntil { harness.actionState.lastError == "push failed" }
+        #expect(!harness.actionState.syncHasTerminalFailure)
+
+        harness.service.resumeExecution()
+        try await task.value
+        #expect(harness.actionState.syncHasTerminalFailure)
     }
 
     @Test func undoRechecksNewestOperationImmediatelyBeforeLaunch() async {

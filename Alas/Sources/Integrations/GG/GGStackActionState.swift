@@ -29,6 +29,7 @@ final class GGStackActionState {
     private(set) var syncProgress: [GGSyncEvent] = []
     private(set) var syncHasTerminalFailure = false
     private(set) var lastError: String?
+    private(set) var lastErrorAction: GGStackActionKind?
     private(set) var pausedOperation: GGPausedOperation?
     private(set) var lastActionSummary: String?
     @ObservationIgnored private(set) var actionGeneration: UInt = 0
@@ -38,7 +39,7 @@ final class GGStackActionState {
         guard inFlightAction == nil else { return false }
         if !syncProgress.isEmpty { syncProgress = [] }
         if syncHasTerminalFailure { syncHasTerminalFailure = false }
-        if lastError != nil { lastError = nil }
+        clearError()
         if lastActionSummary != nil { lastActionSummary = nil }
         actionGeneration &+= 1
         inFlightAction = action
@@ -52,14 +53,32 @@ final class GGStackActionState {
 
     func appendSyncEvent(_ event: GGSyncEvent) { syncProgress.append(event) }
     func clearSyncProgress() { if !syncProgress.isEmpty { syncProgress = [] } }
+    var canDismissCompletedSyncFailure: Bool {
+        inFlightAction == nil && pausedOperation == nil && syncHasTerminalFailure
+    }
+    func dismissCompletedSyncFailure() {
+        guard canDismissCompletedSyncFailure else { return }
+        syncProgress = []
+        syncHasTerminalFailure = false
+        if lastErrorAction == .sync { clearError() }
+    }
     func markSyncTerminalFailure() {
-        if inFlightAction == .sync, !syncHasTerminalFailure { syncHasTerminalFailure = true }
+        if !syncHasTerminalFailure { syncHasTerminalFailure = true }
     }
-    func shouldPublishError(forActionGeneration generation: UInt) -> Bool {
-        actionGeneration == generation && lastError == nil
+    func shouldPublishError(
+        forActionGeneration generation: UInt,
+        action: GGStackActionKind
+    ) -> Bool {
+        actionGeneration == generation && lastErrorAction != action
     }
-    func setError(_ message: String) { lastError = message }
-    func clearError() { if lastError != nil { lastError = nil } }
+    func setError(_ message: String, for action: GGStackActionKind? = nil) {
+        lastError = message
+        lastErrorAction = action
+    }
+    func clearError() {
+        if lastError != nil { lastError = nil }
+        if lastErrorAction != nil { lastErrorAction = nil }
+    }
     func setPaused(_ paused: GGPausedOperation) { if pausedOperation != paused { pausedOperation = paused } }
     func clearPaused() { if pausedOperation != nil { pausedOperation = nil } }
     func setActionSummary(_ message: String) { lastActionSummary = message }

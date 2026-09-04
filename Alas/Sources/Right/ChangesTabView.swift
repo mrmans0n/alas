@@ -49,7 +49,8 @@ struct ChangesTabView: View {
                         )
                     } ?? rps.behindBase?.count ?? 0,
                     effectiveConfig: rps.ggEffectiveConfig
-                )
+                ),
+                canDismissSyncFailure: rps.ggActionState.canDismissCompletedSyncFailure
             )
         }
         let readiness = ReviewReadinessModel(
@@ -263,7 +264,8 @@ struct ChangesTabView: View {
                     },
                     onReviewRequestAction: { action in
                         rps.handleReviewReadinessAction(action, appState: appState)
-                    }
+                    },
+                    onDismissSyncFailure: { rps.ggActionState.dismissCompletedSyncFailure() }
                 )
             }
             workingTreeSection
@@ -372,7 +374,8 @@ struct ChangesTabView: View {
                     onDraftCommit: openDraftTab,
                     onGGAction: handleGGPreparationAction,
                     onGGStackAction: { rps.onGGStackAction($0, appState: appState) },
-                    onReviewRequestAction: { rps.handleReviewReadinessAction($0, appState: appState) }
+                    onReviewRequestAction: { rps.handleReviewReadinessAction($0, appState: appState) },
+                    onDismissSyncFailure: { rps.ggActionState.dismissCompletedSyncFailure() }
                 )
             })
         }

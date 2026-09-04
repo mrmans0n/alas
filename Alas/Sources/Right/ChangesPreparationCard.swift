@@ -44,6 +44,7 @@ struct ChangesPreparationCard: View {
     let onGGAction: (GGChangesPreparationAction) -> Void
     let onGGStackAction: (GGStackActionKind) -> Void
     let onReviewRequestAction: (ReviewReadinessActionKind) -> Void
+    let onDismissSyncFailure: () -> Void
 
     @Environment(\.theme) private var theme
 
@@ -146,6 +147,16 @@ struct ChangesPreparationCard: View {
                 .foregroundColor(theme.color("fg-muted"))
                 .textCase(.uppercase)
             Spacer(minLength: 0)
+            if model.canDismissSyncFailure {
+                Button(action: onDismissSyncFailure) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(theme.color("fg-faint"))
+                        .frame(width: 16, height: 16)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Dismiss sync failure")
+            }
         }
     }
 

@@ -1626,9 +1626,17 @@ final class RightPaneState: GGSplitCommitServicing {
                 default:
                     break
                 }
-                publishGGMutationPresentationError(error, forActionGeneration: actionGeneration)
+                publishGGMutationPresentationError(
+                    error,
+                    for: prepared.request.actionKind,
+                    actionGeneration: actionGeneration
+                )
             } catch {
-                publishGGMutationPresentationError(error, forActionGeneration: actionGeneration)
+                publishGGMutationPresentationError(
+                    error,
+                    for: prepared.request.actionKind,
+                    actionGeneration: actionGeneration
+                )
             }
         }
     }
@@ -1848,7 +1856,11 @@ final class RightPaneState: GGSplitCommitServicing {
             do {
                 try await operation.value
             } catch {
-                publishGGMutationPresentationError(error, forActionGeneration: actionGeneration)
+                publishGGMutationPresentationError(
+                    error,
+                    for: request.actionKind,
+                    actionGeneration: actionGeneration
+                )
             }
         }
     }
@@ -1863,17 +1875,24 @@ final class RightPaneState: GGSplitCommitServicing {
             do {
                 try await operation.value
             } catch {
-                publishGGMutationPresentationError(error, forActionGeneration: actionGeneration)
+                publishGGMutationPresentationError(
+                    error,
+                    for: prepared.request.actionKind,
+                    actionGeneration: actionGeneration
+                )
             }
         }
     }
 
     private func publishGGMutationPresentationError(
         _ error: Error,
-        forActionGeneration generation: UInt
+        for action: GGStackActionKind,
+        actionGeneration generation: UInt
     ) {
-        guard ggActionState.shouldPublishError(forActionGeneration: generation) else { return }
-        ggActionState.setError(GGErrorPresentation.message(for: error))
+        guard ggActionState.actionGeneration == generation else { return }
+        if action == .sync { ggActionState.markSyncTerminalFailure() }
+        guard ggActionState.shouldPublishError(forActionGeneration: generation, action: action) else { return }
+        ggActionState.setError(GGErrorPresentation.message(for: error), for: action)
     }
 
     func markSnapshotUnknown() {
