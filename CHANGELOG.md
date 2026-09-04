@@ -6,6 +6,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.29] - 2026-09-04
+
+### ✨ Features
+
+- Add a context menu for creating files and folders at the worktree root (#1112).
+
+### 🐛 Fixes
+
+- Keep refresh spinners animating while active (#1110).
+
+### 🏗️ Internal
+
+- Update the Rust toolchain to 1.98.1 (#1111).
+
 ## [0.14.28] - 2026-09-03
 
 ### ✨ Features
