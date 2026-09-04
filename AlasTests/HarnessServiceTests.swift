@@ -74,6 +74,75 @@ struct HarnessServiceTests {
         #expect(collector.requests[0].content.body == "Need help")
     }
 
+    @Test func awaitingNotificationCarriesCheckoutOwnerWhenAvailable() {
+        let (service, collector) = makeService()
+        let checkoutID = UUID()
+
+        service.handleSocketEvent(
+            makeEvent(event: .awaitingInput, sessionId: "checkout-leaf", body: "Need input"),
+            stateLookup: { _ in (projectId: "", worktreeId: "workspace-checkout-storage") },
+            ownerLookup: { _ in .workspaceCheckout(checkoutID, .ssh("devbox")) },
+            shouldNotifyOnAwaiting: { true }
+        )
+
+        let context = NotificationClickContext(userInfo: collector.requests[0].content.userInfo)
+        #expect(context?.owner == .workspaceCheckout(checkoutID, .ssh("devbox")))
+    }
+
+    @Test func permissionNotificationCarriesCheckoutOwnerWhenAvailable() {
+        let (service, collector) = makeService()
+        let checkoutID = UUID()
+
+        service.handleSocketEvent(
+            makeEvent(event: .permissionRequest, sessionId: "checkout-leaf", body: "Allow?"),
+            stateLookup: { _ in (projectId: "", worktreeId: "workspace-checkout-storage") },
+            ownerLookup: { _ in .workspaceCheckout(checkoutID, .ssh("devbox")) },
+            shouldNotifyOnAwaiting: { true }
+        )
+
+        let context = NotificationClickContext(userInfo: collector.requests[0].content.userInfo)
+        #expect(context?.owner == .workspaceCheckout(checkoutID, .ssh("devbox")))
+    }
+
+    @Test func finishedNotificationCarriesCheckoutOwnerWhenAvailable() {
+        let (service, collector) = makeService()
+        let checkoutID = UUID()
+
+        service.handleSocketEvent(
+            makeEvent(event: .idle, sessionId: "checkout-leaf", body: "Done"),
+            stateLookup: { _ in (projectId: "", worktreeId: "workspace-checkout-storage") },
+            ownerLookup: { _ in .workspaceCheckout(checkoutID, .ssh("devbox")) },
+            shouldNotifyOnAwaiting: { true }
+        )
+
+        let context = NotificationClickContext(userInfo: collector.requests[0].content.userInfo)
+        #expect(context?.owner == .workspaceCheckout(checkoutID, .ssh("devbox")))
+    }
+
+    @Test func checkoutNotificationClickDoesNotAlsoInvokeLegacyWorktreeRouting() {
+        let (service, _) = makeService()
+        let checkoutID = UUID()
+        var typedContexts: [NotificationClickContext] = []
+        var legacyClicks: [(projectId: String, worktreeId: String, sessionId: String)] = []
+        service.onContextClickThrough = { typedContexts.append($0) }
+        service.onClickThrough = { legacyClicks.append(($0, $1, $2)) }
+        service.start(stateLookup: { _ in nil })
+        let context = NotificationClickContext(userInfo: [
+            "projectId": "synthetic-project",
+            "worktreeId": "synthetic-worktree",
+            "sessionId": "checkout-leaf",
+            "sessionOwnerKind": "workspaceCheckout",
+            "sessionOwnerCheckoutId": checkoutID.uuidString,
+            "sessionOwnerLocationKind": "local",
+        ])!
+
+        service.notifications.delegate.onContextClick?(context)
+
+        #expect(typedContexts.count == 1)
+        #expect(typedContexts.first?.owner == .workspaceCheckout(checkoutID, .local))
+        #expect(legacyClicks.isEmpty)
+    }
+
     @Test func awaitingNotificationRespectsPreference() {
         let (service, collector) = makeService()
         service.handleSocketEvent(

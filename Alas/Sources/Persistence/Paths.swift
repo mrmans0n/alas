@@ -14,6 +14,7 @@ enum Paths {
     static var appConfigFile: URL { appSupportRoot.appendingPathComponent("app.json") }
     static var projectsFile: URL { appSupportRoot.appendingPathComponent("projects.json") }
     static var spacesFile: URL { appSupportRoot.appendingPathComponent("spaces.json") }
+    static var workspacesFile: URL { appSupportRoot.appendingPathComponent("workspaces.json") }
     static var tabsDir: URL { appSupportRoot.appendingPathComponent("tabs", isDirectory: true) }
 
     static func ensureDirectoryExists(_ url: URL) throws {
@@ -22,6 +23,10 @@ enum Paths {
 }
 
 extension Paths {
+    static func tabsFile(for owner: SessionOwnerID) -> URL {
+        tabsFile(forWorktreeId: owner.storageKey)
+    }
+
     static func tabsFile(forWorktreeId id: String) -> URL {
         tabsDir.appendingPathComponent("\(id).json")
     }
@@ -40,6 +45,13 @@ extension Paths {
 
     static func acpSessionsDB(forWorktreeId id: String) -> URL {
         acpSessionsRoot.appendingPathComponent("\(id).sqlite")
+    }
+
+    /// Worktree owners deliberately retain the historical filename while a
+    /// checkout gets its own namespaced database. This keeps existing ACP
+    /// histories intact and prevents equal paths on separate hosts colliding.
+    static func acpSessionsDB(for owner: SessionOwnerID) -> URL {
+        acpSessionsDB(forWorktreeId: owner.storageKey)
     }
 
     static var acpOrchestrationDB: URL {

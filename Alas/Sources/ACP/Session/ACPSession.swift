@@ -40,6 +40,9 @@ final class ACPSession: ObservableObject, Identifiable {
     let id: ID
     let agentId: String
     let worktreeId: String
+    /// The durable owner of this session. `worktreeId` remains the historical
+    /// compatibility field used by the SQLite schema and wire protocol.
+    let owner: SessionOwnerID
     let createdAt: Date
     let restoredFromPersistence: Bool
     let transcript = ACPTranscript()
@@ -308,6 +311,7 @@ final class ACPSession: ObservableObject, Identifiable {
     }
 
     init(id: ID, agentId: String, worktreeId: String, title: String,
+         owner: SessionOwnerID? = nil,
          titleSource: ACPSessionTitleSource = .placeholder,
          origin: ACPSessionOrigin = .alasCreated,
          createdAt: Date = Date(),
@@ -316,6 +320,7 @@ final class ACPSession: ObservableObject, Identifiable {
         self.id = id
         self.agentId = agentId
         self.worktreeId = worktreeId
+        self.owner = owner ?? .worktree(worktreeId)
         self.title = title
         self.titleSource = titleSource
         self.origin = origin

@@ -96,6 +96,12 @@ final class TabsManager {
         byWorktree[id]?.tabs ?? []
     }
 
+    /// Owner-aware session tab lookup. The worktree overload intentionally
+    /// keeps its legacy raw key and storage filename.
+    func tabs(for owner: SessionOwnerID) -> [Tab] {
+        byWorktree[owner.storageKey]?.tabs ?? []
+    }
+
     func commitEditorTab(worktreeId: String, currentSha: String) -> Tab? {
         tabs(forWorktree: worktreeId).first { tab in
             if case .commitEditor(let state) = tab {
@@ -107,6 +113,10 @@ final class TabsManager {
 
     func activeTabId(forWorktree id: String) -> TabID? {
         byWorktree[id]?.activeTabId
+    }
+
+    func activeTabId(for owner: SessionOwnerID) -> TabID? {
+        byWorktree[owner.storageKey]?.activeTabId
     }
 
     func activeTab(forWorktree id: String) -> Tab? {
@@ -140,6 +150,10 @@ final class TabsManager {
         persist(worktreeId)
     }
 
+    func moveTab(owner: SessionOwnerID, fromId: TabID, toId: TabID) {
+        moveTab(worktreeId: owner.storageKey, fromId: fromId, toId: toId)
+    }
+
     @discardableResult
     func activateTabNumber(_ number: Int, worktreeId: String) -> TabID? {
         guard number > 0 else { return nil }
@@ -161,6 +175,20 @@ final class TabsManager {
                 if !restoringActiveTabs {
                     persist(id)
                 }
+            }
+        }
+        hasLoaded = true
+    }
+
+    func load(owner: SessionOwnerID, restoringActiveTabs: Bool = true) {
+        let key = owner.storageKey
+        if var file = try? store.readIfExists(TabsFile.self, from: tabsFile(forOwner: owner)) {
+            if !restoringActiveTabs {
+                file.activeTabId = nil
+            }
+            byWorktree[key] = file
+            if !restoringActiveTabs {
+                persist(key)
             }
         }
         hasLoaded = true
@@ -192,6 +220,34 @@ final class TabsManager {
         let state = TerminalTabState(id: UUID().uuidString, title: title, sessionId: sessionId, runScriptKey: runScriptKey)
         let tab = Tab.terminal(state)
         append(tab, to: worktreeId)
+        return tab
+    }
+
+    @discardableResult
+    func appendTerminal(owner: SessionOwnerID, title: String, sessionId: String, runScriptKey: String? = nil) -> Tab {
+        let leaf = PaneLeaf(
+            id: sessionId,
+            sessionId: sessionId,
+            lastCwd: nil,
+            lastCwdLocation: owner.checkoutExecutionLocation
+        )
+        let state = TerminalTabState(
+            id: UUID().uuidString,
+            title: title,
+            root: .leaf(leaf),
+            focusedLeafId: leaf.id,
+            runScriptKey: runScriptKey,
+            runScriptLeafId: runScriptKey != nil ? leaf.id : nil
+        )
+        let tab = Tab.terminal(state)
+        append(tab, to: owner.storageKey)
+        return tab
+    }
+
+    @discardableResult
+    func appendACP(owner: SessionOwnerID, sessionId: ACPSession.ID, title: String) -> Tab {
+        let tab = Tab.acpSession(.init(sessionId: sessionId, title: title))
+        append(tab, to: owner.storageKey)
         return tab
     }
 
@@ -252,6 +308,11 @@ final class TabsManager {
     }
 
     @discardableResult
+    func renameTerminal(owner: SessionOwnerID, tabId: TabID, title: String) -> Tab? {
+        renameTerminal(worktreeId: owner.storageKey, tabId: tabId, title: title)
+    }
+
+    @discardableResult
     func renameACPSession(worktreeId: String, tabId: TabID, title: String) -> Tab? {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
@@ -264,6 +325,11 @@ final class TabsManager {
         byWorktree[worktreeId] = file
         persist(worktreeId)
         return tab
+    }
+
+    @discardableResult
+    func renameACPSession(owner: SessionOwnerID, tabId: TabID, title: String) -> Tab? {
+        renameACPSession(worktreeId: owner.storageKey, tabId: tabId, title: title)
     }
 
     @discardableResult
@@ -359,18 +425,24 @@ final class TabsManager {
         return tab
     }
 
+    @discardableResult
+    func setFocusedLeaf(owner: SessionOwnerID, tabId: TabID, leafId: String) -> Tab? {
+        setFocusedLeaf(worktreeId: owner.storageKey, tabId: tabId, leafId: leafId)
+    }
+
     /// Split the focused leaf into a 2-child split. The freshly-spawned session id
     /// is wrapped in a new leaf, which becomes the focused one.
     @discardableResult
     func splitFocusedLeaf(
         worktreeId: String, tabId: TabID, axis: SplitAxis,
-        newLeafId: String, newSessionId: String
+        newLeafId: String, newSessionId: String,
+        newLeafCwdLocation: ExecutionLocation? = nil
     ) -> Tab? {
         guard var file = byWorktree[worktreeId],
               let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
               case .terminal(var state) = file.tabs[idx],
               let existing = state.root.find(leafId: state.focusedLeafId)?.leaf else { return nil }
-        let newLeaf = PaneLeaf(id: newLeafId, sessionId: newSessionId, lastCwd: nil)
+        let newLeaf = PaneLeaf(id: newLeafId, sessionId: newSessionId, lastCwd: nil, lastCwdLocation: newLeafCwdLocation)
         let replacement: PaneNode = .split(PaneSplit(
             id: UUID().uuidString,
             axis: axis,
@@ -384,6 +456,15 @@ final class TabsManager {
         byWorktree[worktreeId] = file
         persist(worktreeId)
         return tab
+    }
+
+    @discardableResult
+    func splitFocusedLeaf(
+        owner: SessionOwnerID, tabId: TabID, axis: SplitAxis,
+        newLeafId: String, newSessionId: String,
+        newLeafCwdLocation: ExecutionLocation? = nil
+    ) -> Tab? {
+        splitFocusedLeaf(worktreeId: owner.storageKey, tabId: tabId, axis: axis, newLeafId: newLeafId, newSessionId: newSessionId, newLeafCwdLocation: newLeafCwdLocation)
     }
 
     enum RemoveLeafOutcome {
@@ -437,6 +518,10 @@ final class TabsManager {
         }
     }
 
+    func removeLeaf(owner: SessionOwnerID, tabId: TabID, leafId: String) -> RemoveLeafOutcome? {
+        removeLeaf(worktreeId: owner.storageKey, tabId: tabId, leafId: leafId)
+    }
+
     /// Remove the focused leaf. Thin wrapper around `removeLeaf(worktreeId:tabId:leafId:)`.
     @discardableResult
     func removeFocusedLeaf(worktreeId: String, tabId: TabID) -> RemoveLeafOutcome? {
@@ -464,6 +549,11 @@ final class TabsManager {
     }
 
     @discardableResult
+    func setSplitFraction(owner: SessionOwnerID, tabId: TabID, splitId: String, fraction: Double) -> Tab? {
+        setSplitFraction(worktreeId: owner.storageKey, tabId: tabId, splitId: splitId, fraction: fraction)
+    }
+
+    @discardableResult
     func setLeafCwd(worktreeId: String, tabId: TabID, leafId: String, cwd: String) -> Tab? {
         guard var file = byWorktree[worktreeId],
               let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
@@ -479,6 +569,11 @@ final class TabsManager {
         file.tabs[idx] = tab
         byWorktree[worktreeId] = file
         return tab
+    }
+
+    @discardableResult
+    func setLeafCwd(owner: SessionOwnerID, tabId: TabID, leafId: String, cwd: String) -> Tab? {
+        setLeafCwd(worktreeId: owner.storageKey, tabId: tabId, leafId: leafId, cwd: cwd)
     }
 
     /// Walks the tree and applies `transform` to the split with `splitId`.
@@ -708,6 +803,13 @@ final class TabsManager {
     func append(acpSession state: ACPSessionTabState, to worktreeId: String) -> Tab {
         let tab = Tab.acpSession(state)
         append(tab, to: worktreeId)
+        return tab
+    }
+
+    @discardableResult
+    func append(acpSession state: ACPSessionTabState, to owner: SessionOwnerID) -> Tab {
+        let tab = Tab.acpSession(state)
+        append(tab, to: owner.storageKey)
         return tab
     }
 
@@ -1279,6 +1381,14 @@ final class TabsManager {
         persist(worktreeId)
     }
 
+    func activate(owner: SessionOwnerID, tabId: TabID) {
+        activate(worktreeId: owner.storageKey, tabId: tabId)
+    }
+
+    func clearActiveTab(owner: SessionOwnerID) {
+        clearActiveTab(worktreeId: owner.storageKey)
+    }
+
     func clearActiveTab(worktreeId: String) {
         guard var file = byWorktree[worktreeId],
               file.activeTabId != nil
@@ -1342,6 +1452,16 @@ final class TabsManager {
         }
         byWorktree[worktreeId] = file
         persist(worktreeId)
+    }
+
+    func close(owner: SessionOwnerID, tabId: TabID) {
+        close(worktreeId: owner.storageKey, tabId: tabId)
+    }
+
+    /// Removes visible checkout tabs without changing any focused member's
+    /// worktree bucket or deleting the checkout record itself.
+    func archive(owner: SessionOwnerID) {
+        _ = closeAll(worktreeId: owner.storageKey)
     }
 
     @discardableResult
@@ -1436,6 +1556,10 @@ final class TabsManager {
 
     private func tabsFile(forWorktreeId worktreeId: String) -> URL {
         tabsDirectory.appendingPathComponent("\(worktreeId).json")
+    }
+
+    private func tabsFile(forOwner owner: SessionOwnerID) -> URL {
+        tabsDirectory.appendingPathComponent("\(owner.storageKey).json")
     }
 
     // MARK: - Buffer lifecycle

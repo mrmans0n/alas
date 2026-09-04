@@ -12,6 +12,7 @@ final class HarnessService {
     private(set) var activeHarnessBySession: [String: HarnessKind] = [:]
 
     var onClickThrough: ((String, String, String) -> Void)?
+    var onContextClickThrough: ((NotificationClickContext) -> Void)?
 
     struct HarnessActivityState: Equatable {
         var agent: AgentKind
@@ -41,6 +42,7 @@ final class HarnessService {
 
     func start(
         stateLookup: @escaping (String) -> (projectId: String, worktreeId: String)?,
+        ownerLookup: @escaping (String) -> SessionOwnerID? = { _ in nil },
         shouldNotifyOnAwaiting: @escaping () -> Bool = { true }
     ) {
         detector.onUpdate = { [weak self] sid, kind in
@@ -49,12 +51,18 @@ final class HarnessService {
         }
         detector.start()
 
-        notifications.setup { [weak self] p, w, s in
-            self?.onClickThrough?(p, w, s)
+        notifications.setup { [weak self] context in
+            self?.onContextClickThrough?(context)
+            if case .workspaceCheckout = context.owner {
+                return
+            }
+            if let projectId = context.projectId, let worktreeId = context.worktreeId {
+                self?.onClickThrough?(projectId, worktreeId, context.sessionId)
+            }
         }
 
         socketServer.onEvent = { [weak self] event in
-            self?.handleSocketEvent(event, stateLookup: stateLookup, shouldNotifyOnAwaiting: shouldNotifyOnAwaiting)
+            self?.handleSocketEvent(event, stateLookup: stateLookup, ownerLookup: ownerLookup, shouldNotifyOnAwaiting: shouldNotifyOnAwaiting)
         }
     }
 
@@ -91,6 +99,7 @@ final class HarnessService {
     func handleSocketEvent(
         _ event: AgentHookEvent,
         stateLookup: @escaping (String) -> (projectId: String, worktreeId: String)?,
+        ownerLookup: @escaping (String) -> SessionOwnerID? = { _ in nil },
         shouldNotifyOnAwaiting: () -> Bool
     ) {
         let previousState = activityBySession[event.sessionId]?.state
@@ -122,7 +131,8 @@ final class HarnessService {
                 notifications.notifyHarnessAwaiting(
                     agent: event.agent, body: event.body,
                     projectId: lookup.projectId, worktreeId: lookup.worktreeId,
-                    sessionId: event.sessionId
+                    sessionId: event.sessionId,
+                    owner: ownerLookup(event.sessionId)
                 )
             }
 
@@ -149,7 +159,8 @@ final class HarnessService {
                 notifications.notifyHarnessPermission(
                     agent: event.agent, body: event.body,
                     projectId: lookup.projectId, worktreeId: lookup.worktreeId,
-                    sessionId: event.sessionId
+                    sessionId: event.sessionId,
+                    owner: ownerLookup(event.sessionId)
                 )
             }
 
@@ -169,7 +180,7 @@ final class HarnessService {
                     debouncer.onFire = { [weak self] in
                         guard let self else { return }
                         if let event = self.pendingCursorIdleEvents.removeValue(forKey: sid) {
-                            self.commitIdle(event: event, stateLookup: stateLookup)
+                            self.commitIdle(event: event, stateLookup: stateLookup, ownerLookup: ownerLookup)
                         }
                         self.cursorIdleDebouncers.removeValue(forKey: sid)
                     }
@@ -177,7 +188,7 @@ final class HarnessService {
                     debouncer.poke()
                 }
             } else {
-                commitIdle(event: event, stateLookup: stateLookup)
+                commitIdle(event: event, stateLookup: stateLookup, ownerLookup: ownerLookup)
             }
 
         case .detached:
@@ -189,7 +200,8 @@ final class HarnessService {
 
     private func commitIdle(
         event: AgentHookEvent,
-        stateLookup: @escaping (String) -> (projectId: String, worktreeId: String)?
+        stateLookup: @escaping (String) -> (projectId: String, worktreeId: String)?,
+        ownerLookup: @escaping (String) -> SessionOwnerID?
     ) {
         activityBySession[event.sessionId] = HarnessActivityState(
             agent: event.agent, state: .idle, pid: event.pid,
@@ -199,7 +211,8 @@ final class HarnessService {
             notifications.notifyHarnessFinished(
                 agent: event.agent, body: event.body,
                 projectId: lookup.projectId, worktreeId: lookup.worktreeId,
-                sessionId: event.sessionId
+                sessionId: event.sessionId,
+                owner: ownerLookup(event.sessionId)
             )
         }
     }

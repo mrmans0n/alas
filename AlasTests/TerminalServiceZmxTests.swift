@@ -413,6 +413,46 @@ struct TerminalServiceZmxTests {
     }
 
     @Test
+    func terminateAllKillsPersistedCheckoutOwnerLeavesWithoutLiveRegistryEntries() async {
+        let checkoutID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        let owner = SessionOwnerID.workspaceCheckout(checkoutID, .local)
+        let leafID = "checkout-leaf"
+        let recorder = RecordingRunner()
+        recorder.resultsByFirstArg["ls"] = .init(exitCode: 0, stdout: "", stderr: "")
+        let service = TerminalService(
+            zmxClient: ZmxClient(env: makeZmxEnv(available: true), runner: recorder.runner())
+        )
+
+        service.terminateAll(additionalSessions: [
+            TerminalSessionIdentity(owner: owner, leafId: leafID),
+        ])
+        await waitForCalls(recorder, count: 1) { $0.calls.count }
+
+        #expect(Set(recorder.calls.map(\.args)) == Set([
+            ["kill", ZmxSessionName.derive(owner: owner, leafId: leafID)],
+        ]))
+    }
+
+    @Test
+    func terminateSessionsKillsOnlyTheSuppliedCheckoutOwnerLeaves() async {
+        let checkoutID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        let owner = SessionOwnerID.workspaceCheckout(checkoutID, .local)
+        let recorder = RecordingRunner()
+        let service = TerminalService(
+            zmxClient: ZmxClient(env: makeZmxEnv(available: true), runner: recorder.runner())
+        )
+
+        service.terminateSessions([
+            TerminalSessionIdentity(owner: owner, leafId: "checkout-leaf"),
+        ])
+        await waitForCalls(recorder, count: 1) { $0.calls.count }
+
+        #expect(recorder.calls.map(\.args) == [
+            ["kill", ZmxSessionName.derive(owner: owner, leafId: "checkout-leaf")],
+        ])
+    }
+
+    @Test
     func terminateAllDeduplicatesRegistryAndAdditional() async {
         let recorder = RecordingRunner()
         recorder.resultsByFirstArg["ls"] = .init(exitCode: 0, stdout: "", stderr: "")
@@ -559,6 +599,48 @@ struct TerminalServiceZmxTests {
     }
 
     @Test
+    func workspaceCheckoutOrphanFilterUsesCheckoutOwnerAndLeafIdentity() {
+        let checkoutID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        let owner = SessionOwnerID.workspaceCheckout(checkoutID, .ssh("build-host"))
+        let knownLeaf = "leaf-keep"
+        let unknownLeaf = "leaf-stranded"
+        let foreignOwner = SessionOwnerID.workspaceCheckout(UUID(), .ssh("build-host"))
+        let knownName = ZmxSessionName.derive(owner: owner, leafId: knownLeaf)
+        let orphanName = ZmxSessionName.derive(owner: owner, leafId: unknownLeaf)
+        let foreignName = ZmxSessionName.derive(owner: foreignOwner, leafId: unknownLeaf)
+
+        let orphans = TerminalService.orphanWorkspaceSessionNames(
+            allSessionNames: [
+                "team-\(knownName)",
+                "team-\(orphanName)",
+                "team-\(foreignName)",
+                knownName,
+                "team-alas-\(ZmxSessionName.hash16("wt"))-\(ZmxSessionName.hash16("leaf"))",
+            ],
+            knownLeavesByOwner: [owner: [knownLeaf]],
+            sessionPrefix: "team-"
+        )
+
+        #expect(orphans == [orphanName])
+    }
+
+    @Test
+    func workspaceCheckoutOrphanFilterIncludesOwnersWithNoKnownLeaves() {
+        let checkoutID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        let owner = SessionOwnerID.workspaceCheckout(checkoutID, .local)
+        let orphanName = ZmxSessionName.derive(owner: owner, leafId: "stranded-leaf")
+        let foreignName = ZmxSessionName.derive(owner: .workspaceCheckout(UUID(), .local), leafId: "stranded-leaf")
+
+        let orphans = TerminalService.orphanWorkspaceSessionNames(
+            allSessionNames: [orphanName, foreignName],
+            knownLeavesByOwner: [owner: []],
+            sessionPrefix: ""
+        )
+
+        #expect(orphans == [orphanName])
+    }
+
+    @Test
     func sweepOrphansIssuesKillsForFilteredNames() async {
         let mineWt = "wt-1"
         let mineLeaf = "leaf-keep"
@@ -656,6 +738,41 @@ struct TerminalServiceZmxTests {
         let start = Date()
         svc.waitForPendingKills(timeout: 5.0)
         #expect(Date().timeIntervalSince(start) < 0.1)
+    }
+
+    @Test
+    func drainPendingKillsReturnsAtTimeoutWhileKillIsStillBlocked() async {
+        let started = DispatchSemaphore(value: 0)
+        let unblock = DispatchSemaphore(value: 0)
+        let stallRunner = SubprocessRunner { _, _, _, _ in
+            started.signal()
+            _ = unblock.wait(timeout: .now() + 5.0)
+            return .init(exitCode: 0, stdout: "", stderr: "")
+        }
+        let svc = TerminalService(
+            zmxClient: ZmxClient(env: makeZmxEnv(available: true), runner: stallRunner)
+        )
+
+        let surface = AlasGhostty.SurfaceView(testIO: FakeGhosttySurfaceIO())
+        svc.registry.register(TerminalSession(
+            id: "leaf-drain-timeout",
+            worktreeId: "wt-1",
+            projectId: "proj-1",
+            surface: surface,
+            executable: "/bin/zsh",
+            args: [],
+            zmxSessionName: ZmxSessionName.derive(worktreeId: "wt-1", leafId: "leaf-drain-timeout")
+        ))
+        svc.closeSession(id: "leaf-drain-timeout", worktreeId: "wt-1")
+        _ = started.wait(timeout: .now() + 2.0)
+
+        let start = Date()
+        await svc.drainPendingKills(timeout: 0.1)
+        let elapsed = Date().timeIntervalSince(start)
+        unblock.signal()
+        svc.waitForPendingKills(timeout: 2.0)
+
+        #expect(elapsed < 0.5, "drain should return at its timeout even when a kill task stays blocked")
     }
 
     // MARK: resolveLaunchPlan — keepSessionsAlive gating

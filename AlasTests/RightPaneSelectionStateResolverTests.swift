@@ -5,6 +5,63 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct RightPaneSelectionStateResolverTests {
+    @Test func checkoutScopeRejectsAStaleRepositoryFocus() {
+        let project = ProjectConfig(id: "checkout-project", name: "Checkout", path: "/tmp/checkout", color: "#fff", addedAt: .distantPast)
+        let wt = Worktree(id: "checkout-worktree", projectId: project.id, name: "main", branch: "main", path: URL(fileURLWithPath: "/tmp/checkout"), status: .clean, lastActivity: .distantPast)
+        let manager = ProjectsManager(persistedProjects: [project])
+        manager.insertOptimisticWorktree(wt)
+        let resolver = RightPaneSelectionStateResolver(
+            selectedWorktreeId: wt.id,
+            projects: [project],
+            projectsManager: manager,
+            allowedWorktreeIDs: []
+        )
+        #expect(resolver.resolve() == .empty)
+    }
+
+    @Test func checkoutScopeQualifiesDuplicateWorktreeIDsByProjectAndLocation() {
+        let wrongProject = ProjectConfig(
+            id: "wrong-project",
+            name: "Wrong",
+            path: "/repos/wrong",
+            color: "#fff",
+            addedAt: .distantPast,
+            host: "wrong-host"
+        )
+        let focusedProject = ProjectConfig(
+            id: "focused-project",
+            name: "Focused",
+            path: "/repos/focused",
+            color: "#fff",
+            addedAt: .distantPast,
+            host: "focused-host"
+        )
+        let duplicateID = "/srv/checkouts/member"
+        let wrong = Worktree(id: duplicateID, projectId: wrongProject.id, name: "main", branch: "main", path: URL(fileURLWithPath: duplicateID), status: .clean, lastActivity: .distantPast)
+        let focused = Worktree(id: duplicateID, projectId: focusedProject.id, name: "main", branch: "main", path: URL(fileURLWithPath: duplicateID), status: .clean, lastActivity: .distantPast)
+        let manager = ProjectsManager(persistedProjects: [wrongProject, focusedProject])
+        manager.insertOptimisticWorktree(wrong)
+        manager.insertOptimisticWorktree(focused)
+
+        let resolver = RightPaneSelectionStateResolver(
+            selectedWorktreeId: duplicateID,
+            projects: [wrongProject, focusedProject],
+            projectsManager: manager,
+            allowedWorktreeIDs: [duplicateID],
+            checkoutFocusedWorktreeScope: CheckoutFocusedWorktreeScope(
+                worktreeID: duplicateID,
+                projectID: focusedProject.id,
+                executionLocation: .ssh("focused-host")
+            )
+        )
+
+        if case .active(let returned) = resolver.resolve() {
+            #expect(returned.projectId == focusedProject.id)
+        } else {
+            Issue.record("Expected scoped duplicate worktree to resolve to focused project")
+        }
+    }
+
     @Test func emptyWhenNoSelection() {
         let mgr = ProjectsManager(persistedProjects: [])
         let resolver = RightPaneSelectionStateResolver(

@@ -34,6 +34,23 @@ enum ReviewSessionConsolidation {
     }
 }
 
+enum WorkspaceDefinitionSaveError: LocalizedError {
+    case spacePlacementFailed
+    case workspacePersistenceFailed
+    case spacePlacementRollbackFailed
+
+    var errorDescription: String? {
+        switch self {
+        case .spacePlacementFailed:
+            "Could not place the Workspace in the active Space."
+        case .workspacePersistenceFailed:
+            "Could not save the Workspace definition."
+        case .spacePlacementRollbackFailed:
+            "Could not restore the active Space after the Workspace definition failed to save."
+        }
+    }
+}
+
 @Observable
 @MainActor
 final class AppState {
@@ -59,6 +76,16 @@ final class AppState {
     var canReopenClosedTab: Bool { !isReopeningClosedTab && !closedTabHistory.isEmpty }
     private var unpersistedGGWorktreeModes: [String: [String: GGWorktreeMode]] = [:]
     var spacesManager: SpacesManager
+    var workspacesManager: WorkspacesManager
+    @ObservationIgnored private let workspaceStore: WorkspaceStore
+    @ObservationIgnored private let workspaceRemoteTransport: WorkspaceRemoteTransport
+    @ObservationIgnored private var workspaceCheckoutCoordinator: WorkspaceCheckoutCoordinator?
+    /// Recovery information for a Workspace state file that could not be read.
+    /// Observable so Settings and future Workspace navigation can keep the
+    /// affected data visible instead of silently treating it as empty.
+    private(set) var workspaceRecoveryError: WorkspaceRecoveryState?
+    var workspaceNavigationState = WorkspaceNavigationState()
+    @ObservationIgnored private var workspaceSpaceCheckpointTask: Task<Void, Never>?
     var selectedWorktreeId: String?
     let suppressesRestoredRightPaneAfterAbandonedStartup: Bool
     private(set) var isRefreshingProjectTopologies = false
@@ -544,6 +571,10 @@ final class AppState {
     let fileIndex = FileIndex()
     @ObservationIgnored
     private let statusCache = GitStatusCache()
+    @ObservationIgnored
+    private var workspaceDisableInProgress = false
+    @ObservationIgnored
+    private var workspacePreviewToggleGeneration = 0
 
     var lsp: WorkspaceLSPManager {
         if let lspManager { return lspManager }
@@ -589,9 +620,15 @@ final class AppState {
         projectGitWatcherFactory: @escaping @MainActor (URL) -> ProjectGitWatcher = { ProjectGitWatcher(repoPath: $0) },
         runScriptCompletionWaiter: @escaping RunScriptCompletionWaiter = RunScriptCompletionMonitor.wait(for:),
         tabsManager: TabsManager? = nil,
-        restoreActiveTabsOnStartup: Bool = true
+        restoreActiveTabsOnStartup: Bool = true,
+        workspaceSpacePersistenceBridge: WorkspaceSpacePersistenceBridge? = nil,
+        workspacesManager: WorkspacesManager? = nil,
+        workspaceStore: WorkspaceStore = WorkspaceStore(),
+        workspaceRemoteTransport: WorkspaceRemoteTransport = .init()
     ) {
         self.store = store
+        self.workspaceStore = workspaceStore
+        self.workspaceRemoteTransport = workspaceRemoteTransport
         restoreActiveTabsOnNextReload = restoreActiveTabsOnStartup
         suppressesRestoredRightPaneAfterAbandonedStartup = !restoreActiveTabsOnStartup
         _tabs = tabsManager
@@ -607,6 +644,8 @@ final class AppState {
         self.remoteAccelerationPreparer = remoteAccelerationPreparer
         self.projectGitWatcherFactory = projectGitWatcherFactory
         self.runScriptCompletionWaiter = runScriptCompletionWaiter
+        let workspaceBridge = workspaceSpacePersistenceBridge ?? WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore)
+        self.workspacesManager = workspacesManager ?? WorkspacesManager(bridge: workspaceBridge)
         let config = (try? store.readIfExists(AppConfig.self, from: Paths.appConfigFile)) ?? AppConfig.defaults
         let projectsFile = (try? store.readIfExists(ProjectsFile.self, from: Paths.projectsFile)) ?? ProjectsFile(projects: [])
         let spacesFile = try? store.readIfExists(SpacesFile.self, from: Paths.spacesFile)
@@ -640,6 +679,11 @@ final class AppState {
             themeStore.setMatchSystem(true)
         }
         self.themeStore = themeStore
+        if config.workspacesEnabled {
+            Task { @MainActor [weak self] in
+                await self?.setWorkspacesEnabled(true, persistConfig: false)
+            }
+        }
         // All stored properties are initialized; we can safely capture `self`.
         // Wire the live default-ordering source so the manager reads the
         // current `config.worktrees.defaultOrdering` on every sort.
@@ -921,10 +965,24 @@ final class AppState {
     /// Re-scan persisted tab JSONs for every currently-known worktree id. Call
     /// after `projectsManager.refreshAll()` so worktrees actually exist.
     func reloadTabs() {
+        let restoringActiveTabs = restoreActiveTabsOnNextReload
+        if config.workspacesEnabled {
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                await self.setWorkspacesEnabled(true, persistConfig: false)
+                self.loadWorkspaceCheckoutSessionTabs(restoringActiveTabs: restoringActiveTabs)
+                await self.restoreLoadedWorkspaceCheckoutACPSessions()
+                if !self.config.terminal.keepSessionsAlive {
+                    self.pruneWorkspaceCheckoutTerminalTabs()
+                }
+                self.refreshPersistedHookSymlinks()
+                self.sweepOrphanWorkspaceCheckoutZmxSessions()
+            }
+        }
         let allWorktreeIds = projectsManager.projects.flatMap {
             projectsManager.worktrees(projectId: $0.id).map(\.id)
         }
-        if restoreActiveTabsOnNextReload {
+        if restoringActiveTabs {
             tabs.loadAll(worktreeIds: allWorktreeIds)
         } else {
             tabs.loadAllPersisted(restoringActiveTabs: false)
@@ -954,6 +1012,34 @@ final class AppState {
         sweepOrphanZmxSessions(worktreeIds: allWorktreeIds)
         Task { [weak self] in
             await self?.reconcileInterruptedDelegations()
+        }
+    }
+
+    private func restoreLoadedWorkspaceCheckoutACPSessions() async {
+        guard config.workspacesEnabled, workspacesManager.canMutate else { return }
+        for checkout in workspacesManager.checkouts where checkout.archivedAt == nil {
+            _ = await restoreWorkspaceCheckoutACPSessions(checkout)
+        }
+    }
+
+    func loadWorkspaceCheckoutSessionTabs(restoringActiveTabs: Bool = true) {
+        guard config.workspacesEnabled, workspacesManager.canMutate else { return }
+        for checkout in workspacesManager.checkouts {
+            loadSessionTabs(
+                owner: SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation),
+                restoringActiveTabs: restoringActiveTabs
+            )
+        }
+    }
+
+    private func pruneWorkspaceCheckoutTerminalTabs() {
+        guard config.workspacesEnabled, workspacesManager.canMutate else { return }
+        for checkout in workspacesManager.checkouts {
+            let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+            for tab in tabs.tabs(for: owner) {
+                guard case .terminal = tab else { continue }
+                closeSharedSessionTab(owner: owner, tabID: tab.id)
+            }
         }
     }
 
@@ -1008,10 +1094,164 @@ final class AppState {
         }
     }
 
+    private func sweepOrphanWorkspaceCheckoutZmxSessions() {
+        let knownLeavesByOwner = workspaceCheckoutTerminalLeafIDsByOwner()
+        terminal.sweepWorkspaceCheckoutOrphans(knownLeavesByOwner: knownLeavesByOwner)
+
+        let remoteHosts = Set(knownLeavesByOwner.keys.compactMap { owner -> String? in
+            guard case .workspaceCheckout(_, .ssh(let host)) = owner else { return nil }
+            return host
+        })
+        for host in remoteHosts {
+            Task {
+                await TerminalService.sweepRemoteWorkspaceCheckoutOrphans(
+                    host: host,
+                    knownLeavesByOwner: knownLeavesByOwner
+                )
+            }
+        }
+    }
+
+    func workspaceCheckoutTerminalLeafIDsByOwner() -> [SessionOwnerID: Set<String>] {
+        Dictionary(uniqueKeysWithValues: workspacesManager.checkouts.map { checkout in
+            let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+            guard checkout.archivedAt == nil, checkout.operation != .archiving else {
+                return (owner, [])
+            }
+            let leafIDs = tabs.tabs(for: owner).flatMap { tab -> [String] in
+                guard case .terminal(let state) = tab else { return [] }
+                return state.root.leaves().map(\.id)
+            }
+            return (owner, Set(leafIDs))
+        })
+    }
+
     var projects: [ProjectConfig] { projectsManager.projects }
 
     var activeSpaceProjects: [ProjectConfig] {
         spacesManager.activeProjects(from: projects)
+    }
+
+    /// The selected checkout may focus a member that is not a normal Project
+    /// peer of the active Space. Existing repository panes still receive a
+    /// Worktree, but only from this explicit checkout-member resolution.
+    var navigationProjects: [ProjectConfig] {
+        workspaceNavigationState.selectedCheckoutID == nil ? activeSpaceProjects : projects
+    }
+
+    var selectedWorkspaceCheckout: WorkspaceCheckout? {
+        workspaceNavigationState.selectedCheckoutID.flatMap(workspacesManager.checkout(id:))
+    }
+
+    /// A refreshed snapshot can archive or remove the displayed checkout.
+    /// Clear its focus so no repository pane keeps a stale checkout context.
+    func reconcileWorkspaceNavigationSelection() {
+        guard let checkoutID = workspaceNavigationState.selectedCheckoutID,
+              workspacesManager.checkout(id: checkoutID) == nil
+        else { return }
+        workspaceNavigationState.removeCheckout(checkoutID)
+        selectedWorktreeId = nil
+    }
+
+    var checkoutScopedWorktreeIDs: Set<String>? {
+        guard workspaceNavigationState.selectedCheckoutID != nil else { return nil }
+        return Set(workspaceNavigationState.repositoryFocusWorktreeID.map { [$0] } ?? [])
+    }
+
+    var checkoutFocusedWorktreeScope: CheckoutFocusedWorktreeScope? {
+        guard let checkout = selectedWorkspaceCheckout,
+              let memberID = workspaceNavigationState.focusedCheckoutMemberID,
+              let worktreeID = workspaceNavigationState.repositoryFocusWorktreeID,
+              let member = checkout.members.first(where: { $0.id == memberID })
+        else { return nil }
+        return CheckoutFocusedWorktreeScope(
+            worktreeID: worktreeID,
+            projectID: member.projectID,
+            executionLocation: checkout.executionLocation
+        )
+    }
+
+    func sharedSessionFallbackWorktreeForSelectedWorkspaceCheckout() -> Worktree? {
+        guard let checkout = selectedWorkspaceCheckout,
+              workspaceNavigationState.repositoryFocusWorktreeID == nil
+        else { return nil }
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+        guard !tabs.tabs(for: owner).isEmpty else { return nil }
+        return Worktree(
+            id: "workspace-checkout:\(owner.storageKey)",
+            projectId: "workspace-checkout",
+            name: checkout.fallbackWorkspaceName,
+            branch: checkout.branch,
+            path: URL(fileURLWithPath: checkout.rootPath),
+            status: .clean,
+            lastActivity: checkout.createdAt,
+            createdAt: checkout.createdAt
+        )
+    }
+
+    func selectWorkspace(id: UUID) {
+        guard config.workspacesEnabled, workspacesManager.canMutate else { return }
+        workspaceNavigationState.selectWorkspace(id)
+        selectedWorktreeId = nil
+    }
+
+    func selectWorkspaceCheckout(id: UUID) {
+        guard config.workspacesEnabled, workspacesManager.canMutate else { return }
+        guard let checkout = workspacesManager.checkout(id: id) else { return }
+        workspaceNavigationState.selectCheckout(checkout, resolvedWorktreeIDs: workspaceMemberWorktreeIDs(checkout))
+        selectedWorktreeId = workspaceNavigationState.repositoryFocusWorktreeID
+    }
+
+    func focusWorkspaceCheckoutMember(id: UUID) {
+        guard config.workspacesEnabled, workspacesManager.canMutate else { return }
+        guard let checkout = selectedWorkspaceCheckout else { return }
+        workspaceNavigationState.selectMember(id, in: checkout, resolvedWorktreeIDs: workspaceMemberWorktreeIDs(checkout))
+        selectedWorktreeId = workspaceNavigationState.repositoryFocusWorktreeID
+    }
+
+    func openWorkspaceCheckoutSearchResult(
+        relativePath: String,
+        worktreeId: String,
+        checkoutID: UUID,
+        memberID: UUID,
+        revealLine: Int? = nil,
+        revealEndLine: Int? = nil,
+        revealCharacter: Int? = nil
+    ) -> Bool {
+        guard config.workspacesEnabled, workspacesManager.canMutate else { return false }
+        selectWorkspaceCheckout(id: checkoutID)
+        guard let checkout = selectedWorkspaceCheckout,
+              checkout.id == checkoutID,
+              checkout.members.contains(where: { $0.id == memberID })
+        else { return false }
+        focusWorkspaceCheckoutMember(id: memberID)
+        guard selectedWorktreeId == worktreeId else { return false }
+        openFile(
+            relativePath: relativePath,
+            worktreeId: worktreeId,
+            revealLine: revealLine,
+            revealEndLine: revealEndLine,
+            revealCharacter: revealCharacter
+        )
+        return true
+    }
+
+    private func workspaceMemberWorktreeIDs(_ checkout: WorkspaceCheckout) -> [UUID: String] {
+        WorkspaceMemberWorktreeResolver.resolvedWorktreeIDs(
+            checkout: checkout,
+            worktrees: projects.flatMap { projectsManager.worktrees(projectId: $0.id) }
+        )
+    }
+
+    private func isExactWorkspaceRepairCandidate(path: String, lineageID: String, member: WorkspaceCheckoutMember) -> Bool {
+        guard let plan = member.plan,
+              let expectedLineage = member.gitLineageID,
+              !expectedLineage.isEmpty,
+              !lineageID.isEmpty
+        else { return false }
+        return URL(fileURLWithPath: plan.destinationPath).standardizedFileURL.path == path
+            && member.worktreePath == plan.destinationPath
+            && lineageID == expectedLineage
     }
 
     /// Build a `RepoSelectorEnvironment` that captures `self`. Used by
@@ -1086,6 +1326,69 @@ final class AppState {
         }
     }
 
+    func setWorkspacesEnabled(_ enabled: Bool, persistConfig: Bool = true) async {
+        workspacePreviewToggleGeneration += 1
+        let generation = workspacePreviewToggleGeneration
+        if !enabled, config.workspacesEnabled {
+            workspaceDisableInProgress = true
+            await quiesceWorkspaceCheckoutCreationBeforeDisable()
+        }
+        guard generation == workspacePreviewToggleGeneration else { return }
+        config.workspacesEnabled = enabled
+        if enabled || !config.workspacesEnabled {
+            workspaceDisableInProgress = false
+        }
+        if persistConfig { _ = saveConfig() }
+        let legacySpaces = spacesManager.file
+        let reconciled = await workspacesManager.setEnabled(enabled, spacesFile: legacySpaces)
+        guard generation == workspacePreviewToggleGeneration else { return }
+        reconcileWorkspaceNavigationSelection()
+        workspaceRecoveryError = workspacesManager.recoveryState
+        if let recovery = workspaceRecoveryError {
+            persistenceErrorHandler("Workspace Recovery Required", recovery.message)
+        }
+        guard let reconciled,
+              spacesManager.file == legacySpaces
+        else { return }
+        // The enabled preview may reveal dormant typed members, but enabling
+        // itself is not a user mutation. Keep that projection in memory until
+        // a later explicit Spaces or Workspace action persists it.
+        spacesManager.replace(file: reconciled)
+    }
+
+    func discardWorkspaceRecoveryState() async {
+        do {
+            try await workspaceStore.discardUnreadableState()
+            workspaceRecoveryError = nil
+            if config.workspacesEnabled {
+                _ = await workspacesManager.setEnabled(true, spacesFile: spacesManager.file)
+                workspaceRecoveryError = workspacesManager.recoveryState
+            }
+        } catch {
+            persistenceErrorHandler("Workspace Recovery Failed", error.localizedDescription)
+        }
+    }
+
+    private func quiesceWorkspaceCheckoutCreationBeforeDisable() async {
+        guard workspacesManager.canMutate else { return }
+        let checkouts = workspacesManager.checkouts
+        let stoppableCheckoutIDs = checkouts
+            .filter { $0.operation == .creating || $0.operation == .repairing || $0.operation == .deleting }
+            .map(\.id)
+        let coordinator = workspaceCoordinator()
+        for checkoutID in stoppableCheckoutIDs {
+            try? await coordinator.stopAfterCurrentOperations(checkoutID: checkoutID)
+        }
+        for checkoutID in checkouts.map(\.id) {
+            await coordinator.awaitLiveOperations(checkoutID: checkoutID)
+        }
+        await workspacesManager.refreshCheckoutSnapshots()
+    }
+
+    private var workspaceMutationAvailable: Bool {
+        config.workspacesEnabled && !workspaceDisableInProgress && workspacesManager.canMutate
+    }
+
     struct LanguageServerConfigChangeTracker {
         private var lastSavedLanguageServers: [LanguageServerConfig]
 
@@ -1120,12 +1423,33 @@ final class AppState {
 
     private func writeSpaces() -> Bool {
         do {
-            try store.write(spacesManager.file, to: Paths.spacesFile)
+            let file = spacesManager.file
+            try store.write(file, to: Paths.spacesFile)
+            if config.workspacesEnabled {
+                enqueueWorkspaceSpaceCheckpoint(afterWriting: file)
+            }
             return true
         } catch {
             persistenceErrorHandler("Spaces Save Failed", error.localizedDescription)
             return false
         }
+    }
+
+    private func enqueueWorkspaceSpaceCheckpoint(afterWriting spacesFile: SpacesFile) {
+        let previous = workspaceSpaceCheckpointTask
+        let manager = workspacesManager
+        workspaceSpaceCheckpointTask = Task { @MainActor [weak self] in
+            await previous?.value
+            do {
+                try await manager.checkpointSpaceLayouts(afterWriting: spacesFile)
+            } catch {
+                self?.persistenceErrorHandler("Workspace Spaces Save Failed", error.localizedDescription)
+            }
+        }
+    }
+
+    func waitForWorkspaceSpaceCheckpoint() async {
+        await workspaceSpaceCheckpointTask?.value
     }
 
     private func scheduleSpacesSave() {
@@ -1148,6 +1472,7 @@ final class AppState {
     }
 
     func selectWorktree(id: String?) {
+        workspaceNavigationState.clearCheckoutSelection()
         guard selectedWorktreeId != id || spacesManager.activeSpace?.lastSelectedWorktreeId != id else { return }
         selectedWorktreeId = id
         spacesManager.setLastSelectedWorktree(id)
@@ -1167,10 +1492,967 @@ final class AppState {
 
     func activateWorktreeCenterTab(worktreeId: String, tabId: TabID) {
         tabs.activate(worktreeId: worktreeId, tabId: tabId)
+        if let checkout = selectedWorkspaceCheckout,
+           workspaceMemberWorktreeIDs(checkout).values.contains(worktreeId) {
+            tabs.clearActiveTab(owner: .workspaceCheckout(checkout.id, checkout.executionLocation))
+        }
+    }
+
+    /// Composes checkout-owned session tabs with the repository tabs of the
+    /// focused member. Passing no owner preserves the existing worktree-only
+    /// center exactly.
+    func centerTabComposition(
+        focusedWorktreeID: String,
+        sharedSessionOwner: SessionOwnerID? = nil
+    ) -> CenterTabComposition {
+        guard let sharedSessionOwner else {
+            return CenterTabComposition(
+                worktreeTabs: tabs.tabs(forWorktree: focusedWorktreeID),
+                activeWorktreeTabId: tabs.activeTabId(forWorktree: focusedWorktreeID)
+            )
+        }
+        return CenterTabComposition(
+            sharedTabs: tabs.tabs(for: sharedSessionOwner),
+            focusedMemberTabs: tabs.tabs(forWorktree: focusedWorktreeID),
+            activeSharedTabId: tabs.activeTabId(for: sharedSessionOwner),
+            activeFocusedMemberTabId: tabs.activeTabId(forWorktree: focusedWorktreeID)
+        )
+    }
+
+    func loadSessionTabs(owner: SessionOwnerID, restoringActiveTabs: Bool = true) {
+        tabs.load(owner: owner, restoringActiveTabs: restoringActiveTabs)
+    }
+
+    func archiveSessionTabs(owner: SessionOwnerID) {
+        closeSharedTerminalTabs(owner: owner)
+        tabs.archive(owner: owner)
+    }
+
+    /// Shared checkout sessions are owned by their frozen checkout identity,
+    /// not by the member currently driving repository panes. Lifecycle code
+    /// calls this when archiving a checkout.
+    func stopWorkspaceCheckoutSessions(_ checkout: WorkspaceCheckout) async {
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+        let persistedTerminalSessions = persistedWorkspaceCheckoutTerminalSessions(checkout)
+        // The registry is authoritative for live sessions, including a
+        // freshly opened terminal whose tab has not been persisted yet.
+        // Persisted checkout-owned tab records are archived only after live
+        // sessions have drained, so unarchive cannot expose stale processes.
+        terminal.stopSessions(owner: owner)
+        terminal.terminateSessions(persistedTerminalSessions)
+        await terminal.drainPendingKills(timeout: 5)
+        await disposeACPManagerAndWait(owner: owner)
+        archiveSessionTabs(owner: owner)
+    }
+
+#if DEBUG
+    func persistedWorkspaceCheckoutTerminalSessionsForTesting(_ checkout: WorkspaceCheckout) -> [TerminalSessionIdentity] {
+        persistedWorkspaceCheckoutTerminalSessions(checkout)
+    }
+#endif
+
+    private func persistedWorkspaceCheckoutTerminalSessions(_ checkout: WorkspaceCheckout) -> [TerminalSessionIdentity] {
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+        return tabs.tabs(for: owner).flatMap { tab -> [TerminalSessionIdentity] in
+            guard case .terminal(let state) = tab else { return [] }
+            return state.root.leaves().map { TerminalSessionIdentity(owner: owner, leafId: $0.id) }
+        }
+    }
+
+    /// Opens a terminal in the checkout root with the startup script frozen
+    /// into the checkout snapshot. Repository Focus is deliberately absent
+    /// from this API.
+    @discardableResult
+    func openWorkspaceCheckoutTerminalTab(_ checkout: WorkspaceCheckout) async throws -> Tab {
+        guard let authoritative = await authoritativeCheckoutForWorkspaceTerminal(checkout) else {
+            throw NSError(domain: "AppState", code: 3, userInfo: [NSLocalizedDescriptionKey: "The Workspace checkout root is not owned by this checkout."])
+        }
+        let context = WorkspaceTerminalContext(
+            checkoutID: authoritative.id,
+            executionLocation: authoritative.executionLocation,
+            rootPath: authoritative.rootPath,
+            branch: authoritative.branch,
+            manifestPath: URL(fileURLWithPath: authoritative.rootPath)
+                .appendingPathComponent(WorkspaceCheckoutManifest.fileName).path,
+            startupScript: authoritative.configurationSnapshot?.shared.sessionOpenScript ?? ""
+        )
+        let session = try terminal.openCheckoutSession(
+            context: context,
+            cfg: config.terminal,
+            theme: themeStore.current
+        )
+        harness.detector.register(sessionId: session.id) { [weak session] in
+            session?.surface.foregroundPid
+        }
+        return tabs.appendTerminal(owner: context.owner, title: "Terminal", sessionId: session.id)
+    }
+
+    @discardableResult
+    func openWorkspaceCheckoutAgentTerminalTab(
+        _ checkout: WorkspaceCheckout,
+        focusedMemberWorktree: Worktree,
+        agentId: String
+    ) async throws -> Tab {
+        guard let authoritative = await authoritativeCheckoutForWorkspaceTerminal(checkout),
+              let focusedMember = authoritativeCheckoutMember(
+                for: focusedMemberWorktree,
+                in: authoritative
+              ),
+              let project = projects.first(where: { $0.id == focusedMember.projectID })
+        else {
+            throw AgentTerminalLaunchError.projectUnavailable
+        }
+        guard let agent = agentRegistry.enabled().first(where: { $0.id == agentId }) else {
+            throw AgentTerminalLaunchError.agentUnavailable
+        }
+        if agent.id == AgentKind.copilot.rawValue, project.host == nil {
+            try CopilotInstaller(projectRootURL: focusedMemberWorktree.path).install()
+        }
+        let baseContext = workspaceTerminalContext(for: authoritative)
+        let context = WorkspaceTerminalContext(
+            checkoutID: authoritative.id,
+            executionLocation: authoritative.executionLocation,
+            rootPath: authoritative.rootPath,
+            branch: authoritative.branch,
+            manifestPath: baseContext.manifestPath,
+            startupScript: [
+                baseContext.startupScript,
+                workspaceCheckoutAgentStartupCommand(for: agent, project: project, checkout: authoritative),
+            ].filter { !$0.isEmpty }.joined(separator: "\n")
+        )
+        let session = try terminal.openCheckoutSession(
+            context: context,
+            cfg: config.terminal,
+            theme: themeStore.current
+        )
+        harness.detector.register(sessionId: session.id) { [weak session] in
+            session?.surface.foregroundPid
+        }
+        return tabs.appendTerminal(owner: context.owner, title: agent.displayName, sessionId: session.id)
+    }
+
+    /// Checkout-owned counterpart of `splitFocusedPane(worktreeId:axis:)`.
+    /// It carries the frozen checkout context through the entire operation so
+    /// a member focus cannot change the new shell's owner or starting cwd.
+    func splitFocusedPane(checkout: WorkspaceCheckout, axis: SplitAxis) {
+        Task { @MainActor in
+            await splitFocusedPaneAfterCheckoutValidation(checkout: checkout, axis: axis)
+        }
+    }
+
+    private func splitFocusedPaneAfterCheckoutValidation(checkout: WorkspaceCheckout, axis: SplitAxis) async {
+        guard let authoritative = await authoritativeCheckoutForWorkspaceTerminal(checkout) else { return }
+        let context = workspaceTerminalContext(for: authoritative)
+        let owner = context.owner
+        guard let tabID = tabs.activeTabId(for: owner),
+              let tab = tabs.tabs(for: owner).first(where: { $0.id == tabID }),
+              case .terminal(let state) = tab,
+              let focused = state.root.find(leafId: state.focusedLeafId)?.leaf,
+              let session = terminal.registry.session(for: focused.id)
+        else { return }
+
+        let currentCwd = session.surface.currentWorkingDirectory
+        let restoredCwd = await validatedWorkspaceCheckoutRestorationCwd(
+            savedPath: currentCwd?.path ?? focused.lastCwd,
+            context: context,
+            savedLocation: currentCwd == nil ? focused.lastCwdLocation : context.executionLocation
+        )
+        let cwd = restoredCwd ?? URL(fileURLWithPath: context.rootPath)
+        do {
+            let leafID = UUID().uuidString
+            let newSession = try terminal.openCheckoutSession(
+                context: context,
+                cfg: config.terminal,
+                theme: themeStore.current,
+                forcedCwd: cwd,
+                forcedCwdLocation: context.executionLocation,
+                remoteCwdAlreadyValidated: restoredCwd != nil,
+                leafId: leafID
+            )
+            harness.detector.register(sessionId: newSession.id) { [weak newSession] in newSession?.surface.foregroundPid }
+            _ = tabs.splitFocusedLeaf(
+                owner: owner,
+                tabId: tabID,
+                axis: axis,
+                newLeafId: leafID,
+                newSessionId: leafID,
+                newLeafCwdLocation: context.executionLocation
+            )
+        } catch {
+            AlasGhostty.logger.error("splitFocusedPane checkout failed: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    func splitFocusedPane(worktreeId: String, sharedSessionOwner: SessionOwnerID?, axis: SplitAxis) {
+        if let checkout = activeSharedCheckoutTerminal(worktreeId: worktreeId, owner: sharedSessionOwner) {
+            splitFocusedPane(checkout: checkout, axis: axis)
+            return
+        }
+        splitFocusedPane(worktreeId: worktreeId, axis: axis)
+    }
+
+    private func workspaceTerminalContext(for checkout: WorkspaceCheckout) -> WorkspaceTerminalContext {
+        WorkspaceTerminalContext(
+            checkoutID: checkout.id,
+            executionLocation: checkout.executionLocation,
+            rootPath: checkout.rootPath,
+            branch: checkout.branch,
+            manifestPath: URL(fileURLWithPath: checkout.rootPath).appendingPathComponent(WorkspaceCheckoutManifest.fileName).path,
+            startupScript: checkout.configurationSnapshot?.shared.sessionOpenScript ?? ""
+        )
+    }
+
+    private func workspaceCheckoutManifestMatches(_ checkout: WorkspaceCheckout) async -> Bool {
+        let manifestPath = URL(fileURLWithPath: checkout.rootPath)
+            .appendingPathComponent(WorkspaceCheckoutManifest.fileName).path
+        switch checkout.executionLocation.normalized {
+        case .local:
+            let manifestURL = URL(fileURLWithPath: manifestPath)
+            guard let data = try? Data(contentsOf: manifestURL),
+                  let manifest = try? JSONDecoder().decode(WorkspaceCheckoutManifest.self, from: data)
+            else { return false }
+            return manifest.checkoutID == checkout.id
+                && Self.canonicalWorktreePath(manifest.rootPath) == Self.canonicalWorktreePath(checkout.rootPath)
+        case .ssh(let host):
+            let expectedCheckoutID = "\"checkoutID\":\"\(checkout.id.uuidString)\""
+            let expectedRootPath = WorkspaceCheckoutManifest.jsonStringNeedle(key: "rootPath", value: checkout.rootPath)
+            let command = """
+            test -s \(SSHCommand.shellQuote(manifestPath)) \
+            && grep -F \(SSHCommand.shellQuote(expectedCheckoutID)) \(SSHCommand.shellQuote(manifestPath)) >/dev/null \
+            && grep -F \(SSHCommand.shellQuote(expectedRootPath)) \(SSHCommand.shellQuote(manifestPath)) >/dev/null
+            """
+            guard let result = try? await workspaceRemoteTransport.run(host: host, command: command) else { return false }
+            return result.exitCode == 0
+        }
+    }
+
+    private func validatedWorkspaceCheckoutRestorationCwd(
+        savedPath: String?,
+        context: WorkspaceTerminalContext,
+        savedLocation: ExecutionLocation?
+    ) async -> URL? {
+        guard savedLocation?.normalized == context.executionLocation.normalized,
+              let savedPath,
+              !savedPath.isEmpty
+        else { return nil }
+        switch context.executionLocation.normalized {
+        case .local:
+            return TerminalService.checkoutRestorationCwd(
+                savedPath: savedPath,
+                context: context,
+                savedLocation: savedLocation
+            )
+        case .ssh(let host):
+            let command = Self.remoteCheckoutCwdContainmentCommand(
+                rootPath: context.rootPath,
+                savedPath: savedPath
+            )
+            guard let result = try? await RemoteExec.run(
+                host: host,
+                cwd: nil,
+                command: command,
+                timeout: 10
+            ) else { return nil }
+            return result.exitCode == 0 ? URL(fileURLWithPath: savedPath) : nil
+        }
+    }
+
+    nonisolated static func remoteCheckoutCwdContainmentCommand(rootPath: String, savedPath: String) -> String {
+        """
+        resolve_dir() {
+          [ -d "$1" ] || exit 2
+          (cd "$1" 2>/dev/null && pwd -P) || exit 2
+        }
+        root_resolved=$(resolve_dir \(SSHCommand.shellQuote(rootPath))) || exit 2
+        candidate_resolved=$(resolve_dir \(SSHCommand.shellQuote(savedPath))) || exit 2
+        case "$candidate_resolved" in
+          "$root_resolved"|"$root_resolved"/*) exit 0 ;;
+          *) exit 1 ;;
+        esac
+        """
+    }
+
+    private func authoritativeCheckoutForWorkspaceTerminal(_ checkout: WorkspaceCheckout) async -> WorkspaceCheckout? {
+        guard config.workspacesEnabled,
+              let authoritative = await workspaceStore.checkout(id: checkout.id),
+              authoritative.executionLocation.normalized == checkout.executionLocation.normalized,
+              authoritative.archivedAt == nil,
+              authoritative.operation == .idle,
+              await workspaceCheckoutManifestMatches(authoritative)
+        else { return nil }
+        return authoritative
+    }
+
+    func mcpServersForACPToolbar(worktree: Worktree, owner: SessionOwnerID?) -> [ProjectMCPServer] {
+        if let owner,
+           case .workspaceCheckout(let checkoutID, _) = owner,
+           let checkout = workspacesManager.checkout(id: checkoutID) {
+            return workspaceFrozenMCPServers(for: checkout)
+        }
+        return projects.first(where: { $0.id == worktree.projectId })?.mcpServers ?? []
+    }
+
+    private func currentWorkspaceCheckoutSnapshot(_ checkout: WorkspaceCheckout) -> WorkspaceCheckout {
+        workspacesManager.checkout(id: checkout.id) ?? checkout
+    }
+
+    private func workspaceFrozenMCPAttachments(for checkout: WorkspaceCheckout) -> (descriptors: [WorkspaceMCPServerDescriptor], unavailableDescriptorIDs: Set<String>)? {
+        guard let frozenConfiguration = checkout.configurationSnapshot else { return nil }
+        let unavailableMemberIDs = Set(checkout.members.filter { $0.availability != .available }.map(\.workspaceMemberID.uuidString))
+        let descriptors = frozenConfiguration.members.values.flatMap(\.mcpServers)
+        let unavailableDescriptors = Set(descriptors.compactMap { descriptor in
+            unavailableMemberIDs.contains(where: { descriptor.id.hasPrefix($0 + ":") }) ? descriptor.id : nil
+        })
+        return (descriptors, unavailableDescriptors)
+    }
+
+    private func workspaceFrozenMCPServers(for checkout: WorkspaceCheckout) -> [ProjectMCPServer] {
+        guard let descriptors = workspaceFrozenMCPAttachments(for: checkout)?.descriptors else { return [] }
+        return MCPAttachmentPlanner.normalizedFrozenServerDescriptors(for: descriptors).map(\.server)
+    }
+
+    private func authoritativeCheckoutMember(
+        for worktree: Worktree,
+        in checkout: WorkspaceCheckout
+    ) -> WorkspaceCheckoutMember? {
+        let worktreePath = Self.canonicalWorktreePath(worktree.path.path)
+        return checkout.members.first { member in
+            guard member.availability == .available,
+                  member.projectID == worktree.projectId,
+                  Self.canonicalWorktreePath(member.worktreePath) == worktreePath
+            else { return false }
+            if let plannedDestination = member.plan?.destinationPath {
+                return Self.canonicalWorktreePath(plannedDestination) == worktreePath
+            }
+            return true
+        }
+    }
+
+    /// Restores checkout tabs under their checkout owner. A saved cwd without
+    /// matching persisted location is intentionally discarded and restarts at
+    /// the authoritative root rather than trusting an ambiguous path.
+    @discardableResult
+    func restoreWorkspaceCheckoutTerminalTabIfNeeded(_ checkout: WorkspaceCheckout, tabID: TabID) throws -> Tab? {
+        let context = workspaceTerminalContext(for: checkout)
+        let owner = context.owner
+        guard let tab = tabs.tabs(for: owner).first(where: { $0.id == tabID }),
+              case .terminal(let state) = tab
+        else { return nil }
+        for leaf in state.root.leaves() where terminal.registry.session(for: leaf.id) == nil {
+            let session = try terminal.openCheckoutSession(
+                context: context,
+                cfg: config.terminal,
+                theme: themeStore.current,
+                forcedCwd: TerminalService.checkoutRestorationCwd(
+                    savedPath: leaf.lastCwd,
+                    context: context,
+                    savedLocation: leaf.lastCwdLocation
+                ),
+                forcedCwdLocation: leaf.lastCwdLocation,
+                leafId: leaf.id
+            )
+            harness.detector.register(sessionId: session.id) { [weak session] in session?.surface.foregroundPid }
+        }
+        return tabs.tabs(for: owner).first(where: { $0.id == tabID })
+    }
+
+    /// The App owns one coordinator and one authoritative state-file actor.
+    /// Lifecycle operations therefore never consult the manager's read-only
+    /// display cache when deciding which location-qualified sessions to stop.
+    func workspaceCoordinator() -> WorkspaceCheckoutCoordinator {
+        if let workspaceCheckoutCoordinator { return workspaceCheckoutCoordinator }
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: workspaceStore,
+            sessions: WorkspaceCheckoutSessionStopper(
+                store: workspaceStore,
+                stop: { [weak self] checkout in await self?.stopWorkspaceCheckoutSessions(checkout) }
+            )
+        )
+        workspaceCheckoutCoordinator = coordinator
+        return coordinator
+    }
+
+    /// Definition changes are intentionally independent of checkout snapshots:
+    /// they only determine future creation requests.
+    func saveWorkspaceDefinition(_ workspace: Workspace) async throws {
+        guard workspaceMutationAvailable else {
+            throw WorkspaceStoreError.recoveryRequired
+        }
+        // Make sidebar placement visible first. If its legacy Spaces write
+        // fails, restore the in-memory layout and do not create an otherwise
+        // invisible durable Workspace definition.
+        let originalSpacesFile = spacesManager.file
+        let activeID = spacesManager.activeSpaceId
+        let space = spacesManager.space(id: activeID)
+        let current = space?.members ?? space?.projectIds.map(SpaceMemberReference.project) ?? []
+        let needsPlacement = !current.contains(.workspace(workspace.id))
+        if needsPlacement {
+            spacesManager.setTypedMembers(current + [.workspace(workspace.id)], forSpace: activeID)
+            guard writeSpaces() else {
+                spacesManager.replace(file: originalSpacesFile)
+                throw WorkspaceDefinitionSaveError.spacePlacementFailed
+            }
+        }
+        do {
+            try await workspaceStore.mutate { state in
+                if let index = state.workspaces.firstIndex(where: { $0.id == workspace.id }) {
+                    state.workspaces[index] = workspace
+                } else {
+                    state.workspaces.append(workspace)
+                }
+            }
+        } catch {
+            if needsPlacement {
+                spacesManager.replace(file: originalSpacesFile)
+                do {
+                    try store.write(originalSpacesFile, to: Paths.spacesFile)
+                    if config.workspacesEnabled {
+                        enqueueWorkspaceSpaceCheckpoint(afterWriting: originalSpacesFile)
+                    }
+                } catch {
+                    persistenceErrorHandler("Spaces Save Failed", error.localizedDescription)
+                    throw WorkspaceDefinitionSaveError.spacePlacementRollbackFailed
+                }
+            }
+            throw WorkspaceDefinitionSaveError.workspacePersistenceFailed
+        }
+        await workspacesManager.refreshCheckoutSnapshots()
+    }
+
+    func deleteWorkspaceDefinition(id workspaceID: UUID) async throws {
+        guard workspaceMutationAvailable else {
+            throw WorkspaceStoreError.recoveryRequired
+        }
+        let originalSpacesFile = spacesManager.file
+        var stagedSpacesFile = originalSpacesFile
+        var changedSpaces = false
+        for index in stagedSpacesFile.spaces.indices {
+            guard let members = stagedSpacesFile.spaces[index].members else { continue }
+            let filtered = members.filter { reference in
+                guard case .workspace(let id) = reference else { return true }
+                return id != workspaceID
+            }
+            guard filtered != members else { continue }
+            stagedSpacesFile.spaces[index].members = filtered
+            stagedSpacesFile.spaces[index].projectIds = filtered.compactMap { reference in
+                guard case .project(let id) = reference else { return nil }
+                return id
+            }
+            changedSpaces = true
+        }
+        if changedSpaces {
+            spacesManager.replace(file: stagedSpacesFile)
+            guard writeSpaces() else {
+                spacesManager.replace(file: originalSpacesFile)
+                throw WorkspaceDefinitionSaveError.spacePlacementFailed
+            }
+        }
+        do {
+            try await workspaceStore.mutate { state in
+                guard state.workspaces.contains(where: { $0.id == workspaceID }) else {
+                    throw WorkspaceCheckoutCoordinatorError.checkoutMissing
+                }
+                state.workspaces.removeAll { $0.id == workspaceID }
+                for index in state.checkouts.indices where state.checkouts[index].workspaceID == workspaceID {
+                    state.checkouts[index].workspaceID = nil
+                }
+            }
+        } catch {
+            if changedSpaces {
+                spacesManager.replace(file: originalSpacesFile)
+                do {
+                    try store.write(originalSpacesFile, to: Paths.spacesFile)
+                    if config.workspacesEnabled {
+                        enqueueWorkspaceSpaceCheckpoint(afterWriting: originalSpacesFile)
+                    }
+                } catch {
+                    persistenceErrorHandler("Spaces Save Failed", error.localizedDescription)
+                    throw WorkspaceDefinitionSaveError.spacePlacementRollbackFailed
+                }
+            }
+            throw WorkspaceDefinitionSaveError.workspacePersistenceFailed
+        }
+        await workspacesManager.refreshCheckoutSnapshots()
+        workspaceNavigationState.removeWorkspace(workspaceID)
+    }
+
+    func preflightWorkspaceCheckout(_ request: WorkspaceCheckoutRequest) async -> WorkspaceCheckoutPreflightResult {
+        await WorkspaceCheckoutPreflight(projects: projects).prepare(request)
+    }
+
+    /// The coordinator persists the frozen plan before returning. Selection is
+    /// therefore never optimistic before durability is established.
+    func createWorkspaceCheckout(workspace: Workspace, plan: FrozenWorkspaceCheckoutPlan) async throws -> WorkspaceCheckout {
+        guard workspaceMutationAvailable else {
+            throw WorkspaceStoreError.recoveryRequired
+        }
+        let coordinator = workspaceCoordinator()
+        let checkout: WorkspaceCheckout
+        do {
+            checkout = try await coordinator.createPersisted(
+                workspace: workspace,
+                plan: plan,
+                configurationSnapshot: workspaceConfigurationSnapshot(for: workspace, plan: plan)
+            )
+        } catch {
+            await workspacesManager.refreshCheckoutSnapshots()
+            throw error
+        }
+        await workspacesManager.refreshCheckoutSnapshots()
+        guard workspaceMutationAvailable else {
+            return try await coordinator.stopPendingCreationBeforeStart(checkoutID: checkout.id)
+        }
+        selectWorkspaceCheckout(id: checkout.id)
+        await coordinator.beginCreation(checkoutID: checkout.id)
+        Task { @MainActor [weak self, weak coordinator] in
+            guard let self, let coordinator else { return }
+            await coordinator.awaitCreationCompletion(checkoutID: checkout.id)
+            await self.applyWorkspaceCheckoutCreationLaunchPreference(checkoutID: checkout.id)
+        }
+        return checkout
+    }
+
+    private func applyWorkspaceCheckoutCreationLaunchPreference(checkoutID: UUID) async {
+        await workspacesManager.refreshCheckoutSnapshots()
+        guard let checkout = workspacesManager.checkout(id: checkoutID),
+              checkout.archivedAt == nil,
+              checkout.operation == .idle,
+              checkout.members.allSatisfy({ $0.checkpoint == .setupComplete }),
+              let preference = checkout.configurationSnapshot?.shared.creationLaunchPreference,
+              preference.openAfterCreate == true
+        else { return }
+
+        await refreshWorkspaceCheckoutMemberProjects(checkout)
+        await workspacesManager.refreshCheckoutSnapshots()
+        selectWorkspaceCheckout(id: checkout.id)
+        switch preference.launcherMode ?? .terminal {
+        case .terminal:
+            if let agentID = preference.agentID,
+               agent(id: agentID) != nil,
+               let worktreeID = selectedWorktreeId,
+               let worktree = worktree(withId: worktreeID) {
+                _ = try? await openWorkspaceCheckoutAgentTerminalTab(
+                    checkout,
+                    focusedMemberWorktree: worktree,
+                    agentId: agentID
+                )
+            } else {
+                _ = try? await openWorkspaceCheckoutTerminalTab(checkout)
+            }
+        case .acp:
+            guard let agentID = preference.agentID, agent(id: agentID) != nil else { return }
+            _ = await openWorkspaceCheckoutACPSession(checkout: checkout, agentID: agentID)
+        }
+    }
+
+    private func refreshWorkspaceCheckoutMemberProjects(_ checkout: WorkspaceCheckout) async {
+        var refreshed = Set<String>()
+        for member in checkout.members where !refreshed.contains(member.projectID) {
+            refreshed.insert(member.projectID)
+            _ = try? await refreshProjectWorktrees(projectId: member.projectID)
+        }
+    }
+
+    private func workspaceConfigurationSnapshot(
+        for workspace: Workspace,
+        plan: FrozenWorkspaceCheckoutPlan
+    ) -> WorkspaceCheckoutConfigurationSnapshot {
+        let projectsByID = Dictionary(uniqueKeysWithValues: projects.map { ($0.id, $0) })
+        let members = plan.members.compactMap { planned -> WorkspaceConfigurationResolver.MemberInput? in
+            guard let project = projectsByID[planned.projectID] else { return nil }
+            return .init(
+                id: planned.workspaceMemberID,
+                project: project,
+                checkoutRoot: plan.rootPath,
+                worktreePath: planned.destinationPath
+            )
+        }
+        return WorkspaceConfigurationResolver.resolve(.init(
+            globalTerminal: config.terminal,
+            globalLaunchPreference: .init(
+                openAfterCreate: true,
+                launcherMode: config.agents.defaultLauncherMode,
+                agentID: config.agents.worktreeAutoLaunch.agentId,
+                useBypassPermissions: config.agents.worktreeAutoLaunch.useBypassPermissions
+            ),
+            workspaceConfiguration: workspace.configuration,
+            members: members,
+            availableLauncherModes: Set(AppConfig.LauncherMode.allCases),
+            enabledAgentIDs: Set(agentRegistry.enabled().map(\.id))
+        ))
+    }
+
+    func archiveWorkspaceCheckout(id: UUID) async throws -> WorkspaceCheckout {
+        guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        let wasSelected = workspaceNavigationState.selectedCheckoutID == id
+        let checkout = try await workspaceCoordinator().archive(checkoutID: id)
+        await workspacesManager.refreshCheckoutSnapshots()
+        workspaceNavigationState.removeCheckout(id)
+        if wasSelected {
+            selectedWorktreeId = nil
+        }
+        return checkout
+    }
+
+    func unarchiveWorkspaceCheckout(id: UUID) async throws -> WorkspaceCheckout {
+        guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        let checkout = try await workspaceCoordinator().unarchive(checkoutID: id)
+        await workspacesManager.refreshCheckoutSnapshots()
+        _ = await restoreWorkspaceCheckoutACPSessions(checkout)
+        return checkout
+    }
+
+    func stopWorkspaceCheckoutAfterCurrentOperations(id: UUID) async throws {
+        guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        try await workspaceCoordinator().stopAfterCurrentOperations(checkoutID: id)
+        await workspacesManager.refreshCheckoutSnapshots()
+    }
+
+    func resumeWorkspaceCheckoutCreation(id: UUID) async throws -> WorkspaceCheckout {
+        guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        let checkout = try await workspaceCoordinator().resumeCreation(checkoutID: id)
+        await workspacesManager.refreshCheckoutSnapshots()
+        selectWorkspaceCheckout(id: checkout.id)
+        return checkout
+    }
+
+    func resumeWorkspaceCheckoutMemberCreation(checkoutID: UUID, memberID: UUID) async throws -> WorkspaceCheckout {
+        guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        let checkout = try await workspaceCoordinator().resumeCreation(checkoutID: checkoutID, memberID: memberID)
+        await workspacesManager.refreshCheckoutSnapshots()
+        selectWorkspaceCheckout(id: checkout.id)
+        focusWorkspaceCheckoutMember(id: memberID)
+        return checkout
+    }
+
+    func retryWorkspaceCheckoutSetup(checkoutID: UUID, memberID: UUID) async throws -> WorkspaceCheckout {
+        guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        let checkout = try await workspaceCoordinator().retrySetup(checkoutID: checkoutID, memberID: memberID)
+        await workspacesManager.refreshCheckoutSnapshots()
+        selectWorkspaceCheckout(id: checkout.id)
+        return checkout
+    }
+
+    func workspaceRepairPlan(checkoutID: UUID, memberID: UUID) throws -> WorkspaceRepairPlanModel {
+        guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        guard let checkout = workspacesManager.checkout(id: checkoutID),
+              let member = checkout.members.first(where: { $0.id == memberID })
+        else { throw WorkspaceCheckoutCoordinatorError.checkoutMissing }
+        var candidatesByPath: [String: WorkspaceRepairCandidate] = [:]
+        let worktrees = projects.flatMap { projectsManager.worktrees(projectId: $0.id) }
+            .filter { $0.projectId == member.projectID }
+        for worktree in worktrees {
+            let path = worktree.path.standardizedFileURL.path
+            let lineage = worktree.lineageID ?? ""
+            candidatesByPath[path] = WorkspaceRepairCandidate(
+                path: path,
+                lineageID: lineage,
+                isExactMatch: isExactWorkspaceRepairCandidate(path: path, lineageID: lineage, member: member)
+            )
+        }
+        if let plan = member.plan {
+            let path = URL(fileURLWithPath: plan.destinationPath).standardizedFileURL.path
+            candidatesByPath[path] = WorkspaceRepairCandidate(
+                path: path,
+                lineageID: member.gitLineageID ?? "",
+                isExactMatch: candidatesByPath[path]?.isExactMatch == true
+            )
+        }
+        return WorkspaceRepairPlanModel(
+            memberName: member.fallbackProjectName,
+            candidates: candidatesByPath.values.sorted { $0.path < $1.path }
+        )
+    }
+
+    func useWorkspaceRepairCandidate(checkoutID: UUID, memberID: UUID, candidate: WorkspaceRepairCandidate) async throws -> WorkspaceCheckout {
+        guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        let checkout = try await workspaceCoordinator().useExistingVerifiedCandidate(
+            checkoutID: checkoutID,
+            memberID: memberID,
+            candidate: candidate
+        )
+        await workspacesManager.refreshCheckoutSnapshots()
+        selectWorkspaceCheckout(id: checkout.id)
+        return checkout
+    }
+
+    func deleteWorkspaceCheckoutMember(checkoutID: UUID, memberID: UUID, confirmingRisks: Bool = false) async throws -> WorkspaceCheckout {
+        guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        let resolvedWorktree = try await resolveDirtyBuffersBeforeWorkspaceMemberDeletion(checkoutID: checkoutID, memberID: memberID)
+        guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        let checkout = try await workspaceCoordinator().deleteMember(checkoutID: checkoutID, memberID: memberID, confirmingRisks: confirmingRisks)
+        if let resolvedWorktree,
+           checkout.members.first(where: { $0.id == memberID })?.availability == .explicitlyDeleted {
+            await cleanupDeletedWorkspaceMemberRuntime(resolvedWorktree)
+        }
+        await workspacesManager.refreshCheckoutSnapshots()
+        selectWorkspaceCheckout(id: checkout.id)
+        return checkout
+    }
+
+    private func resolveDirtyBuffersBeforeWorkspaceMemberDeletion(checkoutID: UUID, memberID: UUID) async throws -> Worktree? {
+        guard let checkout = workspacesManager.checkout(id: checkoutID),
+              let worktree = workspaceMemberWorktrees(checkout)[memberID]
+        else { return nil }
+        let dirty = dirtyEditorTabIds(worktreeId: worktree.id)
+        guard !dirty.isEmpty else { return worktree }
+        switch promptForDirtyBuffers(
+            action: "Delete",
+            branch: worktree.branch,
+            dirtyCount: dirty.count,
+            onDiskDestructive: true,
+            keepBranch: true
+        ) {
+        case .save:
+            guard await saveDirtyBuffers(in: worktree) else { throw CocoaError(.userCancelled) }
+        case .discard:
+            return worktree
+        case .cancel:
+            throw CocoaError(.userCancelled)
+        }
+        return worktree
+    }
+
+    private func workspaceMemberWorktrees(_ checkout: WorkspaceCheckout) -> [UUID: Worktree] {
+        let ids = workspaceMemberWorktreeIDs(checkout)
+        var resolved: [UUID: Worktree] = [:]
+        for member in checkout.members {
+            guard let worktreeID = ids[member.id] else { continue }
+            let expectedPath = URL(fileURLWithPath: member.worktreePath).standardizedFileURL.path
+            guard let worktree = projectsManager.worktrees(projectId: member.projectID).first(where: {
+                $0.id == worktreeID
+                    && $0.projectId == member.projectID
+                    && URL(fileURLWithPath: $0.path.path).standardizedFileURL.path == expectedPath
+            }) else { continue }
+            resolved[member.id] = worktree
+        }
+        return resolved
+    }
+
+    func workspaceMemberReviewRollupBuilder(for checkout: WorkspaceCheckout) -> MemberReviewRollupBuilder {
+        var stacks: [String: GGStack] = [:]
+        for member in checkout.members where member.availability == .available {
+            guard let worktreeID = workspaceMemberWorktreeIDs(checkout)[member.id],
+                  let stack = rightPaneStore.activeState(worktreeId: worktreeID)?.ggStack
+            else { continue }
+            let qualifiedWorktreeID = WorkspaceReviewSessionIdentity.worktreeID(
+                projectID: member.projectID,
+                executionLocation: checkout.executionLocation,
+                repositoryPath: member.worktreePath
+            )
+            stacks[qualifiedWorktreeID] = stack
+        }
+        return MemberReviewRollupBuilder(gg: WorkspaceCachedGGStackReader(stacksByWorktreeID: stacks))
+    }
+
+    private func cleanupDeletedWorkspaceMemberRuntime(_ worktree: Worktree) async {
+        cleanupWorktreeState(worktreeId: worktree.id)
+        projectsManager.setOperationState(id: worktree.id, state: nil)
+        removePersistedGGWorktreeMode(projectId: worktree.projectId, worktreeId: worktree.id)
+        _ = try? await refreshProjectWorktrees(projectId: worktree.projectId)
+        if selectedWorktreeId == worktree.id {
+            selectedWorktreeId = nil
+        }
+    }
+
+    func deleteWorkspaceCheckoutMemberSnapshot(checkoutID: UUID, memberID: UUID) async throws -> WorkspaceCheckout {
+        guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        let checkout = try await workspaceCoordinator().deleteMemberSnapshot(checkoutID: checkoutID, memberID: memberID)
+        await workspacesManager.refreshCheckoutSnapshots()
+        selectWorkspaceCheckout(id: checkout.id)
+        return checkout
+    }
+
+    func openWorkspaceReview(_ action: WorkspaceReviewAction) {
+        guard workspaceMutationAvailable else { return }
+        WorkspaceReviewActionHandler(open: { [weak self] worktreeID, record in
+            _ = self?.tabs.openOrFocusReviewSession(worktreeId: worktreeID, record: record)
+            self?.selectedWorktreeId = worktreeID
+            if let checkoutID = self?.workspaceNavigationState.selectedCheckoutID,
+               let checkout = self?.workspacesManager.checkout(id: checkoutID),
+               checkout.members.contains(where: { $0.id == action.memberID }) {
+                self?.workspaceNavigationState.selectMember(
+                    action.memberID,
+                    in: checkout,
+                    resolvedWorktreeIDs: self?.workspaceMemberWorktreeIDs(checkout) ?? [:]
+                )
+                self?.selectedWorktreeId = self?.workspaceNavigationState.repositoryFocusWorktreeID
+                self?.tabs.clearActiveTab(owner: .workspaceCheckout(checkout.id, checkout.executionLocation))
+            }
+        }).open(action)
+    }
+
+    func workspaceMemberDeletionConfirmation(checkoutID: UUID, memberID: UUID) async throws -> WorkspaceLifecycleConfirmationModel {
+        guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        let preview = try await workspaceCoordinator().previewMemberDeletion(checkoutID: checkoutID, memberID: memberID)
+        var model = WorkspaceLifecycleConfirmationModel.memberDeletion(member: preview.member, preflight: preview.preflight)
+        model.risks.append(contentsOf: preview.rootObservation.leftovers)
+        return model
+    }
+
+    func workspaceCheckoutDeletionConfirmation(checkoutID: UUID) async throws -> WorkspaceLifecycleConfirmationModel {
+        guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        guard let checkout = workspacesManager.checkout(id: checkoutID) else {
+            throw WorkspaceCheckoutCoordinatorError.checkoutMissing
+        }
+        var risks: [String] = []
+        for member in checkout.members where member.availability != .explicitlyDeleted {
+            let preview = try await workspaceCoordinator().previewMemberDeletion(checkoutID: checkoutID, memberID: member.id)
+            var model = WorkspaceLifecycleConfirmationModel.memberDeletion(member: preview.member, preflight: preview.preflight)
+            model.risks.append(contentsOf: preview.rootObservation.leftovers)
+            risks.append(contentsOf: model.risks.map { "\(member.fallbackProjectName): \($0)" })
+        }
+        return WorkspaceLifecycleConfirmationModel.checkoutDeletion(risks: risks)
+    }
+
+    func workspaceForgetConfirmation(checkoutID: UUID) throws -> WorkspaceLifecycleConfirmationModel {
+        guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        guard let checkout = workspacesManager.checkout(id: checkoutID) else {
+            throw WorkspaceCheckoutCoordinatorError.checkoutMissing
+        }
+        return WorkspaceLifecycleConfirmationModel.forgetCheckout(
+            cleanups: checkout.members.compactMap(\.cleanup),
+            confirmedPreserveArtifacts: false
+        )
+    }
+
+    func deleteWorkspaceCheckout(id: UUID, confirmingRisks: Bool = false) async throws -> WorkspaceCheckout {
+        guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        guard let before = workspacesManager.checkout(id: id) else { throw WorkspaceCheckoutCoordinatorError.checkoutMissing }
+        var resolvedWorktrees: [UUID: Worktree] = [:]
+        for member in before.members {
+            if let worktree = try await resolveDirtyBuffersBeforeWorkspaceMemberDeletion(checkoutID: id, memberID: member.id) {
+                resolvedWorktrees[member.id] = worktree
+            }
+        }
+        guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        let checkout = try await workspaceCoordinator().deleteCheckout(checkoutID: id, confirmingRisks: confirmingRisks)
+        for member in checkout.members where member.availability == .explicitlyDeleted {
+            if let worktree = resolvedWorktrees[member.id] {
+                await cleanupDeletedWorkspaceMemberRuntime(worktree)
+            }
+        }
+        await workspacesManager.refreshCheckoutSnapshots()
+        selectWorkspaceCheckout(id: id)
+        return checkout
+    }
+
+    func forgetWorkspaceCheckout(id: UUID, confirmedPreserveArtifacts: Bool = false) async throws {
+        guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        let activeMembers = spacesManager.activeSpace?.members
+            ?? spacesManager.activeSpace?.projectIds.map(SpaceMemberReference.project)
+            ?? []
+        let ordered = WorkspaceSidebarLayout.visibleCheckoutIDs(
+            members: activeMembers,
+            workspaces: workspacesManager.workspaces,
+            checkouts: workspacesManager.checkouts
+        )
+        let nearest = WorkspaceCheckoutDetailModel.nearestPeer(afterDeleting: id, orderedCheckoutIDs: ordered)
+        try await workspaceCoordinator().forget(checkoutID: id, confirmedPreserveArtifacts: confirmedPreserveArtifacts)
+        await workspacesManager.refreshCheckoutSnapshots()
+        workspaceNavigationState.removeCheckout(id)
+        if let nearest {
+            selectWorkspaceCheckout(id: nearest)
+        } else {
+            selectedWorktreeId = nil
+        }
+    }
+
+    func activateComposedCenterTab(
+        worktreeID: String,
+        sharedSessionOwner: SessionOwnerID?,
+        tabID: TabID
+    ) {
+        if let sharedSessionOwner,
+           tabs.tabs(for: sharedSessionOwner).contains(where: { $0.id == tabID }) {
+            tabs.activate(owner: sharedSessionOwner, tabId: tabID)
+            tabs.clearActiveTab(worktreeId: worktreeID)
+        } else {
+            tabs.activate(worktreeId: worktreeID, tabId: tabID)
+            if let sharedSessionOwner {
+                tabs.clearActiveTab(owner: sharedSessionOwner)
+            }
+        }
+    }
+
+    /// The ordinary tab-bar close affordance keeps the existing worktree
+    /// close request path, including confirmation and closed-tab history.
+    func requestCloseComposedCenterTab(
+        worktreeID: String,
+        sharedSessionOwner: SessionOwnerID?,
+        tabID: TabID
+    ) {
+        if let sharedSessionOwner,
+           tabs.tabs(for: sharedSessionOwner).contains(where: { $0.id == tabID }) {
+            requestCloseSharedSessionTab(owner: sharedSessionOwner, tabID: tabID)
+        } else {
+            requestCloseTab(worktreeId: worktreeID, tabId: tabID)
+        }
+    }
+
+    /// Bulk close actions retain the established bulk worktree lifecycle for
+    /// member tabs. Checkout-owned tabs intentionally stay in their owner
+    /// bucket and will gain Terminal/ACP teardown when those owners are
+    /// generalized in the following slices.
+    func closeComposedCenterTabs(
+        worktreeID: String,
+        sharedSessionOwner: SessionOwnerID?,
+        tabIDs: [TabID]
+    ) {
+        let sharedIDs = Set(sharedSessionOwner.map { owner in
+            tabs.tabs(for: owner).map(\.id)
+        } ?? [])
+        let memberIDs = tabIDs.filter { !sharedIDs.contains($0) }
+        if !memberIDs.isEmpty {
+            closeCenterTabs(worktreeId: worktreeID, tabIds: memberIDs)
+        }
+        guard let sharedSessionOwner else { return }
+        for tabID in tabIDs where sharedIDs.contains(tabID) {
+            closeSharedSessionTab(owner: sharedSessionOwner, tabID: tabID)
+        }
+    }
+
+    private func requestCloseSharedSessionTab(owner: SessionOwnerID, tabID: TabID) {
+        guard let tab = tabs.tabs(for: owner).first(where: { $0.id == tabID }) else { return }
+        if let prompt = CloseTabConfirmationPolicy.prompt(for: tab, config: config),
+           !confirmCloseTab(prompt) {
+            return
+        }
+        closeSharedSessionTab(owner: owner, tabID: tabID)
+    }
+
+    private func closeSharedSessionTab(owner: SessionOwnerID, tabID: TabID) {
+        closeSharedTerminalLeaves(in: tabID, owner: owner)
+        if let tab = tabs.tabs(for: owner).first(where: { $0.id == tabID }),
+           case .acpSession(let state) = tab {
+            cleanupACPSession(owner: owner, sessionId: state.sessionId)
+        }
+        tabs.close(owner: owner, tabId: tabID)
+    }
+
+    /// Never remove a checkout-owned terminal tab while leaving one of its
+    /// shell/zmx sessions alive. This applies to manual close, archive, and
+    /// process-exit tab teardown and is independent of Repository Focus.
+    private func closeSharedTerminalTabs(owner: SessionOwnerID) {
+        for tab in tabs.tabs(for: owner) {
+            closeSharedTerminalLeaves(in: tab.id, owner: owner)
+        }
+    }
+
+    private func closeSharedTerminalLeaves(in tabID: TabID, owner: SessionOwnerID) {
+        guard let tab = tabs.tabs(for: owner).first(where: { $0.id == tabID }),
+              case .terminal(let state) = tab
+        else { return }
+        for leaf in state.root.leaves() {
+            harness.detector.unregister(sessionId: leaf.id)
+            harness.forgetSession(leaf.id)
+            terminal.closeSession(id: leaf.id, owner: owner)
+        }
     }
 
     func synchronizeVisibleWorktreeCenterTabIfNeeded(worktreeId: String, activeTabId: TabID?) {
         guard let activeTabId else { return }
+        guard tabs.tabs(forWorktree: worktreeId).contains(where: { $0.id == activeTabId }) else { return }
         tabs.activate(worktreeId: worktreeId, tabId: activeTabId)
     }
 
@@ -1626,6 +2908,22 @@ final class AppState {
     }
 
     func agentStartupCommand(for agent: AgentDefinition, project: ProjectConfig) -> String {
+        agentStartupCommand(
+            for: agent,
+            project: project,
+            useBypassPermissions: agentBypassPermissionsEnabled(for: project)
+        )
+    }
+
+    private func workspaceCheckoutAgentStartupCommand(for agent: AgentDefinition, project: ProjectConfig, checkout: WorkspaceCheckout) -> String {
+        agentStartupCommand(
+            for: agent,
+            project: project,
+            useBypassPermissions: checkout.configurationSnapshot?.shared.creationLaunchPreference.useBypassPermissions == true
+        )
+    }
+
+    private func agentStartupCommand(for agent: AgentDefinition, project: ProjectConfig, useBypassPermissions: Bool) -> String {
         let binary = project.host == nil
             ? agent.resolvedBinary
             : URL(fileURLWithPath: agent.resolvedBinary).lastPathComponent
@@ -1633,7 +2931,7 @@ final class AppState {
         if let extra = agent.extraTerminalArgs, !extra.isEmpty {
             argv.append(contentsOf: extra)
         }
-        if agentBypassPermissionsEnabled(for: project),
+        if useBypassPermissions,
            let flag = agent.bypassPermissionsFlag {
             argv.append(flag)
         }
@@ -1823,21 +3121,23 @@ final class AppState {
         destination: URL,
         projectId: String
     ) async throws -> Worktree {
-        try await Task.detached {
-            if !repoPath.isRemoteAlasPath {
-                try FileManager.default.createDirectory(
-                    at: destination.deletingLastPathComponent(),
-                    withIntermediateDirectories: true
+        try await ProjectMutationGate.shared.withMutation(projectID: projectId) {
+            try await Task.detached {
+                if !repoPath.isRemoteAlasPath {
+                    try FileManager.default.createDirectory(
+                        at: destination.deletingLastPathComponent(),
+                        withIntermediateDirectories: true
+                    )
+                }
+                return try await WorktreeService().add(
+                    repoPath: repoPath,
+                    base: base,
+                    branch: branch,
+                    destination: destination,
+                    projectId: projectId
                 )
-            }
-            return try await WorktreeService().add(
-                repoPath: repoPath,
-                base: base,
-                branch: branch,
-                destination: destination,
-                projectId: projectId
-            )
-        }.value
+            }.value
+        }
     }
 
     nonisolated static func preparedCreateWorktreeDestination(repoPath: URL, destination: URL) async throws -> URL {
@@ -3002,6 +4302,13 @@ final class AppState {
                 // notifications routed to the right worktree.
                 return self.persistedLeafLocation(leafId: sessionId)
             },
+            ownerLookup: { [weak self] sessionId in
+                guard let self else { return nil }
+                if let session = self.terminal.registry.session(for: sessionId) {
+                    return session.owner
+                }
+                return self.persistedLeafOwner(leafId: sessionId)
+            },
             shouldNotifyOnAwaiting: { [weak self] in
                 self?.config.harness.notifyOnAwaiting ?? true
             }
@@ -3016,9 +4323,9 @@ final class AppState {
         terminal.socketReleaseHandler = { [weak self] leafId in
             self?.harness.socketServer.unlinkSession(leafId: leafId)
         }
-        terminal.onSessionProcessExited = { [weak self] leafId, worktreeId, processAlive in
+        terminal.onSessionProcessExited = { [weak self] leafId, owner, processAlive in
             self?.handleTerminalProcessExited(
-                worktreeId: worktreeId,
+                owner: owner,
                 leafId: leafId,
                 processAlive: processAlive
             )
@@ -3048,6 +4355,12 @@ final class AppState {
                 projectId: projectId, worktreeId: worktreeId, sessionId: sessionId
             )
         }
+        harness.onContextClickThrough = { [weak self] context in
+            guard let owner = context.owner,
+                  case .workspaceCheckout = owner
+            else { return }
+            self?.activateHarnessSession(owner: owner, sessionId: context.sessionId)
+        }
         // Symlink refresh runs from `reloadTabs()` instead of here —
         // `startHarness()` is called before the tab JSONs have been read,
         // so projectsManager.worktrees(...) would be empty.
@@ -3060,7 +4373,7 @@ final class AppState {
 
     @MainActor
     private func handleCLIRequest(_ request: AlasCLIRequest) async -> AlasCLIResponse {
-        let router = makeCLICommandRouter { [weak self] sessionId in
+        let router = makeCLICommandRouter(sessionWorktreeLookup: { [weak self] sessionId in
             if let s = self?.terminal.registry.session(for: sessionId) {
                 return s.worktreeId
             }
@@ -3071,14 +4384,28 @@ final class AppState {
                 return worktreeId
             }
             return self?.worktreeIdForLiveACPSession(sessionId)
-        }
+        }, sessionOwnerLookup: { [weak self] sessionId in
+            self?.sessionOwnerForCLI(sessionId)
+        })
         return await router.handle(request)
+    }
+
+    private func sessionOwnerForCLI(_ sessionId: String) -> SessionOwnerID? {
+        if let session = terminal.registry.session(for: sessionId) {
+            return session.owner
+        }
+        if let owner = persistedLeafOwner(leafId: sessionId) {
+            return owner
+        }
+        return acpManagers.first { _, manager in
+            manager.liveSession(for: sessionId) != nil
+        }?.key
     }
 
     private func worktreeIdForLiveACPSession(_ sessionId: String) -> String? {
         acpManagers.first { _, manager in
             manager.liveSession(for: sessionId) != nil
-        }?.key
+        }?.key.worktreeID
     }
 
     /// Linear scan of persisted terminal tabs for the (projectId, worktreeId)
@@ -3095,6 +4422,44 @@ final class AppState {
                     if state.root.leaves().contains(where: { $0.id == leafId }) {
                         return (project.id, worktree.id)
                     }
+                }
+            }
+        }
+        for checkout in workspacesManager.checkouts {
+            let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+            for tab in tabs.tabs(for: owner) {
+                guard case .terminal(let state) = tab else { continue }
+                if state.root.leaves().contains(where: { $0.id == leafId }) {
+                    // Harness notifications still require a legacy
+                    // (projectId, worktreeId) tuple before they are emitted.
+                    // Checkout-owned notifications carry the typed owner too,
+                    // and click-through routes through that owner, so this
+                    // synthetic tuple is only the compatibility key that keeps
+                    // persisted checkout leaves observable before lazy restore.
+                    return (checkout.workspaceID?.uuidString ?? "", owner.storageKey)
+                }
+            }
+        }
+        return nil
+    }
+
+    private func persistedLeafOwner(leafId: String) -> SessionOwnerID? {
+        for project in projects {
+            for worktree in projectsManager.worktrees(projectId: project.id) {
+                for tab in tabs.tabs(forWorktree: worktree.id) {
+                    guard case .terminal(let state) = tab else { continue }
+                    if state.root.leaves().contains(where: { $0.id == leafId }) {
+                        return .worktree(worktree.id)
+                    }
+                }
+            }
+        }
+        for checkout in workspacesManager.checkouts {
+            let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+            for tab in tabs.tabs(for: owner) {
+                guard case .terminal(let state) = tab else { continue }
+                if state.root.leaves().contains(where: { $0.id == leafId }) {
+                    return owner
                 }
             }
         }
@@ -3119,6 +4484,15 @@ final class AppState {
                 }
             }
         }
+        for checkout in workspacesManager.checkouts {
+            let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+            for tab in tabs.tabs(for: owner) {
+                guard case .terminal(let state) = tab else { continue }
+                for leaf in state.root.leaves() {
+                    _ = harness.socketServer.linkSession(leafId: leaf.id)
+                }
+            }
+        }
     }
 
     /// Caches the loaded file summaries of a provider review, keyed by its
@@ -3129,7 +4503,8 @@ final class AppState {
     private var providerReviewFileSummaryCache: [ReviewDraftSessionID: [DiffReviewFileSummary]] = [:]
 
     func makeCLICommandRouter(
-        sessionWorktreeLookup: @escaping (String) -> String?
+        sessionWorktreeLookup: @escaping (String) -> String?,
+        sessionOwnerLookup: @escaping (String) -> SessionOwnerID? = { _ in nil }
     ) -> AlasCLICommandRouter {
         let orchestration = ACPSessionOrchestrationCoordinator(
             environment: .init(
@@ -3161,9 +4536,10 @@ final class AppState {
                 },
                 sessionLocation: { [weak self] sessionId in
                     guard let self,
-                          let (worktreeId, manager) = self.acpManagers.first(where: { _, manager in
+                          let (owner, manager) = self.acpManagers.first(where: { _, manager in
                               manager.liveSession(for: sessionId) != nil
                           }),
+                          let worktreeId = owner.worktreeID,
                           let worktree = self.worktree(withId: worktreeId)
                     else { return nil }
                     return .init(
@@ -3209,11 +4585,17 @@ final class AppState {
         )
         return AlasCLICommandRouter(
             sessionWorktreeId: sessionWorktreeLookup,
+            sessionOwner: sessionOwnerLookup,
+            sessionCwdWorktree: { [weak self] sessionId, cwd in
+                guard let self else { return nil }
+                return await self.workspaceCheckoutWorktree(for: sessionOwnerLookup(sessionId), cwd: cwd)
+            },
             resolveACPSessionOrigin: { [weak self] sessionId in
                 guard let self,
-                      let (worktreeId, manager) = self.acpManagers.first(where: { _, manager in
+                      let (owner, manager) = self.acpManagers.first(where: { _, manager in
                           manager.liveSession(for: sessionId) != nil
                       }),
+                      let worktreeId = owner.worktreeID,
                       let worktree = self.worktree(withId: worktreeId)
                 else { return nil }
                 return ACPOrchestrationSessionOrigin(
@@ -3302,11 +4684,22 @@ final class AppState {
             providerReviewOriginalPath: { [weak self] sessionID, relativePath in
                 await self?.reviewRequestOriginalPath(forDraftSessionID: sessionID, relativePath: relativePath) ?? nil
             },
-            notifySession: { [weak self] sessionId, origin, body, title, level in
+            notifySession: { [weak self] sessionId, owner, origin, body, title, level in
                 guard let self else { return .error("Alas is not available.") }
                 return self.cliNotify(
                     sessionId: sessionId,
+                    owner: owner,
                     origin: origin,
+                    body: body,
+                    title: title,
+                    level: level
+                )
+            },
+            notifyOwnedSession: { [weak self] sessionId, owner, body, title, level in
+                guard let self else { return .error("Alas is not available.") }
+                return self.cliNotifyOwned(
+                    sessionId: sessionId,
+                    owner: owner,
                     body: body,
                     title: title,
                     level: level
@@ -3321,14 +4714,74 @@ final class AppState {
             sendDelegatedSessionMessage: { origin, request in
                 await orchestration.send(origin: origin, request: request)
             },
+            workspaceCommand: { [weak self] command in
+                guard let self else { return .error("Alas is not available.") }
+                return await self.cliWorkspace(command)
+            },
             activateApp: {
                 NSApp.activate(ignoringOtherApps: true)
             }
         )
     }
 
+    private func cliWorkspace(_ command: AlasCLIRequest.WorkspaceCommand) async -> AlasCLIResponse {
+        let service = WorkspaceAutomationService(
+            store: workspaceStore,
+            isEnabled: { [weak self] in
+                guard let self else { return false }
+                return self.config.workspacesEnabled
+            },
+            refreshNavigation: { [weak self] in
+                await self?.workspacesManager.refreshCheckoutSnapshots()
+            },
+            selectCheckout: { [weak self] id in
+                self?.selectWorkspaceCheckout(id: id)
+            },
+            focusMember: { [weak self] checkoutID, memberID in
+                guard let self else { return }
+                self.selectWorkspaceCheckout(id: checkoutID)
+                self.focusWorkspaceCheckoutMember(id: memberID)
+            }
+        )
+        do {
+            switch command {
+            case .list:
+                return try jsonLine(await service.listCheckouts())
+            case .show(let checkoutID):
+                return try jsonLine(await service.showCheckout(id: checkoutID))
+            case .switch(let checkoutID):
+                try await service.selectCheckout(id: checkoutID)
+                return .ok
+            case .focus(let checkoutID, let memberID):
+                let target = try await service.memberTarget(checkoutID: checkoutID, memberID: memberID)
+                await workspacesManager.refreshCheckoutSnapshots()
+                _ = try? await refreshProjectWorktrees(projectId: target.projectID)
+                await workspacesManager.refreshCheckoutSnapshots()
+                selectWorkspaceCheckout(id: checkoutID)
+                focusWorkspaceCheckoutMember(id: memberID)
+                guard workspaceNavigationState.selectedCheckoutID == checkoutID,
+                      workspaceNavigationState.focusedCheckoutMemberID == memberID,
+                      selectedWorktreeId != nil
+                else {
+                    throw WorkspaceAutomationError.memberUnavailable
+                }
+                return .ok
+            }
+        } catch let error as WorkspaceAutomationError {
+            return .errorWithExitCode("\(error.code): \(error.message)", error.exitCode)
+        } catch {
+            return .error(error.localizedDescription)
+        }
+    }
+
+    private func jsonLine<T: Encodable>(_ value: T) throws -> AlasCLIResponse {
+        let data = try JSONEncoder.workspaceAutomation.encode(value)
+        return .text([String(data: data, encoding: .utf8) ?? "{}"])
+    }
+
     private func cliNotify(
         sessionId: String?,
+        owner: SessionOwnerID?,
         origin: Worktree,
         body: String,
         title: String?,
@@ -3345,9 +4798,31 @@ final class AppState {
             agent: agent,
             projectId: resolved.project.id,
             worktreeId: resolved.worktree.id,
-            sessionId: notificationSessionId
+            sessionId: notificationSessionId,
+            owner: owner
         )
         if level == .attention, let sessionId {
+            harness.setExternalActivity(sessionId: sessionId, agent: agent, state: .awaitingInput)
+        }
+        return .ok
+    }
+
+    private func cliNotifyOwned(
+        sessionId: String,
+        owner: SessionOwnerID,
+        body: String,
+        title: String?,
+        level: AlasCLINotifyLevel
+    ) -> AlasCLIResponse {
+        let agent = agentKindForNotifySession(sessionId) ?? .codex
+        harness.notifications.notifyAlas(
+            body: body,
+            title: title,
+            agent: agent,
+            sessionId: sessionId,
+            owner: owner
+        )
+        if level == .attention {
             harness.setExternalActivity(sessionId: sessionId, agent: agent, state: .awaitingInput)
         }
         return .ok
@@ -3401,6 +4876,37 @@ final class AppState {
                 _ = tabs.setFocusedLeaf(worktreeId: worktreeId, tabId: tabId, leafId: leafId)
             }
             activateWorktreeCenterTab(worktreeId: worktreeId, tabId: tabId)
+        }
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func activateHarnessSession(owner: SessionOwnerID, sessionId: String) {
+        guard case .workspaceCheckout(let checkoutID, _) = owner else { return }
+        selectWorkspaceCheckout(id: checkoutID)
+        var matchedTabId: TabID?
+        var matchedLeafId: String?
+        for tab in tabs.tabs(for: owner) {
+            guard case .terminal(let state) = tab,
+                  let leaf = state.root.leaves().first(where: { $0.sessionId == sessionId }) else { continue }
+            matchedTabId = tab.id
+            matchedLeafId = leaf.id
+            break
+        }
+        if matchedTabId == nil {
+            for tab in tabs.tabs(for: owner) {
+                guard case .acpSession(let state) = tab, state.sessionId == sessionId else { continue }
+                matchedTabId = tab.id
+                break
+            }
+        }
+        if let tabId = matchedTabId {
+            if let leafId = matchedLeafId {
+                _ = tabs.setFocusedLeaf(owner: owner, tabId: tabId, leafId: leafId)
+            }
+            tabs.activate(owner: owner, tabId: tabId)
+            if let selectedWorktreeId {
+                tabs.clearActiveTab(worktreeId: selectedWorktreeId)
+            }
         }
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -3701,11 +5207,40 @@ final class AppState {
     /// dead session and lets the sibling collapse take over the freed space.
     /// Idempotent: if the leaf is no longer in any tab (manual close raced
     /// ahead), returns without side effects.
-    func handleTerminalProcessExited(worktreeId: String, leafId: String, processAlive: Bool) {
+    func handleTerminalProcessExited(owner: SessionOwnerID, leafId: String, processAlive: Bool) {
         guard !processAlive else { return }
         let authExitHandler = acpAuthTerminalExitHandlers.removeValue(forKey: leafId)
-        closePaneForProcessExit(worktreeId: worktreeId, leafId: leafId)
+        closePaneForProcessExit(owner: owner, leafId: leafId)
         authExitHandler?()
+    }
+
+    /// Legacy worktree compatibility route. Existing terminal callers retain
+    /// their raw worktree identity while checkout sessions stay typed.
+    func handleTerminalProcessExited(worktreeId: String, leafId: String, processAlive: Bool) {
+        handleTerminalProcessExited(owner: .worktree(worktreeId), leafId: leafId, processAlive: processAlive)
+    }
+
+    func closePaneForProcessExit(owner: SessionOwnerID, leafId: String) {
+        switch owner {
+        case .worktree(let worktreeID):
+            closePaneForProcessExit(worktreeId: worktreeID, leafId: leafId)
+        case .workspaceCheckout:
+            let owningTabID = tabs.tabs(for: owner).first { tab in
+                guard case .terminal(let state) = tab else { return false }
+                return state.root.find(leafId: leafId) != nil
+            }?.id
+            guard let tabID = owningTabID else { return }
+            harness.detector.unregister(sessionId: leafId)
+            harness.forgetSession(leafId)
+            guard let outcome = tabs.removeLeaf(owner: owner, tabId: tabID, leafId: leafId) else { return }
+            switch outcome {
+            case .tabRemoved:
+                terminal.closeSession(id: leafId, owner: owner)
+                tabs.close(owner: owner, tabId: tabID)
+            case .leafRemoved:
+                terminal.closeSession(id: leafId, owner: owner)
+            }
+        }
     }
 
     func closePaneForProcessExit(worktreeId: String, leafId: String) {
@@ -3764,6 +5299,33 @@ final class AppState {
     /// restored leaves this instance owns.
     @discardableResult
     func terminateAllTerminalSessions() -> Bool {
+        let snapshot = terminalTerminationSnapshot()
+        let alert = NSAlert()
+        alert.messageText = "Terminate All Terminal Sessions"
+        alert.informativeText = "Terminate \(snapshot.sessionCount) terminal session(s)? This will kill any agent or process currently running in them."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Terminate")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return false }
+
+        terminateAllTerminalSessionsAfterConfirmation(snapshot: snapshot)
+        return true
+    }
+
+#if DEBUG
+    func terminateAllTerminalSessionsAfterConfirmationForTesting() {
+        terminateAllTerminalSessionsAfterConfirmation(snapshot: terminalTerminationSnapshot())
+    }
+#endif
+
+    private struct TerminalTerminationSnapshot {
+        var terminalTabs: [(worktreeId: String, tabId: TabID)]
+        var checkoutTerminalTabs: [(owner: SessionOwnerID, tabId: TabID)]
+        var persistedSessions: [TerminalSessionIdentity]
+        var sessionCount: Int
+    }
+
+    private func terminalTerminationSnapshot() -> TerminalTerminationSnapshot {
         // Snapshot which terminal tabs exist so the confirm sheet count stays
         // accurate even if state changes between rendering and confirming.
         let terminalTabs: [(worktreeId: String, tabId: TabID)] = projects
@@ -3774,39 +5336,50 @@ final class AppState {
                     return (worktree.id, tab.id)
                 }
             }
+        let checkoutTerminalTabs: [(owner: SessionOwnerID, tabId: TabID)] = workspacesManager.checkouts
+            .flatMap { checkout in
+                let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+                return tabs.tabs(for: owner).compactMap { tab -> (SessionOwnerID, TabID)? in
+                    guard case .terminal = tab else { return nil }
+                    return (owner, tab.id)
+                }
+            }
         let persistedSessions = allPersistedTerminalSessions()
         // Count individual leaves, not tabs — a single tab with split panes
         // contains multiple leaves and `terminateAll` kills every one. Union
         // with the live registry catches any session not yet flushed to disk.
         let sessionCount = Set(persistedSessions)
             .union(terminal.registry.all.map {
-                TerminalSessionIdentity(worktreeId: $0.worktreeId, leafId: $0.id)
+                TerminalSessionIdentity(owner: $0.owner, leafId: $0.id)
             })
             .count
 
-        let alert = NSAlert()
-        alert.messageText = "Terminate All Terminal Sessions"
-        alert.informativeText = "Terminate \(sessionCount) terminal session(s)? This will kill any agent or process currently running in them."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Terminate")
-        alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return false }
+        return TerminalTerminationSnapshot(
+            terminalTabs: terminalTabs,
+            checkoutTerminalTabs: checkoutTerminalTabs,
+            persistedSessions: persistedSessions,
+            sessionCount: sessionCount
+        )
+    }
 
-        for (worktreeId, tabId) in terminalTabs {
+    private func terminateAllTerminalSessionsAfterConfirmation(snapshot: TerminalTerminationSnapshot) {
+        for (worktreeId, tabId) in snapshot.terminalTabs {
             closeTab(worktreeId: worktreeId, tabId: tabId)
+        }
+        for (owner, tabId) in snapshot.checkoutTerminalTabs {
+            closeSharedSessionTab(owner: owner, tabID: tabId)
         }
         // Also kill persisted leaves whose tab the user never displayed
         // this run — closeTab only handles registered sessions, but we
         // own those persisted leaves too. Scoped to OUR instance's known
         // leaves so we don't trample sessions owned by a concurrently-
         // running Alas process under the same ZMX_DIR.
-        terminal.terminateAll(additionalSessions: persistedSessions)
-        return true
+        terminal.terminateAll(additionalSessions: snapshot.persistedSessions)
     }
 
     /// All terminal sessions persisted under this Alas instance's projects.
     private func allPersistedTerminalSessions() -> [TerminalSessionIdentity] {
-        projects.flatMap { project in
+        let worktreeSessions = projects.flatMap { project in
             projectsManager.worktrees(projectId: project.id).flatMap { worktree in
                 tabs.tabs(forWorktree: worktree.id).flatMap { tab -> [TerminalSessionIdentity] in
                     guard case .terminal(let state) = tab else { return [] }
@@ -3820,6 +5393,16 @@ final class AppState {
                 }
             }
         }
+        let checkoutSessions = workspacesManager.checkouts.flatMap { checkout in
+            let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+            return tabs.tabs(for: owner).flatMap { tab -> [TerminalSessionIdentity] in
+                guard case .terminal(let state) = tab else { return [] }
+                return state.root.leaves().map {
+                    TerminalSessionIdentity(owner: owner, leafId: $0.id)
+                }
+            }
+        }
+        return worktreeSessions + checkoutSessions
     }
 
     /// Move focus to the geometrically nearest leaf in `direction`. No-op when
@@ -3833,6 +5416,26 @@ final class AppState {
                 from: state.focusedLeafId, direction: direction, frames: frames
               ) else { return }
         _ = tabs.setFocusedLeaf(worktreeId: worktreeId, tabId: activeId, leafId: next)
+    }
+
+    func focusPane(worktreeId: String, sharedSessionOwner: SessionOwnerID?, direction: PaneFocusDirection) {
+        guard let owner = sharedSessionOwner,
+              activeSharedCheckoutTerminal(worktreeId: worktreeId, owner: owner) != nil,
+              let activeId = centerTabComposition(
+                  focusedWorktreeID: worktreeId,
+                  sharedSessionOwner: owner
+              ).activeId,
+              let tab = tabs.tabs(for: owner).first(where: { $0.id == activeId }),
+              case .terminal(let state) = tab,
+              let frames = terminalLeafFrames[activeId],
+              let next = PaneFocusFinder.nearestLeaf(
+                from: state.focusedLeafId, direction: direction, frames: frames
+              )
+        else {
+            focusPane(worktreeId: worktreeId, direction: direction)
+            return
+        }
+        _ = tabs.setFocusedLeaf(owner: owner, tabId: activeId, leafId: next)
     }
 
     /// Resize the focused leaf's enclosing split by ±0.05 toward `direction`.
@@ -3858,6 +5461,53 @@ final class AppState {
         _ = tabs.setSplitFraction(worktreeId: worktreeId, tabId: activeId, splitId: target.id, fraction: newFraction)
     }
 
+    func resizePane(worktreeId: String, sharedSessionOwner: SessionOwnerID?, direction: PaneFocusDirection) {
+        guard let owner = sharedSessionOwner,
+              activeSharedCheckoutTerminal(worktreeId: worktreeId, owner: owner) != nil,
+              let activeId = centerTabComposition(
+                  focusedWorktreeID: worktreeId,
+                  sharedSessionOwner: owner
+              ).activeId,
+              let tab = tabs.tabs(for: owner).first(where: { $0.id == activeId }),
+              case .terminal(let state) = tab,
+              let pathLeaf = state.root.find(leafId: state.focusedLeafId)
+        else {
+            resizePane(worktreeId: worktreeId, direction: direction)
+            return
+        }
+        let axis: SplitAxis = (direction == .left || direction == .right) ? .vertical : .horizontal
+        guard let target = innermostSplit(matching: axis, path: pathLeaf.path, in: state.root) else { return }
+        let isFirstChildOfTarget = isLeafInFirstChild(of: target, leafId: state.focusedLeafId)
+        let delta = 0.05
+        let signed: Double = {
+            switch direction {
+            case .right, .down: return isFirstChildOfTarget ? delta : -delta
+            case .left, .up:    return isFirstChildOfTarget ? -delta : delta
+            }
+        }()
+        let newFraction = target.fraction + signed
+        _ = tabs.setSplitFraction(owner: owner, tabId: activeId, splitId: target.id, fraction: newFraction)
+    }
+
+    private func activeSharedCheckoutTerminal(worktreeId: String, owner: SessionOwnerID?) -> WorkspaceCheckout? {
+        guard let owner,
+              case .workspaceCheckout(let checkoutID, _) = owner,
+              let checkout = selectedWorkspaceCheckout,
+              checkout.id == checkoutID,
+              let activeId = centerTabComposition(
+                  focusedWorktreeID: worktreeId,
+                  sharedSessionOwner: owner
+              ).activeId,
+              tabs.tabs(for: owner).contains(where: {
+                  guard $0.id == activeId,
+                        case .terminal = $0
+                  else { return false }
+                  return true
+              })
+        else { return nil }
+        return checkout
+    }
+
     /// ⌘W router: if the active tab is a multi-pane terminal, close the focused
     /// pane; otherwise fall through to the existing tab-close behavior.
     func handleCloseShortcut(worktreeId: String) {
@@ -3873,41 +5523,66 @@ final class AppState {
         }
     }
 
-    func handleCloseCenterShortcut(worktreeId: String?) {
+    func handleCloseCenterShortcut(worktreeId: String?, sharedSessionOwner: SessionOwnerID? = nil) {
         guard let worktreeId else { return }
+        if let sharedSessionOwner,
+           let activeId = centerTabComposition(
+               focusedWorktreeID: worktreeId,
+               sharedSessionOwner: sharedSessionOwner
+           ).activeId,
+           tabs.tabs(for: sharedSessionOwner).contains(where: { $0.id == activeId }) {
+            requestCloseSharedSessionTab(owner: sharedSessionOwner, tabID: activeId)
+            return
+        }
         handleCloseShortcut(worktreeId: worktreeId)
     }
 
     @discardableResult
-    func activateCenterTabNumber(_ number: Int, worktreeId: String?) -> TabID? {
+    func activateCenterTabNumber(
+        _ number: Int,
+        worktreeId: String?,
+        sharedSessionOwner: SessionOwnerID? = nil
+    ) -> TabID? {
         guard number > 0 else { return nil }
-        let worktreeTabs = worktreeId.map { tabs.tabs(forWorktree: $0) } ?? []
-        let composition = CenterTabComposition(
-            worktreeTabs: worktreeTabs,
-            activeWorktreeTabId: worktreeId.flatMap { tabs.activeTabId(forWorktree: $0) }
+        guard let worktreeId else { return nil }
+        let composition = centerTabComposition(
+            focusedWorktreeID: worktreeId,
+            sharedSessionOwner: sharedSessionOwner
         )
         let index = number - 1
         guard composition.tabs.indices.contains(index) else { return nil }
-        return activateCenterTab(composition.tabs[index].id, worktreeId: worktreeId)
+        return activateCenterTab(
+            composition.tabs[index].id,
+            worktreeId: worktreeId,
+            sharedSessionOwner: sharedSessionOwner
+        )
     }
 
     @discardableResult
     func activateAdjacentCenterTab(
         _ direction: CenterTabNavigationDirection,
-        worktreeId: String?
+        worktreeId: String?,
+        sharedSessionOwner: SessionOwnerID? = nil
     ) -> TabID? {
-        let worktreeTabs = worktreeId.map { tabs.tabs(forWorktree: $0) } ?? []
-        let composition = CenterTabComposition(
-            worktreeTabs: worktreeTabs,
-            activeWorktreeTabId: worktreeId.flatMap { tabs.activeTabId(forWorktree: $0) }
+        guard let worktreeId else { return nil }
+        let composition = centerTabComposition(
+            focusedWorktreeID: worktreeId,
+            sharedSessionOwner: sharedSessionOwner
         )
         guard let tabID = composition.adjacentTabID(in: direction) else { return nil }
-        return activateCenterTab(tabID, worktreeId: worktreeId)
+        return activateCenterTab(tabID, worktreeId: worktreeId, sharedSessionOwner: sharedSessionOwner)
     }
 
-    private func activateCenterTab(_ tabID: TabID, worktreeId: String?) -> TabID? {
-        guard let worktreeId else { return nil }
-        activateWorktreeCenterTab(worktreeId: worktreeId, tabId: tabID)
+    private func activateCenterTab(
+        _ tabID: TabID,
+        worktreeId: String,
+        sharedSessionOwner: SessionOwnerID? = nil
+    ) -> TabID? {
+        activateComposedCenterTab(
+            worktreeID: worktreeId,
+            sharedSessionOwner: sharedSessionOwner,
+            tabID: tabID
+        )
         return tabID
     }
 
@@ -3970,6 +5645,64 @@ final class AppState {
             tabId: tabId,
             legacySessionInfos: legacySessionInfos
         )
+    }
+
+    @discardableResult
+    func restoreTerminalTabIfNeededAsync(owner: SessionOwnerID, tabId: TabID) async throws -> Tab? {
+        switch owner {
+        case .worktree(let worktreeID):
+            return try await restoreTerminalTabIfNeededAsync(worktreeId: worktreeID, tabId: tabId)
+        case .workspaceCheckout(let checkoutID, _):
+            return try await restoreCheckoutTerminalTabIfNeeded(checkoutID: checkoutID, owner: owner, tabID: tabId)
+        }
+    }
+
+    @discardableResult
+    private func restoreCheckoutTerminalTabIfNeeded(
+        checkoutID: UUID,
+        owner: SessionOwnerID,
+        tabID: TabID
+    ) async throws -> Tab? {
+        guard let checkout = await workspaceStore.checkout(id: checkoutID),
+              checkout.archivedAt == nil,
+              checkout.operation == .idle,
+              owner == SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+        else { return nil }
+        guard let tab = tabs.tabs(for: owner).first(where: { $0.id == tabID }),
+              case .terminal(let state) = tab else { return nil }
+        guard await workspaceCheckoutManifestMatches(checkout) else { return nil }
+
+        if !config.terminal.keepSessionsAlive {
+            let hasLiveLeaf = state.root.leaves()
+                .contains { terminal.registry.session(for: $0.id) != nil }
+            if !hasLiveLeaf {
+                closeSharedSessionTab(owner: owner, tabID: tabID)
+                return nil
+            }
+        }
+
+        let context = workspaceTerminalContext(for: checkout)
+        for leaf in state.root.leaves() {
+            if terminal.registry.session(for: leaf.id) != nil { continue }
+            let forcedCwd = await validatedWorkspaceCheckoutRestorationCwd(
+                savedPath: leaf.lastCwd,
+                context: context,
+                savedLocation: leaf.lastCwdLocation
+            )
+            let session = try terminal.openCheckoutSession(
+                context: context,
+                cfg: config.terminal,
+                theme: themeStore.current,
+                forcedCwd: forcedCwd,
+                forcedCwdLocation: leaf.lastCwdLocation,
+                remoteCwdAlreadyValidated: forcedCwd != nil,
+                leafId: leaf.id
+            )
+            harness.detector.register(sessionId: session.id) { [weak session] in
+                session?.surface.foregroundPid
+            }
+        }
+        return tabs.tabs(for: owner).first(where: { $0.id == tabID })
     }
 
     private func legacySessionInfosForTerminalRestore(
@@ -4409,7 +6142,20 @@ final class AppState {
     func renameTerminalTab(worktreeId: String, tabId: TabID) {
         guard let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == tabId }),
               case .terminal(let state) = tab else { return }
+        renameTerminalTab(initialTitle: state.title, tabID: tabId) { [tabs] title in
+            _ = tabs.renameTerminal(worktreeId: worktreeId, tabId: tabId, title: title)
+        }
+    }
 
+    func renameTerminalTab(owner: SessionOwnerID, tabId: TabID) {
+        guard let tab = tabs.tabs(for: owner).first(where: { $0.id == tabId }),
+              case .terminal(let state) = tab else { return }
+        renameTerminalTab(initialTitle: state.title, tabID: tabId) { [tabs] title in
+            _ = tabs.renameTerminal(owner: owner, tabId: tabId, title: title)
+        }
+    }
+
+    private func renameTerminalTab(initialTitle: String, tabID: TabID, applyTitle: (String) -> Void) {
         let alert = NSAlert()
         alert.messageText = "Rename Terminal"
         alert.informativeText = "Choose a stable name for this terminal tab."
@@ -4418,13 +6164,13 @@ final class AppState {
         alert.addButton(withTitle: "Cancel")
 
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
-        field.stringValue = state.title
+        field.stringValue = initialTitle
         field.lineBreakMode = .byTruncatingTail
         alert.accessoryView = field
 
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        _ = tabs.renameTerminal(worktreeId: worktreeId, tabId: tabId, title: field.stringValue)
-        tabs.clearTerminalRuntimeTitles(forLeavesInTabId: tabId)
+        applyTitle(field.stringValue)
+        tabs.clearTerminalRuntimeTitles(forLeavesInTabId: tabID)
     }
 
     func renameACPSessionTab(worktreeId: String, tabId: TabID) {
@@ -4432,7 +6178,25 @@ final class AppState {
               case .acpSession(let state) = tab,
               let worktree = worktree(withId: worktreeId),
               let mgr = acpManager(for: worktree) else { return }
+        renameACPSessionTab(tabState: state, manager: mgr) { [tabs] title in
+            _ = tabs.renameACPSession(worktreeId: worktreeId, tabId: tabId, title: title)
+        }
+    }
 
+    func renameACPSessionTab(owner: SessionOwnerID, tabId: TabID) {
+        guard let tab = tabs.tabs(for: owner).first(where: { $0.id == tabId }),
+              case .acpSession(let state) = tab,
+              let mgr = acpManager(for: owner) else { return }
+        renameACPSessionTab(tabState: state, manager: mgr) { [tabs] title in
+            _ = tabs.renameACPSession(owner: owner, tabId: tabId, title: title)
+        }
+    }
+
+    private func renameACPSessionTab(
+        tabState state: ACPSessionTabState,
+        manager mgr: ACPSessionManager,
+        applyTabTitle: (String) -> Void
+    ) {
         let alert = NSAlert()
         alert.messageText = "Rename Session"
         alert.informativeText = "Choose a name for this ACP session."
@@ -4449,7 +6213,7 @@ final class AppState {
         let newTitle = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !newTitle.isEmpty else { return }
         mgr.renameSession(id: state.sessionId, title: newTitle, source: .manual)
-        _ = tabs.renameACPSession(worktreeId: worktreeId, tabId: tabId, title: newTitle)
+        applyTabTitle(newTitle)
     }
 
     /// Copy the active ACP session's conversation (user + agent, Markdown)
@@ -4466,29 +6230,53 @@ final class AppState {
         }
     }
 
+    func copyACPSessionMarkdown(owner: SessionOwnerID, tabId: TabID) {
+        Task { @MainActor in
+            await withHydratedACPSession(owner: owner, tabId: tabId) { session in
+                Clipboard.copy(ACPTranscriptMarkdown.document(
+                    title: session.title,
+                    agentName: agent(id: session.agentId)?.displayName,
+                    messages: session.transcript.messages
+                ))
+            }
+        }
+    }
+
     /// Save the active ACP session's conversation to a `.md` file via a
     /// save panel. Cancel is a no-op; write failures surface through the
     /// shared file-action error handler.
     func exportACPSessionMarkdown(worktreeId: String, tabId: TabID) {
         Task { @MainActor in
             await withHydratedACPSession(worktreeId: worktreeId, tabId: tabId) { session in
-                let markdown = ACPTranscriptMarkdown.document(
-                    title: session.title,
-                    agentName: agent(id: session.agentId)?.displayName,
-                    messages: session.transcript.messages
-                )
-                let panel = NSSavePanel()
-                panel.title = "Save Session as Markdown"
-                panel.message = "Choose where to save this conversation."
-                panel.nameFieldStringValue = ACPTranscriptMarkdown.sanitizedFilename(title: session.title)
-                panel.canCreateDirectories = true
-                guard panel.runModal() == .OK, let url = panel.url else { return }
-                do {
-                    try markdown.write(to: url, atomically: true, encoding: .utf8)
-                } catch {
-                    showFileActionError(title: "Export Failed", message: error.localizedDescription)
-                }
+                exportMarkdown(for: session)
             }
+        }
+    }
+
+    func exportACPSessionMarkdown(owner: SessionOwnerID, tabId: TabID) {
+        Task { @MainActor in
+            await withHydratedACPSession(owner: owner, tabId: tabId) { session in
+                exportMarkdown(for: session)
+            }
+        }
+    }
+
+    private func exportMarkdown(for session: ACPSession) {
+        let markdown = ACPTranscriptMarkdown.document(
+            title: session.title,
+            agentName: agent(id: session.agentId)?.displayName,
+            messages: session.transcript.messages
+        )
+        let panel = NSSavePanel()
+        panel.title = "Save Session as Markdown"
+        panel.message = "Choose where to save this conversation."
+        panel.nameFieldStringValue = ACPTranscriptMarkdown.sanitizedFilename(title: session.title)
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try markdown.write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            showFileActionError(title: "Export Failed", message: error.localizedDescription)
         }
     }
 
@@ -4523,6 +6311,21 @@ final class AppState {
         // so block until backfill is done before handing the session to
         // `body` — otherwise a long conversation would serialize as just
         // its last 30 entries.
+        await mgr.awaitBackfill(id: tabState.sessionId)
+        guard let session = mgr.sessions[tabState.sessionId] else { return }
+        body(session)
+    }
+
+    private func withHydratedACPSession(
+        owner: SessionOwnerID, tabId: TabID, _ body: (ACPSession) -> Void
+    ) async {
+        guard let tab = tabs.tabs(for: owner).first(where: { $0.id == tabId }),
+              case .acpSession(let tabState) = tab,
+              let mgr = acpManager(for: owner),
+              mgr.placeholderSession(id: tabState.sessionId) != nil else { return }
+        mgr.retainSession(id: tabState.sessionId)
+        defer { mgr.releaseSession(id: tabState.sessionId) }
+        await mgr.hydrateIfNeeded(id: tabState.sessionId)
         await mgr.awaitBackfill(id: tabState.sessionId)
         guard let session = mgr.sessions[tabState.sessionId] else { return }
         body(session)
@@ -4628,7 +6431,11 @@ final class AppState {
     /// tears down the whole worktree's manager — this leaves the
     /// manager (and any sibling sessions) running.
     private func cleanupACPSession(worktreeId: String, sessionId: String) {
-        guard let manager = acpManagers[worktreeId] else { return }
+        cleanupACPSession(owner: .worktree(worktreeId), sessionId: sessionId)
+    }
+
+    private func cleanupACPSession(owner: SessionOwnerID, sessionId: String) {
+        guard let manager = acpManagers[owner] else { return }
         // Flush any in-flight debounced draft write for this session
         // before the tab goes away. The manager itself stays alive
         // (other tabs may share it), so the global flush from
@@ -4645,6 +6452,7 @@ final class AppState {
             runner.stop()
         }
         let pendingID = UUID()
+        let pendingKey = owner.storageKey
         let task = Task { @MainActor in
             if let acpDetachRunner {
                 await acpDetachRunner(manager, sessionId)
@@ -4660,10 +6468,10 @@ final class AppState {
                 }
             }
         }
-        pendingACPDetachTasks[worktreeId, default: [:]][sessionId] = PendingACPDetach(id: pendingID, task: task)
+        pendingACPDetachTasks[pendingKey, default: [:]][sessionId] = PendingACPDetach(id: pendingID, task: task)
         Task { @MainActor [weak self] in
             await task.value
-            self?.clearPendingACPDetach(worktreeId: worktreeId, sessionId: sessionId, id: pendingID)
+            self?.clearPendingACPDetach(worktreeId: pendingKey, sessionId: sessionId, id: pendingID)
         }
     }
 
@@ -4863,6 +6671,9 @@ final class AppState {
     }
 
     func worktree(withId id: String) -> Worktree? {
+        if let focused = workspaceSelectedWorktree(matching: id) {
+            return focused.worktree
+        }
         for project in projects {
             if let worktree = projectsManager.worktrees(projectId: project.id).first(where: { $0.id == id }) {
                 return worktree
@@ -4885,12 +6696,78 @@ final class AppState {
     }
 
     private func projectAndWorktree(withWorktreeId id: String) -> (project: ProjectConfig, worktree: Worktree)? {
+        if let focused = workspaceSelectedWorktree(matching: id),
+           let project = projects.first(where: { $0.id == focused.worktree.projectId }) {
+            return (project, focused.worktree)
+        }
         for project in projects {
             if let worktree = projectsManager.worktrees(projectId: project.id).first(where: { $0.id == id }) {
                 return (project, worktree)
             }
         }
         return nil
+    }
+
+    private func workspaceSelectedWorktree(matching id: String) -> (checkout: WorkspaceCheckout, member: WorkspaceCheckoutMember, worktree: Worktree)? {
+        guard workspaceNavigationState.repositoryFocusWorktreeID == id,
+              let checkout = selectedWorkspaceCheckout,
+              let memberID = workspaceNavigationState.focusedCheckoutMemberID,
+              let member = checkout.members.first(where: { $0.id == memberID && $0.availability == .available })
+        else { return nil }
+        let targetPath = URL(fileURLWithPath: member.worktreePath).standardizedFileURL.path
+        guard let worktree = projectsManager.worktrees(projectId: member.projectID).first(where: {
+            $0.id == id && $0.path.standardizedFileURL.path == targetPath
+        }) else { return nil }
+        return (checkout, member, worktree)
+    }
+
+    private func workspaceCheckoutWorktree(for owner: SessionOwnerID?, cwd: String) async -> Worktree? {
+        guard case .workspaceCheckout(let checkoutID, let location) = owner,
+              let checkout = workspacesManager.checkout(id: checkoutID),
+              checkout.archivedAt == nil,
+              checkout.executionLocation.normalized == location.normalized
+        else { return nil }
+        let cwdPath: String
+        switch location.normalized {
+        case .local:
+            cwdPath = URL(fileURLWithPath: cwd).resolvingSymlinksInPath().standardizedFileURL.path
+        case .ssh(let host):
+            guard let resolved = await remotePhysicalPath(cwd, host: host) else { return nil }
+            cwdPath = resolved
+        }
+        for member in checkout.members where member.availability == .available {
+            let memberPath: String
+            switch location.normalized {
+            case .local:
+                memberPath = URL(fileURLWithPath: member.worktreePath).resolvingSymlinksInPath().standardizedFileURL.path
+            case .ssh(let host):
+                guard let resolved = await remotePhysicalPath(member.worktreePath, host: host) else { continue }
+                memberPath = resolved
+            }
+            guard cwdPath == memberPath || cwdPath.hasPrefix(memberPath + "/") else { continue }
+            guard let worktree = projectsManager.worktrees(projectId: member.projectID).first(where: {
+                let worktreePath: String
+                switch location.normalized {
+                case .local:
+                    worktreePath = $0.path.resolvingSymlinksInPath().standardizedFileURL.path
+                case .ssh:
+                    worktreePath = $0.path.standardizedFileURL.path
+                }
+                return worktreePath == memberPath
+            }) else { continue }
+            return worktree
+        }
+        return nil
+    }
+
+    private func remotePhysicalPath(_ path: String, host: String) async -> String? {
+        let result = try? await workspaceRemoteTransport.run(
+            host: host,
+            command: "cd \(SSHCommand.shellQuote(path)) 2>/dev/null && pwd -P"
+        )
+        guard result?.exitCode == 0 else { return nil }
+        let resolved = result?.stdout.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return resolved.isEmpty ? nil : resolved
     }
 
     private func acpQuestionNotificationBody(from params: ACPQuestionRequestParams) -> String? {
@@ -5068,7 +6945,8 @@ final class AppState {
                                 id: wt.id,
                                 projectId: project.id,
                                 displayName: wt.branch,
-                                absolutePath: wt.path
+                                absolutePath: wt.path,
+                                executionLocation: project.host.map(ExecutionLocation.ssh)
                             ))
                         }
                     }
@@ -5076,10 +6954,30 @@ final class AppState {
                 }
             },
             entries: { [fileIndex] wt in
-                try await fileIndex.entries(forWorktreePath: wt.absolutePath)
+                try await fileIndex.entries(for: wt)
             },
             statuses: { [statusCache] wt in
-                try await statusCache.statuses(forWorktreePath: wt.absolutePath)
+                try await statusCache.statuses(for: wt)
+            },
+            workspaceCheckoutWorktrees: { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self, let checkout = self.selectedWorkspaceCheckout else { return [] }
+                    let resolved = self.workspaceMemberWorktreeIDs(checkout)
+                    return checkout.members.compactMap { member in
+                        guard let worktreeID = resolved[member.id],
+                              let worktree = self.worktree(withId: worktreeID)
+                        else { return nil }
+                        return SearchWorktree(
+                            id: worktree.id,
+                            projectId: worktree.projectId,
+                            displayName: worktree.branch,
+                            absolutePath: worktree.path,
+                            executionLocation: checkout.executionLocation,
+                            workspaceCheckoutID: checkout.id,
+                            workspaceCheckoutMemberID: member.id
+                        )
+                    }
+                }
             },
             fileSearch: { query, wt in
                 try await fileSearchBackend.search(query: query, worktree: wt, limit: 50)
@@ -5878,14 +7776,16 @@ final class AppState {
         deleteBranchIfMerged: Bool,
         force: Bool
     ) async throws {
-        try await Task.detached {
-            try await WorktreeService().remove(
-                repoPath: repoPath,
-                worktree: worktree,
-                deleteBranchIfMerged: deleteBranchIfMerged,
-                force: force
-            )
-        }.value
+        try await ProjectMutationGate.shared.withMutation(projectID: worktree.projectId) {
+            try await Task.detached {
+                try await WorktreeService().remove(
+                    repoPath: repoPath,
+                    worktree: worktree,
+                    deleteBranchIfMerged: deleteBranchIfMerged,
+                    force: force
+                )
+            }.value
+        }
     }
 
     nonisolated private static func performDeletePreflight(worktreePath: URL) async -> WorktreeDeletePreflight {
@@ -6108,9 +8008,11 @@ final class AppState {
 
     // MARK: - ACP
 
-    /// Per-worktree ACP session managers, lazily created on first access.
+    /// ACP managers are keyed by their typed durable owner. Worktree keys stay
+    /// source-compatible through the accessors below; checkout UUID/location
+    /// pairs cannot collide with them or with each other.
     @ObservationIgnored
-    private var acpManagers: [String: ACPSessionManager] = [:]
+    private var acpManagers: [SessionOwnerID: ACPSessionManager] = [:]
 
     @ObservationIgnored
     private let acpOrchestrationPersistence = ACPOrchestrationPersistence()
@@ -6174,13 +8076,18 @@ final class AppState {
     /// Does not create a new manager — use `acpManager(for:)` when lazy
     /// creation is acceptable.
     func acpManager(forWorktreeId id: String) -> ACPSessionManager? {
-        acpManagers[id]
+        acpManagers[.worktree(id)]
+    }
+
+    func acpManager(for owner: SessionOwnerID) -> ACPSessionManager? {
+        acpManagers[owner]
     }
 
     /// Returns (or lazily creates) the ACP session manager for the given worktree.
     /// Store opening and migration happen lazily on the persistence actor.
     func acpManager(for worktree: Worktree) -> ACPSessionManager? {
-        if let existing = acpManagers[worktree.id] { return existing }
+        let owner = SessionOwnerID.worktree(worktree.id)
+        if let existing = acpManagers[owner] { return existing }
         let dbURL = Paths.acpSessionsDB(forWorktreeId: worktree.id)
         let persistence = ACPSessionPersistence(path: dbURL.path)
         let mgr = ACPSessionManager(
@@ -6219,7 +8126,7 @@ final class AppState {
             },
             onDelegatedMessageAvailable: { [weak self] sessionId in
                 Task { @MainActor [weak self] in
-                    guard let self, let manager = self.acpManagers[worktree.id] else { return }
+                    guard let self, let manager = self.acpManagers[owner] else { return }
                     await self.deliverPendingDelegatedMessages(to: sessionId, manager: manager)
                 }
             },
@@ -6415,12 +8322,235 @@ final class AppState {
             }
             return (adapterState, configOutcome, userServerNames, skippedServerStatuses)
         }
-        acpManagers[worktree.id] = mgr
+        acpManagers[owner] = mgr
         acpHarnessBridge.attach(manager: mgr)
         #if DEBUG
         memoryDiagnostics.attach(manager: mgr)
         #endif
         return mgr
+    }
+
+    enum WorkspaceACPManagerResolution {
+        case ready(ACPSessionManager)
+        /// Keep persisted tabs/history intact and wait for an explicit later
+        /// resume rather than constructing a session against a guessed root.
+        case pendingRootOrLocation
+    }
+
+    /// Returns a checkout-owned ACP manager without consulting Repository
+    /// Focus. A missing root/location is intentionally non-destructive: UI
+    /// restoration can retain the tab as pending until the checkout returns.
+    func workspaceACPManager(for checkout: WorkspaceCheckout) async -> WorkspaceACPManagerResolution {
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+        if let existing = acpManagers[owner] { return .ready(existing) }
+        let pinnedRemoteHost: String?
+        switch checkout.executionLocation.normalized {
+        case .local:
+            pinnedRemoteHost = nil
+            guard FileManager.default.fileExists(atPath: checkout.rootPath) else {
+                return .pendingRootOrLocation
+            }
+        case .ssh(let destination):
+            pinnedRemoteHost = destination
+            guard !destination.isEmpty else { return .pendingRootOrLocation }
+            guard let result = try? await workspaceRemoteTransport.run(
+                host: destination,
+                cwd: checkout.rootPath,
+                command: "pwd"
+            ), result.exitCode == 0 else {
+                return .pendingRootOrLocation
+            }
+        }
+        guard await workspaceCheckoutManifestMatches(checkout) else { return .pendingRootOrLocation }
+        if let existing = acpManagers[owner] { return .ready(existing) }
+
+        let dbURL = Paths.acpSessionsDB(for: owner)
+        let checkoutMemberWorktreeID: (String) -> String? = { [weak self] absolutePath in
+            guard let self else { return nil }
+            let target = Self.canonicalWorktreePath(absolutePath)
+            let current = self.workspacesManager.checkout(id: checkout.id) ?? checkout
+            for member in current.members where member.availability == .available {
+                guard Self.canonicalWorktreePath(member.worktreePath) == target
+                    || target.hasPrefix(Self.canonicalWorktreePath(member.worktreePath) + "/")
+                else { continue }
+                guard let worktree = self.projectsManager.worktrees(projectId: member.projectID).first(where: {
+                    Self.canonicalWorktreePath($0.path.path) == Self.canonicalWorktreePath(member.worktreePath)
+                }) else { return nil }
+                return worktree.id
+            }
+            return nil
+        }
+        let manager = ACPSessionManager(
+            worktreeId: owner.storageKey,
+            worktreePath: checkout.rootPath,
+            owner: owner,
+            persistence: ACPSessionPersistence(path: dbURL.path),
+            instanceId: instanceId,
+            pid: Int64(ProcessInfo.processInfo.processIdentifier),
+            hydratorPath: dbURL.path,
+            remoteHost: pinnedRemoteHost,
+            usesRemoteHostRegistry: checkout.executionLocation.normalized != .local,
+            onDirtyCheck: { [weak self] path in
+                guard let worktreeID = checkoutMemberWorktreeID(path) else { return false }
+                return self?.editorHasDirtyBuffer(for: path, worktreeId: worktreeID) ?? false
+            },
+            onLiveBufferRead: { [weak self] path in
+                guard let worktreeID = checkoutMemberWorktreeID(path) else { return nil }
+                return self?.editorLiveBufferText(for: path, worktreeId: worktreeID)
+            },
+            onSessionTitleUpdated: { [weak self] sessionId, title in
+                _ = self?.tabs.renameACPSessionTabs(
+                    worktreeId: owner.storageKey,
+                    sessionId: sessionId,
+                    title: title
+                )
+            },
+            onInputAwaiting: { [weak self] session, request in
+                guard let self,
+                      self.config.harness.notifyOnAwaiting
+                else { return }
+                self.harness.notifications.notifyACPQuestion(
+                    agent: ACPHarnessBridge.agentKind(for: session.agentId),
+                    body: self.acpInputNotificationBody(from: request),
+                    projectId: checkout.id.uuidString,
+                    worktreeId: owner.storageKey,
+                    sessionId: session.id,
+                    requestId: self.notificationRequestId(for: request),
+                    owner: owner
+                )
+            },
+            launchSpecTransformer: { [weak self] spec in
+                guard let self,
+                      checkout.configurationSnapshot?.shared.creationLaunchPreference.useBypassPermissions == true,
+                      let flag = self.agentRegistry.enabled().first(where: { $0.id == spec.agentID })?.bypassPermissionsFlag,
+                      spec.arguments.contains(flag) == false
+                else { return spec }
+                return spec.prependingArguments([flag])
+            },
+            brokerServiceFactory: {
+                let resourceURL = Bundle.main.resourceURL ?? Bundle.main.bundleURL
+                return try await LocalACPBrokerServicePool.shared.service(resourceURL: resourceURL)
+            },
+            builtInMCPProvider: { [weak self] worktreePath, sessionId, adapterSupportsHTTP in
+                guard let self,
+                      let binaryPath = (try? TerminalCLIInjection.installExecutables())?
+                          .appendingPathComponent(TerminalCLIInjection.executableName).path
+                else { return nil }
+                let current = self.currentWorkspaceCheckoutSnapshot(checkout)
+                let configuredServers = self.workspaceFrozenMCPServers(for: current)
+                let context = BuiltInAlasMCP.WorkspaceContext(
+                    checkoutID: current.id,
+                    rootPath: current.rootPath,
+                    members: current.members.map { .init(id: $0.id, availability: $0.availability) }
+                )
+                if self.config.harness.alasMCPTransport == .http,
+                   adapterSupportsHTTP,
+                   let socketPath = self.harness.socketServer.socketPath,
+                   BuiltInAlasMCP.shouldInject(
+                       enabled: self.config.harness.exposeAlasMCP,
+                       configuredServers: configuredServers,
+                       binaryPath: binaryPath,
+                       socketPath: socketPath
+                   ),
+                   let endpoint = await self.mcpHTTPSupervisor.endpoint(
+                       binaryPath: binaryPath,
+                       socketPath: socketPath,
+                       worktreePath: worktreePath,
+                       sessionId: sessionId,
+                       parentSessionId: nil,
+                       workspaceOnly: true
+                   ) {
+                    return BuiltInAlasMCP.injection(
+                        enabled: self.config.harness.exposeAlasMCP,
+                        configuredServers: configuredServers,
+                        binaryPath: binaryPath,
+                        socketPath: self.harness.socketServer.socketPath,
+                        worktreePath: worktreePath,
+                        sessionId: sessionId,
+                        httpEndpoint: endpoint,
+                        workspaceContext: context
+                    )
+                }
+                self.mcpHTTPSupervisor.end(sessionId: sessionId)
+                return BuiltInAlasMCP.injection(
+                    enabled: self.config.harness.exposeAlasMCP,
+                    configuredServers: configuredServers,
+                    binaryPath: binaryPath,
+                    socketPath: self.harness.socketServer.socketPath,
+                    worktreePath: worktreePath,
+                    sessionId: sessionId,
+                    workspaceContext: context
+                )
+            },
+            frozenMCPAttachmentProvider: { [weak self] in
+                guard let self else { return nil }
+                return self.workspaceFrozenMCPAttachments(for: self.currentWorkspaceCheckoutSnapshot(checkout))
+            }
+        )
+        manager.alasCLIEnvProvider = { [weak self] worktreePath, sessionId -> [String: String]? in
+            guard let self else { return nil }
+            let binDirPath = (try? TerminalCLIInjection.installExecutables())?.path
+            return AlasCLIEnvInjection.environment(
+                enabled: self.config.harness.exposeAlasMCP,
+                binDirPath: binDirPath,
+                socketPath: self.harness.socketServer.socketPath,
+                worktreePath: worktreePath,
+                sessionId: sessionId,
+                parentSessionId: nil,
+                basePATH: ACPProcessEnvironment.augmented()["PATH"]
+            )
+        }
+        manager.externalMCPStatusProvider = { [weak self] worktreePath -> (
+            adapterState: PiMCPAdapterInspector.State,
+            configOutcome: PiMCPConfigWriter.Outcome?,
+            userServerNames: [String],
+            skippedServerStatuses: [MCPAttachmentServerStatus]
+        ) in
+            guard let self else { return (.unknown, nil, [], []) }
+            let current = self.currentWorkspaceCheckoutSnapshot(checkout)
+            let attachments = self.workspaceFrozenMCPAttachments(for: current)
+            let descriptors = attachments?.descriptors ?? []
+            let plan = MCPAttachmentPlanner.plan(.init(
+                configuredServers: [],
+                projectDirectory: current.rootPath,
+                worktreeDirectory: worktreePath,
+                environment: ACPProcessEnvironment.sanitizedForACP(extra: [:]),
+                capabilities: ACPMCPServerCapabilities(http: true, sse: true),
+                frozenServerDescriptors: descriptors,
+                unavailableFrozenDescriptorIDs: attachments?.unavailableDescriptorIDs ?? []
+            ))
+            let userServerNames = plan.wireServers.map(\.name)
+            let skippedServerStatuses = plan.statuses.filter {
+                if case .skipped = $0.disposition { return true }
+                return false
+            }
+            let worktreeURL = URL(fileURLWithPath: worktreePath)
+            let adapterState = PiMCPAdapterInspector.state(worktreeURL: worktreeURL)
+            guard adapterState == .installed else {
+                return (adapterState, nil, userServerNames, skippedServerStatuses)
+            }
+            let fingerprint = MCPAttachmentPlanner.resolvedConfigurationFingerprint(for: plan.wireServers)
+            let configOutcome: PiMCPConfigWriter.Outcome
+            do {
+                configOutcome = try PiMCPConfigWriter.sync(
+                    worktreeURL: worktreeURL,
+                    servers: plan.wireServers,
+                    fingerprint: fingerprint
+                )
+            } catch {
+                configOutcome = .failed
+            }
+            if Self.shouldExcludePiDirectory(after: configOutcome) {
+                await self.excludePiDirectoryFromGit(worktreeURL: worktreeURL)
+            }
+            return (adapterState, configOutcome, userServerNames, skippedServerStatuses)
+        }
+        acpManagers[owner] = manager
+        acpHarnessBridge.attach(manager: manager)
+        #if DEBUG
+        memoryDiagnostics.attach(manager: manager)
+        #endif
+        return .ready(manager)
     }
 
     /// Adds `.pi/` to this worktree's `.git/info/exclude` after a managed
@@ -6489,15 +8619,32 @@ final class AppState {
     /// loops would keep the agent + permission / file handlers alive
     /// after the UI was torn down.
     func disposeACPManager(for worktreeId: String) {
-        guard let manager = acpManagers.removeValue(forKey: worktreeId) else { return }
+        disposeACPManager(owner: .worktree(worktreeId))
+    }
+
+    private func disposeACPManager(owner: SessionOwnerID) {
+        guard let manager = acpManagers.removeValue(forKey: owner) else { return }
+        prepareACPManagerForDisposal(manager, owner: owner)
+        Task { @MainActor in
+            await self.finishDisposingACPManager(manager)
+        }
+    }
+
+    private func disposeACPManagerAndWait(owner: SessionOwnerID) async {
+        guard let manager = acpManagers.removeValue(forKey: owner) else { return }
+        prepareACPManagerForDisposal(manager, owner: owner)
+        await finishDisposingACPManager(manager)
+    }
+
+    private func prepareACPManagerForDisposal(_ manager: ACPSessionManager, owner: SessionOwnerID) {
         // Flush any pending debounced draft writes before tearing the
         // manager down — otherwise the last ~300ms of typing in any
         // composer for this worktree never reaches SQLite.
         manager.flushPendingDraftWrites()
         #if DEBUG
-        memoryDiagnostics.detach(worktreeId: worktreeId)
+        memoryDiagnostics.detach(worktreeId: owner.storageKey)
         #endif
-        acpHarnessBridge.detach(worktreeId: worktreeId)
+        acpHarnessBridge.detach(worktreeId: owner.storageKey)
         let sessionIds = Array(manager.runners.keys)
         // Synchronously cancel the runner's async loops so they stop
         // pumping the agent's stdout into our handlers immediately —
@@ -6511,17 +8658,18 @@ final class AppState {
         // must be torn down explicitly to stop the 2.5s backstop polls and
         // notifier subscriptions from outliving the manager.
         manager.shutdownBackgroundTasks()
-        Task { @MainActor in
-            await manager.flushAllPersistence()
-            await manager.disposeAllLiveSessions()
-            // Release any leases this manager still owns AFTER all runner
-            // connections are shut down (detach above). A freed lease must
-            // not be claimable while an old agent process is still alive.
-            // `detach` already released runner-session leases; this mops up
-            // any remaining pre-runner owned leases (e.g. sessions acquired
-            // a lease but didn't register a runner yet).
-            await manager.releaseAllOwnedLeases()
-        }
+    }
+
+    private func finishDisposingACPManager(_ manager: ACPSessionManager) async {
+        await manager.flushAllPersistence()
+        await manager.disposeAllLiveSessions()
+        // Release any leases this manager still owns AFTER all runner
+        // connections are shut down (detach above). A freed lease must
+        // not be claimable while an old agent process is still alive.
+        // `detach` already released runner-session leases; this mops up
+        // any remaining pre-runner owned leases (e.g. sessions acquired
+        // a lease but didn't register a runner yet).
+        await manager.releaseAllOwnedLeases()
     }
 
     /// Open a new ACP session tab for the given agent in the currently-selected worktree.
@@ -6529,6 +8677,12 @@ final class AppState {
         guard let worktreeId = selectedWorktreeId,
               let worktree = worktree(withId: worktreeId) else { return }
         guard let mgr = acpManager(for: worktree) else { return }
+        openNewACPSession(agentID: agentID, owner: mgr.owner, initialPrompt: initialPrompt)
+    }
+
+    @discardableResult
+    func openNewACPSession(agentID: String, owner: SessionOwnerID, initialPrompt: String? = nil) -> ACPSessionTabState? {
+        guard let mgr = acpManager(for: owner) else { return nil }
         let session = mgr.createSession(agentId: agentID, autoRunDefault: config.harness.acpAutoRunByDefault)
         if let initialPrompt, !initialPrompt.isEmpty {
             mgr.persistComposerDraft(
@@ -6537,7 +8691,63 @@ final class AppState {
             )
         }
         let state = ACPSessionTabState(sessionId: session.id, title: session.title)
-        tabs.append(acpSession: state, to: worktree.id)
+        tabs.append(acpSession: state, to: owner)
+        return state
+    }
+
+    /// Opens a checkout-owned shared ACP tab. This is intentionally separate
+    /// from the selected-worktree entry point so Repository Focus cannot
+    /// retarget the session or its persisted database.
+    @discardableResult
+    func openWorkspaceCheckoutACPSession(
+        checkout: WorkspaceCheckout,
+        agentID: String,
+        initialPrompt: String? = nil
+    ) async -> ACPSessionTabState? {
+        guard let checkout = await authoritativeCheckoutForWorkspaceACPSessionCreation(checkout) else { return nil }
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+        guard case let .ready(manager) = await workspaceACPManager(for: checkout) else { return nil }
+        guard await authoritativeCheckoutForWorkspaceACPSessionCreation(checkout) != nil else {
+            await disposeACPManagerAndWait(owner: owner)
+            return nil
+        }
+        let session = manager.createSession(agentId: agentID, autoRunDefault: config.harness.acpAutoRunByDefault)
+        if let initialPrompt, !initialPrompt.isEmpty {
+            manager.persistComposerDraft(.init(segments: [.text(initialPrompt)]), for: session)
+        }
+        let state = ACPSessionTabState(sessionId: session.id, title: session.title)
+        tabs.append(acpSession: state, to: owner)
+        return state
+    }
+
+    private func authoritativeCheckoutForWorkspaceACPSessionCreation(_ checkout: WorkspaceCheckout) async -> WorkspaceCheckout? {
+        guard workspaceMutationAvailable else { return nil }
+        guard let authoritative = await workspaceStore.checkout(id: checkout.id) else { return nil }
+        guard authoritative.executionLocation.normalized == checkout.executionLocation.normalized else { return nil }
+        guard authoritative.archivedAt == nil, authoritative.operation == .idle else { return nil }
+        guard await workspaceCheckoutManifestMatches(authoritative) else { return nil }
+        return authoritative
+    }
+
+    /// Restores saved checkout-owned ACP tabs without creating a replacement
+    /// session. If the checkout root or location is unavailable, the tabs stay
+    /// persisted and visibly pending for a later explicit restore.
+    @discardableResult
+    func restoreWorkspaceCheckoutACPSessions(_ checkout: WorkspaceCheckout) async -> Bool {
+        guard let checkout = await authoritativeCheckoutForWorkspaceACPSessionCreation(checkout) else { return false }
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+        tabs.load(owner: owner, restoringActiveTabs: true)
+        guard case let .ready(manager) = await workspaceACPManager(for: checkout) else { return false }
+        guard await authoritativeCheckoutForWorkspaceACPSessionCreation(checkout) != nil else {
+            await disposeACPManagerAndWait(owner: owner)
+            return false
+        }
+        for tab in tabs.tabs(for: owner) {
+            guard case let .acpSession(state) = tab else { continue }
+            guard manager.placeholderSession(id: state.sessionId) != nil else { continue }
+            await manager.hydrateIfNeeded(id: state.sessionId)
+        }
+        return true
     }
 
     func startACPSession(
@@ -6670,6 +8880,38 @@ final class AppState {
         }
     }
 
+    func forkACPSession(
+        owner: SessionOwnerID,
+        sourceSessionID: ACPSession.ID,
+        boundary: ACPForkMessageBoundary,
+        targetAgentID: String
+    ) {
+        guard let manager = acpManager(for: owner) else { return }
+        Task { @MainActor in
+            do {
+                let target = try await manager.createFork(
+                    sourceSessionID: sourceSessionID,
+                    boundary: boundary,
+                    targetAgentID: targetAgentID,
+                    autoRunDefault: config.harness.acpAutoRunByDefault
+                )
+                let tabState = ACPSessionTabState(sessionId: target.id, title: target.title)
+                let tab = tabs.append(acpSession: tabState, to: owner)
+                tabs.activate(owner: owner, tabId: tab.id)
+                if let selectedWorktreeId {
+                    tabs.clearActiveTab(worktreeId: selectedWorktreeId)
+                }
+                await manager.attach(
+                    to: target.id,
+                    freshlyCreated: true
+                )
+            } catch {
+                manager.liveSession(for: sourceSessionID)?.lastError =
+                    "Could not create fork: \(error.localizedDescription)"
+            }
+        }
+    }
+
     /// Route a prepared handoff into the active ACP tab when its composer is
     /// safely empty; otherwise preserve the current draft and open a new tab.
     func openACPHandoff(agentID: String, initialPrompt: String) {
@@ -6776,6 +9018,43 @@ final class AppState {
         await deliverPendingDelegatedMessages(to: sessionId, manager: mgr)
         let state = ACPSessionTabState(sessionId: sessionId, title: title)
         tabs.append(acpSession: state, to: worktree.id)
+    }
+
+    /// Reopen a persisted ACP session inside a typed session-owner bucket.
+    /// Checkout-owned sessions must not fall back to Repository Focus because
+    /// their database, tabs, and lifecycle are tied to the checkout owner.
+    func openExistingACPSession(sessionId: ACPSession.ID, owner: SessionOwnerID) async {
+        guard let mgr = acpManager(for: owner) else { return }
+
+        let tabIdToFocus: TabID? = tabs.tabs(for: owner).compactMap { tab -> TabID? in
+            if case .acpSession(let state) = tab, state.sessionId == sessionId { return tab.id }
+            return nil
+        }.first
+        if let id = tabIdToFocus {
+            tabs.activate(owner: owner, tabId: id)
+            if let selectedWorktreeId {
+                tabs.clearActiveTab(worktreeId: selectedWorktreeId)
+            }
+            return
+        }
+
+        let title: String
+        if let liveTitle = mgr.liveSession(for: sessionId)?.title {
+            title = liveTitle
+        } else if let row = await mgr.persistedSessionRow(id: sessionId) {
+            title = row.title
+        } else {
+            title = "ACP session"
+        }
+        _ = mgr.placeholderSession(id: sessionId)
+        await mgr.hydrateIfNeeded(id: sessionId)
+        await deliverPendingDelegatedMessages(to: sessionId, manager: mgr)
+        let state = ACPSessionTabState(sessionId: sessionId, title: title)
+        let tab = tabs.append(acpSession: state, to: owner)
+        tabs.activate(owner: owner, tabId: tab.id)
+        if let selectedWorktreeId {
+            tabs.clearActiveTab(worktreeId: selectedWorktreeId)
+        }
     }
 
     private func deliverPendingDelegatedMessages(to sessionId: String, manager: ACPSessionManager) async {
@@ -6898,6 +9177,29 @@ final class AppState {
         else { return false }
 
         await openExistingACPSession(sessionId: row.id)
+        return true
+    }
+
+    @discardableResult
+    func openDiscoveredACPSession(
+        _ discovered: ACPDiscoveredSession,
+        owner: SessionOwnerID,
+        capabilities: ACPSessionDiscoveryCapabilities
+    ) async -> Bool {
+        guard let manager = acpManager(for: owner) else { return false }
+
+        if let localSessionId = discovered.localSessionId {
+            await openExistingACPSession(sessionId: localSessionId, owner: owner)
+            return true
+        }
+        guard capabilities.canOpenRemoteSession,
+              let row = await manager.materializeDiscoveredSession(
+                  discovered,
+                  autoRunDefault: config.harness.acpAutoRunByDefault
+              )
+        else { return false }
+
+        await openExistingACPSession(sessionId: row.id, owner: owner)
         return true
     }
 

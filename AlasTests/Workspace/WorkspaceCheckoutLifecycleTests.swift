@@ -1,0 +1,993 @@
+import Foundation
+import Testing
+@testable import Alas
+
+@Suite("Workspace checkout lifecycle")
+struct WorkspaceCheckoutLifecycleTests {
+    @Test func archivingAnIdleCheckoutStopsItsOwnedSessionsAndRetainsMembers() async throws {
+        let fixture = try await Fixture.make()
+        let sessions = LifecycleSessions()
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: fixture.store,
+            git: FixtureGit(),
+            scripts: FixtureScripts(),
+            sessions: sessions,
+            lifecycle: FixtureLifecycle()
+        )
+
+        let archived = try await coordinator.archive(checkoutID: fixture.checkout.id)
+
+        #expect(archived.archivedAt != nil)
+        #expect(archived.members == fixture.checkout.members)
+        #expect(await sessions.stopped == [fixture.checkout.id])
+    }
+
+    @Test func archivingDuringMutationFailsWithoutStoppingSessions() async throws {
+        let fixture = try await Fixture.make(operation: .creating)
+        let sessions = LifecycleSessions()
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: sessions, lifecycle: FixtureLifecycle())
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.operationInProgress) {
+            try await coordinator.archive(checkoutID: fixture.checkout.id)
+        }
+        #expect(await sessions.stopped.isEmpty)
+    }
+
+    @Test func archivedCheckoutsRejectMemberMutationEntryPoints() async throws {
+        let fixture = try await Fixture.make()
+        try await fixture.store.mutate { state in
+            state.checkouts[0].archivedAt = Date(timeIntervalSince1970: 1_000)
+            state.checkouts[0].members[0].availability = .missing
+            state.checkouts[0].members[0].checkpoint = .failed
+        }
+        let lifecycle = FixtureLifecycle()
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.operationInProgress) {
+            try await coordinator.previewMemberDeletion(checkoutID: fixture.checkout.id, memberID: fixture.member.id)
+        }
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.operationInProgress) {
+            try await coordinator.deleteMember(checkoutID: fixture.checkout.id, memberID: fixture.member.id)
+        }
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.operationInProgress) {
+            try await coordinator.deleteMemberSnapshot(checkoutID: fixture.checkout.id, memberID: fixture.member.id)
+        }
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.operationInProgress) {
+            try await coordinator.useExistingVerifiedCandidate(
+                checkoutID: fixture.checkout.id,
+                memberID: fixture.member.id,
+                candidate: .init(path: fixture.member.worktreePath, lineageID: fixture.member.gitLineageID ?? "", isExactMatch: true)
+            )
+        }
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.operationInProgress) {
+            try await coordinator.deleteCheckout(checkoutID: fixture.checkout.id)
+        }
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.operationInProgress) {
+            try await coordinator.forget(checkoutID: fixture.checkout.id, confirmedPreserveArtifacts: true)
+        }
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.operationInProgress) {
+            try await coordinator.retrySetup(checkoutID: fixture.checkout.id, memberID: fixture.member.id)
+        }
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.operationInProgress) {
+            try await coordinator.resumeCreation(checkoutID: fixture.checkout.id)
+        }
+        #expect(await lifecycle.removedMembers.isEmpty)
+    }
+
+    @Test func interruptedArchivingCheckoutCanResumeAndFinalize() async throws {
+        let fixture = try await Fixture.make(operation: .archiving)
+        let sessions = LifecycleSessions()
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: sessions, lifecycle: FixtureLifecycle())
+
+        let archived = try await coordinator.archive(checkoutID: fixture.checkout.id)
+
+        #expect(archived.archivedAt != nil)
+        #expect(archived.operation == .idle)
+        #expect(await sessions.stopped == [fixture.checkout.id])
+    }
+
+    @Test func deletingAMemberPersistsTheFrozenCleanupPlanBeforeRemovingTheWorktree() async throws {
+        let fixture = try await Fixture.make()
+        let lifecycle = PersistedCleanupLifecycle(store: fixture.store, checkoutID: fixture.checkout.id)
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+
+        let checkout = try await coordinator.deleteMember(checkoutID: fixture.checkout.id, memberID: fixture.member.id)
+
+        #expect(await lifecycle.sawPersistedCleanupPlan)
+        #expect(checkout.members[0].availability == .explicitlyDeleted)
+        #expect(checkout.members[0].checkpoint == .planPersisted)
+        #expect(checkout.members[0].gitLineageID == nil)
+        #expect(checkout.members[0].cleanupOwnership.worktreeCreated == false)
+        #expect(checkout.members[0].cleanup?.worktreeRemoved == true)
+    }
+
+    @Test func deletionPreviewAllowsMissingAttemptOwnedMembers() async throws {
+        let fixture = try await Fixture.make()
+        try await fixture.store.mutate { state in
+            state.checkouts[0].members[0].availability = .missing
+        }
+        let lifecycle = FixtureLifecycle(
+            verification: .missing,
+            preflight: .init(reasons: [.dirty], submoduleLocalState: .none)
+        )
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+
+        let preview = try await coordinator.previewMemberDeletion(checkoutID: fixture.checkout.id, memberID: fixture.member.id)
+
+        #expect(preview.member.availability == .missing)
+        #expect(preview.preflight.reasons.isEmpty)
+        #expect(preview.plan.expectedLineageID == fixture.member.gitLineageID)
+    }
+
+    @Test func interruptedDeletingCheckoutCanResumeFromPersistedCleanup() async throws {
+        let fixture = try await Fixture.make()
+        let plan = WorkspaceCheckoutCleanupPlan(
+            checkoutID: fixture.checkout.id,
+            memberID: fixture.member.id,
+            executionLocation: fixture.checkout.executionLocation,
+            projectID: fixture.member.projectID,
+            sourceRepositoryPath: fixture.member.plan!.sourceRepositoryPath,
+            baseReference: fixture.member.plan!.baseReference,
+            baseCommit: fixture.member.plan!.baseCommit,
+            rootPath: fixture.checkout.rootPath,
+            managedMemberPaths: [fixture.member.worktreePath],
+            worktreePath: fixture.member.worktreePath,
+            branch: fixture.checkout.branch,
+            expectedLineageID: fixture.member.gitLineageID!,
+            branchOwnership: .reused
+        )
+        try await fixture.store.mutate { state in
+            state.checkouts[0].operation = .deleting
+            state.checkouts[0].members[0].cleanup = .init(
+                plan: plan,
+                checkpoint: .worktreeRemoved,
+                worktreeRemoved: true
+            )
+        }
+        let lifecycle = FixtureLifecycle(verification: .missing)
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+
+        let checkout = try await coordinator.deleteMember(checkoutID: fixture.checkout.id, memberID: fixture.member.id)
+
+        #expect(checkout.operation == .idle)
+        #expect(checkout.members[0].availability == .explicitlyDeleted)
+        #expect(await lifecycle.removedMembers.isEmpty)
+    }
+
+    @Test func interruptedDeletionKeepsAlreadyRemovedBranchComplete() async throws {
+        let fixture = try await Fixture.make()
+        let plan = WorkspaceCheckoutCleanupPlan(
+            checkoutID: fixture.checkout.id,
+            memberID: fixture.member.id,
+            executionLocation: fixture.checkout.executionLocation,
+            projectID: fixture.member.projectID,
+            sourceRepositoryPath: fixture.member.plan!.sourceRepositoryPath,
+            baseReference: fixture.member.plan!.baseReference,
+            baseCommit: fixture.member.plan!.baseCommit,
+            rootPath: fixture.checkout.rootPath,
+            managedMemberPaths: [fixture.member.worktreePath],
+            worktreePath: fixture.member.worktreePath,
+            branch: fixture.checkout.branch,
+            expectedLineageID: fixture.member.gitLineageID!,
+            branchOwnership: .created
+        )
+        try await fixture.store.mutate { state in
+            state.checkouts[0].operation = .deleting
+            state.checkouts[0].members[0].cleanup = .init(
+                plan: plan,
+                checkpoint: .complete,
+                worktreeRemoved: true,
+                branchRemoved: true
+            )
+        }
+        let lifecycle = FixtureLifecycle(verification: .missing)
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+
+        let checkout = try await coordinator.deleteMember(checkoutID: fixture.checkout.id, memberID: fixture.member.id)
+
+        #expect(checkout.members[0].cleanup?.branchRemoved == true)
+        #expect(checkout.members[0].cleanup?.checkpoint == .complete)
+        #expect(await lifecycle.deletedBranches.isEmpty)
+    }
+
+    @Test func interruptedDeletionTreatsMissingWorktreeAsRemovedWhenCleanupPlanWasDurable() async throws {
+        let fixture = try await Fixture.make()
+        let plan = WorkspaceCheckoutCleanupPlan(
+            checkoutID: fixture.checkout.id,
+            memberID: fixture.member.id,
+            executionLocation: fixture.checkout.executionLocation,
+            projectID: fixture.member.projectID,
+            sourceRepositoryPath: fixture.member.plan!.sourceRepositoryPath,
+            baseReference: fixture.member.plan!.baseReference,
+            baseCommit: fixture.member.plan!.baseCommit,
+            rootPath: fixture.checkout.rootPath,
+            managedMemberPaths: [fixture.member.worktreePath],
+            worktreePath: fixture.member.worktreePath,
+            branch: fixture.checkout.branch,
+            expectedLineageID: fixture.member.gitLineageID!,
+            branchOwnership: .reused
+        )
+        try await fixture.store.mutate { state in
+            state.checkouts[0].operation = .deleting
+            state.checkouts[0].members[0].cleanup = .init(plan: plan)
+        }
+        let lifecycle = FixtureLifecycle(verification: .missing)
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+
+        let checkout = try await coordinator.deleteMember(checkoutID: fixture.checkout.id, memberID: fixture.member.id)
+
+        #expect(checkout.operation == .idle)
+        #expect(checkout.members[0].cleanup?.worktreeRemoved == true)
+        #expect(checkout.members[0].cleanup?.checkpoint == .worktreeRemoved)
+        #expect(checkout.members[0].availability == .explicitlyDeleted)
+        #expect(await lifecycle.removedMembers.isEmpty)
+    }
+
+    @Test func missingWorktreeClearsStaleGitRegistrationBeforeRecordingRemoval() async throws {
+        let fixture = try await Fixture.make()
+        let plan = WorkspaceCheckoutCleanupPlan(
+            checkoutID: fixture.checkout.id,
+            memberID: fixture.member.id,
+            executionLocation: fixture.checkout.executionLocation,
+            projectID: fixture.member.projectID,
+            sourceRepositoryPath: fixture.member.plan!.sourceRepositoryPath,
+            baseReference: fixture.member.plan!.baseReference,
+            baseCommit: fixture.member.plan!.baseCommit,
+            rootPath: fixture.checkout.rootPath,
+            managedMemberPaths: [fixture.member.worktreePath],
+            worktreePath: fixture.member.worktreePath,
+            branch: fixture.checkout.branch,
+            expectedLineageID: fixture.member.gitLineageID!,
+            branchOwnership: .reused
+        )
+        try await fixture.store.mutate { state in
+            state.checkouts[0].operation = .deleting
+            state.checkouts[0].members[0].cleanup = .init(plan: plan)
+        }
+        let lifecycle = FixtureLifecycle(verification: .missing)
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+
+        let checkout = try await coordinator.deleteMember(checkoutID: fixture.checkout.id, memberID: fixture.member.id)
+
+        #expect(await lifecycle.clearedRegistrations == [fixture.member.id])
+        #expect(await lifecycle.removedMembers.isEmpty)
+        #expect(checkout.members[0].cleanup?.worktreeRemoved == true)
+        #expect(checkout.members[0].cleanup?.checkpoint == .worktreeRemoved)
+    }
+
+    @Test func deleteSnapshotForIdentityConflictDoesNotVerifyOrRemoveAWorktree() async throws {
+        let fixture = try await Fixture.make()
+        try await fixture.store.mutate { state in
+            state.checkouts[0].members[0].availability = .identityConflict
+        }
+        let lifecycle = FixtureLifecycle()
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+
+        let checkout = try await coordinator.deleteMemberSnapshot(checkoutID: fixture.checkout.id, memberID: fixture.member.id)
+
+        #expect(checkout.members[0].availability == .explicitlyDeleted)
+        #expect(checkout.members[0].checkpoint == .planPersisted)
+        #expect(checkout.members[0].cleanup?.worktreeRemoved == true)
+        #expect(await lifecycle.removedMembers.isEmpty)
+    }
+
+    @Test func deleteSnapshotForReconciledIdentityConflictDoesNotRequirePersistedConflict() async throws {
+        let fixture = try await Fixture.make()
+        let lifecycle = FixtureLifecycle(verification: .identityConflict("replacement"))
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+
+        let checkout = try await coordinator.deleteMemberSnapshot(checkoutID: fixture.checkout.id, memberID: fixture.member.id)
+
+        #expect(checkout.members[0].availability == .explicitlyDeleted)
+        #expect(checkout.members[0].cleanup?.worktreeRemoved == true)
+        #expect(await lifecycle.removedMembers.isEmpty)
+    }
+
+    @Test func confirmedForgetCanDiscardSnapshotOnlyDeletion() async throws {
+        let fixture = try await Fixture.make()
+        try await fixture.store.mutate { state in
+            state.checkouts[0].members[0].availability = .identityConflict
+        }
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: FixtureLifecycle())
+        _ = try await coordinator.deleteMemberSnapshot(checkoutID: fixture.checkout.id, memberID: fixture.member.id)
+
+        try await coordinator.forget(checkoutID: fixture.checkout.id, confirmedPreserveArtifacts: true)
+
+        guard case .loaded(let state) = await fixture.store.load() else {
+            Issue.record("Expected loaded Workspace state")
+            return
+        }
+        #expect(state.checkouts.isEmpty)
+    }
+
+    @Test func forgettingACheckoutStopsOwnedSessionsBeforeRemovingTheSnapshot() async throws {
+        let fixture = try await Fixture.make()
+        try await fixture.store.mutate { state in
+            state.checkouts[0].members[0].cleanup = .init(
+                plan: WorkspaceCheckoutCleanupPlan(
+                    checkoutID: fixture.checkout.id,
+                    memberID: fixture.member.id,
+                    executionLocation: .local,
+                    projectID: "a",
+                    sourceRepositoryPath: "/repo/a",
+                    baseReference: "main",
+                    baseCommit: "abc",
+                    rootPath: "/checkout",
+                    managedMemberPaths: ["/checkout/a"],
+                    worktreePath: "/checkout/a",
+                    branch: "feature/a",
+                    expectedLineageID: "lineage-a",
+                    branchOwnership: .created
+                ),
+                worktreeRemoved: true,
+                branchRemoved: true
+            )
+        }
+        let sessions = LifecycleSessions()
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: fixture.store,
+            git: FixtureGit(),
+            scripts: FixtureScripts(),
+            sessions: sessions,
+            lifecycle: FixtureLifecycle()
+        )
+
+        try await coordinator.forget(checkoutID: fixture.checkout.id)
+
+        #expect(await sessions.stopped == [fixture.checkout.id])
+        guard case .loaded(let state) = await fixture.store.load() else {
+            Issue.record("Expected loaded Workspace state")
+            return
+        }
+        #expect(state.checkouts.isEmpty)
+    }
+
+    @Test func forgettingCanResumeAfterPersistedDeletingClaim() async throws {
+        let fixture = try await Fixture.make()
+        try await fixture.store.mutate { state in
+            state.checkouts[0].operation = .deleting
+            state.checkouts[0].members[0].cleanup = .init(
+                plan: WorkspaceCheckoutCleanupPlan(
+                    checkoutID: fixture.checkout.id,
+                    memberID: fixture.member.id,
+                    executionLocation: .local,
+                    projectID: "a",
+                    sourceRepositoryPath: "/repo/a",
+                    baseReference: "main",
+                    baseCommit: "abc",
+                    rootPath: "/checkout",
+                    managedMemberPaths: ["/checkout/a"],
+                    worktreePath: "/checkout/a",
+                    branch: "feature/a",
+                    expectedLineageID: "lineage-a",
+                    branchOwnership: .created
+                ),
+                worktreeRemoved: true,
+                branchRemoved: true
+            )
+        }
+        let sessions = LifecycleSessions()
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: fixture.store,
+            git: FixtureGit(),
+            scripts: FixtureScripts(),
+            sessions: sessions,
+            lifecycle: FixtureLifecycle()
+        )
+
+        try await coordinator.forget(checkoutID: fixture.checkout.id)
+
+        #expect(await sessions.stopped == [fixture.checkout.id])
+        guard case .loaded(let state) = await fixture.store.load() else {
+            Issue.record("Expected loaded Workspace state")
+            return
+        }
+        #expect(state.checkouts.isEmpty)
+    }
+
+    @Test func deletionNeverRemovesAReusedBranch() async throws {
+        let fixture = try await Fixture.make(branchOwnership: .reused)
+        let lifecycle = FixtureLifecycle()
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+
+        _ = try await coordinator.deleteMember(checkoutID: fixture.checkout.id, memberID: fixture.member.id)
+
+        #expect(await lifecycle.deletedBranches.isEmpty)
+    }
+
+    @Test func wrongLineageFailsClosedBeforeRemovingAnything() async throws {
+        let fixture = try await Fixture.make()
+        let lifecycle = FixtureLifecycle(verification: .identityConflict("other"))
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict) {
+            try await coordinator.deleteMember(checkoutID: fixture.checkout.id, memberID: fixture.member.id)
+        }
+        #expect(await lifecycle.removedMembers.isEmpty)
+    }
+
+    @Test func riskyWorktreeRequiresAnExplicitCleanupConfirmationWithoutAForcePath() async throws {
+        let fixture = try await Fixture.make()
+        let lifecycle = FixtureLifecycle(preflight: .init(reasons: [.dirty], submoduleLocalState: .none))
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.cleanupConfirmationRequired) {
+            try await coordinator.deleteMember(checkoutID: fixture.checkout.id, memberID: fixture.member.id)
+        }
+        #expect(await lifecycle.removedMembers.isEmpty)
+    }
+
+    @Test func confirmedRiskPassesForceToWorktreeRemoval() async throws {
+        let fixture = try await Fixture.make()
+        let lifecycle = FixtureLifecycle(preflight: .init(reasons: [.dirty], submoduleLocalState: .none))
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+
+        _ = try await coordinator.deleteMember(checkoutID: fixture.checkout.id, memberID: fixture.member.id, confirmingRisks: true)
+
+        let decisions = await lifecycle.removeForces
+        #expect(decisions.map { $0.force } == [true])
+        #expect(decisions.map { $0.forceTwice } == [false])
+    }
+
+    @Test func confirmedLockedWorktreePassesDoubleForceToWorktreeRemoval() async throws {
+        let fixture = try await Fixture.make()
+        let lifecycle = FixtureLifecycle(preflight: .init(reasons: [.locked], submoduleLocalState: .none))
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+
+        _ = try await coordinator.deleteMember(checkoutID: fixture.checkout.id, memberID: fixture.member.id, confirmingRisks: true)
+
+        let decisions = await lifecycle.removeForces
+        #expect(decisions.map { $0.force } == [true])
+        #expect(decisions.map { $0.forceTwice } == [true])
+    }
+
+    @Test func wholeDeletionRequiresRiskConfirmationBeforeRemovingAnyMember() async throws {
+        let fixture = try await Fixture.make(memberCount: 2)
+        let lifecycle = FixtureLifecycle(preflight: .init(reasons: [.dirty], submoduleLocalState: .none))
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+
+        let result = try await coordinator.deleteCheckout(checkoutID: fixture.checkout.id)
+
+        #expect(result.members.allSatisfy { $0.availability == .available })
+        #expect(await lifecycle.removedMembers.isEmpty)
+    }
+
+    @Test func confirmedWholeDeletionPassesRiskConfirmationToEveryMember() async throws {
+        let fixture = try await Fixture.make(memberCount: 2)
+        let lifecycle = FixtureLifecycle(preflight: .init(reasons: [.dirty], submoduleLocalState: .none))
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+
+        let result = try await coordinator.deleteCheckout(checkoutID: fixture.checkout.id, confirmingRisks: true)
+
+        #expect(result.members.allSatisfy { $0.availability == .explicitlyDeleted })
+        let decisions = await lifecycle.removeForces
+        #expect(decisions.map { $0.force } == [true, true])
+        #expect(decisions.map { $0.forceTwice } == [false, false])
+    }
+
+    @Test func wholeDeletionContinuesAfterOneMemberFails() async throws {
+        let fixture = try await Fixture.make(memberCount: 2)
+        let lifecycle = FixtureLifecycle(failingMember: fixture.checkout.members[0].id)
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+
+        let result = try await coordinator.deleteCheckout(checkoutID: fixture.checkout.id)
+
+        #expect(result.members[0].availability == .available)
+        #expect(result.members[1].availability == .explicitlyDeleted)
+    }
+
+    @Test func wholeDeletionRetainsTheCheckoutClaimUntilTheOuterLoopFinishes() async throws {
+        let fixture = try await Fixture.make(memberCount: 2)
+        let lifecycle = StoreInspectingLifecycle(store: fixture.store, checkoutID: fixture.checkout.id)
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+
+        let result = try await coordinator.deleteCheckout(checkoutID: fixture.checkout.id)
+
+        #expect(await lifecycle.operationsDuringRemoval == [.deleting, .deleting])
+        #expect(result.operation == .idle)
+        #expect(result.members.allSatisfy { $0.availability == .explicitlyDeleted })
+    }
+
+    @Test func concurrentWholeDeletionRejectsTheSecondLiveRequest() async throws {
+        let fixture = try await Fixture.make(memberCount: 2)
+        let lifecycle = BlockingLifecycle()
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+
+        let first = Task { try await coordinator.deleteCheckout(checkoutID: fixture.checkout.id) }
+        await lifecycle.waitUntilRemoving()
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.operationInProgress) {
+            try await coordinator.deleteCheckout(checkoutID: fixture.checkout.id)
+        }
+
+        await lifecycle.release()
+        _ = try await first.value
+    }
+
+    @Test func forgettingRequiresResolvedSharedRootLeftovers() async throws {
+        let fixture = try await Fixture.make()
+        let lifecycle = FixtureLifecycle(leftovers: ["notes.txt"])
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+        _ = try await coordinator.deleteMember(checkoutID: fixture.checkout.id, memberID: fixture.member.id)
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.cleanupIncomplete) {
+            try await coordinator.forget(checkoutID: fixture.checkout.id)
+        }
+    }
+
+    @Test func confirmedForgetPreservesSharedRootLeftovers() async throws {
+        let fixture = try await Fixture.make(branchOwnership: .reused)
+        let lifecycle = FixtureLifecycle(leftovers: [WorkspaceCheckoutManifest.fileName, "notes.txt"])
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+        _ = try await coordinator.deleteMember(checkoutID: fixture.checkout.id, memberID: fixture.member.id)
+
+        try await coordinator.forget(checkoutID: fixture.checkout.id, confirmedPreserveArtifacts: true)
+
+        guard case .loaded(let state) = await fixture.store.load() else { Issue.record("Expected stored state")
+            return
+        }
+        #expect(state.checkouts.contains(where: { $0.id == fixture.checkout.id }) == false)
+    }
+
+    @Test func forgetRemovesOwnedCheckoutRootArtifactsBeforeDroppingTheRecord() async throws {
+        let fixture = try await Fixture.make(branchOwnership: .reused)
+        let lifecycle = FixtureLifecycle()
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+        _ = try await coordinator.deleteMember(checkoutID: fixture.checkout.id, memberID: fixture.member.id)
+
+        try await coordinator.forget(checkoutID: fixture.checkout.id)
+
+        #expect(await lifecycle.removedRootArtifacts == [fixture.checkout.id])
+    }
+
+    @Test func forgetRemovesOwnedCheckoutRootArtifactsEvenWithoutMemberCleanupPlan() async throws {
+        let fixture = try await Fixture.make(branchOwnership: .reused)
+        try await fixture.store.mutate { state in
+            state.checkouts[0].members[0].cleanup = nil
+            state.checkouts[0].members[0].cleanupOwnership = .init()
+            state.checkouts[0].members[0].availability = .explicitlyDeleted
+        }
+        let lifecycle = FixtureLifecycle()
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+
+        try await coordinator.forget(checkoutID: fixture.checkout.id, confirmedPreserveArtifacts: true)
+
+        #expect(await lifecycle.removedRootArtifacts == [fixture.checkout.id])
+        guard case .loaded(let state) = await fixture.store.load() else {
+            Issue.record("Expected Workspace state to remain readable")
+            return
+        }
+        #expect(state.checkouts.contains(where: { $0.id == fixture.checkout.id }) == false)
+    }
+
+    @Test func forgettingARetainedAttemptCreatedBranchRequiresSeparateConfirmation() async throws {
+        let fixture = try await Fixture.make()
+        let lifecycle = FixtureLifecycle(branchRemoved: false)
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+        _ = try await coordinator.deleteMember(checkoutID: fixture.checkout.id, memberID: fixture.member.id)
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.cleanupIncomplete) {
+            try await coordinator.forget(checkoutID: fixture.checkout.id)
+        }
+        try await coordinator.forget(checkoutID: fixture.checkout.id, confirmedPreserveArtifacts: true)
+        guard case .loaded(let state) = await fixture.store.load() else { Issue.record("Expected stored state")
+        return }
+        #expect(state.checkouts.contains(where: { $0.id == fixture.checkout.id }) == false)
+    }
+
+    @Test func concreteLifecycleUsesSSHTransportForCleanup() async throws {
+        let runner = RemoteLifecycleRunner(results: [
+            .init(exitCode: 0, stdout: " M file.txt\n", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "worktree /checkout/a\nHEAD abc\nbranch refs/heads/feature\n", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 1, stdout: "", stderr: "not merged"),
+            .init(exitCode: 0, stdout: ".alas-workspace-checkout.json\nnotes.txt\n", stderr: ""),
+        ])
+        let lifecycle = WorkspaceCheckoutLifecycleOperator(remote: .init { executable, args, timeout in
+            try await runner.run(executable: executable, args: args, timeout: timeout)
+        })
+        let plan = WorkspaceCheckoutCleanupPlan(
+            checkoutID: UUID(),
+            memberID: UUID(),
+            executionLocation: .ssh("example.com"),
+            projectID: "project",
+            sourceRepositoryPath: "/repo",
+            baseReference: "main",
+            baseCommit: "abc",
+            branchCommit: "abc",
+            rootPath: "/checkout",
+            managedMemberPaths: ["/checkout/a"],
+            worktreePath: "/checkout/a",
+            branch: "feature",
+            expectedLineageID: "lineage",
+            branchOwnership: .created
+        )
+
+        let preflight = try await lifecycle.deletePreflight(plan)
+        try await lifecycle.removeWorktree(plan, force: true, forceTwice: true)
+        let branchRemoved = try await lifecycle.deleteMergedBranch(plan)
+        let root = await lifecycle.inspectRoot(plan)
+
+        #expect(preflight.reasons == [.dirty])
+        #expect(branchRemoved == false)
+        #expect(root.leftovers == ["notes.txt"])
+        let commands = await runner.commands.joined(separator: "\n")
+        #expect(commands.contains("worktree remove -f -f --"))
+        #expect(commands.contains("rev-parse --verify"))
+        #expect(commands.contains("branch -d"))
+        #expect(commands.contains("m=$(cd") == false)
+    }
+
+    @Test func concreteRemotePreflightTreatsFailedSubmoduleProbeAsUnknown() async throws {
+        let runner = RemoteLifecycleRunner(results: [
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 128, stdout: "", stderr: "ssh failed"),
+            .init(exitCode: 0, stdout: "worktree /checkout/a\nHEAD abc\nbranch refs/heads/feature\n", stderr: ""),
+        ])
+        let lifecycle = WorkspaceCheckoutLifecycleOperator(remote: .init { executable, args, timeout in
+            try await runner.run(executable: executable, args: args, timeout: timeout)
+        })
+
+        let preflight = try await lifecycle.deletePreflight(Self.sshCleanupPlan())
+
+        #expect(preflight.reasons.isEmpty)
+        #expect(preflight.submoduleLocalState == .unknown)
+    }
+
+    @Test func concreteRemoteCleanupPrunesStaleRegistrationBeforeMarkingMissingWorktreeRemoved() async throws {
+        let runner = RemoteLifecycleRunner(results: [
+            .init(exitCode: 0, stdout: "worktree /checkout/a\nprunable gitdir file points to non-existent location\n", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+        ])
+        let lifecycle = WorkspaceCheckoutLifecycleOperator(remote: .init { executable, args, timeout in
+            try await runner.run(executable: executable, args: args, timeout: timeout)
+        })
+
+        try await lifecycle.clearStaleRegistration(Self.sshCleanupPlan())
+
+        let commands = await runner.commands.joined(separator: "\n")
+        #expect(commands.contains("worktree list --porcelain"))
+        #expect(commands.contains("worktree prune"))
+    }
+
+    private static func sshCleanupPlan() -> WorkspaceCheckoutCleanupPlan {
+        WorkspaceCheckoutCleanupPlan(
+            checkoutID: UUID(),
+            memberID: UUID(),
+            executionLocation: .ssh("example.com"),
+            projectID: "project",
+            sourceRepositoryPath: "/repo",
+            baseReference: "main",
+            baseCommit: "abc",
+            branchCommit: "abc",
+            rootPath: "/checkout",
+            managedMemberPaths: ["/checkout/a"],
+            worktreePath: "/checkout/a",
+            branch: "feature",
+            expectedLineageID: "lineage",
+            branchOwnership: .created
+        )
+    }
+
+    @Test func concreteLifecycleRefusesToDeleteAReplacedOwnedBranch() async throws {
+        let repo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("workspace-cleanup-branch-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "base"], cwd: repo)
+        let original = try await Process.git(["rev-parse", "HEAD"], cwd: repo)
+        let originalCommit = original.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        _ = try await Process.git(["branch", "feature/workspace", originalCommit], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "replacement"], cwd: repo)
+        let replacement = try await Process.git(["rev-parse", "HEAD"], cwd: repo)
+        let replacementCommit = replacement.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        _ = try await Process.git(["branch", "-f", "feature/workspace", replacementCommit], cwd: repo)
+        let plan = WorkspaceCheckoutCleanupPlan(
+            checkoutID: UUID(),
+            memberID: UUID(),
+            executionLocation: .local,
+            projectID: "project",
+            sourceRepositoryPath: repo.path,
+            baseReference: "main",
+            baseCommit: originalCommit,
+            branchCommit: originalCommit,
+            rootPath: repo.deletingLastPathComponent().path,
+            managedMemberPaths: [],
+            worktreePath: repo.path,
+            branch: "feature/workspace",
+            expectedLineageID: "lineage",
+            branchOwnership: .created
+        )
+
+        let removed = try await WorkspaceCheckoutLifecycleOperator().deleteMergedBranch(plan)
+
+        #expect(removed == false)
+        let current = try await Process.git(["rev-parse", "feature/workspace"], cwd: repo)
+        #expect(current.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == replacementCommit)
+    }
+
+    @Test func localRootInspectionIgnoresTheManagedCheckoutManifest() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-cleanup-root-\(UUID().uuidString)")
+        let member = root.appendingPathComponent("a")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: member, withIntermediateDirectories: true)
+        try Data().write(to: root.appendingPathComponent(WorkspaceCheckoutManifest.fileName))
+        try Data().write(to: root.appendingPathComponent("notes.txt"))
+        let plan = WorkspaceCheckoutCleanupPlan(
+            checkoutID: UUID(),
+            memberID: UUID(),
+            executionLocation: .local,
+            projectID: "project",
+            sourceRepositoryPath: "/repo",
+            baseReference: "main",
+            baseCommit: "abc",
+            rootPath: root.path,
+            managedMemberPaths: [member.path],
+            worktreePath: member.path,
+            branch: "feature",
+            expectedLineageID: "lineage",
+            branchOwnership: .created
+        )
+
+        let inspection = await WorkspaceCheckoutLifecycleOperator().inspectRoot(plan)
+
+        #expect(inspection.isContained)
+        #expect(inspection.leftovers == ["notes.txt"])
+    }
+
+    @Test func localRootCleanupRemovesOwnedManifestAndEmptyRoot() async throws {
+        let checkoutID = UUID()
+        let memberID = UUID()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-cleanup-root-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let manifest = WorkspaceCheckoutManifest(
+            checkoutID: checkoutID,
+            rootPath: root.path,
+            branch: "feature",
+            members: [
+                .init(
+                    id: memberID,
+                    projectID: "project",
+                    path: root.appendingPathComponent("a").path,
+                    availability: .explicitlyDeleted
+                )
+            ]
+        )
+        try JSONEncoder().encode(manifest).write(to: root.appendingPathComponent(WorkspaceCheckoutManifest.fileName))
+        let checkout = WorkspaceCheckout(
+            id: checkoutID,
+            workspaceID: nil,
+            fallbackWorkspaceName: "Release",
+            executionLocation: .local,
+            branch: "feature",
+            rootPath: root.path,
+            members: []
+        )
+
+        try await WorkspaceCheckoutLifecycleOperator().removeCheckoutRootArtifacts(for: checkout)
+
+        #expect(FileManager.default.fileExists(atPath: root.path) == false)
+    }
+
+    @Test func localRootCleanupRejectsCopiedManifestWithDifferentRoot() async throws {
+        let checkoutID = UUID()
+        let originalRoot = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-cleanup-original-\(UUID().uuidString)")
+        let copiedRoot = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-cleanup-copy-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: originalRoot)
+            try? FileManager.default.removeItem(at: copiedRoot)
+        }
+        try FileManager.default.createDirectory(at: originalRoot, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: copiedRoot, withIntermediateDirectories: true)
+        let manifest = WorkspaceCheckoutManifest(
+            checkoutID: checkoutID,
+            rootPath: originalRoot.path,
+            branch: "feature",
+            members: []
+        )
+        try JSONEncoder().encode(manifest).write(to: copiedRoot.appendingPathComponent(WorkspaceCheckoutManifest.fileName))
+        let checkout = WorkspaceCheckout(
+            id: checkoutID,
+            workspaceID: nil,
+            fallbackWorkspaceName: "Release",
+            executionLocation: .local,
+            branch: "feature",
+            rootPath: copiedRoot.path,
+            members: []
+        )
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict) {
+            try await WorkspaceCheckoutLifecycleOperator().removeCheckoutRootArtifacts(for: checkout)
+        }
+
+        #expect(FileManager.default.fileExists(atPath: copiedRoot.appendingPathComponent(WorkspaceCheckoutManifest.fileName).path))
+    }
+
+    private struct Fixture {
+        let store: WorkspaceStore
+        let checkout: WorkspaceCheckout
+        let member: WorkspaceCheckoutMember
+
+        static func make(operation: WorkspaceCheckoutOperation = .idle, branchOwnership: WorkspaceBranchOwnership = .created, memberCount: Int = 1) async throws -> Fixture {
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-lifecycle-\(UUID().uuidString).json")
+            let store = WorkspaceStore(url: url)
+            let memberID = UUID()
+            let member = WorkspaceCheckoutMember(
+                id: memberID, workspaceMemberID: UUID(), projectID: "a", fallbackProjectName: "A", fallbackRepositoryRoot: "/repo/a",
+                worktreePath: "/checkout/a", gitLineageID: "lineage-a", availability: .available, checkpoint: .setupComplete,
+                cleanupOwnership: .init(worktreeCreated: true, branchOwnership: branchOwnership),
+                plan: .init(checkoutMemberID: memberID, projectID: "a", sourceRepositoryPath: "/repo/a", destinationPath: "/checkout/a", baseReference: "main", baseCommit: "abc", branchIntent: .create(atCommit: "abc"))
+            )
+            let members = [member] + (1 ..< memberCount).map { index in
+                WorkspaceCheckoutMember(id: UUID(), workspaceMemberID: UUID(), projectID: "a-\(index)", fallbackProjectName: "A \(index)", fallbackRepositoryRoot: "/repo/a-\(index)", worktreePath: "/checkout/a-\(index)", gitLineageID: "lineage-a-\(index)", availability: .available, checkpoint: .setupComplete, cleanupOwnership: .init(worktreeCreated: true, branchOwnership: branchOwnership), plan: .init(checkoutMemberID: UUID(), projectID: "a-\(index)", sourceRepositoryPath: "/repo/a-\(index)", destinationPath: "/checkout/a-\(index)", baseReference: "main", baseCommit: "abc", branchIntent: .create(atCommit: "abc")))
+            }
+            let normalized = members.map { member -> WorkspaceCheckoutMember in var copy = member
+            if copy.plan?.checkoutMemberID != copy.id { copy.plan?.checkoutMemberID = copy.id }
+            return copy }
+            let checkout = WorkspaceCheckout(workspaceID: UUID(), fallbackWorkspaceName: "Release", executionLocation: .local, branch: "feature", rootPath: "/checkout", operation: operation, members: normalized)
+            try await store.checkpoint(.init(checkouts: [checkout]))
+            return .init(store: store, checkout: checkout, member: member)
+        }
+    }
+}
+
+private struct FixtureGit: WorkspaceGitOperating {
+    func prepareBranch(_ operation: WorkspaceFrozenWorktreeOperation) async throws {}
+    func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? { nil }
+}
+private struct FixtureScripts: WorkspaceScriptRunning { func runSetup(for operation: WorkspaceCheckoutSetupOperation) async throws {} }
+private actor LifecycleSessions: WorkspaceCheckoutSessionStopping {
+    private(set) var stopped: [UUID] = []
+    func stopSessions(for checkoutID: UUID) async { stopped.append(checkoutID) }
+}
+private actor FixtureLifecycle: WorkspaceCheckoutLifecycleOperating {
+    let verification: WorkspaceCheckoutMemberObservation
+    private(set) var removedMembers: [UUID] = []
+    private(set) var deletedBranches: [UUID] = []
+    private(set) var clearedRegistrations: [UUID] = []
+    private(set) var removeForces: [(force: Bool, forceTwice: Bool)] = []
+    private(set) var removedRootArtifacts: [UUID] = []
+    let preflight: WorktreeDeletePreflight
+    let leftovers: [String]
+    let failingMember: UUID?
+    let branchRemoved: Bool
+    init(verification: WorkspaceCheckoutMemberObservation = .exactLineage("lineage-a"), preflight: WorktreeDeletePreflight = .init(reasons: [], submoduleLocalState: .none), leftovers: [String] = [], failingMember: UUID? = nil, branchRemoved: Bool = true) { self.verification = verification
+    self.preflight = preflight
+    self.leftovers = leftovers
+    self.failingMember = failingMember
+    self.branchRemoved = branchRemoved }
+    func deletePreflight(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> WorktreeDeletePreflight { preflight }
+    func inspectRoot(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutCleanupRootObservation { .init(isContained: true, leftovers: leftovers) }
+    func verifyCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutMemberObservation {
+        if verification == .exactLineage("lineage-a") { return .exactLineage(plan.expectedLineageID) }
+        return verification
+    }
+    func clearStaleRegistration(_ plan: WorkspaceCheckoutCleanupPlan) async throws {
+        clearedRegistrations.append(plan.memberID)
+    }
+    func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan, force: Bool, forceTwice: Bool) async throws { if failingMember == plan.memberID { throw TestLifecycleError.failed }
+    removeForces.append((force, forceTwice))
+    removedMembers.append(plan.memberID) }
+    func removeCheckoutRootArtifacts(for checkout: WorkspaceCheckout) async throws { removedRootArtifacts.append(checkout.id) }
+    func deleteMergedBranch(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool { deletedBranches.append(plan.memberID)
+    return branchRemoved }
+}
+
+private actor StoreInspectingLifecycle: WorkspaceCheckoutLifecycleOperating {
+    let store: WorkspaceStore
+    let checkoutID: UUID
+    private(set) var operationsDuringRemoval: [WorkspaceCheckoutOperation] = []
+
+    init(store: WorkspaceStore, checkoutID: UUID) {
+        self.store = store
+        self.checkoutID = checkoutID
+    }
+
+    func deletePreflight(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> WorktreeDeletePreflight {
+        .init(reasons: [], submoduleLocalState: .none)
+    }
+
+    func inspectRoot(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutCleanupRootObservation {
+        .init(isContained: true, leftovers: [])
+    }
+
+    func verifyCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutMemberObservation {
+        .exactLineage(plan.expectedLineageID)
+    }
+
+    func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan, force: Bool, forceTwice: Bool) async throws {
+        if let checkout = await store.checkout(id: checkoutID) {
+            operationsDuringRemoval.append(checkout.operation)
+        }
+    }
+
+    func removeCheckoutRootArtifacts(for checkout: WorkspaceCheckout) async throws {}
+
+    func deleteMergedBranch(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool {
+        true
+    }
+}
+private actor PersistedCleanupLifecycle: WorkspaceCheckoutLifecycleOperating {
+    let store: WorkspaceStore
+    let checkoutID: UUID
+    private(set) var sawPersistedCleanupPlan = false
+    init(store: WorkspaceStore, checkoutID: UUID) { self.store = store
+    self.checkoutID = checkoutID }
+    func deletePreflight(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> WorktreeDeletePreflight { .init(reasons: [], submoduleLocalState: .none) }
+    func inspectRoot(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutCleanupRootObservation { .init(isContained: true, leftovers: []) }
+    func verifyCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutMemberObservation { .exactLineage("lineage-a") }
+    func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan, force: Bool, forceTwice: Bool) async throws {
+        guard case .loaded(let state) = await store.load(),
+              state.checkouts.first(where: { $0.id == checkoutID })?.members.first?.cleanup?.plan == plan else { return }
+        sawPersistedCleanupPlan = true
+    }
+    func removeCheckoutRootArtifacts(for checkout: WorkspaceCheckout) async throws {}
+    func deleteMergedBranch(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool { true }
+}
+private enum TestLifecycleError: Error { case failed }
+
+private actor BlockingLifecycle: WorkspaceCheckoutLifecycleOperating {
+    private var started = false
+    private var released = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func deletePreflight(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> WorktreeDeletePreflight {
+        .init(reasons: [], submoduleLocalState: .none)
+    }
+
+    func inspectRoot(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutCleanupRootObservation {
+        .init(isContained: true, leftovers: [])
+    }
+
+    func verifyCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutMemberObservation {
+        .exactLineage(plan.expectedLineageID)
+    }
+
+    func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan, force: Bool, forceTwice: Bool) async throws {
+        started = true
+        startWaiters.forEach { $0.resume() }
+        startWaiters.removeAll()
+        if !released {
+            await withCheckedContinuation { continuation in
+                releaseWaiters.append(continuation)
+            }
+        }
+    }
+
+    func removeCheckoutRootArtifacts(for checkout: WorkspaceCheckout) async throws {}
+
+    func deleteMergedBranch(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool { true }
+
+    func waitUntilRemoving() async {
+        if started { return }
+        await withCheckedContinuation { continuation in
+            startWaiters.append(continuation)
+        }
+    }
+
+    func release() {
+        released = true
+        releaseWaiters.forEach { $0.resume() }
+        releaseWaiters.removeAll()
+    }
+}
+
+private actor RemoteLifecycleRunner {
+    private var results: [ProcessResult]
+    private(set) var commands: [String] = []
+
+    init(results: [ProcessResult]) {
+        self.results = results
+    }
+
+    func run(executable: String, args: [String], timeout: TimeInterval) async throws -> ProcessResult {
+        commands.append(args.joined(separator: " "))
+        return results.isEmpty ? .init(exitCode: 0, stdout: "", stderr: "") : results.removeFirst()
+    }
+}

@@ -14,6 +14,7 @@ struct ACPSessionsButton: View {
     @ObservedObject var manager: ACPSessionManager
     let state: AppState
     let worktree: Worktree
+    var owner: SessionOwnerID? = nil
     let agentLookup: (String) -> AgentDefinition?
     @Environment(\.theme) private var theme
     @State private var open = false
@@ -48,6 +49,7 @@ struct ACPSessionsButton: View {
                 manager: manager,
                 state: state,
                 worktree: worktree,
+                owner: owner,
                 agentLookup: agentLookup,
                 onPick: { open = false }
             )
@@ -60,6 +62,7 @@ private struct SessionsPopover: View {
     @ObservedObject var manager: ACPSessionManager
     let state: AppState
     let worktree: Worktree
+    let owner: SessionOwnerID?
     let agentLookup: (String) -> AgentDefinition?
     let onPick: () -> Void
     @Environment(\.theme) private var theme
@@ -198,7 +201,11 @@ private struct SessionsPopover: View {
         Button {
             if !isCurrent {
                 Task {
-                    await state.openExistingACPSession(sessionId: row.id)
+                    if let owner {
+                        await state.openExistingACPSession(sessionId: row.id, owner: owner)
+                    } else {
+                        await state.openExistingACPSession(sessionId: row.id)
+                    }
                     onPick()
                 }
                 return

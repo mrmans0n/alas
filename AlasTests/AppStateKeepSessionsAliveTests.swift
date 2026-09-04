@@ -155,4 +155,139 @@ struct AppStateKeepSessionsAliveTests {
 
         #expect(state.tabs.tabs(forWorktree: trees[0].id).map(\.id) == [term.id])
     }
+
+    @Test func terminateAllTerminalSessionsClosesCheckoutOwnedTerminalTabs() async throws {
+        let workspaceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-terminate-checkout-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: workspaceURL) }
+
+        let workspaceStore = WorkspaceStore(url: workspaceURL)
+        let checkout = WorkspaceCheckout(
+            workspaceID: nil,
+            fallbackWorkspaceName: "Release",
+            executionLocation: .local,
+            branch: "release/1091",
+            rootPath: "/checkouts/release",
+            members: []
+        )
+        try await workspaceStore.checkpoint(.init(checkouts: [checkout]))
+        let bridge = WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore)
+        let workspaces = WorkspacesManager(bridge: bridge)
+        _ = await workspaces.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+        let tabs = TabsManager(store: MemoryStore())
+        _ = tabs.appendTerminal(owner: owner, title: "Shared", sessionId: "checkout-leaf")
+        let state = AppState(
+            store: MemoryStore(),
+            tabsManager: tabs,
+            workspacesManager: workspaces,
+            workspaceStore: workspaceStore
+        )
+
+        state.terminateAllTerminalSessionsAfterConfirmationForTesting()
+
+        #expect(tabs.tabs(for: owner).isEmpty)
+    }
+
+    @Test func workspaceCheckoutSearchActivationPreservesCheckoutFocus() async throws {
+        let repo = try await makeRepo(name: "checkout-search")
+        let root = repo.deletingLastPathComponent()
+        let workspaceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-search-checkout-\(UUID().uuidString).json")
+        defer {
+            try? FileManager.default.removeItem(at: repo)
+            try? FileManager.default.removeItem(at: workspaceURL)
+        }
+        let projectID = "project"
+        let worktree = Worktree(
+            id: Worktree.makeId(path: repo),
+            projectId: projectID,
+            name: "main",
+            branch: "main",
+            path: repo,
+            isMainWorktree: true,
+            status: .clean,
+            lastActivity: .distantPast
+        )
+        let project = ProjectConfig(
+            id: projectID,
+            name: "Project",
+            path: repo.path,
+            color: "#000000",
+            addedAt: .distantPast,
+            cachedWorktrees: [worktree]
+        )
+        let memberID = UUID()
+        let checkoutMemberID = UUID()
+        let lineage = try #require(WorktreeService.localLineageID(forWorktreeAt: repo, candidateID: "lineage"))
+        let member = WorkspaceCheckoutMember(
+            id: checkoutMemberID,
+            workspaceMemberID: memberID,
+            projectID: projectID,
+            fallbackProjectName: "Project",
+            fallbackRepositoryRoot: repo.path,
+            worktreePath: repo.path,
+            gitLineageID: lineage,
+            availability: .available,
+            checkpoint: .setupComplete,
+            cleanupOwnership: .init(worktreeCreated: true, branchOwnership: .reused),
+            plan: .init(
+                checkoutMemberID: checkoutMemberID,
+                projectID: projectID,
+                sourceRepositoryPath: repo.path,
+                destinationPath: repo.path,
+                baseReference: "main",
+                baseCommit: "base",
+                branchIntent: .reuse
+            )
+        )
+        let checkout = WorkspaceCheckout(
+            workspaceID: nil,
+            fallbackWorkspaceName: "Release",
+            executionLocation: .local,
+            branch: "release/1091",
+            rootPath: root.path,
+            members: [member]
+        )
+        let workspaceStore = WorkspaceStore(url: workspaceURL)
+        try await workspaceStore.checkpoint(.init(checkouts: [checkout]))
+        let workspaces = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
+        _ = await workspaces.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+        let state = AppState(
+            store: MemoryStore(projectsFile: .init(projects: [project])),
+            tabsManager: TabsManager(store: MemoryStore()),
+            workspacesManager: workspaces,
+            workspaceStore: workspaceStore
+        )
+        state.config.workspacesEnabled = true
+        try await state.projectsManager.refreshWorktrees(projectId: projectID)
+        state.selectWorkspaceCheckout(id: checkout.id)
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+        let shared = state.tabs.appendTerminal(owner: owner, title: "Shared", sessionId: "checkout-shared")
+        #expect(state.tabs.activeTabId(for: owner) == shared.id)
+
+        let opened = state.openWorkspaceCheckoutSearchResult(
+            relativePath: "README.md",
+            worktreeId: worktree.id,
+            checkoutID: checkout.id,
+            memberID: checkoutMemberID
+        )
+
+        #expect(opened)
+        #expect(state.workspaceNavigationState.selectedCheckoutID == checkout.id)
+        #expect(state.workspaceNavigationState.focusedCheckoutMemberID == checkoutMemberID)
+        #expect(state.selectedWorktreeId == worktree.id)
+        #expect(state.tabs.activeTabId(for: owner) == nil)
+        #expect(state.tabs.activeTabId(forWorktree: worktree.id) != nil)
+    }
+
+    private struct MemoryStore: PersistenceStoreProtocol {
+        var projectsFile: ProjectsFile = .init(projects: [])
+
+        func write<T: Encodable>(_: T, to _: URL) throws {}
+        func readIfExists<T: Decodable>(_ type: T.Type, from _: URL) throws -> T? {
+            if type == ProjectsFile.self { return projectsFile as? T }
+            return nil
+        }
+    }
 }

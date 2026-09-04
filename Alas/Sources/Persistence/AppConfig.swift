@@ -41,6 +41,9 @@ struct AppConfig: Codable, Equatable {
     var agents: Agents
     var files: Files
     var remote: Remote = .init()
+    /// Preview gate for persistent multi-repository Workspaces. This remains
+    /// off until the feature has completed its preview acceptance matrix.
+    var workspacesEnabled: Bool = false
     var recentProjectIds: [String] = []
     var recentWorktreeIdsByProject: [String: [String]] = [:]
     var recentWorktreeRefs: [RepoSelectorRecents.RecentWorktreeRef] = []
@@ -489,6 +492,7 @@ struct AppConfig: Codable, Equatable {
             chatFontSize: 13
         ),
         files: Files(showIgnored: true),
+        workspacesEnabled: false,
         recentProjectIds: [],
         recentWorktreeIdsByProject: [:],
         recentWorktreeRefs: [],
@@ -580,6 +584,7 @@ extension AppConfig {
              agents,
              files,
              remote,
+             workspacesEnabled,
              recentProjectIds, recentWorktreeIdsByProject, recentWorktreeRefs,
              collapsedProjectIds,
              sidebarChromeOverrides,
@@ -812,6 +817,9 @@ extension AppConfig {
         }
         // Older configs predate `remote`; default to disabled so they still load.
         remote = (try? c.decodeIfPresent(Remote.self, forKey: .remote)) ?? .init()
+        // Workspace preview is opt-in. Configs written before the preview
+        // must continue to load with the feature disabled.
+        workspacesEnabled = (try? c.decode(Bool.self, forKey: .workspacesEnabled)) ?? false
         recentProjectIds = (try? c.decode([String].self, forKey: .recentProjectIds)) ?? []
         recentWorktreeIdsByProject =
             (try? c.decode([String: [String]].self, forKey: .recentWorktreeIdsByProject)) ?? [:]

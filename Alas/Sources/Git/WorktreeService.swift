@@ -10,6 +10,7 @@ struct WorktreeDeletePreflight: Equatable {
 enum WorktreeDeletePreflightReason: Equatable, Hashable {
     case dirty
     case containsInitializedSubmodules
+    case locked
 }
 
 enum SubmoduleLocalState: Equatable {
@@ -152,17 +153,23 @@ struct WorktreeService {
             + "printf '%s\\n' \"$b\""
     }
 
-    static func localLineageID(forWorktreeAt path: URL) -> String? {
+    static func localLineageID(forWorktreeAt path: URL, candidateID: String = UUID().uuidString.lowercased()) -> String? {
         guard let gitDirectory = localGitDirectory(forWorktreeAt: path) else { return nil }
         let marker = gitDirectory.appendingPathComponent("alas-worktree-lineage")
         if let existing = try? String(contentsOf: marker, encoding: .utf8),
            let normalized = normalizedLineageID(existing) {
             return normalized
         }
-        let candidate = UUID().uuidString.lowercased()
-        try? Data("\(candidate)\n".utf8).write(to: marker, options: .withoutOverwriting)
+        try? Data("\(candidateID)\n".utf8).write(to: marker, options: .withoutOverwriting)
         guard let stored = try? String(contentsOf: marker, encoding: .utf8) else { return nil }
         return normalizedLineageID(stored)
+    }
+
+    static func existingLocalLineageID(forWorktreeAt path: URL) -> String? {
+        guard let gitDirectory = localGitDirectory(forWorktreeAt: path) else { return nil }
+        let marker = gitDirectory.appendingPathComponent("alas-worktree-lineage")
+        guard let text = try? String(contentsOf: marker, encoding: .utf8) else { return nil }
+        return normalizedLineageID(text)
     }
 
     static func localBranchName(forWorktreeAt path: URL) -> String? {
@@ -462,7 +469,202 @@ struct WorktreeService {
             cwd: repoPath
         )
         guard fallbackResult.exitCode == 0 else { throw WorktreeError.gitFailed(fallbackResult.stderr) }
-        return makeWorktree(destination: destination, branch: branch, projectId: projectId)
+        var worktree = makeWorktree(destination: destination, branch: branch, projectId: projectId)
+        if !repoPath.isRemoteAlasPath {
+            worktree.lineageID = Self.localLineageID(forWorktreeAt: destination)
+        }
+        return worktree
+    }
+
+    /// Prepares exactly the branch state recorded by Workspace preflight.
+    /// Unlike `add`, this never picks a branch mode from current Git state.
+    func prepareFrozenBranch(
+        repoPath: URL,
+        branch: String,
+        intent: FrozenBranchIntent,
+        remoteHost: String? = nil,
+        usesRemoteHostRegistry: Bool = true
+    ) async throws {
+        if let remoteHost {
+            try await prepareFrozenRemoteBranch(repoPath: repoPath, branch: branch, intent: intent, host: remoteHost)
+            return
+        }
+        let refCheck = try await Process.git(
+            ["show-ref", "--verify", "--quiet", "refs/heads/\(branch)"],
+            cwd: repoPath,
+            usesRemoteHostRegistry: usesRemoteHostRegistry
+        )
+        switch intent {
+        case .create(let atCommit):
+            guard refCheck.exitCode == 1 else {
+                throw WorktreeError.gitFailed("Frozen Workspace branch '\(branch)' changed after preflight.")
+            }
+            let create = try await Process.git(["branch", branch, atCommit], cwd: repoPath, usesRemoteHostRegistry: usesRemoteHostRegistry)
+            guard create.exitCode == 0 else { throw WorktreeError.gitFailed(create.stderr) }
+        case .reuse(let atCommit):
+            guard refCheck.exitCode == 0 else {
+                throw WorktreeError.gitFailed("Frozen Workspace branch '\(branch)' is no longer reusable.")
+            }
+            let resolved = try await Process.git(["rev-parse", "--verify", "\(branch)^{commit}"], cwd: repoPath, usesRemoteHostRegistry: usesRemoteHostRegistry)
+            guard resolved.exitCode == 0,
+                  resolved.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == atCommit
+            else { throw WorktreeError.gitFailed("Frozen Workspace branch '\(branch)' changed after preflight.") }
+        }
+    }
+
+    private func prepareFrozenRemoteBranch(
+        repoPath: URL,
+        branch: String,
+        intent: FrozenBranchIntent,
+        host: String
+    ) async throws {
+        let repo = SSHCommand.shellQuote(repoPath.path)
+        let branchName = SSHCommand.shellQuote(branch)
+        let branchRef = SSHCommand.shellQuote("refs/heads/\(branch)")
+        let refCheck = try await RemoteExec.run(
+            host: host,
+            cwd: nil,
+            command: "git -C \(repo) show-ref --verify --quiet \(branchRef)"
+        )
+        switch intent {
+        case .create(let atCommit):
+            guard refCheck.exitCode == 1 else {
+                throw WorktreeError.gitFailed("Frozen Workspace branch '\(branch)' changed after preflight.")
+            }
+            let create = try await RemoteExec.run(
+                host: host,
+                cwd: nil,
+                command: "git -C \(repo) branch \(branchName) \(SSHCommand.shellQuote(atCommit))"
+            )
+            guard create.exitCode == 0 else { throw WorktreeError.gitFailed(create.stderr) }
+        case .reuse(let atCommit):
+            guard refCheck.exitCode == 0 else {
+                throw WorktreeError.gitFailed("Frozen Workspace branch '\(branch)' is no longer reusable.")
+            }
+            let resolved = try await RemoteExec.run(
+                host: host,
+                cwd: nil,
+                command: "git -C \(repo) rev-parse --verify \(SSHCommand.shellQuote("\(branch)^{commit}"))"
+            )
+            guard resolved.exitCode == 0,
+                  resolved.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == atCommit
+            else { throw WorktreeError.gitFailed("Frozen Workspace branch '\(branch)' changed after preflight.") }
+        }
+    }
+
+    /// Adds a worktree from a branch already prepared by
+    /// `prepareFrozenBranch`. It deliberately refuses stale registrations and
+    /// existing destinations instead of repairing or adopting them.
+    func addFrozen(
+        repoPath: URL,
+        branch: String,
+        destination: URL,
+        projectId: String,
+        intent: FrozenBranchIntent,
+        expectedLineageID: String? = nil,
+        remoteHost: String? = nil,
+        usesRemoteHostRegistry: Bool = true,
+        remoteExistence: @escaping @Sendable (String, String) async -> RemotePathExistence = { host, path in
+            await RemoteFileAccess.existence(host: host, path: path)
+        },
+        remoteRun: @escaping @Sendable (String, String) async throws -> ProcessResult = { host, command in
+            try await RemoteExec.run(host: host, cwd: nil, command: command)
+        },
+        localLineage: @Sendable (URL, String) -> String? = { destination, candidateID in
+            WorktreeService.localLineageID(forWorktreeAt: destination, candidateID: candidateID)
+        }
+    ) async throws -> Worktree {
+        switch GitNameValidator.validateBranchName(branch) {
+        case .valid: break
+        case .invalid(let message): throw WorktreeError.gitFailed("Invalid branch name: \(message)")
+        }
+        let pinnedRemoteHost = remoteHost ?? (usesRemoteHostRegistry ? RemoteHostRegistry.shared.host(forPath: repoPath.path) : nil)
+        if let host = pinnedRemoteHost {
+            if await remoteExistence(host, destination.path) != .missing {
+                throw WorktreeError.gitFailed("Frozen Workspace destination already exists.")
+            }
+        } else if FileManager.default.fileExists(atPath: destination.path) {
+            throw WorktreeError.gitFailed("Frozen Workspace destination already exists.")
+        }
+        let registrations: ProcessResult
+        if let host = pinnedRemoteHost {
+            registrations = try await remoteRun(
+                host,
+                "git -C \(SSHCommand.shellQuote(repoPath.path)) worktree list --porcelain"
+            )
+        } else {
+            registrations = try await Process.git(["worktree", "list", "--porcelain"], cwd: repoPath, usesRemoteHostRegistry: usesRemoteHostRegistry)
+        }
+        guard registrations.exitCode == 0,
+              Self.staleRegistration(registrations.stdout, destination: destination, lockedDestinationIsMissing: false) == nil,
+              !registrations.stdout.split(separator: "\n").contains(where: { $0 == "worktree \(destination.path)" })
+        else { throw WorktreeError.gitFailed("Frozen Workspace destination is already registered.") }
+        let expectedCommit: String
+        switch intent {
+        case .create(let atCommit), .reuse(let atCommit): expectedCommit = atCommit
+        }
+        let ref: ProcessResult
+        if let host = pinnedRemoteHost {
+            ref = try await remoteRun(
+                host,
+                "git -C \(SSHCommand.shellQuote(repoPath.path)) rev-parse --verify \(SSHCommand.shellQuote("\(branch)^{commit}"))"
+            )
+        } else {
+            ref = try await Process.git(["rev-parse", "--verify", "\(branch)^{commit}"], cwd: repoPath, usesRemoteHostRegistry: usesRemoteHostRegistry)
+        }
+        guard ref.exitCode == 0,
+              ref.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == expectedCommit
+        else { throw WorktreeError.gitFailed("Frozen Workspace branch '\(branch)' changed after preflight.") }
+        if pinnedRemoteHost == nil {
+            try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        }
+        let result: ProcessResult
+        if let host = pinnedRemoteHost {
+            result = try await remoteRun(
+                host,
+                "git -C \(SSHCommand.shellQuote(repoPath.path)) worktree add \(SSHCommand.shellQuote(destination.path)) \(SSHCommand.shellQuote(branch))"
+            )
+        } else {
+            result = try await Process.git(["worktree", "add", destination.path, branch], cwd: repoPath, usesRemoteHostRegistry: usesRemoteHostRegistry)
+        }
+        guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
+        var worktree = makeWorktree(destination: destination, branch: branch, projectId: projectId)
+        if let host = pinnedRemoteHost {
+            let lineage: ProcessResult
+            do {
+                lineage = try await remoteRun(
+                    host,
+                    Self.remoteLineageIDCommand(path: destination.path, candidateID: expectedLineageID ?? UUID().uuidString.lowercased())
+                )
+            } catch {
+                _ = try? await remoteRun(
+                    host,
+                    "git -C \(SSHCommand.shellQuote(repoPath.path)) worktree remove -f -f -- \(SSHCommand.shellQuote(destination.path))"
+                )
+                throw error
+            }
+            guard lineage.exitCode == 0,
+                  let identifier = Self.normalizedLineageID(lineage.stdout)
+            else {
+                _ = try? await remoteRun(
+                    host,
+                    "git -C \(SSHCommand.shellQuote(repoPath.path)) worktree remove -f -f -- \(SSHCommand.shellQuote(destination.path))"
+                )
+                throw WorktreeError.gitFailed("Could not record remote Workspace worktree lineage.")
+            }
+            worktree.lineageID = identifier
+        } else {
+            guard let lineageID = localLineage(destination, expectedLineageID ?? UUID().uuidString.lowercased()) else {
+                _ = try? await Process.git(
+                    ["worktree", "remove", "-f", "-f", "--", destination.path],
+                    cwd: repoPath,
+                    usesRemoteHostRegistry: usesRemoteHostRegistry
+                )
+                throw WorktreeError.gitFailed("Could not record local Workspace worktree lineage.")
+            }
+            worktree.lineageID = lineageID
+        }
+        return worktree
     }
 
     enum StaleWorktreeRegistration {
@@ -523,22 +725,29 @@ struct WorktreeService {
         repoPath: URL,
         worktree: Worktree,
         deleteBranchIfMerged: Bool,
-        force: Bool = false
+        force: Bool = false,
+        forceTwice: Bool = false,
+        usesRemoteHostRegistry: Bool = true
     ) async throws {
         var args = ["worktree", "remove", worktree.path.path]
-        if force { args.append("--force") }
-        var result = try await Process.git(args, cwd: repoPath, timeout: 90)
+        if forceTwice {
+            args.append(contentsOf: ["--force", "--force"])
+        } else if force {
+            args.append("--force")
+        }
+        var result = try await Process.git(args, cwd: repoPath, usesRemoteHostRegistry: usesRemoteHostRegistry, timeout: 90)
         if result.exitCode != 0 {
             if Self.looksLikeMissingLFS(result.stderr) {
-                result = try await Process.git(Self.lfsFilterOverride + args, cwd: repoPath, timeout: 90)
+                result = try await Process.git(Self.lfsFilterOverride + args, cwd: repoPath, usesRemoteHostRegistry: usesRemoteHostRegistry, timeout: 90)
             }
             if !force,
                result.exitCode != 0,
                Self.looksLikeDirtyWorktreeRemoveError(result.stderr),
-               try await canForceRemoveAfterMissingLFS(worktree.path) {
+               try await canForceRemoveAfterMissingLFS(worktree.path, usesRemoteHostRegistry: usesRemoteHostRegistry) {
                 result = try await Process.git(
                     Self.lfsFilterOverride + ["worktree", "remove", worktree.path.path, "--force"],
                     cwd: repoPath,
+                    usesRemoteHostRegistry: usesRemoteHostRegistry,
                     timeout: 90
                 )
             }
@@ -548,21 +757,40 @@ struct WorktreeService {
         }
         if deleteBranchIfMerged && worktree.branch != "(detached)" {
             // Best-effort delete. -d only succeeds if merged; ignore failures.
-            _ = try? await Process.git(["branch", "-d", worktree.branch], cwd: repoPath)
+            _ = try? await Process.git(["branch", "-d", worktree.branch], cwd: repoPath, usesRemoteHostRegistry: usesRemoteHostRegistry)
         }
     }
 
-    func deletePreflight(worktreePath: URL) async throws -> WorktreeDeletePreflight {
+    func deletePreflight(
+        worktreePath: URL,
+        usesRemoteHostRegistry: Bool = true
+    ) async throws -> WorktreeDeletePreflight {
         var reasons: Set<WorktreeDeletePreflightReason> = []
 
-        let hasInitializedSubmodules = try await containsInitializedSubmodules(worktreePath)
+        let registrations = try await Process.git(
+            ["worktree", "list", "--porcelain"],
+            cwd: worktreePath,
+            usesRemoteHostRegistry: usesRemoteHostRegistry
+        )
+        guard registrations.exitCode == 0 else { throw WorktreeError.gitFailed(registrations.stderr) }
+        if Self.porcelainMarksWorktreeLocked(registrations.stdout, worktreePath: worktreePath) {
+            reasons.insert(.locked)
+        }
+
+        let hasInitializedSubmodules = try await containsInitializedSubmodules(
+            worktreePath,
+            usesRemoteHostRegistry: usesRemoteHostRegistry
+        )
         if hasInitializedSubmodules {
             reasons.insert(.containsInitializedSubmodules)
         }
 
         let worktreeClean: Bool?
         do {
-            worktreeClean = try await isWorktreeClean(worktreePath)
+            worktreeClean = try await isWorktreeClean(
+                worktreePath,
+                usesRemoteHostRegistry: usesRemoteHostRegistry
+            )
         } catch {
             guard hasInitializedSubmodules else { throw error }
             worktreeClean = nil
@@ -577,10 +805,14 @@ struct WorktreeService {
             do {
                 if worktreeClean == nil {
                     submoduleLocalState = .unknown
-                } else if try await areInitializedSubmodulesClean(worktreePath) {
+                } else if try await areInitializedSubmodulesClean(
+                    worktreePath,
+                    usesRemoteHostRegistry: usesRemoteHostRegistry
+                ) {
                     submoduleLocalState = try await initializedSubmodulesHaveNoLocalState(
                         worktreePath,
-                        timeout: 10
+                        timeout: 10,
+                        usesRemoteHostRegistry: usesRemoteHostRegistry
                     )
                         ? .none
                         : .present
@@ -595,6 +827,28 @@ struct WorktreeService {
         }
 
         return WorktreeDeletePreflight(reasons: reasons, submoduleLocalState: submoduleLocalState)
+    }
+
+    static func porcelainMarksWorktreeLocked(_ porcelain: String, worktreePath: URL) -> Bool {
+        let target = worktreePath.standardizedFileURL.path
+        var currentPath: String?
+        var currentLocked = false
+
+        func matchesCurrent() -> Bool {
+            guard let currentPath else { return false }
+            return URL(fileURLWithPath: currentPath).standardizedFileURL.path == target && currentLocked
+        }
+
+        for line in porcelain.split(separator: "\n") {
+            if line.hasPrefix("worktree ") {
+                if matchesCurrent() { return true }
+                currentPath = String(line.dropFirst("worktree ".count))
+                currentLocked = false
+            } else if line.hasPrefix("locked") {
+                currentLocked = true
+            }
+        }
+        return matchesCurrent()
     }
 
     func prune(repoPath: URL) async throws {
@@ -626,10 +880,20 @@ struct WorktreeService {
             || lower.contains("dirty worktree")
     }
 
-    private func containsInitializedSubmodules(_ path: URL) async throws -> Bool {
-        let result = try await Process.git(["submodule", "status", "--recursive"], cwd: path)
+    private func containsInitializedSubmodules(
+        _ path: URL,
+        usesRemoteHostRegistry: Bool = true
+    ) async throws -> Bool {
+        let result = try await Process.git(
+            ["submodule", "status", "--recursive"],
+            cwd: path,
+            usesRemoteHostRegistry: usesRemoteHostRegistry
+        )
         guard result.exitCode == 0 else {
-            let paths = try await submodulePathsFromGitmodules(path)
+            let paths = try await submodulePathsFromGitmodules(
+                path,
+                usesRemoteHostRegistry: usesRemoteHostRegistry
+            )
             return paths.contains { relativePath in
                 FileManager.default.fileExists(
                     atPath: path.appendingPathComponent(relativePath).appendingPathComponent(".git").path
@@ -642,10 +906,14 @@ struct WorktreeService {
         }
     }
 
-    private func submodulePathsFromGitmodules(_ path: URL) async throws -> [String] {
+    private func submodulePathsFromGitmodules(
+        _ path: URL,
+        usesRemoteHostRegistry: Bool = true
+    ) async throws -> [String] {
         let result = try await Process.git(
             ["config", "--file", ".gitmodules", "--get-regexp", "path"],
-            cwd: path
+            cwd: path,
+            usesRemoteHostRegistry: usesRemoteHostRegistry
         )
         if result.exitCode != 0 {
             return []
@@ -657,22 +925,30 @@ struct WorktreeService {
             }
     }
 
-    private func isWorktreeClean(_ path: URL) async throws -> Bool {
+    private func isWorktreeClean(
+        _ path: URL,
+        usesRemoteHostRegistry: Bool = true
+    ) async throws -> Bool {
         let result = try await Process.git(
             ["status", "--porcelain", "--ignore-submodules=none", "--untracked-files=all"],
-            cwd: path
+            cwd: path,
+            usesRemoteHostRegistry: usesRemoteHostRegistry
         )
         guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
         return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    private func areInitializedSubmodulesClean(_ path: URL) async throws -> Bool {
+    private func areInitializedSubmodulesClean(
+        _ path: URL,
+        usesRemoteHostRegistry: Bool = true
+    ) async throws -> Bool {
         let result = try await Process.git(
             [
                 "submodule", "foreach", "--quiet", "--recursive",
                 "git status --porcelain --ignore-submodules=none --untracked-files=all"
             ],
-            cwd: path
+            cwd: path,
+            usesRemoteHostRegistry: usesRemoteHostRegistry
         )
         guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
         return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -680,7 +956,8 @@ struct WorktreeService {
 
     private func initializedSubmodulesHaveNoLocalState(
         _ path: URL,
-        timeout: TimeInterval = 120
+        timeout: TimeInterval = 120,
+        usesRemoteHostRegistry: Bool = true
     ) async throws -> Bool {
         // Reachability set arithmetic for reflog and notes/stash (the
         // perf-critical fix — replaces an O(reflog × remotes) shell loop
@@ -737,26 +1014,43 @@ struct WorktreeService {
         let result = try await Process.git(
             ["submodule", "foreach", "--quiet", "--recursive", localStateScript],
             cwd: path,
+            usesRemoteHostRegistry: usesRemoteHostRegistry,
             timeout: timeout
         )
         guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
         return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    private func canForceRemoveAfterMissingLFS(_ path: URL) async throws -> Bool {
-        guard try await isWorktreeCleanAllowingSmudgedLFS(path) else { return false }
-        let subsClean = try await areInitializedSubmodulesClean(path)
+    private func canForceRemoveAfterMissingLFS(
+        _ path: URL,
+        usesRemoteHostRegistry: Bool = true
+    ) async throws -> Bool {
+        guard try await isWorktreeCleanAllowingSmudgedLFS(
+            path,
+            usesRemoteHostRegistry: usesRemoteHostRegistry
+        ) else { return false }
+        let subsClean = try await areInitializedSubmodulesClean(
+            path,
+            usesRemoteHostRegistry: usesRemoteHostRegistry
+        )
         guard subsClean else { return false }
-        return try await initializedSubmodulesHaveNoLocalState(path)
+        return try await initializedSubmodulesHaveNoLocalState(
+            path,
+            usesRemoteHostRegistry: usesRemoteHostRegistry
+        )
     }
 
-    private func isWorktreeCleanAllowingSmudgedLFS(_ path: URL) async throws -> Bool {
+    private func isWorktreeCleanAllowingSmudgedLFS(
+        _ path: URL,
+        usesRemoteHostRegistry: Bool = true
+    ) async throws -> Bool {
         let result = try await Process.git(
             Self.lfsFilterOverride + [
                 "status", "--porcelain=v2", "-z",
                 "--ignore-submodules=none", "--untracked-files=all"
             ],
-            cwd: path
+            cwd: path,
+            usesRemoteHostRegistry: usesRemoteHostRegistry
         )
         guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
 
@@ -775,14 +1069,30 @@ struct WorktreeService {
             else { return false }
 
             let relativePath = String(fields[8])
-            guard try await isCleanLFSFile(relativePath, in: path) else { return false }
+            guard try await isCleanLFSFile(
+                relativePath,
+                in: path,
+                usesRemoteHostRegistry: usesRemoteHostRegistry
+            ) else { return false }
         }
         return true
     }
 
-    private func isCleanLFSFile(_ relativePath: String, in worktreePath: URL) async throws -> Bool {
-        guard try await usesLFSFilter(relativePath, in: worktreePath),
-              let pointer = try await indexLFSPointer(relativePath, in: worktreePath)
+    private func isCleanLFSFile(
+        _ relativePath: String,
+        in worktreePath: URL,
+        usesRemoteHostRegistry: Bool = true
+    ) async throws -> Bool {
+        guard try await usesLFSFilter(
+            relativePath,
+            in: worktreePath,
+            usesRemoteHostRegistry: usesRemoteHostRegistry
+        ),
+              let pointer = try await indexLFSPointer(
+                relativePath,
+                in: worktreePath,
+                usesRemoteHostRegistry: usesRemoteHostRegistry
+              )
         else { return false }
 
         let fileURL = worktreePath.appendingPathComponent(relativePath)
@@ -800,21 +1110,41 @@ struct WorktreeService {
         return actual.oid == pointer.oid && actual.size == pointer.size
     }
 
-    private func usesLFSFilter(_ relativePath: String, in worktreePath: URL) async throws -> Bool {
-        let result = try await Process.git(["check-attr", "-z", "filter", "--", relativePath], cwd: worktreePath)
+    private func usesLFSFilter(
+        _ relativePath: String,
+        in worktreePath: URL,
+        usesRemoteHostRegistry: Bool = true
+    ) async throws -> Bool {
+        let result = try await Process.git(
+            ["check-attr", "-z", "filter", "--", relativePath],
+            cwd: worktreePath,
+            usesRemoteHostRegistry: usesRemoteHostRegistry
+        )
         guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
         let parts = result.stdout.split(separator: "\u{0}", omittingEmptySubsequences: false)
         return parts.count >= 3 && parts[2] == "lfs"
     }
 
-    private func indexLFSPointer(_ relativePath: String, in worktreePath: URL) async throws -> LFSPointer? {
-        let listed = try await Process.git(["ls-files", "-s", "--", relativePath], cwd: worktreePath)
+    private func indexLFSPointer(
+        _ relativePath: String,
+        in worktreePath: URL,
+        usesRemoteHostRegistry: Bool = true
+    ) async throws -> LFSPointer? {
+        let listed = try await Process.git(
+            ["ls-files", "-s", "--", relativePath],
+            cwd: worktreePath,
+            usesRemoteHostRegistry: usesRemoteHostRegistry
+        )
         guard listed.exitCode == 0 else { throw WorktreeError.gitFailed(listed.stderr) }
         guard let sha = listed.stdout.split(whereSeparator: \.isWhitespace).dropFirst().first else {
             return nil
         }
 
-        let blob = try await Process.git(["cat-file", "-p", String(sha)], cwd: worktreePath)
+        let blob = try await Process.git(
+            ["cat-file", "-p", String(sha)],
+            cwd: worktreePath,
+            usesRemoteHostRegistry: usesRemoteHostRegistry
+        )
         guard blob.exitCode == 0 else { throw WorktreeError.gitFailed(blob.stderr) }
         return Self.parseLFSPointer(blob.stdout)
     }

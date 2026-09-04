@@ -3,6 +3,7 @@ import SwiftUI
 struct ScopeRow: View {
     @Bindable var model: SearchModel
     let isThisWorktreeAvailable: Bool
+    var isWorkspaceCheckoutAvailable: Bool = false
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -13,6 +14,7 @@ struct ScopeRow: View {
                 .foregroundColor(theme.color("fg-faint"))
             HStack(spacing: 3) {
                 pill(.thisWorktree, enabled: isThisWorktreeAvailable)
+                pill(.workspaceCheckout, enabled: isWorkspaceCheckoutAvailable)
                 pill(.allRepos,     enabled: true)
             }
             Spacer(minLength: 0)

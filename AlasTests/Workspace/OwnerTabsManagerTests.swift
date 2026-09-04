@@ -1,0 +1,237 @@
+import Foundation
+import CoreGraphics
+import Testing
+@testable import Alas
+
+@MainActor
+struct OwnerTabsManagerTests {
+    @Test func checkoutOwnerPersistsTerminalTabsIndependently() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let owner = SessionOwnerID.workspaceCheckout(UUID(), .ssh("build-host"))
+        let manager = TabsManager(store: PersistenceStore(), tabsDirectory: directory)
+        let tab = manager.appendTerminal(owner: owner, title: "Shared", sessionId: "shared")
+
+        #expect(manager.tabs(for: owner).map(\.id) == [tab.id])
+        #expect(manager.tabs(forWorktree: "member").isEmpty)
+
+        let reloaded = TabsManager(store: PersistenceStore(), tabsDirectory: directory)
+        reloaded.load(owner: owner)
+        #expect(reloaded.tabs(for: owner).map(\.id) == [tab.id])
+        #expect(reloaded.activeTabId(for: owner) == tab.id)
+    }
+
+    @Test func closingAndArchivingCheckoutOwnerDoNotTouchWorktreeTabs() {
+        let owner = SessionOwnerID.workspaceCheckout(UUID(), .local)
+        let manager = TabsManager(store: OwnerTabsMemoryStore())
+        let shared = manager.appendTerminal(owner: owner, title: "Shared", sessionId: "shared")
+        let local = manager.appendTerminal(worktreeId: "member", title: "Member", sessionId: "member")
+
+        manager.close(owner: owner, tabId: shared.id)
+        #expect(manager.tabs(for: owner).isEmpty)
+        #expect(manager.tabs(forWorktree: "member").map(\.id) == [local.id])
+
+        manager.archive(owner: owner)
+        #expect(manager.tabs(forWorktree: "member").map(\.id) == [local.id])
+    }
+
+    @Test func appStateRoutesComposedTabsToTheirActualOwners() {
+        let manager = TabsManager(store: OwnerTabsMemoryStore())
+        let state = AppState(store: OwnerTabsMemoryStore(), tabsManager: manager)
+        let owner = SessionOwnerID.workspaceCheckout(UUID(), .local)
+        let shared = manager.appendTerminal(owner: owner, title: "Shared", sessionId: "shared")
+        let member = Tab.editor(.init(id: "member-editor", title: "Member", relativePath: "Member.swift"))
+        manager.restore(
+            tab: member,
+            worktreeID: "member",
+            placement: .init(previousID: nil, nextID: nil, ordinal: 0)
+        )
+
+        let composition = state.centerTabComposition(
+            focusedWorktreeID: "member",
+            sharedSessionOwner: owner
+        )
+        #expect(composition.tabs.map(\.id) == [shared.id, member.id])
+        #expect(composition.activeId == shared.id)
+
+        state.activateComposedCenterTab(worktreeID: "member", sharedSessionOwner: owner, tabID: member.id)
+        #expect(manager.activeTabId(forWorktree: "member") == member.id)
+        #expect(manager.activeTabId(for: owner) == nil)
+
+        state.closeComposedCenterTabs(worktreeID: "member", sharedSessionOwner: owner, tabIDs: [shared.id])
+        #expect(manager.tabs(for: owner).isEmpty)
+        #expect(manager.tabs(forWorktree: "member").map(\.id) == [member.id])
+    }
+
+    @Test func composedMemberCloseUsesExistingClosedTabLifecycle() {
+        let manager = TabsManager(store: OwnerTabsMemoryStore())
+        let state = AppState(store: OwnerTabsMemoryStore(), tabsManager: manager)
+        let owner = SessionOwnerID.workspaceCheckout(UUID(), .local)
+        let member = Tab.editor(.init(id: "member-editor", title: "Member", relativePath: "Member.swift"))
+        manager.restore(
+            tab: member,
+            worktreeID: "member",
+            placement: .init(previousID: nil, nextID: nil, ordinal: 0)
+        )
+
+        state.requestCloseComposedCenterTab(
+            worktreeID: "member",
+            sharedSessionOwner: owner,
+            tabID: member.id
+        )
+
+        #expect(manager.tabs(forWorktree: "member").isEmpty)
+        #expect(state.canReopenClosedTab)
+    }
+
+    @Test func keyboardRoutingUsesComposedSharedThenMemberOrder() {
+        let manager = TabsManager(store: OwnerTabsMemoryStore())
+        let state = AppState(store: OwnerTabsMemoryStore(), tabsManager: manager)
+        let owner = SessionOwnerID.workspaceCheckout(UUID(), .local)
+        let shared = manager.appendTerminal(owner: owner, title: "Shared", sessionId: "shared")
+        let member = Tab.editor(.init(id: "member-editor", title: "Member", relativePath: "Member.swift"))
+        manager.restore(
+            tab: member,
+            worktreeID: "member",
+            placement: .init(previousID: nil, nextID: nil, ordinal: 0)
+        )
+
+        #expect(state.activateCenterTabNumber(2, worktreeId: "member", sharedSessionOwner: owner) == member.id)
+        #expect(manager.activeTabId(forWorktree: "member") == member.id)
+        #expect(manager.activeTabId(for: owner) == nil)
+
+        #expect(state.activateAdjacentCenterTab(.previous, worktreeId: "member", sharedSessionOwner: owner) == shared.id)
+        #expect(manager.activeTabId(for: owner) == shared.id)
+        #expect(manager.activeTabId(forWorktree: "member") == nil)
+    }
+
+    @Test func paneFocusShortcutRoutesToActiveSharedCheckoutTerminal() async throws {
+        let workspaceURL = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-owner-pane-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: workspaceURL) }
+        let store = WorkspaceStore(url: workspaceURL)
+        let checkout = WorkspaceCheckout(
+            workspaceID: nil,
+            fallbackWorkspaceName: "Workspace",
+            executionLocation: .local,
+            branch: "topic",
+            rootPath: "/checkout",
+            members: []
+        )
+        try await store.checkpoint(.init(checkouts: [checkout]))
+        let workspacesManager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: store))
+        let manager = TabsManager(store: OwnerTabsMemoryStore())
+        let state = AppState(
+            store: OwnerTabsMemoryStore(),
+            tabsManager: manager,
+            workspacesManager: workspacesManager,
+            workspaceStore: store
+        )
+        state.config.workspacesEnabled = true
+        _ = await workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+        state.selectWorkspaceCheckout(id: checkout.id)
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, .local)
+        let tab = manager.appendTerminal(owner: owner, title: "Shared", sessionId: "first")
+        _ = manager.splitFocusedLeaf(owner: owner, tabId: tab.id, axis: .vertical, newLeafId: "second", newSessionId: "second")
+        _ = manager.setFocusedLeaf(owner: owner, tabId: tab.id, leafId: "first")
+        state.terminalLeafFrames[tab.id] = [
+            "first": CGRect(x: 0, y: 0, width: 20, height: 20),
+            "second": CGRect(x: 40, y: 0, width: 20, height: 20),
+        ]
+
+        state.focusPane(worktreeId: "member", sharedSessionOwner: owner, direction: .right)
+
+        guard case let .terminal(stateAfter) = manager.tabs(for: owner).first else {
+            Issue.record("Expected shared terminal tab")
+            return
+        }
+        #expect(stateAfter.focusedLeafId == "second")
+    }
+
+    @Test func notificationClickActivatesCheckoutOwnedTerminalLeaf() async throws {
+        let workspaceURL = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-owner-notify-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: workspaceURL) }
+        let store = WorkspaceStore(url: workspaceURL)
+        let checkout = WorkspaceCheckout(
+            workspaceID: nil,
+            fallbackWorkspaceName: "Workspace",
+            executionLocation: .local,
+            branch: "topic",
+            rootPath: "/checkout",
+            members: []
+        )
+        try await store.checkpoint(.init(checkouts: [checkout]))
+        let workspacesManager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: store))
+        let manager = TabsManager(store: OwnerTabsMemoryStore())
+        let state = AppState(
+            store: OwnerTabsMemoryStore(),
+            tabsManager: manager,
+            workspacesManager: workspacesManager,
+            workspaceStore: store
+        )
+        state.config.workspacesEnabled = true
+        _ = await workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, .local)
+        let tab = manager.appendTerminal(owner: owner, title: "Shared", sessionId: "first")
+        _ = manager.splitFocusedLeaf(owner: owner, tabId: tab.id, axis: .vertical, newLeafId: "second", newSessionId: "second-session")
+
+        state.activateHarnessSession(owner: owner, sessionId: "second-session")
+
+        #expect(state.selectedWorkspaceCheckout?.id == checkout.id)
+        #expect(manager.activeTabId(for: owner) == tab.id)
+        guard case let .terminal(stateAfter) = manager.tabs(for: owner).first else {
+            Issue.record("Expected shared terminal tab")
+            return
+        }
+        #expect(stateAfter.focusedLeafId == "second")
+    }
+
+    @Test func selectedCheckoutWithNoFocusedMemberStillHasASharedSessionFallback() async throws {
+        let workspaceURL = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-owner-fallback-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: workspaceURL) }
+        let store = WorkspaceStore(url: workspaceURL)
+        let checkout = WorkspaceCheckout(
+            workspaceID: nil,
+            fallbackWorkspaceName: "Workspace",
+            executionLocation: .local,
+            branch: "topic",
+            rootPath: "/checkout",
+            members: [
+                WorkspaceCheckoutMember(
+                    workspaceMemberID: UUID(),
+                    projectID: "project",
+                    fallbackProjectName: "Project",
+                    fallbackRepositoryRoot: "/repo",
+                    worktreePath: "/checkout/project",
+                    availability: .missing
+                )
+            ]
+        )
+        try await store.checkpoint(.init(checkouts: [checkout]))
+        let workspacesManager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: store))
+        let manager = TabsManager(store: OwnerTabsMemoryStore())
+        let state = AppState(
+            store: OwnerTabsMemoryStore(),
+            tabsManager: manager,
+            workspacesManager: workspacesManager,
+            workspaceStore: store
+        )
+        state.config.workspacesEnabled = true
+        _ = await workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+        state.selectWorkspaceCheckout(id: checkout.id)
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, .local)
+        _ = manager.appendTerminal(owner: owner, title: "Shared", sessionId: "shared")
+
+        let fallback = try #require(state.sharedSessionFallbackWorktreeForSelectedWorkspaceCheckout())
+        let composition = state.centerTabComposition(focusedWorktreeID: fallback.id, sharedSessionOwner: owner)
+
+        #expect(state.selectedWorktreeId == nil)
+        #expect(fallback.path.path == "/checkout")
+        #expect(composition.tabs.count == 1)
+    }
+}
+
+private final class OwnerTabsMemoryStore: PersistenceStoreProtocol {
+    func read<T>(_ type: T.Type, from url: URL) throws -> T where T: Decodable { throw CocoaError(.fileNoSuchFile) }
+    func readIfExists<T>(_ type: T.Type, from url: URL) throws -> T? where T: Decodable { nil }
+    func write<T>(_ value: T, to url: URL) throws where T: Encodable {}
+}

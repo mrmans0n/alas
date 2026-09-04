@@ -190,6 +190,35 @@ struct ProcessGitTests {
         #expect(result.stdout.contains("git version"))
     }
 
+    @Test func gitCanBypassRemoteHostRegistryForExplicitLocalCall() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-explicit-local-git-\(UUID().uuidString)")
+        defer {
+            RemoteHostRegistry.shared.unregister(root: directory.path)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: directory, usesRemoteHostRegistry: false)
+        RemoteHostRegistry.shared.register(root: directory.path, host: "host-that-must-not-be-used")
+
+        let result = try await Process.git(
+            ["rev-parse", "--show-toplevel"],
+            cwd: directory,
+            usesRemoteHostRegistry: false
+        )
+
+        #expect(result.exitCode == 0)
+        let reported = URL(fileURLWithPath: result.stdout.trimmingCharacters(in: .whitespacesAndNewlines))
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+            .path
+        let expected = directory
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+            .path
+        #expect(reported == expected)
+    }
+
     @Test func gitInvocationSurvivesWorkingDirectoryDeletionBeforeLaunch() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-deleted-git-cwd-\(UUID().uuidString)")

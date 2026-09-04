@@ -3,6 +3,8 @@ import Foundation
 @MainActor
 struct AlasCLICommandRouter {
     var sessionWorktreeId: (String) -> String?
+    var sessionOwner: (String) -> SessionOwnerID? = { _ in nil }
+    var sessionCwdWorktree: (String, String) async -> Worktree? = { _, _ in nil }
     var resolveACPSessionOrigin: (String) -> ACPOrchestrationSessionOrigin? = { _ in nil }
     var originatingWorktree: (String) -> Worktree?
     var visibleWorktrees: () -> [Worktree]
@@ -29,7 +31,10 @@ struct AlasCLICommandRouter {
     var now: () -> Date = Date.init
     var gitStatus: (URL) async throws -> [ChangedFile] = { try await GitService().status(worktreePath: $0) }
     var providerReviewOriginalPath: (ReviewDraftSessionID, String) async -> String? = { _, _ in nil }
-    var notifySession: (String?, Worktree, String, String?, AlasCLINotifyLevel) -> AlasCLIResponse = { _, _, _, _, _ in
+    var notifySession: (String?, SessionOwnerID?, Worktree, String, String?, AlasCLINotifyLevel) -> AlasCLIResponse = { _, _, _, _, _, _ in
+        .error("Notifications from the terminal are not available yet.")
+    }
+    var notifyOwnedSession: (String, SessionOwnerID, String, String?, AlasCLINotifyLevel) -> AlasCLIResponse = { _, _, _, _, _ in
         .error("Notifications from the terminal are not available yet.")
     }
     var listDelegatedSessions: (ACPOrchestrationSessionOrigin) async -> AlasCLIResponse = { _ in
@@ -40,6 +45,9 @@ struct AlasCLICommandRouter {
     }
     var sendDelegatedSessionMessage: (ACPOrchestrationSessionOrigin, ACPDelegatedSessionMessageRequest) async -> AlasCLIResponse = { _, _ in
         .error("Session orchestration is not available yet.")
+    }
+    var workspaceCommand: (AlasCLIRequest.WorkspaceCommand) async -> AlasCLIResponse = { _ in
+        .error("Workspace automation is not available yet.")
     }
     var activateApp: () -> Void
 
@@ -72,6 +80,8 @@ struct AlasCLICommandRouter {
     func handle(_ request: AlasCLIRequest) async -> AlasCLIResponse {
         let service = self.service
         switch request.command {
+        case .workspace(let command):
+            return await workspaceCommand(command)
         case .sessionList, .sessionNew, .sessionSend:
             guard let sessionId = request.sessionId,
                   let acpOrigin = resolveACPSessionOrigin(sessionId) else {
@@ -114,16 +124,36 @@ struct AlasCLICommandRouter {
             break
         }
 
-        // Resolve the origin worktree: exact session first, else cwd.
+        // Resolve the origin worktree: exact legacy session first, else cwd.
+        // Checkout-owned terminal sessions intentionally do not collapse to a
+        // synthetic worktree ID; their repository target is the current cwd.
+        let requestOwner = request.sessionId.flatMap(sessionOwner)
+        if case .notify(let body, let title, let level) = request.command,
+           let sessionId = request.sessionId,
+           let owner = requestOwner,
+           case .workspaceCheckout = owner {
+            return notifyOwnedSession(sessionId, owner, body, title, level)
+        }
         let origin: Worktree
+        let originOwner: SessionOwnerID?
         if let sessionId = request.sessionId,
            let worktreeId = sessionWorktreeId(sessionId),
            let resolved = originatingWorktree(worktreeId) {
             origin = resolved
-        } else if request.sessionId != nil {
+            originOwner = requestOwner ?? .worktree(resolved.id)
+        } else if let sessionId = request.sessionId,
+                  let cwd = request.cwd,
+                  let resolved = await sessionCwdWorktree(sessionId, cwd) {
+            origin = resolved
+            originOwner = requestOwner
+        } else if let owner = requestOwner,
+                  case .workspaceCheckout = owner {
             return .error("Unknown Alas terminal session.")
         } else if let cwd = request.cwd, let resolved = service.resolveWorktree(forDirectory: cwd) {
             origin = resolved
+            originOwner = .worktree(resolved.id)
+        } else if request.sessionId != nil {
+            return .error("Unknown Alas terminal session.")
         } else {
             return .error("not inside an Alas worktree")
         }
@@ -144,6 +174,7 @@ struct AlasCLICommandRouter {
         case .notify(let body, let title, let level):
             return service.notify(
                 sessionId: request.sessionId,
+                owner: originOwner,
                 origin: origin,
                 body: body,
                 title: title,
@@ -157,6 +188,8 @@ struct AlasCLICommandRouter {
             return await service.new(origin: origin, branch: branch, base: base)
         case .worktree(.delete(let target, let force, let keepBranch)):
             return await service.delete(target: target, projectWorktrees: projectWorktrees, force: force, keepBranch: keepBranch)
+        case .workspace:
+            preconditionFailure("Workspace commands are handled before generic origin resolution")
         case .review(.localChanges(let worktreeOverride)):
             switch service.reviewOrigin(origin: origin, override: worktreeOverride, projectWorktrees: projectWorktrees) {
             case .success(let reviewOrigin):

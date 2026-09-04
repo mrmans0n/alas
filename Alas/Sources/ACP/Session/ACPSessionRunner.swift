@@ -15,6 +15,8 @@ final class ACPSessionRunner {
     /// identifier used for persistence. Every agent file request is
     /// validated against this path before being honoured.
     let worktreePath: String
+    let remoteHost: String?
+    let usesRemoteHostRegistry: Bool
     /// Single policy instance shared between the runner (where the agent's
     /// `requestPermission` resumes a continuation) and the UI (where the
     /// user's click resolves it). Storing it here is the single source of
@@ -126,6 +128,8 @@ final class ACPSessionRunner {
     init(session: ACPSession, connection: ACPConnection, store: ACPSessionStore? = nil,
          sessionId: String, worktreePath: String,
          agentEnv: [String: String] = ProcessInfo.processInfo.environment,
+         remoteHost: String? = nil,
+         usesRemoteHostRegistry: Bool = true,
          suppressingLoadReplay: Bool = false,
          onDirtyCheck: ((String) -> Bool)? = nil,
          onLiveBufferRead: ((String) -> String?)? = nil,
@@ -150,6 +154,8 @@ final class ACPSessionRunner {
         self.persistence = resolvedPersistence
         self.sessionId = sessionId
         self.worktreePath = worktreePath
+        self.remoteHost = remoteHost
+        self.usesRemoteHostRegistry = usesRemoteHostRegistry
         self.agentEnv = agentEnv
         self.ownerInstanceId = ownerInstanceId
         self.onAuthRequired = onAuthRequired
@@ -281,14 +287,14 @@ final class ACPSessionRunner {
         // aware CLI run from the terminal refuses to start).
         session.terminalHost.updateContext(sessionCwd: worktreePath,
                                            sessionEnv: agentEnv,
-                                           sessionRemoteHost: RemoteHostRegistry.shared.host(forPath: worktreePath))
+                                           sessionRemoteHost: effectiveRemoteHost())
 
         filesTask = Task { @MainActor [weak self] in
             guard let self else { return }
             let writer = ACPFileWriter(
                 worktreeRoot: URL(fileURLWithPath: self.worktreePath)
             )
-            let remoteServer = RemoteHostRegistry.shared.host(forPath: self.worktreePath).map {
+            let remoteServer = self.effectiveRemoteHost().map {
                 ACPRemoteFileServer(host: $0, worktreeRoot: self.worktreePath)
             }
             for await req in self.connection.client.fileRequests {
@@ -330,6 +336,7 @@ final class ACPSessionRunner {
                         // exfiltrate it without a permission prompt.
                         // Cheap pure string work, safe on-main.
                         let target = try writer.resolveInsideWorktree(path: params.path)
+                        let diskTarget = try writer.managedDiskURLInsideWorktree(path: params.path)
                         // Prefer the live editor buffer when the file
                         // is open and dirty so the agent sees what the
                         // user sees (avoids "agent reads stale disk,
@@ -340,7 +347,7 @@ final class ACPSessionRunner {
                         let live = self.onLiveBufferRead?(target.path)
                         // Disk read + slice + encode run off-main.
                         let outcome = await Self.serveRead(
-                            target: target, liveBuffer: live,
+                            target: diskTarget, liveBuffer: live,
                             line: params.line, limit: params.limit
                         )
                         // A detach/takeover can cancel this task during the
@@ -2383,6 +2390,10 @@ extension ACPSessionRunner {
         }
         trimLastPersistedPayloads()
         onPersist?()
+    }
+
+    private func effectiveRemoteHost() -> String? {
+        remoteHost ?? (usesRemoteHostRegistry ? RemoteHostRegistry.shared.host(forPath: worktreePath) : nil)
     }
 
     /// Persist messages from the apply() boundary. Three cases:

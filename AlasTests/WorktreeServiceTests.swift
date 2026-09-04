@@ -96,6 +96,145 @@ struct WorktreeServiceTests {
         #expect(listed.count == 2)
     }
 
+    @Test func addFrozenReturnsTheCreatedLocalLineage() async throws {
+        let repo = try await makeRepo()
+        let destination = repo.deletingLastPathComponent().appendingPathComponent("\(repo.lastPathComponent)-frozen")
+        defer {
+            try? FileManager.default.removeItem(at: destination)
+            try? FileManager.default.removeItem(at: repo)
+        }
+        let base = try await Process.git(["rev-parse", "HEAD"], cwd: repo)
+        let commit = base.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let service = WorktreeService()
+        try await service.prepareFrozenBranch(repoPath: repo, branch: "frozen/lineage", intent: .create(atCommit: commit))
+
+        let worktree = try await service.addFrozen(repoPath: repo, branch: "frozen/lineage", destination: destination, projectId: "p", intent: .create(atCommit: commit))
+
+        #expect(worktree.lineageID != nil)
+        #expect(worktree.lineageID == WorktreeService.existingLocalLineageID(forWorktreeAt: destination))
+    }
+
+    @Test func addFrozenRollsBackTheLocalWorktreeWhenLineageRecordingFails() async throws {
+        let repo = try await makeRepo()
+        let destination = repo.deletingLastPathComponent().appendingPathComponent("\(repo.lastPathComponent)-frozen-lineage-fail")
+        defer {
+            try? FileManager.default.removeItem(at: destination)
+            try? FileManager.default.removeItem(at: repo)
+        }
+        let base = try await Process.git(["rev-parse", "HEAD"], cwd: repo)
+        let commit = base.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let service = WorktreeService()
+        try await service.prepareFrozenBranch(repoPath: repo, branch: "frozen/lineage-fail", intent: .create(atCommit: commit))
+
+        await #expect(throws: (any Error).self) {
+            try await service.addFrozen(
+                repoPath: repo,
+                branch: "frozen/lineage-fail",
+                destination: destination,
+                projectId: "p",
+                intent: .create(atCommit: commit),
+                localLineage: { _, _ in nil }
+            )
+        }
+
+        #expect(!FileManager.default.fileExists(atPath: destination.path))
+        let registrations = try await Process.git(["worktree", "list", "--porcelain"], cwd: repo)
+        #expect(!registrations.stdout.contains(destination.path))
+    }
+
+    @Test func remoteAddFrozenRollsBackTheWorktreeWhenLineageRecordingFails() async throws {
+        let service = WorktreeService()
+        let runner = FrozenRemoteRunner(results: [
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "abc\n", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 6, stdout: "", stderr: "marker failed"),
+            .init(exitCode: 0, stdout: "", stderr: "")
+        ])
+
+        await #expect(throws: (any Error).self) {
+            try await service.addFrozen(
+                repoPath: URL(fileURLWithPath: "/repo"),
+                branch: "feature/workspace",
+                destination: URL(fileURLWithPath: "/checkout/member"),
+                projectId: "p",
+                intent: .create(atCommit: "abc"),
+                expectedLineageID: "lineage",
+                remoteHost: "builder.example",
+                remoteExistence: { _, _ in .missing },
+                remoteRun: { host, command in
+                    await runner.run(host: host, command: command)
+                }
+            )
+        }
+
+        let commands = await runner.commands
+        #expect(commands.count == 5)
+        #expect(commands[2].contains("worktree add"))
+        #expect(commands[3].contains("alas-worktree-lineage"))
+        #expect(commands[4].contains("worktree remove -f -f --"))
+        #expect(commands[4].contains("/checkout/member"))
+    }
+
+    @Test func remoteAddFrozenRollsBackTheWorktreeWhenLineageRecordingThrows() async throws {
+        let service = WorktreeService()
+        let runner = ThrowingFrozenRemoteRunner()
+
+        await #expect(throws: (any Error).self) {
+            try await service.addFrozen(
+                repoPath: URL(fileURLWithPath: "/repo"),
+                branch: "feature/workspace",
+                destination: URL(fileURLWithPath: "/checkout/member"),
+                projectId: "p",
+                intent: .create(atCommit: "abc"),
+                expectedLineageID: "lineage",
+                remoteHost: "builder.example",
+                remoteExistence: { _, _ in .missing },
+                remoteRun: { host, command in
+                    try await runner.run(host: host, command: command)
+                }
+            )
+        }
+
+        let commands = await runner.commands
+        #expect(commands.count == 5)
+        #expect(commands[2].contains("worktree add"))
+        #expect(commands[3].contains("alas-worktree-lineage"))
+        #expect(commands[4].contains("worktree remove -f -f --"))
+    }
+
+    @Test func removeLockedWorktreeUsesDoubleForceWhenRequested() async throws {
+        let repo = try await makeRepo()
+        let destination = repo.deletingLastPathComponent().appendingPathComponent("\(repo.lastPathComponent)-locked")
+        defer {
+            try? FileManager.default.removeItem(at: destination)
+            try? FileManager.default.removeItem(at: repo)
+        }
+        _ = try await Process.git(["branch", "locked"], cwd: repo)
+        _ = try await Process.git(["worktree", "add", "-q", destination.path, "locked"], cwd: repo)
+        _ = try await Process.git(["worktree", "lock", destination.path], cwd: repo)
+        let worktree = Worktree(
+            id: Worktree.makeId(path: destination),
+            projectId: "p",
+            name: "locked",
+            branch: "locked",
+            path: destination,
+            status: .clean,
+            lastActivity: .distantPast
+        )
+
+        try await WorktreeService().remove(
+            repoPath: repo,
+            worktree: worktree,
+            deleteBranchIfMerged: false,
+            force: true,
+            forceTwice: true,
+            usesRemoteHostRegistry: false
+        )
+
+        #expect(!FileManager.default.fileExists(atPath: destination.path))
+    }
+
     @Test func addRecreatesAPrunableWorktreeRegistration() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
@@ -264,6 +403,42 @@ struct WorktreeServiceTests {
     }
 }
 
+private actor FrozenRemoteRunner {
+    private var results: [ProcessResult]
+    private(set) var commands: [String] = []
+
+    init(results: [ProcessResult]) {
+        self.results = results
+    }
+
+    func run(host: String, command: String) -> ProcessResult {
+        commands.append(command)
+        return results.isEmpty ? .init(exitCode: 1, stdout: "", stderr: "") : results.removeFirst()
+    }
+}
+
+private enum FrozenRemoteError: Error { case transport }
+
+private actor ThrowingFrozenRemoteRunner {
+    private(set) var commands: [String] = []
+
+    func run(host: String, command: String) throws -> ProcessResult {
+        commands.append(command)
+        switch commands.count {
+        case 1:
+            return .init(exitCode: 0, stdout: "", stderr: "")
+        case 2:
+            return .init(exitCode: 0, stdout: "abc\n", stderr: "")
+        case 3:
+            return .init(exitCode: 0, stdout: "", stderr: "")
+        case 4:
+            throw FrozenRemoteError.transport
+        default:
+            return .init(exitCode: 0, stdout: "", stderr: "")
+        }
+    }
+}
+
 extension WorktreeServiceTests {
     @Test func deletePreflightReportsCleanForCleanWorktree() async throws {
         let repo = try await makeRepo()
@@ -300,6 +475,42 @@ extension WorktreeServiceTests {
         #expect(preflight.requiresForce == true)
         #expect(preflight.reasons == [.dirty])
         #expect(preflight.submoduleLocalState == .none)
+    }
+
+    @Test func deletePreflightReportsLockedWorktree() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let dest = repo.deletingLastPathComponent().appendingPathComponent("\(repo.lastPathComponent)-preflight-locked")
+        defer { try? FileManager.default.removeItem(at: dest) }
+        let svc = WorktreeService()
+        let wt = try await svc.add(
+            repoPath: repo, base: "main", branch: "feat/preflight-locked",
+            destination: dest, projectId: "p"
+        )
+        let lock = try await Process.git(["worktree", "lock", wt.path.path], cwd: repo)
+        #expect(lock.exitCode == 0)
+
+        let preflight = try await svc.deletePreflight(worktreePath: wt.path)
+
+        #expect(preflight.requiresForce == true)
+        #expect(preflight.reasons.contains(.locked))
+    }
+
+    @Test func lockedDeletePreflightReasonIsParsedFromPorcelain() {
+        let path = URL(fileURLWithPath: "/repos/app-worktree")
+        let porcelain = """
+        worktree /repos/app
+        HEAD abc
+        branch refs/heads/main
+
+        worktree /repos/app-worktree
+        HEAD def
+        branch refs/heads/feature
+        locked
+
+        """
+
+        #expect(WorktreeService.porcelainMarksWorktreeLocked(porcelain, worktreePath: path))
     }
 
     @Test func deletePreflightReportsInitializedSubmodulesWithoutLocalState() async throws {

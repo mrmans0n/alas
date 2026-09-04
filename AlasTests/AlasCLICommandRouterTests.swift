@@ -61,21 +61,50 @@ struct AlasCLICommandRouterTests {
         #expect(opened.first?.relativePath == "a.txt")
     }
 
+    @Test func resolvesOriginFromCwdWhenSessionMapsToCheckoutStorageKey() async throws {
+        let root = try makeFile("repo/a.txt").deletingLastPathComponent()
+        let worktree = Worktree(
+            id: "member-wt", projectId: "p1", name: "member", branch: "main",
+            path: root, status: .clean, lastActivity: Date()
+        )
+        var opened: [(worktreeId: String, relativePath: String)] = []
+        let router = AlasCLICommandRouter(
+            sessionWorktreeId: { _ in "workspace-checkout-storage-key" },
+            originatingWorktree: { _ in nil },
+            visibleWorktrees: { [worktree] },
+            openRelativeFile: { relativePath, worktreeId in opened.append((worktreeId, relativePath)) },
+            openExternalFile: { _, _ in Issue.record("expected relative open") },
+            activateApp: {}
+        )
+
+        let response = await router.handle(.init(
+            version: 1,
+            sessionId: "checkout-leaf",
+            cwd: root.path,
+            command: .open(paths: [root.appendingPathComponent("a.txt").path])
+        ))
+
+        #expect(response == .ok)
+        #expect(opened.count == 1)
+        #expect(opened.first?.worktreeId == "member-wt")
+        #expect(opened.first?.relativePath == "a.txt")
+    }
+
     @Test func notifyRoutesToOriginatingSessionAndWorktree() async throws {
         let root = try makeFile("repo/a.txt").deletingLastPathComponent()
         let worktree = Worktree(
             id: "wt1", projectId: "p1", name: "main", branch: "main",
             path: root, status: .clean, lastActivity: Date()
         )
-        var captured: (sessionId: String?, worktreeId: String, body: String, title: String?, level: AlasCLINotifyLevel)?
+        var captured: (sessionId: String?, owner: SessionOwnerID?, worktreeId: String, body: String, title: String?, level: AlasCLINotifyLevel)?
         let router = AlasCLICommandRouter(
             sessionWorktreeId: { $0 == "acp-1" ? "wt1" : nil },
             originatingWorktree: { _ in worktree },
             visibleWorktrees: { [worktree] },
             openRelativeFile: { _, _ in },
             openExternalFile: { _, _ in },
-            notifySession: { sessionId, origin, body, title, level in
-                captured = (sessionId, origin.id, body, title, level)
+            notifySession: { sessionId, owner, origin, body, title, level in
+                captured = (sessionId, owner, origin.id, body, title, level)
                 return .ok
             },
             activateApp: {}
@@ -90,10 +119,89 @@ struct AlasCLICommandRouterTests {
 
         #expect(response == .ok)
         #expect(captured?.sessionId == "acp-1")
+        #expect(captured?.owner == .worktree("wt1"))
         #expect(captured?.worktreeId == "wt1")
         #expect(captured?.body == "Blocked")
         #expect(captured?.title == "Need input")
         #expect(captured?.level == .attention)
+    }
+
+    @Test func checkoutOwnedNotifyPreservesTypedSessionOwner() async throws {
+        let sharedPath = URL(fileURLWithPath: "/srv/shared/member")
+        let checkoutOwner = SessionOwnerID.workspaceCheckout(
+            UUID(uuidString: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")!,
+            .ssh("devbox")
+        )
+        let member = Worktree(
+            id: "member-wt",
+            projectId: "project",
+            name: "member",
+            branch: "main",
+            path: sharedPath,
+            status: .clean,
+            lastActivity: Date()
+        )
+        var capturedOwner: SessionOwnerID?
+        let router = AlasCLICommandRouter(
+            sessionWorktreeId: { _ in nil },
+            sessionOwner: { $0 == "checkout-leaf" ? checkoutOwner : nil },
+            sessionCwdWorktree: { sessionId, cwd in
+                sessionId == "checkout-leaf" && cwd == sharedPath.path ? member : nil
+            },
+            originatingWorktree: { _ in nil },
+            visibleWorktrees: { [member] },
+            openRelativeFile: { _, _ in },
+            openExternalFile: { _, _ in },
+            notifyOwnedSession: { _, owner, _, _, _ in
+                capturedOwner = owner
+                return .ok
+            },
+            activateApp: {}
+        )
+
+        let response = await router.handle(.init(
+            version: 1,
+            sessionId: "checkout-leaf",
+            cwd: sharedPath.path,
+            command: .notify(body: "Blocked", title: nil, level: .info)
+        ))
+
+        #expect(response == .ok)
+        #expect(capturedOwner == checkoutOwner)
+    }
+
+    @Test func checkoutOwnedNotifyDoesNotRequireRepositoryTarget() async throws {
+        let checkoutOwner = SessionOwnerID.workspaceCheckout(
+            UUID(uuidString: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")!,
+            .local
+        )
+        var captured: (sessionId: String, owner: SessionOwnerID, body: String)?
+        let router = AlasCLICommandRouter(
+            sessionWorktreeId: { _ in nil },
+            sessionOwner: { $0 == "checkout-leaf" ? checkoutOwner : nil },
+            sessionCwdWorktree: { _, _ in nil },
+            originatingWorktree: { _ in nil },
+            visibleWorktrees: { [] },
+            openRelativeFile: { _, _ in },
+            openExternalFile: { _, _ in },
+            notifyOwnedSession: { sessionId, owner, body, _, _ in
+                captured = (sessionId, owner, body)
+                return .ok
+            },
+            activateApp: {}
+        )
+
+        let response = await router.handle(.init(
+            version: 1,
+            sessionId: "checkout-leaf",
+            cwd: "/workspace/checkout-root",
+            command: .notify(body: "Blocked", title: nil, level: .attention)
+        ))
+
+        #expect(response == .ok)
+        #expect(captured?.sessionId == "checkout-leaf")
+        #expect(captured?.owner == checkoutOwner)
+        #expect(captured?.body == "Blocked")
     }
 
     @Test func resolvesOriginFromSymlinkedWorktreeRootCwd() async throws {
@@ -1909,6 +2017,31 @@ struct AlasCLICommandRouterTests {
 
         #expect(terminal == .error("session commands require an originating ACP session"))
         #expect(directory == .error("session commands require an originating ACP session"))
+    }
+
+    @Test func workspaceCommandsRouteWithoutImplicitRepositoryFocus() async throws {
+        let checkoutID = UUID()
+        let memberID = UUID()
+        var commands: [AlasCLIRequest.WorkspaceCommand] = []
+        let router = AlasCLICommandRouter(
+            sessionWorktreeId: { _ in nil },
+            originatingWorktree: { _ in nil },
+            visibleWorktrees: { [] },
+            openRelativeFile: { _, _ in },
+            openExternalFile: { _, _ in },
+            workspaceCommand: { command in
+                commands.append(command)
+                return .text([#"{"version":1}"#])
+            },
+            activateApp: {}
+        )
+
+        let list = await router.handle(.init(version: 1, sessionId: nil, cwd: "/outside", command: .workspace(.list)))
+        let focus = await router.handle(.init(version: 1, sessionId: nil, cwd: "/outside", command: .workspace(.focus(checkoutID: checkoutID, memberID: memberID))))
+
+        #expect(list == .text([#"{"version":1}"#]))
+        #expect(focus == .text([#"{"version":1}"#]))
+        #expect(commands == [.list, .focus(checkoutID: checkoutID, memberID: memberID)])
     }
 
     private static func router(

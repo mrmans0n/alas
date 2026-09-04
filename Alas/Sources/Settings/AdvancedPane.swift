@@ -18,6 +18,32 @@ struct AdvancedPane: View {
 
                 SettingsGroup(title: "Experimental") {
                     SettingsRow(
+                        name: "Workspaces preview",
+                        desc: "Enables persistent multi-repository Workspaces for preview testing."
+                    ) {
+                        AlasToggle(on: Binding(
+                            get: { state.config.workspacesEnabled },
+                            set: { enabled in
+                                Task { @MainActor in
+                                    await state.setWorkspacesEnabled(enabled)
+                                }
+                            }
+                        ))
+                    }
+                    if let recovery = state.workspaceRecoveryError {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Workspace recovery required: \(recovery.message)")
+                                .font(.system(size: 11.5))
+                                .foregroundStyle(theme.color("warn"))
+                            AlasButton(title: "Discard Quarantined Workspace State", icon: "trash", style: .normal) {
+                                Task { @MainActor in
+                                    await state.discardWorkspaceRecoveryState()
+                                }
+                            }
+                        }
+                        .padding(.top, 8)
+                    }
+                    SettingsRow(
                         name: "AppKit Changes scroller",
                         desc: "Uses the virtualized native scroller for working tree files, stashes, and commits."
                     ) {

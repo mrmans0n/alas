@@ -12,7 +12,13 @@ private struct CommitReviewSessionLaunchError: Identifiable, Equatable {
 }
 
 enum RootWorkspaceVisibilityPolicy {
-    static func showsWorkspace(hasProjects: Bool) -> Bool { hasProjects }
+    static func showsWorkspace(
+        hasProjects: Bool,
+        workspacesEnabled: Bool = false,
+        hasWorkspaceContent: Bool = false
+    ) -> Bool {
+        hasProjects || (workspacesEnabled && hasWorkspaceContent)
+    }
 }
 
 struct RootView: View {
@@ -100,7 +106,11 @@ struct RootView: View {
             mainContent
             FileSearchDialog(appState: state)
             RepoSelectorDialog(appState: state)
-            AgentLauncherDialog(appState: state, selectedWorktree: selectedWorktree)
+            AgentLauncherDialog(
+                appState: state,
+                selectedWorktree: selectedWorktree,
+                selectedWorkspaceCheckout: { state.selectedWorkspaceCheckout }
+            )
             ReviewTargetDialog(appState: state)
             RunScriptDialog(appState: state, selectedWorktree: selectedWorktree)
         }
@@ -114,7 +124,11 @@ struct RootView: View {
 
     @ViewBuilder
     private var mainContent: some View {
-        if !RootWorkspaceVisibilityPolicy.showsWorkspace(hasProjects: !state.projects.isEmpty) {
+        if !RootWorkspaceVisibilityPolicy.showsWorkspace(
+            hasProjects: !state.projects.isEmpty,
+            workspacesEnabled: state.config.workspacesEnabled,
+            hasWorkspaceContent: !state.workspacesManager.workspaces.isEmpty || !state.workspacesManager.checkouts.isEmpty
+        ) {
             EmptyState(
                 canCreateWorktree: false,
                 onAddProject: { showNewProject = true },
@@ -215,8 +229,10 @@ struct RootView: View {
     private var rightPaneSelectionState: RightPaneSelectionState {
         RightPaneSelectionStateResolver(
             selectedWorktreeId: state.selectedWorktreeId,
-            projects: state.activeSpaceProjects,
-            projectsManager: state.projectsManager
+            projects: state.navigationProjects,
+            projectsManager: state.projectsManager,
+            allowedWorktreeIDs: state.checkoutScopedWorktreeIDs,
+            checkoutFocusedWorktreeScope: state.checkoutFocusedWorktreeScope
         ).resolve()
     }
 
@@ -228,8 +244,10 @@ struct RootView: View {
     private func centerContent(effectiveRightPaneVisible: Bool) -> some View {
         let resolver = CenterSelectionStateResolver(
             selectedWorktreeId: state.selectedWorktreeId,
-            projects: state.activeSpaceProjects,
+            projects: state.navigationProjects,
             projectsManager: state.projectsManager,
+            allowedWorktreeIDs: state.checkoutScopedWorktreeIDs,
+            checkoutFocusedWorktreeScope: state.checkoutFocusedWorktreeScope,
             isRefreshingProjectTopologies: state.isRefreshingProjectTopologies
         )
         switch resolver.resolve() {
@@ -237,6 +255,7 @@ struct RootView: View {
             CenterPaneView(
                 state: state,
                 worktree: wt,
+                sharedSessionOwner: state.selectedWorkspaceCheckout.map { SessionOwnerID.workspaceCheckout($0.id, $0.executionLocation) },
                 allowsPaneFocus: !state.isKeyboardOverlayOpen,
                 effectiveRightPaneVisible: effectiveRightPaneVisible
             )
@@ -261,25 +280,44 @@ struct RootView: View {
         case .loadingProject:
             LoadingProjectView()
         case .empty:
-            EmptyTabView(
-                onNewTerminal: {},
-                onNewAgentInChat: {},
-                onNewAgentInTerminal: {},
-                newTerminalShortcut: nil,
-                newAgentInChatShortcut: nil,
-                newAgentInTerminalShortcut: nil
-            )
+            if let checkout = state.selectedWorkspaceCheckout,
+               let fallback = state.sharedSessionFallbackWorktreeForSelectedWorkspaceCheckout() {
+                CenterPaneView(
+                    state: state,
+                    worktree: fallback,
+                    sharedSessionOwner: SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation),
+                    allowsPaneFocus: !state.isKeyboardOverlayOpen,
+                    effectiveRightPaneVisible: effectiveRightPaneVisible
+                )
+            } else {
+                EmptyTabView(
+                    onNewTerminal: {},
+                    onNewAgentInChat: {},
+                    onNewAgentInTerminal: {},
+                    newTerminalShortcut: nil,
+                    newAgentInChatShortcut: nil,
+                    newAgentInTerminalShortcut: nil
+                )
+            }
         }
     }
 
     private func selectedWorktree() -> Worktree? {
         let resolver = RightPaneSelectionStateResolver(
             selectedWorktreeId: state.selectedWorktreeId,
-            projects: state.activeSpaceProjects,
-            projectsManager: state.projectsManager
+            projects: state.navigationProjects,
+            projectsManager: state.projectsManager,
+            allowedWorktreeIDs: state.checkoutScopedWorktreeIDs,
+            checkoutFocusedWorktreeScope: state.checkoutFocusedWorktreeScope
         )
         if case .active(let wt) = resolver.resolve() { return wt }
         return nil
+    }
+
+    private func selectedWorkspaceSessionOwner() -> SessionOwnerID? {
+        state.selectedWorkspaceCheckout.map {
+            SessionOwnerID.workspaceCheckout($0.id, $0.executionLocation)
+        }
     }
 
     private func openOrFocusDiff(worktree: Worktree, path: String, staged: Bool, originalPath: String?) {
@@ -773,7 +811,11 @@ private struct RootBaseHandlers: ViewModifier {
             }
         let e = d
             .onReceive(NotificationCenter.default.publisher(for: .alasNewTerminalTab)) { _ in
-                if let wt = selectedWorktree() {
+                if let checkout = state.selectedWorkspaceCheckout {
+                    Task { @MainActor in
+                        _ = try? await state.openWorkspaceCheckoutTerminalTab(checkout)
+                    }
+                } else if let wt = selectedWorktree() {
                     Task { @MainActor in
                         _ = try? await state.openTerminalTabPreparingRemoteZmxIfNeeded(for: wt)
                     }
@@ -781,7 +823,10 @@ private struct RootBaseHandlers: ViewModifier {
             }
         let f = e
             .onReceive(NotificationCenter.default.publisher(for: .alasCloseTab)) { _ in
-                state.handleCloseCenterShortcut(worktreeId: selectedWorktree()?.id)
+                state.handleCloseCenterShortcut(
+                    worktreeId: selectedWorktree()?.id,
+                    sharedSessionOwner: selectedWorkspaceSessionOwner()
+                )
             }
         let fReopenClosedTab = f
             .onReceive(NotificationCenter.default.publisher(for: .alasReopenClosedTab)) { _ in
@@ -792,12 +837,20 @@ private struct RootBaseHandlers: ViewModifier {
         let gAdjacent = fReopenClosedTab
             .onReceive(NotificationCenter.default.publisher(for: .alasActivateAdjacentTab)) { notification in
                 guard let direction = notification.object as? CenterTabNavigationDirection else { return }
-                state.activateAdjacentCenterTab(direction, worktreeId: selectedWorktree()?.id)
+                state.activateAdjacentCenterTab(
+                    direction,
+                    worktreeId: selectedWorktree()?.id,
+                    sharedSessionOwner: selectedWorkspaceSessionOwner()
+                )
             }
         let g = gAdjacent
             .onReceive(NotificationCenter.default.publisher(for: .alasActivateTabByNumber)) { notification in
                 guard let number = notification.object as? Int else { return }
-                state.activateCenterTabNumber(number, worktreeId: selectedWorktree()?.id)
+                state.activateCenterTabNumber(
+                    number,
+                    worktreeId: selectedWorktree()?.id,
+                    sharedSessionOwner: selectedWorkspaceSessionOwner()
+                )
             }
         let h = g
             .onReceive(NotificationCenter.default.publisher(for: .alasSaveActiveTab)) { _ in
@@ -907,6 +960,12 @@ private struct RootBaseHandlers: ViewModifier {
                 state.terminal.waitForPendingKills(timeout: 3.0)
             }
     }
+
+    private func selectedWorkspaceSessionOwner() -> SessionOwnerID? {
+        state.selectedWorkspaceCheckout.map {
+            SessionOwnerID.workspaceCheckout($0.id, $0.executionLocation)
+        }
+    }
 }
 
 private struct RootPaneHandlers: ViewModifier {
@@ -916,35 +975,41 @@ private struct RootPaneHandlers: ViewModifier {
     func body(content: Content) -> some View {
         content
             .onReceive(NotificationCenter.default.publisher(for: .alasSplitRight)) { _ in
-                if let wt = selectedWorktree() { state.splitFocusedPane(worktreeId: wt.id, axis: .vertical) }
+                if let wt = selectedWorktree() { state.splitFocusedPane(worktreeId: wt.id, sharedSessionOwner: selectedWorkspaceSessionOwner(), axis: .vertical) }
             }
             .onReceive(NotificationCenter.default.publisher(for: .alasSplitDown)) { _ in
-                if let wt = selectedWorktree() { state.splitFocusedPane(worktreeId: wt.id, axis: .horizontal) }
+                if let wt = selectedWorktree() { state.splitFocusedPane(worktreeId: wt.id, sharedSessionOwner: selectedWorkspaceSessionOwner(), axis: .horizontal) }
             }
             .onReceive(NotificationCenter.default.publisher(for: .alasFocusPaneLeft)) { _ in
-                if let wt = selectedWorktree() { state.focusPane(worktreeId: wt.id, direction: .left) }
+                if let wt = selectedWorktree() { state.focusPane(worktreeId: wt.id, sharedSessionOwner: selectedWorkspaceSessionOwner(), direction: .left) }
             }
             .onReceive(NotificationCenter.default.publisher(for: .alasFocusPaneRight)) { _ in
-                if let wt = selectedWorktree() { state.focusPane(worktreeId: wt.id, direction: .right) }
+                if let wt = selectedWorktree() { state.focusPane(worktreeId: wt.id, sharedSessionOwner: selectedWorkspaceSessionOwner(), direction: .right) }
             }
             .onReceive(NotificationCenter.default.publisher(for: .alasFocusPaneUp)) { _ in
-                if let wt = selectedWorktree() { state.focusPane(worktreeId: wt.id, direction: .up) }
+                if let wt = selectedWorktree() { state.focusPane(worktreeId: wt.id, sharedSessionOwner: selectedWorkspaceSessionOwner(), direction: .up) }
             }
             .onReceive(NotificationCenter.default.publisher(for: .alasFocusPaneDown)) { _ in
-                if let wt = selectedWorktree() { state.focusPane(worktreeId: wt.id, direction: .down) }
+                if let wt = selectedWorktree() { state.focusPane(worktreeId: wt.id, sharedSessionOwner: selectedWorkspaceSessionOwner(), direction: .down) }
             }
             .onReceive(NotificationCenter.default.publisher(for: .alasResizePaneLeft)) { _ in
-                if let wt = selectedWorktree() { state.resizePane(worktreeId: wt.id, direction: .left) }
+                if let wt = selectedWorktree() { state.resizePane(worktreeId: wt.id, sharedSessionOwner: selectedWorkspaceSessionOwner(), direction: .left) }
             }
             .onReceive(NotificationCenter.default.publisher(for: .alasResizePaneRight)) { _ in
-                if let wt = selectedWorktree() { state.resizePane(worktreeId: wt.id, direction: .right) }
+                if let wt = selectedWorktree() { state.resizePane(worktreeId: wt.id, sharedSessionOwner: selectedWorkspaceSessionOwner(), direction: .right) }
             }
             .onReceive(NotificationCenter.default.publisher(for: .alasResizePaneUp)) { _ in
-                if let wt = selectedWorktree() { state.resizePane(worktreeId: wt.id, direction: .up) }
+                if let wt = selectedWorktree() { state.resizePane(worktreeId: wt.id, sharedSessionOwner: selectedWorkspaceSessionOwner(), direction: .up) }
             }
             .onReceive(NotificationCenter.default.publisher(for: .alasResizePaneDown)) { _ in
-                if let wt = selectedWorktree() { state.resizePane(worktreeId: wt.id, direction: .down) }
+                if let wt = selectedWorktree() { state.resizePane(worktreeId: wt.id, sharedSessionOwner: selectedWorkspaceSessionOwner(), direction: .down) }
             }
+    }
+
+    private func selectedWorkspaceSessionOwner() -> SessionOwnerID? {
+        state.selectedWorkspaceCheckout.map {
+            SessionOwnerID.workspaceCheckout($0.id, $0.executionLocation)
+        }
     }
 }
 

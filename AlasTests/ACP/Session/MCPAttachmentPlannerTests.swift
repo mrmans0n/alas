@@ -226,6 +226,91 @@ struct MCPAttachmentPlannerTests {
         #expect(result.configurationFingerprint == MCPAttachmentPlanner.configurationFingerprint(for: []))
     }
 
+    @Test("frozen descriptors take precedence over current project configuration")
+    func frozenDescriptorsAreUsed() throws {
+        let frozen = WorkspaceMCPServerDescriptor(
+            id: "member-a:before",
+            server: .stdio(name: "before", command: "${PROJECT_DIR}/before"),
+            projectDirectory: "/frozen-project",
+            worktreeDirectory: "/frozen-worktree",
+            checkoutRoot: "/frozen-checkout"
+        )
+        let result = MCPAttachmentPlanner.plan(.init(
+            configuredServers: [.stdio(name: "after", command: "after")],
+            projectDirectory: "/live-project",
+            worktreeDirectory: "/live-worktree",
+            environment: [:],
+            capabilities: .init(),
+            frozenServerDescriptors: [frozen]
+        ))
+
+        let wire = try #require(result.wireServers.first)
+        #expect(serverName(wire) == "before")
+        if case let .stdio(_, command, _, _) = wire {
+            #expect(command == "/frozen-checkout/before")
+        } else {
+            Issue.record("Expected a stdio MCP server")
+        }
+        #expect(result.statuses.first?.id == "member-a:before")
+    }
+
+    @Test("unavailable frozen members are diagnosed without retargeting their attachment")
+    func unavailableFrozenMemberIsNotAttached() {
+        let frozen = WorkspaceMCPServerDescriptor(
+            id: "member-a:server",
+            server: .stdio(name: "member server", command: "member-server"),
+            projectDirectory: "/project-a",
+            worktreeDirectory: "/checkout/a",
+            checkoutRoot: "/checkout"
+        )
+        let result = MCPAttachmentPlanner.plan(.init(
+            configuredServers: [.stdio(name: "live", command: "live-server")],
+            projectDirectory: "/project-b",
+            worktreeDirectory: "/checkout/b",
+            environment: [:],
+            capabilities: .init(),
+            frozenServerDescriptors: [frozen],
+            unavailableFrozenDescriptorIDs: ["member-a:server"]
+        ))
+
+        #expect(result.wireServers.isEmpty)
+        #expect(result.statuses.first?.disposition == .skipped(.unavailableMember))
+    }
+
+    @Test("duplicate frozen member MCP names are qualified before validation")
+    func duplicateFrozenMemberServersAreQualifiedInsteadOfSkipped() {
+        let first = WorkspaceMCPServerDescriptor(
+            id: "member-a:filesystem",
+            server: .stdio(name: "filesystem", command: "${WORKTREE_DIR}/mcp"),
+            projectDirectory: "/project-a",
+            worktreeDirectory: "/checkout/a",
+            checkoutRoot: "/checkout"
+        )
+        let second = WorkspaceMCPServerDescriptor(
+            id: "member-b:filesystem",
+            server: .stdio(name: "filesystem", command: "${WORKTREE_DIR}/mcp"),
+            projectDirectory: "/project-b",
+            worktreeDirectory: "/checkout/b",
+            checkoutRoot: "/checkout"
+        )
+
+        let result = MCPAttachmentPlanner.plan(.init(
+            configuredServers: [],
+            projectDirectory: "/live-project",
+            worktreeDirectory: "/live-worktree",
+            environment: [:],
+            capabilities: .init(),
+            frozenServerDescriptors: [first, second]
+        ))
+
+        #expect(result.wireServers.count == 2)
+        #expect(result.statuses.map(\.disposition) == [.requested, .requested])
+        #expect(result.statuses.map(\.name) == [
+            "filesystem (member-a:filesystem)",
+            "filesystem (member-b:filesystem)",
+        ])
+    }
+
     private func plan(
         _ servers: [ProjectMCPServer],
         environment: [String: String] = [:],

@@ -188,6 +188,29 @@ struct StartupRecoveryTests {
         ))
     }
 
+    @Test func rootWorkspaceRemainsVisibleForWorkspaceContentWithoutProjects() {
+        #expect(RootWorkspaceVisibilityPolicy.showsWorkspace(
+            hasProjects: false,
+            workspacesEnabled: true,
+            hasWorkspaceContent: true
+        ))
+        #expect(!RootWorkspaceVisibilityPolicy.showsWorkspace(
+            hasProjects: false,
+            workspacesEnabled: false,
+            hasWorkspaceContent: true
+        ))
+        #expect(!RootWorkspaceVisibilityPolicy.showsWorkspace(
+            hasProjects: false,
+            workspacesEnabled: true,
+            hasWorkspaceContent: false
+        ))
+        #expect(RootWorkspaceVisibilityPolicy.showsWorkspace(
+            hasProjects: true,
+            workspacesEnabled: false,
+            hasWorkspaceContent: false
+        ))
+    }
+
     @Test func recoveryLaunchSkipsRemoteProjectGitWatchers() {
         let localProject = ProjectConfig(
             id: "local",

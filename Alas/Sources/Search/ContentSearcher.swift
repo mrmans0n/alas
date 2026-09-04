@@ -108,7 +108,7 @@ final class ContentSearcher: Sendable {
         args.append(".")
 
         let process = Process()
-        if let host = RemoteHostRegistry.shared.host(forPath: worktree.absolutePath.path) {
+        if let host = worktree.remoteHost {
             let capabilities = await RemoteHostCapabilityStore.shared.capabilities(for: host)
             guard capabilities?.hasRipgrep == true else {
                 try await streamGitGrep(
@@ -148,7 +148,7 @@ final class ContentSearcher: Sendable {
         }
 
         let execStartedAt = CFAbsoluteTimeGetCurrent()
-        let execHost = RemoteHostRegistry.shared.host(forPath: worktree.absolutePath.path)
+        let execHost = worktree.remoteHost
         defer {
             if let execHost {
                 RemoteOperationTiming.log("search", host: execHost, transport: "exec", startedAt: execStartedAt)
@@ -288,7 +288,7 @@ final class ContentSearcher: Sendable {
         into continuation: AsyncThrowingStream<ContentSearchHit, Error>.Continuation
     ) async throws {
         let result: ProcessResult
-        if let host = RemoteHostRegistry.shared.host(forPath: worktree.absolutePath.path) {
+        if let host = worktree.remoteHost {
             let startedAt = CFAbsoluteTimeGetCurrent()
             defer {
                 RemoteOperationTiming.log("search", host: host, transport: "git-exec", startedAt: startedAt)
@@ -304,6 +304,8 @@ final class ContentSearcher: Sendable {
             result = try await Process.git(
                 RemoteContentSearch.gitGrepArgs(query: query, options: options),
                 cwd: worktree.absolutePath,
+                remoteHost: worktree.remoteHost,
+                usesRemoteHostRegistry: worktree.usesRemoteHostRegistry,
                 timeout: 60
             )
         }
@@ -350,6 +352,8 @@ final class ContentSearcher: Sendable {
         return ContentSearchHit(
             worktreeId: worktree.id,
             projectId: worktree.projectId,
+            workspaceCheckoutID: worktree.workspaceCheckoutID,
+            workspaceCheckoutMemberID: worktree.workspaceCheckoutMemberID,
             relativePath: parsed.path,
             line: parsed.line,
             column: column,
@@ -459,6 +463,8 @@ final class ContentSearcher: Sendable {
         return ContentSearchHit(
             worktreeId: worktree.id,
             projectId: worktree.projectId,
+            workspaceCheckoutID: worktree.workspaceCheckoutID,
+            workspaceCheckoutMemberID: worktree.workspaceCheckoutMemberID,
             relativePath: pathBlob,
             line: lineNumber,
             column: column,

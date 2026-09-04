@@ -59,6 +59,63 @@ struct CenterSelectionStateResolverTests {
         }
     }
 
+    @Test func checkoutScopeRejectsAStaleRepositoryFocus() {
+        let project = ProjectConfig.fixture
+        let worktree = Worktree.fixture()
+        let mgr = ProjectsManager(persistedProjects: [project])
+        mgr.insertOptimisticWorktree(worktree)
+        let resolver = CenterSelectionStateResolver(
+            selectedWorktreeId: worktree.id,
+            projects: [project],
+            projectsManager: mgr,
+            allowedWorktreeIDs: []
+        )
+        #expect(resolver.resolve() == .empty)
+    }
+
+    @Test func checkoutScopeQualifiesDuplicateWorktreeIDsByProjectAndLocation() {
+        let wrongProject = ProjectConfig(
+            id: "wrong-project",
+            name: "Wrong",
+            path: "/repos/wrong",
+            color: "#fff",
+            addedAt: Date(timeIntervalSince1970: 0),
+            host: "wrong-host"
+        )
+        let focusedProject = ProjectConfig(
+            id: "focused-project",
+            name: "Focused",
+            path: "/repos/focused",
+            color: "#fff",
+            addedAt: Date(timeIntervalSince1970: 0),
+            host: "focused-host"
+        )
+        let duplicateID = "/srv/checkouts/member"
+        let wrong = Worktree.fixture(id: duplicateID, projectId: wrongProject.id, path: "/srv/checkouts/member")
+        let focused = Worktree.fixture(id: duplicateID, projectId: focusedProject.id, path: "/srv/checkouts/member")
+        let mgr = ProjectsManager(persistedProjects: [wrongProject, focusedProject])
+        mgr.insertOptimisticWorktree(wrong)
+        mgr.insertOptimisticWorktree(focused)
+
+        let resolver = CenterSelectionStateResolver(
+            selectedWorktreeId: duplicateID,
+            projects: [wrongProject, focusedProject],
+            projectsManager: mgr,
+            allowedWorktreeIDs: [duplicateID],
+            checkoutFocusedWorktreeScope: CheckoutFocusedWorktreeScope(
+                worktreeID: duplicateID,
+                projectID: focusedProject.id,
+                executionLocation: .ssh("focused-host")
+            )
+        )
+
+        if case .worktree(let returned) = resolver.resolve() {
+            #expect(returned.projectId == focusedProject.id)
+        } else {
+            Issue.record("Expected scoped duplicate worktree to resolve to focused project")
+        }
+    }
+
     @Test func returnsDeletingWhenDeletingState() {
         let project = ProjectConfig(id: "p1", name: "A", path: "/tmp/a", color: "#fff", addedAt: Date())
         let wt = Worktree(id: "wt1", projectId: "p1", name: "main", branch: "main", path: URL(fileURLWithPath: "/tmp/a"), status: .clean, lastActivity: Date())
@@ -154,13 +211,17 @@ private extension ProjectConfig {
 }
 
 private extension Worktree {
-    static func fixture(projectId: String = "project-1") -> Worktree {
+    static func fixture(
+        id: String = "worktree-1",
+        projectId: String = "project-1",
+        path: String = "/tmp/alas"
+    ) -> Worktree {
         Worktree(
-            id: "worktree-1",
+            id: id,
             projectId: projectId,
             name: "main",
             branch: "main",
-            path: URL(fileURLWithPath: "/tmp/alas"),
+            path: URL(fileURLWithPath: path),
             status: .clean,
             lastActivity: Date(timeIntervalSince1970: 0)
         )

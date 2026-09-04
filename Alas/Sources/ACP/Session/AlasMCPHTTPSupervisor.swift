@@ -28,7 +28,8 @@ final class AlasMCPHTTPSupervisor {
         socketPath: String,
         worktreePath: String,
         sessionId: String,
-        parentSessionId: String?
+        parentSessionId: String?,
+        workspaceOnly: Bool = false
     ) async -> BuiltInAlasMCP.HTTPEndpoint? {
         if let existing = running[sessionId], existing.process.isRunning {
             return BuiltInAlasMCP.HTTPEndpoint(
@@ -40,13 +41,15 @@ final class AlasMCPHTTPSupervisor {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: binaryPath)
         process.arguments = ["mcp", "--http"]
-        var env = ProcessInfo.processInfo.environment
-        env["ALAS_SOCKET_PATH"] = socketPath
-        env["ALAS_WORKTREE_DIR"] = worktreePath
-        env["ALAS_SESSION_ID"] = sessionId
-        env["ALAS_MCP_HTTP_TOKEN"] = token
-        if let parentSessionId { env["ALAS_PARENT_SESSION_ID"] = parentSessionId }
-        process.environment = env
+        process.environment = Self.environment(
+            base: ProcessInfo.processInfo.environment,
+            socketPath: socketPath,
+            worktreePath: worktreePath,
+            sessionId: sessionId,
+            token: token,
+            parentSessionId: parentSessionId,
+            workspaceOnly: workspaceOnly
+        )
 
         let stdoutPipe = Pipe()
         process.standardOutput = stdoutPipe
@@ -79,6 +82,25 @@ final class AlasMCPHTTPSupervisor {
     func shutdown() {
         for (_, r) in running { r.process.terminate() }
         running.removeAll()
+    }
+
+    nonisolated static func environment(
+        base: [String: String],
+        socketPath: String,
+        worktreePath: String,
+        sessionId: String,
+        token: String,
+        parentSessionId: String?,
+        workspaceOnly: Bool = false
+    ) -> [String: String] {
+        var env = base
+        env["ALAS_SOCKET_PATH"] = socketPath
+        env["ALAS_WORKTREE_DIR"] = worktreePath
+        env["ALAS_SESSION_ID"] = sessionId
+        env["ALAS_MCP_HTTP_TOKEN"] = token
+        if let parentSessionId { env["ALAS_PARENT_SESSION_ID"] = parentSessionId }
+        if workspaceOnly { env["ALAS_MCP_WORKSPACE_ONLY"] = "1" }
+        return env
     }
 
     /// Read lines from `pipe` until one parses as a PORT announcement, or the
