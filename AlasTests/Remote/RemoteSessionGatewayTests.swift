@@ -50,7 +50,9 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     var sessionSummariesCallCount = 0
     var remoteWorktreesCallCount = 0
     var remoteProjectsCallCount = 0
+    var remoteProjectsCompletionCount = 0
     var remoteBranchesCallCount = 0
+    var remoteBranchesCompletionCount = 0
     var remoteBranchRequests: [String] = []
     var remoteAgentsCallCount = 0
     var createRequests: [(worktreeId: String, agentId: String)] = []
@@ -66,6 +68,10 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     private var remoteWorktreesContinuation: CheckedContinuation<[RemoteWorktreeOption], Never>?
     private var remoteProjectsContinuation: CheckedContinuation<[RemoteProjectOption], Never>?
     private var remoteBranchesContinuation: CheckedContinuation<RemoteBranchListResult, Never>?
+    private var remoteProjectsCallWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
+    private var remoteProjectsCompletionWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
+    private var remoteBranchesCallWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
+    private var remoteBranchesCompletionWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
     private var fullToolCallContentContinuation: CheckedContinuation<String?, Never>?
     func sessionSummaries() async -> [RemoteSessionSummary] {
         sessionSummariesCallCount += 1
@@ -87,22 +93,34 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     }
     func remoteProjects() async -> [RemoteProjectOption] {
         remoteProjectsCallCount += 1
+        resumeWaiters(&remoteProjectsCallWaiters, through: remoteProjectsCallCount)
+        let result: [RemoteProjectOption]
         if pauseRemoteProjects {
-            return await withCheckedContinuation { continuation in
+            result = await withCheckedContinuation { continuation in
                 remoteProjectsContinuation = continuation
             }
+        } else {
+            result = projects
         }
-        return projects
+        remoteProjectsCompletionCount += 1
+        resumeWaiters(&remoteProjectsCompletionWaiters, through: remoteProjectsCompletionCount)
+        return result
     }
     func remoteBranches(projectId: String) async -> RemoteBranchListResult {
         remoteBranchesCallCount += 1
         remoteBranchRequests.append(projectId)
+        resumeWaiters(&remoteBranchesCallWaiters, through: remoteBranchesCallCount)
+        let result: RemoteBranchListResult
         if pauseRemoteBranches {
-            return await withCheckedContinuation { continuation in
+            result = await withCheckedContinuation { continuation in
                 remoteBranchesContinuation = continuation
             }
+        } else {
+            result = branchResults[projectId] ?? .failure("Could not load branches.")
         }
-        return branchResults[projectId] ?? .failure("Could not load branches.")
+        remoteBranchesCompletionCount += 1
+        resumeWaiters(&remoteBranchesCompletionWaiters, through: remoteBranchesCompletionCount)
+        return result
     }
     func remoteAgents() -> [RemoteAgentOption] {
         remoteAgentsCallCount += 1
@@ -138,6 +156,38 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
             returning: branchResults[projectId] ?? .failure("Could not load branches.")
         )
         remoteBranchesContinuation = nil
+    }
+    func waitForRemoteProjectsCall(_ count: Int) async {
+        guard remoteProjectsCallCount < count else { return }
+        await withCheckedContinuation { continuation in
+            remoteProjectsCallWaiters.append((count, continuation))
+        }
+    }
+    func waitForRemoteProjectsCompletion(_ count: Int) async {
+        guard remoteProjectsCompletionCount < count else { return }
+        await withCheckedContinuation { continuation in
+            remoteProjectsCompletionWaiters.append((count, continuation))
+        }
+    }
+    func waitForRemoteBranchesCall(_ count: Int) async {
+        guard remoteBranchesCallCount < count else { return }
+        await withCheckedContinuation { continuation in
+            remoteBranchesCallWaiters.append((count, continuation))
+        }
+    }
+    func waitForRemoteBranchesCompletion(_ count: Int) async {
+        guard remoteBranchesCompletionCount < count else { return }
+        await withCheckedContinuation { continuation in
+            remoteBranchesCompletionWaiters.append((count, continuation))
+        }
+    }
+    private func resumeWaiters(
+        _ waiters: inout [(count: Int, continuation: CheckedContinuation<Void, Never>)],
+        through count: Int
+    ) {
+        let ready = waiters.filter { $0.count <= count }
+        waiters.removeAll { $0.count <= count }
+        ready.forEach { $0.continuation.resume() }
     }
     func session(for id: String) -> ACPSession? { sessions[id] }
     func permissionPolicy(for id: String) -> ACPPermissionPolicy? { policies[id] }
@@ -371,6 +421,273 @@ struct RemoteSessionGatewayTests {
 
         #expect(provider.remoteAgentsCallCount == 1)
         #expect(sent == [.agentList(agents: provider.agents)])
+    }
+
+    @Test func listProjectsEmitsProjectList() async {
+        let provider = FakeSessionsProvider()
+        provider.projects = [RemoteProjectOption(id: "project-1", name: "Alas")]
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gw.handle(.listProjects)
+        for _ in 0..<10 where sent.isEmpty {
+            await Task.yield()
+        }
+
+        #expect(provider.remoteProjectsCallCount == 1)
+        #expect(sent == [.projectList(projects: provider.projects)])
+    }
+
+    @Test func listProjectsDropsSupersededPausedResponse() async {
+        let provider = FakeSessionsProvider()
+        let oldProjects = [RemoteProjectOption(id: "project-old", name: "Old")]
+        let newProjects = [RemoteProjectOption(id: "project-new", name: "New")]
+        provider.projects = oldProjects
+        provider.pauseRemoteProjects = true
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gw.handle(.listProjects)
+        await provider.waitForRemoteProjectsCall(1)
+
+        provider.pauseRemoteProjects = false
+        provider.projects = newProjects
+        await gw.handle(.listProjects)
+        await provider.waitForRemoteProjectsCompletion(1)
+
+        provider.projects = oldProjects
+        provider.resumeRemoteProjects()
+        await provider.waitForRemoteProjectsCompletion(2)
+
+        #expect(provider.remoteProjectsCallCount == 2)
+        #expect(sent == [.projectList(projects: newProjects)])
+    }
+
+    @Test func listBranchesEmitsRequestedProjectBranches() async {
+        let provider = FakeSessionsProvider()
+        provider.branchResults["project-1"] = .success(
+            branches: ["main", "feature/remote"],
+            preferredBase: "main"
+        )
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gw.handle(.listBranches(projectId: "project-1"))
+        for _ in 0..<10 where sent.isEmpty {
+            await Task.yield()
+        }
+
+        #expect(provider.remoteBranchRequests == ["project-1"])
+        #expect(sent == [
+            .branchList(
+                projectId: "project-1",
+                branches: ["main", "feature/remote"],
+                preferredBase: "main"
+            )
+        ])
+    }
+
+    @Test func listBranchesEmitsRequestedProjectFailure() async {
+        let provider = FakeSessionsProvider()
+        provider.branchResults["project-1"] = .failure("Repository is no longer available.")
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gw.handle(.listBranches(projectId: "project-1"))
+        for _ in 0..<10 where sent.isEmpty {
+            await Task.yield()
+        }
+
+        #expect(provider.remoteBranchRequests == ["project-1"])
+        #expect(sent == [
+            .branchListFailed(projectId: "project-1", message: "Repository is no longer available.")
+        ])
+    }
+
+    @Test func listBranchesDropsSupersededPausedResponse() async {
+        let provider = FakeSessionsProvider()
+        provider.branchResults["project-old"] = .success(
+            branches: ["main", "feature/old"],
+            preferredBase: "main"
+        )
+        provider.branchResults["project-new"] = .failure("Could not load branches.")
+        provider.pauseRemoteBranches = true
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gw.handle(.listBranches(projectId: "project-old"))
+        await provider.waitForRemoteBranchesCall(1)
+
+        provider.pauseRemoteBranches = false
+        await gw.handle(.listBranches(projectId: "project-new"))
+        await provider.waitForRemoteBranchesCompletion(1)
+
+        provider.resumeRemoteBranches(projectId: "project-old")
+        await provider.waitForRemoteBranchesCompletion(2)
+
+        #expect(provider.remoteBranchRequests == ["project-old", "project-new"])
+        #expect(sent == [
+            .branchListFailed(projectId: "project-new", message: "Could not load branches.")
+        ])
+    }
+
+    @Test func closeCancelsPendingProjectListRefresh() async {
+        let provider = FakeSessionsProvider()
+        provider.projects = [RemoteProjectOption(id: "project-1", name: "Alas")]
+        provider.pauseRemoteProjects = true
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gw.handle(.listProjects)
+        await provider.waitForRemoteProjectsCall(1)
+        gw.close()
+        provider.resumeRemoteProjects()
+        await provider.waitForRemoteProjectsCompletion(1)
+
+        #expect(provider.remoteProjectsCallCount == 1)
+        #expect(sent.isEmpty)
+    }
+
+    @Test func closeCancelsPendingBranchListRefresh() async {
+        let provider = FakeSessionsProvider()
+        provider.branchResults["project-1"] = .success(branches: ["main"], preferredBase: "main")
+        provider.pauseRemoteBranches = true
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gw.handle(.listBranches(projectId: "project-1"))
+        await provider.waitForRemoteBranchesCall(1)
+        gw.close()
+        provider.resumeRemoteBranches(projectId: "project-1")
+        await provider.waitForRemoteBranchesCompletion(1)
+
+        #expect(provider.remoteBranchesCallCount == 1)
+        #expect(sent.isEmpty)
+    }
+
+    @Test func createWorktreeSessionEmitsCreatedSessionAndRefreshesLists() async {
+        let provider = FakeSessionsProvider()
+        let summary = RemoteSessionSummary(
+            id: "session-1",
+            title: "Feature remote",
+            agentId: "claude",
+            status: "idle",
+            canDrive: true
+        )
+        provider.createWorktreeSessionResult = .success(summary)
+        provider.summaries = [summary]
+        provider.worktrees = [
+            RemoteWorktreeOption(
+                id: "worktree-1",
+                projectName: "Alas",
+                worktreeName: "Feature remote",
+                branch: "feature/remote",
+                path: "/tmp/alas-feature-remote",
+                metricsAvailable: false,
+                comparisonRef: nil,
+                commitCount: 0,
+                changedFileCount: 0,
+                addedLines: 0,
+                deletedLines: 0,
+                conflictCount: 0
+            )
+        ]
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gw.handle(.createWorktreeSession(
+            projectId: "project-1",
+            base: "main",
+            branch: "feature/remote",
+            agentId: "claude"
+        ))
+        for _ in 0..<10 {
+            if provider.sessionSummariesCallCount == 1, provider.remoteWorktreesCallCount == 1 { break }
+            await Task.yield()
+        }
+
+        #expect(provider.createWorktreeSessionRequests.count == 1)
+        #expect(provider.createWorktreeSessionRequests.first?.projectId == "project-1")
+        #expect(provider.createWorktreeSessionRequests.first?.base == "main")
+        #expect(provider.createWorktreeSessionRequests.first?.branch == "feature/remote")
+        #expect(provider.createWorktreeSessionRequests.first?.agentId == "claude")
+        #expect(sent.first == .worktreeSessionCreated(session: summary))
+        #expect(sent.contains(.sessionList(sessions: [summary])))
+        #expect(sent.contains(.worktreeList(worktrees: provider.worktrees)))
+        #expect(!sent.contains(.sessionCreated(session: summary)))
+    }
+
+    @Test func createWorktreeSessionEmitsWorktreeFailureWithoutRefreshingLists() async {
+        let provider = FakeSessionsProvider()
+        provider.createWorktreeSessionResult = .failure(
+            stage: .worktree,
+            message: "Could not create worktree.",
+            worktreeId: nil
+        )
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gw.handle(.createWorktreeSession(
+            projectId: "project-1",
+            base: "main",
+            branch: "feature/remote",
+            agentId: "claude"
+        ))
+
+        #expect(sent == [
+            .worktreeSessionCreationFailed(
+                stage: .worktree,
+                message: "Could not create worktree.",
+                worktreeId: nil
+            )
+        ])
+        #expect(provider.sessionSummariesCallCount == 0)
+        #expect(provider.remoteWorktreesCallCount == 0)
+    }
+
+    @Test func createWorktreeSessionEmitsSessionFailureAndRefreshesWorktrees() async {
+        let provider = FakeSessionsProvider()
+        provider.createWorktreeSessionResult = .failure(
+            stage: .session,
+            message: "Worktree created, but the session could not be created.",
+            worktreeId: "worktree-1"
+        )
+        provider.worktrees = [
+            RemoteWorktreeOption(
+                id: "worktree-1",
+                projectName: "Alas",
+                worktreeName: "Feature remote",
+                branch: "feature/remote",
+                path: "/tmp/alas-feature-remote",
+                metricsAvailable: false,
+                comparisonRef: nil,
+                commitCount: 0,
+                changedFileCount: 0,
+                addedLines: 0,
+                deletedLines: 0,
+                conflictCount: 0
+            )
+        ]
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gw.handle(.createWorktreeSession(
+            projectId: "project-1",
+            base: "main",
+            branch: "feature/remote",
+            agentId: "claude"
+        ))
+        for _ in 0..<10 where provider.remoteWorktreesCallCount == 0 {
+            await Task.yield()
+        }
+
+        #expect(sent.first == .worktreeSessionCreationFailed(
+            stage: .session,
+            message: "Worktree created, but the session could not be created.",
+            worktreeId: "worktree-1"
+        ))
+        #expect(sent.contains(.worktreeList(worktrees: provider.worktrees)))
+        #expect(provider.sessionSummariesCallCount == 0)
     }
 
     @Test func createSessionEmitsCreatedSession() async {
