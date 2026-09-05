@@ -1,5 +1,14 @@
 import Foundation
 
+/// What a keystroke should do about code fences. `.none` means the caller
+/// falls through to `PairedDelimiterEditing`, whose one- and two-backtick
+/// wrapping behaviour is unchanged by this feature.
+enum FenceEditAction: Equatable {
+    case openBlock
+    case wrapSelection
+    case none
+}
+
 /// A fenced code block found in markdown source.
 ///
 /// `openFenceRange` and `closeFenceRange` are content ranges — they exclude the
@@ -143,5 +152,87 @@ enum MarkdownFenceEditing {
             length -= 1
         }
         return NSRange(location: range.location, length: length)
+    }
+
+    static func resolve(
+        insertedText: String,
+        in text: String,
+        selectedRange: NSRange
+    ) -> FenceEditAction {
+        guard insertedText == "`" else { return .none }
+        let ns = text as NSString
+        guard isValid(selectedRange, in: ns) else { return .none }
+        // Exactly two backticks before the caret: keystroke one paired, two
+        // stepped over, and this is the third.
+        guard backtickRunLength(before: selectedRange.location, in: ns) == 2 else {
+            return .none
+        }
+        guard block(containing: selectedRange.location, in: text) == nil else {
+            return .none
+        }
+
+        if selectedRange.length == 0 {
+            return .openBlock
+        }
+        // Wrapping already ran twice, so the selection is flanked by exactly
+        // two backticks on each side by the time the third keystroke lands.
+        guard backtickRunLength(after: NSMaxRange(selectedRange), in: ns) == 2 else {
+            return .none
+        }
+        return .wrapSelection
+    }
+
+    /// The block whose interior contains `location`, if any. The interior
+    /// starts at the end of the opening fence's backticks — so the info-string
+    /// slot counts as inside — and ends at the start of the closing fence.
+    static func block(containing location: Int, in text: String) -> FencedBlock? {
+        blocks(in: text).first { block in
+            let lower = NSMaxRange(block.openFenceRange)
+            let upper = block.closeFenceRange?.location ?? NSMaxRange(block.outerRange)
+            return location >= lower && location <= upper
+        }
+    }
+
+    /// How many auto-paired backticks sit immediately after `location`, capped
+    /// at two.
+    ///
+    /// Whether a pending closer exists depends on what preceded the run.
+    /// From an empty line the keystrokes go pair → step-over, leaving `` `` ``
+    /// with nothing after the caret. After a word the first backtick resolves
+    /// `.native` (the preceding character is identifier-like) and the second
+    /// pairs, leaving a closer parked after the caret. Opening a block has to
+    /// swallow that closer or it survives as a stray backtick below the box.
+    static func trailingBacktickRun(at location: Int, in text: String) -> Int {
+        let ns = text as NSString
+        guard location >= 0, location <= ns.length else { return 0 }
+        return min(2, backtickRunLength(after: location, in: ns))
+    }
+
+    private static func backtickRunLength(before location: Int, in ns: NSString) -> Int {
+        var cursor = location
+        var count = 0
+        while cursor > 0, cursor <= ns.length, ns.character(at: cursor - 1) == backtick {
+            cursor -= 1
+            count += 1
+        }
+        return count
+    }
+
+    private static func backtickRunLength(after location: Int, in ns: NSString) -> Int {
+        var cursor = location
+        var count = 0
+        while cursor >= 0, cursor < ns.length, ns.character(at: cursor) == backtick {
+            cursor += 1
+            count += 1
+        }
+        return count
+    }
+
+    private static func isValid(_ range: NSRange, in ns: NSString) -> Bool {
+        range.location != NSNotFound
+            && range.location >= 0
+            && range.length >= 0
+            && range.location <= ns.length
+            && range.length <= ns.length - range.location
     }
 }
