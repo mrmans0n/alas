@@ -180,6 +180,140 @@ struct PairedDelimiterFenceTests {
         #expect(MarkdownFenceEditing.blocks(in: textView.string).count == 1)
     }
 
+    @Test("a selection that starts inside a block and ends below it is caught too")
+    func selectionLeavingABlockIsSwallowed() {
+        let textView = makeTextView()
+        // Mirror image of the "starts outside, ends inside" case: the
+        // selection runs from the middle of the body, through the closing
+        // fence, down to a bare "``" line under the block. Wrapping it
+        // completes that line into a fence, closing the block early and
+        // sweeping the trailing text into a second, unclosed one.
+        textView.string = "```\nxx``\n```\n``\nZ"
+        textView.setSelectedRange(NSRange(location: 8, length: 5))
+        type("`", into: textView)
+
+        #expect(textView.string == "```\nxx``\n```\n``\nZ")
+        #expect(textView.selectedRange() == NSRange(location: 8, length: 5))
+        #expect(MarkdownFenceEditing.blocks(in: textView.string).count == 1)
+    }
+
+    @Test("a lone body backtick is caught, because auto-pairing adds two more")
+    func caretRunOfOneIsSwallowed() {
+        let textView = makeTextView()
+        // Only one backtick precedes the caret, but `.insertPair` writes two
+        // characters, so the line still lands on a full three-wide fence.
+        textView.string = "```\n`\n```"
+        textView.setSelectedRange(NSRange(location: 5, length: 0))
+        type("`", into: textView)
+
+        #expect(textView.string == "```\n`\n```")
+        #expect(textView.selectedRange() == NSRange(location: 5, length: 0))
+        #expect(MarkdownFenceEditing.blocks(in: textView.string).count == 1)
+    }
+
+    @Test("a three-backtick body line inside a four-wide block is caught")
+    func caretRunOfThreeIsSwallowedInsideAWiderFence() {
+        let textView = makeTextView()
+        // The documenting-a-fence shape: a four-wide block whose body is a
+        // three-backtick line. Auto-pairing would widen it to five, which
+        // closes the four-wide opener early.
+        textView.string = "````\n```\n````"
+        textView.setSelectedRange(NSRange(location: 8, length: 0))
+        type("`", into: textView)
+
+        #expect(textView.string == "````\n```\n````")
+        #expect(textView.selectedRange() == NSRange(location: 8, length: 0))
+        #expect(MarkdownFenceEditing.blocks(in: textView.string).count == 1)
+    }
+
+    @Test("a selection flanked by a three-backtick line inside a four-wide block is caught")
+    func selectionFlankOfThreeIsSwallowedInsideAWiderFence() {
+        let textView = makeTextView()
+        // Same width collision from the selection path: wrapping takes the
+        // body's three-backtick line to four, matching the opener.
+        textView.string = "````\n```\nabc\n````"
+        textView.setSelectedRange(NSRange(location: 8, length: 4))
+        type("`", into: textView)
+
+        #expect(textView.string == "````\n```\nabc\n````")
+        #expect(textView.selectedRange() == NSRange(location: 8, length: 4))
+        #expect(MarkdownFenceEditing.blocks(in: textView.string).count == 1)
+    }
+
+    @Test("a body line that stays narrower than its opener is left alone")
+    func runNarrowerThanTheOpenerIsNotSwallowed() {
+        let textView = makeTextView()
+        // Four backticks inside a five-wide block cannot close it, so this
+        // keystroke is harmless and has to land.
+        textView.string = "`````\n``\n`````"
+        textView.setSelectedRange(NSRange(location: 8, length: 0))
+        type("`", into: textView)
+
+        #expect(textView.string == "`````\n````\n`````")
+        #expect(textView.selectedRange() == NSRange(location: 9, length: 0))
+        #expect(MarkdownFenceEditing.blocks(in: textView.string).count == 1)
+    }
+
+    @Test("a body line that reaches its opener's width is swallowed")
+    func runMatchingTheOpenerIsSwallowed() {
+        let textView = makeTextView()
+        // One backtick further along than the case above: the pair takes the
+        // run from three to five, exactly the opener's width, so it closes.
+        textView.string = "`````\n```\n`````"
+        textView.setSelectedRange(NSRange(location: 9, length: 0))
+        type("`", into: textView)
+
+        #expect(textView.string == "`````\n```\n`````")
+        #expect(textView.selectedRange() == NSRange(location: 9, length: 0))
+        #expect(MarkdownFenceEditing.blocks(in: textView.string).count == 1)
+    }
+
+    @Test("a selection spanning two different blocks is caught")
+    func selectionAcrossTwoBlocksIsSwallowed() {
+        let textView = makeTextView()
+        // The two flanks sit in different blocks — the left in the first, the
+        // right in the second — so no single enclosing block explains the
+        // damage: wrapping turns two blocks into three.
+        textView.string = "```\n``\n```\n```\n``\n```"
+        textView.setSelectedRange(NSRange(location: 6, length: 9))
+        type("`", into: textView)
+
+        #expect(textView.string == "```\n``\n```\n```\n``\n```")
+        #expect(textView.selectedRange() == NSRange(location: 6, length: 9))
+        #expect(MarkdownFenceEditing.blocks(in: textView.string).count == 2)
+    }
+
+    @Test("a run that continues into the selection is caught")
+    func runMergingIntoTheSelectionIsSwallowed() {
+        let textView = makeTextView()
+        // The body line is "``" and the selection starts between the two, so
+        // the wrap's opening backtick joins one on each side: a one-backtick
+        // left flank still ends up a three-wide bare fence line. Counting
+        // only the backticks before the selection sees two and stops.
+        textView.string = "```\n``\nB\n```"
+        textView.setSelectedRange(NSRange(location: 5, length: 3))
+        type("`", into: textView)
+
+        #expect(textView.string == "```\n``\nB\n```")
+        #expect(textView.selectedRange() == NSRange(location: 5, length: 3))
+        #expect(MarkdownFenceEditing.blocks(in: textView.string).count == 1)
+    }
+
+    @Test("a run that continues out of the selection is caught")
+    func runMergingOutOfTheSelectionIsSwallowed() {
+        let textView = makeTextView()
+        // Mirror of the above: the selection ends on the first of the body
+        // line's two backticks, so the wrap's closing backtick lands between
+        // them and the line still completes to three.
+        textView.string = "```\nB\n``\n```"
+        textView.setSelectedRange(NSRange(location: 4, length: 3))
+        type("`", into: textView)
+
+        #expect(textView.string == "```\nB\n``\n```")
+        #expect(textView.selectedRange() == NSRange(location: 4, length: 3))
+        #expect(MarkdownFenceEditing.blocks(in: textView.string).count == 1)
+    }
+
     @Test("expansion is a single undo group")
     func singleUndoGroup() throws {
         let textView = makeTextView()
