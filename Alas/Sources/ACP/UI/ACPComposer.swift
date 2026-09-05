@@ -28,6 +28,10 @@ struct ACPInputField: NSViewRepresentable {
     let onDraftChange: (ACPComposerDraft) -> Void
     /// Clears the persisted draft after an accepted submission.
     let onDraftClear: () -> Void
+    /// Stops the composer's dictation session (if one is active) without
+    /// touching committed text — called when Esc is pressed or the
+    /// composer is torn down (tab switch, window close).
+    let onStopDictation: () -> Void
     /// Returns `true` when the host accepted the submission (and the
     /// textview should be cleared) or `false` to keep the draft in
     /// place (e.g. session not ready, prompt already in flight).
@@ -67,6 +71,14 @@ struct ACPInputField: NSViewRepresentable {
         actions.presentImagePicker = { [weak coord] in
             guard let coord, let tv = coord.textView as? ACPNSTextView else { return }
             tv.presentImagePicker()
+        }
+        actions.applyDictationTranscript = { [weak coord] text, isFinal in
+            guard let coord, let tv = coord.textView as? ACPNSTextView else { return }
+            tv.replaceDictationRegion(text, isFinal: isFinal)
+        }
+        actions.cancelDictationRegion = { [weak coord] in
+            guard let coord, let tv = coord.textView as? ACPNSTextView else { return }
+            tv.cancelDictationRegion()
         }
         actions.insertQuote = { [weak coord] message in
             guard let coord, let textView = coord.textView else { return }
@@ -121,6 +133,7 @@ struct ACPInputField: NSViewRepresentable {
     static func dismantleNSView(_ nsView: NSScrollView, coordinator: Coordinator) {
         coordinator.isFocused.wrappedValue = false
         coordinator.flushPendingRestyleNow()
+        coordinator.onStopDictation()
         if let tv = nsView.documentView as? ACPNSTextView {
             coordinator.dropRouter.detach(tv)
             tv.dismissFloatingPanels()
@@ -153,6 +166,7 @@ struct ACPInputField: NSViewRepresentable {
             typography: typography,
             onDraftChange: onDraftChange,
             onDraftClear: onDraftClear,
+            onStopDictation: onStopDictation,
             onSubmit: onSubmit,
             filesProvider: filesProvider,
             dropRouter: dropRouter
@@ -176,6 +190,7 @@ struct ACPInputField: NSViewRepresentable {
         var typography: ACPChatTypography
         let onDraftChange: (ACPComposerDraft) -> Void
         let onDraftClear: () -> Void
+        let onStopDictation: () -> Void
         let onSubmit: ACPComposerSubmitHandler
         let filesProvider: (@Sendable () async -> [URL])?
         let dropRouter: ACPComposerDropRouter
@@ -220,6 +235,7 @@ struct ACPInputField: NSViewRepresentable {
             typography: ACPChatTypography = .default,
             onDraftChange: @escaping (ACPComposerDraft) -> Void,
             onDraftClear: @escaping () -> Void,
+            onStopDictation: @escaping () -> Void = {},
             onSubmit: @escaping ACPComposerSubmitHandler,
             filesProvider: (@Sendable () async -> [URL])? = nil,
             dropRouter: ACPComposerDropRouter = ACPComposerDropRouter()
@@ -233,6 +249,7 @@ struct ACPInputField: NSViewRepresentable {
             self.lastSyncedDraft = initialDraft
             self.onDraftChange = onDraftChange
             self.onDraftClear = onDraftClear
+            self.onStopDictation = onStopDictation
             self.onSubmit = onSubmit
             self.filesProvider = filesProvider
             self.dropRouter = dropRouter
@@ -255,11 +272,13 @@ struct ACPInputField: NSViewRepresentable {
             // routes Esc through `cancelOperation:` after the input
             // method system gets a crack at it. If the panel is still
             // open here, close it and swallow the event.
-            if selector == #selector(NSResponder.cancelOperation(_:)),
-               let tv = textView as? ACPNSTextView,
-               tv.isSlashPanelOpen {
-                tv.dismissSlashPanel()
-                return true
+            if selector == #selector(NSResponder.cancelOperation(_:)) {
+                // Harmless no-op when dictation isn't active.
+                onStopDictation()
+                if let tv = textView as? ACPNSTextView, tv.isSlashPanelOpen {
+                    tv.dismissSlashPanel()
+                    return true
+                }
             }
             // ⌥⏎ steers. AppKit's standard key binding routes Option-Return
             // to `insertNewlineIgnoringFieldEditor:`, NOT `insertNewline:`,
@@ -656,6 +675,25 @@ final class ACPNSTextView: PairedDelimiterTextView {
         super.didChangeText()
         // Trigger placeholder redraw when text becomes (non-)empty.
         needsDisplay = true
+        // A manual edit while a dictation span is open (typing elsewhere,
+        // pasting) leaves the underlying speech session mid-utterance —
+        // it keeps analyzing and will emit more corrections for that same
+        // utterance, unaware the user just took over. Untracking the span
+        // alone stops those corrections from overwriting the wrong
+        // characters, but not from landing at all: the analyzer's next
+        // "corrected" hypothesis would still be inserted as a fresh span,
+        // duplicating whatever partial text it already committed. Stopping
+        // dictation outright is what actually prevents that — the partial
+        // transcript already applied stays as ordinary editable text, and
+        // nothing more arrives to duplicate it.
+        //
+        // `replaceDictationRegion` sets `isApplyingDictationUpdate` around
+        // its own edit so this doesn't fire in response to dictation's own
+        // writes.
+        if dictationRange != nil, !isApplyingDictationUpdate {
+            dictationRange = nil
+            coordinator?.onStopDictation()
+        }
     }
 
     /// A restored draft can already contain an active "/" token before
@@ -708,6 +746,11 @@ final class ACPNSTextView: PairedDelimiterTextView {
                     return
                 }
             case 53:                                    // escape
+                // Harmless no-op when dictation isn't active. Without this,
+                // Esc while the slash panel is open returns here before
+                // `doCommandBy:`'s cancelOperation handling ever runs,
+                // silently skipping the same stop that bare Esc performs.
+                coordinator?.onStopDictation()
                 closeSlashPanel()
                 return
             default: break
@@ -1087,6 +1130,58 @@ final class ACPNSTextView: PairedDelimiterTextView {
         }
         typingAttributes = attrs
         return true
+    }
+
+    /// Tracks the not-yet-finalized dictation span so each subsequent
+    /// volatile transcript update can replace it in place instead of
+    /// appending alongside it. `nil` once a final result commits the span
+    /// (the next volatile update then starts a fresh span after the
+    /// committed text) or once dictation stops.
+    private var dictationRange: NSRange?
+    /// Set around `replaceDictationRegion`'s own edit so `didChangeText()`
+    /// doesn't mistake it for the manual edit that invalidates the span.
+    private var isApplyingDictationUpdate = false
+
+    /// Inserts or replaces the live dictation transcript. Volatile
+    /// updates (`isFinal == false`) replace the previous volatile span in
+    /// place so mid-utterance corrections don't pile up as duplicate
+    /// text. A final update commits the span: the text stays, but the
+    /// next volatile update starts a new span appended after it rather
+    /// than overwriting it.
+    @discardableResult
+    func replaceDictationRegion(_ text: String, isFinal: Bool) -> Bool {
+        guard let textStorage else { return false }
+        let target: NSRange
+        if let existing = dictationRange {
+            target = NSRange(
+                location: min(existing.location, textStorage.length),
+                length: min(existing.length, max(0, textStorage.length - existing.location))
+            )
+        } else {
+            target = selectedRange()
+        }
+        let attrs = baseTypingAttributes
+        typingAttributes = attrs
+        isApplyingDictationUpdate = true
+        performNativeTextInsertion {
+            insertText(text, replacementRange: target)
+        }
+        isApplyingDictationUpdate = false
+        typingAttributes = attrs
+        let inserted = NSRange(location: target.location, length: (text as NSString).length)
+        if isFinal {
+            dictationRange = nil
+            setSelectedRange(NSRange(location: NSMaxRange(inserted), length: 0))
+        } else {
+            dictationRange = inserted
+        }
+        return true
+    }
+
+    /// Stops tracking the live dictation span without altering the
+    /// committed text — used when dictation is toggled off mid-utterance.
+    func cancelDictationRegion() {
+        dictationRange = nil
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {

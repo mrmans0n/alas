@@ -23,6 +23,13 @@ final class ACPComposerActions: ObservableObject {
     /// Published by the coordinator; opens an image picker and inserts the
     /// chosen files as chips.
     var presentImagePicker: (() -> Void)?
+    /// Published by the coordinator; applies a live dictation transcript
+    /// update to the composer's tracked dictation span.
+    var applyDictationTranscript: ((_ text: String, _ isFinal: Bool) -> Void)?
+    /// Published by the coordinator; stops tracking the dictation span
+    /// (used when dictation is toggled off) without altering already
+    /// committed text.
+    var cancelDictationRegion: (() -> Void)?
     /// Convenience used by call sites that just want default submit.
     func submit() { submitWithIntent?(.auto) }
     func quote(_ message: String) { insertQuote?(message) }

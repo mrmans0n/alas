@@ -16,6 +16,7 @@ struct ChatPane: View {
         static let fontSize = "Font size"
         static let defaultLaunchSurface = "Default launch surface"
         static let sendOnEnter = "While busy, ⏎ queues; ⌥⏎ steers"
+        static let dictationLanguage = "Dictation language"
         static let confirmCloseChatTabs = "Confirm before closing chat tabs"
         static let autoRun = "⚡ Auto-run"
     }
@@ -39,7 +40,13 @@ struct ChatPane: View {
         RowLabels.sendOnEnter,
         RowLabels.confirmCloseChatTabs,
         RowLabels.autoRun,
+        RowLabels.dictationLanguage,
     ]
+
+    /// Languages the dictation engine can transcribe. Loaded asynchronously
+    /// because the Speech framework resolves them off-disk; stays empty
+    /// below macOS 26, which also hides the row.
+    @State private var dictationLocales: [String] = []
 
     var body: some View {
         ScrollView {
@@ -90,6 +97,14 @@ struct ChatPane: View {
                             }
                         ))
                     }
+                    if !dictationLocales.isEmpty {
+                        SettingsRow(
+                            name: RowLabels.dictationLanguage,
+                            desc: "Language the 🎤 button transcribes. Automatic follows your app and system languages. Picking one that isn't downloaded yet fetches it the first time you dictate."
+                        ) {
+                            dictationLanguagePicker
+                        }
+                    }
                 }
 
                 SettingsGroup(title: GroupTitles.sessions) {
@@ -117,6 +132,30 @@ struct ChatPane: View {
             }
             .padding(.horizontal, 32).padding(.vertical, 24)
         }
+        .task {
+            dictationLocales = ACPDictationLocaleFormatter.sortedByDisplayName(
+                await ACPSpeechDictationEngine.supportedLocaleIdentifiers()
+            )
+        }
+    }
+
+    private var dictationLanguagePicker: some View {
+        Picker("", selection: Binding(
+            get: { state.config.harness.acpDictationLocale },
+            set: { newValue in
+                state.config.harness.acpDictationLocale = newValue
+                state.saveConfig()
+            }
+        )) {
+            Text(ACPDictationLocaleFormatter.displayName(for: ACPDictationLocaleFormatter.automaticIdentifier))
+                .tag(ACPDictationLocaleFormatter.automaticIdentifier)
+            Divider()
+            ForEach(dictationLocales, id: \.self) { identifier in
+                Text(ACPDictationLocaleFormatter.displayName(for: identifier)).tag(identifier)
+            }
+        }
+        .labelsHidden()
+        .frame(width: 220)
     }
 
     private var defaultLauncherModePicker: some View {

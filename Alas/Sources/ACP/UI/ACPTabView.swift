@@ -500,6 +500,11 @@ private struct ACPSessionView: View {
             worktreeRoot: worktree.path,
             agentLookup: { state.agent(id: $0) },
             sendOnEnter: state.config.harness.acpSendOnEnter,
+            dictationLocale: state.config.harness.acpDictationLocale,
+            onSelectDictationLocale: { [state] identifier in
+                state.config.harness.acpDictationLocale = identifier
+                state.saveConfig()
+            },
             focusRequest: composerFocusRequest,
             dropRouter: composerDropRouter,
             placement: placement,
