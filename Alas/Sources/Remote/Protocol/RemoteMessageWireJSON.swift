@@ -61,6 +61,30 @@ struct RemoteAgentOption: Codable, Equatable, Sendable {
     let isDefault: Bool
 }
 
+struct RemoteProjectOption: Codable, Equatable, Sendable {
+    let id: String
+    let name: String
+}
+
+enum RemoteWorktreeSessionCreationStage: String, Codable, Equatable, Sendable {
+    case worktree
+    case session
+}
+
+enum RemoteBranchListResult: Equatable, Sendable {
+    case success(branches: [String], preferredBase: String)
+    case failure(String)
+}
+
+enum RemoteCreateWorktreeSessionResult: Equatable, Sendable {
+    case success(RemoteSessionSummary)
+    case failure(
+        stage: RemoteWorktreeSessionCreationStage,
+        message: String,
+        worktreeId: String?
+    )
+}
+
 enum RemoteCreateSessionResult: Equatable, Sendable {
     case success(RemoteSessionSummary)
     case failure(String)
