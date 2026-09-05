@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import Alas
 
@@ -26,6 +27,23 @@ struct ThemeStoreTests {
         store.setMatchSystem(true)
         store.setMatchSystem(false)
         #expect(store.current.id == "light")
+    }
+
+    @Test func creatingUsesInitialIdWhenLoadable() {
+        let store = ThemeStore.creating(initialId: "light")
+        #expect(store.current.id == "light")
+    }
+
+    @Test func creatingFallsBackToBundledThemeWhenInitialIdMissing() {
+        let store = ThemeStore.creating(initialId: "nope")
+        #expect(store.current.id == "cool-slate")
+    }
+
+    @Test func creatingNeverThrowsWhenNothingLoads() {
+        let store = ThemeStore.creating(initialId: "nope") { _ in
+            throw NSError(domain: "Theme", code: 1)
+        }
+        #expect(store.current.id == "fallback")
     }
 
     @Test func failedActivationPreservesUserPick() throws {

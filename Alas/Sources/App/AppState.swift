@@ -629,7 +629,10 @@ final class AppState {
             _ = try? store.write(spacesManager.file, to: Paths.spacesFile)
         }
         self.spacesManager = spacesManager
-        let themeStore = (try? ThemeStore(initialId: config.themeId)) ?? (try! ThemeStore())
+        // Non-throwing on purpose: theme resources can be missing (partial
+        // build, test host, corrupted install) and startup must never trap
+        // in a `try!`. Falls back persisted id → bundled ids → fallback.
+        let themeStore = ThemeStore.creating(initialId: config.themeId)
         // Apply the persisted accent override so the picker's selection
         // survives relaunches; otherwise launches always show the theme's
         // built-in accent until the user re-clicks the picker.

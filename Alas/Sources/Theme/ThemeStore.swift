@@ -26,20 +26,54 @@ final class ThemeStore {
     init(initialId: String = "cool-slate") throws {
         self.userPickedId = initialId
         self.current = try Theme.loadBundled(id: initialId)
-        // `AppleInterfaceThemeChangedNotification` is delivered on the
-        // *distributed* notification center (macOS broadcasts it across
-        // process boundaries). Observing the in-process default center
-        // would silently never fire.
+        registerAppearanceObserver()
+    }
+
+    /// Non-throwing factory for startup paths. Resolves the requested id,
+    /// then any bundled id, then a guaranteed in-code fallback theme — a
+    /// missing or unloadable bundle resource must never trap the app at
+    /// launch (see AppState.init).
+    static func creating(
+        initialId: String,
+        loader: (String) throws -> Theme = Theme.loadBundled(id:)
+    ) -> ThemeStore {
+        if let theme = try? loader(initialId) {
+            return ThemeStore(resolvedTheme: theme, initialId: initialId)
+        }
+        for id in Theme.bundledIds {
+            if let theme = try? loader(id) {
+                return ThemeStore(resolvedTheme: theme, initialId: id)
+            }
+        }
+        return ThemeStore(fallbackWithCurrent: .fallback)
+    }
+
+    deinit {
+        DistributedNotificationCenter.default().removeObserver(self)
+    }
+
+    private init(resolvedTheme: Theme, initialId: String) {
+        self.userPickedId = initialId
+        self.current = resolvedTheme
+        registerAppearanceObserver()
+    }
+
+    private init(fallbackWithCurrent theme: Theme) {
+        self.userPickedId = theme.id
+        self.current = theme
+    }
+
+    /// `AppleInterfaceThemeChangedNotification` is delivered on the
+    /// *distributed* notification center (macOS broadcasts it across
+    /// process boundaries). Observing the in-process default center
+    /// would silently never fire.
+    private func registerAppearanceObserver() {
         DistributedNotificationCenter.default().addObserver(
             self,
             selector: #selector(systemAppearanceDidChange),
             name: NSNotification.Name("AppleInterfaceThemeChangedNotification"),
             object: nil
         )
-    }
-
-    deinit {
-        DistributedNotificationCenter.default().removeObserver(self)
     }
 
     func activate(id: String) throws {
