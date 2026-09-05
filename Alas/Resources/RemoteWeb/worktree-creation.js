@@ -122,7 +122,13 @@ function createFlow(sendCommand) {
     return state.error ? { error: null } : {};
   }
 
-  function loadBranches(projectId) {
+  function clearMutableError() {
+    return state.outcomeUnknown ? {} : clearError();
+  }
+
+  function loadBranches(projectId, options = {}) {
+    const preserveBase = options.preserveBase === true;
+    const preserveError = options.preserveError === true || state.outcomeUnknown;
     const selectedProjectId = hasText(projectId) ? projectId : null;
     if (!selectedProjectId) {
       return update({
@@ -133,7 +139,7 @@ function createFlow(sendCommand) {
         preferredBase: "",
         branchError: "",
         base: "",
-        ...clearError(),
+        ...(preserveError ? {} : clearError()),
       });
     }
 
@@ -146,9 +152,9 @@ function createFlow(sendCommand) {
       branches: [],
       preferredBase: "",
       branchError: "",
-      base: "",
+      base: preserveBase ? state.base : "",
       result: null,
-      ...clearError(),
+      ...(preserveError ? {} : clearError()),
     });
     if (state.projectId === selectedProjectId &&
         state.branchesLoading &&
@@ -163,10 +169,21 @@ function createFlow(sendCommand) {
     return loadBranches(projectId);
   }
 
-  function loadProjects() {
-    const next = update({ projectsLoading: true, ...clearError() });
+  function loadProjects(options = {}) {
+    const preserveError = options.preserveError === true || state.outcomeUnknown;
+    const next = update({ projectsLoading: true, ...(preserveError ? {} : clearError()) });
     emit({ type: "listProjects" });
     return next;
+  }
+
+  function reloadCatalog() {
+    const selectedProjectId = state.projectId;
+    const preserveError = state.outcomeUnknown;
+    loadProjects({ preserveError });
+    if (selectedProjectId && state.projectId === selectedProjectId) {
+      return loadBranches(selectedProjectId, { preserveBase: true, preserveError });
+    }
+    return snapshot();
   }
 
   function retryBranches() {
@@ -174,15 +191,27 @@ function createFlow(sendCommand) {
   }
 
   function setBase(base) {
-    return update({ base: stringValue(base), ...clearError() });
+    return update({ base: stringValue(base), ...clearMutableError() });
   }
 
   function setBranch(branch) {
-    return update({ branch: stringValue(branch), ...clearError() });
+    return update({ branch: stringValue(branch), ...clearMutableError() });
   }
 
   function setAgent(agentId) {
-    return update({ agentId: hasText(agentId) ? agentId : null, ...clearError() });
+    return update({ agentId: hasText(agentId) ? agentId : null, ...clearMutableError() });
+  }
+
+  function reconcileAgents(agents) {
+    if (!state.agentId) return false;
+    const availableAgentIds = new Set(
+      Array.isArray(agents)
+        ? agents.filter((agent) => agent && hasText(agent.id)).map((agent) => agent.id)
+        : []
+    );
+    if (availableAgentIds.has(state.agentId)) return false;
+    update({ agentId: null });
+    return true;
   }
 
   function worktreeValidationError() {
@@ -197,6 +226,10 @@ function createFlow(sendCommand) {
     if (worktreeError) return worktreeError;
     if (!hasText(state.agentId)) return "Choose an agent.";
     return "";
+  }
+
+  function canAdvance() {
+    return !state.submitting && !state.outcomeUnknown && !worktreeValidationError();
   }
 
   function startNewWorktree() {
@@ -220,7 +253,7 @@ function createFlow(sendCommand) {
   }
 
   function back() {
-    if (state.submitting) return false;
+    if (state.submitting || state.outcomeUnknown) return false;
     if (state.step === "agent") {
       update({ step: "worktree", error: null });
       return true;
@@ -282,7 +315,7 @@ function createFlow(sendCommand) {
       ? message.branches.filter((branch) => hasText(branch))
       : [];
     const preferredBase = branches.includes(message.preferredBase) ? message.preferredBase : "";
-    const base = preferredBase || (branches.includes(state.base) ? state.base : branches[0] || "");
+    const base = branches.includes(state.base) ? state.base : preferredBase || branches[0] || "";
     update({
       branchesLoading: false,
       branchStatus: "loaded",
@@ -290,7 +323,7 @@ function createFlow(sendCommand) {
       preferredBase,
       branchError: "",
       base,
-      ...clearError(),
+      ...clearMutableError(),
     });
     return true;
   }
@@ -300,6 +333,9 @@ function createFlow(sendCommand) {
 
     const branchError = stringValue(message.message);
 
+    const errorChanges = state.outcomeUnknown
+      ? {}
+      : { error: { stage: "branches", message: branchError, worktreeId: null } };
     update({
       branchesLoading: false,
       branchStatus: "failed",
@@ -307,7 +343,7 @@ function createFlow(sendCommand) {
       preferredBase: "",
       branchError,
       base: "",
-      error: { stage: "branches", message: branchError, worktreeId: null },
+      ...errorChanges,
     });
     return true;
   }
@@ -374,21 +410,30 @@ function createFlow(sendCommand) {
     return true;
   }
 
+  function reset() {
+    if (state.outcomeUnknown && !canRetry(state)) return snapshot();
+    return publish(initialState());
+  }
+
   return {
     loadProjects,
+    reloadCatalog,
     selectProject,
     retryBranches,
     setBase,
     setBranch,
     setAgent,
+    reconcileAgents,
     startNewWorktree,
     next,
     back,
+    canAdvance,
     canSubmit: () => canSubmit(state),
     canRetry: () => canRetry(state),
     submit,
     disconnect,
     markRecoveryListLoaded,
+    reset,
     receive,
     snapshot,
     subscribe,

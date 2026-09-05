@@ -49,13 +49,13 @@ struct RemoteWebAssetTests {
         let sw = try asset("sw.js")
 
         #expect(html.contains(#"/session-ordering.js?v=1"#))
-        #expect(html.range(of: #"/session-ordering.js?v=1"#)!.lowerBound < html.range(of: #"/app.js?v=62"#)!.lowerBound)
-        #expect(html.contains(#"/app.js?v=62"#))
-        #expect(html.contains(#"/style.css?v=40"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v40";"#))
+        #expect(html.range(of: #"/session-ordering.js?v=1"#)!.lowerBound < html.range(of: #"/app.js?v=63"#)!.lowerBound)
+        #expect(html.contains(#"/app.js?v=63"#))
+        #expect(html.contains(#"/style.css?v=41"#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v41";"#))
         #expect(sw.contains(#""/session-ordering.js?v=1""#))
-        #expect(sw.contains(#""/app.js?v=62""#))
-        #expect(sw.contains(#""/style.css?v=40""#))
+        #expect(sw.contains(#""/app.js?v=63""#))
+        #expect(sw.contains(#""/style.css?v=41""#))
     }
 
     @Test func remoteWebToolRowsAvoidNativeButtonRenderingOnMobileSafari() throws {
@@ -68,11 +68,11 @@ struct RemoteWebAssetTests {
         #expect(app.contains("toggle.tabIndex = 0"))
         #expect(app.contains("function handleCardToggleKeydown"))
         #expect(!app.contains(#"const button = el("button", "tool-toggle")"#))
-        #expect(html.contains(#"/app.js?v=62"#))
-        #expect(html.contains(#"/style.css?v=40"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v40";"#))
-        #expect(sw.contains(#""/app.js?v=62""#))
-        #expect(sw.contains(#""/style.css?v=40""#))
+        #expect(html.contains(#"/app.js?v=63"#))
+        #expect(html.contains(#"/style.css?v=41"#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v41";"#))
+        #expect(sw.contains(#""/app.js?v=63""#))
+        #expect(sw.contains(#""/style.css?v=41""#))
     }
 
     @Test func remoteBareURLLinkifierPreservesIndentedCodeBlocks() throws {
@@ -119,8 +119,8 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".session-section"))
         #expect(css.contains(".session-section-title"))
         #expect(css.contains(".session-section-list"))
-        #expect(html.contains("/app.js?v=62"))
-        #expect(html.contains("/style.css?v=40"))
+        #expect(html.contains("/app.js?v=63"))
+        #expect(html.contains("/style.css?v=41"))
     }
 
     @Test func remoteWebExposesSessionRenameControls() throws {
@@ -145,8 +145,8 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".session-open"))
         #expect(css.contains("#detail-title"))
         #expect(css.contains(".sheet-input"))
-        #expect(sw.contains(#""/app.js?v=62""#))
-        #expect(sw.contains(#""/style.css?v=40""#))
+        #expect(sw.contains(#""/app.js?v=63""#))
+        #expect(sw.contains(#""/style.css?v=41""#))
     }
 
     @Test func configSheetScrollsWhenModelListOverflows() throws {
@@ -187,6 +187,46 @@ struct RemoteWebAssetTests {
         #expect(js.contains(#"case "agentList""#))
         #expect(js.contains(#"case "sessionCreated""#))
         #expect(js.contains(#"case "createSessionFailed""#))
+    }
+
+    @Test func remoteWebIntegratesWorktreeCreationController() throws {
+        let html = try asset("index.html")
+        let js = try asset("app.js")
+        let creation = try asset("worktree-creation.js")
+        let sw = try asset("sw.js")
+
+        #expect(html.contains(#"/worktree-creation.js?v=1"#))
+        #expect(html.range(of: #"/worktree-creation.js?v=1"#)!.lowerBound < html.range(of: #"/app.js?v=63"#)!.lowerBound)
+        #expect(js.contains("const worktreeCreation = RemoteWorktreeCreation.createFlow(send);"))
+        #expect(js.contains(#"case "projectList":"#))
+        #expect(js.contains(#"case "branchList":"#))
+        #expect(js.contains(#"case "branchListFailed":"#))
+        #expect(js.contains(#"case "worktreeSessionCreated":"#))
+        #expect(js.contains(#"case "worktreeSessionCreationFailed":"#))
+        #expect(js.contains("worktreeCreation.disconnect();"))
+        #expect(js.contains(#"worktreeCreation.markRecoveryListLoaded("sessions");"#))
+        #expect(js.contains(#"worktreeCreation.markRecoveryListLoaded("worktrees");"#))
+        #expect(js.contains("function reloadNewWorktreeCatalog()"))
+        #expect(js.contains("worktreeCreation.reloadCatalog();"))
+        #expect(js.contains("reloadNewWorktreeCatalog();"))
+        #expect(js.contains("worktreeCreation.reconcileAgents(createState.agents);"))
+        #expect(!js.contains("`Worktree created. ${creationError.message}`"))
+        #expect(creation.contains(#"type: "listProjects""#))
+        #expect(creation.contains(#"type: "createWorktreeSession""#))
+        #expect(creation.contains("function reloadCatalog()"))
+        #expect(creation.contains("function reconcileAgents(agents)"))
+        #expect(sw.contains(#""/worktree-creation.js?v=1""#))
+    }
+
+    @Test func remoteWebScopesBranchFailuresToTheBaseBranchControl() throws {
+        let html = try asset("index.html")
+        let js = try asset("app.js")
+
+        #expect(html.contains(#"id="create-error" class="sheet-error hidden" role="alert" aria-live="assertive""#))
+        #expect(html.contains(#"id="branch-status" class="form-guidance" role="status""#))
+        #expect(html.contains(#"id="retry-branches""#))
+        #expect(js.contains("creationState.error && creationState.error.stage !== \"branches\""))
+        #expect(js.contains("worktreeCreation.canRetry()"))
     }
 
     @Test func remoteWebClearsSessionSheetsWhenOpeningSession() throws {
@@ -294,9 +334,9 @@ struct RemoteWebAssetTests {
     @Test func incrementalTranscriptBustsServiceWorkerAssetCache() throws {
         let sw = try asset("sw.js")
         let html = try asset("index.html")
-        #expect(sw.contains("alas-remote-shell-v40"))
-        #expect(sw.contains("/app.js?v=62"))
-        #expect(html.contains("app.js?v=62"))
+        #expect(sw.contains("alas-remote-shell-v41"))
+        #expect(sw.contains("/app.js?v=63"))
+        #expect(html.contains("app.js?v=63"))
     }
 
     // Regression (codex review, PR #775): applyPage used to clear the
@@ -459,11 +499,11 @@ struct RemoteWebAssetTests {
         let html = try asset("index.html")
         let sw = try asset("sw.js")
 
-        #expect(html.contains(#"/app.js?v=61"#))
-        #expect(html.contains(#"/style.css?v=39"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v39";"#))
-        #expect(sw.contains(#""/app.js?v=61""#))
-        #expect(sw.contains(#""/style.css?v=39""#))
+        #expect(html.contains(#"/app.js?v=63"#))
+        #expect(html.contains(#"/style.css?v=41"#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v41";"#))
+        #expect(sw.contains(#""/app.js?v=63""#))
+        #expect(sw.contains(#""/style.css?v=41""#))
     }
 
     @Test func remoteWebOffersUndoAfterASteerDiscardsTheQueue() throws {

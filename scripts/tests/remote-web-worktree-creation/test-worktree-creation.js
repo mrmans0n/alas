@@ -99,6 +99,57 @@ function newFlow() {
 
 {
   const { flow, commands } = newFlow();
+  flow.startNewWorktree();
+  flow.loadProjects();
+  flow.reloadCatalog();
+  assert.deepStrictEqual(commands, [
+    { type: "listProjects" },
+    { type: "listProjects" },
+  ]);
+
+  flow.receive({ type: "projectList", projects: [{ id: "project-1", name: "First" }] });
+  assert.deepStrictEqual(commands.at(-1), { type: "listBranches", projectId: "project-1" });
+  flow.receive({ type: "branchList", projectId: "project-1", branches: ["main"], preferredBase: "main" });
+  assert.equal(flow.snapshot().projectsLoading, false);
+  assert.equal(flow.snapshot().branchesLoading, false);
+  assert.equal(flow.snapshot().branchStatus, "loaded");
+}
+
+{
+  const { flow, commands } = newFlow();
+  flow.startNewWorktree();
+  flow.receive({ type: "projectList", projects: [{ id: "project-1", name: "First" }] });
+  flow.reloadCatalog();
+  assert.deepStrictEqual(commands.slice(-2), [
+    { type: "listProjects" },
+    { type: "listBranches", projectId: "project-1" },
+  ]);
+  assert.equal(flow.snapshot().projectsLoading, true);
+  assert.equal(flow.snapshot().branchesLoading, true);
+
+  flow.receive({ type: "projectList", projects: [{ id: "project-1", name: "First" }] });
+  flow.receive({ type: "branchList", projectId: "project-1", branches: ["main"], preferredBase: "main" });
+  assert.equal(flow.snapshot().projectsLoading, false);
+  assert.equal(flow.snapshot().branchesLoading, false);
+  assert.equal(flow.snapshot().base, "main");
+}
+
+{
+  const { flow, commands } = newFlow();
+  flow.selectProject("project-1");
+  flow.receive({ type: "branchList", projectId: "project-1", branches: ["main"], preferredBase: "main" });
+  flow.setBranch("feature/stale-agent");
+  flow.setAgent("agent-stale");
+  assert.equal(flow.canSubmit(), true);
+  assert.equal(flow.reconcileAgents([{ id: "agent-current" }]), true);
+  assert.equal(flow.snapshot().agentId, null);
+  assert.equal(flow.canSubmit(), false);
+  assert.equal(flow.submit(), false);
+  assert.equal(commands.filter(({ type }) => type === "createWorktreeSession").length, 0);
+}
+
+{
+  const { flow, commands } = newFlow();
   assert.equal(flow.submit(), false);
   assert.equal(flow.snapshot().error.stage, "validation");
 
@@ -214,6 +265,7 @@ assert.equal(creation.isValidBranchName("feature\u0001broken"), false);
   flow.selectProject("project-1");
   flow.receive({ type: "branchList", projectId: "project-1", branches: ["main"], preferredBase: "main" });
   flow.setBranch("feature/navigation");
+  assert.equal(flow.canAdvance(), true);
   assert.equal(flow.next(), true);
   assert.equal(flow.snapshot().step, "agent");
   flow.setAgent("agent-1");
@@ -223,6 +275,22 @@ assert.equal(creation.isValidBranchName("feature\u0001broken"), false);
   assert.equal(flow.snapshot().agentId, "agent-1");
   assert.equal(flow.next(), true);
   assert.equal(flow.snapshot().step, "agent");
+}
+
+{
+  const { flow } = newFlow();
+  assert.equal(flow.canAdvance(), false);
+  flow.selectProject("project-1");
+  flow.receive({ type: "branchList", projectId: "project-1", branches: ["main"], preferredBase: "main" });
+  flow.setBranch("feature/advance");
+  assert.equal(flow.canAdvance(), true);
+  flow.startNewWorktree();
+  flow.selectProject("project-1");
+  flow.receive({ type: "branchList", projectId: "project-1", branches: ["main"], preferredBase: "main" });
+  flow.setBranch("feature/advance");
+  flow.setAgent("agent-1");
+  flow.submit();
+  assert.equal(flow.canAdvance(), false);
 }
 
 {
@@ -256,6 +324,75 @@ assert.equal(creation.isValidBranchName("feature\u0001broken"), false);
   assert.equal(flow.canRetry(), false);
   flow.markRecoveryListLoaded("worktrees");
   assert.equal(flow.canRetry(), true);
+}
+
+{
+  const { flow, commands } = newFlow();
+  flow.startNewWorktree();
+  flow.selectProject("project-1");
+  flow.receive({
+    type: "branchList",
+    projectId: "project-1",
+    branches: ["main", "release"],
+    preferredBase: "main",
+  });
+  flow.setBase("release");
+  flow.setBranch("feature/reload-preserves-base");
+  flow.next();
+  flow.setAgent("agent-1");
+  flow.submit();
+  flow.disconnect();
+  const unknownError = flow.snapshot().error;
+
+  flow.reloadCatalog();
+  assert.equal(flow.snapshot().base, "release");
+  assert.deepStrictEqual(flow.snapshot().error, unknownError);
+  assert.deepStrictEqual(commands.slice(-2), [
+    { type: "listProjects" },
+    { type: "listBranches", projectId: "project-1" },
+  ]);
+
+  flow.receive({ type: "projectList", projects: [{ id: "project-1", name: "First" }] });
+  flow.receive({
+    type: "branchList",
+    projectId: "project-1",
+    branches: ["main", "release"],
+    preferredBase: "main",
+  });
+  assert.equal(flow.snapshot().base, "release");
+  assert.deepStrictEqual(flow.snapshot().error, unknownError);
+
+  flow.markRecoveryListLoaded("sessions");
+  flow.markRecoveryListLoaded("worktrees");
+  assert.equal(flow.submit(), true);
+  assert.deepStrictEqual(commands.at(-1), {
+    type: "createWorktreeSession",
+    projectId: "project-1",
+    base: "release",
+    branch: "feature/reload-preserves-base",
+    agentId: "agent-1",
+  });
+}
+
+{
+  const { flow } = newFlow();
+  flow.startNewWorktree();
+  flow.selectProject("project-1");
+  flow.receive({ type: "branchList", projectId: "project-1", branches: ["main"], preferredBase: "main" });
+  flow.setBranch("feature/recovery-guard");
+  flow.next();
+  flow.setAgent("agent-1");
+  flow.submit();
+  flow.disconnect();
+
+  const recoveryPending = flow.snapshot();
+  assert.equal(flow.back(), false);
+  assert.deepStrictEqual(flow.reset(), recoveryPending);
+
+  flow.markRecoveryListLoaded("sessions");
+  flow.markRecoveryListLoaded("worktrees");
+  assert.equal(flow.canRetry(), true);
+  assert.deepStrictEqual(flow.reset(), creation.initialState());
 }
 
 {
@@ -370,6 +507,16 @@ assert.equal(creation.isValidBranchName("feature\u0001broken"), false);
   assert.equal(commands.filter(({ type }) => type === "createWorktreeSession").length, 2);
   assert.equal(flow.snapshot().outcomeUnknown, false);
   assert.deepStrictEqual(flow.snapshot().recovery, { sessions: false, worktrees: false });
+}
+
+{
+  const { flow } = newFlow();
+  flow.startNewWorktree();
+  flow.selectProject("project-1");
+  flow.setBranch("feature/clear-on-close");
+  flow.setAgent("agent-1");
+  flow.reset();
+  assert.deepStrictEqual(flow.snapshot(), creation.initialState());
 }
 
 console.log("remote web worktree creation tests passed");
