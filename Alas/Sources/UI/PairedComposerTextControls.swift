@@ -7,6 +7,12 @@ class PairedDelimiterTextView: NSTextView {
     /// Text that the in-flight marked composition swallowed, kept so a dead-key
     /// delimiter can still wrap the selection the user had before pressing it.
     private var selectionReplacedByMarkedText: NSAttributedString?
+    /// Opt-in triple-backtick handling. Off by default so surfaces that are
+    /// not markdown — the shell startup script editors — keep plain pairing.
+    var markdownFencesEnabled = false
+    /// Set by the owning representable when fences are enabled; drives both
+    /// text styling and the box drawn in `drawBackground(in:)`.
+    var markdownCodeBlockStyle: MarkdownCodeBlockStyle?
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -48,6 +54,52 @@ class PairedDelimiterTextView: NSTextView {
         }
 
         let range = replacementRange.location == NSNotFound ? selectedRange() : replacementRange
+
+        if markdownFencesEnabled {
+            switch MarkdownFenceEditing.resolve(
+                insertedText: insertedText,
+                in: string,
+                selectedRange: range
+            ) {
+            case .openBlock:
+                // The two backticks already in the storage plus this keystroke
+                // become the whole block — and so does any closer that auto-
+                // pairing parked after the caret, or it survives as a stray
+                // backtick below the box.
+                let trailing = MarkdownFenceEditing.trailingBacktickRun(at: range.location, in: string)
+                insertFencedBlock(
+                    replacing: NSRange(location: range.location - 2, length: 2 + trailing),
+                    body: ""
+                )
+                return
+            case .wrapSelection:
+                let body = (string as NSString).substring(with: range)
+                insertFencedBlock(
+                    replacing: NSRange(location: range.location - 2, length: range.length + 4),
+                    body: body
+                )
+                return
+            case .none:
+                // `MarkdownFenceEditing.resolve` returns `.none` here on
+                // purpose — its contract is to fall through to plain pairing
+                // for anything it doesn't recognize, including a third
+                // backtick that lands inside an existing block. But
+                // `PairedDelimiterEditing` has no notion of fences: its
+                // auto-pair/step-over dance for that same keystroke leaves a
+                // bare backtick run that CommonMark reads as a real fence
+                // line, splitting the block in two. Swallow just that
+                // keystroke; a lone backtick typed anywhere else in the block
+                // is unaffected.
+                if range.length == 0,
+                   insertedText == "`",
+                   fencedBlockRange(containing: range.location) != nil,
+                   Self.isPrecededByExactlyTwoBackticks(range.location, in: string)
+                {
+                    return
+                }
+            }
+        }
+
         switch PairedDelimiterEditing.resolve(insertedText: insertedText, in: string, selectedRange: range) {
         case let .wrap(opening, closing):
             guard let textStorage, Self.isValid(range, in: textStorage) else {
@@ -81,6 +133,41 @@ class PairedDelimiterTextView: NSTextView {
         case .native:
             super.insertText(insertString, replacementRange: replacementRange)
         }
+    }
+
+    func fencedBlockRange(containing location: Int) -> FencedBlock? {
+        guard markdownFencesEnabled else { return nil }
+        return MarkdownFenceEditing.block(containing: location, in: string)
+    }
+
+    /// Replace `replaced` with a complete fenced block wrapping `body`, adding
+    /// the newlines needed to keep both fences on lines of their own, and leave
+    /// the selection on the body.
+    private func insertFencedBlock(replacing replaced: NSRange, body: String) {
+        guard let textStorage, Self.isValid(replaced, in: textStorage) else { return }
+        let ns = string as NSString
+        let needsLeadingNewline = replaced.location > 0
+            && ns.character(at: replaced.location - 1) != 0x0A
+        let suffixLocation = NSMaxRange(replaced)
+        let needsTrailingNewline = suffixLocation < ns.length
+            && ns.character(at: suffixLocation) != 0x0A
+        let leading = needsLeadingNewline ? "\n" : ""
+        let trailing = needsTrailingNewline ? "\n" : ""
+
+        let replacement = NSAttributedString(
+            string: leading + "```\n" + body + "\n```" + trailing,
+            attributes: typingAttributes
+        )
+
+        undoManager?.beginUndoGrouping()
+        performNativeTextInsertion {
+            super.insertText(replacement, replacementRange: replaced)
+        }
+        undoManager?.endUndoGrouping()
+
+        // "```\n" is four characters past the leading newline, if any.
+        let bodyStart = replaced.location + (leading as NSString).length + 4
+        setSelectedRange(NSRange(location: bodyStart, length: (body as NSString).length))
     }
 
     override func unmarkText() {
@@ -213,6 +300,18 @@ class PairedDelimiterTextView: NSTextView {
             return attributedString.string
         }
         return nil
+    }
+
+    /// Whether exactly two backticks (no more, no fewer) sit immediately
+    /// before `location` — the same precondition `MarkdownFenceEditing.resolve`
+    /// uses internally to recognize a would-be third backtick.
+    private static func isPrecededByExactlyTwoBackticks(_ location: Int, in text: String) -> Bool {
+        let ns = text as NSString
+        guard location >= 2,
+              ns.character(at: location - 1) == 0x60,
+              ns.character(at: location - 2) == 0x60
+        else { return false }
+        return location == 2 || ns.character(at: location - 3) != 0x60
     }
 
     private static func isValid(_ range: NSRange, in storage: NSTextStorage) -> Bool {
