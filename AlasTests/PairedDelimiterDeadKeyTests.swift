@@ -244,6 +244,22 @@ struct PairedDelimiterDeadKeyTests {
         #expect(MarkdownFenceEditing.blocks(in: textView.string).count == 1)
     }
 
+    @Test func deadKeyCaretInsideAClosingFenceMarkerDoesNotOpenABox() {
+        // The dead-key commit resolves against the pre-composition document,
+        // so it reaches the same decision the plain keystroke does: a caret
+        // part-way through a closing fence's own backticks must step over,
+        // not rewrite the marker into a new block.
+        let textView = makePairedTextView(text: "```\ncode\n```", fencesEnabled: true)
+        textView.setSelectedRange(NSRange(location: 11, length: 0))
+        typeDeadKeys("`", in: textView)
+
+        #expect(textView.string == "```\ncode\n```")
+        #expect(textView.selectedRange() == NSRange(location: 12, length: 0))
+        let blocks = MarkdownFenceEditing.blocks(in: textView.string)
+        #expect(blocks.count == 1)
+        #expect(blocks.first?.closeFenceRange != nil)
+    }
+
     @Test func deadKeyBacktickPairingIsUntouchedWhenFencesAreDisabled() {
         let textView = makePairedTextView()
         typeDeadKeys("```", in: textView)

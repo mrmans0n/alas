@@ -151,6 +151,89 @@ struct PairedDelimiterFenceTests {
         #expect(MarkdownFenceEditing.blocks(in: textView.string).count == 1)
     }
 
+    @Test("a caret inside a closing fence's own backticks does not open a box")
+    func caretInsideAClosingFenceMarkerDoesNotOpenABox() {
+        let textView = makeTextView()
+        // Click between the second and third backtick of the closing fence
+        // and type another. Two backticks precede the caret and the position
+        // is outside the block's interior — a fence's marker is not its
+        // interior — so the expansion used to rewrite the closer itself into
+        // a fresh empty block and leave the opener unclosed. Nothing about
+        // the block may move; the keystroke is a plain step-over.
+        textView.string = "```\ncode\n```"
+        textView.setSelectedRange(NSRange(location: 11, length: 0))
+        type("`", into: textView)
+
+        #expect(textView.string == "```\ncode\n```")
+        #expect(textView.selectedRange() == NSRange(location: 12, length: 0))
+        let blocks = MarkdownFenceEditing.blocks(in: textView.string)
+        #expect(blocks.count == 1)
+        #expect(blocks.first?.closeFenceRange != nil)
+    }
+
+    @Test("a caret inside an opening fence's own backticks does not open a box")
+    func caretInsideAnOpeningFenceMarkerDoesNotOpenABox() {
+        let textView = makeTextView()
+        // The same gap at the other marker. Here the damage was worse: the
+        // opener was replaced by a whole empty block, pushing the body out of
+        // the box entirely and leaving the old closer to open a second one.
+        textView.string = "```\ncode\n```"
+        textView.setSelectedRange(NSRange(location: 2, length: 0))
+        type("`", into: textView)
+
+        #expect(textView.string == "```\ncode\n```")
+        #expect(textView.selectedRange() == NSRange(location: 3, length: 0))
+        #expect(MarkdownFenceEditing.blocks(in: textView.string).count == 1)
+    }
+
+    @Test("a caret inside a wider fence's marker does not open a box")
+    func caretInsideAWiderFenceMarkerDoesNotOpenABox() {
+        let textView = makeTextView()
+        // Four-wide fences, caret two backticks into the closer with two more
+        // to its right, so the run the expansion would consume covers the
+        // whole marker.
+        textView.string = "````\ncode\n````"
+        textView.setSelectedRange(NSRange(location: 12, length: 0))
+        type("`", into: textView)
+
+        #expect(textView.string == "````\ncode\n````")
+        #expect(textView.selectedRange() == NSRange(location: 13, length: 0))
+        #expect(MarkdownFenceEditing.blocks(in: textView.string).count == 1)
+    }
+
+    @Test("a caret inside an indented closer's marker does not open a box")
+    func caretInsideAnIndentedClosingFenceMarkerDoesNotOpenABox() {
+        let textView = makeTextView()
+        // The closer's leading spaces sit outside `outerRange`, so only the
+        // marker's own backticks stand between this caret and the block.
+        textView.string = "```\nc\n  ```"
+        textView.setSelectedRange(NSRange(location: 10, length: 0))
+        type("`", into: textView)
+
+        #expect(textView.string == "```\nc\n  ```")
+        #expect(textView.selectedRange() == NSRange(location: 11, length: 0))
+        let blocks = MarkdownFenceEditing.blocks(in: textView.string)
+        #expect(blocks.count == 1)
+        #expect(blocks.first?.closeFenceRange != nil)
+    }
+
+    @Test("two backticks on the line above a block still open their own box")
+    func backticksAboveABlockStillOpenABox() {
+        let textView = makeTextView()
+        // Counterweight to the marker tests: the span this keystroke rewrites
+        // is the two backticks on the first line, which the block below never
+        // touches. It has to still expand — and leave the block alone.
+        textView.string = "``\n\n```\nx\n```"
+        textView.setSelectedRange(NSRange(location: 2, length: 0))
+        type("`", into: textView)
+
+        #expect(textView.string == "```\n\n```\n\n```\nx\n```")
+        #expect(textView.selectedRange() == NSRange(location: 4, length: 0))
+        let blocks = MarkdownFenceEditing.blocks(in: textView.string)
+        #expect(blocks.count == 2)
+        #expect(blocks.last?.closeFenceRange != nil)
+    }
+
     @Test("backticks that don't start a line are never swallowed")
     func midLineBackticksAreNotSwallowed() {
         let textView = makeTextView()

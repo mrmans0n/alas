@@ -118,6 +118,62 @@ struct MarkdownFenceResolveTests {
         #expect(resolve("`", "```\nx``\n```", NSRange(location: 7, length: 0)) == .none)
     }
 
+    @Test("a caret part-way through a closing fence's own backticks falls through")
+    func caretInsideAClosingFenceMarkerIsRefused() {
+        // "```\ncode\n```": the caret sits between the second and third
+        // backtick of the *closing* fence. Two backticks precede it, and
+        // `block(containing:)` reports it as outside the block on purpose —
+        // a fence's own marker is not its interior. Opening a block here
+        // would rewrite the closer into a fresh empty block and leave the
+        // original opener unclosed.
+        #expect(resolve("`", "```\ncode\n```", NSRange(location: 11, length: 0)) == .none)
+    }
+
+    @Test("a caret part-way through an opening fence's own backticks falls through")
+    func caretInsideAnOpeningFenceMarkerIsRefused() {
+        // Same gap from the other end: the caret sits between the second and
+        // third backtick of the *opening* fence, which is likewise ahead of
+        // the block's interior.
+        #expect(resolve("`", "```\ncode\n```", NSRange(location: 2, length: 0)) == .none)
+    }
+
+    @Test("a caret inside a wider fence's marker falls through too")
+    func caretInsideAWiderFenceMarkerIsRefused() {
+        // Four-wide fences: the caret sits two backticks into each marker,
+        // with two more still to its right. Nothing about the gap depends on
+        // a fence being exactly three wide.
+        #expect(resolve("`", "````\ncode\n````", NSRange(location: 2, length: 0)) == .none)
+        #expect(resolve("`", "````\ncode\n````", NSRange(location: 12, length: 0)) == .none)
+    }
+
+    @Test("a caret inside an indented fence's marker falls through")
+    func caretInsideAnIndentedFenceMarkerIsRefused() {
+        // "```\nc\n  ```": the closer carries two spaces of indent, which
+        // `outerRange` does not cover — only the marker itself does.
+        #expect(resolve("`", "```\nc\n  ```", NSRange(location: 10, length: 0)) == .none)
+    }
+
+    @Test("a caret inside an unclosed block's opening marker falls through")
+    func caretInsideAnUnclosedOpenerIsRefused() {
+        #expect(resolve("`", "```\ncode", NSRange(location: 2, length: 0)) == .none)
+    }
+
+    @Test("a caret buried in a wide opener's marker falls through")
+    func caretInsideAWideOpenerMarkerIsRefused() {
+        // "``````\nx\n```": a six-wide opener that the three-wide line below
+        // cannot close, so the block runs unclosed to the end. The caret sits
+        // two backticks in, with four more to its right — the expansion would
+        // eat part of the marker and split the run in two.
+        #expect(resolve("`", "``````\nx\n```", NSRange(location: 2, length: 0)) == .none)
+    }
+
+    @Test("a caret two lines above an untouched block still opens one")
+    func caretAboveABlockStillOpens() {
+        // Counterweight: the span this rewrites is the two backticks on the
+        // first line, which no block goes anywhere near.
+        #expect(resolve("`", "``\n\n```\nx\n```", NSRange(location: 2, length: 0)) == .openBlock)
+    }
+
     @Test("the third backtick over a flanked selection wraps it")
     func wrapsFlankedSelection() {
         #expect(resolve("`", "``value``", NSRange(location: 2, length: 5)) == .wrapSelection)

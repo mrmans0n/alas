@@ -183,12 +183,23 @@ enum MarkdownFenceEditing {
     /// check of its own — unlike `.none`, which routes through
     /// `PairedComposerTextControls`' simulate-and-compare guard. So this is
     /// where the invariant has to hold: neither answer is ever returned when
-    /// the edit would land on an existing block. A caret is refused when it
-    /// sits in a block's interior; a selection is refused when it overlaps any
-    /// existing block's `outerRange` at all — reaching into one, running out of
-    /// one, or swallowing one whole. `blocks(in:)` has no notion of nesting, so
-    /// a block caught inside a new outer fence would have its own opener and
-    /// closer re-paired against that fence rather than each other.
+    /// the edit would land on an existing block. `blocks(in:)` has no notion of
+    /// nesting, so a block caught inside a new outer fence would have its own
+    /// opener and closer re-paired against that fence rather than each other,
+    /// and a block whose fence line the expansion overwrites simply loses it.
+    ///
+    /// That invariant is checked against `rewrittenRange(for:in:selectedRange:)`
+    /// — the exact span the caller will overwrite — rather than against
+    /// stand-ins for it. Two rounds of narrower preconditions each turned out
+    /// to guard a *proxy* for the edit: a caret's own position (which says
+    /// nothing about the auto-paired closer the expansion also swallows, and
+    /// which `block(containing:)` deliberately reports as outside a block when
+    /// it sits within a fence's own backticks — a marker is not an interior),
+    /// and a selection's own range (which stops two characters short of each
+    /// flank the wrap consumes). Guarding the rewritten span instead covers
+    /// every character the edit touches by construction, and keeps covering
+    /// them if that span ever changes shape, because the callers rewrite the
+    /// range this asked about.
     static func resolve(
         insertedText: String,
         in text: String,
@@ -202,29 +213,73 @@ enum MarkdownFenceEditing {
         guard backtickRunLength(before: selectedRange.location, in: ns) == 2 else {
             return .none
         }
-        guard block(containing: selectedRange.location, in: text) == nil else {
-            return .none
+
+        let action: FenceEditAction
+        if selectedRange.length == 0 {
+            action = .openBlock
+        } else {
+            // Wrapping already ran twice, so the selection is flanked by
+            // exactly two backticks on each side by the time the third
+            // keystroke lands.
+            guard backtickRunLength(after: NSMaxRange(selectedRange), in: ns) == 2 else {
+                return .none
+            }
+            action = .wrapSelection
         }
 
-        if selectedRange.length == 0 {
-            return .openBlock
-        }
-        // A caret can only ever be inside one block or outside them all, but a
-        // selection is a span: it can start clear of every block and still run
-        // into one, out of one, or straight over one. Wrapping any of those
-        // hands the enclosed block's fence lines to the new outer fence, so
-        // refuse on any overlap at all rather than only on where it starts.
-        guard !blocks(in: text).contains(where: {
-            NSIntersectionRange($0.outerRange, selectedRange).length > 0
+        guard let rewritten = rewrittenRange(
+            for: action,
+            in: text,
+            selectedRange: selectedRange
+        ), !blocks(in: text).contains(where: {
+            NSIntersectionRange($0.outerRange, rewritten).length > 0
         }) else {
             return .none
         }
-        // Wrapping already ran twice, so the selection is flanked by exactly
-        // two backticks on each side by the time the third keystroke lands.
-        guard backtickRunLength(after: NSMaxRange(selectedRange), in: ns) == 2 else {
-            return .none
+        return action
+    }
+
+    /// The span of `text` that acting on `action` rewrites into a new block,
+    /// or `nil` when `action` rewrites nothing or the range would not be a
+    /// valid one.
+    ///
+    /// The single source of truth for that span. `resolve` refuses `action`
+    /// unless this range clears every existing block, and the callers hand
+    /// this same range to their expansion — so the range that was checked and
+    /// the range that gets overwritten cannot drift apart.
+    ///
+    /// `.openBlock` consumes the two backticks already before the caret, the
+    /// keystroke itself, and any closer auto-pairing parked after the caret,
+    /// which would otherwise survive as a stray backtick below the box.
+    /// `.wrapSelection` consumes the two backticks flanking the selection on
+    /// each side along with the selection between them.
+    static func rewrittenRange(
+        for action: FenceEditAction,
+        in text: String,
+        selectedRange: NSRange
+    ) -> NSRange? {
+        let ns = text as NSString
+        guard isValid(selectedRange, in: ns), selectedRange.location >= 2 else { return nil }
+
+        let rewritten: NSRange
+        switch action {
+        case .openBlock:
+            guard selectedRange.length == 0 else { return nil }
+            rewritten = NSRange(
+                location: selectedRange.location - 2,
+                length: 2 + trailingBacktickRun(at: selectedRange.location, in: text)
+            )
+        case .wrapSelection:
+            rewritten = NSRange(
+                location: selectedRange.location - 2,
+                length: selectedRange.length + 4
+            )
+        case .none:
+            return nil
         }
-        return .wrapSelection
+
+        guard isValid(rewritten, in: ns) else { return nil }
+        return rewritten
     }
 
     /// The block whose interior contains `location`, if any. The interior
@@ -232,6 +287,13 @@ enum MarkdownFenceEditing {
     /// info-string slot counts as inside, including a caret parked part-way
     /// through a language tag the author is still typing — and ends at the
     /// start of the closing fence.
+    ///
+    /// This answers "is the caret in editable block content?", which is what
+    /// key handling wants. It is *not* an edit-safety check: a caret sitting
+    /// within a fence's own backticks reads as outside the block, by design,
+    /// even though an edit there would take the marker apart. Anything asking
+    /// whether an edit may proceed has to weigh the span that edit rewrites
+    /// against `blocks(in:)` — see `resolve`.
     static func block(containing location: Int, in text: String) -> FencedBlock? {
         blocks(in: text).first { block in
             let lower = block.infoRange.location

@@ -107,27 +107,37 @@ class PairedDelimiterTextView: NSTextView {
                 selectedRange: range
             ) {
             case .openBlock:
-                // The two backticks already in the storage plus this keystroke
-                // become the whole block — and so does any closer that auto-
-                // pairing parked after the caret, or it survives as a stray
-                // backtick below the box.
-                let trailing = MarkdownFenceEditing.trailingBacktickRun(at: range.location, in: string)
-                insertFencedBlock(
-                    replacing: NSRange(location: range.location - 2, length: 2 + trailing),
-                    body: NSAttributedString()
-                )
+                // `rewrittenRange` owns the span — the two backticks already
+                // in the storage, this keystroke, and any closer auto-pairing
+                // parked after the caret — and `resolve` cleared that exact
+                // span against every existing block before answering.
+                guard let replaced = MarkdownFenceEditing.rewrittenRange(
+                    for: .openBlock,
+                    in: string,
+                    selectedRange: range
+                ) else {
+                    super.insertText(insertString, replacementRange: replacementRange)
+                    return
+                }
+                insertFencedBlock(replacing: replaced, body: NSAttributedString())
                 return
             case .wrapSelection:
                 // The selection is carried through as attributed text, not as a
                 // `String`: a mention or image chip is a single U+FFFC whose
                 // whole meaning lives in its attributes, so flattening it here
                 // would leave an inert glyph behind in the box.
-                guard let textStorage, Self.isValid(range, in: textStorage) else {
+                guard let textStorage, Self.isValid(range, in: textStorage),
+                      let replaced = MarkdownFenceEditing.rewrittenRange(
+                          for: .wrapSelection,
+                          in: string,
+                          selectedRange: range
+                      )
+                else {
                     super.insertText(insertString, replacementRange: replacementRange)
                     return
                 }
                 insertFencedBlock(
-                    replacing: NSRange(location: range.location - 2, length: range.length + 4),
+                    replacing: replaced,
                     body: textStorage.attributedSubstring(from: range)
                 )
                 return
@@ -564,15 +574,19 @@ class PairedDelimiterTextView: NSTextView {
                 selectedRange: context.selectedRange
             ) {
             case .openBlock:
-                let trailing = MarkdownFenceEditing.trailingBacktickRun(
-                    at: context.selectedRange.location,
-                    in: context.text
-                )
+                // Same span, and the same guarantee about it, as the ordinary
+                // keyboard path — only measured in the pre-composition
+                // document, which is the one `resolve` just answered in.
+                guard let replaced = MarkdownFenceEditing.rewrittenRange(
+                    for: .openBlock,
+                    in: context.text,
+                    selectedRange: context.selectedRange
+                ) else {
+                    super.insertText(insertString, replacementRange: replacementRange)
+                    return
+                }
                 commitFencedBlock(
-                    replacing: NSRange(
-                        location: context.selectedRange.location - 2,
-                        length: 2 + trailing
-                    ),
+                    replacing: replaced,
                     body: NSAttributedString(),
                     context: context,
                     markedRange: marked
@@ -583,15 +597,20 @@ class PairedDelimiterTextView: NSTextView {
                 // — the attributed text `preCompositionContext` put back at
                 // `context.selectedRange` — so it is the body, chips and all.
                 // Anything else would flatten a fenced mention into a glyph.
+                guard let replaced = MarkdownFenceEditing.rewrittenRange(
+                    for: .wrapSelection,
+                    in: context.text,
+                    selectedRange: context.selectedRange
+                ) else {
+                    super.insertText(insertString, replacementRange: replacementRange)
+                    return
+                }
                 let body = replacedSelection ?? NSAttributedString(
                     string: (context.text as NSString).substring(with: context.selectedRange),
                     attributes: typingAttributes
                 )
                 commitFencedBlock(
-                    replacing: NSRange(
-                        location: context.selectedRange.location - 2,
-                        length: context.selectedRange.length + 4
-                    ),
+                    replacing: replaced,
                     body: body,
                     context: context,
                     markedRange: marked
