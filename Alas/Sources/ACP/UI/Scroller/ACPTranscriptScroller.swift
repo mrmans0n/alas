@@ -718,7 +718,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             // explicit call is needed at either site.
             guard !isProgrammatic else {
                 if !reconciler.isApplyingSpecs {
-                    reconciler.layoutMountedRows()
+                    reconciler.layoutMountedRowsForScroll()
                 }
                 syncLogicalScrollerMetrics()
                 return
@@ -810,7 +810,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             // first means that belief is already correct by the time any
             // row is mounted.
             if !reconciler.isApplyingSpecs {
-                reconciler.layoutMountedRows()
+                reconciler.layoutMountedRowsForScroll()
             }
 
             let threshold = ACPTranscriptScroller.headStepThreshold(viewportHeight: viewportHeight)

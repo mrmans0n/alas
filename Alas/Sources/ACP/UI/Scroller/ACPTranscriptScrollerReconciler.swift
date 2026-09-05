@@ -77,6 +77,7 @@ final class ACPTranscriptScrollerReconciler {
     /// pass just mounted.
     private var isLayingOutRows = false
     private var pendingRelayout = false
+    private var lastLaidOutBand: Range<Int>?
 
     /// A scroll anchor whose row was removed by an update, kept so the
     /// position can be recovered if the row comes back.
@@ -794,12 +795,18 @@ final class ACPTranscriptScrollerReconciler {
         }
     }
 
-    /// Mount hosting views for rows in the band, position them, unmount the
-    /// rest. Called after every apply and on every scroll tick. Re-entrant
-    /// calls (triggered by AppKit/SwiftUI invalidating a row's intrinsic
-    /// size as a side effect of a mount/measure happening inside a pass)
-    /// coalesce into an extra pass afterward instead of recursing.
+    /// Scrolling only changes which rows need hosting views. Between band
+    /// crossings, their content and document-relative frames stay unchanged.
+    func layoutMountedRowsForScroll() {
+        guard currentMountBand != lastLaidOutBand else { return }
+        layoutMountedRows()
+    }
+
+    /// Mount and position rows after content or geometry changes. Reentrant
+    /// invalidations coalesce into another pass before the scroll fast path
+    /// can reuse the resulting band.
     func layoutMountedRows() {
+        lastLaidOutBand = nil
         guard !isLayingOutRows else {
             pendingRelayout = true
             return
@@ -818,6 +825,17 @@ final class ACPTranscriptScrollerReconciler {
                 break
             }
         }
+        if !pendingRelayout {
+            lastLaidOutBand = currentMountBand
+        }
+    }
+
+    private var currentMountBand: Range<Int> {
+        tiling.mountBand(
+            viewportMinY: scroller.scrollY,
+            viewportHeight: scroller.viewportHeight,
+            overscan: Self.overscan
+        )
     }
 
     private func performLayoutPass() {
@@ -825,11 +843,7 @@ final class ACPTranscriptScrollerReconciler {
             pool.releaseAll()
             return
         }
-        let band = tiling.mountBand(
-            viewportMinY: scroller.scrollY,
-            viewportHeight: scroller.viewportHeight,
-            overscan: Self.overscan
-        )
+        let band = currentMountBand
         // Rows in the band, PLUS any row exempted from unmounting regardless
         // of distance from the viewport (an in-progress form prompt, say).
         // The exemption only widens which rows get mounted/kept — `band`

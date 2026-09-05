@@ -117,6 +117,114 @@ private final class RowBuildCounter {
 @MainActor
 @Suite("ACPTranscriptScrollerReconciler apply")
 struct ACPTranscriptScrollerReconcilerApplyTests {
+    private struct CountingToken: Equatable {
+        var revision = 0
+        let recordComparison: () -> Void
+
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.recordComparison()
+            return lhs.revision == rhs.revision
+        }
+    }
+
+    @Test("scrolling within the mounted band does not revisit row content", arguments: [800, 2160])
+    func unchangedScrollBandSkipsRowWork(viewportHeight: Int) {
+        let (reconciler, scroller, _) = makeStack()
+        scroller.frame.size.height = CGFloat(viewportHeight)
+        scroller.layoutSubtreeIfNeeded()
+        var comparisons = 0
+        let specs = (0..<100).map { index in
+            ACPTranscriptRowSpec(
+                id: "r\(index)",
+                equalityToken: ACPRowEqualityToken(CountingToken { comparisons += 1 }),
+                build: { AnyView(Color.clear.frame(height: 100)) }
+            )
+        }
+        reconciler.apply(specs: specs, contentWidth: 600, followsTail: false)
+        scroller.setScrollY(2000)
+        reconciler.layoutMountedRowsForScroll()
+        comparisons = 0
+
+        for offset in 1...20 {
+            scroller.setScrollY(2000 + CGFloat(offset))
+            reconciler.layoutMountedRowsForScroll()
+        }
+
+        #expect(comparisons == 0)
+    }
+
+    @Test("scroll band changes mount new rows and preserve an offscreen form")
+    func scrollBandChangeUpdatesMountedRows() throws {
+        let (reconciler, scroller, _, pool) = makeStackWithPool()
+        let specs = (0..<100).map { spec("r\($0)", keepsMountedOffscreen: $0 == 0) }
+        reconciler.apply(specs: specs, contentWidth: 600, followsTail: false)
+        let form = try #require(pool.mountedView(id: "r0"))
+        #expect(pool.mountedView(id: "r50") == nil)
+
+        scroller.setScrollY(5900)
+        reconciler.layoutMountedRowsForScroll()
+
+        #expect(pool.mountedView(id: "r50")?.superview === scroller.flippedDocumentView)
+        #expect(pool.mountedView(id: "r1") == nil)
+        #expect(pool.mountedView(id: "r0") === form)
+
+        scroller.setScrollY(0)
+        reconciler.layoutMountedRowsForScroll()
+        #expect(pool.mountedView(id: "r1")?.superview === scroller.flippedDocumentView)
+        #expect(pool.mountedView(id: "r50") == nil)
+    }
+
+    @Test("content and intrinsic height changes still reposition rows within the same scroll band")
+    func contentChangesBypassScrollFastPath() throws {
+        let (reconciler, scroller, _, pool) = makeStackWithPool()
+        reconciler.apply(specs: [spec("a"), spec("b")], contentWidth: 600, followsTail: false)
+        reconciler.layoutMountedRowsForScroll()
+
+        reconciler.apply(
+            specs: [spec("a", token: 1, height: 200), spec("b")],
+            contentWidth: 600, followsTail: false
+        )
+        #expect(pool.mountedView(id: "b")?.frame.minY == 242)
+
+        let first = try #require(pool.mountedView(id: "a"))
+        first.updateRootView(AnyView(Color.clear.frame(height: 300)))
+        reconciler.remeasureRow(id: "a")
+        reconciler.layoutMountedRowsForScroll()
+        #expect(pool.mountedView(id: "b")?.frame.minY == 342)
+        #expect(scroller.contentHeight == 442)
+    }
+
+    @Test("scroll-time remeasurement fills the expanded band before caching it")
+    func scrollRemeasureConvergesBeforeCaching() {
+        let (reconciler, scroller, tiling) = makeStack()
+        var comparisons = 0
+        func rows(shrunk: Bool) -> [ACPTranscriptRowSpec] {
+            (0..<60).map { index in
+                ACPTranscriptRowSpec(
+                    id: "r\(index)",
+                    equalityToken: ACPRowEqualityToken(CountingToken(
+                        revision: shrunk && index == 20 ? 1 : 0,
+                        recordComparison: { comparisons += 1 }
+                    )),
+                    build: { AnyView(Color.clear.frame(height: !shrunk && index == 20 ? 1000 : 100)) }
+                )
+            }
+        }
+        reconciler.apply(specs: rows(shrunk: false), contentWidth: 600, followsTail: false)
+        reconciler.apply(specs: rows(shrunk: true), contentWidth: 600, followsTail: false)
+        #expect(tiling.row(withId: "r20")?.height == 1000)
+
+        scroller.setScrollY(1000)
+        reconciler.layoutMountedRowsForScroll()
+
+        #expect(tiling.row(withId: "r20")?.height == 100)
+        #expect(reconciler.mountedRowIdsForTesting == Set((0...21).map { "r\($0)" }))
+        comparisons = 0
+        scroller.setScrollY(1001)
+        reconciler.layoutMountedRowsForScroll()
+        #expect(comparisons == 0)
+    }
+
     private func makeStack() -> (ACPTranscriptScrollerReconciler, ACPTranscriptScrollerView, ACPTranscriptTilingController) {
         let scroller = ACPTranscriptScrollerView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
         let tiling = ACPTranscriptTilingController()
