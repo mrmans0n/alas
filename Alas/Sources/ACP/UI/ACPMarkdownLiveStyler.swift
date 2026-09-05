@@ -15,15 +15,17 @@ enum ACPMarkdownLiveStyler {
 
     static func restyle(
         _ storage: NSTextStorage,
-        typography: ACPChatTypography = .default
+        typography: ACPChatTypography = .default,
+        excluding excludedRanges: [NSRange] = []
     ) {
-        restyle(storage, in: nil, typography: typography)
+        restyle(storage, in: nil, typography: typography, excluding: excludedRanges)
     }
 
     static func restyle(
         _ storage: NSTextStorage,
         in requestedRange: NSRange?,
-        typography: ACPChatTypography = .default
+        typography: ACPChatTypography = .default,
+        excluding excludedRanges: [NSRange] = []
     ) {
         guard storage.length > 0 else { return }
 
@@ -57,29 +59,29 @@ enum ACPMarkdownLiveStyler {
         // mention AND image chips don't get bulldozed (their `.attachment`
         // cell stripped) by every keystroke's restyle.
         storage.enumerateAttributes(in: target) { attrs, range, _ in
-            if attrs[.attachmentURI] == nil, attrs[.imageAttachmentURI] == nil {
-                storage.setAttributes([
-                    .font: baseFont,
-                    .foregroundColor: NSColor.labelColor,
-                ], range: range)
-            }
+            guard attrs[.attachmentURI] == nil, attrs[.imageAttachmentURI] == nil else { return }
+            guard !Self.intersects(range, excludedRanges) else { return }
+            storage.setAttributes([
+                .font: baseFont,
+                .foregroundColor: NSColor.labelColor,
+            ], range: range)
         }
 
         apply(regex: bold, in: storage, range: target, attrs: [
             .font: boldFont,
             .foregroundColor: NSColor.labelColor,
-        ])
+        ], excluding: excludedRanges)
         let italicAttrs: [NSAttributedString.Key: Any] = [
             .font: italicFont,
             .foregroundColor: NSColor.labelColor,
         ]
-        apply(regex: italicStar, in: storage, range: target, attrs: italicAttrs)
-        apply(regex: italicUnder, in: storage, range: target, attrs: italicAttrs)
+        apply(regex: italicStar, in: storage, range: target, attrs: italicAttrs, excluding: excludedRanges)
+        apply(regex: italicUnder, in: storage, range: target, attrs: italicAttrs, excluding: excludedRanges)
         apply(regex: code, in: storage, range: target, attrs: [
             .font: codeFont,
             .foregroundColor: NSColor(calibratedRed: 0.78, green: 0.86, blue: 0.92, alpha: 1),
             .backgroundColor: NSColor.white.withAlphaComponent(0.06),
-        ])
+        ], excluding: excludedRanges)
     }
 
     static func editedLineRange(in storage: NSTextStorage) -> NSRange? {
@@ -102,9 +104,11 @@ enum ACPMarkdownLiveStyler {
     private static func apply(regex: NSRegularExpression,
                               in storage: NSTextStorage,
                               range: NSRange,
-                              attrs: [NSAttributedString.Key: Any]) {
+                              attrs: [NSAttributedString.Key: Any],
+                              excluding excludedRanges: [NSRange] = []) {
         regex.enumerateMatches(in: storage.string, range: range) { match, _, _ in
             guard let m = match else { return }
+            guard !intersects(m.range, excludedRanges) else { return }
             // Don't double-style chip mentions or image chips.
             var skip = false
             storage.enumerateAttributes(in: m.range) { attrs, _, stop in
@@ -116,5 +120,33 @@ enum ACPMarkdownLiveStyler {
             if skip { return }
             storage.addAttributes(attrs, range: m.range)
         }
+    }
+
+    private static func intersects(_ range: NSRange, _ others: [NSRange]) -> Bool {
+        others.contains { NSIntersectionRange(range, $0).length > 0 }
+    }
+
+    /// The span that must be restyled when the set of fenced blocks changed.
+    ///
+    /// A single new ``` flips the open/closed parity of every block below it,
+    /// so the range runs from the first differing fence to end of storage.
+    /// Returns nil when the fence set is unchanged, in which case the caller
+    /// keeps its existing edited-line-range behaviour.
+    static func dirtyRange(
+        previous: [FencedBlock],
+        current: [FencedBlock],
+        storageLength: Int
+    ) -> NSRange? {
+        let previousFences = previous.map(\.openFenceRange.location)
+        let currentFences = current.map(\.openFenceRange.location)
+        guard previousFences != currentFences else { return nil }
+
+        let firstDifference = zip(previousFences, currentFences)
+            .first { $0 != $1 }
+            .map { min($0, $1) }
+            ?? (previousFences + currentFences).min()
+            ?? 0
+        let start = max(0, min(firstDifference, storageLength))
+        return NSRange(location: start, length: storageLength - start)
     }
 }

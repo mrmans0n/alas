@@ -120,6 +120,16 @@ struct ACPInputField: NSViewRepresentable {
             }
         }
         if let tv = nsView.documentView as? ACPNSTextView {
+            let baseFont = typography.appKitFont()
+            let style = MarkdownCodeBlockStyle.standard(
+                theme: context.environment.theme,
+                baseFont: baseFont,
+                baseColor: .labelColor,
+                monoSize: typography.codeSize
+            )
+            tv.markdownFencesEnabled = true
+            tv.markdownCodeBlockStyle = style
+            context.coordinator.codeBlockStyle = style
             tv.applyChatTypography(typography)
             tv.placeholderText = Self.placeholder(for: session.transcript.streamingState, sendOnEnter: sendOnEnter)
             tv.needsDisplay = true
@@ -212,6 +222,8 @@ struct ACPInputField: NSViewRepresentable {
         private var pendingRestyleWork: DispatchWorkItem?
         private var pendingRestyleGeneration = 0
         private var pendingRestyleRange: NSRange?
+        var codeBlockStyle: MarkdownCodeBlockStyle?
+        private var lastBlocks: [FencedBlock] = []
         private static let restyleDebounceInterval: Double = 0.5
 
         func reportImageError(_ error: ACPImageStaging.StagingError) {
@@ -331,19 +343,41 @@ struct ACPInputField: NSViewRepresentable {
             let draft = Self.draft(from: storage)
             lastSyncedDraft = draft
             onDraftChange(draft)
+            // Block detection is a line-prefix scan, not a regex over the whole
+            // document, so it is cheap enough to run synchronously here. Only
+            // the attribute application stays on the debounce below.
+            let blocks = MarkdownFenceEditing.blocks(in: storage.string)
+            var dirty = ACPMarkdownLiveStyler.editedLineRange(in: storage)
+            if let fenceDirty = ACPMarkdownLiveStyler.dirtyRange(
+                previous: lastBlocks,
+                current: blocks,
+                storageLength: storage.length
+            ) {
+                dirty = dirty.map { NSUnionRange($0, fenceDirty) } ?? fenceDirty
+            }
+            lastBlocks = blocks
             pendingRestyleRange = pendingRestyleRange.map { existing in
-                NSUnionRange(existing, ACPMarkdownLiveStyler.editedLineRange(in: storage) ?? existing)
-            } ?? ACPMarkdownLiveStyler.editedLineRange(in: storage)
+                dirty.map { NSUnionRange(existing, $0) } ?? existing
+            } ?? dirty
             pendingRestyleWork?.cancel()
             pendingRestyleGeneration += 1
             let generation = pendingRestyleGeneration
             let work = DispatchWorkItem { [weak self] in
                 guard let self else { return }
                 guard self.pendingRestyleGeneration == generation else { return }
+                let blockRanges: [NSRange]
+                if let style = self.codeBlockStyle {
+                    blockRanges = MarkdownCodeBlockStyler
+                        .restyle(storage, in: self.pendingRestyleRange, style: style)
+                        .map(\.outerRange)
+                } else {
+                    blockRanges = []
+                }
                 ACPMarkdownLiveStyler.restyle(
                     storage,
                     in: self.pendingRestyleRange,
-                    typography: self.typography
+                    typography: self.typography,
+                    excluding: blockRanges
                 )
                 self.pendingRestyleRange = nil
                 self.pendingRestyleWork = nil
@@ -458,7 +492,13 @@ struct ACPInputField: NSViewRepresentable {
             invalidatePendingImageFileInsertions()
             restoringDraft = true
             storage.setAttributedString(Self.attributedString(from: draft, typography: typography))
-            ACPMarkdownLiveStyler.restyle(storage, typography: typography)
+            let blockRanges: [NSRange]
+            if let style = codeBlockStyle {
+                blockRanges = MarkdownCodeBlockStyler.restyle(storage, in: nil, style: style).map(\.outerRange)
+            } else {
+                blockRanges = []
+            }
+            ACPMarkdownLiveStyler.restyle(storage, typography: typography, excluding: blockRanges)
             textView.needsDisplay = true
             restoringDraft = false
             lastSyncedDraft = draft
@@ -652,7 +692,14 @@ final class ACPNSTextView: PairedDelimiterTextView {
         font = typography.appKitFont()
         typingAttributes = baseTypingAttributes
         if let textStorage {
-            ACPMarkdownLiveStyler.restyle(textStorage, typography: typography)
+            let blockRanges = markdownCodeBlockStyle.map {
+                MarkdownCodeBlockStyler.restyle(textStorage, in: nil, style: $0).map(\.outerRange)
+            } ?? []
+            ACPMarkdownLiveStyler.restyle(
+                textStorage,
+                typography: typography,
+                excluding: blockRanges
+            )
         }
         needsDisplay = true
     }
