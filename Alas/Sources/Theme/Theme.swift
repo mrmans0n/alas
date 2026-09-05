@@ -47,6 +47,11 @@ struct Theme: Codable, Equatable, Hashable {
 
     static let bundledIds = ["cool-slate", "light"]
 
+    /// Last-resort theme used when no bundled theme resource can be loaded
+    /// (e.g. missing bundle resources). Renders plain but keeps the app
+    /// running; `color(_:)` returns its pink sentinel for missing tokens.
+    static let fallback = Theme(id: "fallback", name: "Fallback", tokens: [:])
+
     /// Hex strings for the 5 named accents in AppearancePane.
     /// Keep in sync with the picker's `accents` array.
     static let accentHexById: [String: String] = [
