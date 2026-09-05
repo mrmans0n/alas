@@ -306,9 +306,18 @@ struct ACPInputField: NSViewRepresentable {
                 return true
             }
             if selector == #selector(NSResponder.insertNewline(_:)) {
+                let modifiers = NSApp.currentEvent?.modifierFlags ?? []
                 // ⇧⏎ inserts a literal newline. (⌥⏎ never reaches here — it
-                // routes to `insertNewlineIgnoringFieldEditor:` above.)
-                if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
+                // routes to `insertNewlineIgnoringFieldEditor:` above. ⌘⏎ is
+                // caught in ACPNSTextView.keyDown.)
+                if modifiers.contains(.shift) {
+                    textView.insertText("\n", replacementRange: textView.selectedRange())
+                    return true
+                }
+                // Inside a code box ⏎ is a plain newline, so a multi-line
+                // snippet doesn't need ⇧⏎ on every line. ⌘⏎ still sends.
+                if let tv = textView as? ACPNSTextView,
+                   tv.fencedBlockRange(containing: tv.selectedRange().location) != nil {
                     textView.insertText("\n", replacementRange: textView.selectedRange())
                     return true
                 }
@@ -802,6 +811,15 @@ final class ACPNSTextView: PairedDelimiterTextView {
                 return
             default: break
             }
+        }
+
+        // ⌘⏎ always sends, including from inside a code box where bare ⏎ is a
+        // newline. Handled here rather than in `doCommandBy` because AppKit
+        // does not reliably route Command-Return to `insertNewline:`.
+        if event.keyCode == 36 || event.keyCode == 76,
+           event.modifierFlags.contains(.command) {
+            coordinator?.submit(self, intent: .auto)
+            return
         }
 
         if event.charactersIgnoringModifiers == "@" {

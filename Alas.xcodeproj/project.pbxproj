@@ -122,6 +122,7 @@
 		128B611E5324A5621897A267 /* ACPVisibleRowsCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0582531788CE9D1D49769F6B /* ACPVisibleRowsCache.swift */; };
 		1298147855092677E3184AC2 /* ACPConfigOption.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88C6356C759B509DD81EDEBB /* ACPConfigOption.swift */; };
 		12EB0B042A0225258B8A6C99 /* ACPOrchestrationModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EC184A7BDBFF2156FD2AD44 /* ACPOrchestrationModels.swift */; };
+		12FD90326DDF6E8BDF2A67B4 /* ACPComposerCodeFenceKeyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42F1A28F4C52A2FC6B0B4186 /* ACPComposerCodeFenceKeyTests.swift */; };
 		133597E7D43CFE746EF4EF2B /* RepoGroupViewLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01675626CE431DD5867636BF /* RepoGroupViewLayoutTests.swift */; };
 		1339BE8F736D53991DDD19CD /* FileSearchBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D68E2007F0370A6C4E7DBC7 /* FileSearchBackend.swift */; };
 		137BF3AED8FFF6D42228EFC0 /* PiMCPAdapterInspectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F40A1779F98074142F57210B /* PiMCPAdapterInspectorTests.swift */; };
@@ -2017,6 +2018,7 @@
 		41B7844FCFC1DD54B2B471F8 /* InstallNudgeBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallNudgeBanner.swift; sourceTree = "<group>"; };
 		4246F7A17DCEC4D2A669BC43 /* ImageDiffDifferenceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageDiffDifferenceView.swift; sourceTree = "<group>"; };
 		4261E417947C1A21E77C1587 /* GitStatusCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitStatusCache.swift; sourceTree = "<group>"; };
+		42F1A28F4C52A2FC6B0B4186 /* ACPComposerCodeFenceKeyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPComposerCodeFenceKeyTests.swift; sourceTree = "<group>"; };
 		4306DE43C5ADCC65310C1169 /* ACPQuestionPrompt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPQuestionPrompt.swift; sourceTree = "<group>"; };
 		430FCE70CDAB35CB0594CF44 /* AlasCLIReviewTargetResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasCLIReviewTargetResolver.swift; sourceTree = "<group>"; };
 		431BECA1461B76DF86BBFBDF /* FileTreeRowIndentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileTreeRowIndentationTests.swift; sourceTree = "<group>"; };
@@ -4297,6 +4299,7 @@
 				81773A01826A91080F5A2E95 /* ACPCodeBlockHighlighterTests.swift */,
 				2B7ADCB7C4178FE036A31214 /* ACPComposerActionButtonMetricsTests.swift */,
 				DE2ABBFA4FB2E5FC2D38C5D3 /* ACPComposerCodeBlockStylingTests.swift */,
+				42F1A28F4C52A2FC6B0B4186 /* ACPComposerCodeFenceKeyTests.swift */,
 				EE91017BB71AB08265C7B56E /* ACPComposerControlPresentationDictationTests.swift */,
 				B9454F0214E21F91473C96F6 /* ACPComposerDraftBridgeTests.swift */,
 				98CA6A0F4862D9A29E4151B5 /* ACPComposerFocusPolicyTests.swift */,
@@ -6962,6 +6965,7 @@
 				238BBB5FC59949CE6ABAFBEF /* ACPCodeBlockHighlighterTests.swift in Sources */,
 				33A0FC862C45CDFF47053A04 /* ACPComposerActionButtonMetricsTests.swift in Sources */,
 				C31DBE249E28F1C82421537C /* ACPComposerCodeBlockStylingTests.swift in Sources */,
+				12FD90326DDF6E8BDF2A67B4 /* ACPComposerCodeFenceKeyTests.swift in Sources */,
 				0191E2173516054F2E502C8E /* ACPComposerControlPresentationDictationTests.swift in Sources */,
 				1721FFC6A99B6E2683378552 /* ACPComposerDraftBridgeTests.swift in Sources */,
 				3518735F0614C32919E3FC27 /* ACPComposerDraftTests.swift in Sources */,
