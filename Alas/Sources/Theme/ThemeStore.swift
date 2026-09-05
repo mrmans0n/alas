@@ -61,6 +61,7 @@ final class ThemeStore {
     private init(fallbackWithCurrent theme: Theme) {
         self.userPickedId = theme.id
         self.current = theme
+        registerAppearanceObserver()
     }
 
     /// `AppleInterfaceThemeChangedNotification` is delivered on the

@@ -39,6 +39,17 @@ struct ThemeStoreTests {
         #expect(store.current.id == "cool-slate")
     }
 
+    @Test func creatingTriesPersistedThenBundledOrderWithInjectedLoader() {
+        var requestedIds: [String] = []
+        let store = ThemeStore.creating(initialId: "nope") { id in
+            requestedIds.append(id)
+            if id == "light" { return Theme(id: id, name: "Light", tokens: [:]) }
+            throw NSError(domain: "Theme", code: 1)
+        }
+        #expect(requestedIds == ["nope", "cool-slate", "light"])
+        #expect(store.current.id == "light")
+    }
+
     @Test func creatingNeverThrowsWhenNothingLoads() {
         let store = ThemeStore.creating(initialId: "nope") { _ in
             throw NSError(domain: "Theme", code: 1)
