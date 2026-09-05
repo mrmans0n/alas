@@ -690,16 +690,6 @@ struct DiffPaneView: View {
         }
     }
 
-    private var legacyInternalScrollBody: some View {
-        GeometryReader { proxy in
-            ScrollView(.vertical) {
-                lazyRowsStack
-                    .frame(minWidth: proxy.size.width, alignment: .topLeading)
-            }
-            .defaultScrollAnchor(.topLeading)
-        }
-    }
-
     private func synchronizedRowPlanInput() -> DiffPaneRowPlanInput {
         let input = rowPlanInput
         presentationState.actionRelay.update(from: input)
@@ -718,19 +708,6 @@ struct DiffPaneView: View {
             showWhitespace: showWhitespace,
             fusionStates: resolvedHunkFusionStates,
         )
-    }
-
-    private var lazyRowsStack: some View {
-        let indexedGroups = Array(model.groups.enumerated())
-        let fusionStates = resolvedHunkFusionStates
-        return LazyVStack(alignment: .leading, spacing: 0) {
-            ForEach(indexedGroups, id: \.element.id) { index, group in
-                hunk(group, fusion: fusionStates[index], input: synchronizedRowPlanInput())
-            }
-        }
-        .padding(.horizontal, 10)
-        .padding(.top, outerTopPadding(for: fusionStates))
-        .padding(.bottom, outerBottomPadding(for: fusionStates))
     }
 
     private var staticRowsStack: some View {

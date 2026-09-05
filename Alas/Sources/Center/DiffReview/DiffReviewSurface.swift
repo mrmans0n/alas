@@ -286,77 +286,6 @@ struct DiffReviewSurface: View {
         }
     }
 
-    private func legacyMainReviewStream(_ session: DiffReviewLoadedSession, firstFileID: DiffReviewFileID) -> some View {
-        ScrollViewReader { scrollProxy in
-            ScrollView(.vertical) {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    let renderRows = DiffReviewRenderEligibility.renderRows(
-                        ordered: session.files.map(\.id),
-                        renderedRowCounts: session.files.map { file in
-                            file.displayModel.map(DiffReviewRenderBudget.renderedRowCount)
-                        },
-                        maxAutomaticallyRenderedRows: DiffReviewRenderBudget.maxRenderedRows
-                    )
-                    ForEach(renderRows) { row in
-                        let file = session.files[row.index]
-                        Color.clear
-                            .frame(height: 1)
-                            .id(DiffReviewSurfaceSelectionSync.topVisibilityTargetID(for: row.id))
-                            .accessibilityHidden(true)
-                        fileSection(file, automaticallyRendersDiff: row.automaticallyRendersDiff)
-                            .id(DiffReviewSurfaceSelectionSync.sectionVisibilityTargetID(for: row.id))
-                        Color.clear
-                            .frame(height: row.showsBottomSpacing ? 14 : 0)
-                            .accessibilityHidden(true)
-                    }
-                }
-                .padding(16)
-                .scrollTargetLayout()
-            }
-            .onScrollTargetVisibilityChange(
-                idType: String.self,
-                threshold: DiffReviewSurfaceSelectionSync.visibilityThreshold
-            ) { ids in
-                updateSelectedFileFromVisibility(ids)
-            }
-            .onChange(of: scrollCommand) { _, command in
-                guard let command else { return }
-                // Snap rather than animate: without a native scroll view we
-                // can't cheaply measure current offset for a distance-based
-                // heuristic, and this path is legacy fallback only.
-                scrollProxy.scrollTo(command.id.rawValue, anchor: .top)
-                scrollCommand = DiffReviewScrollCommandConsumption.consume(
-                    current: scrollCommand,
-                    consumed: command
-                )
-            }
-            .onAppear {
-                if let command = scrollCommand {
-                    scrollProxy.scrollTo(command.id.rawValue, anchor: .top)
-                    scrollCommand = DiffReviewScrollCommandConsumption.consume(
-                        current: scrollCommand,
-                        consumed: command
-                    )
-                }
-                if let command = inlineFeedbackScrollCommand {
-                    scrollToInlineFeedback(command, scrollProxy: scrollProxy, animated: false)
-                }
-                if let draftCommand = draftCommentScrollCommand {
-                    scrollToDraftComment(draftCommand, scrollProxy: scrollProxy, animated: false)
-                }
-            }
-            .onChange(of: inlineFeedbackScrollCommand) { _, command in
-                guard let command else { return }
-                scrollToInlineFeedback(command, scrollProxy: scrollProxy, animated: true)
-            }
-            .onChange(of: draftCommentScrollCommand) { _, command in
-                guard let command else { return }
-                scrollToDraftComment(command, scrollProxy: scrollProxy, animated: true)
-            }
-        }
-        .background(theme.color("bg-1"))
-    }
-
     private func appKitMainReviewStream(_ session: DiffReviewLoadedSession) -> some View {
         AppKitDiffReviewScroller(
             inputs: appKitRowInputs(for: session),
@@ -456,189 +385,12 @@ struct DiffReviewSurface: View {
         }
     }
 
-    @ViewBuilder
-    private func fileSection(
-        _ file: DiffReviewFileSectionModel,
-        automaticallyRendersDiff: Bool
-    ) -> some View {
-        let inlineFeedback = inlineFeedbackByFileID[file.id] ?? []
-        let draftComments = draftCommentsByFileID[file.id] ?? []
-        let presentationState = appKitPresentationStore.state(for: file)
-        EquatableDiffReviewFileSection(
-            section: DiffReviewFileSection(
-                file: file,
-                inlineFeedback: inlineFeedback,
-                focusedFeedbackID: focusedFeedbackID,
-                inlineFeedbackScrollTargetID: inlineFeedbackScrollTargetID(for: file.id),
-                draftComments: draftComments,
-                focusedDraftCommentID: focusedDraftCommentID,
-                draftCommentScrollTargetID: draftCommentScrollTargetID(for: file.id),
-                layoutMode: $layoutMode,
-                wrapLines: $wrapLines,
-                showWhitespace: $showWhitespace,
-                codeFontFamily: codeFontFamily,
-                codeFontSize: codeFontSize,
-                showsSourceBadge: showsSourceBadges,
-                automaticallyRendersDiff: automaticallyRendersDiff,
-                lspContext: lspContextForFile(file),
-                inlineFeedbackActions: inlineFeedbackActions,
-                onSelectInlineFeedback: onSelectInlineFeedback,
-                draftCommentActions: draftCommentActions,
-                onSelectDraftComment: onSelectDraftComment,
-                onSaveDraftComment: { anchor, body in
-                    onSaveDraftComment(file.id, file.summary.path, file.summary.originalPath, anchor, body)
-                },
-                allowsDraftCommentCreation: allowsDraftCommentCreation,
-                allowsNonLineDraftCommentCreation: allowsNonLineDraftCommentCreation,
-                onContextExpansionActivated: {
-                    contextExpandedFileIDs.insert(file.id)
-                },
-                reviewFeedbackTarget: effectiveReviewFeedbackTarget,
-                threads: DiffReviewProviderFeedbackResolver.threads(
-                    threads,
-                    for: file.summary.path,
-                    includeFileLevel: file.imageProvider != nil
-                ),
-                annotations: inlineAnnotations(for: file.summary.path),
-                onReply: onReply,
-                onResolve: onResolve,
-                onUnresolve: onUnresolve,
-                onEdit: onEdit,
-                onDelete: onDelete,
-                canReply: canReply,
-                canResolve: canResolve,
-                onStageReply: onStageReply,
-                canAddToReview: canAddToReview,
-                presentationState: presentationState
-            ),
-            layoutMode: layoutMode,
-            wrapLines: wrapLines,
-            showWhitespace: showWhitespace,
-            draftCommentAvailability: draftComments.map(draftCommentActions.availability),
-            inlineFeedbackAvailability: inlineFeedback.map { inlineFeedbackActions.availability($0, file.summary) },
-            draftCommentAgentTargets: draftCommentActions.agentTargets(),
-            presentationStateSignature: DiffReviewFilePresentationSignature(presentationState)
-        )
-        .equatable()
-    }
-
     private func inlineFeedbackScrollTargetID(for fileID: DiffReviewFileID) -> String? {
         guard let command = inlineFeedbackScrollCommand,
               command.fileID == fileID
         else { return nil }
 
         return command.feedbackID
-    }
-
-    private func draftCommentScrollTargetID(for fileID: DiffReviewFileID) -> String? {
-        guard let command = draftCommentScrollCommand,
-              command.fileID == fileID
-        else { return nil }
-
-        return command.commentID
-    }
-
-    private func scrollToInlineFeedback(
-        _ command: DiffReviewInlineFeedbackScrollCommand,
-        scrollProxy: ScrollViewProxy,
-        animated: Bool
-    ) {
-        selectedFileID = command.fileID
-        scrollToReviewItem(
-            fileID: command.fileID,
-            targetID: command.targetID,
-            scrollProxy: scrollProxy,
-            animated: animated
-        )
-    }
-
-    private func scrollToDraftComment(
-        _ command: DiffReviewDraftCommentScrollCommand,
-        scrollProxy: ScrollViewProxy,
-        animated: Bool
-    ) {
-        selectedFileID = command.fileID
-        scrollToReviewItem(
-            fileID: command.fileID,
-            targetID: command.targetID,
-            scrollProxy: scrollProxy,
-            animated: animated
-        )
-    }
-
-    /// Scrolls the review stream to a specific inline item — a draft comment
-    /// or provider feedback card.
-    ///
-    /// The card is nested inside its file section, which is a lazy child of
-    /// the review stream's `LazyVStack`. When the item's file isn't currently
-    /// realized (the reviewer was looking at another file), a direct
-    /// `scrollTo(cardID)` silently no-ops because the card view isn't in the
-    /// tree yet. Mirror the file-rail scroll for that case: first land on the
-    /// file section (a direct lazy child SwiftUI reliably realizes), let
-    /// layout settle, then scroll to the nested card. `DiffReviewFileSection`
-    /// keeps a commanded card's hunk realized when its normal hunk stack is
-    /// lazy. When the file is already in view, a direct scroll reaches the card
-    /// without a detour through the file header.
-    ///
-    /// A programmatic-scroll token suppresses the scrollspy during the move so
-    /// it doesn't snap the selection back to whichever file ends up at the top
-    /// of the viewport.
-    private func scrollToReviewItem(
-        fileID: DiffReviewFileID,
-        targetID: some Hashable,
-        scrollProxy: ScrollViewProxy,
-        animated: Bool
-    ) {
-        let fileAlreadyVisible = scrollSpyActiveFileID == fileID
-        selectedFileID = fileID
-        // Lock the scrollspy's active file to the destination now. The visibility
-        // callback early-returns once `selectedFileID` already matches (and is
-        // suppressed during the programmatic scroll), so without this the
-        // active-file tracker would stay on the previous file and a later
-        // same-file-shortcut click on that now-off-screen file would no-op.
-        scrollSpyActiveFileID = fileID
-        let token = programmaticScroll.beginProgrammaticScroll(to: fileID)
-
-        func scrollToCard() {
-            if animated {
-                withAnimation(.easeInOut(duration: 0.18)) {
-                    scrollProxy.scrollTo(targetID, anchor: .center)
-                }
-            } else {
-                scrollProxy.scrollTo(targetID, anchor: .center)
-            }
-        }
-
-        if fileAlreadyVisible {
-            scrollToCard()
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 300_000_000)
-                programmaticScroll.finishProgrammaticScroll(token)
-            }
-            return
-        }
-
-        let sectionID = DiffReviewSurfaceSelectionSync.sectionVisibilityTargetID(for: fileID)
-        scrollProxy.scrollTo(sectionID, anchor: .top)
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 150_000_000)
-            guard programmaticScroll.isCurrent(token) else { return }
-            scrollToCard()
-            try? await Task.sleep(nanoseconds: 250_000_000)
-            programmaticScroll.finishProgrammaticScroll(token)
-        }
-    }
-
-    private func updateSelectedFileFromVisibility(_ visibleRawIDs: [String]) {
-        guard let updated = DiffReviewSurfaceSelectionSync.updatedSelectionFromVisibility(
-            current: selectedFileID,
-            visibleRawIDs: visibleRawIDs,
-            fileIDs: fileIDs,
-            programmaticScroll: programmaticScroll
-        ) else { return }
-
-        selectedFileID = updated
-        scrollSpyActiveFileID = updated
     }
 
     private func synchronizeSelectionWithSession() {
@@ -720,31 +472,14 @@ private struct AppKitDiffReviewProgrammaticScroll {
 }
 
 enum DiffReviewSurfaceSelectionSync {
-    static let visibilityThreshold: CGFloat = 0
-
     struct Result {
         let selectedFileID: DiffReviewFileID?
         let fileSetKey: String
         let programmaticScroll: DiffReviewProgrammaticScrollController
     }
 
-    private struct VisibilityLookupCache {
-        let topTargetLookup: [String: DiffReviewFileID]
-        let sectionTargetLookup: [String: DiffReviewFileID]
-    }
-
-    private static var visibilityLookupCache: (key: String, value: VisibilityLookupCache)?
-
     static func fileSetKey(for fileIDs: [DiffReviewFileID]) -> String {
         fileIDs.map { "\($0.rawValue.count):\($0.rawValue)" }.joined(separator: "|")
-    }
-
-    static func sectionVisibilityTargetID(for fileID: DiffReviewFileID) -> String {
-        fileID.rawValue
-    }
-
-    static func topVisibilityTargetID(for fileID: DiffReviewFileID) -> String {
-        "\(fileID.rawValue.count):\(fileID.rawValue):top"
     }
 
     static func synchronizedSelection(
@@ -758,62 +493,6 @@ enum DiffReviewSurfaceSelectionSync {
         }
 
         return first
-    }
-
-    static func updatedSelectionFromVisibility(
-        current: DiffReviewFileID?,
-        visibleRawIDs: [String],
-        fileIDs: [DiffReviewFileID],
-        programmaticScroll: DiffReviewProgrammaticScrollController
-    ) -> DiffReviewFileID? {
-        let key = fileSetKey(for: fileIDs)
-        let cache: VisibilityLookupCache
-        if let cached = visibilityLookupCache, cached.key == key {
-            cache = cached.value
-        } else {
-            let topTargetLookup = Dictionary(uniqueKeysWithValues: fileIDs.map {
-                (topVisibilityTargetID(for: $0), $0)
-            })
-            let sectionTargetLookup = Dictionary(uniqueKeysWithValues: fileIDs.map {
-                (sectionVisibilityTargetID(for: $0), $0)
-            })
-            cache = VisibilityLookupCache(topTargetLookup: topTargetLookup, sectionTargetLookup: sectionTargetLookup)
-            visibilityLookupCache = (key, cache)
-        }
-        let visibleTopTarget = visibleRawIDs.lazy.compactMap { cache.topTargetLookup[$0] }.first
-        let currentIsVisible = current.map { current in
-            visibleRawIDs.contains(topVisibilityTargetID(for: current))
-                || visibleRawIDs.contains(sectionVisibilityTargetID(for: current))
-        } ?? false
-        guard visibleTopTarget != nil || !currentIsVisible else { return nil }
-
-        let active = visibleTopTarget
-            ?? visibleRawIDs.lazy.compactMap { cache.sectionTargetLookup[$0] }.first
-        guard let active,
-              active != current,
-              programmaticScroll.acceptsScrollSpyUpdate(for: active)
-        else { return nil }
-
-        return active
-    }
-
-    static func renderedTargetFileID(
-        fileScrollTarget: DiffReviewFileID?,
-        inlineFeedbackScrollCommand: DiffReviewInlineFeedbackScrollCommand?
-    ) -> DiffReviewFileID? {
-        renderedTargetFileID(
-            fileScrollTarget: fileScrollTarget,
-            inlineFeedbackScrollCommand: inlineFeedbackScrollCommand,
-            draftCommentScrollCommand: nil
-        )
-    }
-
-    static func renderedTargetFileID(
-        fileScrollTarget: DiffReviewFileID?,
-        inlineFeedbackScrollCommand: DiffReviewInlineFeedbackScrollCommand?,
-        draftCommentScrollCommand: DiffReviewDraftCommentScrollCommand?
-    ) -> DiffReviewFileID? {
-        draftCommentScrollCommand?.fileID ?? inlineFeedbackScrollCommand?.fileID ?? fileScrollTarget
     }
 
     static func synchronize(

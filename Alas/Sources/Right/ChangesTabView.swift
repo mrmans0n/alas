@@ -8,7 +8,6 @@ struct ChangesTabView: View {
     let onEditCommit: (CommitInfo, String) -> Void
     let onReviewCommit: (CommitInfo) -> Void
 
-    @State private var appKitScrollerEnabled = AppKitChangesScrollerFlag.isEnabled
     @State private var collapsedChangePaths: Set<String> = []
     @State private var appKitActionRelay = ChangesAppKitActionRelay()
     @Environment(\.theme) private var theme
@@ -77,18 +76,12 @@ struct ChangesTabView: View {
             onReviewCommit: onReviewCommit
         )
         VStack(spacing: 0) {
-            if appKitScrollerEnabled {
-                AppKitDiffScroller(
-                    plan: appKitScrollPlan,
-                    scrollRequest: nil,
-                    onActiveOwnerChange: { _ in },
-                    onScrollRequestCompletion: { _ in }
-                )
-            } else {
-                ScrollView {
-                    scrollContent
-                }
-            }
+            AppKitDiffScroller(
+                plan: appKitScrollPlan,
+                scrollRequest: nil,
+                onActiveOwnerChange: { _ in },
+                onScrollRequestCompletion: { _ in }
+            )
             if isGGDrawerActive {
                 GGStackDrawer(rps: rps, appState: appState)
             } else {
@@ -98,9 +91,6 @@ struct ChangesTabView: View {
                     onAction: { action in rps.handleReviewReadinessAction(action, appState: appState) }
                 )
             }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: AppKitChangesScrollerFlag.overrideDidChangeNotification)) { _ in
-            appKitScrollerEnabled = AppKitChangesScrollerFlag.isEnabled
         }
     }
 
@@ -200,95 +190,6 @@ struct ChangesTabView: View {
     ) -> GGStackReadinessModel.Action? {
         readiness?.primaryActions.first {
             $0.kind == .sync || $0.kind == .rebase
-        }
-    }
-
-    private var scrollContent: some View {
-        let preparation = preparationModel
-        return LazyVStack(alignment: .leading, spacing: 0, pinnedViews: .sectionHeaders) {
-            if let err = rps.sidebarError {
-                InlineErrorStrip(
-                    message: err,
-                    onDismiss: { rps.sidebarError = nil }
-                )
-                .padding(.horizontal, 12)
-                .padding(.top, 6)
-            }
-
-            if let op = rps.mergeOp.current,
-               Self.shouldShowGenericOperationCard(mergeOperation: op, pausedGGOperation: rps.ggActionState.pausedOperation)
-            {
-                OperationCard(
-                    operation: op,
-                    hasUnresolvedConflicts: !conflicts.isEmpty,
-                    onContinue: { rps.continueOperation() },
-                    onSkip: { rps.skipOperation() },
-                    onAbort: { rps.abortOperation() }
-                )
-            }
-
-            ConflictsSection(
-                conflicts: conflicts,
-                bulkInFlight: rps.bulkResolveInFlight,
-                bulkReport: rps.bulkResolveReport,
-                hasAgent: resolvedBulkAgent != nil,
-                onSelect: { file in rps.openConflict?(file.path) },
-                onUseOurs: { file in rps.useOurs(file: file) },
-                onUseTheirs: { file in rps.useTheirs(file: file) },
-                onKeepDeleted: { file in rps.keepDeleted(file: file) },
-                onMarkResolved: { file in rps.markResolved(file: file) },
-                onResolveAllWithAgent: {
-                    guard let agent = resolvedBulkAgent else { return }
-                    rps.resolveAllConflicts(
-                        using: agent,
-                        prompt: appState.config.changes.mergeBulkResolvePrompt
-                    )
-                },
-                onCancelBulkResolve: { rps.cancelBulkResolve() },
-                onDismissBulkReport: { rps.dismissBulkResolveReport() },
-                dragPayload: { file in
-                    .workingTreeFile(worktreePath: rps.worktree.path, relativePath: file.path)
-                }
-            )
-
-            if Self.shouldShowChangesPreparationCard(
-                preparationIsVisible: preparation.isVisible
-            ) {
-                ChangesPreparationCard(
-                    model: preparation,
-                    onReviewChanges: openReviewChangesTab,
-                    onDraftCommit: openDraftTab,
-                    onGGAction: handleGGPreparationAction,
-                    onGGStackAction: { action in
-                        rps.onGGStackAction(action, appState: appState)
-                    },
-                    onReviewRequestAction: { action in
-                        rps.handleReviewReadinessAction(action, appState: appState)
-                    },
-                    onDismissSyncFailure: { rps.ggActionState.dismissCompletedSyncFailure() }
-                )
-            }
-            workingTreeSection
-            StashesSectionView(
-                stashes: rps.stashes,
-                filesByRef: rps.stashFilesByRef,
-                loadingRefs: rps.loadingStashRefs,
-                expanded: $rps.stashesExpanded,
-                expandedRefs: rps.expandedStashRefs,
-                onToggleSection: { rps.stashesExpanded.toggle() },
-                onToggleStash: { rps.toggleStashExpanded($0) },
-                onSelectFile: { stash, file in
-                    appState.openStashDiffTab(worktree: rps.worktree, stash: stash, file: file)
-                },
-                onApply: { rps.applyStash($0) },
-                onPop: { rps.popStash($0) },
-                onDrop: { rps.requestDropStash($0) },
-                dragPayload: { stash, file in
-                    .stashFile(worktreePath: rps.worktree.path, stash: stash, file: file)
-                }
-            )
-            Divider().opacity(0.4)
-            commitsSection
         }
     }
 

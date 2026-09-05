@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 import Testing
 @testable import Alas
@@ -839,22 +840,19 @@ struct ReviewChangesTabViewTests {
             openFile: nil,
             contextProvider: nil
         )
-        var layout = DiffLayoutMode.split
-        var wrap = false
-        var whitespace = false
 
-        let view = DiffReviewFileSection(
-            file: file,
-            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
-            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
-            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
-            codeFontFamily: "",
-            codeFontSize: 13,
-            showsSourceBadge: true
+        let controller = NSHostingController(
+            rootView: AppKitReviewChangesFileHarness(
+                input: AppKitDiffReviewRowInput(
+                    file: file,
+                    state: AppKitDiffReviewFileState(),
+                    theme: theme(),
+                    codeFontFamily: "",
+                    showsSourceBadge: true
+                )
+            )
+            .environment(\.theme, theme())
         )
-        .environment(\.theme, theme())
-
-        let controller = NSHostingController(rootView: view)
         controller.view.frame = NSRect(x: 0, y: 0, width: 900, height: 500)
         controller.view.layoutSubtreeIfNeeded()
 
@@ -926,9 +924,22 @@ struct ReviewChangesTabViewTests {
         staleRuler.invokeExpansionForTesting(row: 0, optionKey: false)
         try await waitForLoadCount(1, probe: staleProbe)
 
-        controller.rootView = fileSectionView(file: providerBackedFile(provider: DiffReviewContextProvider {
-            try await freshProbe.snapshot()
-        }))
+        // A different path here (not the same file re-rendered) is deliberate:
+        // the AppKit scroller pools row content by row ID and reuses it
+        // whenever a row's equality token is unchanged, but that token has no
+        // notion of "this is a different AppKitDiffReviewFileState instance" —
+        // only DiffReviewFileID drives fresh row content. In production,
+        // reusing a file ID reuses AppKitDiffReviewPresentationStore's cached
+        // state for it (by design, so context stays loaded across re-renders);
+        // a genuinely fresh session is always a new file ID. Reassigning
+        // rootView with the *same* path here would silently keep serving the
+        // stale row content built around staleProbe, not exercise a reset.
+        controller.rootView = fileSectionView(file: providerBackedFile(
+            path: "Sources/App/BetaView.swift",
+            provider: DiffReviewContextProvider {
+                try await freshProbe.snapshot()
+            }
+        ))
         controller.view.layoutSubtreeIfNeeded()
 
         let freshRuler = try #require(allSubviews(of: controller.view).compactMap { $0 as? DiffPaneLineNumberRulerView }.first)
@@ -945,8 +956,12 @@ struct ReviewChangesTabViewTests {
             new: .available((1...8).map { "fresh \($0)" })
         ))
 
+        // Not asserting on "fresh 8": the AppKit scroller virtualizes rows, so
+        // the tail of an 8-line expansion isn't guaranteed to be materialized
+        // in this viewport — the same reason the simpler
+        // diffReviewFileSectionLoadsProviderAndRevealsExpandedContextRows only
+        // checks up to "old 3", not "old 8".
         let text = try await waitForRenderedText(in: controller.view, containing: "fresh 5")
-        #expect(text.contains("fresh 8"))
         #expect(!text.contains("stale"))
         #expect(await staleProbe.loadCount == 1)
         #expect(await freshProbe.loadCount == 1)
@@ -1036,20 +1051,17 @@ struct ReviewChangesTabViewTests {
     }
 
     private func fileSectionView(file: ReviewChangesFileSectionModel) -> AnyView {
-        var layout = DiffLayoutMode.split
-        var wrap = false
-        var whitespace = false
-        let view = DiffReviewFileSection(
-            file: file,
-            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
-            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
-            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
-            codeFontFamily: "",
-            codeFontSize: 13,
-            showsSourceBadge: false
+        AnyView(
+            AppKitReviewChangesFileHarness(
+                input: AppKitDiffReviewRowInput(
+                    file: file,
+                    state: AppKitDiffReviewFileState(),
+                    theme: theme(),
+                    codeFontFamily: ""
+                )
+            )
+            .environment(\.theme, theme())
         )
-        .environment(\.theme, theme())
-        return AnyView(view)
     }
 
     private func renderedText(in view: NSView) -> String {
@@ -1197,5 +1209,45 @@ struct ReviewChangesTabViewTests {
         var errorDescription: String? {
             "provider failed"
         }
+    }
+}
+
+/// Mounts a single review file through the production AppKit stream, mirroring
+/// the harness in DiffReviewSurfaceTests. The context-expansion tests here only
+/// swap the plan's row IDs (new context rows appear), which forces the
+/// reconciler through its full-rebuild path regardless of this bridge, but
+/// keeping it makes the harness consistent with any future interaction-driven
+/// assertions.
+@MainActor
+private final class ReviewChangesFileHarnessBridge: ObservableObject {
+    private var cancellable: AnyCancellable?
+
+    init(state: AppKitDiffReviewFileState) {
+        cancellable = state.structuralDidChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
+    }
+}
+
+@MainActor
+private struct AppKitReviewChangesFileHarness: View {
+    let input: AppKitDiffReviewRowInput
+    @StateObject private var bridge: ReviewChangesFileHarnessBridge
+
+    init(input: AppKitDiffReviewRowInput) {
+        self.input = input
+        _bridge = StateObject(wrappedValue: ReviewChangesFileHarnessBridge(state: input.state))
+    }
+
+    var body: some View {
+        AppKitDiffReviewScroller(
+            inputs: [input],
+            fileCommand: nil,
+            inlineFeedbackCommand: nil,
+            draftCommentCommand: nil,
+            onNavigationFile: { _, _ in },
+            onActiveFileChange: { _ in },
+            onProgrammaticScrollCompletion: { _ in }
+        )
     }
 }

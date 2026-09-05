@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### 🏗️ Internal
+
+- Productionize the AppKit Changes scroller and delete the dead SwiftUI diff/review scrolling paths left behind since the AppKit diff and review scrollers shipped (#1018).
+
 ## [0.15.0] - 2026-09-05
 
 ### ✨ Features
