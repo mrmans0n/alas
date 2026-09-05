@@ -721,6 +721,66 @@ struct RemoteAppStateAccessTests {
         #expect(nonACP == .failure("Agent is no longer available."))
     }
 
+    @Test func remoteProjectsPreserveConfiguredProjectIDsAndNames() async {
+        let firstProject = ProjectConfig(
+            id: "project-first",
+            name: "First Project",
+            path: "/tmp/first-project",
+            color: "blue",
+            addedAt: Date()
+        )
+        let secondProject = ProjectConfig(
+            id: "project-second",
+            name: "Second Project",
+            path: "/tmp/second-project",
+            color: "green",
+            addedAt: Date()
+        )
+        let state = AppState(store: ProjectMemoryStore(
+            projectsFile: ProjectsFile(projects: [firstProject, secondProject])
+        ))
+
+        let projects = await state.remoteProjects()
+
+        #expect(projects == [
+            RemoteProjectOption(id: "project-first", name: "First Project"),
+            RemoteProjectOption(id: "project-second", name: "Second Project"),
+        ])
+    }
+
+    @Test func remoteBranchesReturnsBranchesAndPrefersMain() async throws {
+        let repository = try await makeRemoteBranchesRepository()
+        defer { try? FileManager.default.removeItem(at: repository) }
+        let project = ProjectConfig(
+            id: "project-branches",
+            name: "Branch Project",
+            path: repository.path,
+            color: "blue",
+            addedAt: Date()
+        )
+        let state = AppState(store: ProjectMemoryStore(
+            projectsFile: ProjectsFile(projects: [project])
+        ))
+
+        let result = await state.remoteBranches(projectId: project.id)
+
+        guard case let .success(branches, preferredBase) = result else {
+            Issue.record("expected branch list success, got \(result)")
+            return
+        }
+        #expect(branches.contains("main"))
+        #expect(branches.contains("feature/remote"))
+        #expect(preferredBase == "main")
+    }
+
+    @Test func remoteBranchesRejectsMissingProject() async {
+        let state = AppState(store: ProjectMemoryStore(projectsFile: ProjectsFile(projects: [])))
+
+        let result = await state.remoteBranches(projectId: "missing-project")
+
+        #expect(result == .failure("Repository is no longer available."))
+    }
+
     private func statusCode(port: UInt16, host: String, path: String) async throws -> Int? {
         var req = URLRequest(url: URL(string: "http://127.0.0.1:\(port)\(path)")!)
         req.setValue(host, forHTTPHeaderField: "Host")
@@ -807,6 +867,18 @@ struct RemoteAppStateAccessTests {
             installedIds: ["test-agent"]
         )
         return state
+    }
+
+    private func makeRemoteBranchesRepository() async throws -> URL {
+        let repository = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-remote-branches-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: repository, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: repository)
+        _ = try await Process.git(["config", "user.email", "test@example.com"], cwd: repository)
+        _ = try await Process.git(["config", "user.name", "Test User"], cwd: repository)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "initial"], cwd: repository)
+        _ = try await Process.git(["branch", "feature/remote"], cwd: repository)
+        return repository
     }
 
     private func acpTabs(in state: AppState) -> [ACPSessionTabState] {

@@ -5,6 +5,22 @@ import Testing
 /// Enable with ALAS_SSH_INTEGRATION=1 and key-authenticated ssh localhost.
 @Suite(.disabled(if: ProcessInfo.processInfo.environment["ALAS_SSH_INTEGRATION"] != "1"))
 struct SSHIntegrationTests {
+    private struct ProjectMemoryStore: PersistenceStoreProtocol {
+        let projectsFile: ProjectsFile
+
+        func write<T: Encodable>(_: T, to _: URL) throws {}
+
+        func readIfExists<T: Decodable>(_ type: T.Type, from _: URL) throws -> T? {
+            if type == ProjectsFile.self {
+                return projectsFile as? T
+            }
+            if type == AppConfig.self {
+                return AppConfig.defaults as? T
+            }
+            return nil
+        }
+    }
+
     private var enabled: Bool {
         ProcessInfo.processInfo.environment["ALAS_SSH_INTEGRATION"] == "1"
     }
@@ -26,6 +42,45 @@ struct SSHIntegrationTests {
         #expect(status.exitCode == 0)
         let repository = try await Process.git(["rev-parse", "--is-inside-work-tree"], cwd: directory)
         #expect(repository.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "true")
+    }
+
+    @Test @MainActor func remoteBranchesDiscoverOverSSHLocalhost() async throws {
+        try #require(enabled, "set ALAS_SSH_INTEGRATION=1 to run")
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-ssh-branches-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer {
+            RemoteHostRegistry.shared.unregister(root: directory.path)
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        _ = try await Process.run("/usr/bin/env", args: ["git", "init", "-q", "-b", "main"], cwd: directory)
+        _ = try await Process.run("/usr/bin/env", args: ["git", "config", "user.email", "test@example.com"], cwd: directory)
+        _ = try await Process.run("/usr/bin/env", args: ["git", "config", "user.name", "Test User"], cwd: directory)
+        _ = try await Process.run("/usr/bin/env", args: ["git", "commit", "-q", "--allow-empty", "-m", "initial"], cwd: directory)
+        _ = try await Process.run("/usr/bin/env", args: ["git", "branch", "feature/remote"], cwd: directory)
+        let project = ProjectConfig(
+            id: "ssh-branches",
+            name: "SSH Branches",
+            path: directory.path,
+            color: "blue",
+            addedAt: Date(),
+            host: "localhost"
+        )
+        let state = AppState(store: ProjectMemoryStore(
+            projectsFile: ProjectsFile(projects: [project])
+        ))
+
+        let result = await state.remoteBranches(projectId: project.id)
+
+        guard case let .success(branches, preferredBase) = result else {
+            Issue.record("expected branch list success, got \(result)")
+            return
+        }
+        #expect(branches.contains("main"))
+        #expect(branches.contains("feature/remote"))
+        #expect(preferredBase == "main")
     }
 
     @Test func remoteValidatorAcceptsAndRejects() async throws {

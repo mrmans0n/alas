@@ -6,6 +6,8 @@ import Foundation
 final class FakeSessionsProvider: RemoteSessionsProvider {
     var summaries: [RemoteSessionSummary] = []
     var worktrees: [RemoteWorktreeOption] = []
+    var projects: [RemoteProjectOption] = []
+    var branchResults: [String: RemoteBranchListResult] = [:]
     var agents: [RemoteAgentOption] = []
     var createResults: [String: RemoteCreateSessionResult] = [:]
     var sessions: [String: ACPSession] = [:]
@@ -42,15 +44,22 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     var fullToolCallContentCallCount = 0
     var sessionSummariesCallCount = 0
     var remoteWorktreesCallCount = 0
+    var remoteProjectsCallCount = 0
+    var remoteBranchesCallCount = 0
+    var remoteBranchRequests: [String] = []
     var remoteAgentsCallCount = 0
     var createRequests: [(worktreeId: String, agentId: String)] = []
     var pauseSessionSummaries = false
     var pauseRemoteWorktrees = false
+    var pauseRemoteProjects = false
+    var pauseRemoteBranches = false
     /// 1-indexed call number of `fullToolCallContent` to suspend on (nil = never pause).
     /// Lets a test freeze exactly one in-flight fetch while later calls proceed normally.
     var pauseFullToolCallContentOnCall: Int?
     private var sessionSummariesContinuation: CheckedContinuation<[RemoteSessionSummary], Never>?
     private var remoteWorktreesContinuation: CheckedContinuation<[RemoteWorktreeOption], Never>?
+    private var remoteProjectsContinuation: CheckedContinuation<[RemoteProjectOption], Never>?
+    private var remoteBranchesContinuation: CheckedContinuation<RemoteBranchListResult, Never>?
     private var fullToolCallContentContinuation: CheckedContinuation<String?, Never>?
     func sessionSummaries() async -> [RemoteSessionSummary] {
         sessionSummariesCallCount += 1
@@ -70,6 +79,25 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
         }
         return worktrees
     }
+    func remoteProjects() async -> [RemoteProjectOption] {
+        remoteProjectsCallCount += 1
+        if pauseRemoteProjects {
+            return await withCheckedContinuation { continuation in
+                remoteProjectsContinuation = continuation
+            }
+        }
+        return projects
+    }
+    func remoteBranches(projectId: String) async -> RemoteBranchListResult {
+        remoteBranchesCallCount += 1
+        remoteBranchRequests.append(projectId)
+        if pauseRemoteBranches {
+            return await withCheckedContinuation { continuation in
+                remoteBranchesContinuation = continuation
+            }
+        }
+        return branchResults[projectId] ?? .failure("Could not load branches.")
+    }
     func remoteAgents() -> [RemoteAgentOption] {
         remoteAgentsCallCount += 1
         return agents
@@ -85,6 +113,16 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     func resumeRemoteWorktrees() {
         remoteWorktreesContinuation?.resume(returning: worktrees)
         remoteWorktreesContinuation = nil
+    }
+    func resumeRemoteProjects() {
+        remoteProjectsContinuation?.resume(returning: projects)
+        remoteProjectsContinuation = nil
+    }
+    func resumeRemoteBranches(projectId: String) {
+        remoteBranchesContinuation?.resume(
+            returning: branchResults[projectId] ?? .failure("Could not load branches.")
+        )
+        remoteBranchesContinuation = nil
     }
     func session(for id: String) -> ACPSession? { sessions[id] }
     func permissionPolicy(for id: String) -> ACPPermissionPolicy? { policies[id] }

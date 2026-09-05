@@ -7472,6 +7472,28 @@ extension AppState: RemoteSessionsProvider {
         return out
     }
 
+    func remoteProjects() async -> [RemoteProjectOption] {
+        projects.map { RemoteProjectOption(id: $0.id, name: $0.name) }
+    }
+
+    func remoteBranches(projectId: String) async -> RemoteBranchListResult {
+        guard let project = projects.first(where: { $0.id == projectId }) else {
+            return .failure("Repository is no longer available.")
+        }
+
+        do {
+            let branches = try await GitService().branches(at: URL(fileURLWithPath: project.path))
+            let preferredBase = NewWorktreeDialog.preferredBaseBranch(
+                availableBranches: branches,
+                configuredDefault: config.worktrees.baseBranch
+            )
+            return .success(branches: branches, preferredBase: preferredBase)
+        } catch {
+            Self.logger.error("Could not load remote branches for project \(project.id, privacy: .private): \(String(describing: error), privacy: .private)")
+            return .failure("Could not load branches.")
+        }
+    }
+
     func remoteAgents() -> [RemoteAgentOption] {
         let enabledById = Dictionary(uniqueKeysWithValues: agentRegistry.enabled().map { ($0.id, $0) })
         let ordered = ACPLaunchCatalog.specs.compactMap { enabledById[$0.agentID] }
