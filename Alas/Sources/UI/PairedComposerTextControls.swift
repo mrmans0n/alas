@@ -19,6 +19,51 @@ class PairedDelimiterTextView: NSTextView {
         isAutomaticQuoteSubstitutionEnabled = false
     }
 
+    /// Full-width rects covering each fenced block, in view coordinates.
+    ///
+    /// The `.backgroundColor` attribute is not used for this: it paints behind
+    /// glyphs only, so a code block would get a ragged right edge instead of a
+    /// box. These views are TextKit 1, so the layout manager gives us the
+    /// bounding rect directly.
+    func codeBlockBackgroundRects() -> [NSRect] {
+        guard markdownFencesEnabled,
+              let layoutManager,
+              let textContainer
+        else { return [] }
+
+        let full = NSRange(location: 0, length: (string as NSString).length)
+        let padding = textContainer.lineFragmentPadding
+
+        return MarkdownFenceEditing.blocks(in: string).compactMap { block in
+            let range = NSIntersectionRange(block.outerRange, full)
+            guard range.length > 0 else { return nil }
+            let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            guard glyphRange.length > 0 else { return nil }
+            var rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+            rect.origin.x = textContainerInset.width + padding
+            rect.size.width = textContainer.size.width - padding * 2
+            rect.origin.y += textContainerInset.height
+            return rect.insetBy(dx: 0, dy: -2)
+        }
+    }
+
+    override func drawBackground(in rect: NSRect) {
+        super.drawBackground(in: rect)
+        guard let style = markdownCodeBlockStyle else { return }
+        for box in codeBlockBackgroundRects() where box.intersects(rect) {
+            let path = NSBezierPath(
+                roundedRect: box.insetBy(dx: style.borderWidth / 2, dy: style.borderWidth / 2),
+                xRadius: style.cornerRadius,
+                yRadius: style.cornerRadius
+            )
+            style.backgroundColor.setFill()
+            path.fill()
+            style.borderColor.setStroke()
+            path.lineWidth = style.borderWidth
+            path.stroke()
+        }
+    }
+
     override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
         if !hasMarkedText() {
             let replaced = replacementRange.location == NSNotFound ? self.selectedRange() : replacementRange
