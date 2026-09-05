@@ -34,7 +34,12 @@ enum MarkdownFenceEditing {
     /// CommonMark's minimum fence width.
     static let minimumFenceLength = 3
     /// CommonMark allows a fence to be indented by at most three spaces.
-    private static let maximumFenceIndent = 3
+    ///
+    /// Internal rather than private: `PairedComposerTextControls` reuses it to
+    /// decide when a caret's preceding whitespace is a fence's own indentation
+    /// rather than stray padding, so that decision can never drift from what
+    /// `parseFence` itself accepts.
+    static let maximumFenceIndent = 3
 
     private static let space: unichar = 0x20
     private static let backtick: unichar = 0x60

@@ -187,6 +187,15 @@ struct PairedDelimiterDeadKeyTests {
         #expect(textView.selectedRange() == NSRange(location: 4, length: 0))
     }
 
+    @Test func deadKeyThreeBackticksAfterLeadingSpacesKeepIndentation() {
+        let textView = makePairedTextView(text: "  ", fencesEnabled: true)
+        textView.setSelectedRange(NSRange(location: 2, length: 0))
+        typeDeadKeys("```", in: textView)
+
+        #expect(textView.string == "  ```\n\n  ```")
+        #expect(textView.selectedRange() == NSRange(location: 6, length: 0))
+    }
+
     @Test func deadKeyThreeBackticksFenceTheSelection() {
         let textView = makePairedTextView(text: "value", fencesEnabled: true)
         textView.setSelectedRange(NSRange(location: 0, length: 5))

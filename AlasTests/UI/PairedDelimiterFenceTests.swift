@@ -45,6 +45,30 @@ struct PairedDelimiterFenceTests {
         #expect(textView.selectedRange() == NSRange(location: 8, length: 0))
     }
 
+    @Test("a fence opened after up to three leading spaces keeps that indentation",
+        arguments: [1, 2, 3])
+    func fencePreservesLeadingIndent(spaceCount: Int) {
+        let textView = makeTextView()
+        let indent = String(repeating: " ", count: spaceCount)
+        textView.string = indent
+        textView.setSelectedRange(NSRange(location: spaceCount, length: 0))
+        type("```", into: textView)
+
+        #expect(textView.string == "\(indent)```\n\n\(indent)```")
+        #expect(textView.selectedRange() == NSRange(location: spaceCount + 4, length: 0))
+    }
+
+    @Test("a fence opened after more than three leading spaces still starts on its own line")
+    func fenceBeyondIndentToleranceStartsOnOwnLine() {
+        let textView = makeTextView()
+        textView.string = "    "
+        textView.setSelectedRange(NSRange(location: 4, length: 0))
+        type("```", into: textView)
+
+        #expect(textView.string == "    \n```\n\n```")
+        #expect(textView.selectedRange() == NSRange(location: 9, length: 0))
+    }
+
     @Test("following text is pushed past the closing fence")
     func trailingTextGetsItsOwnLine() {
         let textView = makeTextView()
@@ -64,6 +88,17 @@ struct PairedDelimiterFenceTests {
 
         #expect(textView.string == "```\nvalue\n```")
         #expect(textView.selectedRange() == NSRange(location: 4, length: 5))
+    }
+
+    @Test("wrapping a selection after leading spaces keeps that indentation on both fences")
+    func wrapsSelectionPreservingLeadingIndent() {
+        let textView = makeTextView()
+        textView.string = "  value"
+        textView.setSelectedRange(NSRange(location: 2, length: 5))
+        type("```", into: textView)
+
+        #expect(textView.string == "  ```\nvalue\n  ```")
+        #expect(textView.selectedRange() == NSRange(location: 6, length: 5))
     }
 
     @Test("wrapping whole lines does not add a blank line before the closer")

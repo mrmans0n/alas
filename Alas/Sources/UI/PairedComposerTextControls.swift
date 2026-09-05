@@ -456,24 +456,61 @@ class PairedDelimiterTextView: NSTextView {
         body: NSString,
         in text: NSString
     ) -> FencedBlockExpansion {
-        let needsLeadingNewline = replaced.location > 0
+        // A caret preceded only by up-to-tolerance spaces on its own line is
+        // sitting at the end of a fence's own indentation — a "  ```" the
+        // author meant to nest inside a list item, not stray padding above an
+        // unindented one. `parseFence` already reads that as a fence line, so
+        // treating it as one here keeps the two in lockstep instead of
+        // guessing at a tolerance of its own.
+        let precedingIndent = fenceIndent(before: replaced.location, in: text)
+        let needsLeadingNewline = precedingIndent == nil
+            && replaced.location > 0
             && text.character(at: replaced.location - 1) != 0x0A
         let suffixLocation = NSMaxRange(replaced)
         let needsTrailingNewline = suffixLocation < text.length
             && text.character(at: suffixLocation) != 0x0A
         let leading = needsLeadingNewline ? "\n" : ""
         let trailing = needsTrailingNewline ? "\n" : ""
+        let indent = precedingIndent ?? ""
         // Selecting whole lines takes the last one's terminator along, so the
         // body already ends on a line of its own. Adding another newline there
         // would push a blank line the author never typed into their own content.
         let separator = endsWithLineTerminator(body) ? "" : "\n"
 
         return FencedBlockExpansion(
+            // The opening fence's indentation, if any, already sits in the
+            // document right before `replaced` — this edit never touches it,
+            // so `prefix` only ever adds the fence itself.
             prefix: leading + "```\n",
-            suffix: separator + "```" + trailing,
+            // The closing fence starts life on a fresh line with nothing
+            // before it, so its matching indentation has to be typed in here.
+            suffix: separator + indent + "```" + trailing,
             // "```\n" is four characters past the leading newline, if any.
             bodyStart: replaced.location + (leading as NSString).length + 4
         )
+    }
+
+    /// The whitespace-only run, if any, between the start of the line
+    /// containing `location` and `location` itself.
+    ///
+    /// Returns `nil` when that span is empty (nothing to preserve — the
+    /// ordinary leading-newline logic already covers a caret right at the
+    /// start of a line), holds anything other than a plain space (a tab, or
+    /// non-whitespace content `parseFence` would never skip over), or is
+    /// wider than `MarkdownFenceEditing.maximumFenceIndent` — in every one of
+    /// those cases a fence built at `location` would not parse as a fence at
+    /// all, so the caret is better served by the fallback of a fresh, unindented
+    /// line.
+    private static func fenceIndent(before location: Int, in text: NSString) -> String? {
+        guard location > 0 else { return nil }
+        let lineStart = text.lineRange(for: NSRange(location: location, length: 0)).location
+        let span = NSRange(location: lineStart, length: location - lineStart)
+        guard span.length > 0, span.length <= MarkdownFenceEditing.maximumFenceIndent else {
+            return nil
+        }
+        let candidate = text.substring(with: span)
+        guard candidate.allSatisfy({ $0 == " " }) else { return nil }
+        return candidate
     }
 
     /// Whether `body` already ends on a line of its own. Recognizes the same
