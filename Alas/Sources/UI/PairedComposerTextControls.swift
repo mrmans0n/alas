@@ -82,14 +82,18 @@ class PairedDelimiterTextView: NSTextView {
             case .none:
                 // `MarkdownFenceEditing.resolve` returns `.none` here on
                 // purpose — its contract is to fall through to plain pairing
-                // for anything it doesn't recognize, including a backtick
-                // that lands inside an existing block. But
+                // for anything it doesn't recognize, including a delimiter
+                // that lands on or inside an existing block. But
                 // `PairedDelimiterEditing` has no notion of fences, so the
-                // closer it adds on the user's behalf can turn a run of
-                // backticks into a fence line and re-cut the document's
-                // blocks — see `swallowsFenceCollidingBacktick`. Swallow just
-                // those keystrokes; everything else falls through untouched.
-                if swallowsFenceCollidingBacktick(insertedText: insertedText, range: range) {
+                // partner it adds on the user's behalf can re-cut the
+                // document's blocks — see `fenceCollisionOutcome`.
+                switch fenceCollisionOutcome(insertedText: insertedText, range: range) {
+                case .pair:
+                    break
+                case .insertLiterally:
+                    super.insertText(insertString, replacementRange: replacementRange)
+                    return
+                case .swallow:
                     return
                 }
             }
@@ -135,42 +139,106 @@ class PairedDelimiterTextView: NSTextView {
         return MarkdownFenceEditing.block(containing: location, in: string)
     }
 
-    /// Whether a backtick landing at `range` — one `MarkdownFenceEditing`
-    /// declined to handle, most commonly because it's inside an existing
-    /// block — should be swallowed instead of falling through to
-    /// `PairedDelimiterEditing`.
+    /// What to do with a delimiter keystroke `MarkdownFenceEditing` declined
+    /// to handle, once the damage `PairedDelimiterEditing`'s pairing would do
+    /// to the document's fences is accounted for.
+    private enum FenceCollisionOutcome {
+        /// Nothing at risk — let `PairedDelimiterEditing` resolve normally.
+        case pair
+        /// Pairing would re-cut the document; the bare keystroke won't. Insert
+        /// the typed character on its own, without its partner.
+        case insertLiterally
+        /// Even the bare keystroke re-cuts the document.
+        case swallow
+    }
+
+    /// How to handle a delimiter landing at `range` — one
+    /// `MarkdownFenceEditing` declined to handle, most commonly because it's
+    /// on or inside an existing block.
     ///
     /// `PairedDelimiterEditing` knows nothing about fences. It answers a
-    /// backtick by putting *more* than the typed character into the storage:
+    /// delimiter by putting *more* than the typed character into the storage:
     /// `.insertPair` writes two, `.wrap` writes one against each end of the
-    /// selection. Those unrequested characters are what extend a backtick run
-    /// far enough to read as a fence line, and a fence line appearing where
-    /// the author didn't put one re-cuts the document — closing the enclosing
-    /// block early, orphaning its real closer, or widening an opener past the
-    /// closer that used to match it.
+    /// selection. That extra partner is what extends a backtick run far
+    /// enough to read as a fence line, or drops a quote into a closing
+    /// fence's info string where CommonMark then refuses to see a closer —
+    /// either way the document gets re-cut behind the author's back.
     ///
-    /// So rather than restating the fence grammar here — line starts, indent
+    /// Rather than restating the fence grammar here — line starts, indent
     /// tolerance, info strings, how wide a run must be to close its opener —
-    /// per flank, in a form that has to be kept in step with the parser, this
-    /// asks the parser: apply the exact edit `PairedDelimiterEditing` would
-    /// apply, and refuse the keystroke when the block structure that comes
-    /// back isn't the one already on screen. Every flank the edit touches is
-    /// covered at once, because the comparison is over the whole document.
+    /// in a form that has to be kept in step with the parser, this asks the
+    /// parser: apply the exact edit `PairedDelimiterEditing` would apply, and
+    /// compare the fenced blocks that come back against the ones already on
+    /// screen. Every position the edit touches is covered at once, because
+    /// the comparison is over the whole document, and the check holds for any
+    /// delimiter rather than only for backticks.
     ///
-    /// Only the padded resolutions are inspected. `.stepOver` writes nothing,
-    /// and `.native` writes exactly the character the user pressed — vetoing
-    /// that would be a keystroke vanishing with no auto-pairing to blame,
-    /// which is a worse outcome than the markdown it produces.
-    private func swallowsFenceCollidingBacktick(insertedText: String, range: NSRange) -> Bool {
-        guard insertedText == "`",
-              let edited = pairedDelimiterPaddedResult(of: insertedText, at: range)
-        else { return false }
-        return Self.fenceStructure(of: edited) != Self.fenceStructure(of: string)
+    /// The two halves of the edit are judged by different standards, because
+    /// they have different authors. The partner character is the editor's own
+    /// doing, so it has to leave the fences *exactly* as it found them. The
+    /// typed character is the author's, so it only has to leave the blocks
+    /// that are already closed alone — finishing a block that was left open
+    /// is the author completing their own fence, and refusing it would make
+    /// an unclosed block impossible to close by typing.
+    ///
+    /// Falling back to the bare character is offered only from a caret.
+    /// `PairedDelimiterEditing.wrap` is the only resolution a selection gets,
+    /// and its unpadded equivalent is AppKit's plain overtype — which deletes
+    /// the selection, newlines and all. That is both destructive and outside
+    /// what `fenceStructure(of:)` can reason about, so a selection whose wrap
+    /// would re-cut the document is refused rather than downgraded.
+    private func fenceCollisionOutcome(insertedText: String, range: NSRange) -> FenceCollisionOutcome {
+        let ns = string as NSString
+        guard Self.isValid(range, in: ns),
+              // Fence lines are built out of backticks, and nothing on this
+              // path ever deletes a character, so a document with no fence in
+              // it cannot grow one from a keystroke that isn't a backtick.
+              insertedText.contains("`" as Character)
+                  || ns.range(of: Self.narrowestFence).location != NSNotFound,
+              let padded = pairedDelimiterPaddedResult(of: insertedText, at: range)
+        else { return .pair }
+
+        let current = Self.fenceStructure(of: string)
+        guard Self.fenceStructure(of: padded) != current else { return .pair }
+
+        guard range.length == 0 else { return .swallow }
+        let literal = Self.fenceStructure(of: ns.replacingCharacters(in: range, with: insertedText))
+        return Self.preservesFences(literal, from: current) ? .insertLiterally : .swallow
+    }
+
+    /// The narrowest backtick run CommonMark will read as a fence, and so the
+    /// shortest substring a document must contain to have any fence at all.
+    private static let narrowestFence = String(
+        repeating: "`",
+        count: MarkdownFenceEditing.minimumFenceLength
+    )
+
+    /// Whether `edited` still fences the document the way `current` does:
+    /// the same blocks, each opening on the line it opened on, and no block
+    /// that was closed losing or moving its closer. A block left *unclosed*
+    /// may gain a closer — see `fenceCollisionOutcome` for why that one
+    /// direction of change is the author's prerogative.
+    private static func preservesFences(
+        _ edited: [FencedBlockLines],
+        from current: [FencedBlockLines]
+    ) -> Bool {
+        edited.count == current.count
+            && zip(current, edited).allSatisfy { was, now in
+                was.open == now.open && (was.close == nil || was.close == now.close)
+            }
     }
 
     /// The document as `PairedDelimiterEditing` would leave it, or `nil` when
-    /// the resolution adds nothing beyond the typed character and so cannot
-    /// surprise the author with a fence.
+    /// the resolution adds nothing beyond the typed character.
+    ///
+    /// `.stepOver` writes nothing at all, and `.native` writes exactly the
+    /// character the user pressed. Neither is this method's business: a
+    /// `.native` insertion *can* still disturb a fence — dropping a literal
+    /// backtick into an info string kills the line it lands on, as in
+    /// `` "``` swift" `` — but there is no partner character to blame it on,
+    /// so the only options would be to honour it or to eat a keystroke the
+    /// author deliberately typed. `fenceCollisionOutcome` honours it, and
+    /// reaches for the same shape itself as a fallback.
     private func pairedDelimiterPaddedResult(of insertedText: String, at range: NSRange) -> String? {
         let ns = string as NSString
         guard Self.isValid(range, in: ns) else { return nil }
@@ -194,14 +262,22 @@ class PairedDelimiterTextView: NSTextView {
 
     /// Where every fenced block begins and ends, in line numbers.
     ///
-    /// Line numbers rather than character offsets because the edits this
-    /// guard weighs only ever insert backticks, never line terminators — and
-    /// never between a CR and its LF, since AppKit hands over selections and
-    /// carets on composed-character-sequence boundaries — so each line keeps
-    /// its number across the edit and two fingerprints taken either side of
-    /// it compare directly. Openers and closers pin the whole structure:
-    /// everything else `blocks(in:)` reports (bodies, outer ranges, info
-    /// strings) follows from which lines fence which.
+    /// Line numbers rather than character offsets, so that two fingerprints
+    /// taken either side of an edit compare directly without any offset
+    /// arithmetic. Openers and closers pin the whole structure: everything
+    /// else `blocks(in:)` reports (bodies, outer ranges, info strings)
+    /// follows from which lines fence which.
+    ///
+    /// That comparison assumes the edit between the two fingerprints leaves
+    /// every line's number alone. It holds for the edits
+    /// `fenceCollisionOutcome` weighs: each inserts one or two delimiters and
+    /// deletes nothing, so no line terminator is created or destroyed —
+    /// unless the caller hands over a `replacementRange` that splits a CRLF,
+    /// which AppKit does not do because it reports carets and selections on
+    /// composed-character-sequence boundaries. Were that assumption ever
+    /// broken, the lines below the split would renumber and the two
+    /// fingerprints would compare unequal: a keystroke needlessly refused,
+    /// never a corruption let through.
     private static func fenceStructure(of text: String) -> [FencedBlockLines] {
         let ns = text as NSString
         var lineStarts: [Int] = []

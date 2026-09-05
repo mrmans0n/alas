@@ -105,15 +105,19 @@ struct PairedDelimiterFenceTests {
         #expect(MarkdownFenceEditing.blocks(in: textView.string).count == 1)
     }
 
-    @Test("the swallow still applies inside a block opened with a wider fence")
-    func noNestedBoxInsideWiderFence() {
+    @Test("inside a block opened with a wider fence, the third backtick lands unpaired")
+    func thirdBacktickLandsUnpairedInsideWiderFence() {
         let textView = makeTextView()
+        // Pairing the third keystroke would take the body line to four, the
+        // opener's own width, and close it early. The bare keystroke stops at
+        // three, which a four-wide block simply contains — so the author gets
+        // the literal fence line they were typing.
         textView.string = "````\n\n````"
         textView.setSelectedRange(NSRange(location: 5, length: 0))
         type("```", into: textView)
 
-        #expect(textView.string == "````\n``\n````")
-        #expect(textView.selectedRange() == NSRange(location: 7, length: 0))
+        #expect(textView.string == "````\n```\n````")
+        #expect(textView.selectedRange() == NSRange(location: 8, length: 0))
         #expect(MarkdownFenceEditing.blocks(in: textView.string).count == 1)
     }
 
@@ -198,16 +202,17 @@ struct PairedDelimiterFenceTests {
     }
 
     @Test("a lone body backtick is caught, because auto-pairing adds two more")
-    func caretRunOfOneIsSwallowed() {
+    func caretRunOfOneLosesItsPartner() {
         let textView = makeTextView()
         // Only one backtick precedes the caret, but `.insertPair` writes two
-        // characters, so the line still lands on a full three-wide fence.
+        // characters, so pairing would land a full three-wide fence. Dropping
+        // the partner leaves two, which is no fence at all.
         textView.string = "```\n`\n```"
         textView.setSelectedRange(NSRange(location: 5, length: 0))
         type("`", into: textView)
 
-        #expect(textView.string == "```\n`\n```")
-        #expect(textView.selectedRange() == NSRange(location: 5, length: 0))
+        #expect(textView.string == "```\n``\n```")
+        #expect(textView.selectedRange() == NSRange(location: 6, length: 0))
         #expect(MarkdownFenceEditing.blocks(in: textView.string).count == 1)
     }
 
@@ -254,17 +259,18 @@ struct PairedDelimiterFenceTests {
         #expect(MarkdownFenceEditing.blocks(in: textView.string).count == 1)
     }
 
-    @Test("a body line that reaches its opener's width is swallowed")
-    func runMatchingTheOpenerIsSwallowed() {
+    @Test("a body line that would reach its opener's width loses its partner")
+    func runMatchingTheOpenerLosesItsPartner() {
         let textView = makeTextView()
-        // One backtick further along than the case above: the pair takes the
-        // run from three to five, exactly the opener's width, so it closes.
+        // One backtick further along than the case above: the pair would take
+        // the run from three to five, exactly the opener's width, so it would
+        // close. Unpaired it stops at four, one short, and the block survives.
         textView.string = "`````\n```\n`````"
         textView.setSelectedRange(NSRange(location: 9, length: 0))
         type("`", into: textView)
 
-        #expect(textView.string == "`````\n```\n`````")
-        #expect(textView.selectedRange() == NSRange(location: 9, length: 0))
+        #expect(textView.string == "`````\n````\n`````")
+        #expect(textView.selectedRange() == NSRange(location: 10, length: 0))
         #expect(MarkdownFenceEditing.blocks(in: textView.string).count == 1)
     }
 
@@ -312,6 +318,72 @@ struct PairedDelimiterFenceTests {
         #expect(textView.string == "```\nB\n``\n```")
         #expect(textView.selectedRange() == NSRange(location: 4, length: 3))
         #expect(MarkdownFenceEditing.blocks(in: textView.string).count == 1)
+    }
+
+    @Test("a quote pairing onto a closing fence is caught too")
+    func quotePairingOnAClosingFenceIsSwallowed() {
+        let textView = makeTextView()
+        // Nothing to do with backticks: pairing a quote onto the closing
+        // fence line gives it an info string, and CommonMark only accepts a
+        // closer whose info string is empty — so the block would lose its
+        // closer and swallow the rest of the document. Note the block count
+        // stays 1 either way; only the string tells the two apart.
+        textView.string = "```\n\n```"
+        textView.setSelectedRange(NSRange(location: 8, length: 0))
+        type("\"", into: textView)
+
+        #expect(textView.string == "```\n\n```")
+        #expect(textView.selectedRange() == NSRange(location: 8, length: 0))
+        #expect(MarkdownFenceEditing.blocks(in: textView.string).first?.closeFenceRange != nil)
+    }
+
+    @Test("a quote inside a block body pairs as usual")
+    func quotePairingInsideABlockBodyIsUntouched() {
+        let textView = makeTextView()
+        // The counterweight to the test above: a body line can never be a
+        // fence line, so ordinary pairing there has to keep working.
+        textView.string = "```\n\n```"
+        textView.setSelectedRange(NSRange(location: 4, length: 0))
+        type("\"", into: textView)
+
+        #expect(textView.string == "```\n\"\"\n```")
+        #expect(textView.selectedRange() == NSRange(location: 5, length: 0))
+        #expect(MarkdownFenceEditing.blocks(in: textView.string).count == 1)
+    }
+
+    @Test("widening an opening fence past its closer is caught")
+    func wideningAnOpenerPastItsCloserIsSwallowed() {
+        let textView = makeTextView()
+        // Pairing takes the opener to five and the bare keystroke to four;
+        // either way the three-wide closer stops matching and the block runs
+        // off the end of the document. The block count is 1 before and after,
+        // so this only fails if the fingerprint notices the closer going away.
+        textView.string = "```\nA\n```"
+        textView.setSelectedRange(NSRange(location: 3, length: 0))
+        type("`", into: textView)
+
+        #expect(textView.string == "```\nA\n```")
+        #expect(textView.selectedRange() == NSRange(location: 3, length: 0))
+        #expect(MarkdownFenceEditing.blocks(in: textView.string).first?.closeFenceRange != nil)
+    }
+
+    @Test("an unclosed block can still be closed by typing")
+    func unclosedBlockCanBeClosedByTyping() {
+        let textView = makeTextView()
+        // A block left open — by deleting a closer, or by pasting malformed
+        // markdown. Typing its closing fence has to work: the caret sits
+        // inside the block, so every keystroke goes through the collision
+        // check, and refusing the one that finally closes it would leave the
+        // block unclosable from the keyboard forever.
+        textView.string = "```\nfoo\n"
+        textView.setSelectedRange(NSRange(location: 8, length: 0))
+        type("```", into: textView)
+
+        #expect(textView.string == "```\nfoo\n```")
+        #expect(textView.selectedRange() == NSRange(location: 11, length: 0))
+        let blocks = MarkdownFenceEditing.blocks(in: textView.string)
+        #expect(blocks.count == 1)
+        #expect(blocks.first?.closeFenceRange != nil)
     }
 
     @Test("expansion is a single undo group")
