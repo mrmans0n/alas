@@ -148,6 +148,38 @@ struct PairedDelimiterFenceTests {
         #expect(MarkdownFenceEditing.blocks(in: textView.string).count == 1)
     }
 
+    @Test("a dangerous right flank is caught even when the left flank has no preceding backticks at all")
+    func rightFlankDangerDoesNotDependOnLeftFlankBacktickCount() {
+        let textView = makeTextView()
+        // The selection is preceded by "\n" — zero backticks, not merely "not
+        // exactly two" — so the left flank can never be mistaken for
+        // dangerous. Only an independent check of the right flank ("``" alone
+        // on its own line) catches this.
+        textView.string = "```\nX\n``\n```"
+        textView.setSelectedRange(NSRange(location: 4, length: 2))
+        type("`", into: textView)
+
+        #expect(textView.string == "```\nX\n``\n```")
+        #expect(textView.selectedRange() == NSRange(location: 4, length: 2))
+        #expect(MarkdownFenceEditing.blocks(in: textView.string).count == 1)
+    }
+
+    @Test("a dangerous right flank is caught even when the selection starts outside any block")
+    func rightFlankDangerDoesNotDependOnLeftFlankBlockContainment() {
+        let textView = makeTextView()
+        // The selection starts before the block even opens, so checking
+        // block containment only at the selection's start would miss that
+        // the selection's end — where the right flank actually sits — is
+        // inside the block, flanked by a bare "``" line about to complete.
+        textView.string = "X\n```\n``\n```"
+        textView.setSelectedRange(NSRange(location: 0, length: 6))
+        type("`", into: textView)
+
+        #expect(textView.string == "X\n```\n``\n```")
+        #expect(textView.selectedRange() == NSRange(location: 0, length: 6))
+        #expect(MarkdownFenceEditing.blocks(in: textView.string).count == 1)
+    }
+
     @Test("expansion is a single undo group")
     func singleUndoGroup() throws {
         let textView = makeTextView()

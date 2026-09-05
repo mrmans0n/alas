@@ -138,44 +138,57 @@ class PairedDelimiterTextView: NSTextView {
     }
 
     /// Whether a backtick landing at `range` — one `MarkdownFenceEditing`
-    /// declined to handle because it's inside an existing block — should be
-    /// swallowed instead of falling through to `PairedDelimiterEditing`.
+    /// declined to handle, most commonly because it's inside an existing
+    /// block — should be swallowed instead of falling through to
+    /// `PairedDelimiterEditing`.
     ///
-    /// The two backticks that already flank `range` are about to become
-    /// three — matching `MarkdownFenceEditing.minimumFenceLength` — which
-    /// only matters if that run would sit alone on its line: starting at the
-    /// line's first non-indent column, and followed by nothing but
-    /// whitespace up to the next line break. That's precisely the shape
-    /// `MarkdownFenceEditing.blocks(in:)` reads as a real fence line with an
-    /// empty info string, closing the enclosing block early (or opening an
-    /// orphaned one) regardless of how wide that block's own fence is. A run
-    /// that starts mid-line, or is trailed by real content, can never parse
-    /// as a fence line — `parseFence` requires the backticks to lead — so
-    /// it's left alone.
-    ///
-    /// A caret has only the leading flank to check. A selection has two —
-    /// `PairedDelimiterEditing.wrap` completes both simultaneously, and
-    /// either one turning bare on its own is enough to corrupt the block, so
-    /// each is checked independently and either being dangerous swallows the
-    /// keystroke.
+    /// A caret has one flank to worry about (the two backticks already
+    /// before it, about to become three). A selection has two —
+    /// `PairedDelimiterEditing.wrap` completes both simultaneously, by
+    /// leaving whatever already flanks the selection untouched and inserting
+    /// one new character adjacent to each side. Either flank turning into a
+    /// bare fence line is enough to corrupt a block, so each flank's danger —
+    /// including whether *that flank's own position* sits inside a block —
+    /// is evaluated completely independently, with nothing shared between
+    /// them beyond "the keystroke is a backtick." Gating the right flank's
+    /// check on anything computed from the left (its backtick count, or
+    /// block containment checked only at `range.location`) would let a
+    /// dangerous right flank slip through whenever the left side happens not
+    /// to qualify — which is exactly the shape of bug this method exists to
+    /// avoid, so the two checks below must never share a precondition.
     private func swallowsFenceCollidingBacktick(insertedText: String, range: NSRange) -> Bool {
-        guard insertedText == "`",
-              fencedBlockRange(containing: range.location) != nil,
-              Self.isPrecededByExactlyTwoBackticks(range.location, in: string)
-        else { return false }
+        guard insertedText == "`" else { return false }
 
-        if Self.startsLine(range.location - 2, in: string),
-           Self.isBareToEndOfLine(from: range.location, in: string)
-        {
+        if isFenceDangerousLeftFlank(of: range) {
             return true
         }
+        guard range.length > 0 else { return false }
+        return isFenceDangerousRightFlank(of: range)
+    }
 
-        guard range.length > 0,
-              Self.isFollowedByExactlyTwoBackticks(NSMaxRange(range), in: string)
-        else { return false }
+    /// Whether the two backticks immediately before `range` are about to
+    /// complete a bare, line-starting run — see `swallowsFenceCollidingBacktick`.
+    private func isFenceDangerousLeftFlank(of range: NSRange) -> Bool {
+        fencedBlockRange(containing: range.location) != nil
+            && Self.isPrecededByExactlyTwoBackticks(range.location, in: string)
+            && Self.startsLine(range.location - 2, in: string)
+            && Self.isBareToEndOfLine(from: range.location, in: string)
+    }
 
-        return Self.startsLine(NSMaxRange(range), in: string)
-            && Self.isBareToEndOfLine(from: NSMaxRange(range) + 2, in: string)
+    /// Whether the two backticks immediately after `range` are about to
+    /// complete a bare, line-starting run — the mirror image of
+    /// `isFenceDangerousLeftFlank`, only ever relevant for a selection (a
+    /// caret has no trailing flank). Block containment is checked at
+    /// `NSMaxRange(range)` — the right flank's own position — not at
+    /// `range.location`, since the two can disagree: a selection can start
+    /// outside any block and still end with its right flank sitting inside
+    /// one.
+    private func isFenceDangerousRightFlank(of range: NSRange) -> Bool {
+        let end = NSMaxRange(range)
+        return fencedBlockRange(containing: end) != nil
+            && Self.isFollowedByExactlyTwoBackticks(end, in: string)
+            && Self.startsLine(end, in: string)
+            && Self.isBareToEndOfLine(from: end + 2, in: string)
     }
 
     /// Replace `replaced` with a complete fenced block wrapping `body`, adding
