@@ -53,7 +53,13 @@ struct ProviderReviewPublishConfirmationView: View {
                         text: $summaryBody,
                         font: .systemFont(ofSize: 12),
                         textColor: NSColor(theme.color("fg")),
-                        isEnabled: !isPublishing
+                        isEnabled: !isPublishing,
+                        codeBlockStyle: .standard(
+                            theme: theme,
+                            baseFont: .systemFont(ofSize: 12),
+                            baseColor: NSColor(theme.color("fg")),
+                            monoSize: 12
+                        )
                     )
                         .frame(minHeight: 72)
                         .padding(6)

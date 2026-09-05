@@ -1548,7 +1548,13 @@ struct DiffReviewInlineFeedbackCard: View {
                     text: replyEditorBinding.body,
                     font: .systemFont(ofSize: 11.5),
                     textColor: NSColor(theme.color("fg")),
-                    placeholder: "Reply"
+                    placeholder: "Reply",
+                    codeBlockStyle: .standard(
+                        theme: theme,
+                        baseFont: .systemFont(ofSize: 11.5),
+                        baseColor: NSColor(theme.color("fg")),
+                        monoSize: 11.5
+                    )
                 )
                     .frame(minHeight: 32, maxHeight: 96)
                     .padding(7)

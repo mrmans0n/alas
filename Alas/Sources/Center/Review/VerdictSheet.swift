@@ -50,7 +50,13 @@ struct VerdictSheet: View {
                 PairedTextEditor(
                     text: $summaryBody,
                     font: .systemFont(ofSize: 12),
-                    textColor: NSColor(theme.color("fg"))
+                    textColor: NSColor(theme.color("fg")),
+                    codeBlockStyle: .standard(
+                        theme: theme,
+                        baseFont: .systemFont(ofSize: 12),
+                        baseColor: NSColor(theme.color("fg")),
+                        monoSize: 12
+                    )
                 )
                     .frame(minHeight: 80)
                     .background(theme.color("bg-1"))
