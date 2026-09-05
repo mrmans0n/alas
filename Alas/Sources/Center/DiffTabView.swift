@@ -888,6 +888,12 @@ struct DiffTabView: View {
                     ReviewDraftQuote.markdown(path: $0.path, selectedText: $0.selectedText)
                 },
                 quoteInsertionGeneration: quoteInsertionGeneration,
+                codeBlockStyle: .standard(
+                    theme: theme,
+                    baseFont: .systemFont(ofSize: 12),
+                    baseColor: NSColor(theme.color("fg")),
+                    monoSize: 12
+                ),
                 onSave: savePendingDraft,
                 onCancel: clearPendingDraft
             )

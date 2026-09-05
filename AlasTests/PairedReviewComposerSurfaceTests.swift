@@ -59,6 +59,142 @@ struct PairedReviewComposerSurfaceTests {
         #expect(model.cancelCount == 1)
     }
 
+    @Test func reviewDraftComposerDefaultsLeaveFencesPlain() async throws {
+        let model = ReviewDraftComposerCapture(text: "")
+        let controller = NSHostingController(
+            rootView: ReviewDraftComposerCaptureHarness(model: model, theme: try! ThemeStore().current)
+        )
+        let window = attach(controller)
+        defer { window.orderOut(nil) }
+        await drain(controller.view)
+
+        let composer = try #require(
+            textView(containing: model.text, in: controller.view) as? PairedDelimiterTextView
+        )
+        #expect(composer.markdownFencesEnabled == false)
+        #expect(composer.markdownCodeBlockStyle == nil)
+
+        composer.performKeyboardTextInsertion {
+            composer.insertText("`", replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
+        composer.performKeyboardTextInsertion {
+            composer.insertText("`", replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
+        composer.performKeyboardTextInsertion {
+            composer.insertText("`", replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
+
+        // Matches the pre-fix behaviour: `PairedDelimiterTextView`'s ordinary
+        // paired-backtick logic (unrelated to fences) still auto-closes each
+        // backtick, so three keystrokes yield four stray backticks and no box.
+        #expect(model.text == "````")
+        #expect(composer.codeBlockBackgroundRects().isEmpty)
+    }
+
+    @Test func reviewDraftComposerWiresCodeBlockStyleWhenProvided() async throws {
+        let theme = try! ThemeStore().current
+        let style = MarkdownCodeBlockStyle.standard(
+            theme: theme,
+            baseFont: .systemFont(ofSize: 12),
+            baseColor: NSColor(theme.color("fg")),
+            monoSize: 12
+        )
+        let model = ReviewDraftComposerCapture(text: "", codeBlockStyle: style)
+        let controller = NSHostingController(
+            rootView: ReviewDraftComposerCaptureHarness(model: model, theme: theme)
+        )
+        let window = attach(controller)
+        defer { window.orderOut(nil) }
+        await drain(controller.view)
+
+        let composer = try #require(
+            textView(containing: model.text, in: controller.view) as? PairedDelimiterTextView
+        )
+        #expect(composer.markdownFencesEnabled)
+        #expect(composer.markdownCodeBlockStyle == style)
+    }
+
+    @Test func reviewDraftComposerTypingTripleBacktickOpensABoxWhenEnabled() async throws {
+        let theme = try! ThemeStore().current
+        let style = MarkdownCodeBlockStyle.standard(
+            theme: theme,
+            baseFont: .systemFont(ofSize: 12),
+            baseColor: NSColor(theme.color("fg")),
+            monoSize: 12
+        )
+        let model = ReviewDraftComposerCapture(text: "", codeBlockStyle: style)
+        let controller = NSHostingController(
+            rootView: ReviewDraftComposerCaptureHarness(model: model, theme: theme)
+        )
+        let window = attach(controller)
+        defer { window.orderOut(nil) }
+        await drain(controller.view)
+
+        let composer = try #require(
+            textView(containing: model.text, in: controller.view) as? PairedDelimiterTextView
+        )
+
+        for character in ["`", "`", "`"] {
+            composer.performKeyboardTextInsertion {
+                composer.insertText(character, replacementRange: NSRange(location: NSNotFound, length: 0))
+            }
+        }
+        await drain(controller.view)
+
+        #expect(model.text == "```\n\n```")
+        #expect(!composer.codeBlockBackgroundRects().isEmpty)
+    }
+
+    @Test func reviewDraftComposerRestylesAFencedDraftRestoredOnMount() async throws {
+        let theme = try! ThemeStore().current
+        let style = MarkdownCodeBlockStyle.standard(
+            theme: theme,
+            baseFont: .systemFont(ofSize: 12),
+            baseColor: NSColor(theme.color("fg")),
+            monoSize: 12
+        )
+        let persistedDraft = "before\n```\ncode\n```\nafter"
+        let model = ReviewDraftComposerCapture(text: persistedDraft, codeBlockStyle: style)
+        let controller = NSHostingController(
+            rootView: ReviewDraftComposerCaptureHarness(model: model, theme: theme)
+        )
+        let window = attach(controller)
+        defer { window.orderOut(nil) }
+        await drain(controller.view)
+
+        let composer = try #require(
+            textView(containing: persistedDraft, in: controller.view) as? PairedDelimiterTextView
+        )
+        #expect(!composer.codeBlockBackgroundRects().isEmpty)
+    }
+
+    @Test func reviewDraftComposerRestylesAfterAnExternalTextReset() async throws {
+        let theme = try! ThemeStore().current
+        let style = MarkdownCodeBlockStyle.standard(
+            theme: theme,
+            baseFont: .systemFont(ofSize: 12),
+            baseColor: NSColor(theme.color("fg")),
+            monoSize: 12
+        )
+        let model = ReviewDraftComposerCapture(text: "", codeBlockStyle: style)
+        let controller = NSHostingController(
+            rootView: ReviewDraftComposerCaptureHarness(model: model, theme: theme)
+        )
+        let window = attach(controller)
+        defer { window.orderOut(nil) }
+        await drain(controller.view)
+
+        // Simulate a store reload replacing the bound text wholesale, the way
+        // a persisted draft loaded after the composer already mounted would.
+        model.text = "before\n```\ncode\n```\nafter"
+        await drain(controller.view)
+
+        let composer = try #require(
+            textView(containing: model.text, in: controller.view) as? PairedDelimiterTextView
+        )
+        #expect(!composer.codeBlockBackgroundRects().isEmpty)
+    }
+
     @Test func inlineReplyAndEditBindingsReceiveWrappedSelections() async throws {
         let model = InlineCommentCardCapture()
         let controller = NSHostingController(rootView: InlineCommentCardCaptureHarness(model: model))
@@ -241,12 +377,14 @@ private final class ReviewDraftComposerCapture: ObservableObject {
     @Published var text: String
     @Published var quoteInsertionGeneration = 0
     let quoteMarkdown: String?
+    let codeBlockStyle: MarkdownCodeBlockStyle?
     var saveCount = 0
     var cancelCount = 0
 
-    init(text: String, quoteMarkdown: String? = nil) {
+    init(text: String, quoteMarkdown: String? = nil, codeBlockStyle: MarkdownCodeBlockStyle? = nil) {
         self.text = text
         self.quoteMarkdown = quoteMarkdown
+        self.codeBlockStyle = codeBlockStyle
     }
 }
 
@@ -263,6 +401,7 @@ private struct ReviewDraftComposerCaptureHarness: View {
             isFocused: $isFocused,
             quoteMarkdown: model.quoteMarkdown,
             quoteInsertionGeneration: model.quoteInsertionGeneration,
+            codeBlockStyle: model.codeBlockStyle,
             onSave: { model.saveCount += 1 },
             onCancel: { model.cancelCount += 1 }
         )

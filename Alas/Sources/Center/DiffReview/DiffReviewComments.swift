@@ -111,6 +111,7 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
     let focusRequestGeneration: Int
     let quoteMarkdown: String?
     let quoteInsertionGeneration: Int
+    let codeBlockStyle: MarkdownCodeBlockStyle?
     let onSave: () -> Void
     let onCancel: () -> Void
 
@@ -121,6 +122,7 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
         focusRequestGeneration: Int = 0,
         quoteMarkdown: String? = nil,
         quoteInsertionGeneration: Int = 0,
+        codeBlockStyle: MarkdownCodeBlockStyle? = nil,
         onSave: @escaping () -> Void,
         onCancel: @escaping () -> Void
     ) {
@@ -130,6 +132,7 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
         self.focusRequestGeneration = focusRequestGeneration
         self.quoteMarkdown = quoteMarkdown
         self.quoteInsertionGeneration = quoteInsertionGeneration
+        self.codeBlockStyle = codeBlockStyle
         self.onSave = onSave
         self.onCancel = onCancel
     }
@@ -175,6 +178,7 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
         scrollView.documentView = textView
         context.coordinator.textView = textView
         applyTheme(to: scrollView, textView: textView)
+        applyCodeBlockStyle(to: textView)
         context.coordinator.requestFocusIfNeeded()
         return scrollView
     }
@@ -190,6 +194,7 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
             coordinator?.requestFocusIfNeeded()
         }
         applyTheme(to: scrollView, textView: textView)
+        applyCodeBlockStyle(to: textView)
         context.coordinator.requestQuoteInsertionIfNeeded()
         context.coordinator.requestFocusIfNeeded()
     }
@@ -210,6 +215,19 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
         textView.font = .systemFont(ofSize: 12)
         textView.textColor = NSColor(theme.color("fg"))
         textView.insertionPointColor = NSColor(theme.color("accent"))
+    }
+
+    private func applyCodeBlockStyle(to textView: PairedDelimiterTextView) {
+        textView.markdownFencesEnabled = codeBlockStyle != nil
+        textView.markdownCodeBlockStyle = codeBlockStyle
+        // `textView.string = text` above (on both the initial `makeNSView`
+        // build and every `updateNSView` sync) discards every attribute, so
+        // the restyle has to run on each sync here, not only on
+        // `textDidChange` — otherwise a fenced draft restored from a store
+        // reload after the composer already mounted would render unstyled.
+        guard let codeBlockStyle, let storage = textView.textStorage else { return }
+        MarkdownCodeBlockStyler.restyle(storage, in: nil, style: codeBlockStyle)
+        textView.needsDisplay = true
     }
 
     @MainActor
@@ -237,6 +255,10 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
             parent.text = textView.string
+            if let style = parent.codeBlockStyle, let storage = textView.textStorage {
+                MarkdownCodeBlockStyler.restyle(storage, in: nil, style: style)
+                textView.needsDisplay = true
+            }
         }
 
         func textDidBeginEditing(_ notification: Notification) {
@@ -1030,6 +1052,12 @@ struct ReviewDraftCommentCard: View {
                         text: editorStateBinding.editingBody,
                         theme: theme,
                         isFocused: $editorFocused,
+                        codeBlockStyle: .standard(
+                            theme: theme,
+                            baseFont: .systemFont(ofSize: 12),
+                            baseColor: NSColor(theme.color("fg")),
+                            monoSize: 12
+                        ),
                         onSave: saveEditingComment,
                         onCancel: cancelEditingComment
                     )
