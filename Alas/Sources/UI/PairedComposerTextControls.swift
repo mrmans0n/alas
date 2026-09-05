@@ -141,8 +141,7 @@ class PairedDelimiterTextView: NSTextView {
     /// declined to handle because it's inside an existing block — should be
     /// swallowed instead of falling through to `PairedDelimiterEditing`.
     ///
-    /// The two backticks that already flank `range` (one on each side, for a
-    /// selection; just the leading pair, for a caret) are about to become
+    /// The two backticks that already flank `range` are about to become
     /// three — matching `MarkdownFenceEditing.minimumFenceLength` — which
     /// only matters if that run would sit alone on its line: starting at the
     /// line's first non-indent column, and followed by nothing but
@@ -153,20 +152,30 @@ class PairedDelimiterTextView: NSTextView {
     /// that starts mid-line, or is trailed by real content, can never parse
     /// as a fence line — `parseFence` requires the backticks to lead — so
     /// it's left alone.
+    ///
+    /// A caret has only the leading flank to check. A selection has two —
+    /// `PairedDelimiterEditing.wrap` completes both simultaneously, and
+    /// either one turning bare on its own is enough to corrupt the block, so
+    /// each is checked independently and either being dangerous swallows the
+    /// keystroke.
     private func swallowsFenceCollidingBacktick(insertedText: String, range: NSRange) -> Bool {
         guard insertedText == "`",
               fencedBlockRange(containing: range.location) != nil,
               Self.isPrecededByExactlyTwoBackticks(range.location, in: string)
         else { return false }
 
-        if range.length > 0,
-           !Self.isFollowedByExactlyTwoBackticks(NSMaxRange(range), in: string)
+        if Self.startsLine(range.location - 2, in: string),
+           Self.isBareToEndOfLine(from: range.location, in: string)
         {
-            return false
+            return true
         }
 
-        return Self.startsLine(range.location - 2, in: string)
-            && Self.isBareToEndOfLine(from: range.location, in: string)
+        guard range.length > 0,
+              Self.isFollowedByExactlyTwoBackticks(NSMaxRange(range), in: string)
+        else { return false }
+
+        return Self.startsLine(NSMaxRange(range), in: string)
+            && Self.isBareToEndOfLine(from: NSMaxRange(range) + 2, in: string)
     }
 
     /// Replace `replaced` with a complete fenced block wrapping `body`, adding

@@ -117,6 +117,37 @@ struct PairedDelimiterFenceTests {
         #expect(MarkdownFenceEditing.blocks(in: textView.string).count == 1)
     }
 
+    @Test("a selection wrap can also corrupt the block via its right flank")
+    func noNestedBoxFromRightFlankOfSelection() {
+        let textView = makeTextView()
+        // The left flank "xx``" is mid-line (safe on its own), but the right
+        // flank "``" sits alone on its own line — bare and line-starting —
+        // so completing it would still split the block. The guard has to
+        // catch the right flank even though the left one is harmless.
+        textView.string = "```\nxx``\n``\n```"
+        textView.setSelectedRange(NSRange(location: 8, length: 1))
+        type("`", into: textView)
+
+        #expect(textView.string == "```\nxx``\n``\n```")
+        #expect(textView.selectedRange() == NSRange(location: 8, length: 1))
+        #expect(MarkdownFenceEditing.blocks(in: textView.string).count == 1)
+    }
+
+    @Test("a selection flanked by mid-line backtick runs on both sides is left alone")
+    func midLineFlanksOnBothSidesAreNotSwallowed() {
+        let textView = makeTextView()
+        // Both "xx``" and "``yy" are mid-line — a fence line can never form
+        // on either side, so completing the wrap is safe and must not be
+        // swallowed.
+        textView.string = "```\nxx``Z``yy\n```"
+        textView.setSelectedRange(NSRange(location: 8, length: 1))
+        type("`", into: textView)
+
+        #expect(textView.string == "```\nxx```Z```yy\n```")
+        #expect(textView.selectedRange() == NSRange(location: 9, length: 1))
+        #expect(MarkdownFenceEditing.blocks(in: textView.string).count == 1)
+    }
+
     @Test("expansion is a single undo group")
     func singleUndoGroup() throws {
         let textView = makeTextView()
