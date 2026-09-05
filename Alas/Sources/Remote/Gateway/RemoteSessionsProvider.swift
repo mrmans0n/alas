@@ -10,6 +10,12 @@ protocol RemoteSessionsProvider: AnyObject {
     func remoteBranches(projectId: String) async -> RemoteBranchListResult
     func remoteAgents() -> [RemoteAgentOption]
     func createRemoteSession(worktreeId: String, agentId: String) async -> RemoteCreateSessionResult
+    func createRemoteWorktreeSession(
+        projectId: String,
+        base: String,
+        branch: String,
+        agentId: String
+    ) async -> RemoteCreateWorktreeSessionResult
     func session(for id: String) -> ACPSession?
     func permissionPolicy(for id: String) -> ACPPermissionPolicy?
     func hydrateIfNeeded(id: String) async

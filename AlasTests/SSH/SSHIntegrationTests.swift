@@ -83,6 +83,75 @@ struct SSHIntegrationTests {
         #expect(preferredBase == "main")
     }
 
+    @Test @MainActor func remoteWorktreeSessionCreationOverSSHLocalhost() async throws {
+        try #require(enabled, "set ALAS_SSH_INTEGRATION=1 to run")
+
+        let repository = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-ssh-worktree-session-\(UUID().uuidString)")
+        let worktreeRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-ssh-worktree-root-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: repository, withIntermediateDirectories: true)
+        defer {
+            RemoteHostRegistry.shared.unregister(root: repository.path)
+            try? FileManager.default.removeItem(at: worktreeRoot)
+            try? FileManager.default.removeItem(at: repository)
+        }
+
+        _ = try await Process.run("/usr/bin/env", args: ["git", "init", "-q", "-b", "main"], cwd: repository)
+        _ = try await Process.run("/usr/bin/env", args: ["git", "config", "user.email", "test@example.com"], cwd: repository)
+        _ = try await Process.run("/usr/bin/env", args: ["git", "config", "user.name", "Test User"], cwd: repository)
+        _ = try await Process.run("/usr/bin/env", args: ["git", "commit", "-q", "--allow-empty", "-m", "initial"], cwd: repository)
+        let project = ProjectConfig(
+            id: "ssh-worktree-session",
+            name: "SSH Worktree Session",
+            path: repository.path,
+            color: "blue",
+            addedAt: Date(),
+            host: "localhost"
+        )
+        let state = AppState(store: ProjectMemoryStore(
+            projectsFile: ProjectsFile(projects: [project])
+        ))
+        state.config.worktrees.rootPath = worktreeRoot.path
+        state.config.worktrees.pathTemplate = "{worktreeRoot}/{repo}-{branch}"
+        state.agentRegistry = AgentRegistry(
+            builtinState: [
+                "claude": BuiltinAgentState(isEnabled: true, binaryOverride: nil, extraTerminalArgs: nil),
+            ],
+            customs: [],
+            installedIds: ["claude"]
+        )
+        state.remoteSessionAttachScheduler = { _, _ in }
+
+        let result = await state.createRemoteWorktreeSession(
+            projectId: project.id,
+            base: "main",
+            branch: "feature/ssh",
+            agentId: "claude"
+        )
+
+        guard case let .success(summary) = result else {
+            Issue.record("expected remote worktree session creation, got \(result)")
+            return
+        }
+        let worktree = try #require(summary.worktree)
+        let worktreeId = Worktree.makeId(path: URL(fileURLWithPath: worktree.path))
+        defer {
+            RemoteHostRegistry.shared.unregister(root: worktree.path)
+            try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId))
+            let database = Paths.acpSessionsDB(forWorktreeId: worktreeId)
+            try? FileManager.default.removeItem(at: database)
+            try? FileManager.default.removeItem(at: URL(fileURLWithPath: database.path + "-wal"))
+            try? FileManager.default.removeItem(at: URL(fileURLWithPath: database.path + "-shm"))
+        }
+        #expect(FileManager.default.fileExists(atPath: worktree.path))
+        #expect(state.selectedWorktreeId == worktreeId)
+        #expect(state.tabs.tabs(forWorktree: worktreeId).contains { tab in
+            if case let .acpSession(session) = tab { return session.sessionId == summary.id }
+            return false
+        })
+    }
+
     @Test func remoteValidatorAcceptsAndRejects() async throws {
         try #require(enabled, "set ALAS_SSH_INTEGRATION=1 to run")
 

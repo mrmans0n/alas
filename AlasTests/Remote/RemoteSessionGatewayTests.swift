@@ -10,6 +10,11 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     var branchResults: [String: RemoteBranchListResult] = [:]
     var agents: [RemoteAgentOption] = []
     var createResults: [String: RemoteCreateSessionResult] = [:]
+    var createWorktreeSessionResult: RemoteCreateWorktreeSessionResult = .failure(
+        stage: .worktree,
+        message: "Could not create worktree.",
+        worktreeId: nil
+    )
     var sessions: [String: ACPSession] = [:]
     var policies: [String: ACPPermissionPolicy] = [:]
     var lastQuestionResponse: (id: String, requestId: JSONRPCID, response: ACPQuestionResponse)?
@@ -49,6 +54,7 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     var remoteBranchRequests: [String] = []
     var remoteAgentsCallCount = 0
     var createRequests: [(worktreeId: String, agentId: String)] = []
+    var createWorktreeSessionRequests: [(projectId: String, base: String, branch: String, agentId: String)] = []
     var pauseSessionSummaries = false
     var pauseRemoteWorktrees = false
     var pauseRemoteProjects = false
@@ -105,6 +111,15 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     func createRemoteSession(worktreeId: String, agentId: String) async -> RemoteCreateSessionResult {
         createRequests.append((worktreeId, agentId))
         return createResults["\(worktreeId)|\(agentId)"] ?? .failure("Could not create session.")
+    }
+    func createRemoteWorktreeSession(
+        projectId: String,
+        base: String,
+        branch: String,
+        agentId: String
+    ) async -> RemoteCreateWorktreeSessionResult {
+        createWorktreeSessionRequests.append((projectId, base, branch, agentId))
+        return createWorktreeSessionResult
     }
     func resumeSessionSummaries() {
         sessionSummariesContinuation?.resume(returning: summaries)

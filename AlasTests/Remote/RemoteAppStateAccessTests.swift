@@ -781,6 +781,226 @@ struct RemoteAppStateAccessTests {
         #expect(result == .failure("Repository is no longer available."))
     }
 
+    @Test func remoteSessionsProviderCreatesWorktreeSessionAndFocusesIt() async throws {
+        let repository = try await makeRemoteBranchesRepository()
+        let worktreeRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-remote-create-root-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: worktreeRoot)
+            try? FileManager.default.removeItem(at: repository)
+        }
+        let project = ProjectConfig(
+            id: "project-remote-create",
+            name: "Remote Create",
+            path: repository.path,
+            color: "blue",
+            addedAt: Date()
+        )
+        let state = AppState(store: ProjectMemoryStore(
+            projectsFile: ProjectsFile(projects: [project])
+        ))
+        state.config.worktrees.rootPath = worktreeRoot.path
+        state.config.worktrees.pathTemplate = "{worktreeRoot}/{repo}-{branch}"
+        state.agentRegistry = enabledClaudeRegistry()
+        state.remoteSessionAttachScheduler = { _, _ in }
+
+        let provider: RemoteSessionsProvider = state
+        let result = await provider.createRemoteWorktreeSession(
+            projectId: project.id,
+            base: "main",
+            branch: "feature/phone",
+            agentId: "claude"
+        )
+
+        guard case let .success(summary) = result else {
+            Issue.record("expected combined creation success, got \(result)")
+            return
+        }
+        let worktree = try #require(summary.worktree)
+        let worktreeId = Worktree.makeId(path: URL(fileURLWithPath: worktree.path))
+        defer { cleanupRemoteRenameFiles(worktreeId: worktreeId) }
+        #expect(worktree.branch == "feature/phone")
+        #expect(FileManager.default.fileExists(atPath: worktree.path))
+        #expect(state.selectedWorktreeId == worktreeId)
+        let tab = try #require(firstACPTab(in: state, worktreeId: worktreeId))
+        #expect(tab.sessionId == summary.id)
+        #expect(state.tabs.activeTabId(forWorktree: worktreeId) == tab.id)
+    }
+
+    @Test func remoteCreateWorktreeSessionRejectsMissingProjectAndInvalidBranchSafely() async throws {
+        let repository = try await makeRemoteBranchesRepository()
+        defer { try? FileManager.default.removeItem(at: repository) }
+        let project = ProjectConfig(
+            id: "project-remote-reject",
+            name: "Remote Reject",
+            path: repository.path,
+            color: "blue",
+            addedAt: Date()
+        )
+        let state = AppState(store: ProjectMemoryStore(
+            projectsFile: ProjectsFile(projects: [project])
+        ))
+        state.agentRegistry = enabledClaudeRegistry()
+        var branchLookupCount = 0
+        state.remoteWorktreeBranchLoader = { _ in
+            branchLookupCount += 1
+            return ["main"]
+        }
+
+        let missing = await state.createRemoteWorktreeSession(
+            projectId: "missing",
+            base: "main",
+            branch: "feature/phone",
+            agentId: "claude"
+        )
+        let invalid = await state.createRemoteWorktreeSession(
+            projectId: project.id,
+            base: "main",
+            branch: "bad..branch",
+            agentId: "claude"
+        )
+        let invalidAgent = await state.createRemoteWorktreeSession(
+            projectId: project.id,
+            base: "main",
+            branch: "feature/phone",
+            agentId: "missing-agent"
+        )
+        #expect(branchLookupCount == 0)
+
+        let missingBase = await state.createRemoteWorktreeSession(
+            projectId: project.id,
+            base: "missing-base",
+            branch: "feature/phone",
+            agentId: "claude"
+        )
+        let invalidBase = await state.createRemoteWorktreeSession(
+            projectId: project.id,
+            base: "bad..base",
+            branch: "feature/phone",
+            agentId: "claude"
+        )
+
+        #expect(missing == .failure(
+            stage: .worktree,
+            message: "Repository is no longer available.",
+            worktreeId: nil
+        ))
+        #expect(invalid == .failure(
+            stage: .worktree,
+            message: "Could not create worktree.",
+            worktreeId: nil
+        ))
+        #expect(invalidAgent == .failure(
+            stage: .worktree,
+            message: "Could not create worktree.",
+            worktreeId: nil
+        ))
+        #expect(missingBase == .failure(
+            stage: .worktree,
+            message: "Could not create worktree.",
+            worktreeId: nil
+        ))
+        #expect(invalidBase == .failure(
+            stage: .worktree,
+            message: "Could not create worktree.",
+            worktreeId: nil
+        ))
+    }
+
+    @Test func remoteCreateWorktreeSessionRejectsRemoteDestinationBeforeCreating() async throws {
+        let repository = try await makeRemoteBranchesRepository()
+        defer {
+            RemoteHostRegistry.shared.unregister(root: repository.path)
+            try? FileManager.default.removeItem(at: repository)
+        }
+        let project = ProjectConfig(
+            id: "project-remote-collision",
+            name: "Remote Collision",
+            path: repository.path,
+            color: "blue",
+            addedAt: Date(),
+            host: "remote.test"
+        )
+        let state = AppState(store: ProjectMemoryStore(
+            projectsFile: ProjectsFile(projects: [project])
+        ))
+        state.agentRegistry = enabledClaudeRegistry()
+        state.config.worktrees.rootPath = "/remote worktrees"
+        state.config.worktrees.pathTemplate = "{worktreeRoot}/{repo}-{branch}"
+        state.remoteWorktreeBranchLoader = { _ in ["main"] }
+        state.remoteWorktreeDestinationPreparer = { _, destination in destination }
+        var command: (host: String, cwd: String?, command: String)?
+        state.remoteWorktreeCommandRunner = { host, cwd, commandToRun in
+            command = (host, cwd, commandToRun)
+            return ProcessResult(exitCode: 0, stdout: "", stderr: "")
+        }
+        var sessionCreationAttempted = false
+        state.remoteSessionCreator = { _, _ in
+            sessionCreationAttempted = true
+            return .failure("should not be reached")
+        }
+
+        let result = await state.createRemoteWorktreeSession(
+            projectId: project.id,
+            base: "main",
+            branch: "feature/phone",
+            agentId: "claude"
+        )
+
+        #expect(result == .failure(
+            stage: .worktree,
+            message: "A worktree already exists at this path.",
+            worktreeId: nil
+        ))
+        #expect(command?.host == "remote.test")
+        #expect(command?.cwd == nil)
+        #expect(command?.command == "test -e '/remote worktrees/Remote Collision-feature-phone'")
+        #expect(state.projectsManager.visibleWorktrees(projectId: project.id).isEmpty)
+        #expect(!sessionCreationAttempted)
+    }
+
+    @Test func remoteCreateWorktreeSessionPreservesWorktreeWhenSessionCreationFails() async throws {
+        let repository = try await makeRemoteBranchesRepository()
+        let worktreeRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-remote-session-failure-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: worktreeRoot)
+            try? FileManager.default.removeItem(at: repository)
+        }
+        let project = ProjectConfig(
+            id: "project-remote-session-failure",
+            name: "Remote Session Failure",
+            path: repository.path,
+            color: "blue",
+            addedAt: Date()
+        )
+        let state = AppState(store: ProjectMemoryStore(
+            projectsFile: ProjectsFile(projects: [project])
+        ))
+        state.config.worktrees.rootPath = worktreeRoot.path
+        state.config.worktrees.pathTemplate = "{worktreeRoot}/{repo}-{branch}"
+        state.agentRegistry = enabledClaudeRegistry()
+        state.remoteSessionCreator = { _, _ in .failure("internal details") }
+
+        let result = await state.createRemoteWorktreeSession(
+            projectId: project.id,
+            base: "main",
+            branch: "feature/phone",
+            agentId: "claude"
+        )
+
+        guard case let .failure(stage, message, worktreeId) = result else {
+            Issue.record("expected session creation failure, got \(result)")
+            return
+        }
+        #expect(stage == .session)
+        #expect(message == "Worktree created, but the session could not be created.")
+        let createdWorktreeId = try #require(worktreeId)
+        defer { cleanupRemoteRenameFiles(worktreeId: createdWorktreeId) }
+        let createdWorktree = try #require(state.worktree(withId: createdWorktreeId))
+        #expect(FileManager.default.fileExists(atPath: createdWorktree.path.path))
+    }
+
     private func statusCode(port: UInt16, host: String, path: String) async throws -> Int? {
         var req = URLRequest(url: URL(string: "http://127.0.0.1:\(port)\(path)")!)
         req.setValue(host, forHTTPHeaderField: "Host")
@@ -879,6 +1099,16 @@ struct RemoteAppStateAccessTests {
         _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "initial"], cwd: repository)
         _ = try await Process.git(["branch", "feature/remote"], cwd: repository)
         return repository
+    }
+
+    private func enabledClaudeRegistry() -> AgentRegistry {
+        AgentRegistry(
+            builtinState: [
+                "claude": BuiltinAgentState(isEnabled: true, binaryOverride: nil, extraTerminalArgs: nil),
+            ],
+            customs: [],
+            installedIds: ["claude"]
+        )
     }
 
     private func acpTabs(in state: AppState) -> [ACPSessionTabState] {
