@@ -501,6 +501,10 @@ struct ACPInputField: NSViewRepresentable {
             invalidatePendingImageFileInsertions()
             restoringDraft = true
             storage.setAttributedString(Self.attributedString(from: draft, typography: typography))
+            // `restoringDraft` short-circuits `textDidChange`, where the fence
+            // cache is normally refreshed, so refresh it here or it keeps
+            // describing the document this one replaced.
+            lastBlocks = MarkdownFenceEditing.blocks(in: storage.string)
             let blockRanges: [NSRange]
             if let style = codeBlockStyle {
                 blockRanges = MarkdownCodeBlockStyler.restyle(storage, in: nil, style: style).map(\.outerRange)
@@ -520,6 +524,10 @@ struct ACPInputField: NSViewRepresentable {
             invalidatePendingImageFileInsertions()
             restoringDraft = true
             textView.string = ""
+            // Same as `restore`: the cache has to follow the storage even when
+            // `textDidChange` is short-circuited. An empty document has no
+            // fenced blocks.
+            lastBlocks = []
             textView.needsDisplay = true
             restoringDraft = false
         }

@@ -201,7 +201,7 @@ struct PairedDelimiterFenceTests {
         #expect(MarkdownFenceEditing.blocks(in: textView.string).count == 1)
     }
 
-    @Test("a lone body backtick is caught, because auto-pairing adds two more")
+    @Test("a lone body backtick lands without its partner, because pairing would add two more")
     func caretRunOfOneLosesItsPartner() {
         let textView = makeTextView()
         // Only one backtick precedes the caret, but `.insertPair` writes two

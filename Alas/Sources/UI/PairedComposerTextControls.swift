@@ -132,7 +132,11 @@ class PairedDelimiterTextView: NSTextView {
                 // `PairedDelimiterEditing` has no notion of fences, so the
                 // partner it adds on the user's behalf can re-cut the
                 // document's blocks — see `fenceCollisionOutcome`.
-                switch fenceCollisionOutcome(insertedText: insertedText, range: range) {
+                switch Self.fenceCollisionOutcome(
+                    insertedText: insertedText,
+                    in: string,
+                    range: range
+                ) {
                 case .pair:
                     break
                 case .insertLiterally:
@@ -197,9 +201,14 @@ class PairedDelimiterTextView: NSTextView {
         case swallow
     }
 
-    /// How to handle a delimiter landing at `range` — one
+    /// How to handle a delimiter landing at `range` in `text` — one
     /// `MarkdownFenceEditing` declined to handle, most commonly because it's
     /// on or inside an existing block.
+    ///
+    /// `text` is the document the keystroke lands in. On the ordinary keyboard
+    /// path that is the live storage; on the dead-key commit path it is the
+    /// pre-composition document `PairedDelimiterEditing.preCompositionContext`
+    /// reconstructs, because the storage still holds the marked text.
     ///
     /// `PairedDelimiterEditing` knows nothing about fences. It answers a
     /// delimiter by putting *more* than the typed character into the storage:
@@ -232,23 +241,27 @@ class PairedDelimiterTextView: NSTextView {
     /// the selection, newlines and all. That is both destructive and outside
     /// what `fenceStructure(of:)` can reason about, so a selection whose wrap
     /// would re-cut the document is refused rather than downgraded.
-    private func fenceCollisionOutcome(insertedText: String, range: NSRange) -> FenceCollisionOutcome {
-        let ns = string as NSString
-        guard Self.isValid(range, in: ns),
+    private static func fenceCollisionOutcome(
+        insertedText: String,
+        in text: String,
+        range: NSRange
+    ) -> FenceCollisionOutcome {
+        let ns = text as NSString
+        guard isValid(range, in: ns),
               // Fence lines are built out of backticks, and nothing on this
               // path ever deletes a character, so a document with no fence in
               // it cannot grow one from a keystroke that isn't a backtick.
               insertedText.contains("`" as Character)
-                  || ns.range(of: Self.narrowestFence).location != NSNotFound,
-              let padded = pairedDelimiterPaddedResult(of: insertedText, at: range)
+                  || ns.range(of: narrowestFence).location != NSNotFound,
+              let padded = pairedDelimiterPaddedResult(of: insertedText, in: text, at: range)
         else { return .pair }
 
-        let current = Self.fenceStructure(of: string)
-        guard Self.fenceStructure(of: padded) != current else { return .pair }
+        let current = fenceStructure(of: text)
+        guard fenceStructure(of: padded) != current else { return .pair }
 
         guard range.length == 0 else { return .swallow }
-        let literal = Self.fenceStructure(of: ns.replacingCharacters(in: range, with: insertedText))
-        return Self.preservesFences(literal, from: current) ? .insertLiterally : .swallow
+        let literal = fenceStructure(of: ns.replacingCharacters(in: range, with: insertedText))
+        return preservesFences(literal, from: current) ? .insertLiterally : .swallow
     }
 
     /// The narrowest backtick run CommonMark will read as a fence, and so the
@@ -273,8 +286,8 @@ class PairedDelimiterTextView: NSTextView {
             }
     }
 
-    /// The document as `PairedDelimiterEditing` would leave it, or `nil` when
-    /// the resolution adds nothing beyond the typed character.
+    /// `text` as `PairedDelimiterEditing` would leave it, or `nil` when the
+    /// resolution adds nothing beyond the typed character.
     ///
     /// `.stepOver` writes nothing at all, and `.native` writes exactly the
     /// character the user pressed. Neither is this method's business: a
@@ -284,13 +297,17 @@ class PairedDelimiterTextView: NSTextView {
     /// so the only options would be to honour it or to eat a keystroke the
     /// author deliberately typed. `fenceCollisionOutcome` honours it, and
     /// reaches for the same shape itself as a fallback.
-    private func pairedDelimiterPaddedResult(of insertedText: String, at range: NSRange) -> String? {
-        let ns = string as NSString
-        guard Self.isValid(range, in: ns) else { return nil }
+    private static func pairedDelimiterPaddedResult(
+        of insertedText: String,
+        in text: String,
+        at range: NSRange
+    ) -> String? {
+        let ns = text as NSString
+        guard isValid(range, in: ns) else { return nil }
 
         switch PairedDelimiterEditing.resolve(
             insertedText: insertedText,
-            in: string,
+            in: text,
             selectedRange: range
         ) {
         case let .wrap(opening, closing):
@@ -371,17 +388,13 @@ class PairedDelimiterTextView: NSTextView {
     /// the selection on the body.
     private func insertFencedBlock(replacing replaced: NSRange, body: String) {
         guard let textStorage, Self.isValid(replaced, in: textStorage) else { return }
-        let ns = string as NSString
-        let needsLeadingNewline = replaced.location > 0
-            && ns.character(at: replaced.location - 1) != 0x0A
-        let suffixLocation = NSMaxRange(replaced)
-        let needsTrailingNewline = suffixLocation < ns.length
-            && ns.character(at: suffixLocation) != 0x0A
-        let leading = needsLeadingNewline ? "\n" : ""
-        let trailing = needsTrailingNewline ? "\n" : ""
-
+        let expansion = Self.fencedBlockExpansion(
+            replacing: replaced,
+            body: body,
+            in: string as NSString
+        )
         let replacement = NSAttributedString(
-            string: leading + "```\n" + body + "\n```" + trailing,
+            string: expansion.replacement,
             attributes: typingAttributes
         )
 
@@ -391,9 +404,36 @@ class PairedDelimiterTextView: NSTextView {
         }
         undoManager?.endUndoGrouping()
 
-        // "```\n" is four characters past the leading newline, if any.
-        let bodyStart = replaced.location + (leading as NSString).length + 4
-        setSelectedRange(NSRange(location: bodyStart, length: (body as NSString).length))
+        setSelectedRange(NSRange(
+            location: expansion.bodyStart,
+            length: (body as NSString).length
+        ))
+    }
+
+    /// The literal text a fenced block expands to when it replaces `replaced`
+    /// in `text`, plus the offset its body will start at once installed.
+    ///
+    /// Split out of `insertFencedBlock` so the dead-key commit path can build
+    /// the identical expansion from the pre-composition document rather than
+    /// from live storage, which still holds the marked text.
+    private static func fencedBlockExpansion(
+        replacing replaced: NSRange,
+        body: String,
+        in text: NSString
+    ) -> (replacement: String, bodyStart: Int) {
+        let needsLeadingNewline = replaced.location > 0
+            && text.character(at: replaced.location - 1) != 0x0A
+        let suffixLocation = NSMaxRange(replaced)
+        let needsTrailingNewline = suffixLocation < text.length
+            && text.character(at: suffixLocation) != 0x0A
+        let leading = needsLeadingNewline ? "\n" : ""
+        let trailing = needsTrailingNewline ? "\n" : ""
+
+        return (
+            replacement: leading + "```\n" + body + "\n```" + trailing,
+            // "```\n" is four characters past the leading newline, if any.
+            bodyStart: replaced.location + (leading as NSString).length + 4
+        )
     }
 
     override func unmarkText() {
@@ -425,6 +465,82 @@ class PairedDelimiterTextView: NSTextView {
         else {
             super.insertText(insertString, replacementRange: replacementRange)
             return
+        }
+
+        // Dead-key layouts route the third backtick through here, so fence
+        // expansion and the collision guard have to be consulted on this path
+        // too — against the pre-composition document, since the marked text is
+        // still sitting in the storage.
+        if markdownFencesEnabled {
+            switch MarkdownFenceEditing.resolve(
+                insertedText: insertedText,
+                in: context.text,
+                selectedRange: context.selectedRange
+            ) {
+            case .openBlock:
+                let trailing = MarkdownFenceEditing.trailingBacktickRun(
+                    at: context.selectedRange.location,
+                    in: context.text
+                )
+                commitFencedBlock(
+                    replacing: NSRange(
+                        location: context.selectedRange.location - 2,
+                        length: 2 + trailing
+                    ),
+                    body: "",
+                    context: context,
+                    markedRange: marked
+                )
+                return
+            case .wrapSelection:
+                let body = (context.text as NSString).substring(with: context.selectedRange)
+                commitFencedBlock(
+                    replacing: NSRange(
+                        location: context.selectedRange.location - 2,
+                        length: context.selectedRange.length + 4
+                    ),
+                    body: body,
+                    context: context,
+                    markedRange: marked
+                )
+                return
+            case .none:
+                switch Self.fenceCollisionOutcome(
+                    insertedText: insertedText,
+                    in: context.text,
+                    range: context.selectedRange
+                ) {
+                case .pair:
+                    break
+                case .insertLiterally:
+                    replaceMarkedText(
+                        with: NSAttributedString(
+                            string: insertedText,
+                            attributes: typingAttributes
+                        ),
+                        markedRange: marked
+                    )
+                    setSelectedRange(NSRange(
+                        location: marked.location + (insertedText as NSString).length,
+                        length: 0
+                    ))
+                    return
+                case .swallow:
+                    // The normal path simply drops the keystroke. Here the
+                    // composition already ate whatever the selection held, so
+                    // "no visible change" means putting that back.
+                    replaceMarkedText(
+                        with: replacedSelection
+                            ?? NSAttributedString(string: "", attributes: typingAttributes),
+                        markedRange: marked
+                    )
+                    setSelectedRange(NSRange(
+                        location: marked.location,
+                        length: context.selectedRange.length
+                    ))
+                    return
+                }
+            }
         }
 
         switch PairedDelimiterEditing.resolve(
@@ -472,9 +588,58 @@ class PairedDelimiterTextView: NSTextView {
         }
     }
 
+    /// Expands a fenced block from a dead-key commit, the counterpart of
+    /// `insertFencedBlock` for the marked-text path.
+    ///
+    /// `replaced` is in the pre-composition document's coordinates, the ones
+    /// `MarkdownFenceEditing` answered in. Live storage differs from that
+    /// document in exactly one way — the composition swapped the selection for
+    /// the marked text — and that swap happens inside `replaced`, so the
+    /// equivalent live range keeps the same start and trades one length for
+    /// the other. Replacing it wholesale leaves the same bytes the ordinary
+    /// keyboard path would have produced.
+    private func commitFencedBlock(
+        replacing replaced: NSRange,
+        body: String,
+        context: (text: String, selectedRange: NSRange),
+        markedRange: NSRange
+    ) {
+        let ns = context.text as NSString
+        let live = NSRange(
+            location: replaced.location,
+            length: replaced.length - context.selectedRange.length + markedRange.length
+        )
+        guard Self.isValid(replaced, in: ns),
+              let textStorage,
+              Self.isValid(live, in: textStorage)
+        else { return }
+
+        let expansion = Self.fencedBlockExpansion(replacing: replaced, body: body, in: ns)
+
+        undoManager?.beginUndoGrouping()
+        replaceMarkedText(
+            with: NSAttributedString(
+                string: expansion.replacement,
+                attributes: typingAttributes
+            ),
+            markedRange: live
+        )
+        undoManager?.endUndoGrouping()
+
+        setSelectedRange(NSRange(
+            location: expansion.bodyStart,
+            length: (body as NSString).length
+        ))
+    }
+
     /// `NSTextView.unmarkText()` finalizes the composition by re-inserting the
     /// marked characters through `insertText`, so the whole replacement has to
     /// run with pairing suppressed or the placeholder pairs with itself.
+    ///
+    /// `markedRange` is the range the replacement is written over. It is the
+    /// marked range itself for a plain pairing commit, and a range containing
+    /// it when a fence expansion also rewrites the characters around the
+    /// composition.
     private func replaceMarkedText(with replacement: NSAttributedString, markedRange: NSRange) {
         performNativeTextInsertion {
             unmarkText()
