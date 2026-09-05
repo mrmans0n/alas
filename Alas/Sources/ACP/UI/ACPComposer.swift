@@ -121,11 +121,10 @@ struct ACPInputField: NSViewRepresentable {
         }
         if let tv = nsView.documentView as? ACPNSTextView {
             let baseFont = typography.appKitFont()
-            let style = MarkdownCodeBlockStyle.standard(
+            let style = Self.codeBlockStyle(
                 theme: context.environment.theme,
                 baseFont: baseFont,
-                baseColor: .labelColor,
-                monoSize: typography.codeSize
+                typography: typography
             )
             tv.markdownFencesEnabled = true
             tv.markdownCodeBlockStyle = style
@@ -149,6 +148,24 @@ struct ACPInputField: NSViewRepresentable {
             tv.dismissFloatingPanels()
             coordinator.editorUndoManager.removeAllActions()
         }
+    }
+
+    /// Builds the composer's code box style, threading the configured chat
+    /// font family through so the in-progress box matches the font the
+    /// transcript's rendered code block uses once the message is submitted
+    /// — see `MarkdownCodeBlockStyle.standard`'s doc comment.
+    static func codeBlockStyle(
+        theme: Theme,
+        baseFont: NSFont,
+        typography: ACPChatTypography
+    ) -> MarkdownCodeBlockStyle {
+        MarkdownCodeBlockStyle.standard(
+            theme: theme,
+            baseFont: baseFont,
+            baseColor: .labelColor,
+            monoSize: typography.codeSize,
+            monoFontFamily: typography.fontFamily
+        )
     }
 
     /// When busy, the placeholder advertises whichever action ⏎ will

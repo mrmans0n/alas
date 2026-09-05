@@ -35,4 +35,30 @@ struct MarkdownCodeBoxSurfaceOptInTests {
         #expect(style.baseFont == base)
         #expect(style.monoFont != base)
     }
+
+    @Test("omitting monoFontFamily keeps today's system-mono behaviour")
+    func defaultMonoFontFamilyStaysSystemMono() {
+        let style = MarkdownCodeBlockStyle.standard(
+            theme: theme,
+            baseFont: .systemFont(ofSize: 12),
+            baseColor: .labelColor,
+            monoSize: 12
+        )
+
+        #expect(style.monoFont == .monospacedSystemFont(ofSize: 12, weight: .regular))
+    }
+
+    @Test("a configured monoFontFamily resolves to that fixed-pitch font")
+    func configuredMonoFontFamilyResolvesToThatFont() {
+        let style = MarkdownCodeBlockStyle.standard(
+            theme: theme,
+            baseFont: .systemFont(ofSize: 12),
+            baseColor: .labelColor,
+            monoSize: 12,
+            monoFontFamily: "Menlo"
+        )
+
+        #expect(style.monoFont == CenterTypography.resolveCodeFont(family: "Menlo", size: 12))
+        #expect(style.monoFont != .monospacedSystemFont(ofSize: 12, weight: .regular))
+    }
 }

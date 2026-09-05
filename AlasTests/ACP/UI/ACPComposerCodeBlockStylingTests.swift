@@ -162,6 +162,26 @@ struct ACPComposerCodeBlockStylingTests {
             as? NSFont == typography.appKitFont())
     }
 
+    @Test("the composer's code block style threads the configured chat font family through")
+    func codeBlockStyleThreadsConfiguredFontFamily() {
+        let theme = Theme(id: "test", name: "Test", tokens: [:])
+        let configured = ACPChatTypography(fontFamily: "Menlo", fontSize: 13)
+
+        let style = ACPInputField.codeBlockStyle(theme: theme, baseFont: configured.appKitFont(), typography: configured)
+
+        #expect(style.monoFont == CenterTypography.resolveCodeFont(family: "Menlo", size: configured.codeSize))
+        #expect(style.monoFont != .monospacedSystemFont(ofSize: configured.codeSize, weight: .regular))
+    }
+
+    @Test("the default (unconfigured) chat font still yields system mono")
+    func codeBlockStyleDefaultsToSystemMono() {
+        let theme = Theme(id: "test", name: "Test", tokens: [:])
+
+        let style = ACPInputField.codeBlockStyle(theme: theme, baseFont: typography.appKitFont(), typography: typography)
+
+        #expect(style.monoFont == .monospacedSystemFont(ofSize: typography.codeSize, weight: .regular))
+    }
+
     private static func codeBlockStyle(typography: ACPChatTypography) -> MarkdownCodeBlockStyle {
         MarkdownCodeBlockStyle(
             baseFont: typography.appKitFont(),
