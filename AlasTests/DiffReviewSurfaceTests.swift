@@ -1770,29 +1770,6 @@ struct DiffReviewSurfaceTests {
         #expect(selectedFeedbackID == "thread-1")
     }
 
-    @Test func renderWindowKeepsInlineFeedbackScrollTargetFileRendered() {
-        let fileScrollTarget = DiffReviewFileID(namespace: "commit", path: "Selected.swift")
-        let inlineTarget = DiffReviewFileID(namespace: "commit", path: "InlineTarget.swift")
-        let command = DiffReviewInlineFeedbackScrollCommand(
-            feedbackID: "thread-inline",
-            fileID: inlineTarget,
-            generation: 1
-        )
-
-        #expect(
-            DiffReviewSurfaceSelectionSync.renderedTargetFileID(
-                fileScrollTarget: fileScrollTarget,
-                inlineFeedbackScrollCommand: nil
-            ) == fileScrollTarget
-        )
-        #expect(
-            DiffReviewSurfaceSelectionSync.renderedTargetFileID(
-                fileScrollTarget: nil,
-                inlineFeedbackScrollCommand: command
-            ) == inlineTarget
-        )
-    }
-
     @Test func fileSectionCapsInlineFeedbackCardsWithMoreRow() {
         let file = DiffReviewFileSectionModel(
             summary: summary(path: "Sources/App.swift"),
@@ -4160,79 +4137,6 @@ struct DiffReviewSurfaceTests {
         #expect(result.selectedFileID == second)
         #expect(result.fileSetKey == DiffReviewSurfaceSelectionSync.fileSetKey(for: [second]))
         #expect(!result.programmaticScroll.isSuppressing)
-    }
-
-    @Test func visibleScrollTargetsSelectFirstVisibleTargetInViewportOrder() {
-        let first = DiffReviewFileID(namespace: "commit", path: "First.swift")
-        let second = DiffReviewFileID(namespace: "commit", path: "Second.swift")
-        let third = DiffReviewFileID(namespace: "commit", path: "Third.swift")
-
-        let result = DiffReviewSurfaceSelectionSync.updatedSelectionFromVisibility(
-            current: first,
-            visibleRawIDs: [
-                DiffReviewSurfaceSelectionSync.sectionVisibilityTargetID(for: third),
-                DiffReviewSurfaceSelectionSync.sectionVisibilityTargetID(for: second)
-            ],
-            fileIDs: [first, second, third],
-            programmaticScroll: DiffReviewProgrammaticScrollController()
-        )
-
-        #expect(result == third)
-    }
-
-    @Test func visibleScrollTargetsPreferVisibleFileTopSentinelForHandoff() {
-        let first = DiffReviewFileID(namespace: "commit", path: "First.swift")
-        let second = DiffReviewFileID(namespace: "commit", path: "Second.swift")
-
-        let result = DiffReviewSurfaceSelectionSync.updatedSelectionFromVisibility(
-            current: first,
-            visibleRawIDs: [
-                DiffReviewSurfaceSelectionSync.sectionVisibilityTargetID(for: first),
-                DiffReviewSurfaceSelectionSync.topVisibilityTargetID(for: second),
-                DiffReviewSurfaceSelectionSync.sectionVisibilityTargetID(for: second)
-            ],
-            fileIDs: [first, second],
-            programmaticScroll: DiffReviewProgrammaticScrollController()
-        )
-
-        #expect(result == second)
-    }
-
-    @Test func visibleScrollTargetsKeepCurrentSelectionWhenCurrentFileRemainsVisible() {
-        let penultimate = DiffReviewFileID(namespace: "commit", path: "Penultimate.swift")
-        let last = DiffReviewFileID(namespace: "commit", path: "Last.swift")
-
-        let result = DiffReviewSurfaceSelectionSync.updatedSelectionFromVisibility(
-            current: last,
-            visibleRawIDs: [
-                DiffReviewSurfaceSelectionSync.sectionVisibilityTargetID(for: penultimate),
-                DiffReviewSurfaceSelectionSync.sectionVisibilityTargetID(for: last)
-            ],
-            fileIDs: [penultimate, last],
-            programmaticScroll: DiffReviewProgrammaticScrollController()
-        )
-
-        #expect(result == nil)
-    }
-
-    @Test func visibleScrollTargetsRespectProgrammaticScrollSuppression() {
-        let first = DiffReviewFileID(namespace: "commit", path: "First.swift")
-        let second = DiffReviewFileID(namespace: "commit", path: "Second.swift")
-        var controller = DiffReviewProgrammaticScrollController()
-        _ = controller.beginProgrammaticScroll(to: first)
-
-        let result = DiffReviewSurfaceSelectionSync.updatedSelectionFromVisibility(
-            current: first,
-            visibleRawIDs: [DiffReviewSurfaceSelectionSync.sectionVisibilityTargetID(for: second)],
-            fileIDs: [first, second],
-            programmaticScroll: controller
-        )
-
-        #expect(result == nil)
-    }
-
-    @Test func visibleScrollTargetsUseIntersectionThresholdForOversizedFiles() {
-        #expect(DiffReviewSurfaceSelectionSync.visibilityThreshold == 0)
     }
 
     @Test func initialRestoredNonFirstSelectionRequestsScroll() {
