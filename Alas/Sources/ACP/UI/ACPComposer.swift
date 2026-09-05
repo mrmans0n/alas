@@ -823,7 +823,12 @@ final class ACPNSTextView: PairedDelimiterTextView {
             case 125: panel.model.moveDown()
             return    // down
             case 36, 76, 48:                            // return / enter / tab
-                if let pick = panel.model.selected() {
+                // Only without Command. ⌘⏎ is a send, not an accept, and this
+                // branch runs first — so swallowing it here would make the
+                // picker the one state where ⌘⏎ does not reach the send
+                // handler below.
+                if !event.modifierFlags.contains(.command),
+                   let pick = panel.model.selected() {
                     insertSlash(pick)
                     return
                 }

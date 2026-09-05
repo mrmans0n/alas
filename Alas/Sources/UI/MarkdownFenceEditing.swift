@@ -16,11 +16,17 @@ enum FenceEditAction: Equatable {
 /// including each body line's own terminator. `outerRange` covers the block from
 /// the first backtick of the opening fence to the last backtick of the closing
 /// fence, or to end of text when the block is still unclosed.
+///
+/// `infoRange` is the opening fence line's info-string slot: everything from the
+/// end of its backtick run to the end of the line, untrimmed. `infoString` is
+/// the trimmed contents of exactly that range. An opener with no info string
+/// still has an `infoRange` — an empty one parked where the tag would go.
 struct FencedBlock: Equatable {
     var openFenceRange: NSRange
     var bodyRange: NSRange
     var closeFenceRange: NSRange?
     var infoString: String
+    var infoRange: NSRange
     var outerRange: NSRange
 }
 
@@ -40,6 +46,7 @@ enum MarkdownFenceEditing {
         var contentRange: NSRange   // excludes the trailing terminator
         var backtickCount: Int
         var info: String
+        var infoRange: NSRange      // the slot `info` was trimmed out of
     }
 
     static func blocks(in text: String) -> [FencedBlock] {
@@ -74,6 +81,7 @@ enum MarkdownFenceEditing {
                     ),
                     closeFenceRange: closer.contentRange,
                     infoString: opener.info,
+                    infoRange: opener.infoRange,
                     outerRange: NSRange(
                         location: opener.contentRange.location,
                         length: NSMaxRange(closer.contentRange) - opener.contentRange.location
@@ -87,6 +95,7 @@ enum MarkdownFenceEditing {
                     bodyRange: NSRange(location: bodyStart, length: ns.length - bodyStart),
                     closeFenceRange: nil,
                     infoString: opener.info,
+                    infoRange: opener.infoRange,
                     outerRange: NSRange(
                         location: opener.contentRange.location,
                         length: ns.length - opener.contentRange.location
@@ -111,7 +120,8 @@ enum MarkdownFenceEditing {
                     lineRange: lineRange,
                     contentRange: contentRange,
                     backtickCount: fence.count,
-                    info: fence.info
+                    info: fence.info,
+                    infoRange: fence.infoRange
                 ))
             }
             location = NSMaxRange(lineRange)
@@ -119,7 +129,10 @@ enum MarkdownFenceEditing {
         return lines
     }
 
-    private static func parseFence(_ range: NSRange, in ns: NSString) -> (count: Int, info: String)? {
+    private static func parseFence(
+        _ range: NSRange,
+        in ns: NSString
+    ) -> (count: Int, info: String, infoRange: NSRange)? {
         var index = range.location
         let end = NSMaxRange(range)
 
@@ -136,11 +149,14 @@ enum MarkdownFenceEditing {
         }
         guard count >= minimumFenceLength else { return nil }
 
-        let info = ns.substring(with: NSRange(location: index, length: end - index))
+        // Everything past the backticks is the info-string slot, whether or
+        // not anything has been typed into it yet.
+        let infoRange = NSRange(location: index, length: end - index)
+        let info = ns.substring(with: infoRange)
             .trimmingCharacters(in: .whitespaces)
         // A backtick-fence info string may not itself contain a backtick.
         guard !info.contains("`") else { return nil }
-        return (count, info)
+        return (count, info, infoRange)
     }
 
     private static func trimmingLineTerminator(_ range: NSRange, in ns: NSString) -> NSRange {
@@ -154,6 +170,20 @@ enum MarkdownFenceEditing {
         return NSRange(location: range.location, length: length)
     }
 
+    /// What the keystroke `insertedText` at `selectedRange` should do about
+    /// code fences.
+    ///
+    /// Both non-`.none` answers rewrite a span of the document into a whole
+    /// new block, and the caller acts on them without a further structural
+    /// check of its own — unlike `.none`, which routes through
+    /// `PairedComposerTextControls`' simulate-and-compare guard. So this is
+    /// where the invariant has to hold: neither answer is ever returned when
+    /// the edit would land on an existing block. A caret is refused when it
+    /// sits in a block's interior; a selection is refused when it overlaps any
+    /// existing block's `outerRange` at all — reaching into one, running out of
+    /// one, or swallowing one whole. `blocks(in:)` has no notion of nesting, so
+    /// a block caught inside a new outer fence would have its own opener and
+    /// closer re-paired against that fence rather than each other.
     static func resolve(
         insertedText: String,
         in text: String,
@@ -174,6 +204,16 @@ enum MarkdownFenceEditing {
         if selectedRange.length == 0 {
             return .openBlock
         }
+        // A caret can only ever be inside one block or outside them all, but a
+        // selection is a span: it can start clear of every block and still run
+        // into one, out of one, or straight over one. Wrapping any of those
+        // hands the enclosed block's fence lines to the new outer fence, so
+        // refuse on any overlap at all rather than only on where it starts.
+        guard !blocks(in: text).contains(where: {
+            NSIntersectionRange($0.outerRange, selectedRange).length > 0
+        }) else {
+            return .none
+        }
         // Wrapping already ran twice, so the selection is flanked by exactly
         // two backticks on each side by the time the third keystroke lands.
         guard backtickRunLength(after: NSMaxRange(selectedRange), in: ns) == 2 else {
@@ -183,11 +223,13 @@ enum MarkdownFenceEditing {
     }
 
     /// The block whose interior contains `location`, if any. The interior
-    /// starts at the end of the opening fence's backticks — so the info-string
-    /// slot counts as inside — and ends at the start of the closing fence.
+    /// starts at the end of the opening fence's backticks — so the whole
+    /// info-string slot counts as inside, including a caret parked part-way
+    /// through a language tag the author is still typing — and ends at the
+    /// start of the closing fence.
     static func block(containing location: Int, in text: String) -> FencedBlock? {
         blocks(in: text).first { block in
-            let lower = NSMaxRange(block.openFenceRange)
+            let lower = block.infoRange.location
             let upper = block.closeFenceRange?.location ?? NSMaxRange(block.outerRange)
             return location >= lower && location <= upper
         }

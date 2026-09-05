@@ -25,6 +25,14 @@ struct ACPComposerCodeFenceKeyTests {
         #expect(textView.fencedBlockRange(containing: 8) != nil)
     }
 
+    @Test("a caret part-way through the info string is reported as inside")
+    func partialInfoSlotIsInsideBlock() {
+        // Half-typed language tag: the caret sits between 's' and 'w' of
+        // "swift". ⏎ here has to insert a newline, not submit the message.
+        let textView = makeTextView("```swift\ncode\n```", caret: 4)
+        #expect(textView.fencedBlockRange(containing: 4) != nil)
+    }
+
     @Test("a caret before the opening backticks is outside")
     func beforeFenceIsOutside() {
         let textView = makeTextView("```\ncode\n```", caret: 0)

@@ -1061,14 +1061,16 @@ struct ACPComposerDraftBridgeTests {
         )
     }
 
-    private func makeSlashTextView() -> (ACPNSTextView, ACPInputField.Coordinator, NSWindow) {
+    private func makeSlashTextView(
+        onSubmit: @escaping ACPComposerSubmitHandler = { _, _, _, _, _ in true }
+    ) -> (ACPNSTextView, ACPInputField.Coordinator, NSWindow) {
         let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 40))
         // presentSlashPanel() needs a window to position the panel against.
         // `textView.window` is unowned, so the caller must keep the returned
         // window alive for as long as the text view is used.
         let window = NSWindow(contentRect: textView.frame, styleMask: [], backing: .buffered, defer: false)
         window.contentView?.addSubview(textView)
-        let coordinator = makeCoordinator(sendOnEnter: true) { _, _, _, _, _ in true }
+        let coordinator = makeCoordinator(sendOnEnter: true, onSubmit: onSubmit)
         coordinator.promptSuggestions = [
             ACPPromptSuggestion(command: "/init", description: "Initialize"),
             ACPPromptSuggestion(command: "/review", description: "Review"),
@@ -1249,6 +1251,52 @@ struct ACPComposerDraftBridgeTests {
 
         #expect(received == .auto)
         #expect(textView.string == "```\ncode\n```") // unchanged: no newline was inserted
+    }
+
+    @Test("⌘⏎ sends even while the slash picker has a suggestion selected")
+    func commandReturnSendsPastAnOpenSlashPanel() throws {
+        // The picker's own Return handling runs before the ⌘⏎ send handler,
+        // so without a modifier check it would accept the suggestion and
+        // return — making ⌘⏎ the one keystroke that does not "always send".
+        // Reject the submit so the visible draft survives and the string can
+        // be checked for an accidentally-accepted suggestion.
+        var received: ACPSubmitIntent?
+        let (textView, coordinator, window) = makeSlashTextView { _, _, intent, _, _ in
+            received = intent
+            return false
+        }
+        _ = (coordinator, window)
+        textView.string = "/i"
+        textView.setSelectedRange(NSRange(location: 2, length: 0))
+        textView.reconcileSlashPanel()
+        #expect(textView.isSlashPanelOpen)
+
+        textView.keyDown(with: try keyEvent(keyCode: 36, modifiers: .command))
+
+        #expect(received == .auto)
+        #expect(textView.string == "/i")   // the suggestion was not accepted
+    }
+
+    @Test("plain ⏎ still accepts the selected slash suggestion")
+    func plainReturnStillAcceptsTheSlashSuggestion() throws {
+        // Regression guard for the fix above: only ⌘⏎ skips past the
+        // picker's Return handling; bare ⏎ must keep accepting.
+        var received: ACPSubmitIntent?
+        let (textView, coordinator, window) = makeSlashTextView { _, _, intent, _, _ in
+            received = intent
+            return false
+        }
+        _ = (coordinator, window)
+        textView.string = "/i"
+        textView.setSelectedRange(NSRange(location: 2, length: 0))
+        textView.reconcileSlashPanel()
+        #expect(textView.isSlashPanelOpen)
+
+        textView.keyDown(with: try keyEvent(keyCode: 36, modifiers: []))
+
+        #expect(received == nil)
+        #expect(textView.string == "/init ")
+        #expect(!textView.isSlashPanelOpen)
     }
 
     private func keyEvent(

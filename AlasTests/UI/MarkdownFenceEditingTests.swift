@@ -123,6 +123,32 @@ struct MarkdownFenceResolveTests {
         #expect(resolve("`", "``value``", NSRange(location: 2, length: 5)) == .wrapSelection)
     }
 
+    @Test("a selection reaching into a block's interior falls through")
+    func selectionReachingIntoABlockIsRefused() {
+        // "``A\n```\nb``\n```": the selection starts at 2 — outside every
+        // block, since the block's own opener only starts at 4 — but runs
+        // through the opener and into the body. Checking containment at the
+        // selection's start alone sees nothing and wraps, folding the block's
+        // opener into a new outer fence.
+        #expect(resolve("`", "``A\n```\nb``\n```", NSRange(location: 2, length: 7)) == .none)
+    }
+
+    @Test("a selection that swallows a whole block falls through")
+    func selectionContainingAWholeBlockIsRefused() {
+        // "``\n```\ncode\n```\n``": neither endpoint is inside the block —
+        // the selection starts before its opener and ends after its closer —
+        // yet the block sits entirely within the selection, so wrapping would
+        // sweep both of its fence lines into the new outer one.
+        #expect(resolve("`", "``\n```\ncode\n```\n``", NSRange(location: 2, length: 14)) == .none)
+    }
+
+    @Test("a selection next to a block, but not overlapping it, still wraps")
+    func selectionAdjacentToABlockStillWraps() {
+        // Counterweight to the two tests above: the overlap check must not
+        // refuse a selection that merely sits below an existing block.
+        #expect(resolve("`", "```\ncode\n```\n``value``", NSRange(location: 15, length: 5)) == .wrapSelection)
+    }
+
     @Test("an unflanked selection falls through to inline pairing")
     func unflankedSelection() {
         #expect(resolve("`", "value", NSRange(location: 0, length: 5)) == .none)
@@ -154,6 +180,22 @@ struct MarkdownFenceContainmentTests {
     @Test("the info-string slot counts as inside")
     func infoSlotIsInside() {
         #expect(MarkdownFenceEditing.block(containing: 8, in: text) != nil)
+    }
+
+    @Test("a position part-way through the info string counts as inside")
+    func midInfoStringIsInside() {
+        // Caret between 's' and 'w' of "swift" — the author is still typing
+        // the language tag. The whole slot is inside the block, not just the
+        // one position at its end.
+        #expect(MarkdownFenceEditing.block(containing: 4, in: text) != nil)
+        #expect(MarkdownFenceEditing.block(containing: 3, in: text) != nil)
+    }
+
+    @Test("a position inside the opening backticks is still outside")
+    func withinTheOpeningBackticksIsOutside() {
+        // The run of backticks itself is the fence, not its interior.
+        #expect(MarkdownFenceEditing.block(containing: 1, in: text) == nil)
+        #expect(MarkdownFenceEditing.block(containing: 2, in: text) == nil)
     }
 
     @Test("the body counts as inside")

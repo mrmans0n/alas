@@ -226,6 +226,37 @@ struct PairedDelimiterFenceTests {
         #expect(MarkdownFenceEditing.blocks(in: textView.string).count == 1)
     }
 
+    @Test("a selection reaching into a block from outside is not wrapped into a box")
+    func selectionReachingIntoABlockIsNotWrapped() {
+        let textView = makeTextView()
+        // The selection starts at 2 — ahead of the block, which only opens at
+        // 4 — so no single position of it is inside the block, yet it runs
+        // through the opener and into the body. Wrapping would fold that
+        // opener into a new outer fence and re-cut the document.
+        textView.string = "``A\n```\nb``\n```"
+        textView.setSelectedRange(NSRange(location: 2, length: 7))
+        type("`", into: textView)
+
+        #expect(textView.string == "``A\n```\nb``\n```")
+        #expect(textView.selectedRange() == NSRange(location: 2, length: 7))
+        #expect(MarkdownFenceEditing.blocks(in: textView.string).count == 1)
+    }
+
+    @Test("a selection that swallows a whole block is not wrapped into a box")
+    func selectionContainingAWholeBlockIsNotWrapped() {
+        let textView = makeTextView()
+        // Both endpoints sit outside the block — before its opener and after
+        // its closer — but the block itself is entirely inside the selection,
+        // so wrapping would sweep both of its fence lines into the new one.
+        textView.string = "``\n```\ncode\n```\n``"
+        textView.setSelectedRange(NSRange(location: 2, length: 14))
+        type("`", into: textView)
+
+        #expect(textView.string == "``\n```\ncode\n```\n``")
+        #expect(textView.selectedRange() == NSRange(location: 2, length: 14))
+        #expect(MarkdownFenceEditing.blocks(in: textView.string).count == 1)
+    }
+
     @Test("a lone body backtick lands without its partner, because pairing would add two more")
     func caretRunOfOneLosesItsPartner() {
         let textView = makeTextView()
