@@ -486,18 +486,65 @@ class PairedDelimiterTextView: NSTextView {
         // body already ends on a line of its own. Adding another newline there
         // would push a blank line the author never typed into their own content.
         let separator = endsWithLineTerminator(body) ? "" : "\n"
+        // A non-empty body (only `.wrapSelection` ever supplies one —
+        // `.openBlock`'s body is always empty) splices its own first
+        // character in directly after this fence's own newline, and every
+        // character in it keeps whatever line-start position it already had.
+        // A backtick run inside the body that is not currently a fence line —
+        // most commonly the body's very first run, mid-line until this edit's
+        // own leading newline relocates it — would read as one once it lands
+        // there. Widening the fence past every backtick run anywhere in the
+        // body keeps `blocks(in:)`'s closing rule (`>= opener.backtickCount`)
+        // from ever matching such a run, so it can only ever be absorbed as
+        // inert content.
+        let fence = String(repeating: "`", count: fenceWidth(for: body))
 
         return FencedBlockExpansion(
             // The opening fence's indentation, if any, already sits in the
             // document right before `replaced` — this edit never touches it,
             // so `prefix` only ever adds the fence itself.
-            prefix: leading + "```\n",
+            prefix: leading + fence + "\n",
             // The closing fence starts life on a fresh line with nothing
             // before it, so its matching indentation has to be typed in here.
-            suffix: separator + indent + "```" + trailing,
-            // "```\n" is four characters past the leading newline, if any.
-            bodyStart: replaced.location + (leading as NSString).length + 4
+            suffix: separator + indent + fence + trailing,
+            // The fence plus its own newline sit between the leading newline,
+            // if any, and the body.
+            bodyStart: replaced.location + (leading as NSString).length + fence.count + 1
         )
+    }
+
+    /// How wide a fence must be to wrap `body` without any line inside it
+    /// ever satisfying `MarkdownFenceEditing.blocks(in:)`'s closing rule
+    /// (`candidate.backtickCount >= opener.backtickCount`) against this
+    /// fence's own opener.
+    ///
+    /// Scans every character of `body`, not merely lines that already read as
+    /// fence lines: a run that is not currently line-starting can become one
+    /// purely because of the newlines this very edit inserts around `body`,
+    /// which is the failure mode this guards against. `minimumFenceLength` is
+    /// the floor so an empty or backtick-free body still gets the ordinary
+    /// three-wide fence.
+    private static func fenceWidth(for body: NSString) -> Int {
+        max(MarkdownFenceEditing.minimumFenceLength, longestBacktickRun(in: body) + 1)
+    }
+
+    /// The length of the longest contiguous run of `` ` `` anywhere in
+    /// `body`, irrespective of where it sits on its line.
+    private static func longestBacktickRun(in body: NSString) -> Int {
+        let backtick: unichar = 0x60
+        var longest = 0
+        var current = 0
+        var index = 0
+        while index < body.length {
+            if body.character(at: index) == backtick {
+                current += 1
+                longest = max(longest, current)
+            } else {
+                current = 0
+            }
+            index += 1
+        }
+        return longest
     }
 
     /// The whitespace-only run, if any, between the start of the line

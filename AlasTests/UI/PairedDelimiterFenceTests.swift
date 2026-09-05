@@ -589,4 +589,112 @@ struct PairedDelimiterFenceTests {
 
         #expect(textView.string == "````")
     }
+
+    // MARK: - Wrapping a selection whose own body contains a backtick run
+
+    @Test("wrapping a selection that begins with a bare backtick run widens the fence instead of corrupting it")
+    func wrapsSelectionBeginningWithEmbeddedFenceRun() {
+        let textView = makeTextView()
+        // The exact Codex repro: the selected body is itself nothing but a
+        // bare three-backtick run. Relocated onto its own line by the
+        // expansion's leading newline, a hardcoded three-wide fence would read
+        // that run as its own closer — closing the box one line early and
+        // leaving the real closer to open a second, unclosed block.
+        textView.string = "prefix ```"
+        textView.setSelectedRange(NSRange(location: 7, length: 3))
+        type("```", into: textView)
+
+        #expect(textView.string == "prefix \n````\n```\n````")
+        #expect(textView.selectedRange() == NSRange(location: 13, length: 3))
+        let blocks = MarkdownFenceEditing.blocks(in: textView.string)
+        #expect(blocks.count == 1)
+        #expect(blocks.first?.closeFenceRange != nil)
+        if let block = blocks.first {
+            let bodyText = (textView.string as NSString).substring(with: block.bodyRange)
+            #expect(bodyText.contains("```"))
+        }
+    }
+
+    @Test("an embedded fence run at the start of a longer, multi-line body still widens the fence")
+    func wrapsMultiLineSelectionBeginningWithEmbeddedFenceRun() {
+        let textView = makeTextView()
+        // Same failure mode, but the body doesn't end at the embedded run —
+        // there is real content on the lines after it, which the fix must
+        // carry through untouched rather than truncating at the run.
+        let body = "```\nmore\nlines"
+        textView.string = "prefix " + body
+        textView.setSelectedRange(NSRange(location: 7, length: (body as NSString).length))
+        type("```", into: textView)
+
+        let blocks = MarkdownFenceEditing.blocks(in: textView.string)
+        #expect(blocks.count == 1)
+        #expect(blocks.first?.closeFenceRange != nil)
+        if let block = blocks.first {
+            let bodyText = (textView.string as NSString).substring(with: block.bodyRange)
+            #expect(bodyText.contains(body))
+        }
+    }
+
+    @Test("an embedded fence run wider than three backticks still gets a wider wrapping fence")
+    func wrapsSelectionBeginningWithAWiderEmbeddedFenceRun() {
+        let textView = makeTextView()
+        // Four backticks in the body would still close a hardcoded four-wide
+        // fence early; the wrapping fence has to beat whatever is inside it.
+        textView.string = "prefix ````"
+        textView.setSelectedRange(NSRange(location: 7, length: 4))
+        type("```", into: textView)
+
+        #expect(textView.string == "prefix \n`````\n````\n`````")
+        #expect(textView.selectedRange() == NSRange(location: 14, length: 4))
+        let blocks = MarkdownFenceEditing.blocks(in: textView.string)
+        #expect(blocks.count == 1)
+        #expect(blocks.first?.closeFenceRange != nil)
+        if let block = blocks.first {
+            let bodyText = (textView.string as NSString).substring(with: block.bodyRange)
+            #expect(bodyText.contains("````"))
+        }
+    }
+
+    @Test("a body that is itself a complete, closed fenced block is never handed to the width fix at all")
+    func selectingAWholeNestedBlockNeverReachesTheExpansion() {
+        let textView = makeTextView()
+        // A tempting fourth scenario for the width fix would be a body that is
+        // itself a whole, valid, narrower fenced block — "```\nx\n```" — to
+        // prove it nests as inert content once the wrapping fence is wider.
+        // It never gets there: the block's own closer sits right after a real
+        // newline that already exists in the document before this keystroke
+        // ever lands, so `MarkdownFenceEditing.blocks(in:)` already registers
+        // it — as at least an unclosed opener, if nothing else — and
+        // `resolve`'s pre-edit disjointness guard (from the *previous* round
+        // of this fix) refuses `.wrapSelection` outright before
+        // `fencedBlockExpansion` runs at all. The keystroke falls back to
+        // plain character pairing instead, which only ever widens the
+        // existing block's own fence in place — never a second, corrupting
+        // block. This is the guard the width fix is additive to, not a
+        // scenario the width fix itself has to handle.
+        let body = "```\nx\n```"
+        textView.string = "prefix " + body
+        textView.setSelectedRange(NSRange(location: 7, length: (body as NSString).length))
+        type("```", into: textView)
+
+        // Never reaching `.wrapSelection` at all means this keystroke can
+        // only ever widen the pre-existing block's own fence in place, via
+        // plain character pairing — so the original body content ("x") is
+        // untouched, and there is still exactly one block, not two.
+        #expect(textView.string.contains("x"))
+        #expect(MarkdownFenceEditing.blocks(in: textView.string).count == 1)
+    }
+
+    @Test("a body with no backticks at all still gets an ordinary three-wide fence")
+    func wrapsOrdinaryBodyWithoutWideningTheFence() {
+        let textView = makeTextView()
+        // The regression guard: nothing about this fix may widen the fence
+        // for a body that never risked closing it early.
+        textView.string = "value"
+        textView.setSelectedRange(NSRange(location: 0, length: 5))
+        type("```", into: textView)
+
+        #expect(textView.string == "```\nvalue\n```")
+        #expect(textView.selectedRange() == NSRange(location: 4, length: 5))
+    }
 }

@@ -260,6 +260,22 @@ struct PairedDelimiterDeadKeyTests {
         #expect(blocks.first?.closeFenceRange != nil)
     }
 
+    @Test func deadKeyWrapsSelectionBeginningWithEmbeddedFenceRun() {
+        // The dead-key equivalent of the Codex repro: the selected body is
+        // itself nothing but a bare three-backtick run. A hardcoded
+        // three-wide fence would read that run, once relocated onto its own
+        // line by the expansion's leading newline, as its own closer.
+        let textView = makePairedTextView(text: "prefix ```", fencesEnabled: true)
+        textView.setSelectedRange(NSRange(location: 7, length: 3))
+        typeDeadKeys("```", in: textView)
+
+        #expect(textView.string == "prefix \n````\n```\n````")
+        #expect(textView.selectedRange() == NSRange(location: 13, length: 3))
+        let blocks = MarkdownFenceEditing.blocks(in: textView.string)
+        #expect(blocks.count == 1)
+        #expect(blocks.first?.closeFenceRange != nil)
+    }
+
     @Test func deadKeyBacktickPairingIsUntouchedWhenFencesAreDisabled() {
         let textView = makePairedTextView()
         typeDeadKeys("```", in: textView)
