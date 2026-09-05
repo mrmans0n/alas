@@ -1610,6 +1610,12 @@ struct AppKitDiffReviewComposerRowBody: View {
                         ReviewDraftQuote.markdown(path: $0.path, selectedText: $0.selectedText)
                     },
                     quoteInsertionGeneration: input.state.quoteInsertionGeneration,
+                    codeBlockStyle: .standard(
+                        theme: input.theme,
+                        baseFont: .systemFont(ofSize: 12),
+                        baseColor: NSColor(input.theme.color("fg")),
+                        monoSize: 12
+                    ),
                     onSave: input.savePendingDraft,
                     onCancel: input.clearPendingDraft
                 )

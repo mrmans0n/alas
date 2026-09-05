@@ -158,6 +158,12 @@ struct CommitMessageEditorView: View {
                     if value { focused = .body }
                     else if focused == .body { focused = nil }
                 }
+            ),
+            codeBlockStyle: .standard(
+                theme: theme,
+                baseFont: .monospacedSystemFont(ofSize: 12, weight: .regular),
+                baseColor: NSColor(theme.color("fg")),
+                monoSize: 12
             )
         )
             .frame(minHeight: 70, maxHeight: 150)

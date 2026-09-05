@@ -177,6 +177,112 @@ struct PairedDelimiterDeadKeyTests {
         #expect(textView.string == "`value```")
     }
 
+    // MARK: - Markdown fences
+
+    @Test func deadKeyThreeBackticksOpenBox() {
+        let textView = makePairedTextView(fencesEnabled: true)
+        typeDeadKeys("```", in: textView)
+
+        #expect(textView.string == "```\n\n```")
+        #expect(textView.selectedRange() == NSRange(location: 4, length: 0))
+    }
+
+    @Test func deadKeyThreeBackticksAfterLeadingSpacesKeepIndentation() {
+        let textView = makePairedTextView(text: "  ", fencesEnabled: true)
+        textView.setSelectedRange(NSRange(location: 2, length: 0))
+        typeDeadKeys("```", in: textView)
+
+        #expect(textView.string == "  ```\n\n  ```")
+        #expect(textView.selectedRange() == NSRange(location: 6, length: 0))
+    }
+
+    @Test func deadKeyThreeBackticksFenceTheSelection() {
+        let textView = makePairedTextView(text: "value", fencesEnabled: true)
+        textView.setSelectedRange(NSRange(location: 0, length: 5))
+        typeDeadKeys("```", in: textView)
+
+        #expect(textView.string == "```\nvalue\n```")
+        #expect(textView.selectedRange() == NSRange(location: 4, length: 5))
+    }
+
+    @Test func deadKeyBacktickReachingTheOpenersWidthLosesItsPartner() {
+        // The partner would take the body line from three backticks to five,
+        // the opener's own width, and close the block early. Unpaired it stops
+        // at four and the block survives.
+        let textView = makePairedTextView(text: "`````\n```\n`````", fencesEnabled: true)
+        textView.setSelectedRange(NSRange(location: 9, length: 0))
+        typeDeadKeys("`", in: textView)
+
+        #expect(textView.string == "`````\n````\n`````")
+        #expect(textView.selectedRange() == NSRange(location: 10, length: 0))
+        #expect(MarkdownFenceEditing.blocks(in: textView.string).count == 1)
+    }
+
+    @Test func deadKeyQuoteOnAClosingFenceIsSwallowed() {
+        // Pairing a quote onto the closing fence line gives it an info string,
+        // which CommonMark refuses to read as a closer — so the block would
+        // swallow the rest of the document.
+        let textView = makePairedTextView(text: "```\n\n```", fencesEnabled: true)
+        textView.setSelectedRange(NSRange(location: 8, length: 0))
+        typeDeadKeys("\"", in: textView)
+
+        #expect(textView.string == "```\n\n```")
+        #expect(textView.selectedRange() == NSRange(location: 8, length: 0))
+        #expect(MarkdownFenceEditing.blocks(in: textView.string).first?.closeFenceRange != nil)
+    }
+
+    @Test func deadKeySwallowRestoresTheSelectionTheCompositionAte() {
+        // The composition replaces the selection before the commit lands, so a
+        // swallowed keystroke has to put it back rather than merely dropping
+        // the marked text.
+        let textView = makePairedTextView(text: "```\nxx``\n``\n```", fencesEnabled: true)
+        textView.setSelectedRange(NSRange(location: 8, length: 1))
+        typeDeadKeys("`", in: textView)
+
+        #expect(textView.string == "```\nxx``\n``\n```")
+        #expect(textView.selectedRange() == NSRange(location: 8, length: 1))
+        #expect(MarkdownFenceEditing.blocks(in: textView.string).count == 1)
+    }
+
+    @Test func deadKeyCaretInsideAClosingFenceMarkerDoesNotOpenABox() {
+        // The dead-key commit resolves against the pre-composition document,
+        // so it reaches the same decision the plain keystroke does: a caret
+        // part-way through a closing fence's own backticks must step over,
+        // not rewrite the marker into a new block.
+        let textView = makePairedTextView(text: "```\ncode\n```", fencesEnabled: true)
+        textView.setSelectedRange(NSRange(location: 11, length: 0))
+        typeDeadKeys("`", in: textView)
+
+        #expect(textView.string == "```\ncode\n```")
+        #expect(textView.selectedRange() == NSRange(location: 12, length: 0))
+        let blocks = MarkdownFenceEditing.blocks(in: textView.string)
+        #expect(blocks.count == 1)
+        #expect(blocks.first?.closeFenceRange != nil)
+    }
+
+    @Test func deadKeyWrapsSelectionBeginningWithEmbeddedFenceRun() {
+        // The dead-key equivalent of the Codex repro: the selected body is
+        // itself nothing but a bare three-backtick run. A hardcoded
+        // three-wide fence would read that run, once relocated onto its own
+        // line by the expansion's leading newline, as its own closer.
+        let textView = makePairedTextView(text: "prefix ```", fencesEnabled: true)
+        textView.setSelectedRange(NSRange(location: 7, length: 3))
+        typeDeadKeys("```", in: textView)
+
+        #expect(textView.string == "prefix \n````\n```\n````")
+        #expect(textView.selectedRange() == NSRange(location: 13, length: 3))
+        let blocks = MarkdownFenceEditing.blocks(in: textView.string)
+        #expect(blocks.count == 1)
+        #expect(blocks.first?.closeFenceRange != nil)
+    }
+
+    @Test func deadKeyBacktickPairingIsUntouchedWhenFencesAreDisabled() {
+        let textView = makePairedTextView()
+        typeDeadKeys("```", in: textView)
+
+        #expect(textView.string == "````")
+    }
+
     // MARK: - CodeTextView
 
     @Test func codeEditorDeadKeyCommitInsertsPair() {
@@ -234,8 +340,22 @@ struct PairedDelimiterDeadKeyTests {
         }
     }
 
-    private func makePairedTextView(text: String = "") -> PairedDelimiterTextView {
-        makePairedTextView(storage: NSTextStorage(string: text))
+    /// Drives one dead-key composition per character, in sequence — the
+    /// layout-level equivalent of typing them on a keyboard where `` ` ``,
+    /// `"` and `'` are dead keys.
+    private func typeDeadKeys(_ characters: String, in textView: PairedDelimiterTextView) {
+        for character in characters {
+            commitDeadKey(String(character), in: textView)
+        }
+    }
+
+    private func makePairedTextView(
+        text: String = "",
+        fencesEnabled: Bool = false
+    ) -> PairedDelimiterTextView {
+        let textView = makePairedTextView(storage: NSTextStorage(string: text))
+        textView.markdownFencesEnabled = fencesEnabled
+        return textView
     }
 
     private func makePairedTextView(storage: NSTextStorage) -> PairedDelimiterTextView {

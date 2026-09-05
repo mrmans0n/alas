@@ -1061,14 +1061,16 @@ struct ACPComposerDraftBridgeTests {
         )
     }
 
-    private func makeSlashTextView() -> (ACPNSTextView, ACPInputField.Coordinator, NSWindow) {
+    private func makeSlashTextView(
+        onSubmit: @escaping ACPComposerSubmitHandler = { _, _, _, _, _ in true }
+    ) -> (ACPNSTextView, ACPInputField.Coordinator, NSWindow) {
         let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 40))
         // presentSlashPanel() needs a window to position the panel against.
         // `textView.window` is unowned, so the caller must keep the returned
         // window alive for as long as the text view is used.
         let window = NSWindow(contentRect: textView.frame, styleMask: [], backing: .buffered, defer: false)
         window.contentView?.addSubview(textView)
-        let coordinator = makeCoordinator(sendOnEnter: true) { _, _, _, _, _ in true }
+        let coordinator = makeCoordinator(sendOnEnter: true, onSubmit: onSubmit)
         coordinator.promptSuggestions = [
             ACPPromptSuggestion(command: "/init", description: "Initialize"),
             ACPPromptSuggestion(command: "/review", description: "Review"),
@@ -1170,6 +1172,150 @@ struct ACPComposerDraftBridgeTests {
         )
 
         #expect(received == .steer)
+    }
+
+    @Test("plain ⏎ inside a fenced code block inserts a newline instead of submitting")
+    func plainReturnInsideFenceInsertsNewline() {
+        // Task 8: a code box's body treats ⏎ as a plain newline, not a
+        // submit, so a multi-line snippet doesn't need ⇧⏎ on every line.
+        let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+        textView.markdownFencesEnabled = true
+        textView.string = "```\ncode\n```"
+        textView.setSelectedRange(NSRange(location: 5, length: 0)) // inside "code", between 'c' and 'o'
+        var submitted = false
+        let coordinator = makeCoordinator(sendOnEnter: true) { _, _, _, _, _ in
+            submitted = true
+            return true
+        }
+        coordinator.textView = textView
+        textView.coordinator = coordinator
+
+        let handled = coordinator.textView(
+            textView,
+            doCommandBy: #selector(NSResponder.insertNewline(_:))
+        )
+
+        #expect(handled)                              // event swallowed (no submit)
+        #expect(!submitted)
+        #expect(textView.string == "```\nc\node\n```") // literal newline inserted at the caret
+    }
+
+    @Test("plain ⏎ outside any fenced block still submits with .auto")
+    func plainReturnOutsideFenceStillSubmits() {
+        // Regression guard: the fenced-block check must not swallow ⏎
+        // outside a code box, even when the text view has fences enabled.
+        let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+        textView.markdownFencesEnabled = true
+        textView.string = "send this"
+        textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
+        var received: ACPSubmitIntent?
+        let coordinator = makeCoordinator(sendOnEnter: true) { _, _, intent, _, _ in
+            received = intent
+            return true
+        }
+        coordinator.textView = textView
+        textView.coordinator = coordinator
+
+        let handled = coordinator.textView(
+            textView,
+            doCommandBy: #selector(NSResponder.insertNewline(_:))
+        )
+
+        #expect(handled)
+        #expect(received == .auto)
+    }
+
+    @Test("⌘⏎ sends immediately, even inside a code box, without inserting a newline")
+    func commandReturnSendsWithoutInsertingNewline() throws {
+        // Task 8: Cmd-Return is handled in ACPNSTextView.keyDown (not
+        // doCommandBy) because AppKit doesn't reliably route it to
+        // insertNewline:. It must send even from inside a fenced block,
+        // where plain ⏎ is a literal newline, and it must return before
+        // `super.keyDown` runs so no newline sneaks in alongside the submit.
+        let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+        textView.markdownFencesEnabled = true
+        textView.string = "```\ncode\n```"
+        textView.setSelectedRange(NSRange(location: 5, length: 0)) // inside "code"
+        var received: ACPSubmitIntent?
+        // Reject the submit so `clearVisibleDraft` doesn't wipe the text
+        // view's string afterward — that would make it impossible to tell
+        // whether keyDown itself left a stray newline behind.
+        let coordinator = makeCoordinator(sendOnEnter: true) { _, _, intent, _, _ in
+            received = intent
+            return false
+        }
+        coordinator.textView = textView
+        textView.coordinator = coordinator
+
+        textView.keyDown(with: try keyEvent(keyCode: 36, modifiers: .command))
+
+        #expect(received == .auto)
+        #expect(textView.string == "```\ncode\n```") // unchanged: no newline was inserted
+    }
+
+    @Test("⌘⏎ sends even while the slash picker has a suggestion selected")
+    func commandReturnSendsPastAnOpenSlashPanel() throws {
+        // The picker's own Return handling runs before the ⌘⏎ send handler,
+        // so without a modifier check it would accept the suggestion and
+        // return — making ⌘⏎ the one keystroke that does not "always send".
+        // Reject the submit so the visible draft survives and the string can
+        // be checked for an accidentally-accepted suggestion.
+        var received: ACPSubmitIntent?
+        let (textView, coordinator, window) = makeSlashTextView { _, _, intent, _, _ in
+            received = intent
+            return false
+        }
+        _ = (coordinator, window)
+        textView.string = "/i"
+        textView.setSelectedRange(NSRange(location: 2, length: 0))
+        textView.reconcileSlashPanel()
+        #expect(textView.isSlashPanelOpen)
+
+        textView.keyDown(with: try keyEvent(keyCode: 36, modifiers: .command))
+
+        #expect(received == .auto)
+        #expect(textView.string == "/i")   // the suggestion was not accepted
+    }
+
+    @Test("plain ⏎ still accepts the selected slash suggestion")
+    func plainReturnStillAcceptsTheSlashSuggestion() throws {
+        // Regression guard for the fix above: only ⌘⏎ skips past the
+        // picker's Return handling; bare ⏎ must keep accepting.
+        var received: ACPSubmitIntent?
+        let (textView, coordinator, window) = makeSlashTextView { _, _, intent, _, _ in
+            received = intent
+            return false
+        }
+        _ = (coordinator, window)
+        textView.string = "/i"
+        textView.setSelectedRange(NSRange(location: 2, length: 0))
+        textView.reconcileSlashPanel()
+        #expect(textView.isSlashPanelOpen)
+
+        textView.keyDown(with: try keyEvent(keyCode: 36, modifiers: []))
+
+        #expect(received == nil)
+        #expect(textView.string == "/init ")
+        #expect(!textView.isSlashPanelOpen)
+    }
+
+    private func keyEvent(
+        keyCode: UInt16,
+        modifiers: NSEvent.ModifierFlags,
+        characters: String = "\r"
+    ) throws -> NSEvent {
+        try #require(NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: modifiers,
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: characters,
+            charactersIgnoringModifiers: characters,
+            isARepeat: false,
+            keyCode: keyCode
+        ))
     }
 
     // MARK: - Restoring a queued item into the composer (blocks → draft)

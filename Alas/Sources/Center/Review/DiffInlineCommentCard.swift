@@ -26,6 +26,7 @@ struct DiffInlineCommentCard: View {
     var onActiveChange: (Bool) -> Void = { _ in }
     var editorState: Binding<DiffInlineCommentCardEditorState>?
 
+    @Environment(\.theme) private var theme
     @State private var isExpanded: Bool
     @State private var localEditorState = DiffInlineCommentCardEditorState()
     @State private var isHovered = false
@@ -183,6 +184,12 @@ struct DiffInlineCommentCard: View {
                                     focusedEditor = nil
                                 }
                             }
+                        ),
+                        codeBlockStyle: .standard(
+                            theme: theme,
+                            baseFont: .systemFont(ofSize: 11),
+                            baseColor: .labelColor,
+                            monoSize: 11
                         )
                     )
                         .frame(minHeight: 60)
@@ -290,6 +297,12 @@ struct DiffInlineCommentCard: View {
                                     focusedEditor = nil
                                 }
                             }
+                        ),
+                        codeBlockStyle: .standard(
+                            theme: theme,
+                            baseFont: .systemFont(ofSize: 11),
+                            baseColor: .labelColor,
+                            monoSize: 11
                         )
                     )
                     .frame(minHeight: 60)

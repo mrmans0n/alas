@@ -28,7 +28,13 @@ struct PromptEditorBody: View {
                 }
                 PairedTextEditor(
                     text: $draftPrompt,
-                    font: .monospacedSystemFont(ofSize: 12, weight: .regular)
+                    font: .monospacedSystemFont(ofSize: 12, weight: .regular),
+                    codeBlockStyle: .standard(
+                        theme: theme,
+                        baseFont: .monospacedSystemFont(ofSize: 12, weight: .regular),
+                        baseColor: .labelColor,
+                        monoSize: 12
+                    )
                 )
                     .background(theme.color("bg-2"))
                     .overlay(

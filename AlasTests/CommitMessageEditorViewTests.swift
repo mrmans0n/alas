@@ -141,6 +141,24 @@ struct CommitMessageEditorViewTests {
         #expect(model.body == "`body`")
     }
 
+    @Test func bodyEditorWiresCodeBlockStyle() async throws {
+        let theme = currentTheme()
+        let model = CommitComposerModel(subject: "subject", body: "body")
+        let controller = NSHostingController(rootView: CommitComposerHarness(model: model, theme: theme))
+        let window = attach(controller)
+        defer { window.orderOut(nil) }
+        await drain(controller.view)
+
+        let body = try #require(firstSubview(of: PairedDelimiterTextView.self, in: controller.view))
+        #expect(body.markdownFencesEnabled)
+
+        let style = try #require(body.markdownCodeBlockStyle)
+        let expectedFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        #expect(style.baseFont == expectedFont)
+        #expect(style.monoFont == expectedFont)
+        #expect(style.baseColor == NSColor(theme.color("fg")))
+    }
+
     @Test func subjectKeepsFocusAcrossRepeatedTextUpdates() async throws {
         let model = CommitComposerModel(subject: "", body: "")
         let controller = NSHostingController(rootView: CommitComposerHarness(model: model, theme: currentTheme()))

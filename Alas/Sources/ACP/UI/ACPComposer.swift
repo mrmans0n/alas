@@ -120,6 +120,15 @@ struct ACPInputField: NSViewRepresentable {
             }
         }
         if let tv = nsView.documentView as? ACPNSTextView {
+            let baseFont = typography.appKitFont()
+            let style = Self.codeBlockStyle(
+                theme: context.environment.theme,
+                baseFont: baseFont,
+                typography: typography
+            )
+            tv.markdownFencesEnabled = true
+            tv.markdownCodeBlockStyle = style
+            context.coordinator.codeBlockStyle = style
             tv.applyChatTypography(typography)
             tv.placeholderText = Self.placeholder(for: session.transcript.streamingState, sendOnEnter: sendOnEnter)
             tv.needsDisplay = true
@@ -139,6 +148,24 @@ struct ACPInputField: NSViewRepresentable {
             tv.dismissFloatingPanels()
             coordinator.editorUndoManager.removeAllActions()
         }
+    }
+
+    /// Builds the composer's code box style, threading the configured chat
+    /// font family through so the in-progress box matches the font the
+    /// transcript's rendered code block uses once the message is submitted
+    /// — see `MarkdownCodeBlockStyle.standard`'s doc comment.
+    static func codeBlockStyle(
+        theme: Theme,
+        baseFont: NSFont,
+        typography: ACPChatTypography
+    ) -> MarkdownCodeBlockStyle {
+        MarkdownCodeBlockStyle.standard(
+            theme: theme,
+            baseFont: baseFont,
+            baseColor: .labelColor,
+            monoSize: typography.codeSize,
+            monoFontFamily: typography.fontFamily
+        )
     }
 
     /// When busy, the placeholder advertises whichever action ⏎ will
@@ -212,6 +239,8 @@ struct ACPInputField: NSViewRepresentable {
         private var pendingRestyleWork: DispatchWorkItem?
         private var pendingRestyleGeneration = 0
         private var pendingRestyleRange: NSRange?
+        var codeBlockStyle: MarkdownCodeBlockStyle?
+        private var lastBlocks: [FencedBlock] = []
         private static let restyleDebounceInterval: Double = 0.5
 
         func reportImageError(_ error: ACPImageStaging.StagingError) {
@@ -294,9 +323,18 @@ struct ACPInputField: NSViewRepresentable {
                 return true
             }
             if selector == #selector(NSResponder.insertNewline(_:)) {
+                let modifiers = NSApp.currentEvent?.modifierFlags ?? []
                 // ⇧⏎ inserts a literal newline. (⌥⏎ never reaches here — it
-                // routes to `insertNewlineIgnoringFieldEditor:` above.)
-                if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
+                // routes to `insertNewlineIgnoringFieldEditor:` above. ⌘⏎ is
+                // caught in ACPNSTextView.keyDown.)
+                if modifiers.contains(.shift) {
+                    textView.insertText("\n", replacementRange: textView.selectedRange())
+                    return true
+                }
+                // Inside a code box ⏎ is a plain newline, so a multi-line
+                // snippet doesn't need ⇧⏎ on every line. ⌘⏎ still sends.
+                if let tv = textView as? ACPNSTextView,
+                   tv.fencedBlockRange(containing: tv.selectedRange().location) != nil {
                     textView.insertText("\n", replacementRange: textView.selectedRange())
                     return true
                 }
@@ -331,19 +369,41 @@ struct ACPInputField: NSViewRepresentable {
             let draft = Self.draft(from: storage)
             lastSyncedDraft = draft
             onDraftChange(draft)
+            // Block detection is a line-prefix scan, not a regex over the whole
+            // document, so it is cheap enough to run synchronously here. Only
+            // the attribute application stays on the debounce below.
+            let blocks = MarkdownFenceEditing.blocks(in: storage.string)
+            var dirty = ACPMarkdownLiveStyler.editedLineRange(in: storage)
+            if let fenceDirty = ACPMarkdownLiveStyler.dirtyRange(
+                previous: lastBlocks,
+                current: blocks,
+                storageLength: storage.length
+            ) {
+                dirty = dirty.map { NSUnionRange($0, fenceDirty) } ?? fenceDirty
+            }
+            lastBlocks = blocks
             pendingRestyleRange = pendingRestyleRange.map { existing in
-                NSUnionRange(existing, ACPMarkdownLiveStyler.editedLineRange(in: storage) ?? existing)
-            } ?? ACPMarkdownLiveStyler.editedLineRange(in: storage)
+                dirty.map { NSUnionRange(existing, $0) } ?? existing
+            } ?? dirty
             pendingRestyleWork?.cancel()
             pendingRestyleGeneration += 1
             let generation = pendingRestyleGeneration
             let work = DispatchWorkItem { [weak self] in
                 guard let self else { return }
                 guard self.pendingRestyleGeneration == generation else { return }
+                let blockRanges: [NSRange]
+                if let style = self.codeBlockStyle {
+                    blockRanges = MarkdownCodeBlockStyler
+                        .restyle(storage, in: self.pendingRestyleRange, style: style)
+                        .map(\.outerRange)
+                } else {
+                    blockRanges = []
+                }
                 ACPMarkdownLiveStyler.restyle(
                     storage,
                     in: self.pendingRestyleRange,
-                    typography: self.typography
+                    typography: self.typography,
+                    excluding: blockRanges
                 )
                 self.pendingRestyleRange = nil
                 self.pendingRestyleWork = nil
@@ -458,7 +518,17 @@ struct ACPInputField: NSViewRepresentable {
             invalidatePendingImageFileInsertions()
             restoringDraft = true
             storage.setAttributedString(Self.attributedString(from: draft, typography: typography))
-            ACPMarkdownLiveStyler.restyle(storage, typography: typography)
+            // `restoringDraft` short-circuits `textDidChange`, where the fence
+            // cache is normally refreshed, so refresh it here or it keeps
+            // describing the document this one replaced.
+            lastBlocks = MarkdownFenceEditing.blocks(in: storage.string)
+            let blockRanges: [NSRange]
+            if let style = codeBlockStyle {
+                blockRanges = MarkdownCodeBlockStyler.restyle(storage, in: nil, style: style).map(\.outerRange)
+            } else {
+                blockRanges = []
+            }
+            ACPMarkdownLiveStyler.restyle(storage, typography: typography, excluding: blockRanges)
             textView.needsDisplay = true
             restoringDraft = false
             lastSyncedDraft = draft
@@ -471,6 +541,10 @@ struct ACPInputField: NSViewRepresentable {
             invalidatePendingImageFileInsertions()
             restoringDraft = true
             textView.string = ""
+            // Same as `restore`: the cache has to follow the storage even when
+            // `textDidChange` is short-circuited. An empty document has no
+            // fenced blocks.
+            lastBlocks = []
             textView.needsDisplay = true
             restoringDraft = false
         }
@@ -646,13 +720,38 @@ final class ACPNSTextView: PairedDelimiterTextView {
         ]
     }
 
+    /// Whether a restyle has already run with a non-nil `markdownCodeBlockStyle`.
+    ///
+    /// `makeNSView` applies the typography and restores the persisted draft
+    /// before `updateNSView` — the only place the code box style is handed
+    /// over — has ever run, so on first mount both of those happen while the
+    /// style is still nil. Without this the typography guard below would then
+    /// swallow `updateNSView`'s own call (same typography, non-nil font) and a
+    /// remounted draft's fenced block would stay unstyled until the user's next
+    /// edit. One shot: once the style has been applied every later render
+    /// re-enters the guard and returns, so SwiftUI updates do not each re-parse
+    /// and re-attribute the whole storage.
+    private var hasAppliedCodeBlockStyle = false
+
     func applyChatTypography(_ typography: ACPChatTypography) {
-        guard chatTypography != typography || font == nil else { return }
+        let codeBlockStyleBecameAvailable = markdownCodeBlockStyle != nil && !hasAppliedCodeBlockStyle
+        guard chatTypography != typography || font == nil || codeBlockStyleBecameAvailable else { return }
         chatTypography = typography
         font = typography.appKitFont()
         typingAttributes = baseTypingAttributes
         if let textStorage {
-            ACPMarkdownLiveStyler.restyle(textStorage, typography: typography)
+            var blockRanges: [NSRange] = []
+            if let style = markdownCodeBlockStyle {
+                blockRanges = MarkdownCodeBlockStyler
+                    .restyle(textStorage, in: nil, style: style)
+                    .map(\.outerRange)
+                hasAppliedCodeBlockStyle = true
+            }
+            ACPMarkdownLiveStyler.restyle(
+                textStorage,
+                typography: typography,
+                excluding: blockRanges
+            )
         }
         needsDisplay = true
     }
@@ -741,7 +840,12 @@ final class ACPNSTextView: PairedDelimiterTextView {
             case 125: panel.model.moveDown()
             return    // down
             case 36, 76, 48:                            // return / enter / tab
-                if let pick = panel.model.selected() {
+                // Only without Command. ⌘⏎ is a send, not an accept, and this
+                // branch runs first — so swallowing it here would make the
+                // picker the one state where ⌘⏎ does not reach the send
+                // handler below.
+                if !event.modifierFlags.contains(.command),
+                   let pick = panel.model.selected() {
                     insertSlash(pick)
                     return
                 }
@@ -755,6 +859,15 @@ final class ACPNSTextView: PairedDelimiterTextView {
                 return
             default: break
             }
+        }
+
+        // ⌘⏎ always sends, including from inside a code box where bare ⏎ is a
+        // newline. Handled here rather than in `doCommandBy` because AppKit
+        // does not reliably route Command-Return to `insertNewline:`.
+        if event.keyCode == 36 || event.keyCode == 76,
+           event.modifierFlags.contains(.command) {
+            coordinator?.submit(self, intent: .auto)
+            return
         }
 
         if event.charactersIgnoringModifiers == "@" {

@@ -806,7 +806,13 @@ struct ReviewDraftSummaryCommentEditor: View {
         PairedTextEditor(
             text: $text,
             font: .systemFont(ofSize: 11.5),
-            textColor: NSColor(theme.color("fg"))
+            textColor: NSColor(theme.color("fg")),
+            codeBlockStyle: .standard(
+                theme: theme,
+                baseFont: .systemFont(ofSize: 11.5),
+                baseColor: NSColor(theme.color("fg")),
+                monoSize: 11.5
+            )
         )
         .frame(minHeight: 62)
         .background(theme.color("bg-2"))
