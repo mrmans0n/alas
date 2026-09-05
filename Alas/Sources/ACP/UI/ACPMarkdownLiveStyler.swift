@@ -126,19 +126,27 @@ enum ACPMarkdownLiveStyler {
         others.contains { NSIntersectionRange(range, $0).length > 0 }
     }
 
-    /// The span that must be restyled when the set of fenced blocks changed.
+    /// The span that must be restyled when the document's fences moved.
     ///
     /// A single new ``` flips the open/closed parity of every block below it,
     /// so the range runs from the first differing fence to end of storage.
-    /// Returns nil when the fence set is unchanged, in which case the caller
-    /// keeps its existing edited-line-range behaviour.
+    ///
+    /// Closers count as much as openers. Closing a block that ran to the end of
+    /// the document, or deleting the closer of one that didn't, changes where
+    /// the block's body stops without moving a single opener — and the text it
+    /// gives up (or absorbs) is exactly what needs restyling. Comparing openers
+    /// alone reports "nothing changed" there and leaves that tail wearing the
+    /// attributes of a block it is no longer part of.
+    ///
+    /// Returns nil when no fence appeared, vanished, or moved, in which case
+    /// the caller keeps its cheaper edited-line-range behaviour.
     static func dirtyRange(
         previous: [FencedBlock],
         current: [FencedBlock],
         storageLength: Int
     ) -> NSRange? {
-        let previousFences = previous.map(\.openFenceRange.location)
-        let currentFences = current.map(\.openFenceRange.location)
+        let previousFences = previous.flatMap(fenceLocations(of:))
+        let currentFences = current.flatMap(fenceLocations(of:))
         guard previousFences != currentFences else { return nil }
 
         let firstDifference = zip(previousFences, currentFences)
@@ -148,5 +156,17 @@ enum ACPMarkdownLiveStyler {
             ?? 0
         let start = max(0, min(firstDifference, storageLength))
         return NSRange(location: start, length: storageLength - start)
+    }
+
+    /// Every fence position a block owns, in document order: its opener, then
+    /// its closer when it has one. Flattening the blocks this way keeps the
+    /// combined sequence ascending — a block's closer always precedes the next
+    /// block's opener — so the caller's "first differing position" scan works
+    /// on it unchanged.
+    private static func fenceLocations(of block: FencedBlock) -> [Int] {
+        guard let closeFenceRange = block.closeFenceRange else {
+            return [block.openFenceRange.location]
+        }
+        return [block.openFenceRange.location, closeFenceRange.location]
     }
 }

@@ -54,4 +54,123 @@ struct ACPComposerCodeBlockStylingTests {
             storageLength: 9
         ) == nil)
     }
+
+    @Test("closing an unclosed block dirties the tail it stopped covering")
+    func closingABlockExtendsDirtyRange() throws {
+        // The opener never moves — only the closer appears — so comparing
+        // opener locations alone reports "nothing changed" and leaves "tail"
+        // wearing the body styling it had while the block ran to end of text.
+        let after = "```\nbody\n```\ntail"
+        let previous = MarkdownFenceEditing.blocks(in: "```\nbody\ntail")
+        let current = MarkdownFenceEditing.blocks(in: after)
+        #expect(previous.first?.closeFenceRange == nil)
+        #expect(current.first?.closeFenceRange != nil)
+        #expect(previous.first?.openFenceRange.location == current.first?.openFenceRange.location)
+
+        let length = (after as NSString).length
+        let range = try #require(ACPMarkdownLiveStyler.dirtyRange(
+            previous: previous,
+            current: current,
+            storageLength: length
+        ))
+
+        // "tail" starts at 13; the range has to reach it and run to the end.
+        #expect(range.location <= 13)
+        #expect(NSMaxRange(range) == length)
+    }
+
+    @Test("deleting a closer dirties the tail the block just absorbed")
+    func unclosingABlockExtendsDirtyRange() throws {
+        let after = "```\nbody\ntail"
+        let previous = MarkdownFenceEditing.blocks(in: "```\nbody\n```\ntail")
+        let current = MarkdownFenceEditing.blocks(in: after)
+        #expect(previous.first?.openFenceRange.location == current.first?.openFenceRange.location)
+
+        let length = (after as NSString).length
+        let range = try #require(ACPMarkdownLiveStyler.dirtyRange(
+            previous: previous,
+            current: current,
+            storageLength: length
+        ))
+
+        #expect(range.location <= 9)
+        #expect(NSMaxRange(range) == length)
+    }
+
+    @Test("a persisted draft's fenced block is styled once the code box style arrives")
+    func initialDraftFenceIsStyledOnFirstUpdate() throws {
+        let draft = ACPComposerDraft(segments: [.text("intro\n```\nlet x = 1\n```")])
+        let coordinator = ACPInputField.Coordinator(
+            worktreeRoot: URL(fileURLWithPath: "/tmp"),
+            initialDraft: draft,
+            focusRequest: 0,
+            sendOnEnter: true,
+            typography: typography,
+            onDraftChange: { _ in },
+            onDraftClear: {},
+            onSubmit: { _, _, _, _, _ in true }
+        )
+        let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+        coordinator.textView = textView
+
+        // `makeNSView`'s order: typography first, then the persisted draft —
+        // both before `updateNSView` has handed the view its code box style.
+        textView.applyChatTypography(typography)
+        coordinator.restoreInitialDraft(into: textView)
+
+        // `updateNSView`'s first pass, where the style finally shows up.
+        let style = Self.codeBlockStyle(typography: typography)
+        textView.markdownFencesEnabled = true
+        textView.markdownCodeBlockStyle = style
+        coordinator.codeBlockStyle = style
+        textView.applyChatTypography(typography)
+
+        let storage = try #require(textView.textStorage)
+        let block = try #require(MarkdownFenceEditing.blocks(in: storage.string).first)
+        #expect(storage.attribute(.font, at: block.openFenceRange.location, effectiveRange: nil)
+            as? NSFont == style.monoFont)
+        #expect(storage.attribute(.font, at: block.bodyRange.location, effectiveRange: nil)
+            as? NSFont == style.monoFont)
+        // Prose above the block keeps the ordinary chat font.
+        #expect(storage.attribute(.font, at: 0, effectiveRange: nil)
+            as? NSFont == typography.appKitFont())
+    }
+
+    @Test("a settled composer does not restyle again on later renders")
+    func settledComposerDoesNotRestyleOnEveryRender() throws {
+        let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+        let style = Self.codeBlockStyle(typography: typography)
+        let plain: [NSAttributedString.Key: Any] = [
+            .font: typography.appKitFont(),
+            .foregroundColor: NSColor.labelColor,
+        ]
+        textView.markdownFencesEnabled = true
+        textView.markdownCodeBlockStyle = style
+        let storage = try #require(textView.textStorage)
+        storage.setAttributedString(NSAttributedString(string: "```\nx\n```", attributes: plain))
+
+        // The style's arrival restyles once…
+        textView.applyChatTypography(typography)
+        #expect(storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont == style.monoFont)
+
+        // …and every later `updateNSView` pass is a no-op, so SwiftUI renders
+        // don't each re-parse and re-attribute the whole storage.
+        storage.setAttributedString(NSAttributedString(string: "```\nx\n```", attributes: plain))
+        textView.applyChatTypography(typography)
+
+        #expect(storage.attribute(.font, at: 0, effectiveRange: nil)
+            as? NSFont == typography.appKitFont())
+    }
+
+    private static func codeBlockStyle(typography: ACPChatTypography) -> MarkdownCodeBlockStyle {
+        MarkdownCodeBlockStyle(
+            baseFont: typography.appKitFont(),
+            baseColor: .labelColor,
+            monoFont: .monospacedSystemFont(ofSize: typography.codeSize, weight: .regular),
+            bodyColor: .labelColor,
+            fenceColor: .secondaryLabelColor,
+            backgroundColor: .windowBackgroundColor,
+            borderColor: .separatorColor
+        )
+    }
 }

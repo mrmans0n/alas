@@ -114,14 +114,21 @@ class PairedDelimiterTextView: NSTextView {
                 let trailing = MarkdownFenceEditing.trailingBacktickRun(at: range.location, in: string)
                 insertFencedBlock(
                     replacing: NSRange(location: range.location - 2, length: 2 + trailing),
-                    body: ""
+                    body: NSAttributedString()
                 )
                 return
             case .wrapSelection:
-                let body = (string as NSString).substring(with: range)
+                // The selection is carried through as attributed text, not as a
+                // `String`: a mention or image chip is a single U+FFFC whose
+                // whole meaning lives in its attributes, so flattening it here
+                // would leave an inert glyph behind in the box.
+                guard let textStorage, Self.isValid(range, in: textStorage) else {
+                    super.insertText(insertString, replacementRange: replacementRange)
+                    return
+                }
                 insertFencedBlock(
                     replacing: NSRange(location: range.location - 2, length: range.length + 4),
-                    body: body
+                    body: textStorage.attributedSubstring(from: range)
                 )
                 return
             case .none:
@@ -386,41 +393,69 @@ class PairedDelimiterTextView: NSTextView {
     /// Replace `replaced` with a complete fenced block wrapping `body`, adding
     /// the newlines needed to keep both fences on lines of their own, and leave
     /// the selection on the body.
-    private func insertFencedBlock(replacing replaced: NSRange, body: String) {
+    ///
+    /// `body` is attributed rather than plain text because the selection being
+    /// fenced can hold a mention or image chip — an `NSTextAttachment` whose
+    /// identity is entirely in its attributes — and rebuilding the block from a
+    /// `String` would silently reduce that chip to a placeholder glyph.
+    private func insertFencedBlock(replacing replaced: NSRange, body: NSAttributedString) {
         guard let textStorage, Self.isValid(replaced, in: textStorage) else { return }
         let expansion = Self.fencedBlockExpansion(
             replacing: replaced,
-            body: body,
+            body: body.string as NSString,
             in: string as NSString
-        )
-        let replacement = NSAttributedString(
-            string: expansion.replacement,
-            attributes: typingAttributes
         )
 
         undoManager?.beginUndoGrouping()
         performNativeTextInsertion {
-            super.insertText(replacement, replacementRange: replaced)
+            super.insertText(
+                expansion.replacement(body: body, attributes: typingAttributes),
+                replacementRange: replaced
+            )
         }
         undoManager?.endUndoGrouping()
 
-        setSelectedRange(NSRange(
-            location: expansion.bodyStart,
-            length: (body as NSString).length
-        ))
+        setSelectedRange(NSRange(location: expansion.bodyStart, length: body.length))
     }
 
-    /// The literal text a fenced block expands to when it replaces `replaced`
-    /// in `text`, plus the offset its body will start at once installed.
+    /// The fence text a block expands to around its body, plus the offset the
+    /// body will start at once installed.
+    ///
+    /// The fences themselves are plain text — nothing about them can carry an
+    /// attachment — so they are built from `typingAttributes`. The body is
+    /// spliced in exactly as captured, which is what keeps a fenced chip a chip.
+    private struct FencedBlockExpansion {
+        /// Everything written before the body: a separating newline when the
+        /// opener needs a line of its own, the opening fence, and its terminator.
+        var prefix: String
+        /// Everything written after it: the body's own terminator when it lacks
+        /// one, the closing fence, and a separating newline when the text below
+        /// needs a line of its own.
+        var suffix: String
+        var bodyStart: Int
+
+        func replacement(
+            body: NSAttributedString,
+            attributes: [NSAttributedString.Key: Any]
+        ) -> NSAttributedString {
+            let result = NSMutableAttributedString(string: prefix, attributes: attributes)
+            result.append(body)
+            result.append(NSAttributedString(string: suffix, attributes: attributes))
+            return result
+        }
+    }
+
+    /// How a fenced block expands around `body` when it replaces `replaced` in
+    /// `text`.
     ///
     /// Split out of `insertFencedBlock` so the dead-key commit path can build
     /// the identical expansion from the pre-composition document rather than
     /// from live storage, which still holds the marked text.
     private static func fencedBlockExpansion(
         replacing replaced: NSRange,
-        body: String,
+        body: NSString,
         in text: NSString
-    ) -> (replacement: String, bodyStart: Int) {
+    ) -> FencedBlockExpansion {
         let needsLeadingNewline = replaced.location > 0
             && text.character(at: replaced.location - 1) != 0x0A
         let suffixLocation = NSMaxRange(replaced)
@@ -428,12 +463,26 @@ class PairedDelimiterTextView: NSTextView {
             && text.character(at: suffixLocation) != 0x0A
         let leading = needsLeadingNewline ? "\n" : ""
         let trailing = needsTrailingNewline ? "\n" : ""
+        // Selecting whole lines takes the last one's terminator along, so the
+        // body already ends on a line of its own. Adding another newline there
+        // would push a blank line the author never typed into their own content.
+        let separator = endsWithLineTerminator(body) ? "" : "\n"
 
-        return (
-            replacement: leading + "```\n" + body + "\n```" + trailing,
+        return FencedBlockExpansion(
+            prefix: leading + "```\n",
+            suffix: separator + "```" + trailing,
             // "```\n" is four characters past the leading newline, if any.
             bodyStart: replaced.location + (leading as NSString).length + 4
         )
+    }
+
+    /// Whether `body` already ends on a line of its own. Recognizes the same
+    /// terminators `MarkdownFenceEditing.trimmingLineTerminator` strips, so a
+    /// CRLF selection is judged the way the fence parser judges it.
+    private static func endsWithLineTerminator(_ body: NSString) -> Bool {
+        guard body.length > 0 else { return false }
+        let last = body.character(at: body.length - 1)
+        return last == 0x0A || last == 0x0D
     }
 
     override func unmarkText() {
@@ -487,13 +536,20 @@ class PairedDelimiterTextView: NSTextView {
                         location: context.selectedRange.location - 2,
                         length: 2 + trailing
                     ),
-                    body: "",
+                    body: NSAttributedString(),
                     context: context,
                     markedRange: marked
                 )
                 return
             case .wrapSelection:
-                let body = (context.text as NSString).substring(with: context.selectedRange)
+                // `replacedSelection` is exactly what the composition swallowed
+                // — the attributed text `preCompositionContext` put back at
+                // `context.selectedRange` — so it is the body, chips and all.
+                // Anything else would flatten a fenced mention into a glyph.
+                let body = replacedSelection ?? NSAttributedString(
+                    string: (context.text as NSString).substring(with: context.selectedRange),
+                    attributes: typingAttributes
+                )
                 commitFencedBlock(
                     replacing: NSRange(
                         location: context.selectedRange.location - 2,
@@ -600,7 +656,7 @@ class PairedDelimiterTextView: NSTextView {
     /// keyboard path would have produced.
     private func commitFencedBlock(
         replacing replaced: NSRange,
-        body: String,
+        body: NSAttributedString,
         context: (text: String, selectedRange: NSRange),
         markedRange: NSRange
     ) {
@@ -614,22 +670,20 @@ class PairedDelimiterTextView: NSTextView {
               Self.isValid(live, in: textStorage)
         else { return }
 
-        let expansion = Self.fencedBlockExpansion(replacing: replaced, body: body, in: ns)
+        let expansion = Self.fencedBlockExpansion(
+            replacing: replaced,
+            body: body.string as NSString,
+            in: ns
+        )
 
         undoManager?.beginUndoGrouping()
         replaceMarkedText(
-            with: NSAttributedString(
-                string: expansion.replacement,
-                attributes: typingAttributes
-            ),
+            with: expansion.replacement(body: body, attributes: typingAttributes),
             markedRange: live
         )
         undoManager?.endUndoGrouping()
 
-        setSelectedRange(NSRange(
-            location: expansion.bodyStart,
-            length: (body as NSString).length
-        ))
+        setSelectedRange(NSRange(location: expansion.bodyStart, length: body.length))
     }
 
     /// `NSTextView.unmarkText()` finalizes the composition by re-inserting the

@@ -703,15 +703,33 @@ final class ACPNSTextView: PairedDelimiterTextView {
         ]
     }
 
+    /// Whether a restyle has already run with a non-nil `markdownCodeBlockStyle`.
+    ///
+    /// `makeNSView` applies the typography and restores the persisted draft
+    /// before `updateNSView` — the only place the code box style is handed
+    /// over — has ever run, so on first mount both of those happen while the
+    /// style is still nil. Without this the typography guard below would then
+    /// swallow `updateNSView`'s own call (same typography, non-nil font) and a
+    /// remounted draft's fenced block would stay unstyled until the user's next
+    /// edit. One shot: once the style has been applied every later render
+    /// re-enters the guard and returns, so SwiftUI updates do not each re-parse
+    /// and re-attribute the whole storage.
+    private var hasAppliedCodeBlockStyle = false
+
     func applyChatTypography(_ typography: ACPChatTypography) {
-        guard chatTypography != typography || font == nil else { return }
+        let codeBlockStyleBecameAvailable = markdownCodeBlockStyle != nil && !hasAppliedCodeBlockStyle
+        guard chatTypography != typography || font == nil || codeBlockStyleBecameAvailable else { return }
         chatTypography = typography
         font = typography.appKitFont()
         typingAttributes = baseTypingAttributes
         if let textStorage {
-            let blockRanges = markdownCodeBlockStyle.map {
-                MarkdownCodeBlockStyler.restyle(textStorage, in: nil, style: $0).map(\.outerRange)
-            } ?? []
+            var blockRanges: [NSRange] = []
+            if let style = markdownCodeBlockStyle {
+                blockRanges = MarkdownCodeBlockStyler
+                    .restyle(textStorage, in: nil, style: style)
+                    .map(\.outerRange)
+                hasAppliedCodeBlockStyle = true
+            }
             ACPMarkdownLiveStyler.restyle(
                 textStorage,
                 typography: typography,

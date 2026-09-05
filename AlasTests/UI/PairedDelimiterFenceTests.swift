@@ -66,6 +66,31 @@ struct PairedDelimiterFenceTests {
         #expect(textView.selectedRange() == NSRange(location: 4, length: 5))
     }
 
+    @Test("wrapping whole lines does not add a blank line before the closer")
+    func wrapsWholeLinesWithoutASpuriousBlankLine() {
+        let textView = makeTextView()
+        // Selecting a whole line takes its terminator with it, so the body
+        // already ends on a line of its own. The expansion must not add a
+        // second newline and push a blank line into the author's content.
+        textView.string = "value\nmore"
+        textView.setSelectedRange(NSRange(location: 0, length: 6))
+        type("```", into: textView)
+
+        #expect(textView.string == "```\nvalue\n```\nmore")
+        #expect(textView.selectedRange() == NSRange(location: 4, length: 6))
+    }
+
+    @Test("wrapping several whole lines keeps exactly one newline before the closer")
+    func wrapsSeveralWholeLinesWithoutASpuriousBlankLine() {
+        let textView = makeTextView()
+        textView.string = "one\ntwo\n"
+        textView.setSelectedRange(NSRange(location: 0, length: 8))
+        type("```", into: textView)
+
+        #expect(textView.string == "```\none\ntwo\n```")
+        #expect(textView.selectedRange() == NSRange(location: 4, length: 8))
+    }
+
     @Test("backticks inside a block do not open a nested box")
     func noNestedBox() {
         let textView = makeTextView()
