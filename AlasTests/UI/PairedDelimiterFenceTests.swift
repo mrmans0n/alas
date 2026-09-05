@@ -77,6 +77,46 @@ struct PairedDelimiterFenceTests {
         #expect(MarkdownFenceEditing.blocks(in: textView.string).count == 1)
     }
 
+    @Test("a multi-line selection inside a block does not open a nested box either")
+    func noNestedBoxAcrossMultilineSelection() {
+        let textView = makeTextView()
+        textView.string = "```\n\nfoo\n```"
+        // Covers the blank body line's own newline plus "foo" — wrapping this
+        // twice already leaves a bare, would-be-closing run one keystroke away.
+        textView.setSelectedRange(NSRange(location: 4, length: 4))
+        type("```", into: textView)
+
+        #expect(textView.string == "```\n``\nfoo``\n```")
+        #expect(textView.selectedRange() == NSRange(location: 6, length: 4))
+        #expect(MarkdownFenceEditing.blocks(in: textView.string).count == 1)
+    }
+
+    @Test("backticks that don't start a line are never swallowed")
+    func midLineBackticksAreNotSwallowed() {
+        let textView = makeTextView()
+        // "x``" sits mid-line: no run starting there can ever parse as a
+        // fence line, so the completing keystroke must land normally.
+        textView.string = "```\nx``\n```"
+        textView.setSelectedRange(NSRange(location: 7, length: 0))
+        type("`", into: textView)
+
+        #expect(textView.string == "```\nx````\n```")
+        #expect(textView.selectedRange() == NSRange(location: 8, length: 0))
+        #expect(MarkdownFenceEditing.blocks(in: textView.string).count == 1)
+    }
+
+    @Test("the swallow still applies inside a block opened with a wider fence")
+    func noNestedBoxInsideWiderFence() {
+        let textView = makeTextView()
+        textView.string = "````\n\n````"
+        textView.setSelectedRange(NSRange(location: 5, length: 0))
+        type("```", into: textView)
+
+        #expect(textView.string == "````\n``\n````")
+        #expect(textView.selectedRange() == NSRange(location: 7, length: 0))
+        #expect(MarkdownFenceEditing.blocks(in: textView.string).count == 1)
+    }
+
     @Test("expansion is a single undo group")
     func singleUndoGroup() throws {
         let textView = makeTextView()

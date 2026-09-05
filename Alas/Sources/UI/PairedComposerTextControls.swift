@@ -83,18 +83,15 @@ class PairedDelimiterTextView: NSTextView {
                 // `MarkdownFenceEditing.resolve` returns `.none` here on
                 // purpose — its contract is to fall through to plain pairing
                 // for anything it doesn't recognize, including a third
-                // backtick that lands inside an existing block. But
-                // `PairedDelimiterEditing` has no notion of fences: its
-                // auto-pair/step-over dance for that same keystroke leaves a
-                // bare backtick run that CommonMark reads as a real fence
-                // line, splitting the block in two. Swallow just that
-                // keystroke; a lone backtick typed anywhere else in the block
-                // is unaffected.
-                if range.length == 0,
-                   insertedText == "`",
-                   fencedBlockRange(containing: range.location) != nil,
-                   Self.isPrecededByExactlyTwoBackticks(range.location, in: string)
-                {
+                // backtick (or a flanked selection) that lands inside an
+                // existing block. But `PairedDelimiterEditing` has no notion
+                // of fences, so completing that keystroke unguarded can leave
+                // a *bare* fence line sitting inside the block — see
+                // `swallowsFenceCollidingBacktick` for exactly which shape
+                // that is and why it's dangerous. Swallow just that
+                // keystroke; anything that can't parse as a fence line falls
+                // through untouched.
+                if swallowsFenceCollidingBacktick(insertedText: insertedText, range: range) {
                     return
                 }
             }
@@ -138,6 +135,38 @@ class PairedDelimiterTextView: NSTextView {
     func fencedBlockRange(containing location: Int) -> FencedBlock? {
         guard markdownFencesEnabled else { return nil }
         return MarkdownFenceEditing.block(containing: location, in: string)
+    }
+
+    /// Whether a backtick landing at `range` — one `MarkdownFenceEditing`
+    /// declined to handle because it's inside an existing block — should be
+    /// swallowed instead of falling through to `PairedDelimiterEditing`.
+    ///
+    /// The two backticks that already flank `range` (one on each side, for a
+    /// selection; just the leading pair, for a caret) are about to become
+    /// three — matching `MarkdownFenceEditing.minimumFenceLength` — which
+    /// only matters if that run would sit alone on its line: starting at the
+    /// line's first non-indent column, and followed by nothing but
+    /// whitespace up to the next line break. That's precisely the shape
+    /// `MarkdownFenceEditing.blocks(in:)` reads as a real fence line with an
+    /// empty info string, closing the enclosing block early (or opening an
+    /// orphaned one) regardless of how wide that block's own fence is. A run
+    /// that starts mid-line, or is trailed by real content, can never parse
+    /// as a fence line — `parseFence` requires the backticks to lead — so
+    /// it's left alone.
+    private func swallowsFenceCollidingBacktick(insertedText: String, range: NSRange) -> Bool {
+        guard insertedText == "`",
+              fencedBlockRange(containing: range.location) != nil,
+              Self.isPrecededByExactlyTwoBackticks(range.location, in: string)
+        else { return false }
+
+        if range.length > 0,
+           !Self.isFollowedByExactlyTwoBackticks(NSMaxRange(range), in: string)
+        {
+            return false
+        }
+
+        return Self.startsLine(range.location - 2, in: string)
+            && Self.isBareToEndOfLine(from: range.location, in: string)
     }
 
     /// Replace `replaced` with a complete fenced block wrapping `body`, adding
@@ -312,6 +341,53 @@ class PairedDelimiterTextView: NSTextView {
               ns.character(at: location - 2) == 0x60
         else { return false }
         return location == 2 || ns.character(at: location - 3) != 0x60
+    }
+
+    /// Whether exactly two backticks (no more, no fewer) sit immediately
+    /// after `location` — the mirror image of `isPrecededByExactlyTwoBackticks`,
+    /// used for the trailing flank of a wrapped selection.
+    private static func isFollowedByExactlyTwoBackticks(_ location: Int, in text: String) -> Bool {
+        let ns = text as NSString
+        guard location >= 0, location + 2 <= ns.length,
+              ns.character(at: location) == 0x60,
+              ns.character(at: location + 1) == 0x60
+        else { return false }
+        return location + 2 == ns.length || ns.character(at: location + 2) != 0x60
+    }
+
+    /// Whether `location` sits at the start of its line, allowing up to
+    /// three leading spaces of indent — the same allowance
+    /// `MarkdownFenceEditing.parseFence` gives a real fence line.
+    private static func startsLine(_ location: Int, in text: String) -> Bool {
+        let ns = text as NSString
+        guard location >= 0, location <= ns.length else { return false }
+        var cursor = location
+        var indent = 0
+        while cursor > 0 {
+            let previous = ns.character(at: cursor - 1)
+            if previous == 0x0A || previous == 0x0D { return true }
+            guard previous == 0x20, indent < 3 else { return false }
+            cursor -= 1
+            indent += 1
+        }
+        return true
+    }
+
+    /// Whether everything from `location` to the next line break (or end of
+    /// text) is blank — i.e. a backtick run ending at `location` would carry
+    /// an empty info string once trimmed, the shape
+    /// `MarkdownFenceEditing.blocks(in:)` reads as a real fence line rather
+    /// than inline text.
+    private static func isBareToEndOfLine(from location: Int, in text: String) -> Bool {
+        let ns = text as NSString
+        var cursor = location
+        while cursor < ns.length {
+            let character = ns.character(at: cursor)
+            if character == 0x0A || character == 0x0D { return true }
+            guard character == 0x20 || character == 0x09 else { return false }
+            cursor += 1
+        }
+        return true
     }
 
     private static func isValid(_ range: NSRange, in storage: NSTextStorage) -> Bool {
