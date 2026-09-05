@@ -6,9 +6,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-09-05
+
+### ✨ Features
+
+- Add styled code boxes for triple-backtick fences in Markdown editors (#1121).
+
+### 🐛 Fixes
+
+- Prevent startup crashes when bundled themes cannot be loaded (#1120).
+
+### ⚡ Performance
+
+- Skip unchanged ACP transcript scroll layout passes (#1118).
+
 ### 🏗️ Internal
 
-- Productionize the AppKit Changes scroller and delete the dead SwiftUI diff/review scrolling paths left behind since the AppKit diff and review scrollers shipped (#1018).
+- Make the AppKit scroller the only Changes, diff, and review path and remove the legacy SwiftUI implementations (#1119).
 
 ## [0.15.0] - 2026-09-05
 
