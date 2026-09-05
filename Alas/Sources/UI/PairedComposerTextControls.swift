@@ -726,6 +726,7 @@ struct PairedTextEditor: NSViewRepresentable {
     var isFocused: Binding<Bool>?
     var textContainerInset: NSSize
     var placeholder: String?
+    var codeBlockStyle: MarkdownCodeBlockStyle?
 
     init(
         text: Binding<String>,
@@ -734,7 +735,8 @@ struct PairedTextEditor: NSViewRepresentable {
         isEnabled: Bool = true,
         isFocused: Binding<Bool>? = nil,
         textContainerInset: NSSize = .zero,
-        placeholder: String? = nil
+        placeholder: String? = nil,
+        codeBlockStyle: MarkdownCodeBlockStyle? = nil
     ) {
         _text = text
         self.font = font
@@ -743,6 +745,7 @@ struct PairedTextEditor: NSViewRepresentable {
         self.isFocused = isFocused
         self.textContainerInset = textContainerInset
         self.placeholder = placeholder
+        self.codeBlockStyle = codeBlockStyle
     }
 
     func makeCoordinator() -> Coordinator {
@@ -750,6 +753,23 @@ struct PairedTextEditor: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> NSScrollView {
+        let (scrollView, textView) = makeBackingView()
+        textView.delegate = context.coordinator
+        if let backingView = textView as? PairedTextEditorBackingView {
+            backingView.onWindowChanged = { [weak coordinator = context.coordinator, weak backingView] in
+                guard let backingView else { return }
+                coordinator?.synchronizeFocus(for: backingView)
+            }
+        }
+        context.coordinator.textView = textView
+        return scrollView
+    }
+
+    /// Test seam: builds the scroll view and its backing text view without a
+    /// SwiftUI `Context`, which cannot be constructed outside a live view
+    /// update. Coordinator wiring (delegate, window callback, back-reference)
+    /// is left to `makeNSView(context:)`.
+    func makeBackingView() -> (NSScrollView, PairedDelimiterTextView) {
         let scrollView = NSScrollView()
         scrollView.drawsBackground = false
         scrollView.borderType = .noBorder
@@ -758,7 +778,6 @@ struct PairedTextEditor: NSViewRepresentable {
         scrollView.autohidesScrollers = true
 
         let textView = PairedTextEditorBackingView()
-        textView.delegate = context.coordinator
         textView.isRichText = false
         textView.importsGraphics = false
         textView.allowsUndo = true
@@ -775,15 +794,10 @@ struct PairedTextEditor: NSViewRepresentable {
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
-        textView.onWindowChanged = { [weak coordinator = context.coordinator, weak textView] in
-            guard let textView else { return }
-            coordinator?.synchronizeFocus(for: textView)
-        }
         scrollView.documentView = textView
-        context.coordinator.textView = textView
         synchronizeLayout(of: textView, in: scrollView)
         applyConfiguration(to: textView)
-        return scrollView
+        return (scrollView, textView)
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
@@ -817,6 +831,20 @@ struct PairedTextEditor: NSViewRepresentable {
         textView.isSelectable = isEnabled
         textView.textContainerInset = textContainerInset
         textView.setAccessibilityPlaceholderValue(placeholder)
+        textView.markdownFencesEnabled = codeBlockStyle != nil
+        textView.markdownCodeBlockStyle = codeBlockStyle
+        // `textView.string = text` above discards every attribute, so the
+        // restyle has to run on each sync, not only on textDidChange.
+        if let codeBlockStyle, let storage = textView.textStorage {
+            MarkdownCodeBlockStyler.restyle(storage, in: nil, style: codeBlockStyle)
+            textView.needsDisplay = true
+        }
+    }
+
+    /// Test seam: forwards to the private `applyConfiguration(to:)` so tests
+    /// can drive configuration without a SwiftUI `Context`.
+    func applyConfigurationForTesting(to textView: PairedDelimiterTextView) {
+        applyConfiguration(to: textView)
     }
 
     private func synchronizeLayout(of textView: PairedDelimiterTextView, in scrollView: NSScrollView) {
@@ -869,6 +897,10 @@ struct PairedTextEditor: NSViewRepresentable {
                   parent.text != textView.string
             else { return }
             parent.text = textView.string
+            if let style = parent.codeBlockStyle, let storage = textView.textStorage {
+                MarkdownCodeBlockStyler.restyle(storage, in: nil, style: style)
+                textView.needsDisplay = true
+            }
         }
 
         func textDidBeginEditing(_ notification: Notification) {
