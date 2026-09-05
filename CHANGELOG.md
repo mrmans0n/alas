@@ -6,6 +6,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-09-05
+
+### ✨ Features
+
+- Add push-to-talk dictation to the ACP chat composer (#1115).
+
+### 🐛 Fixes
+
+- Hide the ACP provider pill when no alternative provider is available (#1117).
+- Draw diff gutters only for dirty rows (#1116).
+- Dismiss failed GitGud sync preparation cleanly (#1113).
+
+### 🏗️ Internal
+
+- Update the Rust `tree-sitter-proto` crate to 0.6.0 (#1114).
+
 ## [0.14.29] - 2026-09-04
 
 ### ✨ Features
