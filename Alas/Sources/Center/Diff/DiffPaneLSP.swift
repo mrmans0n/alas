@@ -20,24 +20,6 @@ struct DiffPaneLSPContext {
     }
 }
 
-extension DiffPaneLSPContext {
-    /// Render-relevant equality: ignores the `openTarget` closure, which is
-    /// not comparable and does not affect what gets drawn.
-    static func rendersEqual(_ lhs: DiffPaneLSPContext?, _ rhs: DiffPaneLSPContext?) -> Bool {
-        switch (lhs, rhs) {
-        case (nil, nil):
-            return true
-        case let (l?, r?):
-            return l.worktreeId == r.worktreeId
-                && l.relativePath == r.relativePath
-                && l.language == r.language
-                && l.lsp === r.lsp
-        default:
-            return false
-        }
-    }
-}
-
 enum DiffPaneLSPLineMap {
     struct Match: Equatable {
         let position: LSPPosition

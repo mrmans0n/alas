@@ -443,6 +443,88 @@ struct AppKitDiffReviewRowPlanTests {
         #expect(!withoutRow.equalityToken.isEqual(to: withRow.equalityToken))
     }
 
+    @Test func draftRowRebuildsWhenItsAvailabilityChangesWithTheCommentUnchanged() throws {
+        // The comment list itself can stay identical while what's available
+        // for it changes (e.g. an edit action becomes available) — the
+        // rendered action row depends on availability, not just comment
+        // identity, so that must invalidate the row's token too.
+        // The token's draft availability is read from state.actionRelay (used
+        // by the sticky action-presence pinning logic), not from the
+        // draftCommentActions passed directly on the input, so each variant
+        // needs its own state with the relay preconfigured.
+        let file = textFile()
+        let draft = draftComment(fileID: file.id)
+        let unavailableState = AppKitDiffReviewFileState()
+        unavailableState.actionRelay.update(draftCommentActions: .init(availability: { _ in .init(
+            canEdit: false, canDelete: false, canResolve: false, canDismiss: false,
+            canCopyPrompt: false, canShowSendToAgent: false, canSendToAgent: false
+        ) }))
+        let editableState = AppKitDiffReviewFileState()
+        editableState.actionRelay.update(draftCommentActions: .init(availability: { _ in .init(
+            canEdit: true, canDelete: false, canResolve: false, canDismiss: false,
+            canCopyPrompt: false, canShowSendToAgent: false, canSendToAgent: false
+        ) }))
+        let unavailable = AppKitDiffReviewRowInput(file: file, draftComments: [draft], state: unavailableState, theme: theme)
+        let editable = AppKitDiffReviewRowInput(file: file, draftComments: [draft], state: editableState, theme: theme)
+        let draftID = AppKitDiffReviewRowID.draftComment(.targetID(commentID: draft.id, fileID: file.id))
+        let unavailableRow = try #require(AppKitDiffReviewRowPlanBuilder.build(inputs: [unavailable]).corePlan.rows.first { $0.id == draftID })
+        let editableRow = try #require(AppKitDiffReviewRowPlanBuilder.build(inputs: [editable]).corePlan.rows.first { $0.id == draftID })
+
+        #expect(!unavailableRow.equalityToken.isEqual(to: editableRow.equalityToken))
+    }
+
+    @Test func hunkFeedbackRowRebuildsWhenItsAvailabilityChangesWithTheFeedbackUnchanged() throws {
+        let file = textFile()
+        let item = feedback(line: 1)
+        let unavailableState = AppKitDiffReviewFileState()
+        unavailableState.actionRelay.update(inlineFeedbackActions: .init(availability: { _, _ in .init(
+            canOpenProvider: false, canCopyContext: false, canSendToAgent: false
+        ) }))
+        let openableState = AppKitDiffReviewFileState()
+        openableState.actionRelay.update(inlineFeedbackActions: .init(availability: { _, _ in .init(
+            canOpenProvider: true, canCopyContext: false, canSendToAgent: false
+        ) }))
+        let unavailable = AppKitDiffReviewRowInput(file: file, inlineFeedback: [item], state: unavailableState, theme: theme)
+        let openable = AppKitDiffReviewRowInput(file: file, inlineFeedback: [item], state: openableState, theme: theme)
+        let feedbackID = AppKitDiffReviewRowID.inlineFeedback(.targetID(feedbackID: item.id, fileID: file.id))
+        let unavailableRow = try #require(AppKitDiffReviewRowPlanBuilder.build(inputs: [unavailable]).corePlan.rows.first { $0.id == feedbackID })
+        let openableRow = try #require(AppKitDiffReviewRowPlanBuilder.build(inputs: [openable]).corePlan.rows.first { $0.id == feedbackID })
+
+        #expect(!unavailableRow.equalityToken.isEqual(to: openableRow.equalityToken))
+    }
+
+    @Test func headerRowTokenTracksEveryDisplayPreferenceAndActionPresenceField() throws {
+        // Regression coverage mirroring the deleted DiffReviewFileSection's
+        // equality tests: every display-preference and action-presence input
+        // must participate in AppKitDiffReviewRowToken, or a preference change
+        // (layout, wrap, font, reply/resolve/add-to-review availability) would
+        // render stale content because the reconciler thinks nothing changed.
+        let file = textFile()
+        let state = AppKitDiffReviewFileState()
+        let headerID = AppKitDiffReviewRowID.header(fileID: file.id)
+        func header(_ input: AppKitDiffReviewRowInput) throws -> AppKitDiffRowSpec {
+            try #require(AppKitDiffReviewRowPlanBuilder.build(inputs: [input]).corePlan.rows.first { $0.id == headerID })
+        }
+        let base = AppKitDiffReviewRowInput(file: file, state: state, theme: theme)
+        let baseHeader = try header(base)
+
+        let variants: [AppKitDiffReviewRowInput] = [
+            .init(file: file, state: state, theme: theme, layoutMode: .stacked),
+            .init(file: file, state: state, theme: theme, wrapLines: true),
+            .init(file: file, state: state, theme: theme, showWhitespace: true),
+            .init(file: file, state: state, theme: theme, codeFontFamily: "Menlo"),
+            .init(file: file, state: state, theme: theme, codeFontSize: 16),
+            .init(file: file, state: state, theme: theme, actionPresence: .init(canReply: true)),
+            .init(file: file, state: state, theme: theme, actionPresence: .init(canResolve: true)),
+            .init(file: file, state: state, theme: theme, actionPresence: .init(canAddToReview: true)),
+            .init(file: file, state: state, theme: theme, actionPresence: .init(canCreateDraftComment: true)),
+        ]
+        for variant in variants {
+            let variantHeader = try header(variant)
+            #expect(!baseHeader.equalityToken.isEqual(to: variantHeader.equalityToken))
+        }
+    }
+
     @Test func hunkInlineFeedbackRowsReceiveRowContext() throws {
         let file = textFile()
         let item = feedback(line: 1)

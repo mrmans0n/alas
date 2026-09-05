@@ -385,86 +385,12 @@ struct DiffReviewSurface: View {
         }
     }
 
-    @ViewBuilder
-    private func fileSection(
-        _ file: DiffReviewFileSectionModel,
-        automaticallyRendersDiff: Bool
-    ) -> some View {
-        let inlineFeedback = inlineFeedbackByFileID[file.id] ?? []
-        let draftComments = draftCommentsByFileID[file.id] ?? []
-        let presentationState = appKitPresentationStore.state(for: file)
-        EquatableDiffReviewFileSection(
-            section: DiffReviewFileSection(
-                file: file,
-                inlineFeedback: inlineFeedback,
-                focusedFeedbackID: focusedFeedbackID,
-                inlineFeedbackScrollTargetID: inlineFeedbackScrollTargetID(for: file.id),
-                draftComments: draftComments,
-                focusedDraftCommentID: focusedDraftCommentID,
-                draftCommentScrollTargetID: draftCommentScrollTargetID(for: file.id),
-                layoutMode: $layoutMode,
-                wrapLines: $wrapLines,
-                showWhitespace: $showWhitespace,
-                codeFontFamily: codeFontFamily,
-                codeFontSize: codeFontSize,
-                showsSourceBadge: showsSourceBadges,
-                automaticallyRendersDiff: automaticallyRendersDiff,
-                lspContext: lspContextForFile(file),
-                inlineFeedbackActions: inlineFeedbackActions,
-                onSelectInlineFeedback: onSelectInlineFeedback,
-                draftCommentActions: draftCommentActions,
-                onSelectDraftComment: onSelectDraftComment,
-                onSaveDraftComment: { anchor, body in
-                    onSaveDraftComment(file.id, file.summary.path, file.summary.originalPath, anchor, body)
-                },
-                allowsDraftCommentCreation: allowsDraftCommentCreation,
-                allowsNonLineDraftCommentCreation: allowsNonLineDraftCommentCreation,
-                onContextExpansionActivated: {
-                    contextExpandedFileIDs.insert(file.id)
-                },
-                reviewFeedbackTarget: effectiveReviewFeedbackTarget,
-                threads: DiffReviewProviderFeedbackResolver.threads(
-                    threads,
-                    for: file.summary.path,
-                    includeFileLevel: file.imageProvider != nil
-                ),
-                annotations: inlineAnnotations(for: file.summary.path),
-                onReply: onReply,
-                onResolve: onResolve,
-                onUnresolve: onUnresolve,
-                onEdit: onEdit,
-                onDelete: onDelete,
-                canReply: canReply,
-                canResolve: canResolve,
-                onStageReply: onStageReply,
-                canAddToReview: canAddToReview,
-                presentationState: presentationState
-            ),
-            layoutMode: layoutMode,
-            wrapLines: wrapLines,
-            showWhitespace: showWhitespace,
-            draftCommentAvailability: draftComments.map(draftCommentActions.availability),
-            inlineFeedbackAvailability: inlineFeedback.map { inlineFeedbackActions.availability($0, file.summary) },
-            draftCommentAgentTargets: draftCommentActions.agentTargets(),
-            presentationStateSignature: DiffReviewFilePresentationSignature(presentationState)
-        )
-        .equatable()
-    }
-
     private func inlineFeedbackScrollTargetID(for fileID: DiffReviewFileID) -> String? {
         guard let command = inlineFeedbackScrollCommand,
               command.fileID == fileID
         else { return nil }
 
         return command.feedbackID
-    }
-
-    private func draftCommentScrollTargetID(for fileID: DiffReviewFileID) -> String? {
-        guard let command = draftCommentScrollCommand,
-              command.fileID == fileID
-        else { return nil }
-
-        return command.commentID
     }
 
     private func synchronizeSelectionWithSession() {
