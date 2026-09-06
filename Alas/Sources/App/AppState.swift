@@ -7999,6 +7999,49 @@ extension AppState: RemoteSessionsProvider {
         }
     }
 
+    /// Number of bytes `isDiffTargetBinary` sniffs to decide whether a file
+    /// looks binary — matches `GitService.looksBinary` and
+    /// `RemoteWorktreeFileAccess.looksBinaryOnDisk`'s 8 KB prefix, so a
+    /// binary pre-check never needs more than that, on-disk or remote.
+    private static let binarySniffPrefixBytes = 8192
+
+    /// Bounded-prefix variant of `readRemoteWorktreeFileRaw`, used only for
+    /// the binary pre-check ahead of a diff (`isDiffTargetBinary`): reads
+    /// just the first `maxBytes` bytes of the remote file
+    /// (`RemoteFileAccess.readPrefix`, exec-only — there is no helper-RPC
+    /// byte cap), so a binary sniff never needs to consult the file's total
+    /// size or hit `RemoteWorktreeFileAccess.maxFileBytes` at all. Mirrors
+    /// the local path's `RemoteWorktreeFileAccess.looksBinaryOnDisk`, which
+    /// reads only an 8 KB prefix via `FileHandle.read(upToCount:)`
+    /// regardless of the file's size. Never returns `.tooLarge`.
+    func readRemoteWorktreeFilePrefix(
+        host: String, worktreeRoot: String, relativePath: String, maxBytes: Int
+    ) async -> RemoteWorktreeRawReadOutcome {
+        let target: String
+        do {
+            target = try RemotePathContainment.lexicallyResolveInsideWorktree(
+                path: relativePath, worktreeRoot: worktreeRoot)
+        } catch {
+            return .containmentRejected
+        }
+        do {
+            try await RemotePathContainment.verifyRemoteContainment(
+                host: host, path: target, worktreeRoot: worktreeRoot)
+        } catch RemotePathContainment.ContainmentError.outsideWorktree(_) {
+            return .containmentRejected
+        } catch {
+            return .unreadable(String(describing: error))
+        }
+        do {
+            guard let data = try await RemoteFileAccess.readPrefix(host: host, path: target, maxBytes: maxBytes) else {
+                return .notFound
+            }
+            return .data(data)
+        } catch {
+            return .unreadable(String(describing: error))
+        }
+    }
+
     /// Whether `normalizedPath` looks like a binary file for diff purposes.
     /// Prefers an on-disk sniff against the current working tree (mirroring
     /// git's own heuristic). When the file is missing from the working tree
@@ -8006,25 +8049,29 @@ extension AppState: RemoteSessionsProvider {
     /// back to sniffing the blob at `comparisonRef` instead, so a deleted
     /// binary file still reports `.binary` rather than slipping through as
     /// an empty "successful" diff.
+    ///
+    /// The SSH branch sniffs only a bounded PREFIX
+    /// (`readRemoteWorktreeFilePrefix`) rather than the full file: a binary
+    /// verdict never needs more than the first 8 KB, so it must never be
+    /// gated on `RemoteWorktreeFileAccess.maxFileBytes` — a new, oversized,
+    /// untracked binary file used to hit that cap's `.tooLarge` outcome
+    /// here, which (having nothing to sniff at any historical ref either,
+    /// since the file is new) collapsed to "not binary" and produced a
+    /// misleading empty "successful" diff.
     private func isDiffTargetBinary(
         worktree: Worktree, normalizedPath: String, url: URL, comparisonRef: String?, git: GitService
     ) async -> Bool {
         let existsOnDisk: Bool
         let onDiskLooksBinary: Bool
         if worktree.path.isRemoteAlasPath, let host = RemoteHostRegistry.shared.host(forPath: worktree.path.path) {
-            switch await readRemoteWorktreeFileRaw(host: host, worktreeRoot: worktree.path.path, relativePath: normalizedPath) {
+            switch await readRemoteWorktreeFilePrefix(
+                host: host, worktreeRoot: worktree.path.path, relativePath: normalizedPath,
+                maxBytes: Self.binarySniffPrefixBytes
+            ) {
             case .data(let data):
                 existsOnDisk = true
                 onDiskLooksBinary = GitService.looksBinary(data)
-            case .notFound, .unreadable, .containmentRejected:
-                existsOnDisk = false
-                onDiskLooksBinary = false
-            case .tooLarge:
-                // Too large to sniff without an unbounded download; treat as
-                // "cannot tell from disk" so the caller falls back to
-                // sniffing the blob at `comparisonRef` (or, failing that,
-                // proceeds as non-binary — the diff payload itself is still
-                // bounded by `maxDiffBytes`/`maxDiffLines`).
+            case .notFound, .unreadable, .containmentRejected, .tooLarge:
                 existsOnDisk = false
                 onDiskLooksBinary = false
             }
@@ -8068,10 +8115,28 @@ extension AppState: RemoteSessionsProvider {
 
     /// Drops ignored and excluded nodes at the wire boundary: the remote file
     /// browser is git-aware, so build output never reaches the phone.
+    ///
+    /// Runs the same recursive keep-if-has-visible-children pass
+    /// `FilesTabView.filteredNodes` uses for the native desktop Files tab
+    /// (`FileTreeNode.filteredKeepingVisibleDescendants`) BEFORE the flat
+    /// wire projection below: a directory can be individually marked
+    /// `.ignored`/`.excluded` while still holding a tracked (force-added)
+    /// descendant, and `RemoteFileNode` carries no `children` field, so once
+    /// such a directory is dropped from its parent's listing the client can
+    /// never issue the `listFiles` request that would reveal the descendant.
+    /// This only helps when `nodes` actually has real, eagerly-populated
+    /// `children` for the directory in question — true for
+    /// `GitService.fileTree`'s LOCAL-worktree root scan (which builds full
+    /// nested children for exactly this case), but NOT for
+    /// `GitService.fileTreeChildren`'s single-level, on-demand directory
+    /// expansion, which by design never populates nested `children` beyond
+    /// the one level requested. A nested ignored directory with a tracked
+    /// descendant one or more levels below an on-demand `fileTreeChildren`
+    /// expansion can therefore remain unreachable — a known, narrower gap
+    /// than the one this fixes.
     private static func remoteFileNodes(_ nodes: [FileTreeNode]) -> [RemoteFileNode] {
-        nodes.compactMap { node in
-            guard node.visibility != .ignored, node.visibility != .excluded else { return nil }
-            return RemoteFileNode(
+        FileTreeNode.filteredKeepingVisibleDescendants(nodes).map { node in
+            RemoteFileNode(
                 name: node.name,
                 path: node.path,
                 kind: node.kind.rawValue,

@@ -127,6 +127,45 @@ enum RemoteFileAccess {
         }
     }
 
+    /// Bounded-prefix variant of `readScript`: reads only the first
+    /// `maxBytes` bytes via `head -c` instead of the whole file (`cat`).
+    /// Mirrors `readScript`'s exact quoting and exit-code conventions
+    /// (0 = readable, 3 = directory, 4 = missing, 5 = symlink) so it can
+    /// share `readViaExec`'s result mapping — this is the exec-only
+    /// counterpart to a helper-RPC bounded read, which doesn't exist: the
+    /// filesystem/v0.4 `fs/read` contract (`RemoteHelperProtocol.swift`)
+    /// only accepts an `offset`, not a byte cap.
+    ///
+    /// Used only for binary sniffing ahead of a diff
+    /// (`AppState.isDiffTargetBinary`), never to serve real file contents —
+    /// callers that need the whole file still go through `read(host:path:)`.
+    static func readPrefixScript(path: String, maxBytes: Int) -> String {
+        "f=\(SSHCommand.shellQuote(path)); "
+            + "[ -L \"$f\" ] && exit 5; "
+            + "[ -d \"$f\" ] && exit 3; "
+            + "[ -e \"$f\" ] || exit 4; "
+            + "head -c \(maxBytes) \"$f\""
+    }
+
+    /// Returns the first `maxBytes` bytes of the remote file at `path` over
+    /// exec, or nil when it's missing, a directory, a symlink, or otherwise
+    /// unreadable. There is no on-disk size check here (unlike `read`) —
+    /// the whole point is a bounded read that never needs to know the
+    /// file's total size.
+    static func readPrefix(host: String, path: String, maxBytes: Int) async throws -> Data? {
+        let startedAt = CFAbsoluteTimeGetCurrent()
+        defer { RemoteOperationTiming.log("fs/readPrefix", host: host, transport: "exec", startedAt: startedAt) }
+        let result = try await RemoteExec.runData(
+            host: host,
+            cwd: nil,
+            command: readPrefixScript(path: path, maxBytes: maxBytes)
+        )
+        if RemoteExec.isConnectionFailure(exitCode: result.exitCode) {
+            throw RemoteFileAccessError.connectionFailed(result.stderr)
+        }
+        return result.exitCode == 0 ? result.stdout : nil
+    }
+
     private static func readViaExec(host: String, path: String) async throws -> RemoteReadResult {
         let startedAt = CFAbsoluteTimeGetCurrent()
         defer { RemoteOperationTiming.log("fs/read", host: host, transport: "exec", startedAt: startedAt) }

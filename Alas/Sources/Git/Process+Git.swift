@@ -245,6 +245,105 @@ extension Process {
         )
     }
 
+    /// Bounded-prefix variant of `gitData`: returns only the first
+    /// `maxBytes` of stdout, terminating the child process as soon as that
+    /// much has been buffered instead of waiting for it to exit naturally.
+    /// Used for binary sniffing (`GitService.looksBinaryAtRef`), where a
+    /// huge historical blob (`git show <ref>:<file>`) only needs its first
+    /// 8 KB inspected — mirrors `RemoteWorktreeFileAccess.looksBinaryOnDisk`'s
+    /// bounded `FileHandle.read(upToCount:)` for the on-disk case, for a
+    /// git-subprocess-sourced blob instead. Local git invocations have no
+    /// shell to pipe stdout through `head -c`, so this hooks the early stop
+    /// into the existing readability-handler loop rather than adding a
+    /// shell-pipeline codepath.
+    ///
+    /// An early SIGTERM here is the expected happy path, not a failure — the
+    /// caller only wants a bounded PREFIX (e.g. a binary sniff), not a
+    /// verdict on whether the process exited cleanly, so this never surfaces
+    /// an exit code: it returns whatever bytes were captured, up to
+    /// `maxBytes`, including an empty `Data` if the command produced
+    /// nothing or failed outright.
+    static func gitDataPrefix(
+        _ args: [String],
+        cwd: URL? = nil,
+        maxBytes: Int,
+        timeout: TimeInterval = Process.defaultTimeout
+    ) async throws -> Data {
+        let host = RemoteHostRegistry.shared.host(forPath: cwd?.path)
+        if host == nil {
+            try validateWorkingDirectory(cwd)
+        }
+        let invocation = GitInvocation.build(
+            gitArgs: args,
+            cwd: cwd,
+            host: host
+        )
+        try validateLaunchConfiguration(
+            executable: invocation.executable, args: invocation.args, cwd: invocation.cwd)
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: invocation.executable)
+        process.arguments = invocation.args
+        if let cwd = invocation.cwd { process.currentDirectoryURL = cwd }
+        if let env = invocation.env { process.environment = env }
+
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        process.standardOutput = outPipe
+        process.standardError = errPipe
+
+        let exit = ExitGateData()
+        process.terminationHandler = { _ in exit.didExit() }
+
+        let outAccum = ByteAccumulatorData()
+        outPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                outAccum.markClosed()
+                return
+            }
+            outAccum.append(data)
+            if outAccum.snapshot().count >= maxBytes {
+                handle.readabilityHandler = nil
+                outAccum.markClosed()
+                terminateProcessWithEscalation(process)
+            }
+        }
+        errPipe.fileHandleForReading.readabilityHandler = { handle in
+            if handle.availableData.isEmpty { handle.readabilityHandler = nil }
+        }
+
+        do {
+            try process.run()
+        } catch {
+            throw ProcessError.launchFailed(error.localizedDescription)
+        }
+        try? outPipe.fileHandleForWriting.close()
+        try? errPipe.fileHandleForWriting.close()
+
+        let watchdog = Task {
+            try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+            if Task.isCancelled { return }
+            if process.isRunning {
+                terminateProcessWithEscalation(process)
+            }
+        }
+
+        await withTaskCancellationHandler {
+            await exit.wait()
+        } onCancel: {
+            terminateProcessWithEscalation(process)
+        }
+        watchdog.cancel()
+
+        _ = await outAccum.waitForClose(timeoutNanoseconds: 2_000_000_000)
+        outPipe.fileHandleForReading.readabilityHandler = nil
+        errPipe.fileHandleForReading.readabilityHandler = nil
+
+        return outAccum.snapshot().prefix(maxBytes)
+    }
+
     /// Internal: same shape as `run(...)` but emits stdout as `Data`.
     static func runData(
         _ executable: String,

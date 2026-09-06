@@ -138,19 +138,27 @@ extension GitService {
         return DiffParser.parse(result.stdout)
     }
 
-    /// Looks up the source path of a rename that landed `file` at its
-    /// current path since `ref`, or nil when `file` was not renamed (it's
+    /// Looks up the source path of a rename OR copy that landed `file` at
+    /// its current path since `ref`, or nil when `file` is neither (it's
     /// untracked, unchanged, or was modified/deleted/added without a
-    /// rename). Scans the UNRESTRICTED rename-aware name-status diff (no
-    /// pathspec) rather than one scoped to `file`, since pathspec
-    /// restriction happens before rename pairing in git and would hide the
-    /// old path entirely.
+    /// rename/copy). Scans the UNRESTRICTED rename-aware name-status diff
+    /// (no pathspec) rather than one scoped to `file`, since pathspec
+    /// restriction happens before rename/copy pairing in git and would hide
+    /// the old path entirely.
+    ///
+    /// With `-C` enabled, git emits `"C<score>"` (not `"R<score>"`) when
+    /// `file` was copied from a source path that STILL EXISTS — distinct
+    /// from a pure rename, where the source is gone.
+    /// `parseNameStatusZOutput` already records the source path for `C`
+    /// entries too; without accepting `"C"` here, a copied file's diff fell
+    /// through to being treated as brand new (all-add against
+    /// `/dev/null`) instead of a proper diff against its copy source.
     private func renameSource(worktreePath: URL, ref: String, file: String) async throws -> String? {
         let result = try await Process.git(
             ["-c", "core.quotePath=false", "diff", "--name-status", "-z", "-M", "-C", ref], cwd: worktreePath)
         guard result.exitCode == 0 else { return nil }
         let parsed = GitService.parseNameStatusZOutput(result.stdout)
-        guard let status = parsed.status[file], status.hasPrefix("R") else { return nil }
+        guard let status = parsed.status[file], status.hasPrefix("R") || status.hasPrefix("C") else { return nil }
         return parsed.original[file]
     }
 
@@ -158,13 +166,18 @@ extension GitService {
     /// longer exist in the working tree (so an on-disk sniff can't tell).
     /// Returns nil when `file` doesn't exist at `ref` either — nothing to
     /// sniff, so the caller should fall back to its prior on-disk verdict.
+    ///
+    /// Reads only the first 8 KB of the blob via `Process.gitDataPrefix`
+    /// (the same prefix `looksBinary` inspects) rather than buffering the
+    /// entire historical blob — a large deleted file no longer forces a
+    /// full `git show` read (unnecessary network transfer too, over SSH).
     func looksBinaryAtRef(worktreePath: URL, ref: String, file: String) async throws -> Bool? {
         let existsAtRef = try await Process.git(
             ["cat-file", "-e", "\(ref):\(file)"], cwd: worktreePath)
         guard existsAtRef.exitCode == 0 else { return nil }
-        let blob = try await Process.gitData(["show", "\(ref):\(file)"], cwd: worktreePath)
-        guard blob.exitCode == 0 else { return nil }
-        return Self.looksBinary(blob.stdout)
+        let prefix = try await Process.gitDataPrefix(
+            ["show", "\(ref):\(file)"], cwd: worktreePath, maxBytes: 8192)
+        return Self.looksBinary(prefix)
     }
 
     /// Line count for an untracked file, or 0 when it is binary or unreadable.
