@@ -43,4 +43,31 @@ struct DraftCommitTabStateTests {
         let decoded = try JSONDecoder().decode(DraftCommitTabState.self, from: data)
         #expect(decoded == s)
     }
+
+    @Test func roundTripsPersistedPublishIntentAndPresentationRevision() throws {
+        var state = DraftCommitTabState(worktreeId: "wt-1")
+        state.preferredAction = .publish
+        state.createReviewRequestAsDraft = true
+        state.publishCheckpoint = CommitPublishCheckpoint(
+            commitSHA: "abc123",
+            baseRef: "main",
+            commitTitle: "abc123 Subject",
+            subject: "Subject",
+            body: "Body",
+            destination: .gg,
+            nextPhase: .sync
+        )
+        state.prepareForNewCommit()
+        state.prepareForNewCommit()
+        let presentationID = state.presentationID
+
+        let data = try JSONEncoder().encode(state)
+        let decoded = try JSONDecoder().decode(DraftCommitTabState.self, from: data)
+
+        #expect(decoded == state)
+        #expect(decoded.preferredAction == .publish)
+        #expect(decoded.createReviewRequestAsDraft)
+        #expect(decoded.publishCheckpoint == state.publishCheckpoint)
+        #expect(decoded.presentationID == presentationID)
+    }
 }
