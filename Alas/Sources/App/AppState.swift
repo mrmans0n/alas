@@ -7893,13 +7893,25 @@ extension AppState: RemoteSessionsProvider {
         return nil
     }
 
+    /// Distinguishes between a session that was never found vs. one whose
+    /// worktree is no longer available (e.g. deleted while its manager still
+    /// lives), so callers can report different error messages.
+    private enum RemoteWorktreeContextResult {
+        case found(Worktree)
+        case sessionUnknown
+        case worktreeUnavailable
+    }
+
     /// Resolves the worktree backing a session id by scanning the live
     /// per-worktree managers, mirroring how `session(for:)` looks sessions up.
-    private func remoteWorktreeContext(sessionId: String) -> (project: ProjectConfig, worktree: Worktree)? {
+    private func remoteWorktreeContext(sessionId: String) -> RemoteWorktreeContextResult {
         for mgr in acpManagers.values where mgr.sessionRows.contains(where: { $0.id == sessionId }) {
-            return projectAndWorktree(withWorktreeId: mgr.worktreeId)
+            guard let resolved = projectAndWorktree(withWorktreeId: mgr.worktreeId) else {
+                return .worktreeUnavailable
+            }
+            return .found(resolved.worktree)
         }
-        return nil
+        return .sessionUnknown
     }
 
     private static func remoteChangedFile(_ file: ChangedFile) -> RemoteChangedFile {
@@ -7946,18 +7958,24 @@ extension AppState: RemoteSessionsProvider {
     }
 
     func remoteChangeList(sessionId: String) async -> RemoteChangeListResult {
-        guard let context = remoteWorktreeContext(sessionId: sessionId) else {
+        let worktree: Worktree
+        switch remoteWorktreeContext(sessionId: sessionId) {
+        case .sessionUnknown:
             return .failure(reason: .sessionUnknown, message: nil)
+        case .worktreeUnavailable:
+            return .failure(reason: .worktreeUnavailable, message: nil)
+        case .found(let w):
+            worktree = w
         }
         let git = GitService()
         do {
             let commits = try await git.commitsAhead(
-                at: context.worktree.path,
+                at: worktree.path,
                 baseBranch: config.worktrees.baseBranch,
                 resolution: GitService.BaseResolution.forCommits(
                     mode: config.changes.comparisonMode, userOverrodeBaseBranch: false))
             let changed = try await git.changedFilesAgainstRef(
-                worktreePath: context.worktree.path, ref: commits.comparisonRef)
+                worktreePath: worktree.path, ref: commits.comparisonRef)
             let capped = RemoteWorktreeFileAccess.truncateFiles(changed)
             return .success(
                 comparisonRef: commits.comparisonRef,
@@ -7970,10 +7988,16 @@ extension AppState: RemoteSessionsProvider {
     }
 
     func remoteFileDiff(sessionId: String, path: String) async -> RemoteFileDiffResult {
-        guard let context = remoteWorktreeContext(sessionId: sessionId) else {
+        let worktree: Worktree
+        switch remoteWorktreeContext(sessionId: sessionId) {
+        case .sessionUnknown:
             return .failure(reason: .sessionUnknown, message: nil)
+        case .worktreeUnavailable:
+            return .failure(reason: .worktreeUnavailable, message: nil)
+        case .found(let w):
+            worktree = w
         }
-        guard let url = RemoteWorktreeFileAccess.resolve(path: path, in: context.worktree.path) else {
+        guard let url = RemoteWorktreeFileAccess.resolve(path: path, in: worktree.path) else {
             return .failure(reason: .pathRejected, message: nil)
         }
         if let data = try? Data(contentsOf: url), GitService.looksBinary(data) {
@@ -7982,12 +8006,12 @@ extension AppState: RemoteSessionsProvider {
         let git = GitService()
         do {
             let commits = try await git.commitsAhead(
-                at: context.worktree.path,
+                at: worktree.path,
                 baseBranch: config.worktrees.baseBranch,
                 resolution: GitService.BaseResolution.forCommits(
                     mode: config.changes.comparisonMode, userOverrodeBaseBranch: false))
             let parsed = try await git.diff(
-                worktreePath: context.worktree.path,
+                worktreePath: worktree.path,
                 againstRef: commits.comparisonRef,
                 file: path)
             let capped = RemoteWorktreeFileAccess.truncateHunks(parsed.hunks)
@@ -8000,22 +8024,28 @@ extension AppState: RemoteSessionsProvider {
     }
 
     func remoteFileTree(sessionId: String, path: String?) async -> RemoteFileTreeResult {
-        guard let context = remoteWorktreeContext(sessionId: sessionId) else {
+        let worktree: Worktree
+        switch remoteWorktreeContext(sessionId: sessionId) {
+        case .sessionUnknown:
             return .failure(reason: .sessionUnknown, message: nil)
+        case .worktreeUnavailable:
+            return .failure(reason: .worktreeUnavailable, message: nil)
+        case .found(let w):
+            worktree = w
         }
         let git = GitService()
         do {
             guard let path, !path.isEmpty else {
-                let statusEntries = try await git.status(worktreePath: context.worktree.path)
+                let statusEntries = try await git.status(worktreePath: worktree.path)
                 let nodes = try await git.fileTree(
-                    worktreePath: context.worktree.path, statusEntries: statusEntries)
+                    worktreePath: worktree.path, statusEntries: statusEntries)
                 return .success(nodes: Self.remoteFileNodes(nodes))
             }
-            guard RemoteWorktreeFileAccess.resolve(path: path, in: context.worktree.path) != nil else {
+            guard RemoteWorktreeFileAccess.resolve(path: path, in: worktree.path) != nil else {
                 return .failure(reason: .pathRejected, message: nil)
             }
             let nodes = try await git.fileTreeChildren(
-                worktreePath: context.worktree.path, path: path)
+                worktreePath: worktree.path, path: path)
             return .success(nodes: Self.remoteFileNodes(nodes))
         } catch {
             return .failure(reason: .gitFailed, message: error.localizedDescription)
@@ -8023,10 +8053,16 @@ extension AppState: RemoteSessionsProvider {
     }
 
     func remoteFileContents(sessionId: String, path: String) async -> RemoteFileContentsResult {
-        guard let context = remoteWorktreeContext(sessionId: sessionId) else {
+        let worktree: Worktree
+        switch remoteWorktreeContext(sessionId: sessionId) {
+        case .sessionUnknown:
             return .failure(reason: .sessionUnknown, byteSize: nil, message: nil)
+        case .worktreeUnavailable:
+            return .failure(reason: .worktreeUnavailable, byteSize: nil, message: nil)
+        case .found(let w):
+            worktree = w
         }
-        guard let url = RemoteWorktreeFileAccess.resolve(path: path, in: context.worktree.path) else {
+        guard let url = RemoteWorktreeFileAccess.resolve(path: path, in: worktree.path) else {
             return .failure(reason: .pathRejected, byteSize: nil, message: nil)
         }
         guard let data = try? Data(contentsOf: url) else {
