@@ -1203,7 +1203,7 @@ struct RemoteAppStateAccessTests {
         switch outcome {
         case .data(let data):
             Issue.record("remote read must not fall back to local disk, got local bytes: \(data)")
-        case .notFound, .unreadable, .containmentRejected:
+        case .notFound, .unreadable, .containmentRejected, .tooLarge:
             break // any failure kind is fine — the point is it did not read local disk
         }
     }

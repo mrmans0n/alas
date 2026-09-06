@@ -7941,6 +7941,10 @@ extension AppState: RemoteSessionsProvider {
         case unreadable(String)
         /// The resolved path escaped the worktree root.
         case containmentRejected
+        /// The remote file's stat'd size exceeds
+        /// `RemoteWorktreeFileAccess.maxFileBytes` — its bytes were never
+        /// transferred.
+        case tooLarge(byteSize: Int)
     }
 
     /// Reads `relativePath` (already validated by
@@ -7952,6 +7956,12 @@ extension AppState: RemoteSessionsProvider {
     /// `Process.git` is itself remote-host-aware — this helper exists only
     /// for the raw, non-git file reads this surface also needs (plain file
     /// contents, the pre-diff binary sniff).
+    ///
+    /// Stats the remote file and rejects an oversized one BEFORE
+    /// transferring its bytes, mirroring the local path's stat-before-read
+    /// discipline (`RemoteWorktreeFileAccess.readFileContents`) — a client
+    /// naming a huge remote file must not force a full network transfer
+    /// just to be told `.tooLarge`.
     func readRemoteWorktreeFileRaw(
         host: String, worktreeRoot: String, relativePath: String
     ) async -> RemoteWorktreeRawReadOutcome {
@@ -7967,6 +7977,14 @@ extension AppState: RemoteSessionsProvider {
                 host: host, path: target, worktreeRoot: worktreeRoot)
         } catch RemotePathContainment.ContainmentError.outsideWorktree(_) {
             return .containmentRejected
+        } catch {
+            return .unreadable(String(describing: error))
+        }
+        do {
+            if let byteSize = try await RemoteFileAccess.size(host: host, path: target),
+               byteSize > UInt64(RemoteWorktreeFileAccess.maxFileBytes) {
+                return .tooLarge(byteSize: Int(clamping: byteSize))
+            }
         } catch {
             return .unreadable(String(describing: error))
         }
@@ -7999,6 +8017,14 @@ extension AppState: RemoteSessionsProvider {
                 existsOnDisk = true
                 onDiskLooksBinary = GitService.looksBinary(data)
             case .notFound, .unreadable, .containmentRejected:
+                existsOnDisk = false
+                onDiskLooksBinary = false
+            case .tooLarge:
+                // Too large to sniff without an unbounded download; treat as
+                // "cannot tell from disk" so the caller falls back to
+                // sniffing the blob at `comparisonRef` (or, failing that,
+                // proceeds as non-binary — the diff payload itself is still
+                // bounded by `maxDiffBytes`/`maxDiffLines`).
                 existsOnDisk = false
                 onDiskLooksBinary = false
             }
@@ -8200,6 +8226,8 @@ extension AppState: RemoteSessionsProvider {
                 return .failure(reason: .notFound, byteSize: nil, message: nil)
             case .unreadable(let detail):
                 return .failure(reason: .gitFailed, byteSize: nil, message: detail)
+            case .tooLarge(let byteSize):
+                return .failure(reason: .tooLarge, byteSize: byteSize, message: nil)
             case .data(let data):
                 guard data.count <= RemoteWorktreeFileAccess.maxFileBytes else {
                     return .failure(reason: .tooLarge, byteSize: data.count, message: nil)
