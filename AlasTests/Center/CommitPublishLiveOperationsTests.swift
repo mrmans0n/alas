@@ -17,8 +17,17 @@ struct CommitPublishLiveOperationsTests {
         )
         let target = try await CommitPublishReviewTarget.capture(
             snapshot: snapshot, createAsDraft: true, runGit: { args in
-                #expect(args == ["remote", "get-url", "--push", "--all", "fork"])
-                return ProcessResult(exitCode: 0, stdout: "ssh://git@github.com/contributor/repo.git\nssh://mirror.example/repo.git\n", stderr: "")
+                switch args {
+                case ["symbolic-ref", "--short", "HEAD"]:
+                    return .init(exitCode: 0, stdout: "feature\n", stderr: "")
+                case ["rev-parse", "--verify", "HEAD"]:
+                    return .init(exitCode: 0, stdout: "captured-head\n", stderr: "")
+                case ["remote", "get-url", "--push", "--all", "fork"]:
+                    return .init(exitCode: 0, stdout: "ssh://git@github.com/contributor/repo.git\nssh://mirror.example/repo.git\n", stderr: "")
+                default:
+                    Issue.record("Unexpected Git command: \\(args)")
+                    return .init(exitCode: 1, stdout: "", stderr: "")
+                }
             }
         )
         #expect(target.remote.remoteName == "upstream")
@@ -29,6 +38,7 @@ struct CommitPublishLiveOperationsTests {
         #expect(target.createAsDraft)
         #expect(target.headOwner == "contributor")
         #expect(target.upstreamBranch == nil)
+        #expect(target.expectedHeadSHA == "captured-head")
         #expect(try JSONDecoder().decode(CommitPublishReviewTarget.self, from: JSONEncoder().encode(target)) == target)
     }
 
@@ -63,6 +73,35 @@ struct CommitPublishLiveOperationsTests {
             Issue.record("Expected push failure")
         } catch {
             #expect(error.localizedDescription.contains("remote rejected branch"))
+        }
+    }
+
+    @Test func liveTargetValidationRejectsChangedBranchAndHead() async throws {
+        let path = URL(fileURLWithPath: "/tmp/captured-worktree")
+        let review = ReviewLoopState(worktreePath: path, baseBranch: "main")
+        let branchOperations = CommitPublishOperations.live(worktreePath: path, reviewLoop: review,
+            comparisonBase: nil, syncGG: {}, refreshAfterCompletion: {}, runGit: { args in
+                #expect(args == ["symbolic-ref", "--short", "HEAD"])
+                return .init(exitCode: 0, stdout: "other-feature\n", stderr: "")
+            })
+        await #expect(throws: CommitPublishWorkflowError.branchMismatch(expected: "feature", actual: "other-feature")) {
+            try await branchOperations.validateReviewTarget(makeTarget())
+        }
+
+        let headOperations = CommitPublishOperations.live(worktreePath: path, reviewLoop: review,
+            comparisonBase: nil, syncGG: {}, refreshAfterCompletion: {}, runGit: { args in
+                switch args {
+                case ["symbolic-ref", "--short", "HEAD"]:
+                    return .init(exitCode: 0, stdout: "feature\n", stderr: "")
+                case ["rev-parse", "--verify", "HEAD"]:
+                    return .init(exitCode: 0, stdout: "changed-head\n", stderr: "")
+                default:
+                    Issue.record("Unexpected Git command: \\(args)")
+                    return .init(exitCode: 1, stdout: "", stderr: "")
+                }
+            })
+        await #expect(throws: CommitPublishWorkflowError.headMismatch(expected: "captured-head", actual: "changed-head")) {
+            try await headOperations.validateReviewTarget(makeTarget(expectedHeadSHA: "captured-head"))
         }
     }
 
@@ -208,7 +247,12 @@ struct CommitPublishLiveOperationsTests {
             providerRegistry: .init(providers: [.github: provider]))
         let operations = CommitPublishOperations.live(worktreePath: path, reviewLoop: review,
             comparisonBase: "main", syncGG: {}, refreshAfterCompletion: {},
-            runGit: { _ in .init(exitCode: 0, stdout: "committed", stderr: "") },
+            runGit: { args in
+                if args == ["symbolic-ref", "--short", "HEAD"] {
+                    return .init(exitCode: 0, stdout: "feature", stderr: "")
+                }
+                return .init(exitCode: 0, stdout: "committed", stderr: "")
+            },
             commit: { subject, body, _ in
                 #expect(subject == "Subject")
                 #expect(body == "Body")
@@ -265,10 +309,13 @@ struct CommitPublishLiveOperationsTests {
     }
 
     @Test func oldTargetDecodesWithoutCapturedPushFields() throws {
-        let data = try JSONEncoder().encode(makeTarget())
-        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let encoded = try JSONEncoder().encode(makeTarget())
+        var object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
         #expect(object["pushURL"] == nil)
+        object.removeValue(forKey: "expectedHeadSHA")
+        let data = try JSONSerialization.data(withJSONObject: object)
         let target = try JSONDecoder().decode(CommitPublishReviewTarget.self, from: data)
+        #expect(target.expectedHeadSHA == nil)
         #expect(target.pushURL == nil)
         #expect(target.pushRemoteName == nil)
     }
@@ -283,11 +330,11 @@ struct CommitPublishLiveOperationsTests {
     }
 
     @Test func liveLookupAndCreationUseCapturedTargetThenRefreshAfterCheckpointClears() async throws {
-        let provider = CapturedPublishProvider()
+        let provider = CapturedPublishProvider(expectedBranch: "pushed-feature")
         let path = URL(fileURLWithPath: "/tmp/captured-worktree")
         let review = ReviewLoopState(worktreePath: path, baseBranch: "changed-base",
             providerRegistry: .init(providers: [.github: provider]))
-        let target = makeTarget()
+        let target = makeTarget(upstreamBranch: "pushed-feature")
         var checkpoint: CommitPublishCheckpoint? = .init(commitSHA: "committed", baseRef: "old-base",
             commitTitle: "Title", subject: "Subject", body: "Body", destination: .review(target), nextPhase: .createReviewRequest)
         var refreshed = false
@@ -321,19 +368,28 @@ struct CommitPublishLiveOperationsTests {
         }
     }
 
-    private func makeTarget(upstreamBranch: String? = nil) -> CommitPublishReviewTarget {
+    private func makeTarget(
+        upstreamBranch: String? = nil,
+        expectedHeadSHA: String? = nil
+    ) -> CommitPublishReviewTarget {
         .init(provider: .github, host: "github.com", owner: "team", repository: "repo",
               repositorySlug: "team/repo", remoteName: "upstream",
               webURL: URL(string: "https://github.com/team/repo")!, branch: "feature",
-              upstreamBranch: upstreamBranch, headOwner: "contributor", baseBranch: "main",
+              expectedHeadSHA: expectedHeadSHA, upstreamBranch: upstreamBranch,
+              headOwner: "contributor", baseBranch: "main",
               reviewRequestExisted: false, createAsDraft: true)
     }
 }
 
 private actor CapturedPublishProvider: CodeHostProvider {
     nonisolated let kind = CodeHostKind.github
+    private let expectedBranch: String
     var lookupCount = 0
     var creationCount = 0
+
+    init(expectedBranch: String = "feature") {
+        self.expectedBranch = expectedBranch
+    }
     func isAvailable(cwd: URL) async -> Bool { true }
     func isAuthenticated(remote: CodeHostRemote, cwd: URL) async -> Bool { true }
     func currentReviewRequest(remote: CodeHostRemote, branch: String, headOwner: String?, baseBranch: String, cwd: URL) async throws -> ReviewRequest? {
@@ -353,7 +409,7 @@ private actor CapturedPublishProvider: CodeHostProvider {
     private func checkTarget(_ remote: CodeHostRemote, _ branch: String, _ owner: String?, _ base: String, _ cwd: URL) {
         #expect(remote.repositorySlug == "team/repo")
         #expect(remote.remoteName == "upstream")
-        #expect(branch == "feature")
+        #expect(branch == expectedBranch)
         #expect(owner == "contributor")
         #expect(base == "main")
         #expect(cwd.path == "/tmp/captured-worktree")

@@ -86,6 +86,7 @@ final class CommitPublishSession {
 
 @MainActor
 struct CommitPublishOperations {
+    var validateReviewTarget: (_ target: CommitPublishReviewTarget) async throws -> Void = { _ in }
     var createCommit: (_ subject: String, _ body: String, _ amend: Bool) async throws -> CommitPublishCreatedCommit
     var currentHeadSHA: () async throws -> String
     var remoteBranchContainsCommit: (_ target: CommitPublishReviewTarget, _ commitSHA: String) async throws -> Bool
@@ -114,6 +115,20 @@ struct CommitPublishOperations {
             try await git.remoteBranchContainsCommit(worktreePath: worktreePath, remote: $0, branch: $1, commitSHA: $2)
         }
         return Self(
+            validateReviewTarget: { target in
+                let branchResult = try await run(["symbolic-ref", "--short", "HEAD"])
+                let currentBranch = branchResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard branchResult.exitCode == 0, currentBranch == target.branch else {
+                    throw CommitPublishWorkflowError.branchMismatch(expected: target.branch, actual: currentBranch)
+                }
+                guard let expectedHeadSHA = target.expectedHeadSHA else { return }
+                let headResult = try await run(["rev-parse", "--verify", "HEAD"])
+                try GitService.assertSuccess(headResult, op: "Resolve HEAD")
+                let currentHeadSHA = headResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard currentHeadSHA == expectedHeadSHA else {
+                    throw CommitPublishWorkflowError.headMismatch(expected: expectedHeadSHA, actual: currentHeadSHA)
+                }
+            },
             createCommit: { subject, body, amend in
                 if amend, try await publication() == .published {
                     throw CommitPublishWorkflowError.publishedAmend
@@ -168,11 +183,11 @@ struct CommitPublishOperations {
                 }
             },
             currentReviewRequestExists: { target in
-                try await reviewLoop.currentReviewRequest(remote: target.remote, branch: target.branch,
+                try await reviewLoop.currentReviewRequest(remote: target.remote, branch: target.upstreamBranch ?? target.branch,
                     headOwner: target.headOwner, baseBranch: target.baseBranch) != nil
             },
             createReviewRequest: { target, subject, body in
-                try await reviewLoop.createReviewRequest(remote: target.remote, branch: target.branch,
+                try await reviewLoop.createReviewRequest(remote: target.remote, branch: target.upstreamBranch ?? target.branch,
                     headOwner: target.headOwner, baseBranch: target.baseBranch,
                     title: subject, body: body, draft: target.createAsDraft)
             },
@@ -201,6 +216,7 @@ enum CommitPublishActivity: Equatable {
 }
 
 enum CommitPublishWorkflowError: LocalizedError, Equatable {
+    case branchMismatch(expected: String, actual: String)
     case headMismatch(expected: String, actual: String)
     case invalidDestination(phase: CommitPublishPhase)
     case missingPushDestination
@@ -209,6 +225,8 @@ enum CommitPublishWorkflowError: LocalizedError, Equatable {
 
     var errorDescription: String? {
         switch self {
+        case .branchMismatch:
+            return "The current branch changed before publishing could begin."
         case .headMismatch:
             return "The current commit changed before publishing could resume."
         case .invalidDestination(let phase):
@@ -256,6 +274,10 @@ final class CommitPublishWorkflow {
         let body = body.trimmingCharacters(in: .whitespacesAndNewlines)
 
         do {
+            if case .review(let target) = destination {
+                try await operations.validateReviewTarget(target)
+                try Task.checkCancellation()
+            }
             let createdCommit = try await operations.createCommit(subject, body, amend)
             let checkpoint = CommitPublishCheckpoint(
                 commitSHA: createdCommit.commitSHA,
@@ -326,12 +348,14 @@ final class CommitPublishWorkflow {
                     throw CommitPublishWorkflowError.invalidDestination(phase: .createReviewRequest)
                 }
 
-                activity = .creatingReviewRequest
-                try Task.checkCancellation()
-                let requestExists = try await operations.currentReviewRequestExists(target)
-                try Task.checkCancellation()
-                if !requestExists {
-                    _ = try await operations.createReviewRequest(target, checkpoint.subject, checkpoint.body)
+                if !target.reviewRequestExisted {
+                    activity = .creatingReviewRequest
+                    try Task.checkCancellation()
+                    let requestExists = try await operations.currentReviewRequestExists(target)
+                    try Task.checkCancellation()
+                    if !requestExists {
+                        _ = try await operations.createReviewRequest(target, checkpoint.subject, checkpoint.body)
+                    }
                 }
                 try await complete(runID)
                 return

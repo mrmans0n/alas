@@ -221,6 +221,7 @@ struct CommitPublishReviewTarget: Codable, Equatable, Sendable {
     let remoteName: String
     let webURL: URL
     let branch: String
+    var expectedHeadSHA: String? = nil
     let upstreamBranch: String?
     let headOwner: String?
     let baseBranch: String
@@ -254,6 +255,12 @@ struct CommitPublishReviewTarget: Codable, Equatable, Sendable {
         }
         let local = snapshot.local
         let pushRemote = local.upstreamRemoteName ?? local.headRemoteName ?? remote.remoteName
+        let branchResult = try await runGit(["symbolic-ref", "--short", "HEAD"])
+        try GitService.assertSuccess(branchResult, op: "Resolve current branch")
+        let branch = branchResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let headResult = try await runGit(["rev-parse", "--verify", "HEAD"])
+        try GitService.assertSuccess(headResult, op: "Resolve HEAD")
+        let headSHA = headResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         let result = try await runGit(["remote", "get-url", "--push", "--all", pushRemote])
         try GitService.assertSuccess(result, op: "Resolve push destination")
         let pushURLs = result.stdout.split(whereSeparator: \.isNewline).map(String.init)
@@ -261,7 +268,7 @@ struct CommitPublishReviewTarget: Codable, Equatable, Sendable {
         return Self(
             provider: remote.kind, host: remote.host, owner: remote.owner, repository: remote.repository,
             repositorySlug: remote.repositorySlug, remoteName: remote.remoteName, webURL: remote.webURL,
-            branch: local.branchName, upstreamBranch: local.upstreamBranchName,
+            branch: branch, expectedHeadSHA: headSHA, upstreamBranch: local.upstreamBranchName,
             headOwner: local.headRemoteOwner, baseBranch: local.baseBranch,
             reviewRequestExisted: snapshot.reviewRequest != nil, createAsDraft: createAsDraft,
             pushURL: pushURL, pushURLs: pushURLs, pushRemoteName: pushRemote

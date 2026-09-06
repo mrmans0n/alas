@@ -128,6 +128,30 @@ struct CommitPublishWorkflowTests {
         #expect(workflow.lastError != nil)
     }
 
+    @Test func changedReviewTargetStopsBeforeCreatingLocalCommit() async {
+        var calls: [String] = []
+        let target = WorkflowHarness().target
+        let operations = CommitPublishOperations(
+            validateReviewTarget: { _ in
+                calls.append("validateTarget")
+                throw CommitPublishWorkflowError.headMismatch(expected: "captured", actual: "changed")
+            },
+            createCommit: { _, _, _ in
+                calls.append("commit")
+                return .init(commitSHA: "committed", comparisonBase: "main", editorTitle: "Title")
+            },
+            currentHeadSHA: { "committed" }, remoteBranchContainsCommit: { _, _ in false },
+            push: { _, _ in calls.append("push") }, currentReviewRequestExists: { _ in true },
+            createReviewRequest: { target, _, _ in target.webURL }, syncGG: {}, refreshAfterCompletion: {}
+        )
+        let workflow = CommitPublishWorkflow(operations: operations) { _ in }
+
+        await workflow.start(subject: "Subject", body: "", amend: false, destination: .review(target))
+
+        #expect(calls == ["validateTarget"])
+        #expect(workflow.lastError as? CommitPublishWorkflowError == .headMismatch(expected: "captured", actual: "changed"))
+    }
+
     @Test func pushFailureRetainsPushCheckpoint() async {
         let harness = WorkflowHarness()
         harness.pushError = WorkflowHarness.Failure.push
@@ -377,6 +401,17 @@ struct CommitPublishWorkflowTests {
         #expect(harness.calls == ["head", "lookupPR"])
     }
 
+    @Test func previouslyExistingRequestSkipsLookupAndCreationAfterPush() async {
+        let harness = WorkflowHarness()
+        let target = harness.existingRequestTarget
+        let workflow = harness.makeWorkflow()
+
+        await workflow.start(subject: "Subject", body: "Body", amend: false, destination: .review(target))
+
+        #expect(harness.calls == ["commit", "head", "remoteContainsCommit", "push"])
+        #expect(harness.checkpoint == nil)
+    }
+
     @Test func completionClearsCheckpointBeforeRefreshing() async {
         let harness = WorkflowHarness()
         harness.refreshChecksCheckpoint = true
@@ -450,6 +485,22 @@ private final class WorkflowHarness {
         headOwner: "owner",
         baseBranch: "main",
         reviewRequestExisted: false,
+        createAsDraft: false
+    )
+
+    let existingRequestTarget = CommitPublishReviewTarget(
+        provider: .github,
+        host: "github.com",
+        owner: "owner",
+        repository: "repository",
+        repositorySlug: "owner/repository",
+        remoteName: "origin",
+        webURL: URL(string: "https://github.com/owner/repository")!,
+        branch: "feature",
+        upstreamBranch: "origin/feature",
+        headOwner: "owner",
+        baseBranch: "main",
+        reviewRequestExisted: true,
         createAsDraft: false
     )
 
