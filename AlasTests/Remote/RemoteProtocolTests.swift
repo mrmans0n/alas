@@ -656,4 +656,86 @@ struct RemoteProtocolTests {
         #expect(!RemoteClientMessage.setModel(sessionId: "s", modelId: "m").isDriveOrdering)
         #expect(!RemoteClientMessage.listSessions.isDriveOrdering)
     }
+
+    @Test func changesAndFilesClientMessagesRoundTripAndEncodeRequiredFields() throws {
+        let listChanges = RemoteClientMessage.listChanges(sessionId: "s1")
+        #expect(try roundTrip(listChanges) == listChanges)
+
+        let fileDiff = RemoteClientMessage.fileDiff(sessionId: "s1", path: "src/main.swift")
+        #expect(try roundTrip(fileDiff) == fileDiff)
+
+        let listRoot = RemoteClientMessage.listFiles(sessionId: "s1", path: nil)
+        #expect(try roundTrip(listRoot) == listRoot)
+
+        let listDir = RemoteClientMessage.listFiles(sessionId: "s1", path: "src")
+        #expect(try roundTrip(listDir) == listDir)
+
+        let readFile = RemoteClientMessage.readFile(sessionId: "s1", path: "README.md")
+        #expect(try roundTrip(readFile) == readFile)
+
+        let object = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(fileDiff)) as? [String: Any])
+        #expect(object["type"] as? String == "fileDiff")
+        #expect(object["sessionId"] as? String == "s1")
+        #expect(object["path"] as? String == "src/main.swift")
+    }
+
+    @Test func changesAndFilesServerMessagesRoundTripAndEncodeRequiredFields() throws {
+        let file = RemoteChangedFile(
+            path: "src/main.swift", status: "M", add: 12, del: 3,
+            conflict: nil, renameFrom: nil)
+        let changeList = RemoteServerMessage.changeList(
+            sessionId: "s1", comparisonRef: "origin/main", metricsAvailable: true,
+            files: [file], truncated: false)
+        #expect(try roundTrip(changeList) == changeList)
+
+        let changeFailure = RemoteServerMessage.changeListFailed(
+            sessionId: "s1", reason: .worktreeUnavailable, message: nil)
+        #expect(try roundTrip(changeFailure) == changeFailure)
+
+        let hunk = RemoteDiffHunk(
+            header: "@@ -1,2 +1,3 @@", oldStart: 1, newStart: 1,
+            lines: [
+                RemoteDiffLine(kind: "context", text: "import Foundation", oldNumber: 1, newNumber: 1),
+                RemoteDiffLine(kind: "add", text: "import Testing", oldNumber: nil, newNumber: 2)
+            ])
+        let diff = RemoteServerMessage.fileDiffResult(
+            sessionId: "s1", path: "src/main.swift", hunks: [hunk], truncated: true)
+        #expect(try roundTrip(diff) == diff)
+
+        let diffFailure = RemoteServerMessage.fileDiffFailed(
+            sessionId: "s1", path: "logo.png", reason: .binary, message: nil)
+        #expect(try roundTrip(diffFailure) == diffFailure)
+
+        let node = RemoteFileNode(
+            name: "src", path: "src", kind: "dir", badge: nil,
+            childrenState: "notLoaded", isSubmodule: false)
+        let tree = RemoteServerMessage.fileTree(sessionId: "s1", path: nil, nodes: [node])
+        #expect(try roundTrip(tree) == tree)
+
+        let treeFailure = RemoteServerMessage.fileTreeFailed(
+            sessionId: "s1", path: "../etc", reason: .pathRejected, message: nil)
+        #expect(try roundTrip(treeFailure) == treeFailure)
+
+        let contents = RemoteServerMessage.fileContents(
+            sessionId: "s1", path: "README.md", text: "# Alas\n", truncated: false)
+        #expect(try roundTrip(contents) == contents)
+
+        let unavailable = RemoteServerMessage.fileUnavailable(
+            sessionId: "s1", path: "big.bin", reason: .tooLarge, byteSize: 1_500_000, message: nil)
+        #expect(try roundTrip(unavailable) == unavailable)
+
+        let object = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(changeList)) as? [String: Any])
+        #expect(object["type"] as? String == "changeList")
+        #expect(object["comparisonRef"] as? String == "origin/main")
+        #expect(object["metricsAvailable"] as? Bool == true)
+        #expect(object["truncated"] as? Bool == false)
+    }
+
+    @Test func unknownFileAccessReasonDecodesAsUnknown() throws {
+        let json = #"{"type":"fileDiffFailed","sessionId":"s1","path":"a.txt","reason":"someFutureReason"}"#
+        let decoded = try JSONDecoder().decode(RemoteServerMessage.self, from: Data(json.utf8))
+        #expect(decoded == .fileDiffFailed(sessionId: "s1", path: "a.txt", reason: .unknown, message: nil))
+    }
 }

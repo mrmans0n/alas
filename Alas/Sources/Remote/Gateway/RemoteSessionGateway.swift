@@ -280,6 +280,18 @@ final class RemoteSessionGateway {
         case .queueSteerUndo(let id):
             guard provider.isWriter(for: id) else { return }
             await provider.queueSteerUndo(for: id)
+        case .listChanges:
+            // Read-only verb; implementation deferred to later tasks
+            break
+        case .fileDiff:
+            // Read-only verb; implementation deferred to later tasks
+            break
+        case .listFiles:
+            // Read-only verb; implementation deferred to later tasks
+            break
+        case .readFile:
+            // Read-only verb; implementation deferred to later tasks
+            break
         }
     }
 
