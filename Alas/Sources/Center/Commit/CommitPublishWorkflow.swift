@@ -192,8 +192,29 @@ struct CommitPublishOperations {
             },
             configureUpstreamTracking: { target in
                 guard target.upstreamBranch == nil else { return }
+                let urls = target.capturedPushURLs
+                guard let pushURL = urls.first, !pushURL.isEmpty else {
+                    throw CommitPublishWorkflowError.missingPushDestination
+                }
                 let remote = target.pushRemoteName ?? target.remoteName
                 let branch = target.branch
+                let destination = try await run(["remote", "get-url", "--push", "--all", remote])
+                try GitService.assertSuccess(destination, op: "Resolve push destination")
+                let currentURLs = destination.stdout.split(whereSeparator: \.isNewline).map(String.init)
+                guard currentURLs.sorted() == urls.sorted() else {
+                    throw CommitPublishWorkflowError.pushDestinationChanged
+                }
+                let branchRef = "refs/heads/\(branch)"
+                let trackingRef = "refs/remotes/\(remote)/\(branch)"
+                for ref in [branchRef, trackingRef] {
+                    let validation = try await run(["check-ref-format", ref])
+                    try GitService.assertSuccess(validation, op: "Validate tracking ref")
+                }
+                let fetch = try await run([
+                    "fetch", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules", "--refmap=",
+                    "--", pushURL, "+\(branchRef):\(trackingRef)",
+                ])
+                try GitService.assertSuccess(fetch, op: "Fetch remote tracking ref")
                 for (key, value) in [("remote", remote), ("merge", "refs/heads/\(branch)")] {
                     let configuration = try await run(["config", "--local", "branch.\(target.branch).\(key)", value])
                     try GitService.assertSuccess(configuration, op: "Configure branch upstream")

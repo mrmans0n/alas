@@ -357,6 +357,44 @@ struct CommitPublishLiveOperationsTests {
         #expect(upstream.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "fork/feature")
     }
 
+    @Test func skippedPushMaterializesRemoteTrackingRefForUntrackedBranch() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let repo = directory.appendingPathComponent("worktree")
+        let remote = directory.appendingPathComponent("remote.git")
+        for args in [["init", "--bare", remote.path], ["init", "-b", "feature", repo.path]] {
+            try GitService.assertSuccess(try await Process.git(args, cwd: directory), op: "Initialize test repository")
+        }
+        try GitService.assertSuccess(try await Process.git(
+            ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "Initial"], cwd: repo), op: "Create test commit")
+        try GitService.assertSuccess(try await Process.git(["remote", "add", "fork", remote.path], cwd: repo), op: "Add test remote")
+        let head = try await Process.git(["rev-parse", "HEAD"], cwd: repo)
+        let sha = head.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        try GitService.assertSuccess(try await Process.git(["push", remote.path, "\(sha):refs/heads/feature"], cwd: repo),
+            op: "Seed remote branch")
+        let missingTracking = try await Process.git(["rev-parse", "--verify", "refs/remotes/fork/feature"], cwd: repo)
+        #expect(missingTracking.exitCode != 0)
+        var target = makeTarget()
+        target.pushURL = remote.path
+        target.pushRemoteName = "fork"
+        let operations = CommitPublishOperations.live(worktreePath: repo,
+            reviewLoop: ReviewLoopState(worktreePath: repo, baseBranch: "main"), comparisonBase: nil,
+            syncGG: {}, refreshAfterCompletion: {})
+
+        #expect(try await operations.remoteBranchContainsCommit(target, sha))
+        let stillMissingTracking = try await Process.git(["rev-parse", "--verify", "refs/remotes/fork/feature"], cwd: repo)
+        #expect(stillMissingTracking.exitCode != 0)
+        try await operations.configureUpstreamTracking(target)
+
+        let tracking = try await Process.git(["rev-parse", "--verify", "refs/remotes/fork/feature"], cwd: repo)
+        #expect(tracking.exitCode == 0)
+        #expect(tracking.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == sha)
+        let upstream = try await Process.git(["rev-parse", "--verify", "@{u}"], cwd: repo)
+        #expect(upstream.exitCode == 0)
+        #expect(upstream.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == sha)
+    }
+
     @Test func workflowNormalizesMessageBeforeCommitCheckpointAndProviderCreation() async throws {
         let provider = CapturedPublishProvider()
         let path = URL(fileURLWithPath: "/tmp/captured-worktree")
@@ -379,7 +417,7 @@ struct CommitPublishLiveOperationsTests {
         let workflow = CommitPublishWorkflow(operations: operations) {
             if let checkpoint = $0 { checkpoints.append(checkpoint) }
         }
-        var target = makeTarget()
+        var target = makeTarget(upstreamBranch: "feature")
         target.pushURL = "ssh://git@github.com/contributor/repo.git"
         await workflow.start(subject: " \nSubject\t ", body: "\n Body \n", amend: false, destination: .review(target))
         #expect(workflow.lastError == nil)
