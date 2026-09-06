@@ -1074,9 +1074,6 @@ struct RemoteAppStateAccessTests {
         cleanupWorktreeId = worktreeId
         state.openNewACPSession(agentID: "test-agent")
         let tab = try #require(acpTabs(in: state).first)
-        let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
-        await settleSessionRowsRace(manager)
-
         let contentsResult = await state.remoteFileContents(sessionId: tab.sessionId, path: "secret.env")
         #expect(contentsResult == .failure(reason: .pathRejected, byteSize: nil, message: nil))
 
@@ -1103,9 +1100,6 @@ struct RemoteAppStateAccessTests {
         cleanupWorktreeId = worktreeId
         state.openNewACPSession(agentID: "test-agent")
         let tab = try #require(acpTabs(in: state).first)
-        let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
-        await settleSessionRowsRace(manager)
-
         let contentsResult = await state.remoteFileContents(sessionId: tab.sessionId, path: " secret.env")
         #expect(contentsResult == .failure(reason: .pathRejected, byteSize: nil, message: nil))
 
@@ -1131,11 +1125,135 @@ struct RemoteAppStateAccessTests {
         cleanupWorktreeId = worktreeId
         state.openNewACPSession(agentID: "test-agent")
         let tab = try #require(acpTabs(in: state).first)
-        let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
-        await settleSessionRowsRace(manager)
 
         let contentsResult = await state.remoteFileContents(sessionId: tab.sessionId, path: "visible.txt")
         #expect(contentsResult == .success(text: "hello\n", truncated: false))
+    }
+
+    /// Reproduces the race `remoteWorktreeContext` used to lose: a manager's
+    /// own background `refreshRecentNow()` (fired from `init` before any
+    /// session exists) can land its `recentSessions()` read after
+    /// `createSession()` has already installed the session live but before
+    /// that session's own `upsertSession` write is visible to a fresh read —
+    /// overwriting `sessionRows` with a snapshot that omits the new session.
+    /// Forcing an extra `refreshRecentNow()` here — without first flushing
+    /// the just-created session's write — reproduces exactly that ordering.
+    /// Whether or not `sessionRows` actually loses the row on a given run,
+    /// the session is live either way, so the assertion must hold
+    /// regardless — this is what distinguishes the fix (checking
+    /// `liveSession` too) from the old `sessionRows`-only lookup.
+    @Test func remoteFileContentsSucceedsWhenLiveSessionRacesAheadOfPersistedSessionRows() async throws {
+        let repository = try await makeRemoteBranchesRepository()
+        defer { try? FileManager.default.removeItem(at: repository) }
+        try "hello\n".write(to: repository.appendingPathComponent("visible.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "visible.txt"], cwd: repository)
+        _ = try await Process.git(["commit", "-m", "add visible file"], cwd: repository)
+
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+        let state = makeRemoteGitBackedState(repositoryPath: repository)
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let tab = try #require(acpTabs(in: state).first)
+        let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
+
+        await manager.refreshRecentNow()
+
+        let contentsResult = await state.remoteFileContents(sessionId: tab.sessionId, path: "visible.txt")
+        #expect(contentsResult == .success(text: "hello\n", truncated: false))
+    }
+
+    /// `AppState.readRemoteWorktreeFileRaw` must go over the (attempted) SSH
+    /// transport for a worktree whose root is registered in
+    /// `RemoteHostRegistry` — never silently fall back to reading local
+    /// disk. There is no reachable SSH server in this environment (confirmed
+    /// manually: `ssh 127.0.0.1` returns "Connection refused" immediately),
+    /// so this test can't drive a real end-to-end remote read; instead it
+    /// proves the negative that matters: given a local directory that
+    /// genuinely contains the requested file with known content, reading it
+    /// through the "remote" branch does NOT return that local content. A
+    /// regression that reintroduced a local-disk fallback would make this
+    /// test fail by returning `.data(...)` with the real bytes.
+    @Test func readRemoteWorktreeFileRawDoesNotFallBackToLocalDiskWhenTheHostIsUnreachable() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-remote-raw-read-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let marker = "local content that a remote read must never return\n"
+        try marker.write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+
+        let state = AppState(store: MemoryStore())
+        let outcome = await state.readRemoteWorktreeFileRaw(
+            host: "127.0.0.1", worktreeRoot: root.path, relativePath: "a.txt")
+
+        switch outcome {
+        case .data(let data):
+            Issue.record("remote read must not fall back to local disk, got local bytes: \(data)")
+        case .notFound, .unreadable, .containmentRejected:
+            break // any failure kind is fine — the point is it did not read local disk
+        }
+    }
+
+    /// Companion to the above: confirms the fixture actually would have
+    /// produced a misleadingly "successful" local read had the code taken
+    /// the local-disk branch instead — otherwise the test above would pass
+    /// vacuously (any host, reachable or not, "not returning local content"
+    /// is meaningless if there's no local content to begin with).
+    @Test func readRemoteWorktreeFileRawFixtureWouldSucceedIfReadLocally() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-remote-raw-read-control-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let marker = "local content that a remote read must never return\n"
+        try marker.write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+
+        let outcome = await RemoteWorktreeFileAccess.readFileContents(at: root.appendingPathComponent("a.txt"))
+        #expect(outcome == .text(marker))
+    }
+
+    /// End-to-end reproduction of the bug: a binary file that existed at the
+    /// comparison ref but was deleted from the working tree since must still
+    /// surface `.binary`, not an empty "successful" diff (the working-tree
+    /// sniff alone can't tell — the file isn't there to sniff).
+    @Test func remoteFileDiffReportsBinaryForABinaryFileDeletedSinceTheComparisonRef() async throws {
+        let repository = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-remote-binary-delete-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: repository, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: repository) }
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: repository)
+        _ = try await Process.git(["config", "user.email", "test@example.com"], cwd: repository)
+        _ = try await Process.git(["config", "user.name", "Test User"], cwd: repository)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "initial"], cwd: repository)
+
+        try Data([0x89, 0x50, 0x4E, 0x47, 0x00, 0x01, 0x02]).write(
+            to: repository.appendingPathComponent("image.bin"))
+        _ = try await Process.git(["add", "image.bin"], cwd: repository)
+        _ = try await Process.git(["commit", "-q", "-m", "add binary"], cwd: repository)
+        _ = try await Process.git(["branch", "start"], cwd: repository)
+
+        _ = try await Process.git(["rm", "-q", "image.bin"], cwd: repository)
+        _ = try await Process.git(["commit", "-q", "-m", "remove binary"], cwd: repository)
+
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+        let state = makeRemoteGitBackedState(repositoryPath: repository)
+        state.config.worktrees.baseBranch = "start"
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let tab = try #require(acpTabs(in: state).first)
+
+        let diffResult = await state.remoteFileDiff(sessionId: tab.sessionId, path: "image.bin")
+        #expect(diffResult == .failure(reason: .binary, message: nil))
     }
 
     private func statusCode(port: UInt16, host: String, path: String) async throws -> Int? {
@@ -1224,22 +1342,6 @@ struct RemoteAppStateAccessTests {
             installedIds: ["test-agent"]
         )
         return state
-    }
-
-    /// `ACPSessionManager.init` fires an untracked background `refreshRecent()`
-    /// when constructed via `persistence:` (as `AppState.acpManager(for:)`
-    /// does) — see its `if store == nil { refreshRecent() }`. That task's own
-    /// DB read can be submitted to the persistence backend before a
-    /// same-tick `createSession()`'s `upsertSession` write, so it can
-    /// overwrite `sessionRows` with a snapshot that doesn't yet include the
-    /// just-created session as soon as this test's first `await` yields the
-    /// MainActor. Flushing the create's own write, then re-reading
-    /// ourselves, settles both writes before `sessionRows` is relied upon —
-    /// otherwise `remoteWorktreeContext` intermittently reports
-    /// `.sessionUnknown` for a session that very much exists.
-    private func settleSessionRowsRace(_ manager: ACPSessionManager) async {
-        await manager.flushPersistence()
-        await manager.refreshRecentNow()
     }
 
     /// Like `makeRemoteRenameState()` but points the worktree at a real git

@@ -10,6 +10,19 @@ enum RemoteWorktreeFileAccess {
     static let maxFileBytes = 512 * 1024
     static let maxDiffLines = 2_000
     static let maxChangedFiles = 500
+    /// Overall byte budget for a diff payload, on top of the line-count cap.
+    /// A single pathological line (e.g. minified/generated code) can stay
+    /// under `maxDiffLines` while still being megabytes long, so the line
+    /// count alone doesn't bound the wire payload — this does. Matches
+    /// `maxFileBytes`'s order of magnitude: a diff is not expected to need a
+    /// materially larger budget than a single whole file.
+    static let maxDiffBytes = 512 * 1024
+    /// Per-line cap: a single line longer than this is truncated with a
+    /// marker rather than shipped whole (or dropped silently), so one huge
+    /// line can't itself blow the byte budget before the accountant even
+    /// gets a chance to stop it.
+    static let maxDiffLineBytes = 64 * 1024
+    private static let lineTruncationMarker = "…(line truncated)"
 
     /// Normalizes a client-supplied worktree-relative path: trims surrounding
     /// whitespace/newlines and rejects the same shapes `resolve` rejects
@@ -58,27 +71,77 @@ enum RemoteWorktreeFileAccess {
         return candidate
     }
 
-    /// Caps a diff at `maxDiffLines` total lines, dropping whole trailing
-    /// lines from the hunk that crosses the cap. Reports whether anything was
-    /// dropped so the client can render a truncation footer.
-    static func truncateHunks(_ hunks: [ParsedDiff.Hunk]) -> (hunks: [ParsedDiff.Hunk], truncated: Bool) {
-        var remaining = maxDiffLines
-        var kept: [ParsedDiff.Hunk] = []
-        for hunk in hunks {
-            if remaining <= 0 { return (kept, true) }
-            if hunk.lines.count <= remaining {
-                kept.append(hunk)
-                remaining -= hunk.lines.count
-                continue
-            }
-            kept.append(ParsedDiff.Hunk(
-                header: hunk.header,
-                oldStart: hunk.oldStart,
-                newStart: hunk.newStart,
-                lines: Array(hunk.lines.prefix(remaining))))
-            return (kept, true)
+    /// Truncates a single line's `text` to `maxDiffLineBytes` UTF-8 bytes,
+    /// appending a marker, when it individually exceeds the cap. Keeps the
+    /// line (rather than dropping it) so the diff shape (add/delete/context)
+    /// stays intact — only the payload is bounded.
+    private static func clampedLine(_ line: ParsedDiff.Hunk.Line) -> ParsedDiff.Hunk.Line {
+        let bytes = line.text.utf8
+        guard bytes.count > maxDiffLineBytes else { return line }
+        let markerBytes = lineTruncationMarker.utf8.count
+        let keep = max(0, maxDiffLineBytes - markerBytes)
+        // Byte-prefix a String's UTF-8 view safely: decode only up to the
+        // last complete scalar within `keep` bytes rather than slicing
+        // mid-codepoint.
+        var prefixByteCount = 0
+        var truncatedScalars = String.UnicodeScalarView()
+        for scalar in line.text.unicodeScalars {
+            let scalarByteCount = String(scalar).utf8.count
+            guard prefixByteCount + scalarByteCount <= keep else { break }
+            truncatedScalars.append(scalar)
+            prefixByteCount += scalarByteCount
         }
-        return (kept, false)
+        var result = ParsedDiff.Hunk.Line(
+            kind: line.kind,
+            text: String(truncatedScalars) + lineTruncationMarker,
+            oldNumber: line.oldNumber,
+            newNumber: line.newNumber)
+        result.noTrailingNewline = line.noTrailingNewline
+        return result
+    }
+
+    /// Caps a diff at `maxDiffLines` total lines AND `maxDiffBytes` total
+    /// UTF-8 bytes of line text, whichever comes first — dropping whole
+    /// trailing lines from the hunk that crosses either cap, and truncating
+    /// (not shipping whole or dropping silently) any single line that alone
+    /// exceeds `maxDiffLineBytes`. Reports whether anything was dropped or
+    /// clamped so the client can render a truncation footer.
+    static func truncateHunks(_ hunks: [ParsedDiff.Hunk]) -> (hunks: [ParsedDiff.Hunk], truncated: Bool) {
+        var remainingLines = maxDiffLines
+        var remainingBytes = maxDiffBytes
+        var kept: [ParsedDiff.Hunk] = []
+        var truncated = false
+
+        hunkLoop: for hunk in hunks {
+            if remainingLines <= 0 || remainingBytes <= 0 {
+                truncated = true
+                break
+            }
+            var keptLines: [ParsedDiff.Hunk.Line] = []
+            for rawLine in hunk.lines {
+                if remainingLines <= 0 || remainingBytes <= 0 {
+                    truncated = true
+                    break
+                }
+                let line = clampedLine(rawLine)
+                if line.text != rawLine.text { truncated = true }
+                keptLines.append(line)
+                remainingLines -= 1
+                remainingBytes -= line.text.utf8.count
+            }
+            if !keptLines.isEmpty {
+                kept.append(ParsedDiff.Hunk(
+                    header: hunk.header,
+                    oldStart: hunk.oldStart,
+                    newStart: hunk.newStart,
+                    lines: keptLines))
+            }
+            if keptLines.count < hunk.lines.count {
+                truncated = true
+                break hunkLoop
+            }
+        }
+        return (kept, truncated)
     }
 
     /// Caps a change list at `maxChangedFiles` entries.

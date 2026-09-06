@@ -71,6 +71,47 @@ struct RemoteWorktreeFileAccessTests {
         #expect(kept.hunks.count == 1)
     }
 
+    @Test func truncatesHunksAtTheByteBudgetBeforeTheLineCap() {
+        // Each line is 2KB; at 2KB/line the byte budget (512KB) is exhausted
+        // long before the 2,000-line cap would be, so this hunk must be
+        // stopped by the byte budget rather than the line count.
+        let text = String(repeating: "a", count: 2048)
+        let line = ParsedDiff.Hunk.Line(kind: .add, text: text, oldNumber: nil, newNumber: 1)
+        let hunk = ParsedDiff.Hunk(
+            header: "@@ -0,0 +1,1 @@", oldStart: 0, newStart: 1,
+            lines: Array(repeating: line, count: RemoteWorktreeFileAccess.maxDiffLines))
+
+        let result = RemoteWorktreeFileAccess.truncateHunks([hunk])
+
+        #expect(result.truncated)
+        let keptLines = result.hunks.reduce(0) { $0 + $1.lines.count }
+        #expect(keptLines < RemoteWorktreeFileAccess.maxDiffLines)
+        let totalBytes = result.hunks.reduce(0) { total, hunk in
+            total + hunk.lines.reduce(0) { $0 + $1.text.utf8.count }
+        }
+        #expect(totalBytes <= RemoteWorktreeFileAccess.maxDiffBytes)
+    }
+
+    @Test func truncatesASingleEnormousLineRatherThanShippingOrDroppingItWhole() throws {
+        let hugeText = String(repeating: "x", count: 2 * 1024 * 1024) // 2 MB single line
+        let hugeLine = ParsedDiff.Hunk.Line(kind: .add, text: hugeText, oldNumber: nil, newNumber: 1)
+        let normalLine = ParsedDiff.Hunk.Line(kind: .add, text: "y", oldNumber: nil, newNumber: 2)
+        let hunk = ParsedDiff.Hunk(
+            header: "@@ -0,0 +1,2 @@", oldStart: 0, newStart: 1,
+            lines: [hugeLine, normalLine])
+
+        let result = RemoteWorktreeFileAccess.truncateHunks([hunk])
+
+        #expect(result.truncated)
+        let totalBytes = result.hunks.reduce(0) { total, hunk in
+            total + hunk.lines.reduce(0) { $0 + $1.text.utf8.count }
+        }
+        #expect(totalBytes <= RemoteWorktreeFileAccess.maxDiffBytes)
+        let firstLine = try #require(result.hunks.first?.lines.first)
+        #expect(firstLine.text.utf8.count <= RemoteWorktreeFileAccess.maxDiffLineBytes)
+        #expect(firstLine.text.hasSuffix("(line truncated)"))
+    }
+
     @Test func truncatesChangedFilesAtTheFileCap() {
         let files = (0..<(RemoteWorktreeFileAccess.maxChangedFiles + 5)).map { index in
             ChangedFile(path: "f\(index).txt", status: "M", stage: .unstaged,
