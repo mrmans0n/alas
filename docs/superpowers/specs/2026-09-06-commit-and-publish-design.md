@@ -55,12 +55,13 @@ Choosing either destination preserves any existing draft text and changes the
 preferred action on a live or stashed draft. Other ways of opening a draft use
 local commit as the default.
 
-The publish destination is disabled with a concise help reason while review
-state is loading or when preflight detects a blocker. Blockers include a missing
-supported remote, unavailable or unauthenticated provider CLI when a new review
-request is needed, selecting the base branch, a stale or diverged upstream, and
-another active operation. A repository with no supported review host does not
-show a misleading review-request action.
+For a supported review host, the publish destination is disabled with a concise
+help reason while review state is loading or when preflight detects an
+actionable blocker. Blockers include an unavailable or unauthenticated provider
+CLI when a new review request is needed, selecting the base branch, a stale or
+diverged upstream, and another active operation. A repository with no supported
+review host hides the publish destination instead of showing a review-request
+action that cannot succeed.
 
 GG mode adds **Commit & sync** beside **New stack commit**, **Amend current**,
 and **Absorb into stack**. The four GG actions use a two-column, two-row grid:
