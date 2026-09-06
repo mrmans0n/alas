@@ -24,11 +24,16 @@ enum RemoteWorktreeFileAccess {
     static let maxDiffLineBytes = 64 * 1024
     private static let lineTruncationMarker = "…(line truncated)"
 
-    /// Normalizes a client-supplied worktree-relative path: trims surrounding
-    /// whitespace/newlines and rejects the same shapes `resolve` rejects
-    /// (empty, absolute, upward traversal, `.git`). Returns the normalized
-    /// relative path string (e.g. `"src/file.txt"`, no leading/trailing
-    /// slashes) or nil when the path is invalid.
+    /// Normalizes a client-supplied worktree-relative path: rejects the same
+    /// shapes `resolve` rejects (empty/whitespace-only, absolute, upward
+    /// traversal, `.git`) and returns the ORIGINAL path's exact bytes (no
+    /// leading/trailing slashes stripped beyond splitting on `/`) — not a
+    /// trimmed copy. A real file can legitimately be named with leading or
+    /// trailing whitespace; git does not trim filenames, so trimming here
+    /// would silently resolve a client's exact selection to a DIFFERENT
+    /// path than the one it asked for. Trimming is used only to decide
+    /// whether the input is empty/meaningless, never to build the string
+    /// callers actually resolve/serve.
     ///
     /// Callers that need to gate access on a path (ignore checks, diff
     /// pathspecs) MUST use this same normalized string — not the raw
@@ -36,14 +41,27 @@ enum RemoteWorktreeFileAccess {
     /// is identical to the string used to actually read/diff the file.
     /// `resolve(path:in:)` calls this internally to build its URL.
     static func normalizedRelativePath(_ path: String) -> String? {
-        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !trimmed.hasPrefix("/") else { return nil }
+        guard !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !path.hasPrefix("/") else { return nil }
 
-        let components = trimmed.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        let components = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
         guard !components.isEmpty else { return nil }
         guard !components.contains(".."), !components.contains(".git") else { return nil }
 
         return components.joined(separator: "/")
+    }
+
+    /// True when `url` itself — not whatever it may point to — is a
+    /// symbolic link. `.isSymbolicLinkKey` is computed on the link itself
+    /// (lstat semantics), not its resolved target, so this is accurate even
+    /// for a dangling link. Local file/diff reads reject ANY symlink
+    /// outright rather than resolving-and-rechecking the target: an ignore
+    /// check against the alias name says nothing about the content actually
+    /// served by transparently following the link at the OS level (e.g.
+    /// `Data(contentsOf:)`), which is exactly the bypass shape already
+    /// closed above for `.git` symlink aliases and for the SSH read path's
+    /// `.symlink` outcome (mapped to `.notFound` rather than followed).
+    static func isSymlink(at url: URL) -> Bool {
+        (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink ?? false
     }
 
     /// Returns the on-disk URL for a worktree-relative path, or nil when the
@@ -168,6 +186,7 @@ enum RemoteWorktreeFileAccess {
     /// blocks the UI thread.
     static func readFileContents(at url: URL) async -> FileReadOutcome {
         await Task.detached(priority: .userInitiated) {
+            guard !isSymlink(at: url) else { return .notFound }
             guard let size = fileByteSize(at: url) else { return .notFound }
             guard size <= maxFileBytes else { return .tooLarge(byteSize: size) }
             guard let data = try? Data(contentsOf: url) else { return .notFound }
@@ -185,6 +204,7 @@ enum RemoteWorktreeFileAccess {
     /// a large file.
     static func looksBinaryOnDisk(at url: URL) async -> Bool {
         await Task.detached(priority: .userInitiated) {
+            guard !isSymlink(at: url) else { return false }
             guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
             defer { try? handle.close() }
             let sample = (try? handle.read(upToCount: 8192)) ?? Data()

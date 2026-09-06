@@ -8126,6 +8126,19 @@ extension AppState: RemoteSessionsProvider {
         else {
             return .failure(reason: .pathRejected, message: nil)
         }
+        // `resolve` returns the UNRESOLVED candidate URL, so this checks the
+        // alias itself (lstat), not whatever it points to. A tracked
+        // symlink whose own name isn't ignored but whose target is (e.g.
+        // `public-env -> .env`) would otherwise pass `isPathIgnored` below
+        // and then have its target's content served transparently, first
+        // by the on-disk binary sniff and then by the `git diff` subprocess
+        // itself resolving the link at the OS level. Reject ANY local
+        // symlink outright rather than trying to resolve-and-recheck the
+        // target — the same choice already made for `.git` symlink aliases
+        // and for the SSH read path's `.symlink` outcome.
+        if !worktree.path.isRemoteAlasPath, RemoteWorktreeFileAccess.isSymlink(at: url) {
+            return .failure(reason: .notFound, message: nil)
+        }
         let git = GitService()
         do {
             let ignored = try await git.isPathIgnored(worktreePath: worktree.path, path: normalizedPath)
@@ -8225,6 +8238,15 @@ extension AppState: RemoteSessionsProvider {
               let url = RemoteWorktreeFileAccess.resolve(path: path, in: worktree.path)
         else {
             return .failure(reason: .pathRejected, byteSize: nil, message: nil)
+        }
+        // See the matching comment in `remoteFileDiff`: a tracked symlink
+        // whose alias name isn't itself ignored can still point at an
+        // ignored (or otherwise off-limits) target, and `readFileContents`
+        // below would otherwise transparently follow it via
+        // `Data(contentsOf:)`. Reject the alias outright rather than
+        // resolving-and-rechecking the target.
+        if !worktree.path.isRemoteAlasPath, RemoteWorktreeFileAccess.isSymlink(at: url) {
+            return .failure(reason: .notFound, byteSize: nil, message: nil)
         }
         do {
             let ignored = try await GitService().isPathIgnored(worktreePath: worktree.path, path: normalizedPath)

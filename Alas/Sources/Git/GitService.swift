@@ -221,7 +221,25 @@ extension GitService {
         let head = try await hasHead(worktreePath: worktreePath)
         if !head {
             let fileURL = worktreePath.appendingPathComponent(file)
-            guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            // `FileManager.fileExists` only ever sees this Mac's local
+            // filesystem. For an SSH-backed worktree there is nothing local
+            // at `fileURL.path` to find — the check always reports "missing"
+            // regardless of the file's real state on the remote host, so
+            // every staged/untracked file's diff on an unborn remote branch
+            // silently came back empty. Route the existence check through
+            // the remote host when one is registered for this worktree;
+            // `.missing` is the only outcome treated as absent (mirrors
+            // `WorktreeService`'s use of the same primitive) so a transient
+            // "unknown" result doesn't itself suppress a real diff — the
+            // `--no-index` invocation below is still the actual source of
+            // truth and fails harmlessly if the file truly isn't there.
+            let exists: Bool
+            if worktreePath.isRemoteAlasPath, let host = RemoteHostRegistry.shared.host(forPath: worktreePath.path) {
+                exists = await RemoteFileAccess.existence(host: host, path: fileURL.path) != .missing
+            } else {
+                exists = FileManager.default.fileExists(atPath: fileURL.path)
+            }
+            guard exists else {
                 return ParsedDiff(hunks: [])
             }
             let result = try await Process.git(

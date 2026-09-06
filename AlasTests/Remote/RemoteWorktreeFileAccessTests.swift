@@ -163,12 +163,51 @@ struct RemoteWorktreeFileAccessTests {
         #expect(RemoteWorktreeFileAccess.resolve(path: ".gIT/config", in: root) == nil)
     }
 
-    @Test func normalizedRelativePathTrimsWhitespaceToMatchTheTrimmedForm() {
-        #expect(RemoteWorktreeFileAccess.normalizedRelativePath(" secret.env") == "secret.env")
-        #expect(
-            RemoteWorktreeFileAccess.normalizedRelativePath(" secret.env")
-                == RemoteWorktreeFileAccess.normalizedRelativePath("secret.env"))
-        #expect(RemoteWorktreeFileAccess.normalizedRelativePath("\tsrc/file.txt\n") == "src/file.txt")
+    /// Git does not trim filenames — a real file can legitimately be named
+    /// with leading or trailing whitespace. `normalizedRelativePath` used to
+    /// trim the path used for actual resolution, which meant a client
+    /// selecting a genuinely whitespace-padded filename (as reported by the
+    /// file/change list, which preserves such names byte-for-byte) would
+    /// have the server silently look up a DIFFERENT, trimmed path instead.
+    /// Trimming is only used to reject an empty/whitespace-only input; the
+    /// returned string must be byte-for-byte identical to the original.
+    @Test func normalizedRelativePathPreservesGenuineWhitespaceInAFilenameRatherThanTrimmingIt() {
+        #expect(RemoteWorktreeFileAccess.normalizedRelativePath(" secret.env") == " secret.env")
+        #expect(RemoteWorktreeFileAccess.normalizedRelativePath(" secret.env") != "secret.env")
+        #expect(RemoteWorktreeFileAccess.normalizedRelativePath("\tsrc/file.txt\n") == "\tsrc/file.txt\n")
+    }
+
+    /// A padded path like `" secret.env"` must resolve to a candidate named
+    /// literally `" secret.env"` (with the leading space as part of the
+    /// name) — not silently collapse onto a real file named `"secret.env"`.
+    /// This is the empirical half of the reasoning above: proves the
+    /// original whitespace-padding bypass this replaces doesn't reopen,
+    /// since the padded string simply fails to resolve to the real file.
+    @Test func resolvesAWhitespacePaddedPathToItsExactLiteralNameNotTheTrimmedFile() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "TOKEN=abc\n".write(to: root.appendingPathComponent("secret.env"), atomically: true, encoding: .utf8)
+
+        let resolved = try #require(RemoteWorktreeFileAccess.resolve(path: " secret.env", in: root))
+        #expect(resolved.lastPathComponent == " secret.env")
+        #expect(!FileManager.default.fileExists(atPath: resolved.path))
+    }
+
+    /// A file genuinely named with leading/trailing whitespace must still be
+    /// reachable by its exact name — the fix must not merely stop matching
+    /// the wrong file, it must keep matching the RIGHT one.
+    @Test func readsAFileWhoseRealNameHasLeadingAndTrailingWhitespace() async throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let realName = " padded name.txt "
+        try "content\n".write(to: root.appendingPathComponent(realName), atomically: true, encoding: .utf8)
+
+        #expect(RemoteWorktreeFileAccess.normalizedRelativePath(realName) == realName)
+        let resolved = try #require(RemoteWorktreeFileAccess.resolve(path: realName, in: root))
+        #expect(resolved.lastPathComponent == realName)
+
+        let outcome = await RemoteWorktreeFileAccess.readFileContents(at: resolved)
+        #expect(outcome == .text("content\n"))
     }
 
     @Test func normalizedRelativePathRejectsTheSameInputsAsResolve() {
@@ -232,6 +271,29 @@ struct RemoteWorktreeFileAccessTests {
         let outcome = await RemoteWorktreeFileAccess.readFileContents(at: url)
 
         #expect(outcome == .binary(byteSize: 3))
+    }
+
+    /// A TRACKED symlink whose own name isn't ignored (e.g. `public-env`)
+    /// but whose target IS (`.env`) must not have its target's content
+    /// served transparently. `resolve` deliberately returns the unresolved
+    /// alias URL (not the symlink-followed target), so a naive read via
+    /// `Data(contentsOf:)` would follow the link at the OS level regardless
+    /// of what `isPathIgnored` decided about the alias's own name. Reject
+    /// the alias outright — mirrors the SSH read path's `.symlink ->
+    /// .notFound` mapping, applied here for local reads.
+    @Test func readFileContentsRejectsASymlinkAliasRatherThanFollowingItToItsTarget() async throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let target = root.appendingPathComponent(".env")
+        try "TOKEN=super-secret\n".write(to: target, atomically: true, encoding: .utf8)
+        let alias = root.appendingPathComponent("public-env")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: target)
+
+        let resolved = try #require(RemoteWorktreeFileAccess.resolve(path: "public-env", in: root))
+        #expect(RemoteWorktreeFileAccess.isSymlink(at: resolved))
+
+        let outcome = await RemoteWorktreeFileAccess.readFileContents(at: resolved)
+        #expect(outcome == .notFound)
     }
 
     @Test func looksBinaryOnDiskSniffsWithoutReadingTheWholeFile() async throws {
