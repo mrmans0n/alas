@@ -94,8 +94,10 @@ struct DraftCommitTabsManagerTests {
 
     @Test func closingCheckpointOnlyDraftRetainsCheckpoint() {
         let worktreeId = "draft-commit-tabs-mgr-checkpoint-stash"
-        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
-        let manager = TabsManager()
+        let tabsDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-draft-checkpoint-stash-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: tabsDirectory) }
+        let manager = TabsManager(store: PersistenceStore(), tabsDirectory: tabsDirectory)
         let draft = manager.openOrFocusDraftCommit(worktreeId: worktreeId)
         let checkpoint = makePublishCheckpoint()
         manager.updateDraftCommit(worktreeId: worktreeId, tabId: draft.id) { state in
@@ -106,7 +108,15 @@ struct DraftCommitTabsManagerTests {
 
         manager.close(worktreeId: worktreeId, tabId: draft.id)
 
-        #expect(manager.stashedDraft(worktreeId: worktreeId)?.publishCheckpoint == checkpoint)
+        let reloaded = TabsManager(store: PersistenceStore(), tabsDirectory: tabsDirectory)
+        reloaded.loadAll(worktreeIds: [worktreeId])
+        let reopened = reloaded.openOrFocusDraftCommit(worktreeId: worktreeId)
+
+        guard case .draftCommit(let state) = reopened else {
+            Issue.record("expected restored draftCommit tab")
+            return
+        }
+        #expect(state.publishCheckpoint == checkpoint)
     }
 
     @Test func openOrFocusDraftCommit_createsTabFirstTime() {
