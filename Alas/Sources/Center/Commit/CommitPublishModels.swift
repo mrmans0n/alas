@@ -1,4 +1,32 @@
 import Foundation
+import Observation
+
+@Observable
+@MainActor
+final class CommitPublishAmendProbeLoader {
+    private var key: String?
+    private var generation = 0
+    private var state: CommitPublishAmendProbe = .loading
+
+    func result(for key: String) -> CommitPublishAmendProbe {
+        self.key == key ? state : .loading
+    }
+
+    func load(key: String, operation: () async throws -> HeadPublicationState) async {
+        generation += 1
+        let requestGeneration = generation
+        self.key = key
+        state = .loading
+        let result: CommitPublishAmendProbe
+        do {
+            result = .init(try await operation())
+        } catch {
+            result = .failed(error.localizedDescription)
+        }
+        guard !Task.isCancelled, generation == requestGeneration else { return }
+        state = result
+    }
+}
 
 enum CommitPublishAmendProbe: Equatable, Sendable {
     case loading

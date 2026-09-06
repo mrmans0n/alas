@@ -10,8 +10,7 @@ struct ChangesTabView: View {
 
     @State private var collapsedChangePaths: Set<String> = []
     @State private var appKitActionRelay = ChangesAppKitActionRelay()
-    @State private var amendProbe: CommitPublishAmendProbe = .loading
-    @State private var resolvedAmendProbeKey: String?
+    @State private var amendProbe = CommitPublishAmendProbeLoader()
     @Environment(\.theme) private var theme
 
     private var conflicts: [ChangedFile] {
@@ -76,7 +75,7 @@ struct ChangesTabView: View {
                 lastError: rps.reviewLoop.lastError,
                 mutationDisabledReason: publishMutationDisabledReason,
                 amend: currentDraft?.amend == true,
-                amendProbe: resolvedAmendProbeKey == amendProbeKey ? amendProbe : .loading
+                amendProbe: amendProbe.result(for: amendProbeKey)
             )
         )
     }
@@ -107,18 +106,10 @@ struct ChangesTabView: View {
         }
         .task(id: amendProbeKey) {
             let key = amendProbeKey
-            resolvedAmendProbeKey = nil
-            amendProbe = .loading
             guard currentDraft?.amend == true, !isGGDrawerActive else { return }
-            let result: CommitPublishAmendProbe
-            do {
-                result = .init(try await GitService().headPublicationState(worktreePath: rps.worktree.path))
-            } catch {
-                result = .failed(error.localizedDescription)
+            await amendProbe.load(key: key) {
+                try await GitService().headPublicationState(worktreePath: rps.worktree.path)
             }
-            guard !Task.isCancelled, key == amendProbeKey else { return }
-            amendProbe = result
-            resolvedAmendProbeKey = key
         }
     }
 
@@ -131,9 +122,20 @@ struct ChangesTabView: View {
     }
 
     private var amendProbeKey: String {
-        [rps.worktree.id, rps.currentBranch, rps.currentHeadSHA,
-         String(currentDraft?.amend == true), String(isGGDrawerActive),
-         String(reflecting: rps.reviewLoop.snapshot?.local)].joined(separator: "\u{0}")
+        Self.amendPublicationProbeKey(
+            worktreeID: rps.worktree.id, branch: rps.currentBranch, headSHA: rps.currentHeadSHA,
+            amend: currentDraft?.amend == true, ggModeActive: isGGDrawerActive,
+            reviewLoop: rps.reviewLoop
+        )
+    }
+
+    static func amendPublicationProbeKey(
+        worktreeID: String, branch: String, headSHA: String, amend: Bool,
+        ggModeActive: Bool, reviewLoop: ReviewLoopState
+    ) -> String {
+        [worktreeID, branch, headSHA, String(amend), String(ggModeActive),
+         String(reviewLoop.refreshGeneration),
+         String(reflecting: reviewLoop.snapshot?.local)].joined(separator: "\u{0}")
     }
 
     private var isGGDrawerActive: Bool {

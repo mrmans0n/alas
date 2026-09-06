@@ -17,7 +17,7 @@ final class ReviewLoopState {
     private let worktreePath: URL
     private var baseBranch: String
     private let providerRegistry: CodeHostProviderRegistry
-    private var refreshGeneration: Int = 0
+    private(set) var refreshGeneration: Int = 0
 
     private(set) var snapshot: ReviewLoopSnapshot?
     private(set) var isRefreshing: Bool = false
