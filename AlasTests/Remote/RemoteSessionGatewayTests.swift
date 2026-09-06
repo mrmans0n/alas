@@ -2662,4 +2662,102 @@ struct RemoteSessionGatewayTests {
         #expect(provider.prompts.map(\.text) == ["queue me"])
         #expect(provider.steerPrompts.isEmpty)
     }
+
+    @Test func listChangesSendsChangeListFromTheProvider() async {
+        let provider = FakeSessionsProvider()
+        let file = RemoteChangedFile(
+            path: "a.txt", status: "M", add: 2, del: 1, conflict: nil, renameFrom: nil)
+        provider.changeListResult = .success(
+            comparisonRef: "origin/main", metricsAvailable: true, files: [file], truncated: false)
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gateway.handle(.listChanges(sessionId: "s1"))
+
+        #expect(provider.changeListRequests == ["s1"])
+        #expect(sent == [.changeList(
+            sessionId: "s1", comparisonRef: "origin/main", metricsAvailable: true,
+            files: [file], truncated: false)])
+    }
+
+    @Test func listChangesSendsFailureMessageOnProviderFailure() async {
+        let provider = FakeSessionsProvider()
+        provider.changeListResult = .failure(reason: .worktreeUnavailable, message: "gone")
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gateway.handle(.listChanges(sessionId: "s1"))
+
+        #expect(sent == [.changeListFailed(
+            sessionId: "s1", reason: .worktreeUnavailable, message: "gone")])
+    }
+
+    @Test func fileDiffSendsHunksAndFailures() async {
+        let provider = FakeSessionsProvider()
+        let hunk = RemoteDiffHunk(
+            header: "@@ -1 +1,2 @@", oldStart: 1, newStart: 1,
+            lines: [RemoteDiffLine(kind: "add", text: "new", oldNumber: nil, newNumber: 2)])
+        provider.fileDiffResult = .success(hunks: [hunk], truncated: true)
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gateway.handle(.fileDiff(sessionId: "s1", path: "a.txt"))
+        #expect(provider.fileDiffRequests.map(\.path) == ["a.txt"])
+        #expect(sent == [.fileDiffResult(
+            sessionId: "s1", path: "a.txt", hunks: [hunk], truncated: true)])
+
+        provider.fileDiffResult = .failure(reason: .pathRejected, message: nil)
+        sent.removeAll()
+        await gateway.handle(.fileDiff(sessionId: "s1", path: "../etc/passwd"))
+        #expect(sent == [.fileDiffFailed(
+            sessionId: "s1", path: "../etc/passwd", reason: .pathRejected, message: nil)])
+    }
+
+    @Test func listFilesAndReadFileSendTreeAndContents() async {
+        let provider = FakeSessionsProvider()
+        let node = RemoteFileNode(
+            name: "src", path: "src", kind: "dir", badge: nil,
+            childrenState: "notLoaded", isSubmodule: false)
+        provider.fileTreeResult = .success(nodes: [node])
+        provider.fileContentsResult = .success(text: "# Alas\n", truncated: false)
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gateway.handle(.listFiles(sessionId: "s1", path: nil))
+        await gateway.handle(.readFile(sessionId: "s1", path: "README.md"))
+
+        #expect(sent == [
+            .fileTree(sessionId: "s1", path: nil, nodes: [node]),
+            .fileContents(sessionId: "s1", path: "README.md", text: "# Alas\n", truncated: false)
+        ])
+    }
+
+    @Test func readFileSendsUnavailableWithByteSize() async {
+        let provider = FakeSessionsProvider()
+        provider.fileContentsResult = .failure(reason: .tooLarge, byteSize: 900_000, message: nil)
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gateway.handle(.readFile(sessionId: "s1", path: "big.bin"))
+
+        #expect(sent == [.fileUnavailable(
+            sessionId: "s1", path: "big.bin", reason: .tooLarge, byteSize: 900_000, message: nil)])
+    }
+
+    @Test func duplicateInFlightRequestsForTheSamePathAreDropped() async {
+        let provider = FakeSessionsProvider()
+        provider.fileDiffResult = .success(hunks: [], truncated: false)
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        async let first: Void = gateway.handle(.fileDiff(sessionId: "s1", path: "a.txt"))
+        async let second: Void = gateway.handle(.fileDiff(sessionId: "s1", path: "a.txt"))
+        _ = await (first, second)
+
+        #expect(provider.fileDiffRequests.count <= 2)
+        #expect(sent.allSatisfy { message in
+            if case .fileDiffResult(_, let path, _, _) = message { return path == "a.txt" }
+            return false
+        })
+    }
 }
