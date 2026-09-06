@@ -1025,6 +1025,36 @@ struct RemoteAppStateAccessTests {
         #expect(result == .failure(reason: .sessionUnknown, byteSize: nil, message: nil))
     }
 
+    @Test func remoteChangeListReportsWorktreeUnavailableWhenProjectAndWorktreeReturnsNil() async throws {
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+
+        let state = makeRemoteRenameState()
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let tab = try #require(acpTabs(in: state).first)
+
+        // Simulate worktree deletion while manager still holds session reference.
+        // First ensure the session is in the manager's rows.
+        let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
+        #expect(manager.sessionRows.contains(where: { $0.id == tab.sessionId }))
+
+        // Now delete the worktree from projectsManager, making projectAndWorktree return nil
+        let project = try #require(state.projects.first)
+        let visibleWorktrees = state.projectsManager.visibleWorktrees(projectId: project.id)
+        for wt in visibleWorktrees {
+            state.projectsManager.removeOptimisticWorktree(id: wt.id, projectId: project.id)
+        }
+
+        let result = await state.remoteChangeList(sessionId: tab.sessionId)
+        #expect(result == .failure(reason: .worktreeUnavailable, message: nil))
+    }
+
     private func statusCode(port: UInt16, host: String, path: String) async throws -> Int? {
         var req = URLRequest(url: URL(string: "http://127.0.0.1:\(port)\(path)")!)
         req.setValue(host, forHTTPHeaderField: "Host")
