@@ -34,6 +34,8 @@ enum ReviewSessionConsolidation {
     }
 }
 
+private struct RemoteWorktreeDestinationCheckError: Error {}
+
 @Observable
 @MainActor
 final class AppState {
@@ -160,6 +162,14 @@ final class AppState {
     private(set) var remoteConnectedDeviceCountsSnapshot: [String: Int] = [:]
     @ObservationIgnored
     var remoteSessionAttachScheduler: (@MainActor (ACPSessionManager, ACPSession.ID) -> Void)?
+    @ObservationIgnored
+    var remoteWorktreeBranchLoader: (@MainActor (URL) async throws -> [String])?
+    @ObservationIgnored
+    var remoteWorktreeDestinationPreparer: (@MainActor (URL, URL) async throws -> URL)?
+    @ObservationIgnored
+    var remoteWorktreeCommandRunner: (@MainActor (String, String?, String) async throws -> ProcessResult)?
+    @ObservationIgnored
+    var remoteSessionCreator: (@MainActor (String, String) async -> RemoteCreateSessionResult)?
 
     private func makeRemoteInterfaces() -> [RemoteNetworkInterface] {
         RemoteNetwork.interfaces()
@@ -1289,7 +1299,8 @@ final class AppState {
         runStartup: Bool,
         launchSurface: WorktreeLaunchSurface,
         ggWorktreeMode: GGWorktreeMode = .inherit,
-        issueAttachment: IssueAttachment? = nil
+        issueAttachment: IssueAttachment? = nil,
+        destinationAlreadyPrepared: Bool = false
     ) async -> String {
         guard let project = projects.first(where: { $0.id == projectId }) else {
             // Should not happen if the dialog validated the project; fail silently.
@@ -1306,14 +1317,18 @@ final class AppState {
         // that exist on disk; the leaf doesn't exist yet, so resolve the
         // parent (which does) and reattach the leaf.
         let canonicalDestination: URL
-        do {
-            canonicalDestination = try await Self.preparedCreateWorktreeDestination(
-                repoPath: repoPath,
-                destination: destination
-            )
-        } catch {
-            showFileActionError(title: "Create Worktree Failed", message: error.localizedDescription)
-            return ""
+        if destinationAlreadyPrepared {
+            canonicalDestination = destination
+        } else {
+            do {
+                canonicalDestination = try await Self.preparedCreateWorktreeDestination(
+                    repoPath: repoPath,
+                    destination: destination
+                )
+            } catch {
+                showFileActionError(title: "Create Worktree Failed", message: error.localizedDescription)
+                return ""
+            }
         }
         let optimisticId = Worktree.makeId(path: canonicalDestination)
         if projectsManager.worktrees(projectId: projectId).contains(where: { $0.id == optimisticId }) {
@@ -1556,7 +1571,8 @@ final class AppState {
         branch: String,
         destination: URL,
         runStartup: Bool,
-        ggWorktreeMode: GGWorktreeMode = .inherit
+        ggWorktreeMode: GGWorktreeMode = .inherit,
+        destinationAlreadyPrepared: Bool = false
     ) async -> Result<Worktree, WorktreeCreationFailure> {
         let id = await createWorktree(
             projectId: projectId,
@@ -1565,7 +1581,8 @@ final class AppState {
             destination: destination,
             runStartup: runStartup,
             launchSurface: .delegated,
-            ggWorktreeMode: ggWorktreeMode
+            ggWorktreeMode: ggWorktreeMode,
+            destinationAlreadyPrepared: destinationAlreadyPrepared
         )
         guard !id.isEmpty else {
             return .failure(.init(message: "Could not start worktree creation."))
@@ -7472,6 +7489,28 @@ extension AppState: RemoteSessionsProvider {
         return out
     }
 
+    func remoteProjects() async -> [RemoteProjectOption] {
+        projects.map { RemoteProjectOption(id: $0.id, name: $0.name) }
+    }
+
+    func remoteBranches(projectId: String) async -> RemoteBranchListResult {
+        guard let project = projects.first(where: { $0.id == projectId }) else {
+            return .failure("Repository is no longer available.")
+        }
+
+        do {
+            let branches = try await GitService().branches(at: URL(fileURLWithPath: project.path))
+            let preferredBase = NewWorktreeDialog.preferredBaseBranch(
+                availableBranches: branches,
+                configuredDefault: config.worktrees.baseBranch
+            )
+            return .success(branches: branches, preferredBase: preferredBase)
+        } catch {
+            Self.logger.error("Could not load remote branches for project \(project.id, privacy: .private): \(String(describing: error), privacy: .private)")
+            return .failure("Could not load branches.")
+        }
+    }
+
     func remoteAgents() -> [RemoteAgentOption] {
         let enabledById = Dictionary(uniqueKeysWithValues: agentRegistry.enabled().map { ($0.id, $0) })
         let ordered = ACPLaunchCatalog.specs.compactMap { enabledById[$0.agentID] }
@@ -7518,6 +7557,138 @@ extension AppState: RemoteSessionsProvider {
 
         let worktreeSummary = remoteWorktreeSummaryWithoutMetrics(project: resolved.project, worktree: resolved.worktree)
         return .success(remoteSessionSummary(session: session, manager: manager, worktreeSummary: worktreeSummary))
+    }
+
+    func createRemoteWorktreeSession(
+        projectId: String,
+        base: String,
+        branch: String,
+        agentId: String
+    ) async -> RemoteCreateWorktreeSessionResult {
+        guard let project = projects.first(where: { $0.id == projectId }) else {
+            return .failure(
+                stage: .worktree,
+                message: "Repository is no longer available.",
+                worktreeId: nil
+            )
+        }
+
+        let acpIDs = Set(ACPLaunchCatalog.specs.map(\.agentID))
+        guard agentRegistry.enabled().contains(where: { $0.id == agentId && acpIDs.contains($0.id) }) else {
+            return .failure(stage: .worktree, message: "Could not create worktree.", worktreeId: nil)
+        }
+
+        guard case .valid = GitNameValidator.validateBranchName(branch) else {
+            return .failure(stage: .worktree, message: "Could not create worktree.", worktreeId: nil)
+        }
+
+        do {
+            let repoPath = URL(fileURLWithPath: project.path)
+            let branches = if let remoteWorktreeBranchLoader {
+                try await remoteWorktreeBranchLoader(repoPath)
+            } else {
+                try await GitService().branches(at: repoPath)
+            }
+            guard branches.contains(base) else {
+                return .failure(stage: .worktree, message: "Could not create worktree.", worktreeId: nil)
+            }
+        } catch {
+            Self.logger.error("Could not load branches for remote worktree creation in project \(project.id, privacy: .private): \(String(describing: error), privacy: .private)")
+            return .failure(stage: .worktree, message: "Could not load branches.", worktreeId: nil)
+        }
+
+        let renderedDestination = WorktreePathTemplateRenderer.render(
+            template: config.worktrees.pathTemplate,
+            worktreeRoot: config.worktrees.rootPath,
+            repoName: project.name,
+            branch: branch
+        )
+        let destination: URL
+        do {
+            let repoPath = URL(fileURLWithPath: project.path)
+            destination = if let remoteWorktreeDestinationPreparer {
+                try await remoteWorktreeDestinationPreparer(repoPath, renderedDestination)
+            } else {
+                try await Self.preparedCreateWorktreeDestination(
+                    repoPath: repoPath,
+                    destination: renderedDestination
+                )
+            }
+            if try await remoteCreationDestinationExists(project: project, destination: destination) {
+                return .failure(
+                    stage: .worktree,
+                    message: "A worktree already exists at this path.",
+                    worktreeId: nil
+                )
+            }
+        } catch {
+            Self.logger.error("Could not preflight remote worktree creation for project \(project.id, privacy: .private): \(String(describing: error), privacy: .private)")
+            return .failure(stage: .worktree, message: "Could not create worktree.", worktreeId: nil)
+        }
+
+        let worktreeResult = await createWorktreeAndWait(
+            projectId: project.id,
+            base: base,
+            branch: branch,
+            destination: destination,
+            runStartup: true,
+            ggWorktreeMode: .inherit,
+            destinationAlreadyPrepared: true
+        )
+        switch worktreeResult {
+        case .success(let worktree):
+            let sessionResult = if let remoteSessionCreator {
+                await remoteSessionCreator(worktree.id, agentId)
+            } else {
+                await createRemoteSession(worktreeId: worktree.id, agentId: agentId)
+            }
+            return Self.remoteWorktreeSessionResult(
+                worktree: worktree,
+                sessionResult: sessionResult
+            )
+        case .failure(let error):
+            Self.logger.error("Could not create remote worktree for project \(project.id, privacy: .private): \(error.message, privacy: .private)")
+            return .failure(stage: .worktree, message: "Could not create worktree.", worktreeId: nil)
+        }
+    }
+
+    nonisolated static func remoteWorktreeSessionResult(
+        worktree: Worktree,
+        sessionResult: RemoteCreateSessionResult
+    ) -> RemoteCreateWorktreeSessionResult {
+        switch sessionResult {
+        case .success(let summary):
+            return .success(summary)
+        case .failure:
+            return .failure(
+                stage: .session,
+                message: "Worktree created, but the session could not be created.",
+                worktreeId: worktree.id
+            )
+        }
+    }
+
+    private func remoteCreationDestinationExists(
+        project: ProjectConfig,
+        destination: URL
+    ) async throws -> Bool {
+        guard let host = project.host ?? RemoteHostRegistry.shared.host(forPath: project.path) else {
+            return FileManager.default.fileExists(atPath: destination.path)
+        }
+        let command = "test -e \(SSHCommand.shellQuote(destination.path))"
+        let result = if let remoteWorktreeCommandRunner {
+            try await remoteWorktreeCommandRunner(host, nil, command)
+        } else {
+            try await RemoteExec.run(host: host, cwd: nil, command: command)
+        }
+        switch result.exitCode {
+        case 0:
+            return true
+        case 1:
+            return false
+        default:
+            throw RemoteWorktreeDestinationCheckError()
+        }
     }
 
     func session(for id: String) -> ACPSession? {

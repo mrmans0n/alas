@@ -231,8 +231,16 @@ h1 { font-size: 22px; font-weight: 700; margin: 12px 4px 10px; }
 .sheet-title { margin: 0 0 12px; font-size: 15px; font-weight: 600; color: var(--fg); }
 .sheet-input { width: 100%; margin: 0 0 10px; padding: 12px 13px; border: 1px solid var(--bg-4); border-radius: 10px; background: var(--bg-0); color: var(--fg); font: inherit; font-size: 16px; outline: none; }
 .sheet-input:focus { border-color: color-mix(in oklab, var(--accent) 65%, var(--bg-4)); }
+.sheet-label { display: block; margin: 10px 0 6px; color: var(--fg-muted); font-size: 13px; font-weight: 600; }
+.sheet-label:first-child { margin-top: 0; }
+select.sheet-input { appearance: auto; }
+.form-guidance { min-height: 18px; margin: -3px 0 9px; color: var(--fg-dim); font-size: 12px; line-height: 1.35; }
+#retry-branches { margin: -3px 0 10px; }
 .create-sheet { max-height: min(78vh, 620px); display: flex; flex-direction: column; }
+#worktree-step, #agent-step { min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
 .create-list { min-height: 0; max-height: 44vh; overflow-y: auto; -webkit-overflow-scrolling: touch; display: flex; flex-direction: column; gap: 8px; padding: 1px 0 4px; }
+.create-review { margin: 0 0 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg-1); color: var(--fg-muted); font-size: 13px; line-height: 1.4; }
+.create-review strong { display: block; margin-bottom: 4px; color: var(--fg); font-size: 14px; }
 button.create-row { display: block; width: 100%; padding: 11px 12px; margin: 0; border: 1px solid var(--bg-4); border-radius: 10px; background: var(--bg-1); color: var(--fg); font: inherit; text-align: left; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 button.create-row:disabled { cursor: not-allowed; opacity: .72; }
 button.create-row.is-selected { border-color: var(--accent); background: color-mix(in oklab, var(--accent) 17%, var(--bg-1)); }

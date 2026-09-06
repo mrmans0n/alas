@@ -26,6 +26,10 @@ final class RemoteSessionGateway {
     private var sessionListGeneration = 0
     private var worktreeListRefresh: Task<Void, Never>?
     private var worktreeListGeneration = 0
+    private var projectListRefresh: Task<Void, Never>?
+    private var projectListGeneration = 0
+    private var branchListRefresh: Task<Void, Never>?
+    private var branchListGeneration = 0
     private var syncStates: [String: RemoteTranscriptSync] = [:]
     private var trackedSessions: Set<String> = []
     // Per-session request id of the permission/question prompt we last surfaced,
@@ -48,6 +52,32 @@ final class RemoteSessionGateway {
             refreshWorktreeList()
         case .listAgents:
             send(.agentList(agents: provider.remoteAgents()))
+        case .listProjects:
+            refreshProjectList()
+        case .listBranches(let projectId):
+            refreshBranchList(projectId: projectId)
+        case .createWorktreeSession(let projectId, let base, let branch, let agentId):
+            let result = await provider.createRemoteWorktreeSession(
+                projectId: projectId,
+                base: base,
+                branch: branch,
+                agentId: agentId
+            )
+            switch result {
+            case .success(let summary):
+                send(.worktreeSessionCreated(session: summary))
+                refreshSessionList()
+                refreshWorktreeList()
+            case .failure(let stage, let message, let worktreeId):
+                send(.worktreeSessionCreationFailed(
+                    stage: stage,
+                    message: message,
+                    worktreeId: worktreeId
+                ))
+                if worktreeId != nil {
+                    refreshWorktreeList()
+                }
+            }
         case .createSession(let worktreeId, let agentId):
             let result = await provider.createRemoteSession(worktreeId: worktreeId, agentId: agentId)
             switch result {
@@ -293,6 +323,39 @@ final class RemoteSessionGateway {
         }
     }
 
+    private func refreshProjectList() {
+        projectListGeneration += 1
+        let generation = projectListGeneration
+        projectListRefresh?.cancel()
+        projectListRefresh = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let projects = await provider.remoteProjects()
+            guard !Task.isCancelled, generation == projectListGeneration else { return }
+            send(.projectList(projects: projects))
+        }
+    }
+
+    private func refreshBranchList(projectId: String) {
+        branchListGeneration += 1
+        let generation = branchListGeneration
+        branchListRefresh?.cancel()
+        branchListRefresh = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let result = await provider.remoteBranches(projectId: projectId)
+            guard !Task.isCancelled, generation == branchListGeneration else { return }
+            switch result {
+            case .success(let branches, let preferredBase):
+                send(.branchList(
+                    projectId: projectId,
+                    branches: branches,
+                    preferredBase: preferredBase
+                ))
+            case .failure(let message):
+                send(.branchListFailed(projectId: projectId, message: message))
+            }
+        }
+    }
+
     // MARK: attachment materialization
 
     private static let maxAttachmentsBytes = 10_000_000
@@ -351,6 +414,10 @@ final class RemoteSessionGateway {
         sessionListRefresh = nil
         worktreeListRefresh?.cancel()
         worktreeListRefresh = nil
+        projectListRefresh?.cancel()
+        projectListRefresh = nil
+        branchListRefresh?.cancel()
+        branchListRefresh = nil
         subscriptions.removeAll()
         configSubscriptions.removeAll()
         configCoalesce.values.forEach { $0.cancel() }

@@ -44,6 +44,8 @@ let createState = {
   busy: false,
   error: ""
 };
+const worktreeCreation = RemoteWorktreeCreation.createFlow(send);
+worktreeCreation.subscribe(() => renderCreateSheet());
 const ATTACH_CAP = 10 * 1000 * 1000;   // 10 MB running total — matches the server's maxAttachmentsBytes
 
 // state ∈ {connecting, ok, bad} drives the chip's dot/border color via [data-state].
@@ -198,6 +200,7 @@ async function connect() {
     if (createState.open) {
       createState.error = "";
       requestCreateLists();
+      reloadNewWorktreeCatalog();
       renderCreateSheet();
     }
   };
@@ -229,7 +232,10 @@ function send(obj) { ws && ws.readyState === 1 && ws.send(JSON.stringify(obj)); 
 
 function handle(msg) {
   switch (msg.type) {
-    case "sessionList": renderSessions(msg.sessions); break;
+    case "sessionList":
+      renderSessions(msg.sessions);
+      worktreeCreation.markRecoveryListLoaded("sessions");
+      break;
     case "transcriptSnapshot": applySnapshot(msg); break;
     case "transcriptDelta": applyDelta(msg); break;
     case "transcriptPage": applyPage(msg); break;
@@ -248,7 +254,13 @@ function handle(msg) {
     case "sessionRenamed": applySessionRenamed(msg.sessionId, msg.title); break;
     case "worktreeList":
       createState.worktrees = msg.worktrees || [];
-      if (!createState.worktrees.some(w => w.id === createState.selectedWorktreeId)) createState.selectedWorktreeId = null;
+      const recoveredWorktreeId = worktreeCreation.snapshot().selectedWorktreeId;
+      if (recoveredWorktreeId && createState.worktrees.some(w => w.id === recoveredWorktreeId)) {
+        createState.selectedWorktreeId = recoveredWorktreeId;
+      } else if (!createState.worktrees.some(w => w.id === createState.selectedWorktreeId)) {
+        createState.selectedWorktreeId = null;
+      }
+      worktreeCreation.markRecoveryListLoaded("worktrees");
       renderCreateSheet();
       break;
     case "agentList":
@@ -257,6 +269,7 @@ function handle(msg) {
         const preferred = createState.agents.find(a => a.isDefault) || createState.agents[0];
         createState.selectedAgentId = preferred ? preferred.id : null;
       }
+      worktreeCreation.reconcileAgents(createState.agents);
       renderCreateSheet();
       break;
     case "sessionCreated":
@@ -266,6 +279,21 @@ function handle(msg) {
       createState.busy = false;
       createState.error = msg.message || "Could not create session.";
       renderCreateSheet();
+      break;
+    case "projectList":
+    case "branchList":
+    case "branchListFailed":
+      worktreeCreation.receive(msg);
+      break;
+    case "worktreeSessionCreated":
+      if (worktreeCreation.receive(msg)) applyCreatedSession(msg.session);
+      break;
+    case "worktreeSessionCreationFailed":
+      if (worktreeCreation.receive(msg)) {
+        const state = worktreeCreation.snapshot();
+        if (state.selectedWorktreeId) createState.selectedWorktreeId = state.selectedWorktreeId;
+        renderCreateSheet();
+      }
       break;
     case "sessionClosed": if (msg.sessionId === currentSession) showSessions(); break;
     case "promptRejected": if (msg.sessionId === currentSession) restoreRejectedPrompt(); break;
@@ -457,6 +485,8 @@ function applySessionRenamed(sessionId, title) {
 }
 
 function showCreateSheet() {
+  const preserveRecovery = worktreeCreation.snapshot().outcomeUnknown && !worktreeCreation.canRetry();
+  if (!preserveRecovery) worktreeCreation.reset();
   createState = {
     ...createState,
     open: true,
@@ -481,13 +511,27 @@ function requestCreateLists() {
   send({ type: "listAgents" });
 }
 
+function reloadNewWorktreeCatalog() {
+  if (worktreeCreation.snapshot().mode !== "new") return;
+  worktreeCreation.reloadCatalog();
+}
+
+function startNewWorktree() {
+  if (!worktreeCreation.startNewWorktree()) return;
+  worktreeCreation.loadProjects();
+  requestAnimationFrame(() => $("project-select").focus());
+}
+
 function hideCreateSheet(force) {
   const forced = force === true;
-  if (createState.busy && !forced) return;
+  const creationState = worktreeCreation.snapshot();
+  const recoveryPending = creationState.outcomeUnknown && !worktreeCreation.canRetry();
+  if (recoveryPending || ((createState.busy || creationState.submitting) && !forced)) return;
   createState.open = false;
   createState.busy = false;
   createState.error = "";
   $("new-session-sheet").classList.add("hidden");
+  worktreeCreation.reset();
   if (forced) {
     deferredCreatePrompt = null;
   } else {
@@ -496,7 +540,9 @@ function hideCreateSheet(force) {
 }
 
 function failCreateOnDisconnect() {
+  const disconnectedWorktreeCreation = worktreeCreation.disconnect();
   if (!createState.open) return;
+  if (disconnectedWorktreeCreation) return;
   const wasBusy = createState.busy;
   createState.busy = false;
   createState.error = wasBusy ? "Connection lost. Reconnect and try again." : "Connection lost. Reconnecting...";
@@ -518,28 +564,106 @@ function visibleCreateWorktrees() {
 function renderCreateSheet() {
   if (!createState.open) return;
 
-  const inWorktreeStep = createState.step === "worktree";
+  const creationState = worktreeCreation.snapshot();
+  const isNewWorktree = creationState.mode === "new";
+  const busy = createState.busy || creationState.submitting;
+  const recoveryPending = creationState.outcomeUnknown && !worktreeCreation.canRetry();
+  const inWorktreeStep = isNewWorktree ? creationState.step === "worktree" : createState.step === "worktree";
   $("worktree-step").classList.toggle("hidden", !inWorktreeStep);
   $("agent-step").classList.toggle("hidden", inWorktreeStep);
-  $("create-back").classList.toggle("hidden", inWorktreeStep);
-  $("create-back").disabled = createState.busy;
-  $("create-cancel").disabled = createState.busy;
-  $("worktree-search").disabled = createState.busy;
+  $("existing-worktree-picker").classList.toggle("hidden", isNewWorktree);
+  $("new-worktree-form").classList.toggle("hidden", !isNewWorktree);
+  $("create-back").classList.toggle("hidden", inWorktreeStep && !isNewWorktree);
+  $("create-back").disabled = busy || recoveryPending;
+  $("create-cancel").disabled = busy || recoveryPending;
+  $("worktree-search").disabled = busy;
 
   const error = $("create-error");
-  error.textContent = createState.error;
-  error.classList.toggle("hidden", !createState.error);
+  const creationError = creationState.error && creationState.error.stage !== "branches"
+    ? creationState.error
+    : null;
+  const errorMessage = creationError
+    ? creationError.message
+    : createState.error;
+  error.textContent = errorMessage;
+  error.classList.toggle("hidden", !errorMessage);
 
-  renderCreateWorktrees();
-  renderCreateAgents();
+  renderCreateWorktrees(busy);
+  renderNewWorktreeForm(creationState, busy);
+  renderCreateAgents(creationState, isNewWorktree, busy);
+  renderNewWorktreeReview(creationState, isNewWorktree && !inWorktreeStep);
 
-  const canSubmit = inWorktreeStep ? !!createState.selectedWorktreeId : !!createState.selectedWorktreeId && !!createState.selectedAgentId;
   const next = $("create-next");
-  next.disabled = createState.busy || !canSubmit;
-  next.textContent = inWorktreeStep ? "Next" : (createState.busy ? "Creating..." : "Create");
+  const canProceed = isNewWorktree
+    ? (inWorktreeStep ? worktreeCreation.canAdvance() : worktreeCreation.canSubmit())
+    : (inWorktreeStep ? !!createState.selectedWorktreeId : !!createState.selectedWorktreeId && !!createState.selectedAgentId);
+  next.disabled = busy || !canProceed;
+  next.textContent = inWorktreeStep
+    ? "Next"
+    : (busy ? "Creating..." : (isNewWorktree ? "Create worktree and session" : "Create"));
 }
 
-function renderCreateWorktrees() {
+function renderNewWorktreeForm(state, busy) {
+  const projectSelect = $("project-select");
+  projectSelect.innerHTML = "";
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.disabled = true;
+  placeholder.textContent = state.projectsLoading ? "Loading repositories..." : "Choose a repository";
+  projectSelect.append(placeholder);
+  state.projects.forEach(project => {
+    const option = document.createElement("option");
+    option.value = project.id;
+    option.textContent = project.name || project.id;
+    projectSelect.append(option);
+  });
+  projectSelect.value = state.projectId || "";
+  projectSelect.disabled = busy || state.projectsLoading || state.projects.length === 0;
+  $("project-guidance").textContent = state.projectsLoading
+    ? "Loading repositories..."
+    : (state.projects.length === 0 ? "No repositories are available." : "Choose the repository for the new worktree.");
+
+  const baseSelect = $("base-select");
+  baseSelect.innerHTML = "";
+  const basePlaceholder = document.createElement("option");
+  basePlaceholder.value = "";
+  basePlaceholder.disabled = true;
+  basePlaceholder.textContent = state.branchStatus === "loading" ? "Loading branches..." : "Choose a base branch";
+  baseSelect.append(basePlaceholder);
+  state.branches.forEach(branch => {
+    const option = document.createElement("option");
+    option.value = branch;
+    option.textContent = branch;
+    baseSelect.append(option);
+  });
+  baseSelect.value = state.base || "";
+  baseSelect.disabled = busy || state.branchStatus !== "loaded";
+  const branchStatus = $("branch-status");
+  branchStatus.textContent = state.branchStatus === "loading"
+    ? "Loading branches..."
+    : (state.branchStatus === "failed" ? state.branchError || "Could not load branches."
+      : (state.branchStatus === "loaded" ? "Choose the branch to base this worktree on." : "Choose a repository to load branches."));
+  $("retry-branches").classList.toggle("hidden", state.branchStatus !== "failed");
+  $("retry-branches").disabled = busy;
+
+  const branchInput = $("new-branch");
+  if (branchInput.value !== state.branch) branchInput.value = state.branch;
+  branchInput.disabled = busy;
+}
+
+function renderNewWorktreeReview(state, visible) {
+  const review = $("new-worktree-review");
+  review.classList.toggle("hidden", !visible);
+  review.innerHTML = "";
+  if (!visible) return;
+  const project = state.projects.find(candidate => candidate.id === state.projectId);
+  review.append(el("strong", "", "Review"));
+  review.append(el("div", "", project ? project.name || project.id : "Repository not selected"));
+  review.append(el("div", "", state.base || "Base branch not selected"));
+  review.append(el("div", "", state.branch || "New branch not entered"));
+}
+
+function renderCreateWorktrees(busy) {
   const list = $("worktree-list");
   list.innerHTML = "";
   const worktrees = visibleCreateWorktrees();
@@ -551,10 +675,11 @@ function renderCreateWorktrees() {
   worktrees.forEach(worktree => {
     const row = el("button", "create-row");
     row.type = "button";
-    row.disabled = createState.busy;
+    row.disabled = busy;
     row.classList.toggle("is-selected", worktree.id === createState.selectedWorktreeId);
+    row.setAttribute("aria-pressed", String(worktree.id === createState.selectedWorktreeId));
     row.onclick = () => {
-      if (createState.busy) return;
+      if (busy) return;
       createState.selectedWorktreeId = worktree.id;
       createState.error = "";
       renderCreateSheet();
@@ -588,7 +713,7 @@ function createWorktreeMeta(worktree) {
   return parts.length ? parts : ["clean"];
 }
 
-function renderCreateAgents() {
+function renderCreateAgents(creationState, isNewWorktree, busy) {
   const list = $("agent-list");
   list.innerHTML = "";
   if (createState.agents.length === 0) {
@@ -599,13 +724,19 @@ function renderCreateAgents() {
   createState.agents.forEach(agent => {
     const row = el("button", "create-row");
     row.type = "button";
-    row.disabled = createState.busy;
-    row.classList.toggle("is-selected", agent.id === createState.selectedAgentId);
+    const selectedAgentId = isNewWorktree ? creationState.agentId : createState.selectedAgentId;
+    row.disabled = busy;
+    row.classList.toggle("is-selected", agent.id === selectedAgentId);
+    row.setAttribute("aria-pressed", String(agent.id === selectedAgentId));
     row.onclick = () => {
-      if (createState.busy) return;
-      createState.selectedAgentId = agent.id;
-      createState.error = "";
-      renderCreateSheet();
+      if (busy) return;
+      if (isNewWorktree) {
+        worktreeCreation.setAgent(agent.id);
+      } else {
+        createState.selectedAgentId = agent.id;
+        createState.error = "";
+        renderCreateSheet();
+      }
     };
     row.append(el("div", "create-row-title", agent.name || agent.id));
     if (agent.isDefault) row.append(el("div", "create-row-detail", "Default agent"));
@@ -614,7 +745,13 @@ function renderCreateAgents() {
 }
 
 function advanceCreateSheet() {
-  if (createState.busy) return;
+  const creationState = worktreeCreation.snapshot();
+  if (createState.busy || creationState.submitting) return;
+  if (creationState.mode === "new") {
+    if (creationState.step === "worktree") worktreeCreation.next();
+    else worktreeCreation.submit();
+    return;
+  }
   createState.error = "";
 
   if (createState.step === "worktree") {
@@ -631,7 +768,14 @@ function advanceCreateSheet() {
 }
 
 function backCreateSheet() {
-  if (createState.busy) return;
+  const creationState = worktreeCreation.snapshot();
+  if (createState.busy || creationState.submitting) return;
+  if (creationState.mode === "new") {
+    if (worktreeCreation.back() && worktreeCreation.snapshot().mode === "existing") {
+      requestAnimationFrame(() => $("worktree-search").focus());
+    }
+    return;
+  }
   createState.step = "worktree";
   createState.error = "";
   renderCreateSheet();
@@ -2413,11 +2557,16 @@ $("new-session").onclick = showCreateSheet;
 $("create-cancel").onclick = hideCreateSheet;
 $("create-next").onclick = advanceCreateSheet;
 $("create-back").onclick = backCreateSheet;
+$("create-new-worktree").onclick = startNewWorktree;
+$("retry-branches").onclick = () => worktreeCreation.retryBranches();
 $("new-session-sheet").onclick = (e) => { if (e.target.id === "new-session-sheet" && !createState.busy) hideCreateSheet(); };
 listen("worktree-search", "input", (e) => {
   createState.filter = e.target.value || "";
   renderCreateSheet();
 });
+listen("project-select", "change", (e) => worktreeCreation.selectProject(e.target.value));
+listen("base-select", "change", (e) => worktreeCreation.setBase(e.target.value));
+listen("new-branch", "input", (e) => worktreeCreation.setBranch(e.target.value));
 $("config").onclick = showConfig;
 $("cfg-close").onclick = hideConfig;
 $("cfg").onclick = (e) => { if (e.target.id === "cfg") hideConfig(); };

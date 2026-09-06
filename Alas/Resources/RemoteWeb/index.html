@@ -11,7 +11,7 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/icon-180.png" />
   <title>Alas Remote</title>
-  <link rel="stylesheet" href="/style.css?v=40" />
+  <link rel="stylesheet" href="/style.css?v=41" />
 </head>
 <body>
   <header id="bar">
@@ -118,13 +118,31 @@
   <div id="new-session-sheet" class="sheet hidden" role="dialog" aria-modal="true" aria-labelledby="new-session-title">
     <div class="sheet-card create-sheet">
       <p id="new-session-title" class="sheet-title">New session</p>
-      <div id="create-error" class="sheet-error hidden"></div>
+      <div id="create-error" class="sheet-error hidden" role="alert" aria-live="assertive"></div>
       <div id="worktree-step">
-        <input id="worktree-search" class="sheet-input" type="search" autocomplete="off" placeholder="Search worktrees" aria-label="Search worktrees" />
-        <div id="worktree-list" class="create-list"></div>
+        <div id="existing-worktree-picker">
+          <button id="create-new-worktree" class="option-btn" type="button">Create new worktree</button>
+          <label class="sheet-label" for="worktree-search">Existing worktree</label>
+          <input id="worktree-search" class="sheet-input" type="search" autocomplete="off" placeholder="Search worktrees" aria-label="Search worktrees" />
+          <div id="worktree-list" class="create-list"></div>
+        </div>
+        <div id="new-worktree-form" class="hidden">
+          <label class="sheet-label" for="project-select">Repository</label>
+          <select id="project-select" class="sheet-input" aria-describedby="project-guidance"></select>
+          <p id="project-guidance" class="form-guidance"></p>
+          <label class="sheet-label" for="base-select">Base branch</label>
+          <select id="base-select" class="sheet-input" aria-describedby="branch-status"></select>
+          <p id="branch-status" class="form-guidance" role="status"></p>
+          <button id="retry-branches" class="sheet-close hidden" type="button">Retry branches</button>
+          <label class="sheet-label" for="new-branch">New branch</label>
+          <input id="new-branch" class="sheet-input" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="feature/new-worktree" aria-describedby="new-branch-guidance" />
+          <p id="new-branch-guidance" class="form-guidance">Use a valid Git branch name.</p>
+        </div>
       </div>
       <div id="agent-step" class="hidden">
-        <div id="agent-list" class="create-list"></div>
+        <div id="new-worktree-review" class="create-review hidden" aria-live="polite"></div>
+        <p id="agent-picker-label" class="sheet-label">Agent</p>
+        <div id="agent-list" class="create-list" role="group" aria-labelledby="agent-picker-label"></div>
       </div>
       <div class="create-actions">
         <button id="create-back" class="sheet-close hidden">Back</button>
@@ -152,7 +170,8 @@
   <script src="/marked.min.js?v=28"></script>
   <script src="/purify.min.js?v=28"></script>
   <script src="/session-ordering.js?v=1"></script>
-  <script src="/app.js?v=62"></script>
+  <script src="/worktree-creation.js?v=1"></script>
+  <script src="/app.js?v=63"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {

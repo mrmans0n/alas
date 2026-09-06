@@ -26,6 +26,9 @@ enum RemoteClientMessage: Equatable, Sendable {
     case listSessions
     case listWorktrees
     case listAgents
+    case listProjects
+    case listBranches(projectId: String)
+    case createWorktreeSession(projectId: String, base: String, branch: String, agentId: String)
     case createSession(worktreeId: String, agentId: String)
     case subscribe(sessionId: String)
     case unsubscribe(sessionId: String)
@@ -54,7 +57,7 @@ enum RemoteClientMessage: Equatable, Sendable {
 }
 
 extension RemoteClientMessage: Codable {
-    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, content, text, attachments, modelId, modeId, enabled, title, worktreeId, agentId, beforeIndex, limit, itemId, intent }
+    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, content, text, attachments, modelId, modeId, enabled, title, worktreeId, agentId, beforeIndex, limit, itemId, intent, projectId, base, branch }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -62,6 +65,15 @@ extension RemoteClientMessage: Codable {
         case "listSessions": self = .listSessions
         case "listWorktrees": self = .listWorktrees
         case "listAgents": self = .listAgents
+        case "listProjects": self = .listProjects
+        case "listBranches":
+            self = .listBranches(projectId: try c.decode(String.self, forKey: .projectId))
+        case "createWorktreeSession":
+            self = .createWorktreeSession(
+                projectId: try c.decode(String.self, forKey: .projectId),
+                base: try c.decode(String.self, forKey: .base),
+                branch: try c.decode(String.self, forKey: .branch),
+                agentId: try c.decode(String.self, forKey: .agentId))
         case "createSession":
             self = .createSession(
                 worktreeId: try c.decode(String.self, forKey: .worktreeId),
@@ -149,6 +161,17 @@ extension RemoteClientMessage: Codable {
             try c.encode("listWorktrees", forKey: .type)
         case .listAgents:
             try c.encode("listAgents", forKey: .type)
+        case .listProjects:
+            try c.encode("listProjects", forKey: .type)
+        case .listBranches(let projectId):
+            try c.encode("listBranches", forKey: .type)
+            try c.encode(projectId, forKey: .projectId)
+        case .createWorktreeSession(let projectId, let base, let branch, let agentId):
+            try c.encode("createWorktreeSession", forKey: .type)
+            try c.encode(projectId, forKey: .projectId)
+            try c.encode(base, forKey: .base)
+            try c.encode(branch, forKey: .branch)
+            try c.encode(agentId, forKey: .agentId)
         case .createSession(let worktreeId, let agentId):
             try c.encode("createSession", forKey: .type)
             try c.encode(worktreeId, forKey: .worktreeId)
@@ -266,6 +289,11 @@ enum RemoteServerMessage: Equatable, Sendable {
     case sessionList(sessions: [RemoteSessionSummary])
     case worktreeList(worktrees: [RemoteWorktreeOption])
     case agentList(agents: [RemoteAgentOption])
+    case projectList(projects: [RemoteProjectOption])
+    case branchList(projectId: String, branches: [String], preferredBase: String)
+    case branchListFailed(projectId: String, message: String)
+    case worktreeSessionCreated(session: RemoteSessionSummary)
+    case worktreeSessionCreationFailed(stage: RemoteWorktreeSessionCreationStage, message: String, worktreeId: String?)
     case sessionCreated(session: RemoteSessionSummary)
     case createSessionFailed(message: String)
     case transcriptSnapshot(
@@ -296,8 +324,8 @@ enum RemoteServerMessage: Equatable, Sendable {
 
 extension RemoteServerMessage: Codable {
     private enum CodingKeys: String, CodingKey {
-        case type, sessions, sessionId, streamingState, canDrive, messages, upserts, payload, requestId, message
-        case worktrees, agents, session
+        case type, sessions, sessionId, projectId, streamingState, canDrive, messages, upserts, payload, requestId, message
+        case worktrees, agents, session, projects, branches, preferredBase, stage, worktreeId
         case models, modes, currentModel, currentMode, autoRunEnabled, acceptsImages, title
         case firstIndex, totalCount, epoch, revision
         case items, steerUndoAvailable, itemId, text
@@ -311,6 +339,24 @@ extension RemoteServerMessage: Codable {
             self = .worktreeList(worktrees: try c.decode([RemoteWorktreeOption].self, forKey: .worktrees))
         case "agentList":
             self = .agentList(agents: try c.decode([RemoteAgentOption].self, forKey: .agents))
+        case "projectList":
+            self = .projectList(projects: try c.decode([RemoteProjectOption].self, forKey: .projects))
+        case "branchList":
+            self = .branchList(
+                projectId: try c.decode(String.self, forKey: .projectId),
+                branches: try c.decode([String].self, forKey: .branches),
+                preferredBase: try c.decode(String.self, forKey: .preferredBase))
+        case "branchListFailed":
+            self = .branchListFailed(
+                projectId: try c.decode(String.self, forKey: .projectId),
+                message: try c.decode(String.self, forKey: .message))
+        case "worktreeSessionCreated":
+            self = .worktreeSessionCreated(session: try c.decode(RemoteSessionSummary.self, forKey: .session))
+        case "worktreeSessionCreationFailed":
+            self = .worktreeSessionCreationFailed(
+                stage: try c.decode(RemoteWorktreeSessionCreationStage.self, forKey: .stage),
+                message: try c.decode(String.self, forKey: .message),
+                worktreeId: try c.decodeIfPresent(String.self, forKey: .worktreeId))
         case "sessionCreated":
             self = .sessionCreated(session: try c.decode(RemoteSessionSummary.self, forKey: .session))
         case "createSessionFailed":
@@ -409,6 +455,26 @@ extension RemoteServerMessage: Codable {
         case .agentList(let agents):
             try c.encode("agentList", forKey: .type)
             try c.encode(agents, forKey: .agents)
+        case .projectList(let projects):
+            try c.encode("projectList", forKey: .type)
+            try c.encode(projects, forKey: .projects)
+        case .branchList(let projectId, let branches, let preferredBase):
+            try c.encode("branchList", forKey: .type)
+            try c.encode(projectId, forKey: .projectId)
+            try c.encode(branches, forKey: .branches)
+            try c.encode(preferredBase, forKey: .preferredBase)
+        case .branchListFailed(let projectId, let message):
+            try c.encode("branchListFailed", forKey: .type)
+            try c.encode(projectId, forKey: .projectId)
+            try c.encode(message, forKey: .message)
+        case .worktreeSessionCreated(let session):
+            try c.encode("worktreeSessionCreated", forKey: .type)
+            try c.encode(session, forKey: .session)
+        case .worktreeSessionCreationFailed(let stage, let message, let worktreeId):
+            try c.encode("worktreeSessionCreationFailed", forKey: .type)
+            try c.encode(stage, forKey: .stage)
+            try c.encode(message, forKey: .message)
+            try c.encodeIfPresent(worktreeId, forKey: .worktreeId)
         case .sessionCreated(let session):
             try c.encode("sessionCreated", forKey: .type)
             try c.encode(session, forKey: .session)

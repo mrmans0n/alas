@@ -8,6 +8,106 @@ struct RemoteProtocolTests {
         return try JSONDecoder().decode(T.self, from: data)
     }
 
+    @Test func worktreeCreationClientMessagesRoundTripAndEncodeRequiredFields() throws {
+        let listProjects = RemoteClientMessage.listProjects
+        #expect(try roundTrip(listProjects) == listProjects)
+
+        let listBranches = RemoteClientMessage.listBranches(projectId: "project-1")
+        #expect(try roundTrip(listBranches) == listBranches)
+
+        let create = RemoteClientMessage.createWorktreeSession(
+            projectId: "project-1", base: "origin/main", branch: "feature/remote-create", agentId: "codex")
+        #expect(try roundTrip(create) == create)
+        let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(create)) as? [String: Any])
+        #expect(object["type"] as? String == "createWorktreeSession")
+        #expect(object["projectId"] as? String == "project-1")
+        #expect(object["base"] as? String == "origin/main")
+        #expect(object["branch"] as? String == "feature/remote-create")
+        #expect(object["agentId"] as? String == "codex")
+    }
+
+    @Test func worktreeCreationServerMessagesRoundTripAndEncodeRequiredFields() throws {
+        let projects = [RemoteProjectOption(id: "project-1", name: "alas")]
+        #expect(try roundTrip(RemoteServerMessage.projectList(projects: projects)) == .projectList(projects: projects))
+
+        let branchList = RemoteServerMessage.branchList(
+            projectId: "project-1", branches: ["main", "develop"], preferredBase: "main")
+        #expect(try roundTrip(branchList) == branchList)
+
+        let branchFailure = RemoteServerMessage.branchListFailed(
+            projectId: "project-1", message: "Could not load branches.")
+        #expect(try roundTrip(branchFailure) == branchFailure)
+
+        let session = RemoteSessionSummary(id: "s1", title: "New", agentId: "codex", status: "idle", canDrive: true)
+        let created = RemoteServerMessage.worktreeSessionCreated(session: session)
+        #expect(try roundTrip(created) == created)
+
+        let failure = RemoteServerMessage.worktreeSessionCreationFailed(
+            stage: .session,
+            message: "Worktree created, but the session could not be created.",
+            worktreeId: "/tmp/alas-feature")
+        #expect(try roundTrip(failure) == failure)
+
+        let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(failure)) as? [String: Any])
+        #expect(object["type"] as? String == "worktreeSessionCreationFailed")
+        #expect(object["stage"] as? String == "session")
+        #expect(object["message"] as? String == "Worktree created, but the session could not be created.")
+        #expect(object["worktreeId"] as? String == "/tmp/alas-feature")
+    }
+
+    @Test func worktreeCreationMessagesRejectMissingRequiredFields() throws {
+        let invalidClientPayloads = [
+            #"{"type":"listBranches"}"#,
+            #"{"type":"createWorktreeSession","base":"main","branch":"feature","agentId":"codex"}"#,
+            #"{"type":"createWorktreeSession","projectId":"p","branch":"feature","agentId":"codex"}"#,
+            #"{"type":"createWorktreeSession","projectId":"p","base":"main","agentId":"codex"}"#,
+            #"{"type":"createWorktreeSession","projectId":"p","base":"main","branch":"feature"}"#,
+        ]
+        for payload in invalidClientPayloads {
+            #expect(throws: DecodingError.self) {
+                _ = try JSONDecoder().decode(RemoteClientMessage.self, from: Data(payload.utf8))
+            }
+        }
+
+        let invalidServerPayloads = [
+            #"{"type":"branchList","branches":[],"preferredBase":"main"}"#,
+            #"{"type":"branchListFailed","message":"failed"}"#,
+            #"{"type":"worktreeSessionCreationFailed","message":"failed"}"#,
+            #"{"type":"worktreeSessionCreationFailed","message":"failed","stage":"invalid"}"#,
+        ]
+        for payload in invalidServerPayloads {
+            #expect(throws: DecodingError.self) {
+                _ = try JSONDecoder().decode(RemoteServerMessage.self, from: Data(payload.utf8))
+            }
+        }
+
+        for stage in [RemoteWorktreeSessionCreationStage.worktree, .session] {
+            let withoutWorktreeId = try #require(
+                try? JSONDecoder().decode(
+                    RemoteServerMessage.self,
+                    from: Data(#"{"type":"worktreeSessionCreationFailed","message":"failed","stage":"\#(stage.rawValue)"}"#.utf8)
+                )
+            )
+            #expect(
+                withoutWorktreeId == .worktreeSessionCreationFailed(
+                    stage: stage, message: "failed", worktreeId: nil)
+            )
+            #expect(try roundTrip(withoutWorktreeId) == withoutWorktreeId)
+        }
+    }
+
+    @Test func worktreeCreationClientMessagesAreNotControlOrDriveOrdered() {
+        let messages: [RemoteClientMessage] = [
+            .listProjects,
+            .listBranches(projectId: "project-1"),
+            .createWorktreeSession(projectId: "project-1", base: "main", branch: "feature", agentId: "codex"),
+        ]
+        for message in messages {
+            #expect(!message.isControl)
+            #expect(!message.isDriveOrdering)
+        }
+    }
+
     @Test func clientMessageDecodesSubscribe() throws {
         let json = #"{"type":"subscribe","sessionId":"s1"}"#.data(using: .utf8)!
         let msg = try JSONDecoder().decode(RemoteClientMessage.self, from: json)
