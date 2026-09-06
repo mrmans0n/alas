@@ -1171,14 +1171,23 @@ struct RemoteAppStateAccessTests {
     /// `AppState.readRemoteWorktreeFileRaw` must go over the (attempted) SSH
     /// transport for a worktree whose root is registered in
     /// `RemoteHostRegistry` — never silently fall back to reading local
-    /// disk. There is no reachable SSH server in this environment (confirmed
-    /// manually: `ssh 127.0.0.1` returns "Connection refused" immediately),
-    /// so this test can't drive a real end-to-end remote read; instead it
-    /// proves the negative that matters: given a local directory that
-    /// genuinely contains the requested file with known content, reading it
-    /// through the "remote" branch does NOT return that local content. A
-    /// regression that reintroduced a local-disk fallback would make this
-    /// test fail by returning `.data(...)` with the real bytes.
+    /// disk. There is no reachable SSH server in this environment, so this
+    /// test can't drive a real end-to-end remote read; instead it proves the
+    /// negative that matters: given a local directory that genuinely
+    /// contains the requested file with known content, reading it through
+    /// the "remote" branch does NOT return that local content. A regression
+    /// that reintroduced a local-disk fallback would make this test fail by
+    /// returning `.data(...)` with the real bytes.
+    ///
+    /// Uses `nonexistent-host.invalid` rather than `127.0.0.1`: `127.0.0.1`
+    /// is a real, routable address that would silently exercise an actual
+    /// local SSH server on any machine with Remote Login enabled, making
+    /// this test pass for the wrong reason (or fail outright) instead of
+    /// proving the no-fallback invariant it's named for. `.invalid` is an
+    /// IANA-reserved TLD (RFC 2606) guaranteed never to resolve, and DNS
+    /// resolution failure is fast — unlike a non-routable IP (e.g.
+    /// TEST-NET-1), which would instead hang for the configured SSH
+    /// `ConnectTimeout` (10-30s) waiting for packets nothing ever answers.
     @Test func readRemoteWorktreeFileRawDoesNotFallBackToLocalDiskWhenTheHostIsUnreachable() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-remote-raw-read-\(UUID().uuidString)")
@@ -1189,7 +1198,7 @@ struct RemoteAppStateAccessTests {
 
         let state = AppState(store: MemoryStore())
         let outcome = await state.readRemoteWorktreeFileRaw(
-            host: "127.0.0.1", worktreeRoot: root.path, relativePath: "a.txt")
+            host: "nonexistent-host.invalid", worktreeRoot: root.path, relativePath: "a.txt")
 
         switch outcome {
         case .data(let data):
