@@ -82,6 +82,33 @@ struct GitServiceRemoteChangesTests {
         #expect(added.map(\.text) == ["fresh"])
     }
 
+    /// `diff(worktreePath:againstRef:file:)` used to check `git cat-file -e
+    /// <ref>:<file>` using the file's CURRENT (post-rename) path, which does
+    /// not exist at `ref` (it existed under its OLD name) — so a renamed
+    /// file rendered as an entirely new file (every line an addition)
+    /// instead of a rename-aware diff of just the actual edit.
+    @Test func diffAgainstRef_showsOnlyTheChangedLineForARenamedAndEditedFile() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try "line1\nline2\nline3\nline4\nline5\n".write(
+            to: repo.appendingPathComponent("old.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "old.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "base"], cwd: repo)
+        _ = try await Process.git(["branch", "start"], cwd: repo)
+
+        _ = try await Process.git(["mv", "old.txt", "new.txt"], cwd: repo)
+        try "line1\nline2\nline3-changed\nline4\nline5\n".write(
+            to: repo.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "-A"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "rename and edit"], cwd: repo)
+
+        let diff = try await GitService().diff(worktreePath: repo, againstRef: "start", file: "new.txt")
+        let addedLines = diff.hunks.flatMap(\.lines).filter { $0.kind == .add }.map(\.text)
+        let deletedLines = diff.hunks.flatMap(\.lines).filter { $0.kind == .delete }.map(\.text)
+        #expect(addedLines == ["line3-changed"])
+        #expect(deletedLines == ["line3"])
+    }
+
     @Test func changedFilesAgainstRef_handlesRename() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }

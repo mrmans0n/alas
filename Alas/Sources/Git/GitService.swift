@@ -687,20 +687,41 @@ extension GitService {
                     directories.insert(components.prefix(index).joined(separator: "/"))
                 }
             }
+            // Entries the remote directory listing surfaces that git itself
+            // doesn't already know about (untracked, and — unlike
+            // `gitVisibleFilePaths`, which excludes them — gitignored) need
+            // the same ignore/exclude classification the local branch below
+            // applies, so `.ignored`/`.excluded` names (e.g. `node_modules`,
+            // `.env`) get filtered out at the wire boundary
+            // (`AppState.remoteFileNodes`) instead of leaking their names to
+            // the client.
+            var ignoreCandidates: [RootIgnoreCandidate] = []
             if let host = RemoteHostRegistry.shared.host(forPath: worktreePath.path) {
                 let directory = path.isEmpty ? worktreePath.path : worktreePath.appendingPathComponent(path).path
                 for entry in await RemoteFileStats.directoryEntries(host: host, path: directory)
                     where entry.name != ".git" {
                     let fullPath = path.isEmpty ? entry.name : path + "/" + entry.name
                     if entry.isDirectory { directories.insert(fullPath) }
-                    if !paths.contains(fullPath) { paths.append(fullPath) }
+                    if !paths.contains(fullPath) {
+                        paths.append(fullPath)
+                        ignoreCandidates.append(RootIgnoreCandidate(path: fullPath, isDirectory: entry.isDirectory))
+                    }
                 }
+            }
+            var visibility: [String: FileVisibility] = [:]
+            if !ignoreCandidates.isEmpty {
+                let excludedSources = try await excludedSourcePaths(worktreePath: worktreePath)
+                visibility = try await ignoredOrExcludedVisibility(
+                    candidates: ignoreCandidates,
+                    worktreePath: worktreePath,
+                    excludedSourcePaths: excludedSources
+                )
             }
             let lazyDirectories = path.isEmpty ? directories : directories.subtracting([path])
             let built = FileTreeBuilder.build(
                 paths: paths,
                 badges: [:],
-                visibility: [:],
+                visibility: visibility,
                 directories: directories,
                 lazyDirectories: lazyDirectories,
                 submodules: (try? await submodulePaths(worktreePath: worktreePath)) ?? []

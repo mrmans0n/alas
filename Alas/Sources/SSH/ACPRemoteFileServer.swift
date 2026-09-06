@@ -31,9 +31,60 @@ enum RemotePathContainment {
         """
     }
 
+    /// Like `containmentProbeCommand`, but fully resolves the ENTIRE target
+    /// path (not just its parent) to its physical/canonical form and rejects
+    /// when any resulting path component, relative to the worktree's own
+    /// canonical root, case-insensitively equals `.git`.
+    ///
+    /// This closes a gap `containmentProbeCommand` alone does not: a
+    /// directory symlink alias to `.git` (e.g. `alias -> .git` inside the
+    /// worktree) physically resolves to a location that IS still under the
+    /// worktree root, so a request for `alias/config` passes plain
+    /// containment while actually serving `.git/config` — which can contain
+    /// remote URLs with embedded credentials.
+    ///
+    /// Exit codes: 0 = contained and outside `.git`; 3 = no existing
+    /// ancestor found; 4/5 = `cd`/`pwd -P` failed; 6 = resolves outside the
+    /// worktree root; 7 = resolves inside `.git`.
+    static func containmentExcludingGitProbeCommand(path: String, worktreeRoot: String) -> String {
+        let root = SSHCommand.shellQuote(worktreeRoot)
+        let target = SSHCommand.shellQuote(path)
+        return """
+        root=\(root); target=\(target); root_phys=$(cd "$root" && pwd -P) || exit 4; \
+        existing="$target"; tail=""; \
+        while [ ! -e "$existing" ]; do \
+        comp=$(basename "$existing"); \
+        if [ -z "$tail" ]; then tail="$comp"; else tail="$comp/$tail"; fi; \
+        next=$(dirname "$existing"); [ "$next" = "$existing" ] && exit 3; existing="$next"; \
+        done; \
+        if [ -d "$existing" ]; then existing_phys=$(cd "$existing" && pwd -P) || exit 5; else \
+        comp=$(basename "$existing"); existing=$(dirname "$existing"); \
+        if [ -z "$tail" ]; then tail="$comp"; else tail="$comp/$tail"; fi; \
+        existing_phys=$(cd "$existing" && pwd -P) || exit 5; \
+        fi; \
+        full_phys="$existing_phys"; [ -n "$tail" ] && full_phys="$existing_phys/$tail"; \
+        case "$full_phys" in \
+        "$root_phys") rel="" ;; \
+        "$root_phys"/*) rel=${full_phys#"$root_phys"/} ;; \
+        *) exit 6 ;; \
+        esac; \
+        rest="$rel"; \
+        while [ -n "$rest" ]; do \
+        case "$rest" in \
+        */*) comp=${rest%%/*}; rest=${rest#*/} ;; \
+        *) comp="$rest"; rest="" ;; \
+        esac; \
+        case "$comp" in .[Gg][Ii][Tt]) exit 7 ;; esac; \
+        done; \
+        exit 0
+        """
+    }
+
     static func verifyRemoteContainment(host: String, path: String, worktreeRoot: String) async throws {
         let target = try lexicallyResolveInsideWorktree(path: path, worktreeRoot: worktreeRoot)
-        let result = try await RemoteExec.run(host: host, cwd: nil, command: containmentProbeCommand(path: target, worktreeRoot: worktreeRoot))
+        let result = try await RemoteExec.run(
+            host: host, cwd: nil,
+            command: containmentExcludingGitProbeCommand(path: target, worktreeRoot: worktreeRoot))
         if RemoteExec.isConnectionFailure(exitCode: result.exitCode) {
             throw RemoteFileAccessError.connectionFailed(result.stderr)
         }

@@ -303,4 +303,148 @@ struct SSHIntegrationTests {
         )
         #expect(exists.exitCode != 0)
     }
+
+    /// Finding 1 (2nd Codex pass on PR #1124): a directory symlink alias to
+    /// `.git` used to pass `RemotePathContainment.verifyRemoteContainment`
+    /// because only the physical PARENT's location was checked — the
+    /// resolved path landed inside `.git`, which is still under the
+    /// worktree root. Requires a real SSH connection (the containment probe
+    /// runs remote `cd`/`pwd -P`), so this is gated behind
+    /// `ALAS_SSH_INTEGRATION=1` like the rest of this suite.
+    @Test func containmentRejectsADirectorySymlinkAliasToGitOverSSHLocalhost() async throws {
+        try #require(enabled, "set ALAS_SSH_INTEGRATION=1 to run")
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-ssh-git-alias-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let gitDir = directory.appendingPathComponent(".git")
+        try FileManager.default.createDirectory(at: gitDir, withIntermediateDirectories: true)
+        try Data("[remote \"origin\"]\n\turl = https://user:secret@example.com/repo.git\n".utf8)
+            .write(to: gitDir.appendingPathComponent("config"))
+        try FileManager.default.createSymbolicLink(
+            atPath: directory.appendingPathComponent("alias").path, withDestinationPath: ".git")
+
+        await #expect(throws: RemotePathContainment.ContainmentError.self) {
+            try await RemotePathContainment.verifyRemoteContainment(
+                host: "localhost",
+                path: directory.appendingPathComponent("alias/config").path,
+                worktreeRoot: directory.path
+            )
+        }
+        // A legitimate file must still pass.
+        try Data("print(1)".utf8).write(to: directory.appendingPathComponent("main.swift"))
+        try await RemotePathContainment.verifyRemoteContainment(
+            host: "localhost",
+            path: directory.appendingPathComponent("main.swift").path,
+            worktreeRoot: directory.path
+        )
+    }
+
+    /// Finding 2: `RemoteFileAccess.size` must report the real remote byte
+    /// count via a cheap `stat`, without transferring the file's contents.
+    @Test func remoteFileAccessSizeReportsByteCountOverSSHLocalhost() async throws {
+        try #require(enabled, "set ALAS_SSH_INTEGRATION=1 to run")
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-ssh-size-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("big.txt")
+        try String(repeating: "x", count: 10_000).write(to: file, atomically: true, encoding: .utf8)
+
+        let size = try await RemoteFileAccess.size(host: "localhost", path: file.path)
+        #expect(size == 10_000)
+
+        let missing = try await RemoteFileAccess.size(
+            host: "localhost", path: directory.appendingPathComponent("missing.txt").path)
+        #expect(missing == nil)
+    }
+
+    /// Finding 2 end-to-end: `AppState.readRemoteWorktreeFileRaw` must
+    /// report `.tooLarge` with the real byte count for an oversized remote
+    /// file WITHOUT ever downloading it.
+    @Test @MainActor func readRemoteWorktreeFileRawReportsTooLargeWithoutDownloadingOverSSHLocalhost() async throws {
+        try #require(enabled, "set ALAS_SSH_INTEGRATION=1 to run")
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-ssh-toolarge-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("huge.txt")
+        let byteCount = RemoteWorktreeFileAccess.maxFileBytes + 1
+        try String(repeating: "x", count: byteCount).write(to: file, atomically: true, encoding: .utf8)
+
+        let state = AppState(store: ProjectMemoryStore(projectsFile: ProjectsFile(projects: [])))
+        let outcome = await state.readRemoteWorktreeFileRaw(
+            host: "localhost", worktreeRoot: directory.path, relativePath: "huge.txt")
+
+        guard case let .tooLarge(byteSize) = outcome else {
+            Issue.record("expected .tooLarge, got \(outcome)")
+            return
+        }
+        #expect(byteSize == byteCount)
+    }
+
+    /// Finding 3: the remote branch of `fileTreeChildren` must classify
+    /// gitignored entries as `.ignored` (not `.tracked`, which would leak
+    /// their names past `AppState.remoteFileNodes`' visibility filter).
+    @Test func fileTreeChildrenFiltersIgnoredEntriesOverSSHLocalhost() async throws {
+        try #require(enabled, "set ALAS_SSH_INTEGRATION=1 to run")
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-ssh-ignored-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer {
+            RemoteHostRegistry.shared.unregister(root: directory.path)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        _ = try await Process.run("/usr/bin/env", args: ["git", "init", "-q", "-b", "main"], cwd: directory)
+        _ = try await Process.run("/usr/bin/env", args: ["git", "config", "user.email", "t@e"], cwd: directory)
+        _ = try await Process.run("/usr/bin/env", args: ["git", "config", "user.name", "t"], cwd: directory)
+        try Data("node_modules/\n".utf8).write(to: directory.appendingPathComponent(".gitignore"))
+        _ = try await Process.run("/usr/bin/env", args: ["git", "add", ".gitignore"], cwd: directory)
+        _ = try await Process.run("/usr/bin/env", args: ["git", "commit", "-q", "-m", "init"], cwd: directory)
+        try FileManager.default.createDirectory(
+            at: directory.appendingPathComponent("node_modules"), withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: directory.appendingPathComponent("node_modules/pkg.js"))
+        try Data("keep".utf8).write(to: directory.appendingPathComponent("keep.txt"))
+        _ = try await Process.run("/usr/bin/env", args: ["git", "add", "keep.txt"], cwd: directory)
+        _ = try await Process.run("/usr/bin/env", args: ["git", "commit", "-q", "-m", "add keep"], cwd: directory)
+        RemoteHostRegistry.shared.register(root: directory.path, host: "localhost")
+
+        let children = try await GitService().fileTreeChildren(worktreePath: directory, path: "")
+
+        let ignoredNode = try #require(children.first { $0.path == "node_modules" })
+        #expect(ignoredNode.visibility == .ignored)
+        #expect(children.first { $0.path == "keep.txt" }?.visibility == .tracked)
+    }
+
+    /// Finding 5: untracked-file line counts in the remote base-relative
+    /// changes view must use the real remote byte content, not a local
+    /// `Data(contentsOf:)` read against a path with no local file behind it
+    /// (which silently reports 0 lines).
+    @Test func changedFilesAgainstRefUsesRemoteLineCountsForUntrackedFilesOverSSHLocalhost() async throws {
+        try #require(enabled, "set ALAS_SSH_INTEGRATION=1 to run")
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-ssh-linecounts-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer {
+            RemoteHostRegistry.shared.unregister(root: directory.path)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        _ = try await Process.run("/usr/bin/env", args: ["git", "init", "-q", "-b", "main"], cwd: directory)
+        _ = try await Process.run("/usr/bin/env", args: ["git", "config", "user.email", "t@e"], cwd: directory)
+        _ = try await Process.run("/usr/bin/env", args: ["git", "config", "user.name", "t"], cwd: directory)
+        _ = try await Process.run("/usr/bin/env", args: ["git", "commit", "-q", "--allow-empty", "-m", "init"], cwd: directory)
+        _ = try await Process.run("/usr/bin/env", args: ["git", "branch", "start"], cwd: directory)
+        try Data("one\ntwo\nthree\n".utf8).write(to: directory.appendingPathComponent("untracked.txt"))
+        RemoteHostRegistry.shared.register(root: directory.path, host: "localhost")
+
+        let files = try await GitService().changedFilesAgainstRef(worktreePath: directory, ref: "start")
+
+        let untracked = try #require(files.first { $0.path == "untracked.txt" })
+        #expect(untracked.add == 3)
+    }
 }

@@ -49,14 +49,31 @@ extension GitService {
 
         let untracked = try await Process.git(
             ["ls-files", "--others", "--exclude-standard"], cwd: worktreePath)
-        for raw in untracked.stdout.split(separator: "\n") {
-            let path = String(raw)
-            guard !path.isEmpty, seen.insert(path).inserted else { continue }
+        let untrackedPaths = untracked.stdout.split(separator: "\n")
+            .map(String.init)
+            .filter { !$0.isEmpty && seen.insert($0).inserted }
+
+        // `addedLineCount` shells out to `Data(contentsOf:)` against a LOCAL
+        // URL, which silently reads nothing (0 lines) for a remote worktree
+        // path — batch a single remote round-trip instead, mirroring
+        // `status(worktreePath:)`'s identical remote/local split for
+        // untracked line counts.
+        let remoteCounts: [String: Int]
+        if worktreePath.isRemoteAlasPath, let host = RemoteHostRegistry.shared.host(forPath: worktreePath.path) {
+            remoteCounts = await RemoteFileStats.lineCounts(host: host, cwd: worktreePath.path, paths: untrackedPaths)
+        } else {
+            remoteCounts = [:]
+        }
+
+        for path in untrackedPaths {
+            let add = worktreePath.isRemoteAlasPath
+                ? (remoteCounts[path] ?? 0)
+                : Self.addedLineCount(worktreePath: worktreePath, path: path)
             files.append(ChangedFile(
                 path: path,
                 status: "A",
                 stage: .unstaged,
-                add: Self.addedLineCount(worktreePath: worktreePath, path: path),
+                add: add,
                 del: 0,
                 renameFrom: nil,
                 conflict: nil))
@@ -68,9 +85,27 @@ extension GitService {
     /// Diff of one file between `ref` and the working tree. Untracked files
     /// diff against /dev/null so they render as a single all-add hunk. A nil
     /// `ref` falls back to the working-tree diff.
+    ///
+    /// A file renamed since `ref` did not exist at `ref` under its CURRENT
+    /// path (it existed under its OLD path), so the plain `cat-file -e`
+    /// existence check below would otherwise treat it as untracked/new and
+    /// diff the whole current content against `/dev/null` instead of
+    /// showing the rename's actual edits. `renameSource` catches that case
+    /// first by consulting the unrestricted (no-pathspec) rename-aware
+    /// name-status diff — pathspec-restricting `git diff -M -C ref --
+    /// <file>` does NOT detect the rename, because git's pathspec filtering
+    /// happens before rename pairing, so it never sees the old path to pair
+    /// against.
     func diff(worktreePath: URL, againstRef ref: String?, file: String) async throws -> ParsedDiff {
         guard let ref, !ref.isEmpty else {
             return try await diff(worktreePath: worktreePath, file: file)
+        }
+
+        if let originalPath = try await renameSource(worktreePath: worktreePath, ref: ref, file: file) {
+            let result = try await Process.git(
+                ["diff", "--no-color", "-M", "-C", ref, "--", file, originalPath], cwd: worktreePath)
+            guard result.exitCode <= 1 else { return ParsedDiff(hunks: []) }
+            return DiffParser.parse(Self.sliceDiffForFile(result.stdout, file: file))
         }
 
         // Check if file exists at ref (not just in current index) to handle deleted files correctly.
@@ -91,6 +126,25 @@ extension GitService {
             ["diff", "--no-color", "-M", "-C", ref, "--", file], cwd: worktreePath)
         guard result.exitCode <= 1 else { return ParsedDiff(hunks: []) }
         return DiffParser.parse(result.stdout)
+    }
+
+    /// Looks up the source path of a rename that landed `file` at its
+    /// current path since `ref`, or nil when `file` was not renamed (it's
+    /// untracked, unchanged, or was modified/deleted/added without a
+    /// rename). Scans the UNRESTRICTED rename-aware name-status diff (no
+    /// pathspec) rather than one scoped to `file`, since pathspec
+    /// restriction happens before rename pairing in git and would hide the
+    /// old path entirely.
+    private func renameSource(worktreePath: URL, ref: String, file: String) async throws -> String? {
+        let result = try await Process.git(
+            ["diff", "--name-status", "-M", "-C", ref], cwd: worktreePath)
+        guard result.exitCode == 0 else { return nil }
+        for line in result.stdout.split(separator: "\n") {
+            let parts = line.split(separator: "\t").map(String.init)
+            guard parts.count == 3, let status = parts.first, status.hasPrefix("R"), parts[2] == file else { continue }
+            return parts[1]
+        }
+        return nil
     }
 
     /// Sniffs whether the blob at `ref:file` looks binary, for files that no
