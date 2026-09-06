@@ -1081,6 +1081,16 @@ struct RemoteAppStateAccessTests {
         #expect(diffResult == .failure(reason: .pathRejected, message: nil))
     }
 
+    /// `normalizedRelativePath` used to trim the path before resolving it,
+    /// which happened to close this bypass for the wrong reason (a real
+    /// file legitimately named with leading/trailing whitespace would have
+    /// been silently misrouted to a different, trimmed path). Now that
+    /// resolution preserves the client's exact bytes, the padded path
+    /// simply doesn't name the real `secret.env` file — it fails to resolve
+    /// to anything, rather than being caught by the ignore check — so the
+    /// outcome shape changes (not-found / empty diff instead of path
+    /// rejected), but the actual security guarantee (the real, ignored
+    /// content is never served) must still hold.
     @Test func remoteFileContentsAndDiffRejectAGitignoredFileWithAWhitespacePaddedPath() async throws {
         let repository = try await makeRemoteBranchesRepository()
         defer { try? FileManager.default.removeItem(at: repository) }
@@ -1101,10 +1111,66 @@ struct RemoteAppStateAccessTests {
         state.openNewACPSession(agentID: "test-agent")
         let tab = try #require(acpTabs(in: state).first)
         let contentsResult = await state.remoteFileContents(sessionId: tab.sessionId, path: " secret.env")
-        #expect(contentsResult == .failure(reason: .pathRejected, byteSize: nil, message: nil))
+        if case .success(let text, _) = contentsResult {
+            Issue.record("secret content must never be served for a whitespace-padded path, got: \(text)")
+        }
+        #expect(contentsResult == .failure(reason: .notFound, byteSize: nil, message: nil))
 
         let diffResult = await state.remoteFileDiff(sessionId: tab.sessionId, path: " secret.env")
-        #expect(diffResult == .failure(reason: .pathRejected, message: nil))
+        if case .success(let hunks, _) = diffResult {
+            let text = hunks.flatMap(\.lines).map(\.text).joined()
+            #expect(!text.contains("abc"), "secret content must never be served for a whitespace-padded path")
+        }
+    }
+
+    /// A TRACKED symlink whose own name doesn't match any ignore pattern
+    /// (`public-env`) but whose target does (`.env`) must not have the
+    /// target's content served. `isPathIgnored("public-env")` correctly
+    /// reports "not ignored" — the check runs against the alias's own name,
+    /// which is the whole point of a symlink alias — so the read/diff path
+    /// itself must independently reject any symlink rather than trusting
+    /// the ignore check alone.
+    @Test func remoteFileContentsAndDiffRejectATrackedSymlinkAliasingAGitignoredTarget() async throws {
+        let repository = try await makeRemoteBranchesRepository()
+        defer { try? FileManager.default.removeItem(at: repository) }
+        try ".env\n".write(
+            to: repository.appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
+        try "TOKEN=super-secret\n".write(
+            to: repository.appendingPathComponent(".env"), atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(
+            at: repository.appendingPathComponent("public-env"),
+            withDestinationURL: repository.appendingPathComponent(".env"))
+        _ = try await Process.git(["add", "public-env"], cwd: repository)
+        _ = try await Process.git(["commit", "-q", "-m", "add public-env symlink"], cwd: repository)
+
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+        let state = makeRemoteGitBackedState(repositoryPath: repository)
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let tab = try #require(acpTabs(in: state).first)
+
+        // Confirm the premise: the alias's own name is genuinely not ignored.
+        let ignored = try await GitService().isPathIgnored(worktreePath: repository, path: "public-env")
+        #expect(!ignored)
+
+        let contentsResult = await state.remoteFileContents(sessionId: tab.sessionId, path: "public-env")
+        #expect(contentsResult == .failure(reason: .notFound, byteSize: nil, message: nil))
+        if case .success(let text, _) = contentsResult {
+            Issue.record("secret content must never be served through a symlink alias, got: \(text)")
+        }
+
+        let diffResult = await state.remoteFileDiff(sessionId: tab.sessionId, path: "public-env")
+        #expect(diffResult == .failure(reason: .notFound, message: nil))
+        if case .success(let hunks, _) = diffResult {
+            let text = hunks.flatMap(\.lines).map(\.text).joined()
+            #expect(!text.contains("super-secret"), "secret content must never be served through a symlink alias diff")
+        }
     }
 
     @Test func remoteFileContentsAndDiffServeATrackedFileNormally() async throws {

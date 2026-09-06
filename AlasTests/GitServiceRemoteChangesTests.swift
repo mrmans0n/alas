@@ -352,6 +352,72 @@ struct GitServiceRemoteChangesTests {
         #expect(result)
     }
 
+    // MARK: - diffAgainstHEAD on an unborn branch
+
+    private func makeUnbornRepo() async throws -> URL {
+        let repo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-unborn-diff-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: repo)
+        _ = try await Process.git(["config", "user.email", "test@example.com"], cwd: repo)
+        _ = try await Process.git(["config", "user.name", "Test User"], cwd: repo)
+        return repo
+    }
+
+    /// Baseline/regression coverage for the LOCAL branch of `diffAgainstHEAD`'s
+    /// unborn-HEAD existence check — must be unaffected by making the check
+    /// remote-aware.
+    @Test func diffAgainstHEADOnAnUnbornLocalBranchShowsAnExistingFileAsAllAdd() async throws {
+        let repo = try await makeUnbornRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try "fresh\n".write(to: repo.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
+
+        let diff = try await GitService().diffAgainstHEAD(worktreePath: repo, file: "new.txt")
+        let added = diff.hunks.flatMap(\.lines).filter { $0.kind == .add }
+        #expect(added.map(\.text) == ["fresh"])
+    }
+
+    @Test func diffAgainstHEADOnAnUnbornLocalBranchReturnsEmptyHunksForAMissingFile() async throws {
+        let repo = try await makeUnbornRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let diff = try await GitService().diffAgainstHEAD(worktreePath: repo, file: "missing.txt")
+        #expect(diff.hunks.isEmpty)
+    }
+
+    /// `diffAgainstHEAD`'s unborn-HEAD existence check used to be
+    /// `FileManager.default.fileExists`, a purely LOCAL filesystem check
+    /// that is meaningless for an SSH-backed worktree — nothing exists
+    /// locally at that path, so it always reported the file as missing and
+    /// silently returned an empty diff for every staged/untracked file on a
+    /// remote unborn branch. There is no reachable SSH host in this
+    /// environment, so this can't drive a real end-to-end remote diff:
+    /// `Process.git` itself also routes every git invocation for a
+    /// `RemoteHostRegistry`-registered worktree over the same (unreachable)
+    /// host, so the final diff still comes back empty here regardless —
+    /// but for a different reason (a failed SSH connection), not because
+    /// the existence check took a local-disk shortcut. What this test
+    /// proves empirically is the structural negative that matters: handing
+    /// `diffAgainstHEAD` a worktree registered as remote does not crash or
+    /// hang (the `nonexistent-host.invalid` TLD fails DNS resolution fast
+    /// rather than hanging on a connection timeout). That the existence
+    /// check itself now calls `RemoteFileAccess.existence(host:path:)`
+    /// instead of `FileManager.default.fileExists` when
+    /// `worktreePath.isRemoteAlasPath` is true is verified by reading
+    /// `diffAgainstHEAD`'s source, not by this test.
+    @Test func diffAgainstHEADOnAnUnbornRemoteBranchDoesNotCrashOrHangOnAnUnreachableHost() async throws {
+        let repo = try await makeUnbornRepo()
+        defer {
+            RemoteHostRegistry.shared.unregister(root: repo.path)
+            try? FileManager.default.removeItem(at: repo)
+        }
+        try "fresh\n".write(to: repo.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
+        RemoteHostRegistry.shared.register(root: repo.path, host: "nonexistent-host.invalid")
+
+        let diff = try await GitService().diffAgainstHEAD(worktreePath: repo, file: "new.txt")
+        #expect(diff.hunks.isEmpty)
+    }
+
     // MARK: - parseNumstatZOutput / parseNameStatusZOutput
 
     @Test func parseNumstatZOutput_parsesOrdinaryRecords() {
