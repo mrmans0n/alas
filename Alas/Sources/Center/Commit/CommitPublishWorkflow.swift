@@ -371,14 +371,19 @@ final class CommitPublishWorkflow {
         try Task.checkCancellation()
         let currentHeadSHA = try await operations.currentHeadSHA()
         try Task.checkCancellation()
-        guard currentHeadSHA == initialCheckpoint.commitSHA else {
+        var checkpoint = initialCheckpoint
+        if currentHeadSHA != checkpoint.commitSHA, checkpoint.canReconcileGGHeadRewrite {
+            checkpoint = checkpoint.resolvingGGCommitSHA(currentHeadSHA)
+            try onCheckpointChange(checkpoint)
+            try Task.checkCancellation()
+        }
+        guard currentHeadSHA == checkpoint.commitSHA else {
             throw CommitPublishWorkflowError.headMismatch(
-                expected: initialCheckpoint.commitSHA,
+                expected: checkpoint.commitSHA,
                 actual: currentHeadSHA
             )
         }
 
-        var checkpoint = initialCheckpoint
         while true {
             switch checkpoint.nextPhase {
             case .push:
@@ -429,6 +434,13 @@ final class CommitPublishWorkflow {
                 } else {
                     try await operations.syncGG()
                 }
+                let postSyncHeadSHA = try await operations.currentHeadSHA()
+                try Task.checkCancellation()
+                if postSyncHeadSHA != checkpoint.commitSHA {
+                    checkpoint = checkpoint.resolvingGGCommitSHA(postSyncHeadSHA)
+                    try onCheckpointChange(checkpoint)
+                    try Task.checkCancellation()
+                }
                 try await complete(runID)
                 return
             }
@@ -475,5 +487,31 @@ final class CommitPublishWorkflow {
         guard activeRunID == runID else { return }
         activity = .idle
         lastError = error
+    }
+}
+
+private extension CommitPublishCheckpoint {
+    var canReconcileGGHeadRewrite: Bool {
+        guard nextPhase == .sync,
+              case .gg(.some) = destination
+        else { return false }
+        return true
+    }
+
+    func resolvingGGCommitSHA(_ commitSHA: String) -> Self {
+        var destination = destination
+        if case .gg(var target) = destination {
+            target?.expectedHeadSHA = commitSHA
+            destination = .gg(target)
+        }
+        return .init(
+            commitSHA: commitSHA,
+            baseRef: baseRef,
+            commitTitle: "\(commitSHA.prefix(7)) \(subject)",
+            subject: subject,
+            body: body,
+            destination: destination,
+            nextPhase: nextPhase
+        )
     }
 }

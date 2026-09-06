@@ -148,6 +148,32 @@ struct CommitPublishWorkflowTests {
         #expect(state.publishCheckpoint == nil)
     }
 
+    @Test func tabsManagerOpensPostSyncGGHeadAfterCommitPublish() async throws {
+        let manager = TabsManager()
+        let draft = manager.openOrFocusDraftCommit(worktreeId: "gg-post-sync-head")
+        var headSHA = "commit-sha"
+        let target = WorkflowHarness().ggTarget
+        let operations = CommitPublishOperations(
+            createCommit: { _, _, _ in .init(commitSHA: "commit-sha", comparisonBase: "main", editorTitle: "commit- feat") },
+            currentHeadSHA: { headSHA },
+            remoteBranchContainsCommit: { _, _ in false },
+            push: { _, _ in },
+            currentReviewRequestExists: { _ in true },
+            createReviewRequest: { target, _, _ in target.webURL },
+            syncGG: { Issue.record("Unexpected untargeted sync") },
+            syncGGForTarget: { _ in headSHA = "rebased-sha" },
+            refreshAfterCompletion: {}
+        )
+
+        let task = try #require(manager.runCommitPublish(worktreeId: "gg-post-sync-head", tabId: draft.id,
+            subject: "feat", body: "", amend: false, operations: operations,
+            prepareDestination: { .gg(target) }))
+        await task.value
+
+        #expect(manager.commitEditorTab(worktreeId: "gg-post-sync-head", currentSha: "rebased-sha") != nil)
+        #expect(manager.commitEditorTab(worktreeId: "gg-post-sync-head", currentSha: "commit-sha") == nil)
+    }
+
     @Test func normalNewRequestPublishesInOrder() async {
         let harness = WorkflowHarness()
         let workflow = harness.makeWorkflow()
@@ -178,7 +204,7 @@ struct CommitPublishWorkflowTests {
 
         await workflow.start(subject: "Subject", body: "Body", amend: false, destination: .gg())
 
-        #expect(harness.calls == ["commit", "head", "sync"])
+        #expect(harness.calls == ["commit", "head", "sync", "head"])
         #expect(harness.checkpointPhases == [.sync])
         #expect(harness.checkpoint == nil)
     }
@@ -189,7 +215,7 @@ struct CommitPublishWorkflowTests {
 
         await workflow.start(subject: "Subject", body: "Body", amend: false, destination: .gg(harness.ggTarget))
 
-        #expect(harness.calls == ["validateGGTarget", "commit", "head", "validateGGTarget", "sync"])
+        #expect(harness.calls == ["validateGGTarget", "commit", "head", "validateGGTarget", "sync", "head"])
         #expect(harness.validatedGGTargets == [
             harness.ggTarget,
             .init(branch: "feature", stackName: "feature", base: "main", expectedHeadSHA: "commit-sha"),
@@ -281,6 +307,36 @@ struct CommitPublishWorkflowTests {
         #expect(workflow.lastError as? GGMutationError == .staleConfirmation)
     }
 
+    @Test func ggRetryUpdatesCheckpointForRewrittenHeadBeforeSync() async {
+        let harness = WorkflowHarness()
+        var persistedCheckpoints: [CommitPublishCheckpoint?] = []
+        var syncedTargets: [GGStackTargetIdentity] = []
+        let checkpoint = harness.ggCheckpoint
+        let operations = CommitPublishOperations(
+            createCommit: { _, _, _ in .init(commitSHA: "unused", comparisonBase: "main", editorTitle: "Unused") },
+            currentHeadSHA: { "rebased-sha" },
+            remoteBranchContainsCommit: { _, _ in false },
+            push: { _, _ in },
+            currentReviewRequestExists: { _ in true },
+            createReviewRequest: { target, _, _ in target.webURL },
+            syncGG: { Issue.record("Unexpected untargeted sync") },
+            syncGGForTarget: { target in syncedTargets.append(target) },
+            refreshAfterCompletion: {}
+        )
+        let workflow = CommitPublishWorkflow(operations: operations) {
+            persistedCheckpoints.append($0)
+        }
+
+        await workflow.resume(checkpoint)
+
+        #expect(persistedCheckpoints.compactMap { $0?.commitSHA } == ["commit-sha", "rebased-sha"])
+        #expect(syncedTargets == [
+            .init(branch: "feature", stackName: "feature", base: "main", expectedHeadSHA: "rebased-sha"),
+        ])
+        #expect(persistedCheckpoints.last! == nil)
+        #expect(workflow.lastError == nil)
+    }
+
     @Test func pushFailureRetainsPushCheckpoint() async {
         let harness = WorkflowHarness()
         harness.pushError = WorkflowHarness.Failure.push
@@ -341,7 +397,7 @@ struct CommitPublishWorkflowTests {
 
         await workflow.resume(checkpoint)
 
-        #expect(harness.calls == ["head", "sync"])
+        #expect(harness.calls == ["head", "sync", "head"])
         #expect(harness.checkpoint == nil)
     }
 
@@ -477,7 +533,7 @@ struct CommitPublishWorkflowTests {
 
         await workflow.start(subject: "Second", body: "Body", amend: false, destination: .gg())
 
-        #expect(harness.calls == ["head", "lookupPR", "createPR", "commit", "head", "sync"])
+        #expect(harness.calls == ["head", "lookupPR", "createPR", "commit", "head", "sync", "head"])
         #expect(harness.checkpoint == nil)
         #expect(workflow.lastError == nil)
 
