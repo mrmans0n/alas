@@ -301,6 +301,55 @@ function handle(msg) {
       break;
     case "sessionClosed": if (msg.sessionId === currentSession) showSessions(); break;
     case "promptRejected": if (msg.sessionId === currentSession) restoreRejectedPrompt(); break;
+    case "changeList":
+      if (msg.sessionId !== currentSession) break;
+      $("changes-error").classList.add("hidden");
+      changesState = {
+        comparisonRef: msg.comparisonRef || null,
+        metricsAvailable: msg.metricsAvailable !== false,
+        files: msg.files || [],
+        truncated: !!msg.truncated,
+        loaded: true
+      };
+      renderChanges();
+      break;
+    case "changeListFailed":
+      if (msg.sessionId !== currentSession) break;
+      changesState.loaded = true;
+      showChangesError(fileAccessMessage(msg.reason, null));
+      break;
+    case "fileDiffResult":
+      if (msg.sessionId !== currentSession) break;
+      renderDiff(msg.path, msg.hunks || [], !!msg.truncated);
+      break;
+    case "fileDiffFailed":
+      if (msg.sessionId !== currentSession) break;
+      if ($("diff-path").textContent === msg.path) {
+        $("diff-rows").innerHTML = "";
+        $("diff-rows").append(el("p", "placeholder-card", fileAccessMessage(msg.reason, null)));
+      }
+      break;
+    case "fileTree":
+      if (msg.sessionId !== currentSession) break;
+      $("file-error").classList.add("hidden");
+      changesTree.applyNodes(msg.path === undefined ? null : msg.path, msg.nodes || []);
+      renderFileTree();
+      break;
+    case "fileTreeFailed":
+      if (msg.sessionId !== currentSession) break;
+      showFileError(fileAccessMessage(msg.reason, null));
+      break;
+    case "fileContents":
+      if (msg.sessionId !== currentSession) break;
+      renderFileContents(msg.path, msg.text || "", !!msg.truncated);
+      break;
+    case "fileUnavailable":
+      if (msg.sessionId !== currentSession) break;
+      if ($("file-view-path").textContent === msg.path) {
+        $("file-view-body").innerHTML = "";
+        $("file-view-body").append(el("p", "placeholder-card", fileAccessMessage(msg.reason, msg.byteSize)));
+      }
+      break;
     case "error": setStatus("Error", "bad"); $("status").title = msg.message ?? ""; break;
     default: console.warn("unknown message type", msg.type);
   }
@@ -431,6 +480,162 @@ $("tab-chat").addEventListener("click", () => showTab("chat"));
 $("tab-changes").addEventListener("click", () => showTab("changes"));
 $("tab-files").addEventListener("click", () => showTab("files"));
 $("changes-refresh").addEventListener("click", requestChanges);
+
+function renderChanges() {
+  const list = $("changes-list");
+  list.innerHTML = "";
+  $("changes-summary").textContent = changesState.loaded
+    ? RemoteChangesView.formatSummary(changesState)
+    : "Loading changes…";
+
+  if (changesState.loaded && !changesState.metricsAvailable) {
+    list.append(el("p", "placeholder-card", "Change metrics are unavailable for this worktree."));
+    return;
+  }
+
+  if (changesState.loaded && changesState.files.length === 0) {
+    list.append(el("p", "placeholder-card", "No changes yet."));
+    return;
+  }
+
+  for (const file of RemoteChangesView.sortFiles(changesState.files)) {
+    const parts = RemoteChangesView.splitPath(file.path);
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "change-row";
+    row.onclick = () => openDiff(file.path);
+
+    row.append(el("span", "change-dir", parts.dir), el("span", "change-name", parts.name));
+    if (file.conflict) row.append(el("span", "change-conflict", "conflict"));
+    row.append(el("span", "change-counts", RemoteChangesView.formatFileCounts(file)));
+    list.appendChild(row);
+  }
+
+  const notice = RemoteChangesView.truncationNotice(changesState.truncated, "files");
+  if (notice) list.append(el("p", "placeholder-card", notice));
+}
+
+function openDiff(path) {
+  detailStack.push({ tab: "changes", path });
+  $("changes-list").classList.add("hidden");
+  $("changes-header").classList.add("hidden");
+  $("diff-view").classList.remove("hidden");
+  $("diff-path").textContent = path;
+  $("diff-rows").innerHTML = "";
+  send({ type: "fileDiff", sessionId: currentSession, path });
+}
+
+function closeDetailLevel() {
+  detailStack.pop();
+  $("diff-view").classList.add("hidden");
+  $("file-view").classList.add("hidden");
+  $("changes-list").classList.remove("hidden");
+  $("changes-header").classList.remove("hidden");
+  $("file-list").classList.remove("hidden");
+}
+
+function renderDiff(path, hunks, truncated) {
+  if ($("diff-path").textContent !== path) return;   // a newer file is open
+  const container = $("diff-rows");
+  container.innerHTML = "";
+  for (const row of RemoteChangesView.diffRows(hunks)) {
+    if (row.type === "hunk") {
+      container.append(el("div", "diff-hunk", row.text));
+      continue;
+    }
+    const line = el("div", "diff-line " + row.kind);
+    line.append(
+      el("span", "diff-gutter", row.oldNumber === null ? "" : String(row.oldNumber)),
+      el("span", "diff-gutter", row.newNumber === null ? "" : String(row.newNumber)),
+      el("span", "", row.text));
+    container.appendChild(line);
+  }
+  const notice = RemoteChangesView.truncationNotice(truncated, "diff");
+  if (notice) container.append(el("p", "placeholder-card", notice));
+}
+
+function renderFileTree() {
+  const list = $("file-list");
+  list.innerHTML = "";
+  for (const row of changesTree.visibleRows()) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "file-row";
+    button.style.paddingLeft = 12 + row.depth * 14 + "px";
+
+    const label = row.node.kind === "dir"
+      ? (row.expanded ? "▾ " : "▸ ") + row.node.name
+      : row.node.name;
+    button.append(el("span", "", label));
+    if (row.node.badge) button.append(el("span", "change-counts", row.node.badge));
+
+    button.onclick = () => {
+      if (row.node.kind === "dir") {
+        if (changesTree.toggle(row.node.path)) {
+          send({ type: "listFiles", sessionId: currentSession, path: row.node.path });
+        }
+        renderFileTree();
+        return;
+      }
+      openFileView(row.node.path);
+    };
+    list.appendChild(button);
+  }
+}
+
+function openFileView(path) {
+  detailStack.push({ tab: "files", path });
+  $("file-list").classList.add("hidden");
+  $("file-view").classList.remove("hidden");
+  $("file-view-path").textContent = path;
+  $("file-view-body").textContent = "Loading…";
+  send({ type: "readFile", sessionId: currentSession, path });
+}
+
+function renderFileContents(path, text, truncated) {
+  if ($("file-view-path").textContent !== path) return;
+  const body = $("file-view-body");
+  body.innerHTML = "";
+  text.split("\n").forEach((line, index) => {
+    const row = el("div", "diff-line");
+    row.append(el("span", "diff-gutter", String(index + 1)), el("span", "", line));
+    body.appendChild(row);
+  });
+  if (truncated) body.append(el("p", "placeholder-card", "File truncated."));
+}
+
+function fileAccessMessage(reason, byteSize) {
+  switch (reason) {
+    case "binary": return "Binary file — not shown.";
+    case "tooLarge": return byteSize
+      ? "File is " + Math.round(byteSize / 1024) + " KB — too large to view."
+      : "File is too large to view.";
+    case "pathRejected": return "That path is outside this worktree.";
+    case "notFound": return "File not found.";
+    case "worktreeUnavailable": return "This session's worktree is unavailable.";
+    case "sessionUnknown": return "This session is no longer open on the host.";
+    default: return "Could not read this file.";
+  }
+}
+
+function showChangesError(text) {
+  const error = $("changes-error");
+  error.textContent = text;
+  error.classList.remove("hidden");
+}
+
+function showFileError(text) {
+  const error = $("file-error");
+  error.textContent = text;
+  error.classList.remove("hidden");
+}
+
+/// Re-fetch the change list when the agent stops, but only while the tab is
+/// open — the server keeps no per-tab state.
+function noteStreamingStateForChanges(state) {
+  if (state !== "idle") return;
+  if (activeTab === "changes" && detailStack.length === 0) requestChanges();
+}
 
 function clearSessionSheetsForOpen() {
   hidePermission();
@@ -2450,6 +2655,7 @@ function markStopping(on) {
 function syncStreamingState(streamingState) {
   if (streamingState === "idle" && stopPending) markStopping(false);
   renderDriveBar(streamingState);
+  noteStreamingStateForChanges(streamingState);
 }
 
 // takeOver seizes the lease synchronously server-side and messages are ordered,
@@ -2683,7 +2889,10 @@ $("question").onclick = (e) => { if (e.target.id === "question") dismissQuestion
 $("permission").onclick = (e) => { if (e.target.id === "permission") hidePermission(); };
 $("elicitation").onclick = (e) => { if (e.target.id === "elicitation") resolveElicitation("cancel"); };
 
-$("back").onclick = showSessions;
+$("back").onclick = () => {
+  if (detailStack.length > 0) { closeDetailLevel(); return; }
+  showSessions();
+};
 $("gate-retry").onclick = retryConnection;
 
 // iOS overlays the keyboard without shrinking the layout viewport, so a
