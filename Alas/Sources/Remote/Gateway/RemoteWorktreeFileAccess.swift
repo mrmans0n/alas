@@ -28,6 +28,15 @@ enum RemoteWorktreeFileAccess {
 
         let rootPath = resolvedRoot.path.hasSuffix("/") ? resolvedRoot.path : resolvedRoot.path + "/"
         guard resolved.path.hasPrefix(rootPath) else { return nil }
+
+        // Check that no component of the resolved path is .git (case-insensitive),
+        // including via symlink aliases or case variations. This is the actual
+        // security boundary: we check the canonical (symlink-resolved) path,
+        // not just the user's input string.
+        let resolvedRelativePath = String(resolved.path.dropFirst(rootPath.count))
+        let resolvedComponents = resolvedRelativePath.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        guard !resolvedComponents.contains(where: { $0.lowercased() == ".git" }) else { return nil }
+
         return candidate
     }
 
