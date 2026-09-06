@@ -171,7 +171,12 @@ struct ACPTranscriptRowContent: View, Equatable {
                 onFork: onFork
             ) {
                 if buf.phase == .commentary {
-                    ACPCommentaryRow(buffer: buf)
+                    ACPCommentaryRow(
+                        messageId: stableId,
+                        transcript: transcript,
+                        buffer: buf,
+                        typography: typography
+                    )
                 } else {
                     AgentMessageRow(
                         messageId: stableId,

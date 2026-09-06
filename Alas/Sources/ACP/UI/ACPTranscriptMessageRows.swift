@@ -92,45 +92,40 @@ struct AgentMessageRow: View {
     }
 }
 
+/// Codex `commentary`-phase prose: the narration the model writes before and
+/// between tool calls, as opposed to its final answer. It is ordinary
+/// user-facing markdown, so it renders exactly like `AgentMessageRow` — the
+/// left bar and "Working…" label only mark it as narration, mirroring the
+/// affordance `ACPThoughtView` uses for reasoning.
 struct ACPCommentaryRow: View {
+    let messageId: String
+    let transcript: ACPTranscript
     @ObservedObject var buffer: StreamingText
+    let typography: ACPChatTypography
     @Environment(\.theme) private var theme
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(theme.color("bg-0").opacity(0.8))
+        HStack(alignment: .top, spacing: 12) {
+            Rectangle()
+                .fill(theme.color("bg-4"))
+                .frame(width: 1.5)
+                .padding(.vertical, 2)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 7) {
                     Image(systemName: "ellipsis")
-                        .font(.system(size: 10))
-                        .foregroundStyle(Color.indigo)
+                        .font(.system(size: 11))
+                        .foregroundStyle(theme.color("fg-faint"))
+                    Text("Working…")
+                        .font(.system(size: 11))
+                        .foregroundStyle(theme.color("fg-faint"))
                 }
-                .frame(width: 18, height: 18)
-                Text("Working")
-                    .font(.system(size: 10.5, weight: .semibold))
-                    .tracking(0.6)
-                    .textCase(.uppercase)
-                    .foregroundStyle(Color.indigo)
-                Spacer(minLength: 6)
+                AgentMessageRow(
+                    messageId: messageId,
+                    transcript: transcript,
+                    buffer: buffer,
+                    typography: typography
+                )
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            Divider().background(theme.color("line-soft"))
-            Text(buffer.value)
-                .font(.system(size: 12))
-                .foregroundStyle(theme.color("fg-dim"))
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .background(theme.color("bg-0").opacity(0.55))
         }
-        .background(theme.color("bg-1").opacity(0.5))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(theme.color("line"), lineWidth: 0.5)
-        )
     }
 }
