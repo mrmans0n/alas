@@ -8,6 +8,83 @@ struct CommitPublishCreatedCommit: Equatable, Sendable {
 }
 
 @MainActor
+@Observable
+final class CommitPublishSession {
+    private(set) var checkpoint: CommitPublishCheckpoint?
+    private var activeRunID: UUID?
+    private(set) var lastError: Error?
+    private var workflow: CommitPublishWorkflow?
+    @ObservationIgnored private var task: Task<Void, Never>?
+    private let onCheckpointChange: (CommitPublishCheckpoint?) -> Void
+    private let onCompletion: (CommitPublishCheckpoint) -> Void
+
+    var activity: CommitPublishActivity { workflow?.activity ?? .idle }
+    var isRunning: Bool { activeRunID != nil }
+
+    init(
+        checkpoint: CommitPublishCheckpoint?,
+        onCheckpointChange: @escaping (CommitPublishCheckpoint?) -> Void,
+        onCompletion: @escaping (CommitPublishCheckpoint) -> Void
+    ) {
+        self.checkpoint = checkpoint
+        self.onCheckpointChange = onCheckpointChange
+        self.onCompletion = onCompletion
+    }
+
+    func clearError() { lastError = nil }
+
+    @discardableResult
+    func run(
+        subject: String,
+        body: String,
+        amend: Bool,
+        operations: CommitPublishOperations,
+        prepareDestination: @escaping () async throws -> CommitPublishDestination
+    ) -> Task<Void, Never>? {
+        guard !isRunning else { return nil }
+        let runID = UUID()
+        activeRunID = runID
+        lastError = nil
+        let task = Task { @MainActor in
+            defer { finish(runID) }
+            let workflow = CommitPublishWorkflow(operations: operations) { [weak self] next in
+                guard let self, activeRunID == runID else { return }
+                let previous = checkpoint
+                checkpoint = next
+                onCheckpointChange(next)
+                if next == nil, let previous {
+                    finish(runID)
+                    onCompletion(previous)
+                }
+            }
+            self.workflow = workflow
+            do {
+                if let checkpoint {
+                    await workflow.resume(checkpoint)
+                } else {
+                    let destination = try await prepareDestination()
+                    try Task.checkCancellation()
+                    await workflow.start(subject: subject, body: body, amend: amend, destination: destination)
+                }
+                if activeRunID == runID { lastError = workflow.lastError }
+            } catch is CancellationError {
+                if activeRunID == runID { lastError = nil }
+            } catch {
+                if activeRunID == runID { lastError = error }
+            }
+        }
+        self.task = task
+        return task
+    }
+
+    private func finish(_ runID: UUID) {
+        guard activeRunID == runID else { return }
+        activeRunID = nil
+        task = nil
+    }
+}
+
+@MainActor
 struct CommitPublishOperations {
     var createCommit: (_ subject: String, _ body: String, _ amend: Bool) async throws -> CommitPublishCreatedCommit
     var currentHeadSHA: () async throws -> String
@@ -58,22 +135,36 @@ struct CommitPublishOperations {
                 return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
             },
             remoteBranchContainsCommit: { target, sha in
-                guard let pushURL = target.pushURL else { throw CommitPublishWorkflowError.missingPushDestination }
-                return try await contains(pushURL, target.upstreamBranch ?? target.branch, sha)
+                let urls = target.capturedPushURLs
+                guard !urls.isEmpty else { throw CommitPublishWorkflowError.missingPushDestination }
+                for url in urls {
+                    if try await !contains(url, target.upstreamBranch ?? target.branch, sha) { return false }
+                }
+                return true
             },
-            push: { target, _ in
-                guard let pushURL = target.pushURL else { throw CommitPublishWorkflowError.missingPushDestination }
+            push: { target, sha in
+                let urls = target.capturedPushURLs
+                guard !urls.isEmpty else { throw CommitPublishWorkflowError.missingPushDestination }
                 let remote = target.pushRemoteName ?? target.remoteName
-                let destination = try await run(["remote", "get-url", "--push", remote])
+                let destination = try await run(["remote", "get-url", "--push", "--all", remote])
                 try GitService.assertSuccess(destination, op: "Resolve push destination")
-                guard destination.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == pushURL else {
+                let currentURLs = destination.stdout.split(whereSeparator: \.isNewline).map(String.init)
+                guard currentURLs.sorted() == urls.sorted() else {
                     throw CommitPublishWorkflowError.pushDestinationChanged
                 }
-                let ref = target.upstreamBranch.map { "HEAD:\($0)" } ?? target.branch
+                let branch = target.upstreamBranch ?? target.branch
+                let ref = "\(sha):refs/heads/\(branch)"
                 let result = try await run(["push", "-u", remote, ref])
                 guard result.exitCode == 0 else {
                     throw NSError(domain: "CommitPublish", code: Int(result.exitCode),
                         userInfo: [NSLocalizedDescriptionKey: RightPaneState.reviewLoopPushFailureMessage(result)])
+                }
+                if target.upstreamBranch == nil {
+                    // An explicit SHA source gives `push -u` no local branch to configure.
+                    for (key, value) in [("remote", remote), ("merge", "refs/heads/\(branch)")] {
+                        let configuration = try await run(["config", "--local", "branch.\(target.branch).\(key)", value])
+                        try GitService.assertSuccess(configuration, op: "Configure branch upstream")
+                    }
                 }
             },
             currentReviewRequestExists: { target in

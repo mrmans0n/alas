@@ -64,6 +64,7 @@ final class TabsManager {
     /// Session-only split drafts survive view recreation when the user switches
     /// tabs, but are deliberately not persisted as part of the tab identity.
     private var ggSplitCommitDrafts: [TabID: GGSplitCommitDraft] = [:]
+    private var commitPublishSessions: [TabID: CommitPublishSession] = [:]
     /// Tracks which tab IDs have already had `openExternalDocument` fired so
     /// that cache-hit calls to `externalBuffer` don't double-count the ref.
     private var openedExternalDocs: Set<TabID> = []
@@ -1027,6 +1028,52 @@ final class TabsManager {
         return tab
     }
 
+    func commitPublishSession(tabId: TabID) -> CommitPublishSession? {
+        commitPublishSessions[tabId]
+    }
+
+    @discardableResult
+    func runCommitPublish(
+        worktreeId: String,
+        tabId: TabID,
+        subject: String,
+        body: String,
+        amend: Bool,
+        operations: CommitPublishOperations,
+        prepareDestination: @escaping () async throws -> CommitPublishDestination
+    ) -> Task<Void, Never>? {
+        guard case .draftCommit(let draft) = tabs(forWorktree: worktreeId).first(where: { $0.id == tabId }) else {
+            return nil
+        }
+        let session: CommitPublishSession
+        if let existing = commitPublishSessions[tabId] {
+            session = existing
+        } else {
+            session = CommitPublishSession(checkpoint: draft.publishCheckpoint, onCheckpointChange: { [weak self] checkpoint in
+                self?.persistCommitPublishCheckpoint(checkpoint, worktreeId: worktreeId, tabId: tabId)
+            }, onCompletion: { [weak self] checkpoint in
+                guard let self else { return }
+                if replaceDraftWithCommitEditor(worktreeId: worktreeId, draftTabId: tabId,
+                    baseRef: checkpoint.baseRef, newSha: checkpoint.commitSHA, title: checkpoint.commitTitle) == nil {
+                    discardStashedDraft(worktreeId: worktreeId)
+                }
+            })
+            commitPublishSessions[tabId] = session
+        }
+        return session.run(subject: subject, body: body, amend: amend,
+            operations: operations, prepareDestination: prepareDestination)
+    }
+
+    private func persistCommitPublishCheckpoint(_ checkpoint: CommitPublishCheckpoint?, worktreeId: String, tabId: TabID) {
+        if updateDraftCommit(worktreeId: worktreeId, tabId: tabId, mutate: { $0.publishCheckpoint = checkpoint }) != nil {
+            return
+        }
+        guard var file = byWorktree[worktreeId], file.stashedDraft?.id == tabId else { return }
+        file.stashedDraft?.publishCheckpoint = checkpoint
+        byWorktree[worktreeId] = file
+        persist(worktreeId)
+    }
+
     @discardableResult
     func openOrFocusDraftReviewRequest(worktreeId: String, snapshot: ReviewLoopSnapshot) -> Tab {
         let baseState = DraftReviewRequestTabState(worktreeId: worktreeId, snapshot: snapshot)
@@ -1068,6 +1115,8 @@ final class TabsManager {
     /// Used when the user explicitly discards the draft (via tab context
     /// menu) or after a successful commit consumes the draft.
     func discardStashedDraft(worktreeId: String) {
+        let tabId = DraftCommitTabState(worktreeId: worktreeId).id
+        if commitPublishSessions[tabId]?.isRunning == false { commitPublishSessions[tabId] = nil }
         guard var file = byWorktree[worktreeId], file.stashedDraft != nil else { return }
         file.stashedDraft = nil
         byWorktree[worktreeId] = file

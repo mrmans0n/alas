@@ -10,7 +10,7 @@ struct DraftCommitTabView: View {
     @State private var subject: String = ""
     @State private var bodyText: String = ""
     @State private var amend: Bool = false
-    @State private var busy = false
+    @State private var localBusy = false
     @State private var committingLocally = false
     @State private var error: String?
     @State private var amendPrefilled: Bool = false
@@ -20,9 +20,6 @@ struct DraftCommitTabView: View {
     @State private var canAmend: Bool = true
     @State private var generation: Task<Void, Never>? = nil
     @State private var createReviewRequestAsDraft = false
-    @State private var publishCheckpoint: CommitPublishCheckpoint?
-    @State private var publishWorkflow: CommitPublishWorkflow?
-    @State private var publishError: String?
     @State private var publicationProbe = CommitPublishAmendProbeLoader()
 
     @State private var stagedSession: DiffReviewLoadedSession?
@@ -53,6 +50,13 @@ struct DraftCommitTabView: View {
         return rps.changes.contains { $0.stage == .staged }
     }
     private var canCommit: Bool { hasStaged && !trimmedSubject.isEmpty && !busy && publishCheckpoint == nil }
+    private var busy: Bool { localBusy || publishSession?.isRunning == true }
+    private var publishSession: CommitPublishSession? { appState.tabs.commitPublishSession(tabId: tabState.id) }
+    private var publishError: String? { publishSession?.lastError?.localizedDescription }
+    private var publishCheckpoint: CommitPublishCheckpoint? {
+        if let publishSession { return publishSession.checkpoint }
+        return tabState.publishCheckpoint
+    }
     private var mutationsDisabled: Bool { busy || publishCheckpoint != nil }
     private var rightPane: RightPaneState? { appState.rightPaneStore.activeState(worktreeId: worktreeId) }
 
@@ -114,7 +118,7 @@ struct DraftCommitTabView: View {
     }
 
     private var activity: CommitPublishActivity {
-        committingLocally ? .committing : publishWorkflow?.activity ?? .idle
+        committingLocally ? .committing : publishSession?.activity ?? .idle
     }
 
     private var commitActionLabel: String {
@@ -224,7 +228,7 @@ struct DraftCommitTabView: View {
                 preferredActionPosition: publishCheckpoint != nil || tabState.preferredAction == .publish ? .trailing : .leading,
                 editorDisabled: publishCheckpoint != nil,
                 onDismissError: {
-                    publishError = nil
+                    publishSession?.clearError()
                     error = nil
                 },
                 accessory: AnyView(
@@ -338,7 +342,6 @@ struct DraftCommitTabView: View {
         bodyText = tabState.bodyText
         amend = tabState.amend
         createReviewRequestAsDraft = tabState.createReviewRequestAsDraft
-        publishCheckpoint = tabState.publishCheckpoint
         selectedFileID = tabState.selectedPath.map { DiffReviewFileID(namespace: "staged", path: $0) }
     }
 
@@ -405,7 +408,7 @@ struct DraftCommitTabView: View {
     }
 
     private func runGenerate() {
-        publishError = nil
+        publishSession?.clearError()
         guard let agent = appState.agent(id: appState.config.changes.aiToolId) else {
             error = "Select an AI tool to generate a commit message."
             return
@@ -415,12 +418,12 @@ struct DraftCommitTabView: View {
         let prompt = appState.config.changes.prompt
         let baseBranch = appState.rightPaneStore.commitEditorComparisonRef(worktreeId: worktreeId) ?? "HEAD"
 
-        busy = true
+        localBusy = true
         error = nil
 
         generation = Task { @MainActor in
             defer {
-                busy = false
+                localBusy = false
                 generation = nil
             }
             do {
@@ -505,11 +508,11 @@ struct DraftCommitTabView: View {
 
     private func unstageFileByPaths(path: String, originalPath: String?) {
         guard !mutationsDisabled else { return }
-        busy = true
+        localBusy = true
         error = nil
-        publishError = nil
+        publishSession?.clearError()
         Task { @MainActor in
-            defer { busy = false }
+            defer { localBusy = false }
             do {
                 var paths = [path]
                 if let original = originalPath, !original.isEmpty {
@@ -526,11 +529,11 @@ struct DraftCommitTabView: View {
 
     private func unstageHunk(path: String, hunk: ParsedDiff.Hunk) {
         guard !mutationsDisabled else { return }
-        busy = true
+        localBusy = true
         error = nil
-        publishError = nil
+        publishSession?.clearError()
         Task { @MainActor in
-            defer { busy = false }
+            defer { localBusy = false }
             do {
                 try await git.unstageHunk(worktreePath: worktreePath, path: path, hunk: hunk)
                 await loadStagedSession()
@@ -547,14 +550,14 @@ struct DraftCommitTabView: View {
         let bodySnapshot = bodyText
         let amendSnapshot = amend
 
-        busy = true
+        localBusy = true
         committingLocally = true
         error = nil
-        publishError = nil
+        publishSession?.clearError()
 
         Task { @MainActor in
             defer {
-                busy = false
+                localBusy = false
                 committingLocally = false
             }
             do {
@@ -606,53 +609,21 @@ struct DraftCommitTabView: View {
         let reviewSnapshot = rps.reviewLoop.snapshot
         let ggMode = rps.ggContext.isActive
         let comparisonBase = appState.rightPaneStore.commitEditorComparisonRef(worktreeId: worktreeId)
-        busy = true
         error = nil
-        publishError = nil
-
-        Task { @MainActor in
-            defer { busy = false }
-            do {
-                let operations = CommitPublishOperations.live(
-                    worktreePath: worktreePath, reviewLoop: rps.reviewLoop, comparisonBase: comparisonBase,
-                    syncGG: { try await rps.syncGGForCommitPublish() },
-                    refreshAfterCompletion: { _ = await rps.refresh(forceReviewLoopRemote: true) }
-                )
-                let workflow = CommitPublishWorkflow(operations: operations) { checkpoint in
-                    let completed = publishCheckpoint
-                    publishCheckpoint = checkpoint
-                    appState.tabs.updateDraftCommit(worktreeId: worktreeId, tabId: tabState.id) {
-                        $0.publishCheckpoint = checkpoint
-                    }
-                    if checkpoint == nil, let completed {
-                        _ = appState.tabs.replaceDraftWithCommitEditor(
-                            worktreeId: worktreeId, draftTabId: tabState.id,
-                            baseRef: completed.baseRef, newSha: completed.commitSHA, title: completed.commitTitle
-                        )
-                    }
-                }
-                publishWorkflow = workflow
-                if let checkpoint = publishCheckpoint {
-                    await workflow.resume(checkpoint)
-                } else {
-                    let destination: CommitPublishDestination
-                    if ggMode {
-                        destination = .gg
-                    } else if let reviewSnapshot {
-                        destination = .review(try await CommitPublishReviewTarget.capture(
-                            snapshot: reviewSnapshot, createAsDraft: draftSnapshot,
-                            runGit: { try await Process.git($0, cwd: worktreePath) }
-                        ))
-                    } else {
-                        throw CommitPublishWorkflowError.invalidDestination(phase: .push)
-                    }
-                    await workflow.start(subject: subjectSnapshot, body: bodySnapshot,
-                        amend: amendSnapshot, destination: destination)
-                }
-                publishError = workflow.lastError?.localizedDescription
-            } catch {
-                publishError = error.localizedDescription
-            }
-        }
+        let operations = CommitPublishOperations.live(
+            worktreePath: worktreePath, reviewLoop: rps.reviewLoop, comparisonBase: comparisonBase,
+            syncGG: { try await rps.syncGGForCommitPublish() },
+            refreshAfterCompletion: { _ = await rps.refresh(forceReviewLoopRemote: true) }
+        )
+        appState.tabs.runCommitPublish(worktreeId: worktreeId, tabId: tabState.id,
+            subject: subjectSnapshot, body: bodySnapshot, amend: amendSnapshot,
+            operations: operations, prepareDestination: { [worktreePath] in
+                if ggMode { return .gg }
+                guard let reviewSnapshot else { throw CommitPublishWorkflowError.invalidDestination(phase: .push) }
+                return .review(try await CommitPublishReviewTarget.capture(
+                    snapshot: reviewSnapshot, createAsDraft: draftSnapshot,
+                    runGit: { try await Process.git($0, cwd: worktreePath) }
+                ))
+            })
     }
 }

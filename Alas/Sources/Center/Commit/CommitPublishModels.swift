@@ -150,7 +150,10 @@ struct CommitPublishReviewTarget: Codable, Equatable, Sendable {
     let reviewRequestExisted: Bool
     let createAsDraft: Bool
     var pushURL: String? = nil
+    var pushURLs: [String]? = nil
     var pushRemoteName: String? = nil
+
+    var capturedPushURLs: [String] { pushURLs ?? pushURL.map { [$0] } ?? [] }
 
     var remote: CodeHostRemote {
         CodeHostRemote(
@@ -174,17 +177,17 @@ struct CommitPublishReviewTarget: Codable, Equatable, Sendable {
         }
         let local = snapshot.local
         let pushRemote = local.upstreamRemoteName ?? local.headRemoteName ?? remote.remoteName
-        let result = try await runGit(["remote", "get-url", "--push", pushRemote])
+        let result = try await runGit(["remote", "get-url", "--push", "--all", pushRemote])
         try GitService.assertSuccess(result, op: "Resolve push destination")
-        let pushURL = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !pushURL.isEmpty else { throw CommitPublishWorkflowError.missingPushDestination }
+        let pushURLs = result.stdout.split(whereSeparator: \.isNewline).map(String.init)
+        guard let pushURL = pushURLs.first, !pushURL.isEmpty else { throw CommitPublishWorkflowError.missingPushDestination }
         return Self(
             provider: remote.kind, host: remote.host, owner: remote.owner, repository: remote.repository,
             repositorySlug: remote.repositorySlug, remoteName: remote.remoteName, webURL: remote.webURL,
             branch: local.branchName, upstreamBranch: local.upstreamBranchName,
             headOwner: local.headRemoteOwner, baseBranch: local.baseBranch,
             reviewRequestExisted: snapshot.reviewRequest != nil, createAsDraft: createAsDraft,
-            pushURL: pushURL, pushRemoteName: pushRemote
+            pushURL: pushURL, pushURLs: pushURLs, pushRemoteName: pushRemote
         )
     }
 }

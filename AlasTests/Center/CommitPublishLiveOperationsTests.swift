@@ -17,13 +17,14 @@ struct CommitPublishLiveOperationsTests {
         )
         let target = try await CommitPublishReviewTarget.capture(
             snapshot: snapshot, createAsDraft: true, runGit: { args in
-                #expect(args == ["remote", "get-url", "--push", "fork"])
-                return ProcessResult(exitCode: 0, stdout: "ssh://git@github.com/contributor/repo.git\n", stderr: "")
+                #expect(args == ["remote", "get-url", "--push", "--all", "fork"])
+                return ProcessResult(exitCode: 0, stdout: "ssh://git@github.com/contributor/repo.git\nssh://mirror.example/repo.git\n", stderr: "")
             }
         )
         #expect(target.remote.remoteName == "upstream")
         #expect(target.pushRemoteName == "fork")
         #expect(target.pushURL == "ssh://git@github.com/contributor/repo.git")
+        #expect(target.pushURLs == ["ssh://git@github.com/contributor/repo.git", "ssh://mirror.example/repo.git"])
         #expect(target.baseBranch == "upstream/main")
         #expect(target.createAsDraft)
         #expect(target.headOwner == "contributor")
@@ -41,10 +42,10 @@ struct CommitPublishLiveOperationsTests {
             reviewLoop: ReviewLoopState(worktreePath: URL(fileURLWithPath: "/tmp"), baseBranch: "changed"),
             comparisonBase: "captured-base", syncGG: {}, refreshAfterCompletion: {},
             runGit: { args in
-                if args == ["remote", "get-url", "--push", "fork"] {
+                if args == ["remote", "get-url", "--push", "--all", "fork"] {
                     return .init(exitCode: 0, stdout: "ssh://git@github.com/contributor/repo.git\n", stderr: "")
                 }
-                #expect(args == ["push", "-u", "fork", "feature"])
+                #expect(args == ["push", "-u", "fork", "created-sha:refs/heads/feature"])
                 return ProcessResult(exitCode: 1, stdout: "remote rejected branch\n", stderr: "")
             },
             containsCommit: { remote, branch, sha in
@@ -109,7 +110,94 @@ struct CommitPublishLiveOperationsTests {
             })
         #expect(try await !operations.remoteBranchContainsCommit(target, "committed"))
         try await operations.push(target, "committed")
-        #expect(calls == [["remote", "get-url", "--push", "fork"], ["push", "-u", "fork", "HEAD:remote-feature"]])
+        #expect(calls == [["remote", "get-url", "--push", "--all", "fork"], ["push", "-u", "fork", "committed:refs/heads/remote-feature"]])
+    }
+
+    @Test func addingPushURLAfterCaptureDoesNotPublishToEitherDestination() async throws {
+        var target = makeTarget()
+        target.pushURL = "ssh://git@github.com/contributor/repo.git"
+        target.pushURLs = [target.pushURL!]
+        target.pushRemoteName = "fork"
+        var pushed = false
+        let operations = CommitPublishOperations.live(worktreePath: URL(fileURLWithPath: "/tmp"),
+            reviewLoop: ReviewLoopState(worktreePath: URL(fileURLWithPath: "/tmp"), baseBranch: "main"),
+            comparisonBase: nil, syncGG: {}, refreshAfterCompletion: {}, runGit: { args in
+                if args.first == "remote" {
+                    #expect(args == ["remote", "get-url", "--push", "--all", "fork"])
+                    let urls = args.contains("--all") ? target.pushURL! + "\nssh://unexpected.example/repo.git\n" : target.pushURL!
+                    return .init(exitCode: 0, stdout: urls, stderr: "")
+                }
+                pushed = true
+                return .init(exitCode: 0, stdout: "", stderr: "")
+            })
+        await #expect(throws: CommitPublishWorkflowError.pushDestinationChanged) {
+            try await operations.push(target, "committed")
+        }
+        #expect(!pushed)
+    }
+
+    @Test func headChangeDuringContainmentStillPushesCheckpointCommit() async throws {
+        var target = makeTarget(upstreamBranch: "remote-feature")
+        target.pushURL = "ssh://git@github.com/contributor/repo.git"
+        target.pushRemoteName = "fork"
+        var head = "committed"
+        var pushArguments: [String]?
+        var operations = CommitPublishOperations.live(worktreePath: URL(fileURLWithPath: "/tmp"),
+            reviewLoop: ReviewLoopState(worktreePath: URL(fileURLWithPath: "/tmp"), baseBranch: "main"),
+            comparisonBase: nil, syncGG: {}, refreshAfterCompletion: {}, runGit: { args in
+                if args.first == "rev-parse" { return .init(exitCode: 0, stdout: head, stderr: "") }
+                if args.first == "remote" { return .init(exitCode: 0, stdout: target.pushURL!, stderr: "") }
+                pushArguments = args
+                return .init(exitCode: 0, stdout: "", stderr: "")
+            }, containsCommit: { _, _, _ in head = "new-head"; return false })
+        operations.currentReviewRequestExists = { _ in true }
+        let workflow = CommitPublishWorkflow(operations: operations) { _ in }
+        await workflow.resume(.init(commitSHA: "committed", baseRef: "main", commitTitle: "Title",
+            subject: "Subject", body: "", destination: .review(target), nextPhase: .push))
+        #expect(workflow.lastError == nil)
+        #expect(head == "new-head")
+        #expect(pushArguments == ["push", "-u", "fork", "committed:refs/heads/remote-feature"])
+    }
+
+    @Test func containmentChecksEveryCapturedPushURL() async throws {
+        var target = makeTarget()
+        target.pushURL = "ssh://primary.example/repo.git"
+        target.pushURLs = [target.pushURL!, "ssh://mirror.example/repo.git"]
+        var checked: [String] = []
+        let operations = CommitPublishOperations.live(worktreePath: URL(fileURLWithPath: "/tmp"),
+            reviewLoop: ReviewLoopState(worktreePath: URL(fileURLWithPath: "/tmp"), baseBranch: "main"),
+            comparisonBase: nil, syncGG: {}, refreshAfterCompletion: {}, containsCommit: { remote, _, _ in
+                checked.append(remote)
+                return remote == target.pushURL
+            })
+        #expect(try await !operations.remoteBranchContainsCommit(target, "committed"))
+        #expect(checked == target.pushURLs)
+    }
+
+    @Test func explicitCommitPushStillSetsUpstreamForUntrackedBranch() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let repo = directory.appendingPathComponent("worktree")
+        let remote = directory.appendingPathComponent("remote.git")
+        for args in [["init", "--bare", remote.path], ["init", "-b", "feature", repo.path]] {
+            try GitService.assertSuccess(try await Process.git(args, cwd: directory), op: "Initialize test repository")
+        }
+        try GitService.assertSuccess(try await Process.git(
+            ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "Initial"], cwd: repo), op: "Create test commit")
+        try GitService.assertSuccess(try await Process.git(["remote", "add", "fork", remote.path], cwd: repo), op: "Add test remote")
+        let head = try await Process.git(["rev-parse", "HEAD"], cwd: repo)
+        let sha = head.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        var target = makeTarget()
+        target.pushURL = remote.path
+        target.pushRemoteName = "fork"
+        let operations = CommitPublishOperations.live(worktreePath: repo,
+            reviewLoop: ReviewLoopState(worktreePath: repo, baseBranch: "main"), comparisonBase: nil,
+            syncGG: {}, refreshAfterCompletion: {})
+        try await operations.push(target, sha)
+        let upstream = try await Process.git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], cwd: repo)
+        #expect(upstream.exitCode == 0)
+        #expect(upstream.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "fork/feature")
     }
 
     @Test func workflowNormalizesMessageBeforeCommitCheckpointAndProviderCreation() async throws {
@@ -180,6 +268,15 @@ struct CommitPublishLiveOperationsTests {
         let target = try JSONDecoder().decode(CommitPublishReviewTarget.self, from: data)
         #expect(target.pushURL == nil)
         #expect(target.pushRemoteName == nil)
+    }
+
+    @Test func legacySinglePushURLDecodesAsOneCapturedDestination() throws {
+        var original = makeTarget()
+        original.pushURL = "ssh://legacy.example/repo.git"
+        let data = try JSONEncoder().encode(original)
+        let restored = try JSONDecoder().decode(CommitPublishReviewTarget.self, from: data)
+        #expect(restored.pushURLs == nil)
+        #expect(restored.capturedPushURLs == ["ssh://legacy.example/repo.git"])
     }
 
     @Test func liveLookupAndCreationUseCapturedTargetThenRefreshAfterCheckpointClears() async throws {

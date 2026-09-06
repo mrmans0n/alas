@@ -4,6 +4,81 @@ import Testing
 
 @MainActor
 struct CommitPublishWorkflowTests {
+    @Test func ownerReleasesCompletedRunBeforeRefreshWithoutClearingNewerFailure() async throws {
+        let refreshGate = AsyncGate()
+        var failSync = false
+        let operations = CommitPublishOperations(
+            createCommit: { _, _, _ in .init(commitSHA: "committed", comparisonBase: "main", editorTitle: "Title") },
+            currentHeadSHA: { "committed" }, remoteBranchContainsCommit: { _, _ in false }, push: { _, _ in },
+            currentReviewRequestExists: { _ in true },
+            createReviewRequest: { target, _, _ in target.webURL },
+            syncGG: {
+                if failSync { throw NSError(domain: "Publish", code: 1, userInfo: [NSLocalizedDescriptionKey: "Second failed"]) }
+            }, refreshAfterCompletion: { await refreshGate.waitForFirstCall() }
+        )
+        let session = CommitPublishSession(checkpoint: nil, onCheckpointChange: { _ in }, onCompletion: { _ in })
+        let first = try #require(session.run(subject: "First", body: "", amend: false, operations: operations,
+            prepareDestination: { .gg }))
+        await refreshGate.waitUntilEntered()
+        #expect(!session.isRunning)
+        failSync = true
+        let second = session.run(subject: "Second", body: "", amend: false, operations: operations,
+            prepareDestination: { .gg })
+        #expect(second != nil)
+        await second?.value
+        await refreshGate.release()
+        await first.value
+        #expect(session.lastError?.localizedDescription == "Second failed")
+        #expect(session.checkpoint?.subject == "Second")
+        #expect(!session.isRunning)
+    }
+
+    @Test func tabsManagerKeepsSuspendedPublishOwnedAcrossDraftRemount() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let manager = TabsManager(tabsDirectory: directory)
+        let draft = manager.openOrFocusDraftCommit(worktreeId: "remount-publish")
+        let gate = AsyncGate()
+        let target = WorkflowHarness().target
+        var commits = 0
+        var pushes = 0
+        let operations = CommitPublishOperations(
+            createCommit: { _, _, _ in
+                commits += 1
+                return .init(commitSHA: "committed", comparisonBase: "main", editorTitle: "Title")
+            }, currentHeadSHA: { "committed" }, remoteBranchContainsCommit: { _, _ in false },
+            push: { _, _ in pushes += 1; await gate.waitForFirstCall() },
+            currentReviewRequestExists: { _ in true },
+            createReviewRequest: { _, _, _ in Issue.record("Unexpected creation"); return target.webURL },
+            syncGG: {}, refreshAfterCompletion: {}
+        )
+        let task = try #require(manager.runCommitPublish(worktreeId: "remount-publish", tabId: draft.id,
+            subject: "Subject", body: "Body", amend: false, operations: operations,
+            prepareDestination: { .review(target) }))
+        await gate.waitUntilEntered()
+        let originalSession = try #require(manager.commitPublishSession(tabId: draft.id))
+        #expect(originalSession.isRunning)
+        #expect(originalSession.activity == .pushing)
+
+        manager.close(worktreeId: "remount-publish", tabId: draft.id)
+        let reopened = manager.openOrFocusDraftCommit(worktreeId: "remount-publish")
+        let remountedSession = try #require(manager.commitPublishSession(tabId: reopened.id))
+        #expect(remountedSession === originalSession)
+        #expect(remountedSession.checkpoint?.nextPhase == .push)
+        #expect(manager.runCommitPublish(worktreeId: "remount-publish", tabId: reopened.id,
+            subject: "Another subject", body: "", amend: false, operations: operations,
+            prepareDestination: { .review(target) }) == nil)
+        #expect(commits == 1)
+        #expect(pushes == 1)
+
+        await gate.release()
+        await task.value
+        #expect(!remountedSession.isRunning)
+        #expect(remountedSession.checkpoint == nil)
+        #expect(manager.commitEditorTab(worktreeId: "remount-publish", currentSha: "committed") != nil)
+    }
+
     @Test func normalNewRequestPublishesInOrder() async {
         let harness = WorkflowHarness()
         let workflow = harness.makeWorkflow()
