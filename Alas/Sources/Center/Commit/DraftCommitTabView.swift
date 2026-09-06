@@ -11,6 +11,7 @@ struct DraftCommitTabView: View {
     @State private var bodyText: String = ""
     @State private var amend: Bool = false
     @State private var busy = false
+    @State private var committingLocally = false
     @State private var error: String?
     @State private var amendPrefilled: Bool = false
     @State private var amendPrefilledSubject: String = ""
@@ -96,15 +97,10 @@ struct DraftCommitTabView: View {
     private var publishAction: CommitPrimaryAction? {
         guard publishCheckpoint != nil || publishAvailability != nil else { return nil }
         let label: String
-        if let checkpoint = publishCheckpoint {
-            switch checkpoint.nextPhase {
-            case .push: label = "Retry push"
-            case .createReviewRequest:
-                if case .review(let target) = checkpoint.destination {
-                    label = "Retry \(target.provider.reviewRequestLabel)"
-                } else { label = "Retry publish" }
-            case .sync: label = "Retry sync"
-            }
+        if let activityLabel = publishActivityText {
+            label = activityLabel
+        } else if let checkpoint = publishCheckpoint {
+            label = checkpoint.nextPhase.retryLabel(reviewRequestLabel: reviewRequestLabel)
         } else {
             label = publishAvailability?.label ?? "Publish"
         }
@@ -114,13 +110,23 @@ struct DraftCommitTabView: View {
     }
 
     private var publishActivityText: String? {
-        switch publishWorkflow?.activity ?? .idle {
-        case .idle: return nil
-        case .committing: return "Committing..."
-        case .pushing: return "Pushing..."
-        case .creatingReviewRequest: return "Publishing review request..."
-        case .syncing: return "Syncing stack..."
+        activity.actionLabel(reviewRequestLabel: reviewRequestLabel)
+    }
+
+    private var activity: CommitPublishActivity {
+        committingLocally ? .committing : publishWorkflow?.activity ?? .idle
+    }
+
+    private var commitActionLabel: String {
+        if activity == .committing, let label = publishActivityText { return label }
+        return amend ? "Amend" : "Commit"
+    }
+
+    private var reviewRequestLabel: String {
+        if let checkpoint = publishCheckpoint, case .review(let target) = checkpoint.destination {
+            return target.provider.reviewRequestLabel
         }
+        return rightPane?.reviewLoop.snapshot?.remote?.kind.reviewRequestLabel ?? "PR"
     }
 
     /// A key that changes whenever the staged set changes in the sidebar.
@@ -207,7 +213,7 @@ struct DraftCommitTabView: View {
                 availableAgents: appState.agentRegistry.enabled(),
                 onGenerate: handleGenerate,
                 primaryAction: CommitPrimaryAction(
-                    label: amend ? "Amend" : "Commit",
+                    label: commitActionLabel,
                     savedLabel: nil,
                     isEnabled: canCommit,
                     showSavedState: false,
@@ -399,6 +405,7 @@ struct DraftCommitTabView: View {
     }
 
     private func runGenerate() {
+        publishError = nil
         guard let agent = appState.agent(id: appState.config.changes.aiToolId) else {
             error = "Select an AI tool to generate a commit message."
             return
@@ -500,6 +507,7 @@ struct DraftCommitTabView: View {
         guard !mutationsDisabled else { return }
         busy = true
         error = nil
+        publishError = nil
         Task { @MainActor in
             defer { busy = false }
             do {
@@ -520,6 +528,7 @@ struct DraftCommitTabView: View {
         guard !mutationsDisabled else { return }
         busy = true
         error = nil
+        publishError = nil
         Task { @MainActor in
             defer { busy = false }
             do {
@@ -539,10 +548,15 @@ struct DraftCommitTabView: View {
         let amendSnapshot = amend
 
         busy = true
+        committingLocally = true
         error = nil
+        publishError = nil
 
         Task { @MainActor in
-            defer { busy = false }
+            defer {
+                busy = false
+                committingLocally = false
+            }
             do {
                 let newSha = try await git.commit(
                     worktreePath: worktreePath,
@@ -585,7 +599,7 @@ struct DraftCommitTabView: View {
         guard !busy, let rps = rightPane,
               publishCheckpoint != nil || (canCommit && publishAvailability?.isEnabled == true)
         else { return }
-        let subjectSnapshot = trimmedSubject
+        let subjectSnapshot = subject
         let bodySnapshot = bodyText
         let amendSnapshot = amend
         let draftSnapshot = createReviewRequestAsDraft

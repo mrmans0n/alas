@@ -3,6 +3,18 @@ import Testing
 @testable import Alas
 
 struct CommitPublishModelsTests {
+    @Test func actionLabelsDescribeActivityAndCreationRetry() {
+        #expect(CommitPublishActivity.idle.actionLabel(reviewRequestLabel: "PR") == nil)
+        #expect(CommitPublishActivity.committing.actionLabel(reviewRequestLabel: "PR") == "Committing...")
+        #expect(CommitPublishActivity.pushing.actionLabel(reviewRequestLabel: "PR") == "Pushing...")
+        #expect(CommitPublishActivity.creatingReviewRequest.actionLabel(reviewRequestLabel: "PR") == "Creating PR...")
+        #expect(CommitPublishActivity.creatingReviewRequest.actionLabel(reviewRequestLabel: "MR") == "Creating MR...")
+        #expect(CommitPublishActivity.syncing.actionLabel(reviewRequestLabel: "PR") == "Syncing...")
+        #expect(CommitPublishPhase.createReviewRequest.retryLabel(reviewRequestLabel: "PR") == "Retry create PR")
+        #expect(CommitPublishPhase.push.retryLabel(reviewRequestLabel: "PR") == "Retry push")
+        #expect(CommitPublishPhase.sync.retryLabel(reviewRequestLabel: "PR") == "Retry sync")
+    }
+
     @Test func supportedHostOffersCreateOrPush() {
         let create = CommitPublishAvailability.review(snapshot: publishSnapshot())
         #expect(create?.label == "Commit & PR")

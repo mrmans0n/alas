@@ -97,6 +97,16 @@ enum CommitPublishActivity: Equatable {
     case pushing
     case creatingReviewRequest
     case syncing
+
+    func actionLabel(reviewRequestLabel: String) -> String? {
+        switch self {
+        case .idle: nil
+        case .committing: "Committing..."
+        case .pushing: "Pushing..."
+        case .creatingReviewRequest: "Creating \(reviewRequestLabel)..."
+        case .syncing: "Syncing..."
+        }
+    }
 }
 
 enum CommitPublishWorkflowError: LocalizedError, Equatable {
@@ -151,6 +161,8 @@ final class CommitPublishWorkflow {
 
         lastError = nil
         activity = .committing
+        let subject = subject.trimmingCharacters(in: .whitespacesAndNewlines)
+        let body = body.trimmingCharacters(in: .whitespacesAndNewlines)
 
         do {
             let createdCommit = try await operations.createCommit(subject, body, amend)

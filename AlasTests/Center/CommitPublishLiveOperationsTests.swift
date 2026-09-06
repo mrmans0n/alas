@@ -91,6 +91,53 @@ struct CommitPublishLiveOperationsTests {
         #expect(workflow.lastError?.localizedDescription == "The push destination changed. Restore the captured remote URL before retrying.")
     }
 
+    @Test func livePushUsesCapturedUpstreamBranch() async throws {
+        var target = makeTarget(upstreamBranch: "remote-feature")
+        target.pushURL = "ssh://git@github.com/contributor/repo.git"
+        target.pushRemoteName = "fork"
+        var calls: [[String]] = []
+        let operations = CommitPublishOperations.live(worktreePath: URL(fileURLWithPath: "/tmp"),
+            reviewLoop: ReviewLoopState(worktreePath: URL(fileURLWithPath: "/tmp"), baseBranch: "main"),
+            comparisonBase: nil, syncGG: {}, refreshAfterCompletion: {}, runGit: { args in
+                calls.append(args)
+                return .init(exitCode: 0, stdout: target.pushURL!, stderr: "")
+            }, containsCommit: { remote, branch, sha in
+                #expect(remote == target.pushURL)
+                #expect(branch == "remote-feature")
+                #expect(sha == "committed")
+                return false
+            })
+        #expect(try await !operations.remoteBranchContainsCommit(target, "committed"))
+        try await operations.push(target, "committed")
+        #expect(calls == [["remote", "get-url", "--push", "fork"], ["push", "-u", "fork", "HEAD:remote-feature"]])
+    }
+
+    @Test func workflowNormalizesMessageBeforeCommitCheckpointAndProviderCreation() async throws {
+        let provider = CapturedPublishProvider()
+        let path = URL(fileURLWithPath: "/tmp/captured-worktree")
+        let review = ReviewLoopState(worktreePath: path, baseBranch: "main",
+            providerRegistry: .init(providers: [.github: provider]))
+        let operations = CommitPublishOperations.live(worktreePath: path, reviewLoop: review,
+            comparisonBase: "main", syncGG: {}, refreshAfterCompletion: {},
+            runGit: { _ in .init(exitCode: 0, stdout: "committed", stderr: "") },
+            commit: { subject, body, _ in
+                #expect(subject == "Subject")
+                #expect(body == "Body")
+                return "committed"
+            }, containsCommit: { _, _, _ in true })
+        var checkpoints: [CommitPublishCheckpoint] = []
+        let workflow = CommitPublishWorkflow(operations: operations) {
+            if let checkpoint = $0 { checkpoints.append(checkpoint) }
+        }
+        var target = makeTarget()
+        target.pushURL = "ssh://git@github.com/contributor/repo.git"
+        await workflow.start(subject: " \nSubject\t ", body: "\n Body \n", amend: false, destination: .review(target))
+        #expect(workflow.lastError == nil)
+        #expect(await provider.creationCount == 1)
+        #expect(checkpoints.count == 2)
+        #expect(checkpoints.allSatisfy { $0.subject == "Subject" && $0.body == "Body" })
+    }
+
     @Test func liveCommitProbesAmendBeforeCommittingAndKeepsComparisonBase() async throws {
         var calls: [String] = []
         let operations = CommitPublishOperations.live(
@@ -174,11 +221,11 @@ struct CommitPublishLiveOperationsTests {
         }
     }
 
-    private func makeTarget() -> CommitPublishReviewTarget {
+    private func makeTarget(upstreamBranch: String? = nil) -> CommitPublishReviewTarget {
         .init(provider: .github, host: "github.com", owner: "team", repository: "repo",
               repositorySlug: "team/repo", remoteName: "upstream",
               webURL: URL(string: "https://github.com/team/repo")!, branch: "feature",
-              upstreamBranch: nil, headOwner: "contributor", baseBranch: "main",
+              upstreamBranch: upstreamBranch, headOwner: "contributor", baseBranch: "main",
               reviewRequestExisted: false, createAsDraft: true)
     }
 }

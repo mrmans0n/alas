@@ -125,6 +125,14 @@ enum CommitPublishPhase: String, Codable, Equatable, Sendable {
     case push
     case createReviewRequest
     case sync
+
+    func retryLabel(reviewRequestLabel: String) -> String {
+        switch self {
+        case .push: "Retry push"
+        case .createReviewRequest: "Retry create \(reviewRequestLabel)"
+        case .sync: "Retry sync"
+        }
+    }
 }
 
 struct CommitPublishReviewTarget: Codable, Equatable, Sendable {
