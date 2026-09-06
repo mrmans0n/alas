@@ -109,6 +109,51 @@ struct GitServiceRemoteChangesTests {
         #expect(deletedLines == ["line3"])
     }
 
+    /// `renameSource` used to only recognize an `"R"` name-status prefix, so
+    /// a file git classifies as a COPY (`"C<score>"`, distinct from a rename
+    /// because the source path still exists) fell through to being diffed
+    /// as brand new — every line shown as an addition instead of a diff
+    /// against the copy source. With `-C` (not `-C -C`), git only considers
+    /// a path a copy SOURCE when that source is itself modified in the same
+    /// diff — verified empirically before writing this test — so the
+    /// original file is edited alongside the copy to reliably reproduce a
+    /// `"C"` status rather than `"R"`.
+    @Test func diffAgainstRef_showsOnlyTheChangedLineForACopiedAndEditedFile() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try "line1\nline2\nline3\nline4\nline5\n".write(
+            to: repo.appendingPathComponent("old.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "old.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "base"], cwd: repo)
+        _ = try await Process.git(["branch", "start"], cwd: repo)
+
+        try FileManager.default.copyItem(
+            at: repo.appendingPathComponent("old.txt"), to: repo.appendingPathComponent("new.txt"))
+        try "line1\nline2\nline3-changed\nline4\nline5\n".write(
+            to: repo.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
+        // The original must also change in the SAME diff, or git's `-C`
+        // (without a second `-C`) won't consider it eligible as a copy
+        // source at all and `new.txt` would show up as a plain add instead.
+        try "line1\nline2\nline3\nline4\nline5\nline6\n".write(
+            to: repo.appendingPathComponent("old.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "old.txt", "new.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "copy and edit"], cwd: repo)
+
+        // Confirm the premise: git reports this as a copy (`C`), not a
+        // rename (`R`), before asserting on the diff that depends on it.
+        let nameStatus = try await Process.git(
+            ["-c", "core.quotePath=false", "diff", "--name-status", "-z", "-M", "-C", "start"], cwd: repo)
+        let parsed = GitService.parseNameStatusZOutput(nameStatus.stdout)
+        #expect(parsed.status["new.txt"] == "C")
+        #expect(parsed.original["new.txt"] == "old.txt")
+
+        let diff = try await GitService().diff(worktreePath: repo, againstRef: "start", file: "new.txt")
+        let addedLines = diff.hunks.flatMap(\.lines).filter { $0.kind == .add }.map(\.text)
+        let deletedLines = diff.hunks.flatMap(\.lines).filter { $0.kind == .delete }.map(\.text)
+        #expect(addedLines == ["line3-changed"])
+        #expect(deletedLines == ["line3"])
+    }
+
     /// Under git's default `core.quotePath=true`, a non-ASCII filename is
     /// emitted quoted and octal-escaped (e.g. `café.txt` →
     /// `"caf\303\251.txt"`). Without `-c core.quotePath=false` (and `-z` to
@@ -268,6 +313,30 @@ struct GitServiceRemoteChangesTests {
 
         let result = try await GitService().looksBinaryAtRef(worktreePath: repo, ref: "start", file: "missing.bin")
         #expect(result == nil)
+    }
+
+    /// Regression coverage for bounding `looksBinaryAtRef`'s blob read: a
+    /// several-hundred-KB deleted binary file must still be correctly
+    /// detected as binary from just its first 8 KB, not by buffering the
+    /// entire historical blob.
+    @Test func looksBinaryAtRef_sniffsALargeBlobWithoutReadingItWhole() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        // A NUL byte up front plus a few hundred KB of filler — large enough
+        // that reading the whole blob (rather than an 8 KB prefix) would be
+        // wasteful, per the finding this test guards against.
+        var bytes = Data([0x00])
+        bytes.append(Data(repeating: 0x41, count: 400 * 1024))
+        try bytes.write(to: repo.appendingPathComponent("large.bin"))
+        _ = try await Process.git(["add", "large.bin"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "add large binary"], cwd: repo)
+        _ = try await Process.git(["branch", "start"], cwd: repo)
+
+        _ = try await Process.git(["rm", "large.bin"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "remove large binary"], cwd: repo)
+
+        let result = try await GitService().looksBinaryAtRef(worktreePath: repo, ref: "start", file: "large.bin")
+        #expect(result == true)
     }
 
     @Test func isPathIgnored_reportsFalseForAForceAddedTrackedFileMatchingAGitignorePattern() async throws {

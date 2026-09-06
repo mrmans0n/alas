@@ -1347,6 +1347,57 @@ struct RemoteAppStateAccessTests {
         #expect(reason == .gitFailed)
     }
 
+    /// LOCAL-worktree counterpart of the SSH-specific
+    /// `shouldClassifyRemotelyDiscoveredEntry` fix: `GitService.fileTree`'s
+    /// LOCAL root scan can mark a directory `.ignored` even though it holds
+    /// a tracked, force-added descendant (gitignore rules don't un-track a
+    /// path already in the index) — intentional, since the native desktop
+    /// Files tab keeps such a directory visible via
+    /// `FilesTabView.filteredNodes`'s recursive keep-if-has-visible-children
+    /// check. `AppState.remoteFileNodes` used to do a flat, non-recursive
+    /// `compactMap` that dropped the directory outright — since
+    /// `RemoteFileNode` carries no `children`, once dropped from the ROOT
+    /// listing the client could never issue the `listFiles` request that
+    /// would reveal `generated/keep.txt`. This exercises the fix via the
+    /// same seam other tests in this file use for the root-level remote file
+    /// tree (`state.remoteFileTree(sessionId:path: nil)`), against a real
+    /// LOCAL git repo (not registered with `RemoteHostRegistry`), so it
+    /// actually drives `GitService.fileTree`'s local branch end-to-end.
+    @Test func remoteFileTreeSurfacesAnIgnoredRootDirectoryWithATrackedDescendant() async throws {
+        let repository = try await makeRemoteBranchesRepository()
+        defer { try? FileManager.default.removeItem(at: repository) }
+        try "generated/\n".write(
+            to: repository.appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
+        try FileManager.default.createDirectory(
+            at: repository.appendingPathComponent("generated"), withIntermediateDirectories: true)
+        try "tracked\n".write(
+            to: repository.appendingPathComponent("generated/keep.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", ".gitignore"], cwd: repository)
+        _ = try await Process.git(["add", "-f", "generated/keep.txt"], cwd: repository)
+        _ = try await Process.git(["commit", "-q", "-m", "seed"], cwd: repository)
+
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+        let state = makeRemoteGitBackedState(repositoryPath: repository)
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let tab = try #require(acpTabs(in: state).first)
+
+        let result = await state.remoteFileTree(sessionId: tab.sessionId, path: nil)
+
+        guard case let .success(nodes) = result else {
+            Issue.record("expected a successful root file tree listing, got \(result)")
+            return
+        }
+        let generated = try #require(nodes.first { $0.path == "generated" })
+        #expect(generated.kind == "dir")
+    }
+
     /// End-to-end reproduction of the bug: a binary file that existed at the
     /// comparison ref but was deleted from the working tree since must still
     /// surface `.binary`, not an empty "successful" diff (the working-tree
