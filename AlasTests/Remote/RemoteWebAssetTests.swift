@@ -550,4 +550,28 @@ struct RemoteWebAssetTests {
         #expect(js.contains(#"type: "listChanges""#))
         #expect(js.contains(#"type: "listFiles""#))
     }
+
+    @Test func remoteWebHandlesChangesAndFilesMessages() throws {
+        let js = try asset("app.js")
+
+        #expect(js.contains(#"case "changeList":"#))
+        #expect(js.contains(#"case "changeListFailed":"#))
+        #expect(js.contains(#"case "fileDiffResult":"#))
+        #expect(js.contains(#"case "fileDiffFailed":"#))
+        #expect(js.contains(#"case "fileTree":"#))
+        #expect(js.contains(#"case "fileTreeFailed":"#))
+        #expect(js.contains(#"case "fileContents":"#))
+        #expect(js.contains(#"case "fileUnavailable":"#))
+        #expect(js.contains("function renderChanges()"))
+        #expect(js.contains("function renderDiff("))
+        #expect(js.contains("function renderFileTree()"))
+        #expect(js.contains("RemoteChangesView.diffRows("))
+        #expect(js.contains("RemoteChangesView.formatSummary("))
+    }
+
+    @Test func remoteWebRefreshesChangesWhenATurnGoesIdle() throws {
+        let js = try asset("app.js")
+        #expect(js.contains("function noteStreamingStateForChanges(state)"))
+        #expect(js.contains(#"activeTab === "changes""#))
+    }
 }
