@@ -95,6 +95,26 @@ struct CommitPublishWorkflowTests {
         #expect(harness.checkpoint?.nextPhase == .sync)
     }
 
+    @Test func resumeSyncsWithoutCreatingAnotherCommit() async {
+        let harness = WorkflowHarness()
+        let workflow = harness.makeWorkflow()
+        let checkpoint = CommitPublishCheckpoint(
+            commitSHA: "commit-sha",
+            baseRef: "origin/main",
+            commitTitle: "Subject",
+            subject: "Subject",
+            body: "Body",
+            destination: .gg,
+            nextPhase: .sync
+        )
+        harness.checkpoint = checkpoint
+
+        await workflow.resume(checkpoint)
+
+        #expect(harness.calls == ["head", "sync"])
+        #expect(harness.checkpoint == nil)
+    }
+
     @Test func resumeNeverCreatesAnotherCommit() async {
         let harness = WorkflowHarness()
         let workflow = harness.makeWorkflow()
