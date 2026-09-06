@@ -149,7 +149,8 @@ struct CommitPublishLiveOperationsTests {
                 if args.first == "remote" { return .init(exitCode: 0, stdout: target.pushURL!, stderr: "") }
                 pushArguments = args
                 return .init(exitCode: 0, stdout: "", stderr: "")
-            }, containsCommit: { _, _, _ in head = "new-head"; return false })
+            }, containsCommit: { _, _, _ in head = "new-head"
+            return false })
         operations.currentReviewRequestExists = { _ in true }
         let workflow = CommitPublishWorkflow(operations: operations) { _ in }
         await workflow.resume(.init(commitSHA: "committed", baseRef: "main", commitTitle: "Title",
@@ -239,7 +240,8 @@ struct CommitPublishLiveOperationsTests {
                 #expect(amend)
                 return "abcdef123"
             },
-            publicationState: { calls.append("probe"); return .unpublished }
+            publicationState: { calls.append("probe")
+            return .unpublished }
         )
         let created = try await operations.createCommit("Subject", "Body", true)
         #expect(calls == ["probe", "commit"])
@@ -253,7 +255,8 @@ struct CommitPublishLiveOperationsTests {
             worktreePath: URL(fileURLWithPath: "/tmp"),
             reviewLoop: ReviewLoopState(worktreePath: URL(fileURLWithPath: "/tmp"), baseBranch: "main"),
             comparisonBase: nil, syncGG: {}, refreshAfterCompletion: {},
-            commit: { _, _, _ in committed = true; return "new" }, publicationState: { .published }
+            commit: { _, _, _ in committed = true
+            return "new" }, publicationState: { .published }
         )
         await #expect(throws: (any Error).self) {
             try await operations.createCommit("Subject", "", true)

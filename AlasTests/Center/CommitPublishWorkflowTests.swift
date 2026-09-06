@@ -48,9 +48,11 @@ struct CommitPublishWorkflowTests {
                 commits += 1
                 return .init(commitSHA: "committed", comparisonBase: "main", editorTitle: "Title")
             }, currentHeadSHA: { "committed" }, remoteBranchContainsCommit: { _, _ in false },
-            push: { _, _ in pushes += 1; await gate.waitForFirstCall() },
+            push: { _, _ in pushes += 1
+            await gate.waitForFirstCall() },
             currentReviewRequestExists: { _ in true },
-            createReviewRequest: { _, _, _ in Issue.record("Unexpected creation"); return target.webURL },
+            createReviewRequest: { _, _, _ in Issue.record("Unexpected creation")
+            return target.webURL },
             syncGG: {}, refreshAfterCompletion: {}
         )
         let task = try #require(manager.runCommitPublish(worktreeId: "remount-publish", tabId: draft.id,
