@@ -907,6 +907,35 @@ struct RightPaneGGStackTests {
         #expect(!state.ggStackRemoteEnrichmentPending)
     }
 
+    @Test func cancelledEnrichmentKeepsLocalStackAfterDetachedContextPromotion() async throws {
+        let runner = LocalFirstGGRunner()
+        runner.delaysRemote = true
+        let state = makeState()
+        defer { GGStackSummaryStore.shared.summaries[state.worktree.path.path] = nil }
+        state.ggService = GGService(runner: runner)
+        state.ggCapabilities = {
+            GGCapabilities(structuredSplit: false, keepCurrentUnstack: false, localStackSnapshot: true)
+        }
+        state.ggContextProvider = { _ in .inactive(reason: .branchPrefixMismatch(expectedPrefix: "nacho/")) }
+        state.seedGGContext(branch: "")
+        let refresh = Task { @MainActor in await state.refreshGGStack() }
+        for _ in 0..<500 where runner.calls.count < 2 {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        #expect(state.ggContext == .active(stackName: "agent-inbox"))
+        #expect(state.ggStackLoadState == .loaded)
+        let publishedKey = state.ggStackCommitsKey
+        refresh.cancel()
+        await refresh.value
+        #expect(state.ggStackLoadState == .loaded)
+        #expect(state.ggStack?.name == "agent-inbox")
+        #expect(state.ggStackDisplayCommits.count == 3)
+        #expect(state.ggStackCommitsKey == publishedKey)
+        #expect(state.ggStackCommitsKey == state.currentGGStackCommitsKey)
+        #expect(state.ggStackRemoteEnrichmentPending)
+        #expect(GGStackSummaryStore.shared.summaries[state.worktree.path.path] != nil)
+    }
+
     @Test func cancelledRemoteEnrichmentKeepsPublishedEmptyStack() async throws {
         let runner = LocalFirstGGRunner()
         runner.delaysRemote = true

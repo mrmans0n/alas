@@ -30,6 +30,8 @@ extension GitService {
         return .published
     }
 
+    /// Publication callers must pass the captured push URL as `remote`.
+    /// A configured remote name resolves its fetch URL, which may differ.
     func remoteBranchContainsCommit(
         worktreePath: URL,
         remote: String,
@@ -50,7 +52,7 @@ extension GitService {
         }) else { return false }
 
         let temporaryRef = "refs/alas/publish-check/\(UUID().uuidString)"
-        // Await cleanup on both paths so callers never race a detached ref deletion.
+        let containsCommit: Bool
         do {
             let fetch = try await Process.git(
                 ["fetch", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules", "--refmap=",
@@ -61,12 +63,21 @@ extension GitService {
                 ["merge-base", "--is-ancestor", commitSHA, temporaryRef], cwd: worktreePath
             )
             if result.exitCode != 1 { try Self.assertSuccess(result, op: "Check remote commit") }
-            _ = try? await Process.git(["update-ref", "-d", temporaryRef], cwd: worktreePath)
-            return result.exitCode == 0
+            containsCommit = result.exitCode == 0
         } catch {
-            _ = try? await Process.git(["update-ref", "-d", temporaryRef], cwd: worktreePath)
+            try? await removePublicationProbeRef(temporaryRef, worktreePath: worktreePath)
             throw error
         }
+        try await removePublicationProbeRef(temporaryRef, worktreePath: worktreePath)
+        return containsCommit
+    }
+
+    private func removePublicationProbeRef(_ ref: String, worktreePath: URL) async throws {
+        // Cleanup must survive caller cancellation, but still finish before the probe returns.
+        try await Task.detached {
+            let result = try await Process.git(["update-ref", "-d", ref], cwd: worktreePath)
+            try Self.assertSuccess(result, op: "Delete publication probe ref")
+        }.value
     }
 
     func remotes(worktreePath: URL) async throws -> [GitRemote] {

@@ -1080,12 +1080,14 @@ final class RightPaneState: GGSplitCommitServicing {
         let previousSummary = GGStackSummaryStore.shared.summaries[worktree.path.path]
         let keepsPreviousPresentation = previousKey == key
             && previousLoadState == .loaded
+        var publishedKey: String?
         defer {
+            let retainedKey = publishedKey ?? key
             if Task.isCancelled,
                snapshotGeneration == snapshotInvalidationGeneration,
                refreshGeneration == ggStackRefreshGeneration,
                !((ggStackLoadState == .loaded || ggStackLoadState == .empty)
-                 && ggStackCommitsKey == key && key == currentGGStackCommitsKey) {
+                 && ggStackCommitsKey == retainedKey && retainedKey == currentGGStackCommitsKey) {
                 let canRestorePreviousSnapshot = previousKey == key
                     && key == currentGGStackCommitsKey
                     && (previousLoadState == .loaded || previousLoadState == .empty)
@@ -1176,6 +1178,7 @@ final class RightPaneState: GGSplitCommitServicing {
                 GGStackSummaryStore.shared.summaries[worktree.path.path] = summary
             }
             ggStackRemoteMetadataCache = nil
+            publishedKey = ggStackCommitsKey
             await reconcileGGUndoCandidateIfNeeded()
             guard usesLocalSnapshot else { return }
 
