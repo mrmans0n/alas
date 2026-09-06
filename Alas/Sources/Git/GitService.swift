@@ -679,6 +679,10 @@ extension GitService {
             let prefix = path.isEmpty ? "" : path + "/"
             var paths = try await gitVisibleFilePaths(worktreePath: worktreePath)
                 .filter { path.isEmpty || $0.hasPrefix(prefix) }
+            // Snapshot before the remote-listing loop below starts appending
+            // newly discovered (untracked/ignored) entries to `paths`, so
+            // descendant lookups only ever see paths git already knows about.
+            let gitVisiblePaths = Set(paths)
             var directories = Set<String>()
             for candidate in paths {
                 let components = candidate.split(separator: "/")
@@ -704,7 +708,13 @@ extension GitService {
                     if entry.isDirectory { directories.insert(fullPath) }
                     if !paths.contains(fullPath) {
                         paths.append(fullPath)
-                        ignoreCandidates.append(RootIgnoreCandidate(path: fullPath, isDirectory: entry.isDirectory))
+                        if shouldClassifyRemotelyDiscoveredEntry(
+                            fullPath: fullPath,
+                            isDirectory: entry.isDirectory,
+                            gitVisiblePaths: gitVisiblePaths
+                        ) {
+                            ignoreCandidates.append(RootIgnoreCandidate(path: fullPath, isDirectory: entry.isDirectory))
+                        }
                     }
                 }
             }
@@ -895,6 +905,32 @@ extension GitService {
     private func hasVisibleDescendant(of root: String, in paths: Set<String>) -> Bool {
         let prefix = "\(root)/"
         return paths.contains { $0.hasPrefix(prefix) }
+    }
+
+    /// Whether an entry discovered only by listing the remote filesystem
+    /// (i.e. not already known to git) should be run through
+    /// `ignoredOrExcludedVisibility`.
+    ///
+    /// A directory that matches a `.gitignore` pattern can still contain a
+    /// tracked, force-added (`git add -f`) descendant. Unlike the local/eager
+    /// file tree — where `FileTreeNode.children` is a real nested array the
+    /// native UI recurses into even when the parent is `.ignored` — the
+    /// remote wire protocol's `RemoteFileNode` has no `children` field:
+    /// directory contents are fetched lazily, one flat `listFiles` request
+    /// per directory the client expands. If this directory is classified
+    /// `.ignored`/`.excluded`, `AppState.remoteFileNodes` drops it from its
+    /// PARENT's listing entirely, and the client can never issue the
+    /// `listFiles` request that would reveal the tracked descendant — there
+    /// is no way to "promote" that descendant up to reappear elsewhere.
+    /// Skipping classification here instead lets the directory default to
+    /// `.tracked` visibility (`FileTreeBuilder`'s default for any path with
+    /// no explicit entry), keeping it expandable.
+    func shouldClassifyRemotelyDiscoveredEntry(
+        fullPath: String,
+        isDirectory: Bool,
+        gitVisiblePaths: Set<String>
+    ) -> Bool {
+        !(isDirectory && hasVisibleDescendant(of: fullPath, in: gitVisiblePaths))
     }
 
     private func excludedSourcePaths(worktreePath: URL) async throws -> Set<String> {
