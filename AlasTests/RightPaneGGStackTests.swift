@@ -251,14 +251,26 @@ private actor ControlledStackGGRunner: GGCommandRunning {
 /// to the non-streaming path.
 private final class NDJSONSyncFakeGGRunner: GGCommandRunning, @unchecked Sendable {
     private let ndjson: String
+    private let json: String?
 
-    init(ndjson: String) {
+    init(ndjson: String, json: String? = nil) {
         self.ndjson = ndjson
+        self.json = json
     }
 
     func run(args: [String], cwd: URL?) async throws -> ProcessResult {
         if args == ["sync", "--help"] {
             return ProcessResult(exitCode: 0, stdout: "--jsonl", stderr: "")
+        }
+        if args == ["ls", "--json"] {
+            return ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
+        }
+        if args == ["sync", "--json"] {
+            return ProcessResult(
+                exitCode: 0,
+                stdout: json ?? ndjson,
+                stderr: ""
+            )
         }
         return ProcessResult(exitCode: 0, stdout: ndjson, stderr: "")
     }
@@ -737,6 +749,23 @@ struct RightPaneGGStackTests {
         #expect(state.ggActionState.syncHasTerminalFailure)
         #expect(state.ggActionState.inFlightAction == nil)
         #expect(state.ggActionState.lastActionSummary == nil)
+    }
+
+    @Test func commitPublishSyncThrowsWhenStreamReportsTerminalEntryFailure() async throws {
+        let state = makeState()
+        let runner = NDJSONSyncFakeGGRunner(ndjson: [
+            #"{"event":"start","total_entries":1}"#,
+            #"{"event":"summary","entries":[{"position":1,"error":{"message":"push failed"}}]}"#,
+        ].joined(separator: "\n"), json: #"{"version":1,"sync":{"entries":[{"position":1,"error":{"message":"push failed"}}]}}"#)
+        state.ggService = GGService(runner: runner)
+
+        await #expect(throws: GGMutationError.syncTerminalFailure(message: "push failed")) {
+            try await state.syncGGForCommitPublish()
+        }
+
+        #expect(state.ggActionState.lastError == "push failed")
+        #expect(state.ggActionState.syncHasTerminalFailure)
+        #expect(state.ggActionState.inFlightAction == nil)
     }
 
     @Test func commitPublishSyncRefusesConcurrentMutation() async throws {

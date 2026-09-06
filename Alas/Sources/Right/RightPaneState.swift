@@ -1916,6 +1916,9 @@ final class RightPaneState: GGSplitCommitServicing {
             throw GGMutationError.operationInFlight
         }
         try await completeGGMutation(operation, request: .sync).value
+        if ggActionState.syncHasTerminalFailure {
+            throw GGMutationError.syncTerminalFailure(message: ggActionState.lastError ?? "GG sync failed.")
+        }
     }
 
     private func completeGGMutation(

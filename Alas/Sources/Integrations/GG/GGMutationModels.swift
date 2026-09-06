@@ -153,6 +153,7 @@ enum GGMutationError: Error, Equatable {
     case pausedOperation
     case blockingGitOperation
     case stagingFailed
+    case syncTerminalFailure(message: String)
 }
 
 extension GGMutationError: LocalizedError {
@@ -164,6 +165,7 @@ extension GGMutationError: LocalizedError {
         case .pausedOperation: "Continue or abort the paused gg operation first."
         case .blockingGitOperation: "Finish the current Git operation first."
         case .stagingFailed: "Staging failed. Fix the staging error and try again."
+        case .syncTerminalFailure(let message): message
         }
     }
 }
