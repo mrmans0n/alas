@@ -266,9 +266,15 @@ struct CommitPublishReviewTarget: Codable, Equatable, Sendable {
         let branchResult = try await runGit(["symbolic-ref", "--short", "HEAD"])
         try GitService.assertSuccess(branchResult, op: "Resolve current branch")
         let branch = branchResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard branch == local.branchName else {
+            throw CommitPublishWorkflowError.branchMismatch(expected: local.branchName, actual: branch)
+        }
         let headResult = try await runGit(["rev-parse", "--verify", "HEAD"])
         try GitService.assertSuccess(headResult, op: "Resolve HEAD")
         let headSHA = headResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard headSHA == local.headSHA else {
+            throw CommitPublishWorkflowError.headMismatch(expected: local.headSHA, actual: headSHA)
+        }
         let result = try await runGit(["remote", "get-url", "--push", "--all", pushRemote])
         try GitService.assertSuccess(result, op: "Resolve push destination")
         let pushURLs = result.stdout.split(whereSeparator: \.isNewline).map(String.init)

@@ -15,7 +15,7 @@ final class CommitPublishSession {
     private(set) var lastError: Error?
     private var workflow: CommitPublishWorkflow?
     @ObservationIgnored private var task: Task<Void, Never>?
-    private let onCheckpointChange: (CommitPublishCheckpoint?) -> Void
+    private let onCheckpointChange: (CommitPublishCheckpoint?) throws -> Void
     private let onCompletion: (CommitPublishCheckpoint) -> Void
 
     var activity: CommitPublishActivity { workflow?.activity ?? .idle }
@@ -23,7 +23,7 @@ final class CommitPublishSession {
 
     init(
         checkpoint: CommitPublishCheckpoint?,
-        onCheckpointChange: @escaping (CommitPublishCheckpoint?) -> Void,
+        onCheckpointChange: @escaping (CommitPublishCheckpoint?) throws -> Void,
         onCompletion: @escaping (CommitPublishCheckpoint) -> Void
     ) {
         self.checkpoint = checkpoint
@@ -50,9 +50,12 @@ final class CommitPublishSession {
             let workflow = CommitPublishWorkflow(operations: operations) { [weak self] next in
                 guard let self, activeRunID == runID else { return }
                 let previous = checkpoint
-                checkpoint = next
-                onCheckpointChange(next)
+                if next != nil {
+                    checkpoint = next
+                }
+                try onCheckpointChange(next)
                 if next == nil, let previous {
+                    checkpoint = nil
                     finish(runID)
                     onCompletion(previous)
                 }
@@ -82,6 +85,15 @@ final class CommitPublishSession {
         activeRunID = nil
         task = nil
     }
+
+    func abandonCheckpoint() -> Bool {
+        guard !isRunning else { return false }
+        checkpoint = nil
+        lastError = nil
+        workflow = nil
+        task = nil
+        return true
+    }
 }
 
 @MainActor
@@ -92,6 +104,7 @@ struct CommitPublishOperations {
     var currentHeadSHA: () async throws -> String
     var remoteBranchContainsCommit: (_ target: CommitPublishReviewTarget, _ commitSHA: String) async throws -> Bool
     var push: (_ target: CommitPublishReviewTarget, _ commitSHA: String) async throws -> Void
+    var configureUpstreamTracking: (_ target: CommitPublishReviewTarget) async throws -> Void = { _ in }
     var currentReviewRequestExists: (_ target: CommitPublishReviewTarget) async throws -> Bool
     var createReviewRequest: (_ target: CommitPublishReviewTarget, _ subject: String, _ body: String) async throws -> URL
     var syncGG: () async throws -> Void
@@ -176,12 +189,14 @@ struct CommitPublishOperations {
                     throw NSError(domain: "CommitPublish", code: Int(result.exitCode),
                         userInfo: [NSLocalizedDescriptionKey: RightPaneState.reviewLoopPushFailureMessage(result)])
                 }
-                if target.upstreamBranch == nil {
-                    // An explicit SHA source gives `push -u` no local branch to configure.
-                    for (key, value) in [("remote", remote), ("merge", "refs/heads/\(branch)")] {
-                        let configuration = try await run(["config", "--local", "branch.\(target.branch).\(key)", value])
-                        try GitService.assertSuccess(configuration, op: "Configure branch upstream")
-                    }
+            },
+            configureUpstreamTracking: { target in
+                guard target.upstreamBranch == nil else { return }
+                let remote = target.pushRemoteName ?? target.remoteName
+                let branch = target.branch
+                for (key, value) in [("remote", remote), ("merge", "refs/heads/\(branch)")] {
+                    let configuration = try await run(["config", "--local", "branch.\(target.branch).\(key)", value])
+                    try GitService.assertSuccess(configuration, op: "Configure branch upstream")
                 }
             },
             currentReviewRequestExists: { target in
@@ -250,7 +265,7 @@ enum CommitPublishWorkflowError: LocalizedError, Equatable {
 @Observable
 final class CommitPublishWorkflow {
     private let operations: CommitPublishOperations
-    private let onCheckpointChange: (CommitPublishCheckpoint?) -> Void
+    private let onCheckpointChange: (CommitPublishCheckpoint?) throws -> Void
 
     private(set) var activity: CommitPublishActivity = .idle
     private(set) var lastError: Error?
@@ -258,7 +273,7 @@ final class CommitPublishWorkflow {
 
     init(
         operations: CommitPublishOperations,
-        onCheckpointChange: @escaping (CommitPublishCheckpoint?) -> Void
+        onCheckpointChange: @escaping (CommitPublishCheckpoint?) throws -> Void
     ) {
         self.operations = operations
         self.onCheckpointChange = onCheckpointChange
@@ -304,7 +319,7 @@ final class CommitPublishWorkflow {
                 destination: checkpointDestination,
                 nextPhase: nextPhase(for: checkpointDestination)
             )
-            onCheckpointChange(checkpoint)
+            try onCheckpointChange(checkpoint)
             try Task.checkCancellation()
             try await continueResuming(checkpoint, runID: runID)
         } catch is CancellationError {
@@ -355,8 +370,9 @@ final class CommitPublishWorkflow {
                 if !alreadyPublished {
                     try await operations.push(target, checkpoint.commitSHA)
                 }
+                try await operations.configureUpstreamTracking(target)
                 checkpoint.nextPhase = .createReviewRequest
-                onCheckpointChange(checkpoint)
+                try onCheckpointChange(checkpoint)
                 try Task.checkCancellation()
 
             case .createReviewRequest:
@@ -406,7 +422,7 @@ final class CommitPublishWorkflow {
     }
 
     private func complete(_ runID: UUID) async throws {
-        onCheckpointChange(nil)
+        try onCheckpointChange(nil)
         activity = .idle
         lastError = nil
         endRun(runID)

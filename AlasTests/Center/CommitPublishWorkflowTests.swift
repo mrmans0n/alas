@@ -81,6 +81,73 @@ struct CommitPublishWorkflowTests {
         #expect(manager.commitEditorTab(worktreeId: "remount-publish", currentSha: "committed") != nil)
     }
 
+    @Test func tabsManagerStopsBeforeRemoteMutationWhenCheckpointCannotPersist() async throws {
+        let manager = TabsManager(store: FailingTabsStore())
+        let draft = manager.openOrFocusDraftCommit(worktreeId: "checkpoint-persist-failure")
+        var calls: [String] = []
+        let operations = CommitPublishOperations(
+            createCommit: { _, _, _ in
+                calls.append("commit")
+                return .init(commitSHA: "committed", comparisonBase: "main", editorTitle: "Title")
+            },
+            currentHeadSHA: {
+                calls.append("head")
+                return "committed"
+            },
+            remoteBranchContainsCommit: { _, _ in
+                calls.append("remoteContainsCommit")
+                return false
+            },
+            push: { _, _ in calls.append("push") },
+            currentReviewRequestExists: { _ in true },
+            createReviewRequest: { target, _, _ in target.webURL },
+            syncGG: {},
+            refreshAfterCompletion: {}
+        )
+
+        let task = try #require(manager.runCommitPublish(worktreeId: "checkpoint-persist-failure", tabId: draft.id,
+            subject: "Subject", body: "Body", amend: false, operations: operations,
+            prepareDestination: { .review(WorkflowHarness().target) }))
+        await task.value
+
+        let session = try #require(manager.commitPublishSession(tabId: draft.id))
+        #expect(calls == ["commit"])
+        #expect(session.checkpoint?.nextPhase == .push)
+        #expect(session.lastError?.localizedDescription == "write rejected")
+    }
+
+    @Test func tabsManagerCanAbandonPausedPublishCheckpoint() async throws {
+        let manager = TabsManager()
+        let draft = manager.openOrFocusDraftCommit(worktreeId: "abandon-publish")
+        let checkpoint = WorkflowHarness().checkpoint(nextPhase: .push)
+        manager.updateDraftCommit(worktreeId: "abandon-publish", tabId: draft.id) {
+            $0.publishCheckpoint = checkpoint
+        }
+        let operations = CommitPublishOperations(
+            createCommit: { _, _, _ in .init(commitSHA: "unused", comparisonBase: "main", editorTitle: "Unused") },
+            currentHeadSHA: { throw WorkflowHarness.Failure.head },
+            remoteBranchContainsCommit: { _, _ in false },
+            push: { _, _ in },
+            currentReviewRequestExists: { _ in true },
+            createReviewRequest: { target, _, _ in target.webURL },
+            syncGG: {},
+            refreshAfterCompletion: {}
+        )
+        let task = try #require(manager.runCommitPublish(worktreeId: "abandon-publish", tabId: draft.id,
+            subject: "Subject", body: "Body", amend: false, operations: operations,
+            prepareDestination: { .review(WorkflowHarness().target) }))
+        await task.value
+
+        #expect(manager.abandonCommitPublishCheckpoint(worktreeId: "abandon-publish", tabId: draft.id))
+
+        #expect(manager.commitPublishSession(tabId: draft.id) == nil)
+        guard case .draftCommit(let state) = manager.tabs(forWorktree: "abandon-publish").first else {
+            Issue.record("Expected draft commit tab")
+            return
+        }
+        #expect(state.publishCheckpoint == nil)
+    }
+
     @Test func normalNewRequestPublishesInOrder() async {
         let harness = WorkflowHarness()
         let workflow = harness.makeWorkflow()
@@ -453,6 +520,39 @@ struct CommitPublishWorkflowTests {
         #expect(harness.calls == ["head", "remoteContainsCommit", "lookupPR", "createPR"])
     }
 
+    @Test func remoteContainmentStillConfiguresUpstreamForUntrackedBranch() async {
+        var calls: [String] = []
+        let target = WorkflowHarness().targetWithoutUpstream
+        let operations = CommitPublishOperations(
+            createCommit: { _, _, _ in .init(commitSHA: "unused", comparisonBase: "main", editorTitle: "Unused") },
+            currentHeadSHA: {
+                calls.append("head")
+                return "commit-sha"
+            },
+            remoteBranchContainsCommit: { _, _ in
+                calls.append("remoteContainsCommit")
+                return true
+            },
+            push: { _, _ in calls.append("push") },
+            configureUpstreamTracking: { _ in calls.append("configureUpstream") },
+            currentReviewRequestExists: { _ in
+                calls.append("lookupPR")
+                return true
+            },
+            createReviewRequest: { target, _, _ in
+                calls.append("createPR")
+                return target.webURL
+            },
+            syncGG: {},
+            refreshAfterCompletion: {}
+        )
+        let workflow = CommitPublishWorkflow(operations: operations) { _ in }
+
+        await workflow.resume(WorkflowHarness().checkpoint(target: target, nextPhase: .push))
+
+        #expect(calls == ["head", "remoteContainsCommit", "configureUpstream", "lookupPR"])
+    }
+
     @Test func freshLookupSkipsCreateWhenRequestNowExists() async {
         let harness = WorkflowHarness()
         harness.reviewRequestExists = true
@@ -485,6 +585,15 @@ struct CommitPublishWorkflowTests {
 
         #expect(harness.checkpointWasClearedBeforeRefresh)
     }
+}
+
+private struct FailingTabsStore: PersistenceStoreProtocol {
+    func write<T: Encodable>(_: T, to _: URL) throws {
+        throw NSError(domain: "CommitPublishWorkflowTests", code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "write rejected"])
+    }
+
+    func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
 }
 
 @MainActor

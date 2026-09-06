@@ -6,7 +6,7 @@ import Testing
 struct CommitPublishLiveOperationsTests {
     @Test func captureRejectsIncompatibleUpstreamRemoteBeforeReadingGit() async {
         let snapshot = ReviewLoopSnapshot(
-            local: ReviewLoopLocalState(branchName: "feature", headSHA: "old", baseBranch: "main",
+            local: ReviewLoopLocalState(branchName: "feature", headSHA: "captured-head", baseBranch: "main",
                 hasWorkingTreeChanges: true, hasStagedChanges: true, aheadCommitCount: 1,
                 hasUpstream: true, upstreamRemoteName: "fork", upstreamBranchName: "feature",
                 upstreamAheadCommitCount: 0, needsPush: true),
@@ -31,7 +31,7 @@ struct CommitPublishLiveOperationsTests {
 
     @Test func captureUsesCompatibleTrackedUpstreamRemote() async throws {
         let snapshot = ReviewLoopSnapshot(
-            local: ReviewLoopLocalState(branchName: "feature", headSHA: "old", baseBranch: "main",
+            local: ReviewLoopLocalState(branchName: "feature", headSHA: "captured-head", baseBranch: "main",
                 hasWorkingTreeChanges: true, hasStagedChanges: true, aheadCommitCount: 1,
                 hasUpstream: true, upstreamRemoteName: "fork", upstreamBranchName: "review/feature",
                 headRemoteName: "fork", headRemoteOwner: "contributor",
@@ -61,9 +61,68 @@ struct CommitPublishLiveOperationsTests {
         #expect(target.upstreamBranch == "review/feature")
     }
 
+    @Test func captureRejectsBranchChangedSinceReviewSnapshotBeforeReadingRemote() async {
+        let snapshot = ReviewLoopSnapshot(
+            local: ReviewLoopLocalState(branchName: "feature", headSHA: "captured-head", baseBranch: "main",
+                hasWorkingTreeChanges: true, hasStagedChanges: true, aheadCommitCount: 1,
+                hasUpstream: false, headRemoteName: "fork", headRemoteOwner: "contributor",
+                upstreamAheadCommitCount: 0, needsPush: true),
+            remote: .init(kind: .github, host: "github.com", owner: "team", repository: "repo",
+                remoteName: "origin", webURL: URL(string: "https://github.com/team/repo")!),
+            reviewRequest: nil, providerAvailable: true, providerAuthenticated: true,
+            providerCapabilities: .githubCLI, errorMessage: nil
+        )
+        var commands: [[String]] = []
+
+        await #expect(throws: CommitPublishWorkflowError.branchMismatch(expected: "feature", actual: "other-feature")) {
+            try await CommitPublishReviewTarget.capture(
+                snapshot: snapshot, createAsDraft: false, runGit: { args in
+                    commands.append(args)
+                    #expect(args == ["symbolic-ref", "--short", "HEAD"])
+                    return .init(exitCode: 0, stdout: "other-feature\n", stderr: "")
+                }
+            )
+        }
+
+        #expect(commands == [["symbolic-ref", "--short", "HEAD"]])
+    }
+
+    @Test func captureRejectsHeadChangedSinceReviewSnapshotBeforeReadingRemote() async {
+        let snapshot = ReviewLoopSnapshot(
+            local: ReviewLoopLocalState(branchName: "feature", headSHA: "captured-head", baseBranch: "main",
+                hasWorkingTreeChanges: true, hasStagedChanges: true, aheadCommitCount: 1,
+                hasUpstream: false, headRemoteName: "fork", headRemoteOwner: "contributor",
+                upstreamAheadCommitCount: 0, needsPush: true),
+            remote: .init(kind: .github, host: "github.com", owner: "team", repository: "repo",
+                remoteName: "origin", webURL: URL(string: "https://github.com/team/repo")!),
+            reviewRequest: nil, providerAvailable: true, providerAuthenticated: true,
+            providerCapabilities: .githubCLI, errorMessage: nil
+        )
+        var commands: [[String]] = []
+
+        await #expect(throws: CommitPublishWorkflowError.headMismatch(expected: "captured-head", actual: "changed-head")) {
+            try await CommitPublishReviewTarget.capture(
+                snapshot: snapshot, createAsDraft: false, runGit: { args in
+                    commands.append(args)
+                    switch args {
+                    case ["symbolic-ref", "--short", "HEAD"]:
+                        return .init(exitCode: 0, stdout: "feature\n", stderr: "")
+                    case ["rev-parse", "--verify", "HEAD"]:
+                        return .init(exitCode: 0, stdout: "changed-head\n", stderr: "")
+                    default:
+                        Issue.record("Unexpected Git command: \(args)")
+                        return .init(exitCode: 1, stdout: "", stderr: "")
+                    }
+                }
+            )
+        }
+
+        #expect(commands == [["symbolic-ref", "--short", "HEAD"], ["rev-parse", "--verify", "HEAD"]])
+    }
+
     @Test func captureSeparatesReviewRepositoryFromPushDestination() async throws {
         let snapshot = ReviewLoopSnapshot(
-            local: ReviewLoopLocalState(branchName: "feature", headSHA: "old", baseBranch: "upstream/main",
+            local: ReviewLoopLocalState(branchName: "feature", headSHA: "captured-head", baseBranch: "upstream/main",
                 hasWorkingTreeChanges: true, hasStagedChanges: true, aheadCommitCount: 1,
                 hasUpstream: false, headRemoteName: "fork", headRemoteOwner: "contributor",
                 upstreamAheadCommitCount: 0, needsPush: true),
@@ -292,6 +351,7 @@ struct CommitPublishLiveOperationsTests {
             reviewLoop: ReviewLoopState(worktreePath: repo, baseBranch: "main"), comparisonBase: nil,
             syncGG: {}, refreshAfterCompletion: {})
         try await operations.push(target, sha)
+        try await operations.configureUpstreamTracking(target)
         let upstream = try await Process.git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], cwd: repo)
         #expect(upstream.exitCode == 0)
         #expect(upstream.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "fork/feature")

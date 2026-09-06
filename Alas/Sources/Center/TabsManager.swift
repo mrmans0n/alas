@@ -1050,7 +1050,8 @@ final class TabsManager {
             session = existing
         } else {
             session = CommitPublishSession(checkpoint: draft.publishCheckpoint, onCheckpointChange: { [weak self] checkpoint in
-                self?.persistCommitPublishCheckpoint(checkpoint, worktreeId: worktreeId, tabId: tabId)
+                guard let self else { return }
+                try persistCommitPublishCheckpoint(checkpoint, worktreeId: worktreeId, tabId: tabId)
             }, onCompletion: { [weak self] checkpoint in
                 guard let self else { return }
                 if replaceDraftWithCommitEditor(worktreeId: worktreeId, draftTabId: tabId,
@@ -1064,14 +1065,35 @@ final class TabsManager {
             operations: operations, prepareDestination: prepareDestination)
     }
 
-    private func persistCommitPublishCheckpoint(_ checkpoint: CommitPublishCheckpoint?, worktreeId: String, tabId: TabID) {
-        if updateDraftCommit(worktreeId: worktreeId, tabId: tabId, mutate: { $0.publishCheckpoint = checkpoint }) != nil {
-            return
+    @discardableResult
+    func abandonCommitPublishCheckpoint(worktreeId: String, tabId: TabID) -> Bool {
+        guard commitPublishSessions[tabId]?.isRunning != true else { return false }
+        do {
+            try persistCommitPublishCheckpoint(nil, worktreeId: worktreeId, tabId: tabId)
+            _ = commitPublishSessions[tabId]?.abandonCheckpoint()
+            commitPublishSessions[tabId] = nil
+            return true
+        } catch {
+            return false
         }
-        guard var file = byWorktree[worktreeId], file.stashedDraft?.id == tabId else { return }
+    }
+
+    @discardableResult
+    private func persistCommitPublishCheckpoint(_ checkpoint: CommitPublishCheckpoint?, worktreeId: String, tabId: TabID) throws -> Bool {
+        guard var file = byWorktree[worktreeId] else { return false }
+        if let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
+           case .draftCommit(var state) = file.tabs[idx] {
+            state.publishCheckpoint = checkpoint
+            file.tabs[idx] = .draftCommit(state)
+            byWorktree[worktreeId] = file
+            try persistThrowing(worktreeId)
+            return true
+        }
+        guard file.stashedDraft?.id == tabId else { return false }
         file.stashedDraft?.publishCheckpoint = checkpoint
         byWorktree[worktreeId] = file
-        persist(worktreeId)
+        try persistThrowing(worktreeId)
+        return true
     }
 
     @discardableResult
@@ -1135,6 +1157,19 @@ final class TabsManager {
               let idx = file.tabs.firstIndex(where: { $0.id == draftTabId }),
               case .draftCommit = file.tabs[idx]
         else { return nil }
+        for existingIdx in file.tabs.indices {
+            guard case .commitEditor(var existing) = file.tabs[existingIdx],
+                  existing.currentSha == newSha else { continue }
+            existing.title = title
+            let tab = Tab.commitEditor(existing)
+            file.tabs[existingIdx] = tab
+            file.tabs.remove(at: idx)
+            file.activeTabId = tab.id
+            file.stashedDraft = nil
+            byWorktree[worktreeId] = file
+            persist(worktreeId)
+            return tab
+        }
         let editor = CommitEditorTabState(
             worktreeId: worktreeId,
             baseRef: baseRef,
@@ -1493,8 +1528,12 @@ final class TabsManager {
     }
 
     private func persist(_ worktreeId: String) {
+        try? persistThrowing(worktreeId)
+    }
+
+    private func persistThrowing(_ worktreeId: String) throws {
         guard let file = byWorktree[worktreeId] else { return }
-        try? store.write(file, to: tabsFile(forWorktreeId: worktreeId))
+        try store.write(file, to: tabsFile(forWorktreeId: worktreeId))
     }
 
     private func tabsFile(forWorktreeId worktreeId: String) -> URL {

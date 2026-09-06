@@ -272,6 +272,33 @@ struct DraftCommitTabsManagerTests {
         #expect(s.baseRef == "main")
     }
 
+    @Test func replaceDraftWithCommitEditor_reusesExistingEditorForPublishedCommit() {
+        let worktreeId = "draft-commit-tabs-mgr-replace-reuse"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+        let draft = mgr.openOrFocusDraftCommit(worktreeId: worktreeId)
+        let existing = mgr.openCommitEditor(
+            worktreeId: worktreeId,
+            baseRef: "main",
+            originalSha: "abc1234",
+            currentSha: "abc1234",
+            title: "abc1234 existing"
+        )
+
+        let replaced = mgr.replaceDraftWithCommitEditor(
+            worktreeId: worktreeId,
+            draftTabId: draft.id,
+            baseRef: "main",
+            newSha: "abc1234",
+            title: "abc1234 feat: foo"
+        )
+
+        #expect(replaced?.id == existing.id)
+        #expect(mgr.tabs(forWorktree: worktreeId).count == 1)
+        #expect(!mgr.tabs(forWorktree: worktreeId).contains { $0.id == draft.id })
+        #expect(mgr.activeTabId(forWorktree: worktreeId) == existing.id)
+    }
+
     @Test func closingDraftTab_stashesStateAcrossReopen() {
         let worktreeId = "draft-stash-roundtrip"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }

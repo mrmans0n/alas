@@ -234,6 +234,14 @@ struct DraftCommitTabView: View {
                                 .help(presentation.draftToggleHelp)
                                 .accessibilityIdentifier("commit-composer-draft-review-request")
                         }
+                        if publishCheckpoint != nil {
+                            AlasButton(title: "Abandon retry", style: .subtle) {
+                                abandonPublishCheckpoint()
+                            }
+                            .disabled(busy)
+                            .help("Clear the paused publish retry.")
+                            .accessibilityIdentifier("commit-composer-abandon-publish")
+                        }
                     }
                 )
             )
@@ -627,5 +635,13 @@ struct DraftCommitTabView: View {
                     runGit: { try await Process.git($0, cwd: worktreePath) }
                 ))
             })
+    }
+
+    private func abandonPublishCheckpoint() {
+        guard !busy else { return }
+        if appState.tabs.abandonCommitPublishCheckpoint(worktreeId: worktreeId, tabId: tabState.id) {
+            error = nil
+            refreshActionsOverlay()
+        }
     }
 }
