@@ -11,16 +11,34 @@ enum RemoteWorktreeFileAccess {
     static let maxDiffLines = 2_000
     static let maxChangedFiles = 500
 
-    /// Returns the on-disk URL for a worktree-relative path, or nil when the
-    /// path is empty, absolute, traverses upward, names `.git`, or resolves
-    /// outside the worktree through a symlink.
-    static func resolve(path: String, in worktreeRoot: URL) -> URL? {
+    /// Normalizes a client-supplied worktree-relative path: trims surrounding
+    /// whitespace/newlines and rejects the same shapes `resolve` rejects
+    /// (empty, absolute, upward traversal, `.git`). Returns the normalized
+    /// relative path string (e.g. `"src/file.txt"`, no leading/trailing
+    /// slashes) or nil when the path is invalid.
+    ///
+    /// Callers that need to gate access on a path (ignore checks, diff
+    /// pathspecs) MUST use this same normalized string — not the raw
+    /// caller-supplied path — so the string that decided "is this allowed"
+    /// is identical to the string used to actually read/diff the file.
+    /// `resolve(path:in:)` calls this internally to build its URL.
+    static func normalizedRelativePath(_ path: String) -> String? {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !trimmed.hasPrefix("/") else { return nil }
 
         let components = trimmed.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
         guard !components.isEmpty else { return nil }
         guard !components.contains(".."), !components.contains(".git") else { return nil }
+
+        return components.joined(separator: "/")
+    }
+
+    /// Returns the on-disk URL for a worktree-relative path, or nil when the
+    /// path is empty, absolute, traverses upward, names `.git`, or resolves
+    /// outside the worktree through a symlink.
+    static func resolve(path: String, in worktreeRoot: URL) -> URL? {
+        guard let normalized = normalizedRelativePath(path) else { return nil }
+        let components = normalized.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
 
         let candidate = components.reduce(worktreeRoot) { $0.appendingPathComponent($1) }
         let resolvedRoot = worktreeRoot.resolvingSymlinksInPath().standardizedFileURL

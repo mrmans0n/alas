@@ -8000,12 +8000,14 @@ extension AppState: RemoteSessionsProvider {
         case .found(let w):
             worktree = w
         }
-        guard let url = RemoteWorktreeFileAccess.resolve(path: path, in: worktree.path) else {
+        guard let normalizedPath = RemoteWorktreeFileAccess.normalizedRelativePath(path),
+              let url = RemoteWorktreeFileAccess.resolve(path: path, in: worktree.path)
+        else {
             return .failure(reason: .pathRejected, message: nil)
         }
         let git = GitService()
         do {
-            let ignored = try await git.isPathIgnored(worktreePath: worktree.path, path: path)
+            let ignored = try await git.isPathIgnored(worktreePath: worktree.path, path: normalizedPath)
             if ignored {
                 return .failure(reason: .pathRejected, message: nil)
             }
@@ -8024,7 +8026,7 @@ extension AppState: RemoteSessionsProvider {
             let parsed = try await git.diff(
                 worktreePath: worktree.path,
                 againstRef: commits.comparisonRef,
-                file: path)
+                file: normalizedPath)
             let capped = RemoteWorktreeFileAccess.truncateHunks(parsed.hunks)
             return .success(
                 hunks: capped.hunks.map(Self.remoteDiffHunk),
@@ -8073,11 +8075,13 @@ extension AppState: RemoteSessionsProvider {
         case .found(let w):
             worktree = w
         }
-        guard let url = RemoteWorktreeFileAccess.resolve(path: path, in: worktree.path) else {
+        guard let normalizedPath = RemoteWorktreeFileAccess.normalizedRelativePath(path),
+              let url = RemoteWorktreeFileAccess.resolve(path: path, in: worktree.path)
+        else {
             return .failure(reason: .pathRejected, byteSize: nil, message: nil)
         }
         do {
-            let ignored = try await GitService().isPathIgnored(worktreePath: worktree.path, path: path)
+            let ignored = try await GitService().isPathIgnored(worktreePath: worktree.path, path: normalizedPath)
             if ignored {
                 return .failure(reason: .pathRejected, byteSize: nil, message: nil)
             }
