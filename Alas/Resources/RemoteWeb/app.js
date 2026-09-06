@@ -46,6 +46,10 @@ let createState = {
 };
 const worktreeCreation = RemoteWorktreeCreation.createFlow(send);
 worktreeCreation.subscribe(() => renderCreateSheet());
+const changesTree = RemoteFileBrowser.createTree();
+let activeTab = "chat";
+let changesState = { comparisonRef: null, metricsAvailable: true, files: [], truncated: false, loaded: false };
+let detailStack = [];   // [{ tab, path }] for the in-tab list → detail level
 const ATTACH_CAP = 10 * 1000 * 1000;   // 10 MB running total — matches the server's maxAttachmentsBytes
 
 // state ∈ {connecting, ok, bad} drives the chip's dot/border color via [data-state].
@@ -393,7 +397,40 @@ function openSession(id) {
   $("messages").innerHTML = ""; renderConfigAffordances();
   queueItems = []; steerUndoAvailable = false; renderQueue();
   renderDriveBar("idle"); send({ type: "subscribe", sessionId: id });
+  changesTree.reset();
+  changesState = { comparisonRef: null, metricsAvailable: true, files: [], truncated: false, loaded: false };
+  detailStack = [];
+  const summary = listedSessions.get(id);
+  $("detail-tabs").classList.toggle("hidden", !summary || !summary.worktree);
+  showTab("chat");
 }
+
+function showTab(name) {
+  activeTab = name;
+  detailStack = [];
+  $("diff-view").classList.add("hidden");
+  $("file-view").classList.add("hidden");
+  for (const [id, tab] of [["tab-chat", "chat"], ["tab-changes", "changes"], ["tab-files", "files"]]) {
+    $(id).classList.toggle("is-active", tab === name);
+  }
+  $("transcript").classList.toggle("hidden", name !== "chat");
+  $("changes").classList.toggle("hidden", name !== "changes");
+  $("files").classList.toggle("hidden", name !== "files");
+  if (name === "changes") requestChanges();
+  if (name === "files" && changesTree.needsChildren(null)) {
+    send({ type: "listFiles", sessionId: currentSession });
+  }
+}
+
+function requestChanges() {
+  if (!currentSession) return;
+  send({ type: "listChanges", sessionId: currentSession });
+}
+
+$("tab-chat").addEventListener("click", () => showTab("chat"));
+$("tab-changes").addEventListener("click", () => showTab("changes"));
+$("tab-files").addEventListener("click", () => showTab("files"));
+$("changes-refresh").addEventListener("click", requestChanges);
 
 function clearSessionSheetsForOpen() {
   hidePermission();
@@ -414,6 +451,13 @@ function showSessions() {
   $("detail-title").classList.add("hidden"); $("detail-rename").classList.add("hidden");
   $("drivebar").classList.add("hidden");
   $("transcript").classList.add("hidden"); $("sessions").classList.remove("hidden");
+  changesTree.reset();
+  changesState = { comparisonRef: null, metricsAvailable: true, files: [], truncated: false, loaded: false };
+  detailStack = [];
+  activeTab = "chat";
+  $("detail-tabs").classList.add("hidden");
+  $("changes").classList.add("hidden");
+  $("files").classList.add("hidden");
   send({ type: "listSessions" });
 }
 
