@@ -83,6 +83,7 @@ struct CommitMessageEditorView: View {
                 busy: busy,
                 onGenerate: onGenerate
             )
+            .disabled(editorDisabled)
             actionButton(primaryAction, position: .leading)
             if let alternateAction {
                 actionButton(alternateAction, position: .trailing)

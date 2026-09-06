@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 struct CommitPublishCreatedCommit: Equatable, Sendable {
     let commitSHA: String
@@ -16,6 +17,78 @@ struct CommitPublishOperations {
     var createReviewRequest: (_ target: CommitPublishReviewTarget, _ subject: String, _ body: String) async throws -> URL
     var syncGG: () async throws -> Void
     var refreshAfterCompletion: () async -> Void
+
+    static func live(
+        worktreePath: URL,
+        reviewLoop: ReviewLoopState,
+        comparisonBase: String?,
+        syncGG: @escaping () async throws -> Void,
+        refreshAfterCompletion: @escaping () async -> Void,
+        runGit: (([String]) async throws -> ProcessResult)? = nil,
+        commit: ((String, String, Bool) async throws -> String)? = nil,
+        publicationState: (() async throws -> HeadPublicationState)? = nil,
+        containsCommit: ((String, String, String) async throws -> Bool)? = nil
+    ) -> Self {
+        let git = GitService()
+        let run = runGit ?? { try await Process.git($0, cwd: worktreePath) }
+        let commit = commit ?? { try await git.commit(worktreePath: worktreePath, subject: $0, body: $1, amend: $2) }
+        let publication = publicationState ?? { try await git.headPublicationState(worktreePath: worktreePath) }
+        let contains = containsCommit ?? {
+            try await git.remoteBranchContainsCommit(worktreePath: worktreePath, remote: $0, branch: $1, commitSHA: $2)
+        }
+        return Self(
+            createCommit: { subject, body, amend in
+                if amend, try await publication() == .published {
+                    throw CommitPublishWorkflowError.publishedAmend
+                }
+                let sha = try await commit(subject, body, amend)
+                let base: String
+                if let comparisonBase {
+                    base = comparisonBase
+                } else if let parent = try? await run(["rev-parse", "--verify", "\(sha)^"]), parent.exitCode == 0 {
+                    base = parent.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+                } else {
+                    base = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+                }
+                return .init(commitSHA: sha, comparisonBase: base, editorTitle: "\(sha.prefix(7)) \(subject)")
+            },
+            currentHeadSHA: {
+                let result = try await run(["rev-parse", "--verify", "HEAD"])
+                try GitService.assertSuccess(result, op: "Resolve HEAD")
+                return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            },
+            remoteBranchContainsCommit: { target, sha in
+                guard let pushURL = target.pushURL else { throw CommitPublishWorkflowError.missingPushDestination }
+                return try await contains(pushURL, target.upstreamBranch ?? target.branch, sha)
+            },
+            push: { target, _ in
+                guard let pushURL = target.pushURL else { throw CommitPublishWorkflowError.missingPushDestination }
+                let remote = target.pushRemoteName ?? target.remoteName
+                let destination = try await run(["remote", "get-url", "--push", remote])
+                try GitService.assertSuccess(destination, op: "Resolve push destination")
+                guard destination.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == pushURL else {
+                    throw CommitPublishWorkflowError.pushDestinationChanged
+                }
+                let ref = target.upstreamBranch.map { "HEAD:\($0)" } ?? target.branch
+                let result = try await run(["push", "-u", remote, ref])
+                guard result.exitCode == 0 else {
+                    throw NSError(domain: "CommitPublish", code: Int(result.exitCode),
+                        userInfo: [NSLocalizedDescriptionKey: RightPaneState.reviewLoopPushFailureMessage(result)])
+                }
+            },
+            currentReviewRequestExists: { target in
+                try await reviewLoop.currentReviewRequest(remote: target.remote, branch: target.branch,
+                    headOwner: target.headOwner, baseBranch: target.baseBranch) != nil
+            },
+            createReviewRequest: { target, subject, body in
+                try await reviewLoop.createReviewRequest(remote: target.remote, branch: target.branch,
+                    headOwner: target.headOwner, baseBranch: target.baseBranch,
+                    title: subject, body: body, draft: target.createAsDraft)
+            },
+            syncGG: syncGG,
+            refreshAfterCompletion: refreshAfterCompletion
+        )
+    }
 }
 
 enum CommitPublishActivity: Equatable {
@@ -29,6 +102,9 @@ enum CommitPublishActivity: Equatable {
 enum CommitPublishWorkflowError: LocalizedError, Equatable {
     case headMismatch(expected: String, actual: String)
     case invalidDestination(phase: CommitPublishPhase)
+    case missingPushDestination
+    case pushDestinationChanged
+    case publishedAmend
 
     var errorDescription: String? {
         switch self {
@@ -36,11 +112,18 @@ enum CommitPublishWorkflowError: LocalizedError, Equatable {
             return "The current commit changed before publishing could resume."
         case .invalidDestination(let phase):
             return "The publish checkpoint cannot continue its \(phase.rawValue) phase."
+        case .missingPushDestination:
+            return "The publish checkpoint has no captured push destination."
+        case .pushDestinationChanged:
+            return "The push destination changed. Restore the captured remote URL before retrying."
+        case .publishedAmend:
+            return "This commit is already published. Commit locally or turn off Amend before publishing."
         }
     }
 }
 
 @MainActor
+@Observable
 final class CommitPublishWorkflow {
     private let operations: CommitPublishOperations
     private let onCheckpointChange: (CommitPublishCheckpoint?) -> Void
