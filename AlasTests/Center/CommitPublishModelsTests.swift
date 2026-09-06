@@ -106,4 +106,23 @@ struct CommitPublishModelsTests {
         #expect(pair.leading == .init(key: "j", modifiers: [.command, .shift]))
         #expect(pair.trailing == .init(key: "j", modifiers: [.command]))
     }
+
+    @Test func subtleActionBadgeUsesThemeForegroundColors() {
+        #expect(CommitComposerActionEmphasis.subtle.badgeStyle == .init(
+            foreground: .theme("fg"),
+            foregroundOpacity: 1,
+            background: .theme("fg"),
+            backgroundOpacity: 0.12
+        ))
+    }
+
+    @Test func actionPairResolvesShortcutAtEachPosition() {
+        let pair = CommitComposerActionPair.shortcuts(
+            preferred: .trailing,
+            base: .init(key: "return", modifiers: [.command])
+        )
+
+        #expect(pair.shortcut(at: .leading) == .init(key: "return", modifiers: [.command, .shift]))
+        #expect(pair.shortcut(at: .trailing) == .init(key: "return", modifiers: [.command]))
+    }
 }

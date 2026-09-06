@@ -6,6 +6,43 @@ enum CommitComposerActionPosition: Sendable {
     case trailing
 }
 
+enum CommitComposerActionBadgeColor: Equatable, Sendable {
+    case systemWhite
+    case systemBlack
+    case theme(String)
+}
+
+struct CommitComposerActionBadgeStyle: Equatable, Sendable {
+    let foreground: CommitComposerActionBadgeColor
+    let foregroundOpacity: Double
+    let background: CommitComposerActionBadgeColor
+    let backgroundOpacity: Double
+}
+
+enum CommitComposerActionEmphasis: Sendable {
+    case preferred
+    case subtle
+
+    var badgeStyle: CommitComposerActionBadgeStyle {
+        switch self {
+        case .preferred:
+            .init(
+                foreground: .systemWhite,
+                foregroundOpacity: 0.85,
+                background: .systemBlack,
+                backgroundOpacity: 0.25
+            )
+        case .subtle:
+            .init(
+                foreground: .theme("fg"),
+                foregroundOpacity: 1,
+                background: .theme("fg"),
+                backgroundOpacity: 0.12
+            )
+        }
+    }
+}
+
 struct CommitComposerActionPair: Equatable, Sendable {
     let leading: ShortcutBinding
     let trailing: ShortcutBinding
@@ -19,6 +56,13 @@ struct CommitComposerActionPair: Equatable, Sendable {
             Self(leading: base, trailing: base.togglingShift())
         case .trailing:
             Self(leading: base.togglingShift(), trailing: base)
+        }
+    }
+
+    func shortcut(at position: CommitComposerActionPosition) -> ShortcutBinding {
+        switch position {
+        case .leading: leading
+        case .trailing: trailing
         }
     }
 }

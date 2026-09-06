@@ -91,3 +91,32 @@ struct ShortcutBinding: Codable, Equatable, Hashable, Sendable {
         return m
     }
 }
+
+extension ShortcutBinding {
+    init?(keyboardShortcut: KeyboardShortcut) {
+        let key: String
+        switch keyboardShortcut.key {
+        case .return:     key = "return"
+        case .leftArrow:  key = "leftArrow"
+        case .rightArrow: key = "rightArrow"
+        case .upArrow:    key = "upArrow"
+        case .downArrow:  key = "downArrow"
+        case .delete:     key = "delete"
+        case .escape:     key = "escape"
+        case .tab:        key = "tab"
+        case .space:      key = "space"
+        default:
+            let literalKey = keyboardShortcut.key.character.lowercased()
+            guard Self.isSupportedLiteralKey(literalKey) else { return nil }
+            key = literalKey
+        }
+
+        let eventModifiers = keyboardShortcut.modifiers
+        var modifiers: [Modifier] = []
+        if eventModifiers.contains(.control) { modifiers.append(.control) }
+        if eventModifiers.contains(.option) { modifiers.append(.option) }
+        if eventModifiers.contains(.shift) { modifiers.append(.shift) }
+        if eventModifiers.contains(.command) { modifiers.append(.command) }
+        self.init(key: key, modifiers: modifiers)
+    }
+}

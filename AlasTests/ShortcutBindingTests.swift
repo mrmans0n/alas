@@ -71,4 +71,13 @@ struct ShortcutBindingTests {
 
         #expect(base.togglingShift() == .init(key: "j", modifiers: [.command]))
     }
+
+    @Test func keyboardShortcutConvertsToBinding() throws {
+        let shortcut = KeyboardShortcut(.return, modifiers: [.command, .shift])
+
+        #expect(try #require(ShortcutBinding(keyboardShortcut: shortcut)) == .init(
+            key: "return",
+            modifiers: [.shift, .command]
+        ))
+    }
 }

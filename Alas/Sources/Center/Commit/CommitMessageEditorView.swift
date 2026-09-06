@@ -97,6 +97,7 @@ struct CommitMessageEditorView: View {
     ) -> some View {
         let shortcut = shortcut(for: position)
         let isPreferred = alternateAction == nil || position == preferredActionPosition
+        let emphasis: CommitComposerActionEmphasis = isPreferred ? .preferred : .subtle
         let enabled = canRun(action)
         Button(action: action.handler) {
             HStack(spacing: 8) {
@@ -104,7 +105,7 @@ struct CommitMessageEditorView: View {
                     .font(.system(size: 12, weight: .semibold))
                 HStack(spacing: 2) {
                     ForEach(Array(kbdGlyphs(for: shortcut).enumerated()), id: \.offset) { _, glyph in
-                        kbdBadge(glyph)
+                        kbdBadge(glyph, emphasis: emphasis)
                     }
                 }
             }
@@ -135,18 +136,15 @@ struct CommitMessageEditorView: View {
 
     private func shortcut(for position: CommitComposerActionPosition) -> KeyboardShortcut {
         let base = primaryAction.keyboardShortcut
-            ?? KeyboardShortcut(.return, modifiers: .command)
-        guard alternateAction != nil, position != preferredActionPosition else {
-            return base
+            .flatMap { ShortcutBinding(keyboardShortcut: $0) }
+            ?? ShortcutBinding(key: "return", modifiers: [.command])
+        let preferred = alternateAction == nil ? CommitComposerActionPosition.leading : preferredActionPosition
+        let binding = CommitComposerActionPair.shortcuts(preferred: preferred, base: base)
+            .shortcut(at: position)
+        if let shortcut = binding.asKeyboardShortcut() {
+            return shortcut
         }
-
-        var modifiers = base.modifiers
-        if modifiers.contains(.shift) {
-            modifiers.remove(.shift)
-        } else {
-            modifiers.insert(.shift)
-        }
-        return KeyboardShortcut(base.key, modifiers: modifiers)
+        return KeyboardShortcut(.return, modifiers: .command)
     }
 
     private var subjectField: some View {
@@ -259,13 +257,22 @@ struct CommitMessageEditorView: View {
     }
 
     @ViewBuilder
-    private func kbdBadge(_ text: String) -> some View {
+    private func kbdBadge(_ text: String, emphasis: CommitComposerActionEmphasis) -> some View {
+        let style = emphasis.badgeStyle
         Text(text)
             .font(.system(size: 9.5, weight: .semibold))
             .frame(minWidth: 14, minHeight: 14)
             .padding(.horizontal, 3)
-            .background(Color.black.opacity(0.25))
-            .foregroundColor(.white.opacity(0.85))
+            .background(badgeColor(style.background).opacity(style.backgroundOpacity))
+            .foregroundColor(badgeColor(style.foreground).opacity(style.foregroundOpacity))
             .clipShape(RoundedRectangle(cornerRadius: 2))
+    }
+
+    private func badgeColor(_ color: CommitComposerActionBadgeColor) -> Color {
+        switch color {
+        case .systemWhite: return .white
+        case .systemBlack: return .black
+        case .theme(let token): return theme.color(token)
+        }
     }
 }
