@@ -47,7 +47,7 @@ final class CommitPublishWorkflow {
 
     private(set) var activity: CommitPublishActivity = .idle
     private(set) var lastError: Error?
-    private var isRunning = false
+    private var activeRunID: UUID?
 
     init(
         operations: CommitPublishOperations,
@@ -63,8 +63,8 @@ final class CommitPublishWorkflow {
         amend: Bool,
         destination: CommitPublishDestination
     ) async {
-        guard beginRun() else { return }
-        defer { isRunning = false }
+        guard let runID = beginRun() else { return }
+        defer { endRun(runID) }
 
         lastError = nil
         activity = .committing
@@ -82,30 +82,30 @@ final class CommitPublishWorkflow {
             )
             onCheckpointChange(checkpoint)
             try Task.checkCancellation()
-            try await continueResuming(checkpoint)
+            try await continueResuming(checkpoint, runID: runID)
         } catch is CancellationError {
-            finishCancellation()
+            finishCancellation(runID)
         } catch {
-            finish(with: error)
+            finish(with: error, runID: runID)
         }
     }
 
     func resume(_ checkpoint: CommitPublishCheckpoint) async {
-        guard beginRun() else { return }
-        defer { isRunning = false }
+        guard let runID = beginRun() else { return }
+        defer { endRun(runID) }
 
         lastError = nil
 
         do {
-            try await continueResuming(checkpoint)
+            try await continueResuming(checkpoint, runID: runID)
         } catch is CancellationError {
-            finishCancellation()
+            finishCancellation(runID)
         } catch {
-            finish(with: error)
+            finish(with: error, runID: runID)
         }
     }
 
-    private func continueResuming(_ initialCheckpoint: CommitPublishCheckpoint) async throws {
+    private func continueResuming(_ initialCheckpoint: CommitPublishCheckpoint, runID: UUID) async throws {
         try Task.checkCancellation()
         let currentHeadSHA = try await operations.currentHeadSHA()
         try Task.checkCancellation()
@@ -147,7 +147,7 @@ final class CommitPublishWorkflow {
                 if !requestExists {
                     _ = try await operations.createReviewRequest(target, checkpoint.subject, checkpoint.body)
                 }
-                try await complete()
+                try await complete(runID)
                 return
 
             case .sync:
@@ -158,7 +158,7 @@ final class CommitPublishWorkflow {
                 activity = .syncing
                 try Task.checkCancellation()
                 try await operations.syncGG()
-                try await complete()
+                try await complete(runID)
                 return
             }
         }
@@ -173,26 +173,35 @@ final class CommitPublishWorkflow {
         }
     }
 
-    private func complete() async throws {
+    private func complete(_ runID: UUID) async throws {
         onCheckpointChange(nil)
-        try Task.checkCancellation()
         activity = .idle
         lastError = nil
+        endRun(runID)
+        try Task.checkCancellation()
         await operations.refreshAfterCompletion()
     }
 
-    private func beginRun() -> Bool {
-        guard !isRunning else { return false }
-        isRunning = true
-        return true
+    private func beginRun() -> UUID? {
+        guard activeRunID == nil else { return nil }
+        let runID = UUID()
+        activeRunID = runID
+        return runID
     }
 
-    private func finishCancellation() {
+    private func endRun(_ runID: UUID) {
+        guard activeRunID == runID else { return }
+        activeRunID = nil
+    }
+
+    private func finishCancellation(_ runID: UUID) {
+        guard activeRunID == runID else { return }
         activity = .idle
         lastError = nil
     }
 
-    private func finish(with error: Error) {
+    private func finish(with error: Error, runID: UUID) {
+        guard activeRunID == runID else { return }
         activity = .idle
         lastError = error
     }

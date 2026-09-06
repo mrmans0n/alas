@@ -231,6 +231,30 @@ struct CommitPublishWorkflowTests {
         #expect(workflow.lastError == nil)
     }
 
+    @Test func refreshDoesNotBlockNextRun() async {
+        let harness = WorkflowHarness()
+        let refreshGate = AsyncGate()
+        harness.refreshGate = refreshGate
+        let workflow = harness.makeWorkflow()
+        let checkpoint = harness.checkpoint(nextPhase: .createReviewRequest)
+        harness.checkpoint = checkpoint
+
+        let completingRun = Task { @MainActor in
+            await workflow.resume(checkpoint)
+        }
+        await refreshGate.waitUntilEntered()
+        #expect(workflow.activity == .idle)
+
+        await workflow.start(subject: "Second", body: "Body", amend: false, destination: .gg)
+
+        #expect(harness.calls == ["head", "lookupPR", "createPR", "commit", "head", "sync"])
+        #expect(harness.checkpoint == nil)
+        #expect(workflow.lastError == nil)
+
+        await refreshGate.release()
+        await completingRun.value
+    }
+
     @Test func resumeNeverCreatesAnotherCommit() async {
         let harness = WorkflowHarness()
         let workflow = harness.makeWorkflow()
@@ -318,6 +342,7 @@ private final class WorkflowHarness {
     var checkpointWasClearedBeforeRefresh = false
     var createCommitGate: AsyncGate?
     var pushGate: AsyncGate?
+    var refreshGate: AsyncGate?
 
     let target = CommitPublishReviewTarget(
         provider: .github,
@@ -398,6 +423,9 @@ private final class WorkflowHarness {
                     if let syncError { throw syncError }
                 },
                 refreshAfterCompletion: { [unowned self] in
+                    if let refreshGate {
+                        await refreshGate.waitForFirstCall()
+                    }
                     if refreshChecksCheckpoint {
                         checkpointWasClearedBeforeRefresh = checkpoint == nil
                     }
