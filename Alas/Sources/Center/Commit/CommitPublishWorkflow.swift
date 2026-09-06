@@ -47,6 +47,7 @@ final class CommitPublishWorkflow {
 
     private(set) var activity: CommitPublishActivity = .idle
     private(set) var lastError: Error?
+    private var isRunning = false
 
     init(
         operations: CommitPublishOperations,
@@ -62,6 +63,9 @@ final class CommitPublishWorkflow {
         amend: Bool,
         destination: CommitPublishDestination
     ) async {
+        guard beginRun() else { return }
+        defer { isRunning = false }
+
         lastError = nil
         activity = .committing
 
@@ -77,66 +81,86 @@ final class CommitPublishWorkflow {
                 nextPhase: nextPhase(for: destination)
             )
             onCheckpointChange(checkpoint)
-            await resume(checkpoint)
+            try Task.checkCancellation()
+            try await continueResuming(checkpoint)
+        } catch is CancellationError {
+            finishCancellation()
         } catch {
             finish(with: error)
         }
     }
 
     func resume(_ checkpoint: CommitPublishCheckpoint) async {
+        guard beginRun() else { return }
+        defer { isRunning = false }
+
         lastError = nil
 
         do {
-            let currentHeadSHA = try await operations.currentHeadSHA()
-            guard currentHeadSHA == checkpoint.commitSHA else {
-                throw CommitPublishWorkflowError.headMismatch(
-                    expected: checkpoint.commitSHA,
-                    actual: currentHeadSHA
-                )
-            }
-
-            var checkpoint = checkpoint
-            while true {
-                switch checkpoint.nextPhase {
-                case .push:
-                    guard case .review(let target) = checkpoint.destination else {
-                        throw CommitPublishWorkflowError.invalidDestination(phase: .push)
-                    }
-
-                    activity = .pushing
-                    let alreadyPublished = try await operations.remoteBranchContainsCommit(target, checkpoint.commitSHA)
-                    if !alreadyPublished {
-                        try await operations.push(target, checkpoint.commitSHA)
-                    }
-                    checkpoint.nextPhase = .createReviewRequest
-                    onCheckpointChange(checkpoint)
-
-                case .createReviewRequest:
-                    guard case .review(let target) = checkpoint.destination else {
-                        throw CommitPublishWorkflowError.invalidDestination(phase: .createReviewRequest)
-                    }
-
-                    activity = .creatingReviewRequest
-                    let requestExists = try await operations.currentReviewRequestExists(target)
-                    if !requestExists {
-                        _ = try await operations.createReviewRequest(target, checkpoint.subject, checkpoint.body)
-                    }
-                    await complete()
-                    return
-
-                case .sync:
-                    guard case .gg = checkpoint.destination else {
-                        throw CommitPublishWorkflowError.invalidDestination(phase: .sync)
-                    }
-
-                    activity = .syncing
-                    try await operations.syncGG()
-                    await complete()
-                    return
-                }
-            }
+            try await continueResuming(checkpoint)
+        } catch is CancellationError {
+            finishCancellation()
         } catch {
             finish(with: error)
+        }
+    }
+
+    private func continueResuming(_ initialCheckpoint: CommitPublishCheckpoint) async throws {
+        try Task.checkCancellation()
+        let currentHeadSHA = try await operations.currentHeadSHA()
+        try Task.checkCancellation()
+        guard currentHeadSHA == initialCheckpoint.commitSHA else {
+            throw CommitPublishWorkflowError.headMismatch(
+                expected: initialCheckpoint.commitSHA,
+                actual: currentHeadSHA
+            )
+        }
+
+        var checkpoint = initialCheckpoint
+        while true {
+            switch checkpoint.nextPhase {
+            case .push:
+                guard case .review(let target) = checkpoint.destination else {
+                    throw CommitPublishWorkflowError.invalidDestination(phase: .push)
+                }
+
+                activity = .pushing
+                try Task.checkCancellation()
+                let alreadyPublished = try await operations.remoteBranchContainsCommit(target, checkpoint.commitSHA)
+                try Task.checkCancellation()
+                if !alreadyPublished {
+                    try await operations.push(target, checkpoint.commitSHA)
+                }
+                checkpoint.nextPhase = .createReviewRequest
+                onCheckpointChange(checkpoint)
+                try Task.checkCancellation()
+
+            case .createReviewRequest:
+                guard case .review(let target) = checkpoint.destination else {
+                    throw CommitPublishWorkflowError.invalidDestination(phase: .createReviewRequest)
+                }
+
+                activity = .creatingReviewRequest
+                try Task.checkCancellation()
+                let requestExists = try await operations.currentReviewRequestExists(target)
+                try Task.checkCancellation()
+                if !requestExists {
+                    _ = try await operations.createReviewRequest(target, checkpoint.subject, checkpoint.body)
+                }
+                try await complete()
+                return
+
+            case .sync:
+                guard case .gg = checkpoint.destination else {
+                    throw CommitPublishWorkflowError.invalidDestination(phase: .sync)
+                }
+
+                activity = .syncing
+                try Task.checkCancellation()
+                try await operations.syncGG()
+                try await complete()
+                return
+            }
         }
     }
 
@@ -149,11 +173,23 @@ final class CommitPublishWorkflow {
         }
     }
 
-    private func complete() async {
+    private func complete() async throws {
         onCheckpointChange(nil)
+        try Task.checkCancellation()
         activity = .idle
         lastError = nil
         await operations.refreshAfterCompletion()
+    }
+
+    private func beginRun() -> Bool {
+        guard !isRunning else { return false }
+        isRunning = true
+        return true
+    }
+
+    private func finishCancellation() {
+        activity = .idle
+        lastError = nil
     }
 
     private func finish(with error: Error) {

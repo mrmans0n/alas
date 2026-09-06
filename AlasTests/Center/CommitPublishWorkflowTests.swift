@@ -115,6 +115,122 @@ struct CommitPublishWorkflowTests {
         #expect(harness.checkpoint == nil)
     }
 
+    @Test func currentHeadFailureRetainsCheckpoint() async {
+        let harness = WorkflowHarness()
+        harness.currentHeadError = WorkflowHarness.Failure.head
+        let workflow = harness.makeWorkflow()
+        let checkpoint = harness.checkpoint(nextPhase: .push)
+        harness.checkpoint = checkpoint
+
+        await workflow.resume(checkpoint)
+
+        #expect(harness.calls == ["head"])
+        #expect(harness.checkpoint?.nextPhase == .push)
+        #expect(workflow.lastError != nil)
+    }
+
+    @Test func remoteContainmentFailureRetainsPushCheckpoint() async {
+        let harness = WorkflowHarness()
+        harness.remoteContainsCommitError = WorkflowHarness.Failure.remoteContainment
+        let workflow = harness.makeWorkflow()
+        let checkpoint = harness.checkpoint(nextPhase: .push)
+        harness.checkpoint = checkpoint
+
+        await workflow.resume(checkpoint)
+
+        #expect(harness.calls == ["head", "remoteContainsCommit"])
+        #expect(harness.checkpoint?.nextPhase == .push)
+        #expect(workflow.lastError != nil)
+    }
+
+    @Test func malformedDestinationAndPhaseRetainsCheckpoint() async {
+        let harness = WorkflowHarness()
+        let workflow = harness.makeWorkflow()
+        let checkpoint = CommitPublishCheckpoint(
+            commitSHA: "commit-sha",
+            baseRef: "origin/main",
+            commitTitle: "Subject",
+            subject: "Subject",
+            body: "Body",
+            destination: .gg,
+            nextPhase: .push
+        )
+        harness.checkpoint = checkpoint
+
+        await workflow.resume(checkpoint)
+
+        #expect(harness.calls == ["head"])
+        #expect(harness.checkpoint == checkpoint)
+        #expect((workflow.lastError as? CommitPublishWorkflowError) == .invalidDestination(phase: .push))
+    }
+
+    @Test func cancellationAfterPushAdvancesCheckpointWithoutCreatingRequest() async {
+        let harness = WorkflowHarness()
+        let pushGate = AsyncGate()
+        harness.pushGate = pushGate
+        let workflow = harness.makeWorkflow()
+        let checkpoint = harness.checkpoint(nextPhase: .push)
+        harness.checkpoint = checkpoint
+
+        let task = Task { @MainActor in
+            await workflow.resume(checkpoint)
+        }
+        await pushGate.waitUntilEntered()
+        task.cancel()
+        await pushGate.release()
+        await task.value
+
+        #expect(harness.calls == ["head", "remoteContainsCommit", "push"])
+        #expect(harness.checkpoint?.nextPhase == .createReviewRequest)
+        #expect(workflow.activity == .idle)
+        #expect(workflow.lastError == nil)
+    }
+
+    @Test func overlappingInvocationsDoNotClobberActiveRun() async {
+        let harness = WorkflowHarness()
+        let commitGate = AsyncGate()
+        harness.createCommitGate = commitGate
+        let workflow = harness.makeWorkflow()
+        let checkpoint = harness.checkpoint(nextPhase: .push)
+
+        let first = Task { @MainActor in
+            await workflow.start(subject: "First", body: "Body", amend: false, destination: .review(harness.target))
+        }
+        await commitGate.waitUntilEntered()
+
+        await workflow.start(subject: "Second", body: "Body", amend: false, destination: .review(harness.target))
+        await workflow.resume(checkpoint)
+
+        #expect(harness.calls == ["commit"])
+        #expect(workflow.activity == .committing)
+        #expect(workflow.lastError == nil)
+
+        await commitGate.release()
+        await first.value
+
+        #expect(workflow.activity == .idle)
+        #expect(workflow.lastError == nil)
+    }
+
+    @Test func successfulRetryClearsErrorWithoutRepeatingPush() async {
+        let harness = WorkflowHarness()
+        harness.lookupError = WorkflowHarness.Failure.lookup
+        let workflow = harness.makeWorkflow()
+
+        await workflow.start(subject: "Subject", body: "Body", amend: false, destination: .review(harness.target))
+        let checkpoint = try! #require(harness.checkpoint)
+        #expect(checkpoint.nextPhase == .createReviewRequest)
+        #expect(workflow.lastError != nil)
+
+        harness.lookupError = nil
+        harness.calls.removeAll()
+        await workflow.resume(checkpoint)
+
+        #expect(harness.calls == ["head", "lookupPR", "createPR"])
+        #expect(harness.checkpoint == nil)
+        #expect(workflow.lastError == nil)
+    }
+
     @Test func resumeNeverCreatesAnotherCommit() async {
         let harness = WorkflowHarness()
         let workflow = harness.makeWorkflow()
@@ -177,6 +293,8 @@ struct CommitPublishWorkflowTests {
 private final class WorkflowHarness {
     enum Failure: Error {
         case commit
+        case head
+        case remoteContainment
         case push
         case lookup
         case create
@@ -190,12 +308,16 @@ private final class WorkflowHarness {
     var remoteContainsCommit = false
     var reviewRequestExists = false
     var createCommitError: Error?
+    var currentHeadError: Error?
+    var remoteContainsCommitError: Error?
     var pushError: Error?
     var lookupError: Error?
     var createRequestError: Error?
     var syncError: Error?
     var refreshChecksCheckpoint = false
     var checkpointWasClearedBeforeRefresh = false
+    var createCommitGate: AsyncGate?
+    var pushGate: AsyncGate?
 
     let target = CommitPublishReviewTarget(
         provider: .github,
@@ -234,6 +356,9 @@ private final class WorkflowHarness {
             operations: CommitPublishOperations(
                 createCommit: { [unowned self] _, _, _ in
                     calls.append("commit")
+                    if let createCommitGate {
+                        await createCommitGate.waitForFirstCall()
+                    }
                     if let createCommitError { throw createCommitError }
                     return CommitPublishCreatedCommit(
                         commitSHA: "commit-sha",
@@ -243,14 +368,19 @@ private final class WorkflowHarness {
                 },
                 currentHeadSHA: { [unowned self] in
                     calls.append("head")
+                    if let currentHeadError { throw currentHeadError }
                     return headSHA
                 },
                 remoteBranchContainsCommit: { [unowned self] _, _ in
                     calls.append("remoteContainsCommit")
+                    if let remoteContainsCommitError { throw remoteContainsCommitError }
                     return remoteContainsCommit
                 },
                 push: { [unowned self] _, _ in
                     calls.append("push")
+                    if let pushGate {
+                        await pushGate.waitForFirstCall()
+                    }
                     if let pushError { throw pushError }
                 },
                 currentReviewRequestExists: { [unowned self] _ in
@@ -295,5 +425,35 @@ private final class WorkflowHarness {
             destination: .review(target ?? self.target),
             nextPhase: nextPhase
         )
+    }
+}
+
+private actor AsyncGate {
+    private var hasEntered = false
+    private var hasSuspended = false
+    private var entryContinuation: CheckedContinuation<Void, Never>?
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+    func waitForFirstCall() async {
+        guard !hasSuspended else { return }
+        hasSuspended = true
+        hasEntered = true
+        entryContinuation?.resume()
+        entryContinuation = nil
+        await withCheckedContinuation { continuation in
+            releaseContinuation = continuation
+        }
+    }
+
+    func waitUntilEntered() async {
+        guard !hasEntered else { return }
+        await withCheckedContinuation { continuation in
+            entryContinuation = continuation
+        }
+    }
+
+    func release() {
+        releaseContinuation?.resume()
+        releaseContinuation = nil
     }
 }
