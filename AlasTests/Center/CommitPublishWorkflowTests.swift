@@ -18,12 +18,12 @@ struct CommitPublishWorkflowTests {
         )
         let session = CommitPublishSession(checkpoint: nil, onCheckpointChange: { _ in }, onCompletion: { _ in })
         let first = try #require(session.run(subject: "First", body: "", amend: false, operations: operations,
-            prepareDestination: { .gg }))
+            prepareDestination: { .gg() }))
         await refreshGate.waitUntilEntered()
         #expect(!session.isRunning)
         failSync = true
         let second = session.run(subject: "Second", body: "", amend: false, operations: operations,
-            prepareDestination: { .gg })
+            prepareDestination: { .gg() })
         #expect(second != nil)
         await second?.value
         await refreshGate.release()
@@ -109,7 +109,7 @@ struct CommitPublishWorkflowTests {
         let harness = WorkflowHarness()
         let workflow = harness.makeWorkflow()
 
-        await workflow.start(subject: "Subject", body: "Body", amend: false, destination: .gg)
+        await workflow.start(subject: "Subject", body: "Body", amend: false, destination: .gg())
 
         #expect(harness.calls == ["commit", "head", "sync"])
         #expect(harness.checkpointPhases == [.sync])
@@ -194,21 +194,23 @@ struct CommitPublishWorkflowTests {
 
     @Test func changedGGTargetStopsRetryBeforeSync() async {
         let harness = WorkflowHarness()
-        var checkpoint = harness.ggCheckpoint
+        let checkpoint = harness.ggCheckpoint
+        var persistedCheckpoint: CommitPublishCheckpoint? = checkpoint
         let operations = CommitPublishOperations(
             validateGGTarget: { _ in throw GGMutationError.staleConfirmation },
             createCommit: { _, _, _ in Issue.record("Unexpected commit")
             return .init(commitSHA: "committed", comparisonBase: "main", editorTitle: "Title") },
             currentHeadSHA: { "commit-sha" }, remoteBranchContainsCommit: { _, _ in false }, push: { _, _ in },
             currentReviewRequestExists: { _ in true },
-            createReviewRequest: { target, _, _ in target.webURL }, syncGG: { _ in Issue.record("Unexpected sync") },
+            createReviewRequest: { target, _, _ in target.webURL }, syncGG: {},
+            syncGGForTarget: { _ in Issue.record("Unexpected sync") },
             refreshAfterCompletion: {}
         )
-        let workflow = CommitPublishWorkflow(operations: operations) { checkpoint = $0 }
+        let workflow = CommitPublishWorkflow(operations: operations) { persistedCheckpoint = $0 }
 
         await workflow.resume(checkpoint)
 
-        #expect(checkpoint == harness.ggCheckpoint)
+        #expect(persistedCheckpoint == checkpoint)
         #expect(workflow.lastError as? GGMutationError == .staleConfirmation)
     }
 
@@ -250,7 +252,7 @@ struct CommitPublishWorkflowTests {
         harness.syncError = WorkflowHarness.Failure.sync
         let workflow = harness.makeWorkflow()
 
-        await workflow.start(subject: "Subject", body: "Body", amend: false, destination: .gg)
+        await workflow.start(subject: "Subject", body: "Body", amend: false, destination: .gg())
 
         #expect(harness.calls == ["commit", "head", "sync"])
         #expect(harness.checkpoint?.nextPhase == .sync)
@@ -265,7 +267,7 @@ struct CommitPublishWorkflowTests {
             commitTitle: "Subject",
             subject: "Subject",
             body: "Body",
-            destination: .gg,
+            destination: .gg(),
             nextPhase: .sync
         )
         harness.checkpoint = checkpoint
@@ -313,7 +315,7 @@ struct CommitPublishWorkflowTests {
             commitTitle: "Subject",
             subject: "Subject",
             body: "Body",
-            destination: .gg,
+            destination: .gg(),
             nextPhase: .push
         )
         harness.checkpoint = checkpoint
@@ -406,7 +408,7 @@ struct CommitPublishWorkflowTests {
         await refreshGate.waitUntilEntered()
         #expect(workflow.activity == .idle)
 
-        await workflow.start(subject: "Second", body: "Body", amend: false, destination: .gg)
+        await workflow.start(subject: "Second", body: "Body", amend: false, destination: .gg())
 
         #expect(harness.calls == ["head", "lookupPR", "createPR", "commit", "head", "sync"])
         #expect(harness.checkpoint == nil)

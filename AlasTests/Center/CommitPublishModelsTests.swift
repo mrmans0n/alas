@@ -112,7 +112,7 @@ struct CommitPublishModelsTests {
 
     private func presentationCheckpoint(phase: CommitPublishPhase) -> CommitPublishCheckpoint {
         CommitPublishCheckpoint(commitSHA: "abc", baseRef: "main", commitTitle: "abc Subject",
-            subject: "Subject", body: "", destination: phase == .sync ? .gg : .review(.init(
+            subject: "Subject", body: "", destination: phase == .sync ? .gg() : .review(.init(
                 provider: .gitlab, host: "gitlab.com", owner: "owner", repository: "repo",
                 repositorySlug: "owner/repo", remoteName: "origin", webURL: URL(string: "https://gitlab.com/owner/repo")!,
                 branch: "feature", upstreamBranch: nil, headOwner: nil, baseBranch: "main",
@@ -232,7 +232,7 @@ struct CommitPublishModelsTests {
             commitTitle: "def456 Subject",
             subject: "Subject",
             body: "Body",
-            destination: .gg,
+            destination: .gg(),
             nextPhase: .sync
         )
 

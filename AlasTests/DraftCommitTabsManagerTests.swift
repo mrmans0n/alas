@@ -430,7 +430,7 @@ struct DraftCommitTabsManagerTests {
             commitTitle: "abc1234 feat: publish",
             subject: "feat: publish",
             body: "Publish body",
-            destination: .gg,
+            destination: .gg(),
             nextPhase: .push
         )
     }

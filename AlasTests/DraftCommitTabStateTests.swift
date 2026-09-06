@@ -67,7 +67,7 @@ struct DraftCommitTabStateTests {
             commitTitle: "abc123 Subject",
             subject: "Subject",
             body: "Body",
-            destination: .gg,
+            destination: .gg(),
             nextPhase: .sync
         )
         state.prepareForNewCommit()
