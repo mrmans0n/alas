@@ -789,14 +789,21 @@ extension GitService {
     }
 
     /// Whether `path` (worktree-relative) is covered by gitignore rules,
-    /// including local excludes (`.git/info/exclude`, `core.excludesFile`) —
-    /// `--no-index` folds those in the same way `ignoredOrExcludedVisibility`
-    /// does for the file tree. Used to reject reading or diffing a single
-    /// path the client already knows about, mirroring the visibility filter
-    /// that already keeps such paths out of the file tree entirely.
+    /// including local excludes (`.git/info/exclude`, `core.excludesFile`).
+    /// Used to reject reading or diffing a single path the client already
+    /// knows about, mirroring the visibility filter that already keeps such
+    /// paths out of the file tree entirely.
+    ///
+    /// Deliberately does NOT pass `--no-index`: that flag makes git ignore
+    /// the index entirely, which would report a force-added tracked file
+    /// (`git add -f`) matching a `.gitignore` pattern as "ignored" even
+    /// though it's correctly shown as tracked in the Files/Changes tabs.
+    /// Without the flag, git consults the index first, so a tracked path
+    /// always reports as not ignored while a genuinely untracked, gitignored
+    /// path still reports as ignored.
     func isPathIgnored(worktreePath: URL, path: String) async throws -> Bool {
         let result = try await Process.git(
-            ["check-ignore", "-q", "--no-index", "--", path],
+            ["check-ignore", "-q", "--", path],
             cwd: worktreePath
         )
         switch result.exitCode {

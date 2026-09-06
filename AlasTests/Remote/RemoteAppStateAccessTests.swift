@@ -1084,6 +1084,35 @@ struct RemoteAppStateAccessTests {
         #expect(diffResult == .failure(reason: .pathRejected, message: nil))
     }
 
+    @Test func remoteFileContentsAndDiffRejectAGitignoredFileWithAWhitespacePaddedPath() async throws {
+        let repository = try await makeRemoteBranchesRepository()
+        defer { try? FileManager.default.removeItem(at: repository) }
+        try "secret.env\n".write(
+            to: repository.appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
+        try "TOKEN=abc\n".write(
+            to: repository.appendingPathComponent("secret.env"), atomically: true, encoding: .utf8)
+
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+        let state = makeRemoteGitBackedState(repositoryPath: repository)
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let tab = try #require(acpTabs(in: state).first)
+        let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
+        await settleSessionRowsRace(manager)
+
+        let contentsResult = await state.remoteFileContents(sessionId: tab.sessionId, path: " secret.env")
+        #expect(contentsResult == .failure(reason: .pathRejected, byteSize: nil, message: nil))
+
+        let diffResult = await state.remoteFileDiff(sessionId: tab.sessionId, path: " secret.env")
+        #expect(diffResult == .failure(reason: .pathRejected, message: nil))
+    }
+
     @Test func remoteFileContentsAndDiffServeATrackedFileNormally() async throws {
         let repository = try await makeRemoteBranchesRepository()
         defer { try? FileManager.default.removeItem(at: repository) }

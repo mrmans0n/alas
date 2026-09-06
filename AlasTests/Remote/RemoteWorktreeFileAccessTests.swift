@@ -122,6 +122,22 @@ struct RemoteWorktreeFileAccessTests {
         #expect(RemoteWorktreeFileAccess.resolve(path: ".gIT/config", in: root) == nil)
     }
 
+    @Test func normalizedRelativePathTrimsWhitespaceToMatchTheTrimmedForm() {
+        #expect(RemoteWorktreeFileAccess.normalizedRelativePath(" secret.env") == "secret.env")
+        #expect(
+            RemoteWorktreeFileAccess.normalizedRelativePath(" secret.env")
+                == RemoteWorktreeFileAccess.normalizedRelativePath("secret.env"))
+        #expect(RemoteWorktreeFileAccess.normalizedRelativePath("\tsrc/file.txt\n") == "src/file.txt")
+    }
+
+    @Test func normalizedRelativePathRejectsTheSameInputsAsResolve() {
+        #expect(RemoteWorktreeFileAccess.normalizedRelativePath("") == nil)
+        #expect(RemoteWorktreeFileAccess.normalizedRelativePath("   ") == nil)
+        #expect(RemoteWorktreeFileAccess.normalizedRelativePath("/etc/passwd") == nil)
+        #expect(RemoteWorktreeFileAccess.normalizedRelativePath("../secrets.txt") == nil)
+        #expect(RemoteWorktreeFileAccess.normalizedRelativePath(".git/config") == nil)
+    }
+
     @Test func readFileContentsReportsTooLargeFromStatWithoutReadingTheWholeFile() async throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }

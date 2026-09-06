@@ -152,4 +152,16 @@ struct GitServiceRemoteChangesTests {
         let ignored = try await GitService().isPathIgnored(worktreePath: repo, path: "a.txt")
         #expect(!ignored)
     }
+
+    @Test func isPathIgnored_reportsFalseForAForceAddedTrackedFileMatchingAGitignorePattern() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try "forced.log\n".write(to: repo.appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
+        try "keep me\n".write(to: repo.appendingPathComponent("forced.log"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "-f", "forced.log"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "force add ignored file"], cwd: repo)
+
+        let ignored = try await GitService().isPathIgnored(worktreePath: repo, path: "forced.log")
+        #expect(!ignored)
+    }
 }
