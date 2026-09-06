@@ -231,4 +231,74 @@ struct GitServiceRemoteChangesTests {
         let ignored = try await GitService().isPathIgnored(worktreePath: repo, path: "forced.log")
         #expect(!ignored)
     }
+
+    // MARK: - fileTreeChildren (remote branch) ignored-directory-with-tracked-descendant
+
+    /// `fileTreeChildren`'s remote branch discovers directory entries by
+    /// listing the actual remote filesystem (not just `git ls-files`), so it
+    /// can encounter a directory like `.vscode` that matches `.gitignore`
+    /// but contains a force-added, tracked file such as
+    /// `.vscode/settings.json`. Classifying `.vscode` itself as `.ignored`
+    /// would make `AppState.remoteFileNodes` drop it from its parent's flat
+    /// listing entirely — since the wire protocol's `RemoteFileNode` has no
+    /// `children` and fetches each directory lazily, the client would never
+    /// be able to expand into `.vscode` to reach `settings.json`, even
+    /// though that file is genuinely tracked and reachable via
+    /// `remoteFileContents`/`remoteFileDiff` if the client already knew its
+    /// path. This exercises the extracted decision helper directly, since
+    /// driving the remote branch of `fileTreeChildren` end-to-end requires a
+    /// real SSH-reachable host (`RemoteFileStats.directoryEntries`), which
+    /// isn't available in this test environment — see
+    /// `RemoteAppStateAccessTests.readRemoteWorktreeFileRawDoesNotFallBackToLocalDiskWhenTheHostIsUnreachable`
+    /// for the same constraint acknowledged elsewhere.
+    @Test func shouldClassifyRemotelyDiscoveredEntry_skipsADirectoryWithATrackedDescendant() {
+        let gitVisiblePaths: Set<String> = [".vscode/settings.json"]
+
+        let result = GitService().shouldClassifyRemotelyDiscoveredEntry(
+            fullPath: ".vscode",
+            isDirectory: true,
+            gitVisiblePaths: gitVisiblePaths
+        )
+
+        #expect(!result)
+    }
+
+    @Test func shouldClassifyRemotelyDiscoveredEntry_classifiesADirectoryWithNoTrackedDescendant() {
+        let gitVisiblePaths: Set<String> = ["src/main.swift"]
+
+        let result = GitService().shouldClassifyRemotelyDiscoveredEntry(
+            fullPath: "node_modules",
+            isDirectory: true,
+            gitVisiblePaths: gitVisiblePaths
+        )
+
+        #expect(result)
+    }
+
+    @Test func shouldClassifyRemotelyDiscoveredEntry_alwaysClassifiesFiles() {
+        let gitVisiblePaths: Set<String> = []
+
+        let result = GitService().shouldClassifyRemotelyDiscoveredEntry(
+            fullPath: ".env",
+            isDirectory: false,
+            gitVisiblePaths: gitVisiblePaths
+        )
+
+        #expect(result)
+    }
+
+    @Test func shouldClassifyRemotelyDiscoveredEntry_skipsOnlyForADirectDescendantNotAPrefixCollision() {
+        // ".vscode-extra/tracked.txt" is NOT a descendant of ".vscode" (no
+        // "/" boundary), so this must not false-positive via a naive
+        // `hasPrefix(root)` check on the un-slashed root.
+        let gitVisiblePaths: Set<String> = [".vscode-extra/tracked.txt"]
+
+        let result = GitService().shouldClassifyRemotelyDiscoveredEntry(
+            fullPath: ".vscode",
+            isDirectory: true,
+            gitVisiblePaths: gitVisiblePaths
+        )
+
+        #expect(result)
+    }
 }
