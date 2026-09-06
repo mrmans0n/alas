@@ -59,4 +59,16 @@ struct ShortcutBindingTests {
         #expect(ShortcutBinding(key: "f13", modifiers: [.command]).asKeyboardShortcut() == nil)
         #expect(ShortcutBinding(key: "🙂", modifiers: [.command]).asKeyboardShortcut() == nil)
     }
+
+    @Test func shiftVariantAddsShift() {
+        let base = ShortcutBinding(key: "return", modifiers: [.command])
+
+        #expect(base.togglingShift() == .init(key: "return", modifiers: [.command, .shift]))
+    }
+
+    @Test func shiftVariantRemovesExistingShift() {
+        let base = ShortcutBinding(key: "j", modifiers: [.command, .shift])
+
+        #expect(base.togglingShift() == .init(key: "j", modifiers: [.command]))
+    }
 }

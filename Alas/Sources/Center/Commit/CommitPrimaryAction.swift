@@ -1,6 +1,28 @@
 import Foundation
 import SwiftUI
 
+enum CommitComposerActionPosition: Sendable {
+    case leading
+    case trailing
+}
+
+struct CommitComposerActionPair: Equatable, Sendable {
+    let leading: ShortcutBinding
+    let trailing: ShortcutBinding
+
+    static func shortcuts(
+        preferred: CommitComposerActionPosition,
+        base: ShortcutBinding
+    ) -> Self {
+        switch preferred {
+        case .leading:
+            Self(leading: base, trailing: base.togglingShift())
+        case .trailing:
+            Self(leading: base.togglingShift(), trailing: base)
+        }
+    }
+}
+
 struct CommitPrimaryAction {
     let label: String
     let savedLabel: String?     // shown when showSavedState is true (and non-nil)

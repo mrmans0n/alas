@@ -86,4 +86,24 @@ struct CommitPublishModelsTests {
             webURL: URL(string: "https://gitlab.example.com/team/project")!
         ))
     }
+
+    @Test func preferredTrailingActionReceivesBaseShortcut() {
+        let pair = CommitComposerActionPair.shortcuts(
+            preferred: .trailing,
+            base: .init(key: "return", modifiers: [.command])
+        )
+
+        #expect(pair.leading == .init(key: "return", modifiers: [.command, .shift]))
+        #expect(pair.trailing == .init(key: "return", modifiers: [.command]))
+    }
+
+    @Test func preferredLeadingActionReceivesBaseShortcut() {
+        let pair = CommitComposerActionPair.shortcuts(
+            preferred: .leading,
+            base: .init(key: "j", modifiers: [.command, .shift])
+        )
+
+        #expect(pair.leading == .init(key: "j", modifiers: [.command, .shift]))
+        #expect(pair.trailing == .init(key: "j", modifiers: [.command]))
+    }
 }

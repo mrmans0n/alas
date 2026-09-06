@@ -45,6 +45,16 @@ struct ShortcutBinding: Codable, Equatable, Hashable, Sendable {
         keyEquivalent != nil
     }
 
+    func togglingShift() -> Self {
+        var toggledModifiers = modifiers
+        if let shiftIndex = toggledModifiers.firstIndex(of: .shift) {
+            toggledModifiers.remove(at: shiftIndex)
+        } else {
+            toggledModifiers.append(.shift)
+        }
+        return Self(key: key, modifiers: toggledModifiers)
+    }
+
     func asKeyboardShortcut() -> KeyboardShortcut? {
         guard let keyEquivalent else { return nil }
         return KeyboardShortcut(keyEquivalent, modifiers: eventModifiers)
