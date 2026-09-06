@@ -362,6 +362,67 @@ struct ACPMarkdownInlineRendererTests {
         #expect(drawerScrollView.frame.height < 200)
     }
 
+    @Test("outdated drawer long thread list stays capped and scrollable")
+    func outdatedDrawerLongThreadListStaysCappedAndScrollable() throws {
+        let threads = (0..<12).map { index in
+            ReviewThread(
+                id: "thread-\(index)",
+                path: "Sources/App\(index).swift",
+                line: nil,
+                startLine: nil,
+                originalLine: nil,
+                diffHunk: "@@ -1,4 +1,8 @@\n func body() {\n     return nil\n }",
+                isResolved: false,
+                isOutdated: true,
+                isFileLevel: false,
+                comments: [
+                    ReviewComment(
+                        id: "comment-\(index)",
+                        author: "chatgpt-codex-connector",
+                        body: """
+                        **Resolve live sessions before declaring them unknown**
+
+                        When a session exists in `liveSession(for:)` but is temporarily absent from
+                        `sessionRows`, all four endpoints incorrectly return `sessionUnknown`.
+                        """,
+                        url: nil,
+                        createdAt: nil,
+                        viewerCanUpdate: false,
+                        viewerCanDelete: false,
+                        isPending: false
+                    )
+                ],
+                viewerCanResolve: false,
+                viewerCanReply: false,
+                url: nil
+            )
+        }
+
+        let host = NSHostingView(
+            rootView: OutdatedThreadsDrawer(
+                threads: threads,
+                maxExpandedListHeight: 280,
+                initiallyExpanded: true
+            )
+            .environment(\.theme, try Theme.loadBundled(id: "cool-slate"))
+            .frame(width: 620, height: 360)
+        )
+        host.frame = NSRect(x: 0, y: 0, width: 620, height: 360)
+        // The capped height is derived from a measured content-height preference, which
+        // needs a follow-up layout pass to settle after the first one discovers it.
+        host.layoutSubtreeIfNeeded()
+        host.layoutSubtreeIfNeeded()
+
+        let drawerScrollView = try #require(
+            allSubviews(of: host)
+                .compactMap { $0 as? NSScrollView }
+                .max { $0.frame.height < $1.frame.height }
+        )
+        // The viewport must honour the cap instead of growing to the full content height,
+        // otherwise the list overflows the drawer and there is nothing left to scroll.
+        #expect(drawerScrollView.frame.height <= 280)
+    }
+
     @Test("inline markdown text invalidates height when resized narrower")
     func inlineMarkdownTextInvalidatesHeightWhenResizedNarrower() throws {
         let theme = try Theme.loadBundled(id: "cool-slate")
