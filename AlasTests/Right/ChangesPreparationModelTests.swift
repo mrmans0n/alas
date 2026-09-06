@@ -91,7 +91,7 @@ struct ChangesPreparationModelTests {
         #expect(model.ggActions.isEmpty)
     }
 
-    @Test func ggPreparationShowsReviewAndThreeDestinations() {
+    @Test func ggPreparationShowsReviewAndFourDestinations() {
         let model = ChangesPreparationModel.makeGG(
             staged: .init(files: 2, insertions: 8, deletions: 3),
             hasDraft: false,
@@ -99,8 +99,8 @@ struct ChangesPreparationModelTests {
         )
 
         #expect(model.primaryAction?.title == "Review current changes")
-        #expect(model.ggActions.map(\.kind) == [.newStackCommit, .amendCurrent, .absorbIntoStack])
-        #expect(model.ggActions.map(\.title) == ["New stack commit", "Amend current", "Absorb into stack"])
+        #expect(model.ggActions.map(\.kind) == [.newStackCommit, .commitAndSync, .amendCurrent, .absorbIntoStack])
+        #expect(model.ggActions.map(\.title) == ["New stack commit", "Commit & sync", "Amend current", "Absorb into stack"])
         #expect(model.ggActions.allSatisfy { $0.isEnabled })
     }
 
@@ -112,6 +112,7 @@ struct ChangesPreparationModelTests {
         )
 
         #expect(model.ggAction(.newStackCommit)?.isEnabled == true)
+        #expect(model.ggAction(.commitAndSync)?.isEnabled == true)
         #expect(model.ggAction(.amendCurrent)?.disabledReason == "Stage changes first")
         #expect(model.ggAction(.absorbIntoStack)?.disabledReason == "Stage changes first")
     }
@@ -162,7 +163,7 @@ struct ChangesPreparationModelTests {
             capabilities: stagedOnlyCapabilities
         )
 
-        #expect(model.ggActions.map(\.kind) == [.newStackCommit, .amendCurrent, .absorbIntoStack])
+        #expect(model.ggActions.map(\.kind) == [.newStackCommit, .commitAndSync, .amendCurrent, .absorbIntoStack])
         #expect(!model.ggActions.contains { $0.isEnabled })
         #expect(!model.isVisible)
     }
@@ -299,6 +300,8 @@ struct ChangesPreparationModelTests {
 
         #expect(model.ggAction(.newStackCommit)?.disabledReason ==
             "Checkout the stack head to create a new stack commit.")
+        #expect(model.ggAction(.commitAndSync)?.disabledReason ==
+            "Checkout the stack head to create a new stack commit.")
         #expect(model.ggAction(.amendCurrent)?.isEnabled == true)
         #expect(model.ggAction(.absorbIntoStack)?.isEnabled == true)
     }
@@ -315,6 +318,41 @@ struct ChangesPreparationModelTests {
         #expect(model.ggActions.allSatisfy {
             $0.disabledReason == "Another GG operation is running."
         })
+    }
+
+    @Test func publishDestinationSuppressesOnlyRedundantCompactActions() {
+        let publish = CommitPublishAvailability(label: "Commit & PR", detail: "Publish branch", disabledReason: nil, showsDraftToggle: true)
+        for kind in [ReviewReadinessActionKind.pushBranch, .createReviewRequest, .inspectReviewEvidence] {
+            let model = ChangesPreparationModel(
+                changes: [changedFile("App.swift", stage: .staged, add: 1, del: 0)],
+                hasDraft: false, draftNonEmpty: false,
+                readinessActions: [Action(kind: kind, title: "Action", isEnabled: true)],
+                publishAvailability: publish
+            )
+            #expect(model.draftAction != nil)
+            #expect(model.publishAction == publish)
+            #expect(model.reviewRequestActions.map(\.kind) == (kind == .inspectReviewEvidence ? [kind] : []))
+        }
+    }
+
+    @Test func publishDestinationNeedsStagedChangesOrDraft() {
+        let model = ChangesPreparationModel(changes: [], hasDraft: false, draftNonEmpty: false,
+            readinessActions: [], publishAvailability: .init(label: "Commit & PR", detail: "Publish branch", disabledReason: nil, showsDraftToggle: true))
+        #expect(model.publishAction == nil)
+    }
+
+    @Test func publishDestinationKeepsUnrelatedActionBesideRedundantPush() {
+        let model = ChangesPreparationModel(
+            changes: [], hasDraft: true, draftNonEmpty: true,
+            readinessActions: [
+                Action(kind: .pushBranch, title: "Push", isEnabled: true),
+                Action(kind: .inspectReviewEvidence, title: "Inspect", isEnabled: true),
+            ],
+            publishAvailability: .init(label: "Commit & push", detail: "Publish branch", disabledReason: "Published Amend", showsDraftToggle: false)
+        )
+        #expect(model.draftAction != nil)
+        #expect(model.publishAction?.isEnabled == false)
+        #expect(model.reviewRequestActions.map(\.kind) == [.inspectReviewEvidence])
     }
 }
 

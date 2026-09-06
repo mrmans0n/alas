@@ -1,5 +1,93 @@
 import Foundation
 
+enum CommitPublishAmendProbe: Equatable, Sendable {
+    case loading
+    case notPublished
+    case published
+    case failed(String)
+
+    init(_ state: HeadPublicationState) {
+        self = state == .published ? .published : .notPublished
+    }
+
+    var disabledReason: String? {
+        switch self {
+        case .loading: "Checking whether HEAD is published."
+        case .notPublished: nil
+        case .published: "This commit is already published. Commit locally or turn off Amend before publishing."
+        case .failed(let message): message
+        }
+    }
+}
+
+struct CommitPublishAvailability: Equatable, Sendable {
+    let label: String
+    let detail: String
+    let disabledReason: String?
+    let showsDraftToggle: Bool
+
+    var isEnabled: Bool { disabledReason == nil }
+
+    static func review(
+        snapshot: ReviewLoopSnapshot?,
+        supportedRemote: CodeHostRemote? = nil,
+        isRefreshing: Bool = false,
+        currentBranch: String? = nil,
+        currentBaseBranch: String? = nil,
+        lastError: String? = nil,
+        mutationDisabledReason: String? = nil,
+        amend: Bool = false,
+        amendProbe: CommitPublishAmendProbe = .loading
+    ) -> Self? {
+        guard let remote = snapshot == nil ? supportedRemote : snapshot?.remote else { return nil }
+        let hasRequest = snapshot?.reviewRequest != nil
+        let label = hasRequest ? "Commit & push" : "Commit & \(remote.kind.reviewRequestLabel)"
+        let detail = hasRequest ? "Push to \(remote.repositorySlug)" : "Create \(remote.kind.reviewRequestLabel) in \(remote.repositorySlug)"
+        let reason: String?
+        if let mutationDisabledReason {
+            reason = mutationDisabledReason
+        } else if let lastError {
+            reason = lastError
+        } else if isRefreshing || snapshot == nil {
+            reason = "Wait for review state to load."
+        } else if let snapshot {
+            reason = reviewDisabledReason(snapshot, currentBranch: currentBranch, currentBaseBranch: currentBaseBranch)
+                ?? (amend ? amendProbe.disabledReason : nil)
+        } else {
+            reason = "Wait for review state to load."
+        }
+        return Self(label: label, detail: detail, disabledReason: reason, showsDraftToggle: !hasRequest)
+    }
+
+    private static func reviewDisabledReason(
+        _ snapshot: ReviewLoopSnapshot, currentBranch: String?, currentBaseBranch: String?
+    ) -> String? {
+        if let error = snapshot.errorMessage { return error }
+        guard let remote = snapshot.remote else { return "No supported review host." }
+        if !snapshot.providerAvailable { return "\(remote.kind.displayName) CLI missing." }
+        if !snapshot.providerAuthenticated { return "\(remote.kind.displayName) authentication required." }
+        if let currentBranch, currentBranch != snapshot.local.branchName {
+            return "Refresh review state for the current branch."
+        }
+        if let currentBaseBranch, currentBaseBranch != snapshot.local.baseBranch {
+            return "Refresh review state for the selected base."
+        }
+        let branch = currentBranch ?? snapshot.local.branchName
+        let base = currentBaseBranch ?? snapshot.local.baseBranch
+        let remotePrefix = "\(remote.remoteName)/"
+        let normalizedBase = base.hasPrefix(remotePrefix) ? String(base.dropFirst(remotePrefix.count)) : base
+        if branch.isEmpty || branch == "HEAD" { return "Checkout a branch before publishing." }
+        if branch == normalizedBase { return "Checkout a feature branch before publishing." }
+        if snapshot.local.pushState == .stale || snapshot.local.pushState == .diverged {
+            return "Remote has commits not in this branch. Pull or rebase before publishing."
+        }
+        if snapshot.reviewRequest == nil && !snapshot.providerCapabilities.canCreateReviewRequest {
+            return "Creating a \(remote.kind.reviewRequestLabel) is unavailable."
+        }
+        return nil
+    }
+}
+
 enum DraftCommitPreferredAction: String, Codable, Equatable, Sendable {
     case commit
     case publish

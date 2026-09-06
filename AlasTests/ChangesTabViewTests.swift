@@ -4,6 +4,14 @@ import Testing
 
 @MainActor
 struct ChangesTabViewTests {
+    @Test func ggFirstRowRoutesToDraftWithExplicitIntent() {
+        #expect(ChangesTabView.draftPreferredAction(for: .newStackCommit) == .commit)
+        #expect(ChangesTabView.draftPreferredAction(for: .commitAndSync) == .publish)
+        #expect(ChangesTabView.stackAction(for: .commitAndSync) == nil)
+        #expect(ChangesTabView.draftPreferredAction(for: .amendCurrent) == nil)
+        #expect(ChangesTabView.draftPreferredAction(for: .absorbIntoStack) == nil)
+    }
+
     @Test func appKitCommitHeaderTracksCommitCounts() {
         #expect(ChangesTabView.commitHeaderCountsToken(primary: 1, older: 23)
             != ChangesTabView.commitHeaderCountsToken(primary: 12, older: 3))

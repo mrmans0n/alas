@@ -41,6 +41,7 @@ struct ChangesPreparationCard: View {
     let model: ChangesPreparationModel
     let onReviewChanges: () -> Void
     let onDraftCommit: () -> Void
+    let onPublishCommit: () -> Void
     let onGGAction: (GGChangesPreparationAction) -> Void
     let onGGStackAction: (GGStackActionKind) -> Void
     let onReviewRequestAction: (ReviewReadinessActionKind) -> Void
@@ -61,7 +62,7 @@ struct ChangesPreparationCard: View {
                     ggReconciliationButton(reconciliationAction)
                 }
                 if !model.ggActions.isEmpty {
-                    HStack(spacing: 6) {
+                    LazyVGrid(columns: [GridItem(.flexible(minimum: 0)), GridItem(.flexible(minimum: 0))], spacing: 6) {
                         ForEach(model.ggActions, id: \.kind) { action in
                             ggDestinationButton(action)
                         }
@@ -202,6 +203,9 @@ struct ChangesPreparationCard: View {
             if let draftAction = model.draftAction {
                 secondaryDraftButton(draftAction)
             }
+            if let publishAction = model.publishAction {
+                secondaryPublishButton(publishAction)
+            }
             ForEach(model.reviewRequestActions, id: \.kind) { action in
                 secondaryReviewRequestButton(action)
             }
@@ -212,6 +216,9 @@ struct ChangesPreparationCard: View {
         VStack(alignment: .leading, spacing: 6) {
             if let draftAction = model.draftAction {
                 secondaryDraftButton(draftAction)
+            }
+            if let publishAction = model.publishAction {
+                secondaryPublishButton(publishAction)
             }
             ForEach(model.reviewRequestActions, id: \.kind) { action in
                 secondaryReviewRequestButton(action)
@@ -233,6 +240,19 @@ struct ChangesPreparationCard: View {
             action: onDraftCommit
         )
         .accessibilityIdentifier("changes-preparation-draft")
+    }
+
+    private func secondaryPublishButton(_ action: CommitPublishAvailability) -> some View {
+        secondaryButton(
+            title: action.label,
+            subtitle: action.detail,
+            iconName: "arrow.up",
+            showsDot: false,
+            isEnabled: action.isEnabled,
+            action: onPublishCommit
+        )
+        .help(action.disabledReason ?? action.detail)
+        .accessibilityIdentifier("changes-preparation-publish")
     }
 
     private func secondaryReviewRequestButton(
@@ -370,13 +390,13 @@ struct ChangesPreparationCard: View {
             return switch action.kind {
             case .amendCurrent: "Amending…"
             case .absorbIntoStack: "Absorbing…"
-            case .newStackCommit: action.title
+            case .newStackCommit, .commitAndSync: action.title
             }
         }
         if let disabledReason = action.disabledReason {
             return disabledReason
         }
-        if action.kind == .newStackCommit, action.hasNonEmptyDraft, !action.stats.hasChanges {
+        if action.hasNonEmptyDraft, !action.stats.hasChanges {
             return "Draft ready"
         }
         return ChangesPreparationCardText.draftStats(
@@ -389,6 +409,7 @@ struct ChangesPreparationCard: View {
     private func ggIconName(for action: GGChangesPreparationAction) -> String {
         switch action {
         case .newStackCommit: "commit"
+        case .commitAndSync: "arrow.clockwise"
         case .amendCurrent: "arrow.uturn.backward.circle"
         case .absorbIntoStack: "arrow.down.to.line.compact"
         }
@@ -397,6 +418,7 @@ struct ChangesPreparationCard: View {
     private func ggIdentifier(for action: GGChangesPreparationAction) -> String {
         switch action {
         case .newStackCommit: "new"
+        case .commitAndSync: "sync"
         case .amendCurrent: "amend"
         case .absorbIntoStack: "absorb"
         }
