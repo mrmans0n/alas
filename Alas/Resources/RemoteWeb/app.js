@@ -435,6 +435,16 @@ function plural(count, singular) {
   return `${count} ${singular}${count === 1 ? "" : "s"}`;
 }
 
+function resetChangesAndFilesDOM() {
+  $("changes-list").innerHTML = "";
+  $("changes-summary").textContent = "";
+  $("changes-error").textContent = ""; $("changes-error").classList.add("hidden");
+  $("file-list").innerHTML = "";
+  $("file-error").textContent = ""; $("file-error").classList.add("hidden");
+  $("diff-rows").innerHTML = ""; $("diff-path").textContent = "";
+  $("file-view-body").innerHTML = ""; $("file-view-path").textContent = "";
+}
+
 function openSession(id) {
   clearSessionSheetsForOpen();
   currentSession = id; messages = new Map(); messageNodes = new Map(); transcriptMeta = null; olderFetchInFlight = false;
@@ -449,9 +459,18 @@ function openSession(id) {
   changesTree.reset();
   changesState = { comparisonRef: null, metricsAvailable: true, files: [], truncated: false, loaded: false };
   detailStack = [];
+  resetChangesAndFilesDOM();
+  if (changesRefreshDebounceTimer) { clearTimeout(changesRefreshDebounceTimer); changesRefreshDebounceTimer = null; }
+  previousChangesStreamingState = "idle";
   const summary = listedSessions.get(id);
   $("detail-tabs").classList.toggle("hidden", !summary || !summary.worktree);
   showTab("chat");
+}
+
+function showTabListLevel() {
+  $("changes-list").classList.remove("hidden");
+  $("changes-header").classList.remove("hidden");
+  $("file-list").classList.remove("hidden");
 }
 
 function showTab(name) {
@@ -459,6 +478,7 @@ function showTab(name) {
   detailStack = [];
   $("diff-view").classList.add("hidden");
   $("file-view").classList.add("hidden");
+  showTabListLevel();
   for (const [id, tab] of [["tab-chat", "chat"], ["tab-changes", "changes"], ["tab-files", "files"]]) {
     $(id).classList.toggle("is-active", tab === name);
   }
@@ -507,6 +527,7 @@ function renderChanges() {
 
     row.append(el("span", "change-dir", parts.dir), el("span", "change-name", parts.name));
     if (file.conflict) row.append(el("span", "change-conflict", "conflict"));
+    row.append(el("span", "change-status", file.status));
     row.append(el("span", "change-counts", RemoteChangesView.formatFileCounts(file)));
     list.appendChild(row);
   }
@@ -529,9 +550,7 @@ function closeDetailLevel() {
   detailStack.pop();
   $("diff-view").classList.add("hidden");
   $("file-view").classList.add("hidden");
-  $("changes-list").classList.remove("hidden");
-  $("changes-header").classList.remove("hidden");
-  $("file-list").classList.remove("hidden");
+  showTabListLevel();
 }
 
 function renderDiff(path, hunks, truncated) {
@@ -630,11 +649,26 @@ function showFileError(text) {
   error.classList.remove("hidden");
 }
 
-/// Re-fetch the change list when the agent stops, but only while the tab is
-/// open — the server keeps no per-tab state.
+let previousChangesStreamingState = "idle";   // so we can edge-trigger on the idle TRANSITION only
+let changesRefreshDebounceTimer = null;
+const CHANGES_REFRESH_DEBOUNCE_MS = 500;
+
+/// Re-fetch the change list when the agent stops, but only on the actual
+/// transition into idle (not on every idle delta, and not on an
+/// already-idle first delta) and only while the tab is open — the server
+/// keeps no per-tab state. Debounced as defense in depth: the gateway
+/// serializes non-control messages per-connection, so a burst of
+/// transitions must not queue up a pile of listChanges calls.
 function noteStreamingStateForChanges(state) {
-  if (state !== "idle") return;
-  if (activeTab === "changes" && detailStack.length === 0) requestChanges();
+  const wasIdle = previousChangesStreamingState === "idle";
+  previousChangesStreamingState = state;
+  if (state !== "idle" || wasIdle) return;
+  if (activeTab !== "changes" || detailStack.length !== 0) return;
+  if (changesRefreshDebounceTimer) clearTimeout(changesRefreshDebounceTimer);
+  changesRefreshDebounceTimer = setTimeout(() => {
+    changesRefreshDebounceTimer = null;
+    requestChanges();
+  }, CHANGES_REFRESH_DEBOUNCE_MS);
 }
 
 function clearSessionSheetsForOpen() {
@@ -659,6 +693,9 @@ function showSessions() {
   changesTree.reset();
   changesState = { comparisonRef: null, metricsAvailable: true, files: [], truncated: false, loaded: false };
   detailStack = [];
+  resetChangesAndFilesDOM();
+  if (changesRefreshDebounceTimer) { clearTimeout(changesRefreshDebounceTimer); changesRefreshDebounceTimer = null; }
+  previousChangesStreamingState = "idle";
   activeTab = "chat";
   $("detail-tabs").classList.add("hidden");
   $("changes").classList.add("hidden");

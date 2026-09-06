@@ -49,12 +49,12 @@ struct RemoteWebAssetTests {
         let sw = try asset("sw.js")
 
         #expect(html.contains(#"/session-ordering.js?v=1"#))
-        #expect(html.range(of: #"/session-ordering.js?v=1"#)!.lowerBound < html.range(of: #"/app.js?v=64"#)!.lowerBound)
-        #expect(html.contains(#"/app.js?v=64"#))
+        #expect(html.range(of: #"/session-ordering.js?v=1"#)!.lowerBound < html.range(of: #"/app.js?v=65"#)!.lowerBound)
+        #expect(html.contains(#"/app.js?v=65"#))
         #expect(html.contains(#"/style.css?v=42"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v42";"#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v43";"#))
         #expect(sw.contains(#""/session-ordering.js?v=1""#))
-        #expect(sw.contains(#""/app.js?v=64""#))
+        #expect(sw.contains(#""/app.js?v=65""#))
         #expect(sw.contains(#""/style.css?v=42""#))
     }
 
@@ -68,10 +68,10 @@ struct RemoteWebAssetTests {
         #expect(app.contains("toggle.tabIndex = 0"))
         #expect(app.contains("function handleCardToggleKeydown"))
         #expect(!app.contains(#"const button = el("button", "tool-toggle")"#))
-        #expect(html.contains(#"/app.js?v=64"#))
+        #expect(html.contains(#"/app.js?v=65"#))
         #expect(html.contains(#"/style.css?v=42"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v42";"#))
-        #expect(sw.contains(#""/app.js?v=64""#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v43";"#))
+        #expect(sw.contains(#""/app.js?v=65""#))
         #expect(sw.contains(#""/style.css?v=42""#))
     }
 
@@ -119,7 +119,7 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".session-section"))
         #expect(css.contains(".session-section-title"))
         #expect(css.contains(".session-section-list"))
-        #expect(html.contains("/app.js?v=64"))
+        #expect(html.contains("/app.js?v=65"))
         #expect(html.contains("/style.css?v=42"))
     }
 
@@ -145,7 +145,7 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".session-open"))
         #expect(css.contains("#detail-title"))
         #expect(css.contains(".sheet-input"))
-        #expect(sw.contains(#""/app.js?v=64""#))
+        #expect(sw.contains(#""/app.js?v=65""#))
         #expect(sw.contains(#""/style.css?v=42""#))
     }
 
@@ -196,7 +196,7 @@ struct RemoteWebAssetTests {
         let sw = try asset("sw.js")
 
         #expect(html.contains(#"/worktree-creation.js?v=1"#))
-        #expect(html.range(of: #"/worktree-creation.js?v=1"#)!.lowerBound < html.range(of: #"/app.js?v=64"#)!.lowerBound)
+        #expect(html.range(of: #"/worktree-creation.js?v=1"#)!.lowerBound < html.range(of: #"/app.js?v=65"#)!.lowerBound)
         #expect(js.contains("const worktreeCreation = RemoteWorktreeCreation.createFlow(send);"))
         #expect(js.contains(#"case "projectList":"#))
         #expect(js.contains(#"case "branchList":"#))
@@ -334,9 +334,9 @@ struct RemoteWebAssetTests {
     @Test func incrementalTranscriptBustsServiceWorkerAssetCache() throws {
         let sw = try asset("sw.js")
         let html = try asset("index.html")
-        #expect(sw.contains("alas-remote-shell-v42"))
-        #expect(sw.contains("/app.js?v=64"))
-        #expect(html.contains("app.js?v=64"))
+        #expect(sw.contains("alas-remote-shell-v43"))
+        #expect(sw.contains("/app.js?v=65"))
+        #expect(html.contains("app.js?v=65"))
     }
 
     // Regression (codex review, PR #775): applyPage used to clear the
@@ -499,10 +499,10 @@ struct RemoteWebAssetTests {
         let html = try asset("index.html")
         let sw = try asset("sw.js")
 
-        #expect(html.contains(#"/app.js?v=64"#))
+        #expect(html.contains(#"/app.js?v=65"#))
         #expect(html.contains(#"/style.css?v=42"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v42";"#))
-        #expect(sw.contains(#""/app.js?v=64""#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v43";"#))
+        #expect(sw.contains(#""/app.js?v=65""#))
         #expect(sw.contains(#""/style.css?v=42""#))
     }
 
@@ -536,9 +536,9 @@ struct RemoteWebAssetTests {
         #expect(html.contains(#"/changes-view.js?v=1"#))
         #expect(html.contains(#"/file-browser.js?v=1"#))
         #expect(html.range(of: #"/changes-view.js?v=1"#)!.lowerBound
-            < html.range(of: #"/app.js?v=64"#)!.lowerBound)
+            < html.range(of: #"/app.js?v=65"#)!.lowerBound)
         #expect(html.range(of: #"/file-browser.js?v=1"#)!.lowerBound
-            < html.range(of: #"/app.js?v=64"#)!.lowerBound)
+            < html.range(of: #"/app.js?v=65"#)!.lowerBound)
         #expect(sw.contains(#""/changes-view.js?v=1""#))
         #expect(sw.contains(#""/file-browser.js?v=1""#))
     }
@@ -572,6 +572,25 @@ struct RemoteWebAssetTests {
     @Test func remoteWebRefreshesChangesWhenATurnGoesIdle() throws {
         let js = try asset("app.js")
         #expect(js.contains("function noteStreamingStateForChanges(state)"))
-        #expect(js.contains(#"activeTab === "changes""#))
+        #expect(js.contains(#"activeTab !== "changes""#))
+    }
+
+    // Regression (final whole-branch review, finding 4): a `listChanges` per
+    // idle DELTA (rather than per idle TRANSITION) can back up the gateway's
+    // serialized per-connection message queue behind a burst of git
+    // subprocess calls. The fix must edge-trigger on the transition into
+    // idle AND debounce as defense in depth — either alone was flagged as
+    // insufficient during the plan's self-review.
+    @Test func remoteWebEdgeTriggersAndDebouncesTheIdleChangesRefresh() throws {
+        let js = try asset("app.js")
+        let body = try #require(
+            js.range(of: "function noteStreamingStateForChanges(state) {")
+                .map { js[$0.lowerBound...].prefix(800) }
+        )
+        #expect(body.contains("previousChangesStreamingState"))
+        #expect(body.contains("wasIdle"))
+        #expect(body.contains("setTimeout"))
+        #expect(body.contains("clearTimeout"))
+        #expect(js.contains("let changesRefreshDebounceTimer = null;"))
     }
 }

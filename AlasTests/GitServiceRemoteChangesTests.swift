@@ -131,4 +131,25 @@ struct GitServiceRemoteChangesTests {
         #expect(deleted.map(\.text).contains("content"))
         #expect(deleted.map(\.text).contains("line two"))
     }
+
+    @Test func isPathIgnored_reportsTrueForAGitignoredPath() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try "secret.env\n".write(to: repo.appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
+        try "TOKEN=abc\n".write(to: repo.appendingPathComponent("secret.env"), atomically: true, encoding: .utf8)
+
+        let ignored = try await GitService().isPathIgnored(worktreePath: repo, path: "secret.env")
+        #expect(ignored)
+    }
+
+    @Test func isPathIgnored_reportsFalseForATrackedPath() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try "one\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "a.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "base"], cwd: repo)
+
+        let ignored = try await GitService().isPathIgnored(worktreePath: repo, path: "a.txt")
+        #expect(!ignored)
+    }
 }
