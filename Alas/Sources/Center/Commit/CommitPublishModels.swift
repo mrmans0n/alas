@@ -254,7 +254,15 @@ struct CommitPublishReviewTarget: Codable, Equatable, Sendable {
             throw CommitPublishWorkflowError.invalidDestination(phase: .push)
         }
         let local = snapshot.local
-        let pushRemote = local.upstreamRemoteName ?? local.headRemoteName ?? remote.remoteName
+        let pushRemote: String
+        if let upstreamRemoteName = local.upstreamRemoteName {
+            guard local.headRemoteName == upstreamRemoteName else {
+                throw CommitPublishWorkflowError.incompatiblePushRemote
+            }
+            pushRemote = upstreamRemoteName
+        } else {
+            pushRemote = local.headRemoteName ?? remote.remoteName
+        }
         let branchResult = try await runGit(["symbolic-ref", "--short", "HEAD"])
         try GitService.assertSuccess(branchResult, op: "Resolve current branch")
         let branch = branchResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)

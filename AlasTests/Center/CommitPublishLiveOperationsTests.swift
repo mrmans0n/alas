@@ -4,6 +4,63 @@ import Testing
 
 @MainActor
 struct CommitPublishLiveOperationsTests {
+    @Test func captureRejectsIncompatibleUpstreamRemoteBeforeReadingGit() async {
+        let snapshot = ReviewLoopSnapshot(
+            local: ReviewLoopLocalState(branchName: "feature", headSHA: "old", baseBranch: "main",
+                hasWorkingTreeChanges: true, hasStagedChanges: true, aheadCommitCount: 1,
+                hasUpstream: true, upstreamRemoteName: "fork", upstreamBranchName: "feature",
+                upstreamAheadCommitCount: 0, needsPush: true),
+            remote: .init(kind: .github, host: "github.com", owner: "team", repository: "repo",
+                remoteName: "origin", webURL: URL(string: "https://github.com/team/repo")!),
+            reviewRequest: nil, providerAvailable: true, providerAuthenticated: true,
+            providerCapabilities: .githubCLI, errorMessage: nil
+        )
+        var commands: [[String]] = []
+
+        await #expect(throws: CommitPublishWorkflowError.incompatiblePushRemote) {
+            try await CommitPublishReviewTarget.capture(
+                snapshot: snapshot, createAsDraft: false, runGit: { args in
+                    commands.append(args)
+                    return .init(exitCode: 0, stdout: "", stderr: "")
+                }
+            )
+        }
+
+        #expect(commands.isEmpty)
+    }
+
+    @Test func captureUsesCompatibleTrackedUpstreamRemote() async throws {
+        let snapshot = ReviewLoopSnapshot(
+            local: ReviewLoopLocalState(branchName: "feature", headSHA: "old", baseBranch: "main",
+                hasWorkingTreeChanges: true, hasStagedChanges: true, aheadCommitCount: 1,
+                hasUpstream: true, upstreamRemoteName: "fork", upstreamBranchName: "review/feature",
+                headRemoteName: "fork", headRemoteOwner: "contributor",
+                upstreamAheadCommitCount: 0, needsPush: true),
+            remote: .init(kind: .github, host: "github.com", owner: "team", repository: "repo",
+                remoteName: "origin", webURL: URL(string: "https://github.com/team/repo")!),
+            reviewRequest: nil, providerAvailable: true, providerAuthenticated: true,
+            providerCapabilities: .githubCLI, errorMessage: nil
+        )
+        let target = try await CommitPublishReviewTarget.capture(
+            snapshot: snapshot, createAsDraft: false, runGit: { args in
+                switch args {
+                case ["symbolic-ref", "--short", "HEAD"]:
+                    return .init(exitCode: 0, stdout: "feature\n", stderr: "")
+                case ["rev-parse", "--verify", "HEAD"]:
+                    return .init(exitCode: 0, stdout: "captured-head\n", stderr: "")
+                case ["remote", "get-url", "--push", "--all", "fork"]:
+                    return .init(exitCode: 0, stdout: "ssh://git@github.com/contributor/repo.git\n", stderr: "")
+                default:
+                    Issue.record("Unexpected Git command: \(args)")
+                    return .init(exitCode: 1, stdout: "", stderr: "")
+                }
+            }
+        )
+
+        #expect(target.pushRemoteName == "fork")
+        #expect(target.upstreamBranch == "review/feature")
+    }
+
     @Test func captureSeparatesReviewRepositoryFromPushDestination() async throws {
         let snapshot = ReviewLoopSnapshot(
             local: ReviewLoopLocalState(branchName: "feature", headSHA: "old", baseBranch: "upstream/main",

@@ -222,6 +222,7 @@ enum CommitPublishWorkflowError: LocalizedError, Equatable {
     case headMismatch(expected: String, actual: String)
     case invalidDestination(phase: CommitPublishPhase)
     case missingPushDestination
+    case incompatiblePushRemote
     case pushDestinationChanged
     case publishedAmend
 
@@ -235,6 +236,8 @@ enum CommitPublishWorkflowError: LocalizedError, Equatable {
             return "The publish checkpoint cannot continue its \(phase.rawValue) phase."
         case .missingPushDestination:
             return "The publish checkpoint has no captured push destination."
+        case .incompatiblePushRemote:
+            return "The branch upstream is incompatible with the selected review host."
         case .pushDestinationChanged:
             return "The push destination changed. Restore the captured remote URL before retrying."
         case .publishedAmend:
