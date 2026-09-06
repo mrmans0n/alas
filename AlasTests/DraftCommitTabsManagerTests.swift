@@ -4,6 +4,111 @@ import Foundation
 
 @MainActor
 struct DraftCommitTabsManagerTests {
+    @Test func openDraftWithPublishIntentCreatesPublishFirstDraft() {
+        let worktreeId = "draft-commit-tabs-mgr-publish-intent-new"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let manager = TabsManager()
+
+        let tab = manager.openOrFocusDraftCommit(worktreeId: worktreeId, preferredAction: .publish)
+
+        guard case .draftCommit(let state) = tab else {
+            Issue.record("expected draftCommit tab")
+            return
+        }
+        #expect(state.preferredAction == .publish)
+    }
+
+    @Test func changingIntentPreservesLiveDraftContents() {
+        let worktreeId = "draft-commit-tabs-mgr-publish-intent-live"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let manager = TabsManager()
+        let draft = manager.openOrFocusDraftCommit(worktreeId: worktreeId)
+        let checkpoint = makePublishCheckpoint()
+        manager.updateDraftCommit(worktreeId: worktreeId, tabId: draft.id) { state in
+            state.subject = "feat: publish this"
+            state.bodyText = "Preserve this body"
+            state.createReviewRequestAsDraft = true
+            state.amend = true
+            state.selectedPath = "Alas/Sources/Center/TabsManager.swift"
+            state.publishCheckpoint = checkpoint
+        }
+        guard case .draftCommit(let original) = manager.tabs(forWorktree: worktreeId).first(where: { $0.id == draft.id }) else {
+            Issue.record("expected live draftCommit tab")
+            return
+        }
+        var expected = original
+        expected.preferredAction = .publish
+
+        let reopened = manager.openOrFocusDraftCommit(
+            worktreeId: worktreeId,
+            resetAmend: false,
+            preferredAction: .publish
+        )
+
+        guard case .draftCommit(let state) = reopened,
+              case .draftCommit(let selectedState) = manager.activeTab(forWorktree: worktreeId) else {
+            Issue.record("expected focused draftCommit tab")
+            return
+        }
+        #expect(state == expected)
+        #expect(selectedState == expected)
+        #expect(reopened.id == draft.id)
+        #expect(manager.tabs(forWorktree: worktreeId).count == 1)
+    }
+
+    @Test func changingIntentPreservesStashedDraftContents() {
+        let worktreeId = "draft-commit-tabs-mgr-publish-intent-stashed"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let manager = TabsManager()
+        let draft = manager.openOrFocusDraftCommit(worktreeId: worktreeId)
+        let checkpoint = makePublishCheckpoint()
+        manager.updateDraftCommit(worktreeId: worktreeId, tabId: draft.id) { state in
+            state.subject = "feat: resume publish"
+            state.bodyText = "Preserve this stashed body"
+            state.createReviewRequestAsDraft = true
+            state.amend = true
+            state.selectedPath = "Alas/Sources/Center/TabsManager.swift"
+            state.publishCheckpoint = checkpoint
+        }
+        guard case .draftCommit(let original) = manager.tabs(forWorktree: worktreeId).first(where: { $0.id == draft.id }) else {
+            Issue.record("expected live draftCommit tab")
+            return
+        }
+        manager.close(worktreeId: worktreeId, tabId: draft.id)
+        var expected = original
+        expected.preferredAction = .publish
+
+        let reopened = manager.openOrFocusDraftCommit(
+            worktreeId: worktreeId,
+            resetAmend: false,
+            preferredAction: .publish
+        )
+
+        guard case .draftCommit(let state) = reopened else {
+            Issue.record("expected restored draftCommit tab")
+            return
+        }
+        #expect(state == expected)
+        #expect(manager.stashedDraft(worktreeId: worktreeId) == expected)
+    }
+
+    @Test func closingCheckpointOnlyDraftRetainsCheckpoint() {
+        let worktreeId = "draft-commit-tabs-mgr-checkpoint-stash"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let manager = TabsManager()
+        let draft = manager.openOrFocusDraftCommit(worktreeId: worktreeId)
+        let checkpoint = makePublishCheckpoint()
+        manager.updateDraftCommit(worktreeId: worktreeId, tabId: draft.id) { state in
+            state.subject = ""
+            state.bodyText = ""
+            state.publishCheckpoint = checkpoint
+        }
+
+        manager.close(worktreeId: worktreeId, tabId: draft.id)
+
+        #expect(manager.stashedDraft(worktreeId: worktreeId)?.publishCheckpoint == checkpoint)
+    }
+
     @Test func openOrFocusDraftCommit_createsTabFirstTime() {
         let worktreeId = "draft-commit-tabs-mgr-create"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
@@ -306,5 +411,17 @@ struct DraftCommitTabsManagerTests {
         _ = mgr.closeAll(worktreeId: worktreeId)
 
         #expect(mgr.stashedDraft(worktreeId: worktreeId)?.subject == "wip: close-all test")
+    }
+
+    private func makePublishCheckpoint() -> CommitPublishCheckpoint {
+        CommitPublishCheckpoint(
+            commitSHA: "abc1234",
+            baseRef: "main",
+            commitTitle: "abc1234 feat: publish",
+            subject: "feat: publish",
+            body: "Publish body",
+            destination: .gg,
+            nextPhase: .push
+        )
     }
 }
