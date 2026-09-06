@@ -44,6 +44,19 @@ struct DraftCommitTabStateTests {
         #expect(decoded == s)
     }
 
+    @Test func localCommitPreferencePreservesDraftReviewRequestAndEmptyBody() throws {
+        var state = DraftCommitTabState(worktreeId: "wt-1")
+        state.subject = "Subject"
+        state.createReviewRequestAsDraft = true
+        let decoded = try JSONDecoder().decode(DraftCommitTabState.self, from: JSONEncoder().encode(state))
+        #expect(decoded.preferredAction == .commit)
+        #expect(decoded.createReviewRequestAsDraft)
+        #expect(decoded.bodyText.isEmpty)
+        let presentation = CommitPublishPresentation(subject: decoded.subject, hasStaged: true, availability: .gg())
+        #expect(presentation.commit.isEnabled)
+        #expect(presentation.publish?.isEnabled == true)
+    }
+
     @Test func roundTripsPersistedPublishIntentAndPresentationRevision() throws {
         var state = DraftCommitTabState(worktreeId: "wt-1")
         state.preferredAction = .publish

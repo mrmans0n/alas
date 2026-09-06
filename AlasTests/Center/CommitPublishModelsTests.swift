@@ -3,6 +3,122 @@ import Testing
 @testable import Alas
 
 struct CommitPublishModelsTests {
+    @Test func composerOffersCommitAndCreateWithEitherPreferredAction() {
+        for preferred in [DraftCommitPreferredAction.commit, .publish] {
+            let presentation = CommitPublishPresentation(
+                subject: "Subject", hasStaged: true, preferredAction: preferred,
+                availability: .review(snapshot: publishSnapshot())
+            )
+            #expect(presentation.commit.label == "Commit")
+            #expect(presentation.commit.isEnabled)
+            #expect(presentation.publish?.label == "Commit & PR")
+            #expect(presentation.publish?.isEnabled == true)
+            #expect(presentation.preferredActionPosition == (preferred == .commit ? .leading : .trailing))
+            #expect(presentation.draftToggleLabel == "Draft PR")
+            #expect(presentation.draftToggleEnabled)
+        }
+    }
+
+    @Test func composerUsesExistingRequestAndGGLabels() {
+        let push = CommitPublishPresentation(subject: "Subject", hasStaged: true,
+            availability: .review(snapshot: publishSnapshot(hasRequest: true)))
+        #expect(push.publish?.label == "Commit & push")
+        #expect(push.draftToggleLabel == nil)
+        let sync = CommitPublishPresentation(subject: "Subject", hasStaged: true, availability: .gg())
+        #expect(sync.publish?.label == "Commit & sync")
+        #expect(sync.publish?.isEnabled == true)
+        #expect(sync.draftToggleLabel == nil)
+    }
+
+    @Test func initialActionsRequireSubjectAndStagedChanges() {
+        for (subject, hasStaged) in [(" \n", true), ("Subject", false), ("", false)] {
+            let presentation = CommitPublishPresentation(subject: subject, hasStaged: hasStaged,
+                availability: .review(snapshot: publishSnapshot()))
+            #expect(!presentation.commit.isEnabled)
+            #expect(presentation.publish?.isEnabled == false)
+            #expect(!presentation.commit.help.isEmpty)
+        }
+    }
+
+    @Test func loadingProviderRetainsItsReviewRequestTerminology() {
+        let remote = CodeHostRemote(kind: .gitlab, host: "gitlab.com", owner: "owner", repository: "repo",
+            remoteName: "origin", webURL: URL(string: "https://gitlab.com/owner/repo")!)
+        let presentation = CommitPublishPresentation(subject: "Subject", hasStaged: true,
+            availability: .review(snapshot: nil, supportedRemote: remote))
+        #expect(presentation.publish?.label == "Commit & MR")
+        #expect(presentation.publish?.isEnabled == false)
+        #expect(presentation.draftToggleLabel == "Draft MR")
+    }
+
+    @Test func retryDoesNotRequireStagedChangesOrCurrentProviderAvailability() {
+        for (phase, label) in [(CommitPublishPhase.push, "Retry push"), (.createReviewRequest, "Retry create MR"), (.sync, "Retry sync")] {
+            let checkpoint = presentationCheckpoint(phase: phase)
+            let presentation = CommitPublishPresentation(subject: "", hasStaged: false, checkpoint: checkpoint)
+            #expect(presentation.publish?.label == label)
+            #expect(presentation.publish?.isEnabled == true)
+            #expect(!presentation.commit.isEnabled)
+            #expect(presentation.preferredActionPosition == .trailing)
+            #expect(presentation.editorDisabled)
+            #expect(presentation.mutationsDisabled)
+            #expect(!presentation.draftToggleEnabled)
+        }
+    }
+
+    @Test func busyDisablesBothActionsIncludingRetry() {
+        for activity in [CommitPublishActivity.idle, .committing, .pushing, .creatingReviewRequest, .syncing] {
+            for checkpoint in [nil, presentationCheckpoint(phase: .push)] {
+                let presentation = CommitPublishPresentation(subject: "Subject", hasStaged: true,
+                    busy: true, activity: activity, checkpoint: checkpoint,
+                    availability: .review(snapshot: publishSnapshot()))
+                #expect(!presentation.commit.isEnabled)
+                #expect(presentation.publish?.isEnabled == false)
+                #expect(!presentation.draftToggleEnabled)
+                #expect(presentation.mutationsDisabled)
+            }
+        }
+    }
+
+    @Test func activityLabelsFollowCapturedProvider() {
+        let presentation = CommitPublishPresentation(subject: "Subject", hasStaged: false,
+            busy: true, activity: .creatingReviewRequest, checkpoint: presentationCheckpoint(phase: .createReviewRequest))
+        #expect(presentation.publish?.label == "Creating MR...")
+        #expect(presentation.activityText == "Creating MR...")
+        let committing = CommitPublishPresentation(subject: "Subject", hasStaged: true,
+            busy: true, activity: .committing, availability: .gg())
+        #expect(committing.commit.label == "Committing...")
+        #expect(committing.publish?.label == "Committing...")
+    }
+
+    @Test func publishedAmendOnlyBlocksPublish() {
+        let presentation = CommitPublishPresentation(subject: "Subject", hasStaged: true, amend: true,
+            availability: .review(snapshot: publishSnapshot(), amend: true, amendProbe: .published))
+        #expect(presentation.commit.label == "Amend")
+        #expect(presentation.commit.isEnabled)
+        #expect(presentation.publish?.isEnabled == false)
+        #expect(presentation.publish?.help == "This commit is already published. Commit locally or turn off Amend before publishing.")
+    }
+
+    @Test func unsupportedHostHidesPublishButSupportedBlockerKeepsItVisible() {
+        let unsupported = CommitPublishPresentation(subject: "Subject", hasStaged: true,
+            preferredAction: .publish, availability: .review(snapshot: publishSnapshot(supported: false)))
+        #expect(unsupported.publish == nil)
+        #expect(unsupported.preferredActionPosition == .leading)
+        let blocked = CommitPublishPresentation(subject: "Subject", hasStaged: true,
+            availability: .review(snapshot: publishSnapshot(authenticated: false)))
+        #expect(blocked.publish?.label == "Commit & PR")
+        #expect(blocked.publish?.isEnabled == false)
+        #expect(blocked.commit.isEnabled)
+    }
+
+    private func presentationCheckpoint(phase: CommitPublishPhase) -> CommitPublishCheckpoint {
+        CommitPublishCheckpoint(commitSHA: "abc", baseRef: "main", commitTitle: "abc Subject",
+            subject: "Subject", body: "", destination: phase == .sync ? .gg : .review(.init(
+                provider: .gitlab, host: "gitlab.com", owner: "owner", repository: "repo",
+                repositorySlug: "owner/repo", remoteName: "origin", webURL: URL(string: "https://gitlab.com/owner/repo")!,
+                branch: "feature", upstreamBranch: nil, headOwner: nil, baseBranch: "main",
+                reviewRequestExisted: false, createAsDraft: true)), nextPhase: phase)
+    }
+
     @Test func actionLabelsDescribeActivityAndCreationRetry() {
         #expect(CommitPublishActivity.idle.actionLabel(reviewRequestLabel: "PR") == nil)
         #expect(CommitPublishActivity.committing.actionLabel(reviewRequestLabel: "PR") == "Committing...")

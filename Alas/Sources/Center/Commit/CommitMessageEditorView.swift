@@ -126,6 +126,8 @@ struct CommitMessageEditorView: View {
         .buttonStyle(.plain)
         .disabled(!enabled)
         .keyboardShortcut(shortcut)
+        .help(action.help ?? displayedLabel(for: action))
+        .accessibilityIdentifier(action.accessibilityIdentifier ?? "commit-composer-\(position == .leading ? "primary" : "alternate")")
     }
 
     private func buttonBackground(isPreferred: Bool, enabled: Bool) -> Color {

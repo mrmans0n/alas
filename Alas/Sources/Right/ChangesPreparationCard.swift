@@ -67,7 +67,7 @@ struct ChangesPreparationCard: View {
                             ggDestinationButton(action)
                         }
                     }
-                } else if model.draftAction != nil || !model.reviewRequestActions.isEmpty {
+                } else if model.draftAction != nil || model.publishAction != nil || !model.reviewRequestActions.isEmpty {
                     ViewThatFits(in: .horizontal) {
                         secondaryActionsHorizontal
                         secondaryActionsVertical
@@ -249,9 +249,9 @@ struct ChangesPreparationCard: View {
             iconName: "arrow.up",
             showsDot: false,
             isEnabled: action.isEnabled,
+            help: action.disabledReason ?? action.detail,
             action: onPublishCommit
         )
-        .help(action.disabledReason ?? action.detail)
         .accessibilityIdentifier("changes-preparation-publish")
     }
 
@@ -439,6 +439,7 @@ struct ChangesPreparationCard: View {
         showsDot: Bool,
         isEnabled: Bool,
         isInFlight: Bool = false,
+        help: String? = nil,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
@@ -484,6 +485,6 @@ struct ChangesPreparationCard: View {
             RoundedRectangle(cornerRadius: 6)
                 .strokeBorder(theme.color("line").opacity(0.65), lineWidth: 0.75)
         )
-        .help(title)
+        .help(help ?? title)
     }
 }

@@ -53,8 +53,13 @@ struct CommitPublishAvailability: Equatable, Sendable {
     let detail: String
     let disabledReason: String?
     let showsDraftToggle: Bool
+    var reviewRequestLabel: String = "PR"
 
     var isEnabled: Bool { disabledReason == nil }
+
+    static func gg(disabledReason: String? = nil) -> Self {
+        Self(label: "Commit & sync", detail: "Sync stack", disabledReason: disabledReason, showsDraftToggle: false)
+    }
 
     static func review(
         snapshot: ReviewLoopSnapshot?,
@@ -84,7 +89,8 @@ struct CommitPublishAvailability: Equatable, Sendable {
         } else {
             reason = "Wait for review state to load."
         }
-        return Self(label: label, detail: detail, disabledReason: reason, showsDraftToggle: !hasRequest)
+        return Self(label: label, detail: detail, disabledReason: reason, showsDraftToggle: !hasRequest,
+            reviewRequestLabel: remote.kind.reviewRequestLabel)
     }
 
     private static func reviewDisabledReason(
@@ -113,6 +119,77 @@ struct CommitPublishAvailability: Equatable, Sendable {
             return "Creating a \(remote.kind.reviewRequestLabel) is unavailable."
         }
         return nil
+    }
+}
+
+struct CommitPublishPresentation: Sendable {
+    struct Action: Equatable, Sendable {
+        let label: String
+        let disabledReason: String?
+        let detail: String
+
+        var isEnabled: Bool { disabledReason == nil }
+        var help: String { disabledReason ?? detail }
+    }
+
+    let commit: Action
+    let publish: Action?
+    let preferredActionPosition: CommitComposerActionPosition
+    let activityText: String?
+    let draftToggleLabel: String?
+    let draftToggleHelp: String
+    let draftToggleEnabled: Bool
+    let editorDisabled: Bool
+    let mutationsDisabled: Bool
+
+    init(
+        subject: String,
+        hasStaged: Bool,
+        amend: Bool = false,
+        busy: Bool = false,
+        activity: CommitPublishActivity = .idle,
+        checkpoint: CommitPublishCheckpoint? = nil,
+        preferredAction: DraftCommitPreferredAction = .commit,
+        availability: CommitPublishAvailability? = nil
+    ) {
+        let reviewRequestLabel: String
+        if let checkpoint, case .review(let target) = checkpoint.destination {
+            reviewRequestLabel = target.provider.reviewRequestLabel
+        } else {
+            reviewRequestLabel = availability?.reviewRequestLabel ?? "PR"
+        }
+        let isBusy = busy || activity != .idle
+        activityText = activity.actionLabel(reviewRequestLabel: reviewRequestLabel)
+        editorDisabled = checkpoint != nil
+        mutationsDisabled = isBusy || editorDisabled
+        let initialDisabledReason: String?
+        if !hasStaged {
+            initialDisabledReason = "Stage changes before committing."
+        } else if subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            initialDisabledReason = "Enter a commit subject."
+        } else {
+            initialDisabledReason = nil
+        }
+        let busyReason = isBusy ? "Another operation is running." : nil
+        commit = Action(
+            label: activity == .committing ? "Committing..." : amend ? "Amend" : "Commit",
+            disabledReason: busyReason ?? (checkpoint != nil ? "Finish publishing this commit first." : initialDisabledReason),
+            detail: amend ? "Amend the local commit." : "Commit staged changes locally."
+        )
+        if let checkpoint {
+            let label = checkpoint.nextPhase.retryLabel(reviewRequestLabel: reviewRequestLabel)
+            publish = Action(label: activityText ?? label, disabledReason: busyReason, detail: label)
+        } else if let availability {
+            publish = Action(label: activityText ?? availability.label,
+                disabledReason: busyReason ?? availability.disabledReason ?? initialDisabledReason,
+                detail: availability.detail)
+        } else {
+            publish = nil
+        }
+        preferredActionPosition = publish != nil && (checkpoint != nil || preferredAction == .publish) ? .trailing : .leading
+        draftToggleLabel = availability?.showsDraftToggle == true ? "Draft \(reviewRequestLabel)" : nil
+        draftToggleHelp = "Create the \(reviewRequestLabel) as a draft."
+        draftToggleEnabled = draftToggleLabel != nil && !mutationsDisabled
     }
 }
 

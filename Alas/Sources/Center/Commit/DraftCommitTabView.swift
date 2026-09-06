@@ -49,7 +49,7 @@ struct DraftCommitTabView: View {
         guard let rps = appState.rightPaneStore.activeState(worktreeId: worktreeId) else { return false }
         return rps.changes.contains { $0.stage == .staged }
     }
-    private var canCommit: Bool { hasStaged && !trimmedSubject.isEmpty && !busy && publishCheckpoint == nil }
+    private var canCommit: Bool { presentation.commit.isEnabled }
     private var busy: Bool { localBusy || publishSession?.isRunning == true }
     private var publishSession: CommitPublishSession? { appState.tabs.commitPublishSession(tabId: tabState.id) }
     private var publishError: String? { publishSession?.lastError?.localizedDescription }
@@ -57,7 +57,7 @@ struct DraftCommitTabView: View {
         if let publishSession { return publishSession.checkpoint }
         return tabState.publishCheckpoint
     }
-    private var mutationsDisabled: Bool { busy || publishCheckpoint != nil }
+    private var mutationsDisabled: Bool { presentation.mutationsDisabled }
     private var rightPane: RightPaneState? { appState.rightPaneStore.activeState(worktreeId: worktreeId) }
 
     private var publicationProbeKey: String {
@@ -79,7 +79,7 @@ struct DraftCommitTabView: View {
                 contextIsActive: true, stackLoadState: rps.ggStackLoadState,
                 stack: rps.ggStack, currentHeadSHA: rps.currentHeadSHA
             ) ?? (amend ? publicationProbe.result(for: publicationProbeKey).disabledReason : nil)
-            return .init(label: "Commit & sync", detail: "Sync stack", disabledReason: reason, showsDraftToggle: false)
+            return .gg(disabledReason: reason)
         }
         let mutationReason: String?
         if rps.mergeOp.current != nil {
@@ -99,38 +99,23 @@ struct DraftCommitTabView: View {
     }
 
     private var publishAction: CommitPrimaryAction? {
-        guard publishCheckpoint != nil || publishAvailability != nil else { return nil }
-        let label: String
-        if let activityLabel = publishActivityText {
-            label = activityLabel
-        } else if let checkpoint = publishCheckpoint {
-            label = checkpoint.nextPhase.retryLabel(reviewRequestLabel: reviewRequestLabel)
-        } else {
-            label = publishAvailability?.label ?? "Publish"
-        }
-        return .init(label: label, savedLabel: nil,
-            isEnabled: !busy && (publishCheckpoint != nil || (canCommit && publishAvailability?.isEnabled == true)),
-            showSavedState: false, keyboardShortcut: nil, handler: runPublish)
+        guard let action = presentation.publish else { return nil }
+        return .init(label: action.label, isEnabled: action.isEnabled,
+            help: action.help, accessibilityIdentifier: "commit-composer-publish", handler: runPublish)
     }
 
     private var publishActivityText: String? {
-        activity.actionLabel(reviewRequestLabel: reviewRequestLabel)
+        presentation.activityText
     }
 
     private var activity: CommitPublishActivity {
         committingLocally ? .committing : publishSession?.activity ?? .idle
     }
 
-    private var commitActionLabel: String {
-        if activity == .committing, let label = publishActivityText { return label }
-        return amend ? "Amend" : "Commit"
-    }
-
-    private var reviewRequestLabel: String {
-        if let checkpoint = publishCheckpoint, case .review(let target) = checkpoint.destination {
-            return target.provider.reviewRequestLabel
-        }
-        return rightPane?.reviewLoop.snapshot?.remote?.kind.reviewRequestLabel ?? "PR"
+    private var presentation: CommitPublishPresentation {
+        CommitPublishPresentation(subject: subject, hasStaged: hasStaged, amend: amend,
+            busy: busy, activity: activity, checkpoint: publishCheckpoint,
+            preferredAction: tabState.preferredAction, availability: publishAvailability)
     }
 
     /// A key that changes whenever the staged set changes in the sidebar.
@@ -217,16 +202,18 @@ struct DraftCommitTabView: View {
                 availableAgents: appState.agentRegistry.enabled(),
                 onGenerate: handleGenerate,
                 primaryAction: CommitPrimaryAction(
-                    label: commitActionLabel,
+                    label: presentation.commit.label,
                     savedLabel: nil,
                     isEnabled: canCommit,
                     showSavedState: false,
                     keyboardShortcut: appState.shortcut(for: .commitInComposer),
+                    help: presentation.commit.help,
+                    accessibilityIdentifier: "commit-composer-commit",
                     handler: runCommit
                 ),
                 alternateAction: publishAction,
-                preferredActionPosition: publishCheckpoint != nil || tabState.preferredAction == .publish ? .trailing : .leading,
-                editorDisabled: publishCheckpoint != nil,
+                preferredActionPosition: presentation.preferredActionPosition,
+                editorDisabled: presentation.editorDisabled,
                 onDismissError: {
                     publishSession?.clearError()
                     error = nil
@@ -239,11 +226,13 @@ struct DraftCommitTabView: View {
                         .toggleStyle(.checkbox)
                         .disabled(mutationsDisabled || !canAmend)
                         .help(canAmend ? "" : "No previous commit to amend")
-                        if publishAvailability?.showsDraftToggle == true {
-                            Toggle("Draft \(rightPane?.reviewLoop.snapshot?.remote?.kind.reviewRequestLabel ?? "PR")", isOn: $createReviewRequestAsDraft)
+                        if let label = presentation.draftToggleLabel {
+                            Toggle(label, isOn: $createReviewRequestAsDraft)
                                 .font(.system(size: 11))
                                 .toggleStyle(.checkbox)
-                                .disabled(mutationsDisabled)
+                                .disabled(!presentation.draftToggleEnabled)
+                                .help(presentation.draftToggleHelp)
+                                .accessibilityIdentifier("commit-composer-draft-review-request")
                         }
                     }
                 )
@@ -545,7 +534,7 @@ struct DraftCommitTabView: View {
     }
 
     private func runCommit() {
-        guard !mutationsDisabled else { return }
+        guard canCommit else { return }
         let subjectSnapshot = trimmedSubject
         let bodySnapshot = bodyText
         let amendSnapshot = amend
@@ -599,8 +588,7 @@ struct DraftCommitTabView: View {
     }
 
     private func runPublish() {
-        guard !busy, let rps = rightPane,
-              publishCheckpoint != nil || (canCommit && publishAvailability?.isEnabled == true)
+        guard presentation.publish?.isEnabled == true, let rps = rightPane
         else { return }
         let subjectSnapshot = subject
         let bodySnapshot = bodyText

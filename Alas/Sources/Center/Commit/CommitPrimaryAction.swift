@@ -77,6 +77,8 @@ struct CommitPrimaryAction {
     let showSavedState: Bool
     /// Optional keyboard shortcut applied to the primary action button.
     let keyboardShortcut: KeyboardShortcut?
+    let help: String?
+    let accessibilityIdentifier: String?
     let handler: () -> Void
 
     init(
@@ -85,6 +87,8 @@ struct CommitPrimaryAction {
         isEnabled: Bool,
         showSavedState: Bool = false,
         keyboardShortcut: KeyboardShortcut? = nil,
+        help: String? = nil,
+        accessibilityIdentifier: String? = nil,
         handler: @escaping () -> Void
     ) {
         self.label = label
@@ -92,6 +96,8 @@ struct CommitPrimaryAction {
         self.isEnabled = isEnabled
         self.showSavedState = showSavedState
         self.keyboardShortcut = keyboardShortcut
+        self.help = help
+        self.accessibilityIdentifier = accessibilityIdentifier
         self.handler = handler
     }
 }
