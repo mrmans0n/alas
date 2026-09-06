@@ -84,4 +84,41 @@ struct RemoteWorktreeFileAccessTests {
         #expect(!short.truncated)
         #expect(short.files.count == 3)
     }
+
+    @Test func rejectsSymlinkAliasToGit() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        // Create a real .git directory inside the root
+        let gitDir = root.appendingPathComponent(".git")
+        try FileManager.default.createDirectory(at: gitDir, withIntermediateDirectories: true)
+
+        // Create a config file inside .git
+        try "secret\n".write(to: gitDir.appendingPathComponent("config"), atomically: true, encoding: .utf8)
+
+        // Create a symlink alias that points to .git
+        try FileManager.default.createSymbolicLink(
+            at: root.appendingPathComponent("alias"),
+            withDestinationURL: gitDir)
+
+        // Accessing via the symlink alias should be rejected
+        #expect(RemoteWorktreeFileAccess.resolve(path: "alias", in: root) == nil)
+        #expect(RemoteWorktreeFileAccess.resolve(path: "alias/config", in: root) == nil)
+    }
+
+    @Test func rejectsCaseVariationOfGitOnResolvedPath() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        // Create actual .git directory
+        let gitDir = root.appendingPathComponent(".git")
+        try FileManager.default.createDirectory(at: gitDir, withIntermediateDirectories: true)
+        try "secret\n".write(to: gitDir.appendingPathComponent("config"), atomically: true, encoding: .utf8)
+
+        // Test various case variations - all should be rejected
+        // The resolved path check must compare case-insensitively
+        #expect(RemoteWorktreeFileAccess.resolve(path: ".GIT/config", in: root) == nil)
+        #expect(RemoteWorktreeFileAccess.resolve(path: ".Git/config", in: root) == nil)
+        #expect(RemoteWorktreeFileAccess.resolve(path: ".gIT/config", in: root) == nil)
+    }
 }
