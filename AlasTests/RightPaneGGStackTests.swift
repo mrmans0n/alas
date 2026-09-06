@@ -698,6 +698,45 @@ struct RightPaneGGRefreshSchedulingTests {
 
 @MainActor
 struct RightPaneGGStackTests {
+    @Test func commitPublishSyncAwaitsCoordinatorAndPreservesSummary() async throws {
+        let state = makeState()
+        let runner = ReentrantSyncFakeGGRunner()
+        state.ggService = GGService(runner: runner)
+        state.ggContextProvider = { _ in .active(stackName: "stack") }
+        try await state.syncGGForCommitPublish()
+        #expect(runner.syncCallCount == 1)
+        #expect(state.ggActionState.inFlightAction == nil)
+        #expect(state.ggActionState.lastActionSummary == "Synced · 1 pushed")
+        #expect(state.ggActionState.lastError == nil)
+    }
+
+    @Test func commitPublishSyncThrowsAndPublishesFailureOnce() async throws {
+        let state = makeState()
+        let runner = ThrowingFakeGGRunner()
+        state.ggService = GGService(runner: runner)
+        let generation = state.ggActionState.actionGeneration
+        await #expect(throws: (any Error).self) { try await state.syncGGForCommitPublish() }
+        #expect(runner.callCount == 1)
+        #expect(state.ggActionState.actionGeneration == generation + 1)
+        #expect(state.ggActionState.lastError?.contains("boom") == true)
+        #expect(state.ggActionState.syncHasTerminalFailure)
+        #expect(state.ggActionState.inFlightAction == nil)
+        #expect(state.ggActionState.lastActionSummary == nil)
+    }
+
+    @Test func commitPublishSyncRefusesConcurrentMutation() async throws {
+        let state = makeState()
+        let runner = ReentrantSyncFakeGGRunner()
+        state.ggService = GGService(runner: runner)
+        let first = try #require(state.runGGMutation(.sync))
+        let generation = state.ggActionState.actionGeneration
+        await #expect(throws: GGMutationError.operationInFlight) { try await state.syncGGForCommitPublish() }
+        #expect(state.ggActionState.actionGeneration == generation)
+        #expect(state.ggActionState.lastError == nil)
+        await first.value
+        #expect(runner.syncCallCount == 1)
+    }
+
     private struct MemoryStore: PersistenceStoreProtocol {
         var projectsFile: ProjectsFile?
 
@@ -745,6 +784,13 @@ struct RightPaneGGStackTests {
     }
 
     private func installFakeGGStackLoader(on state: RightPaneState) {
+        state.ggCapabilities = {
+            GGCapabilities(
+                structuredSplit: false,
+                keepCurrentUnstack: false,
+                localStackSnapshot: false
+            )
+        }
         state.ggStackCommitLoader = { _, shas in
             Dictionary(uniqueKeysWithValues: shas.map { sha in
                 let fullSHA = sha.count == 40
@@ -1498,6 +1544,7 @@ struct RightPaneGGStackTests {
         let worktree = makeWorktree()
         let state = store.state(for: worktree, baseBranch: "main", comparisonMode: .manual)
         store.deactivate()
+        installFakeGGStackLoader(on: state)
         let runner = CountingFakeGGRunner(
             result: ProcessResult(exitCode: 0, stdout: GGStackModelsTests.fixture, stderr: "")
         )
@@ -2561,7 +2608,8 @@ struct RightPaneGGStackTests {
         await state.refreshGGStack()
         #expect(state.ggStack?.name == "agent-inbox")
         #expect(state.ggStackCommitsKey == state.currentGGStackCommitsKey)
-        #expect(runner.callCount == 3)
+        // The legacy snapshot path makes one read per refresh, without remote enrichment.
+        #expect(runner.callCount == 2)
     }
 
     @Test func cancelledFirstStackLoadBecomesRetryableFailure() async {
@@ -3066,6 +3114,13 @@ struct RightPaneGGStackTests {
         let runner = StaleMutationFailureRunner()
         let state = RightPaneState(worktree: worktree, baseBranch: "main")
         state.ggService = GGService(runner: runner)
+        state.ggCapabilities = {
+            GGCapabilities(
+                structuredSplit: false,
+                keepCurrentUnstack: false,
+                localStackSnapshot: false
+            )
+        }
         state.ggContextProvider = { _ in .active(stackName: "agent-inbox") }
         state.ggStackSourceCommits = [
             commit(sha: String(repeating: "s", count: 40), stackShaped: true),

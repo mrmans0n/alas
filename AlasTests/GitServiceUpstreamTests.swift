@@ -4,6 +4,111 @@ import Foundation
 
 @Suite(.serialized)
 struct GitServiceUpstreamTests {
+    @Test func strictPublicationDistinguishesStatesAndProbeFailures() async throws {
+        let (repo, remote) = try await makeRepoWithRemote()
+        defer {
+            try? FileManager.default.removeItem(at: repo)
+            try? FileManager.default.removeItem(at: remote)
+        }
+        let git = GitService()
+        #expect(try await git.headPublicationState(worktreePath: repo) == .published)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "local"], cwd: repo)
+        #expect(try await git.headPublicationState(worktreePath: repo) == .unpublished)
+        _ = try await Process.git(["update-ref", "-d", "refs/remotes/origin/main"], cwd: repo)
+        await #expect(throws: (any Error).self) { try await git.headPublicationState(worktreePath: repo) }
+        _ = try await Process.git(["branch", "--unset-upstream"], cwd: repo)
+        #expect(try await git.headPublicationState(worktreePath: repo) == .noUpstream)
+        await #expect(throws: (any Error).self) { try await git.headPublicationState(worktreePath: remote.deletingLastPathComponent()) }
+    }
+
+    @Test func strictPublicationDistinguishesBehindDivergedAndDetachedHead() async throws {
+        let (repo, remote) = try await makeRepoWithRemote()
+        defer {
+            try? FileManager.default.removeItem(at: repo)
+            try? FileManager.default.removeItem(at: remote)
+        }
+        let git = GitService()
+        let initial = try await checkedGit(["rev-parse", "HEAD"], cwd: repo)
+        _ = try await checkedGit(["commit", "-q", "--allow-empty", "-m", "remote update"], cwd: repo)
+        _ = try await checkedGit(["push", "-q", "origin", "main"], cwd: repo)
+        _ = try await checkedGit(["update-ref", "refs/heads/main", initial], cwd: repo)
+        #expect(try await git.headPublicationState(worktreePath: repo) == .published)
+        _ = try await checkedGit(["commit", "-q", "--allow-empty", "-m", "local divergence"], cwd: repo)
+        #expect(try await git.headPublicationState(worktreePath: repo) == .unpublished)
+        #expect(try await git.isHeadAtOrBehindUpstream(worktreePath: repo) == false)
+        _ = try await checkedGit(["checkout", "--detach", "HEAD"], cwd: repo)
+        #expect(try await git.headPublicationState(worktreePath: repo) == .noUpstream)
+    }
+
+    @Test func remoteContainmentUsesExactBranchWithoutUpstreamAndCleansTemporaryRef() async throws {
+        let (repo, remote) = try await makeRepoWithRemote()
+        defer {
+            try? FileManager.default.removeItem(at: repo)
+            try? FileManager.default.removeItem(at: remote)
+        }
+        let git = GitService()
+        let checkpoint = try await checkedGit(["rev-parse", "HEAD"], cwd: repo)
+        let secondRemote = repo.appendingPathComponent("secondary.git")
+        _ = try await checkedGit(["init", "--bare", "-q", secondRemote.path], cwd: repo)
+        _ = try await checkedGit(["remote", "add", "publish", secondRemote.path], cwd: repo)
+        _ = try await checkedGit(["push", "-q", "publish", "HEAD:main"], cwd: repo)
+        _ = try await checkedGit(["branch", "--unset-upstream"], cwd: repo)
+        _ = try await checkedGit(["update-ref", "refs/alas/publish-check/keep", checkpoint], cwd: repo)
+        #expect(try await git.remoteBranchContainsCommit(worktreePath: repo, remote: "origin", branch: "missing", commitSHA: checkpoint) == false)
+        #expect(try await git.remoteBranchContainsCommit(worktreePath: repo, remote: "origin", branch: "main", commitSHA: checkpoint))
+        _ = try await checkedGit(["commit", "-q", "--allow-empty", "-m", "advance"], cwd: repo)
+        _ = try await checkedGit(["push", "-q", "origin", "HEAD:main"], cwd: repo)
+        #expect(try await git.remoteBranchContainsCommit(worktreePath: repo, remote: "origin", branch: "main", commitSHA: checkpoint))
+        _ = try await checkedGit(["checkout", "--orphan", "unrelated"], cwd: repo)
+        _ = try await checkedGit(["commit", "-q", "--allow-empty", "-m", "unrelated"], cwd: repo)
+        _ = try await checkedGit(["push", "-q", "--force", "origin", "HEAD:main"], cwd: repo)
+        _ = try await checkedGit(["update-ref", "refs/remotes/origin/main", checkpoint], cwd: repo)
+        #expect(try await git.remoteBranchContainsCommit(worktreePath: repo, remote: "origin", branch: "main", commitSHA: checkpoint) == false)
+        #expect(try await git.remoteBranchContainsCommit(worktreePath: repo, remote: "publish", branch: "main", commitSHA: checkpoint))
+        #expect(try await checkedGit(["rev-parse", "refs/remotes/origin/main"], cwd: repo) == checkpoint)
+        await #expect(throws: (any Error).self) {
+            try await git.remoteBranchContainsCommit(worktreePath: repo, remote: "origin", branch: "main", commitSHA: "not-a-commit")
+        }
+        #expect(try await checkedGit(["for-each-ref", "--format=%(refname)", "refs/alas/publish-check/"], cwd: repo) == "refs/alas/publish-check/keep")
+        _ = try await checkedGit(["remote", "set-url", "origin", remote.appendingPathComponent("missing").path], cwd: repo)
+        await #expect(throws: (any Error).self) {
+            try await git.remoteBranchContainsCommit(worktreePath: repo, remote: "origin", branch: "main", commitSHA: checkpoint)
+        }
+    }
+
+    @Test func remoteContainmentThrowsWhenFetchFailsAfterAdvertisement() async throws {
+        let (repo, remote) = try await makeRepoWithRemote()
+        defer {
+            try? FileManager.default.removeItem(at: repo)
+            try? FileManager.default.removeItem(at: remote)
+        }
+        let checkpoint = try await checkedGit(["rev-parse", "HEAD"], cwd: repo)
+        let script = repo.appendingPathComponent("upload-pack")
+        let marker = repo.appendingPathComponent("advertised")
+        try """
+        #!/bin/sh
+        if [ -f '\(marker.path)' ]; then
+            echo 'fetch refused' >&2
+            exit 42
+        fi
+        touch '\(marker.path)'
+        exec /usr/bin/git-upload-pack "$@"
+        """.write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        _ = try await checkedGit(["config", "remote.origin.uploadpack", script.path], cwd: repo)
+        await #expect(throws: (any Error).self) {
+            try await GitService().remoteBranchContainsCommit(worktreePath: repo, remote: "origin", branch: "main", commitSHA: checkpoint)
+        }
+        #expect(FileManager.default.fileExists(atPath: marker.path))
+        #expect(try await checkedGit(["for-each-ref", "--format=%(refname)", "refs/alas/publish-check/"], cwd: repo).isEmpty)
+    }
+
+    private func checkedGit(_ args: [String], cwd: URL) async throws -> String {
+        let result = try await Process.git(args, cwd: cwd)
+        guard result.exitCode == 0 else { throw ProcessError.nonZeroExit(result.exitCode, result.stderr) }
+        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private func makeRepoWithRemote() async throws -> (URL, URL) {
         let repo = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-up-\(UUID().uuidString)")

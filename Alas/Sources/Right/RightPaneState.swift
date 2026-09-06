@@ -1084,7 +1084,8 @@ final class RightPaneState: GGSplitCommitServicing {
             if Task.isCancelled,
                snapshotGeneration == snapshotInvalidationGeneration,
                refreshGeneration == ggStackRefreshGeneration,
-               !((ggStackLoadState == .loaded || ggStackLoadState == .empty) && ggStackCommitsKey == key) {
+               !((ggStackLoadState == .loaded || ggStackLoadState == .empty)
+                 && ggStackCommitsKey == key && key == currentGGStackCommitsKey) {
                 let canRestorePreviousSnapshot = previousKey == key
                     && key == currentGGStackCommitsKey
                     && (previousLoadState == .loaded || previousLoadState == .empty)
@@ -1162,7 +1163,7 @@ final class RightPaneState: GGSplitCommitServicing {
             if deferralGeneration == ggStackRefreshDeferralGeneration {
                 ggStackRefreshDeferredUntilSyncEnds = false
             }
-            ggStackCommitsKey = key
+            ggStackCommitsKey = currentGGStackCommitsKey
             if ggStack != stack { ggStack = stack }
             ggStackDisplayCommits = displayCommits
             let stackIsEmpty = stack.map { $0.totalCommits == 0 || $0.entries.isEmpty } ?? true
@@ -1849,6 +1850,28 @@ final class RightPaneState: GGSplitCommitServicing {
             request,
             confirmedAgainst: identity
         ) else { return nil }
+        let completion = completeGGMutation(operation, request: request)
+        return Task { _ = try? await completion.value }
+    }
+
+    @discardableResult
+    func runGGMutation(_ prepared: GGPreparedMutation) -> Task<Void, Never>? {
+        guard let operation = ggMutationCoordinator.startApplying(prepared) else { return nil }
+        let completion = completeGGMutation(operation, request: prepared.request)
+        return Task { _ = try? await completion.value }
+    }
+
+    func syncGGForCommitPublish() async throws {
+        guard let operation = ggMutationCoordinator.startApplying(.sync, confirmedAgainst: nil) else {
+            throw GGMutationError.operationInFlight
+        }
+        try await completeGGMutation(operation, request: .sync).value
+    }
+
+    private func completeGGMutation(
+        _ operation: Task<Void, Error>,
+        request: GGMutationRequest
+    ) -> Task<Void, Error> {
         if request == .sync { supersedeGGStackRefreshForSync() }
         let actionGeneration = ggActionState.actionGeneration
         return Task { @MainActor in
@@ -1861,25 +1884,7 @@ final class RightPaneState: GGSplitCommitServicing {
                     for: request.actionKind,
                     actionGeneration: actionGeneration
                 )
-            }
-        }
-    }
-
-    @discardableResult
-    func runGGMutation(_ prepared: GGPreparedMutation) -> Task<Void, Never>? {
-        guard let operation = ggMutationCoordinator.startApplying(prepared) else { return nil }
-        if prepared.request == .sync { supersedeGGStackRefreshForSync() }
-        let actionGeneration = ggActionState.actionGeneration
-        return Task { @MainActor in
-            defer { scheduleDeferredGGStackRefreshIfNeeded() }
-            do {
-                try await operation.value
-            } catch {
-                publishGGMutationPresentationError(
-                    error,
-                    for: prepared.request.actionKind,
-                    actionGeneration: actionGeneration
-                )
+                throw error
             }
         }
     }
