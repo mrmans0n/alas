@@ -106,7 +106,7 @@ extension ShortcutBinding {
         case .tab:        key = "tab"
         case .space:      key = "space"
         default:
-            let literalKey = keyboardShortcut.key.character.lowercased()
+            let literalKey = String(keyboardShortcut.key.character)
             guard Self.isSupportedLiteralKey(literalKey) else { return nil }
             key = literalKey
         }

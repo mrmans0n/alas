@@ -80,4 +80,12 @@ struct ShortcutBindingTests {
             modifiers: [.shift, .command]
         ))
     }
+
+    @Test func keyboardShortcutConversionPreservesUppercaseLiteralKey() throws {
+        let shortcut = KeyboardShortcut("P", modifiers: [.command])
+        let binding = try #require(ShortcutBinding(keyboardShortcut: shortcut))
+
+        #expect(binding == .init(key: "P", modifiers: [.command]))
+        #expect(binding.asKeyboardShortcut() == shortcut)
+    }
 }
