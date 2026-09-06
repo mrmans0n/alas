@@ -27,6 +27,76 @@ struct RemoteServerIntegrationTests {
         return (server, try #require(server.port))
     }
 
+    @Test func teardownCancelsQueuedPredecessorAndSkipsSuccessor() async {
+        let gate = CancellableTaskGate()
+        let previous = RemoteConnection.MessageProcessingTask(previous: nil)
+        previous.start {
+            await withTaskCancellationHandler(
+                operation: { await gate.waitForRelease() },
+                onCancel: { Task { await gate.recordCancellation() } }
+            )
+            await gate.recordCompletion(wasCancelled: Task.isCancelled)
+        }
+        guard await gate.waitForEntry() else {
+            Issue.record("predecessor did not start")
+            await gate.release()
+            return
+        }
+
+        let successor = RemoteConnection.MessageProcessingTask(previous: previous)
+        successor.start {
+            await gate.recordHandlerRun()
+        }
+        successor.cancelForTeardown()
+
+        let didCancelPredecessor = await gate.waitForCancellation()
+        await gate.release()
+
+        await previous.task.value
+        #expect(didCancelPredecessor)
+        #expect(await gate.completedWhileCancelled())
+        await successor.task.value
+        #expect(await gate.handlerDidRun() == false)
+    }
+
+    @Test func stopTimeoutCancellationDoesNotCancelQueuedPredecessor() async {
+        let gate = CancellableTaskGate()
+        let previous = RemoteConnection.MessageProcessingTask(previous: nil)
+        previous.start {
+            await withTaskCancellationHandler(
+                operation: { await gate.waitForRelease() },
+                onCancel: { Task { await gate.recordCancellation() } }
+            )
+            await gate.recordCompletion(wasCancelled: Task.isCancelled)
+        }
+        guard await gate.waitForEntry() else {
+            Issue.record("predecessor did not start")
+            await gate.release()
+            return
+        }
+
+        let successor = RemoteConnection.MessageProcessingTask(previous: previous)
+        successor.start {}
+        successor.task.cancel()
+        await gate.release()
+
+        await previous.task.value
+        #expect(await gate.completedWhileCancelled() == false)
+        await successor.task.value
+    }
+
+    @Test func completedPredecessorIsPrunedFromSuccessor() async {
+        let predecessor = RemoteConnection.MessageProcessingTask(previous: nil)
+        predecessor.start {}
+        await predecessor.task.value
+        predecessor.markFinished()
+
+        let successor = RemoteConnection.MessageProcessingTask(previous: predecessor)
+        #expect(successor.hasPredecessor)
+        successor.pruneFinishedPredecessors()
+        #expect(successor.hasPredecessor == false)
+    }
+
     @Test func pairThenWebSocketSubscribeReceivesSnapshot() async throws {
         // Provider with one session containing one agent message.
         let provider = FakeSessionsProvider()
@@ -876,5 +946,91 @@ struct RemoteServerIntegrationTests {
             data.append(chunk)
             return data
         }
+    }
+}
+
+private actor CancellableTaskGate {
+    private static let timeoutNanoseconds: UInt64 = 1_000_000_000
+    private var entered = false
+    private var released = false
+    private var cancelled = false
+    private var completedWithCancellation = false
+    private var handlerRan = false
+    private var entryContinuation: CheckedContinuation<Bool, Never>?
+    private var cancellationContinuation: CheckedContinuation<Bool, Never>?
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+    func waitForRelease() async {
+        entered = true
+        finishEntry(true)
+        guard !released else { return }
+        await withCheckedContinuation { releaseContinuation = $0 }
+    }
+
+    func waitForEntry() async -> Bool {
+        guard !entered else { return true }
+        return await withCheckedContinuation { continuation in
+            entryContinuation = continuation
+            scheduleEntryTimeout()
+        }
+    }
+
+    func recordCancellation() {
+        cancelled = true
+        finishCancellation(true)
+    }
+
+    func waitForCancellation() async -> Bool {
+        guard !cancelled else { return true }
+        return await withCheckedContinuation { continuation in
+            cancellationContinuation = continuation
+            scheduleCancellationTimeout()
+        }
+    }
+
+    func recordCompletion(wasCancelled: Bool) {
+        completedWithCancellation = wasCancelled
+    }
+
+    func completedWhileCancelled() -> Bool {
+        completedWithCancellation
+    }
+
+    func recordHandlerRun() {
+        handlerRan = true
+    }
+
+    func handlerDidRun() -> Bool {
+        handlerRan
+    }
+
+    func release() {
+        released = true
+        releaseContinuation?.resume()
+        releaseContinuation = nil
+    }
+
+    private func scheduleEntryTimeout() {
+        Task {
+            try? await Task.sleep(nanoseconds: Self.timeoutNanoseconds)
+            finishEntry(false)
+        }
+    }
+
+    private func scheduleCancellationTimeout() {
+        Task {
+            try? await Task.sleep(nanoseconds: Self.timeoutNanoseconds)
+            finishCancellation(false)
+        }
+    }
+
+    private func finishEntry(_ value: Bool) {
+        entryContinuation?.resume(returning: value)
+        entryContinuation = nil
+    }
+
+    private func finishCancellation(_ value: Bool) {
+        cancellationContinuation?.resume(returning: value)
+        cancellationContinuation = nil
     }
 }

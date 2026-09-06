@@ -18,6 +18,9 @@ enum WorktreeCreationCompletion {
     ) async -> Result<Worktree, WorktreeCreationFailure> {
         var remainingInactivePolls = maxPolls
         while remainingInactivePolls > 0 {
+            guard !Task.isCancelled else {
+                return .failure(.init(message: "Worktree creation was interrupted."))
+            }
             let reconciledWorktree = worktree()
 
             switch operationState() {

@@ -37,13 +37,14 @@ final class RemoteConnection: @unchecked Sendable {
     /// `gateway.handle` awaits the previous one, so messages are processed in
     /// arrival order — clients rely on this (e.g. a `takeOver` must land before
     /// the `sendPrompt` that follows it). Mutated only on `queue`.
-    private var processingTail: Task<Void, Never>?
+    private var processingTail: MessageProcessingTask?
     /// Task of the most recently dispatched `isDriveOrdering` message
     /// (sendPrompt/takeOver). A following `stop` awaits exactly this —
     /// narrower than the full `processingTail` — so it lands after a turn
     /// the user just started without being blocked by unrelated queued read
     /// work (subscribe/fetchOlder/list*/etc). Mutated only on `queue`.
     private var lastDriveActionTail: Task<Void, Never>?
+    private var lastDriveActionID: UUID?
     /// Reassembles fragmented WebSocket messages before they're decoded.
     private var reassembler = WebSocketReassembler()
     /// The device this connection authenticated as, set on `queue` once the WS
@@ -351,20 +352,17 @@ final class RemoteConnection: @unchecked Sendable {
             }
             return
         }
-        let previous = processingTail
-        let task = Task { @MainActor in
-            await previous?.value
-            // Only drive-ordering tasks are ever explicitly cancelled (by a
-            // timed-out stop, above) — this check is a no-op for every other
-            // message type, which nothing cancels.
-            if msg.isDriveOrdering {
-                guard !Task.isCancelled else { return }
+        let task = MessageProcessingTask(previous: processingTail)
+        task.start(
+            operation: { await gateway.handle(msg) },
+            onFinish: { [weak self] id in
+                self?.onQueue { [weak self] in self?.finishProcessingTask(id: id) }
             }
-            await gateway.handle(msg)
-        }
+        )
         processingTail = task
         if msg.isDriveOrdering {
-            lastDriveActionTail = task
+            lastDriveActionTail = task.task
+            lastDriveActionID = task.id
         }
     }
 
@@ -399,12 +397,93 @@ final class RemoteConnection: @unchecked Sendable {
         guard !closed else { return }
         closed = true
         isClosing = true
-        processingTail?.cancel()
+        processingTail?.cancelForTeardown()
         processingTail = nil
+        lastDriveActionTail = nil
+        lastDriveActionID = nil
         if let gateway { Task { @MainActor in gateway.close() } }
         gateway = nil
         conn.cancel()
         onClose(self)
+    }
+
+    private func finishProcessingTask(id: UUID) {
+        guard let tail = processingTail, let completed = tail.task(withID: id) else { return }
+        completed.markFinished()
+        if tail.isFinished {
+            processingTail = nil
+        } else {
+            tail.pruneFinishedPredecessors()
+        }
+        if lastDriveActionID == id {
+            lastDriveActionTail = nil
+            lastDriveActionID = nil
+        }
+    }
+
+    /// Queue-confined node in the ordered message chain. The task only captures
+    /// its predecessor's task handle, never this node, so node/task references
+    /// cannot form a cycle. Completion is reported to `RemoteConnection`, which
+    /// marks and unlinks this node on the connection queue.
+    final class MessageProcessingTask: @unchecked Sendable {
+        let id = UUID()
+        private(set) var task: Task<Void, Never>!
+        private(set) var previous: MessageProcessingTask?
+        private(set) var isFinished = false
+
+        init(previous: MessageProcessingTask?) {
+            self.previous = previous
+        }
+
+        func start(
+            operation: @escaping @MainActor @Sendable () async -> Void,
+            onFinish: @escaping @Sendable (UUID) -> Void = { _ in }
+        ) {
+            precondition(task == nil)
+            let previousTask = previous?.task
+            let id = id
+            task = Task { @MainActor in
+                defer { onFinish(id) }
+                await previousTask?.value
+                guard !Task.isCancelled else { return }
+                await operation()
+            }
+        }
+
+        func cancelForTeardown() {
+            var current: MessageProcessingTask? = self
+            while let node = current, !node.isFinished {
+                node.task.cancel()
+                current = node.previous
+            }
+        }
+
+        func task(withID id: UUID) -> MessageProcessingTask? {
+            var current: MessageProcessingTask? = self
+            while let node = current {
+                if node.id == id { return node }
+                current = node.previous
+            }
+            return nil
+        }
+
+        func markFinished() {
+            isFinished = true
+        }
+
+        func pruneFinishedPredecessors() {
+            var current: MessageProcessingTask? = self
+            while let node = current {
+                while let previous = node.previous, previous.isFinished {
+                    node.previous = previous.previous
+                }
+                current = node.previous
+            }
+        }
+
+        var hasPredecessor: Bool {
+            previous != nil
+        }
     }
 
     static func acceptKey(for key: String) -> String {
