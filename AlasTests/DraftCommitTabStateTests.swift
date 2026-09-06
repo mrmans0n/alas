@@ -16,6 +16,23 @@ struct DraftCommitTabStateTests {
         #expect(s.selectedPath == nil)
     }
 
+    @Test func draftDefaultsToLocalCommitAndRegularReviewRequest() {
+        let state = DraftCommitTabState(worktreeId: "wt-1")
+
+        #expect(state.preferredAction == .commit)
+        #expect(state.createReviewRequestAsDraft == false)
+        #expect(state.publishCheckpoint == nil)
+    }
+
+    @Test func legacyDraftJSONDecodesNewFieldsWithDefaults() throws {
+        let data = Data(#"{"id":"draft-commit:wt-1","worktreeId":"wt-1","subject":"Subject","bodyText":"Body","amend":false}"#.utf8)
+        let state = try JSONDecoder().decode(DraftCommitTabState.self, from: data)
+
+        #expect(state.preferredAction == .commit)
+        #expect(state.createReviewRequestAsDraft == false)
+        #expect(state.publishCheckpoint == nil)
+    }
+
     @Test func roundTripsThroughCodable() throws {
         var s = DraftCommitTabState(worktreeId: "wt-1")
         s.subject = "feat: foo"

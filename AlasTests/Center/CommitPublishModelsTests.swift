@@ -1,0 +1,89 @@
+import Foundation
+import Testing
+@testable import Alas
+
+struct CommitPublishModelsTests {
+    @Test func reviewCheckpointRoundTripsEveryCapturedField() throws {
+        let checkpoint = CommitPublishCheckpoint(
+            commitSHA: "abc123",
+            baseRef: "main",
+            commitTitle: "abc123 Subject",
+            subject: "Subject",
+            body: "Body",
+            destination: .review(.init(
+                provider: .github,
+                host: "github.com",
+                owner: "owner",
+                repository: "repo",
+                repositorySlug: "owner/repo",
+                remoteName: "origin",
+                webURL: URL(string: "https://github.com/owner/repo")!,
+                branch: "feature",
+                upstreamBranch: nil,
+                headOwner: nil,
+                baseBranch: "main",
+                reviewRequestExisted: false,
+                createAsDraft: true
+            )),
+            nextPhase: .push
+        )
+
+        let data = try JSONEncoder().encode(checkpoint)
+
+        #expect(try JSONDecoder().decode(CommitPublishCheckpoint.self, from: data) == checkpoint)
+    }
+
+    @Test func ggCheckpointRoundTrips() throws {
+        let checkpoint = CommitPublishCheckpoint(
+            commitSHA: "def456",
+            baseRef: "main",
+            commitTitle: "def456 Subject",
+            subject: "Subject",
+            body: "Body",
+            destination: .gg,
+            nextPhase: .sync
+        )
+
+        let data = try JSONEncoder().encode(checkpoint)
+
+        #expect(try JSONDecoder().decode(CommitPublishCheckpoint.self, from: data) == checkpoint)
+    }
+
+    @Test func everyPublishPhaseRoundTrips() throws {
+        for phase in [
+            CommitPublishPhase.push,
+            .createReviewRequest,
+            .sync,
+        ] {
+            let data = try JSONEncoder().encode(phase)
+            #expect(try JSONDecoder().decode(CommitPublishPhase.self, from: data) == phase)
+        }
+    }
+
+    @Test func reviewTargetRestoresCapturedSelfHostedRemote() {
+        let target = CommitPublishReviewTarget(
+            provider: .gitlab,
+            host: "gitlab.example.com",
+            owner: "team",
+            repository: "project",
+            repositorySlug: "team/project",
+            remoteName: "gitlab",
+            webURL: URL(string: "https://gitlab.example.com/team/project")!,
+            branch: "feature",
+            upstreamBranch: "gitlab/feature",
+            headOwner: "fork-owner",
+            baseBranch: "main",
+            reviewRequestExisted: true,
+            createAsDraft: false
+        )
+
+        #expect(target.remote == CodeHostRemote(
+            kind: .gitlab,
+            host: "gitlab.example.com",
+            owner: "team",
+            repository: "project",
+            remoteName: "gitlab",
+            webURL: URL(string: "https://gitlab.example.com/team/project")!
+        ))
+    }
+}
