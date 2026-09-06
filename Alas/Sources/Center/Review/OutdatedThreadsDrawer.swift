@@ -10,12 +10,20 @@ enum OutdatedThreadsDrawerPresentation {
 
         return min(defaultMaxExpandedListHeight, max(80, floor(availableHeight * 0.35)))
     }
+
+    /// Height applied to the expanded list's ScrollView: shrink-wraps to the measured
+    /// content when it's shorter than the cap, otherwise clamps to the cap so long lists
+    /// stay within the drawer and scroll instead of overflowing past it.
+    static func cappedListHeight(measuredContentHeight: CGFloat, maxHeight: CGFloat) -> CGFloat {
+        min(max(measuredContentHeight, 1), maxHeight)
+    }
 }
 
 struct OutdatedThreadsDrawer: View {
     let threads: [ReviewThread]  // already filtered: isFileLevel || isOutdated
     let maxExpandedListHeight: CGFloat
     @State private var isExpanded = false
+    @State private var contentHeight: CGFloat = 0
 
     @Environment(\.theme) private var theme
 
@@ -68,9 +76,24 @@ struct OutdatedThreadsDrawer: View {
                             }
                         }
                         .padding(.vertical, 4)
+                        .onGeometryChange(for: CGFloat.self) { proxy in
+                            proxy.size.height
+                        } action: { height in
+                            contentHeight = height
+                        }
                     }
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxHeight: maxExpandedListHeight)
+                    // Shrink-wrap short lists, but never exceed the cap — a plain
+                    // .fixedSize(vertical: true) + .frame(maxHeight:) combo lets the
+                    // ScrollView render at its full (uncapped) content height because
+                    // fixedSize ignores the frame's proposal, so long lists overflowed
+                    // past the drawer instead of clipping and scrolling.
+                    .frame(
+                        height: OutdatedThreadsDrawerPresentation.cappedListHeight(
+                            measuredContentHeight: contentHeight,
+                            maxHeight: maxExpandedListHeight
+                        )
+                    )
+                    .clipped()
                 }
             }
             .background(theme.color("bg-2"))

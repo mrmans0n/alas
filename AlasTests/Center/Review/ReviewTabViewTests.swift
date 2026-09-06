@@ -91,4 +91,31 @@ struct ReviewTabViewTests {
         #expect(OutdatedThreadsDrawerPresentation.expandedListMaxHeight(availableHeight: 200) == 80)
         #expect(OutdatedThreadsDrawerPresentation.expandedListMaxHeight(availableHeight: 0) == 280)
     }
+
+    @Test func outdatedDrawerCappedListHeightShrinksToContentButNeverExceedsCap() {
+        // Short content: shrink-wrap to its measured height.
+        #expect(
+            OutdatedThreadsDrawerPresentation.cappedListHeight(
+                measuredContentHeight: 60,
+                maxHeight: 280
+            ) == 60
+        )
+        // Long content (e.g. many threads): clamp to the cap instead of overflowing
+        // past the drawer, which is what let the expanded section swallow the whole
+        // review pane and made it impossible to scroll.
+        #expect(
+            OutdatedThreadsDrawerPresentation.cappedListHeight(
+                measuredContentHeight: 1_892,
+                maxHeight: 280
+            ) == 280
+        )
+        // Not-yet-measured content (0, before the first layout pass reports a size)
+        // must not collapse the list to zero height.
+        #expect(
+            OutdatedThreadsDrawerPresentation.cappedListHeight(
+                measuredContentHeight: 0,
+                maxHeight: 280
+            ) == 1
+        )
+    }
 }
