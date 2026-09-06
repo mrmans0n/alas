@@ -12,15 +12,19 @@ extension GitService {
             return try await status(worktreePath: worktreePath)
         }
 
+        // `-c core.quotePath=false` plus `-z` keep non-ASCII (and
+        // tab/newline-containing) filenames intact instead of git's default
+        // octal-escaped, quoted rendering — mirrors `stagedChangedFiles`,
+        // whose NUL-token parsers this reuses.
         let numstat = try await Process.git(
-            ["diff", "--numstat", "-M", "-C", ref, "--"], cwd: worktreePath)
+            ["-c", "core.quotePath=false", "diff", "--numstat", "-z", "-M", "-C", ref, "--"], cwd: worktreePath)
         guard numstat.exitCode == 0 else {
             return try await status(worktreePath: worktreePath)
         }
-        let counts = NumstatParser.parse(numstat.stdout)
+        let counts = GitService.parseNumstatZOutput(numstat.stdout)
 
         let nameStatus = try await Process.git(
-            ["diff", "--name-status", "-M", "-C", ref, "--"], cwd: worktreePath)
+            ["-c", "core.quotePath=false", "diff", "--name-status", "-z", "-M", "-C", ref, "--"], cwd: worktreePath)
         let statusEntries = try await status(worktreePath: worktreePath)
         let conflicts = Dictionary(
             statusEntries.compactMap { entry in entry.conflict.map { (entry.path, $0) } },
@@ -28,29 +32,26 @@ extension GitService {
 
         var files: [ChangedFile] = []
         var seen = Set<String>()
-        for line in nameStatus.stdout.split(separator: "\n") {
-            let parts = line.split(separator: "\t").map(String.init)
-            guard let code = parts.first, parts.count >= 2 else { continue }
-            let letter = String(code.prefix(1))
-            // Rename/copy entries carry both the source and destination path.
-            let path = parts.count >= 3 ? parts[2] : parts[1]
-            let renameFrom = parts.count >= 3 ? parts[1] : nil
+        let parsedNameStatus = GitService.parseNameStatusZOutput(nameStatus.stdout)
+        for path in parsedNameStatus.ordered {
             guard seen.insert(path).inserted else { continue }
-            let count = counts[path] ?? (add: 0, del: 0)
+            let letter = parsedNameStatus.status[path] ?? "M"
+            let renameFrom = parsedNameStatus.original[path]
+            let add = counts.add[path] ?? 0
+            let del = counts.del[path] ?? 0
             files.append(ChangedFile(
                 path: path,
                 status: letter,
                 stage: .unstaged,   // not meaningful for a base-relative view
-                add: count.add,
-                del: count.del,
+                add: add,
+                del: del,
                 renameFrom: renameFrom,
                 conflict: conflicts[path]))
         }
 
         let untracked = try await Process.git(
-            ["ls-files", "--others", "--exclude-standard"], cwd: worktreePath)
-        let untrackedPaths = untracked.stdout.split(separator: "\n")
-            .map(String.init)
+            ["ls-files", "--others", "--exclude-standard", "-z"], cwd: worktreePath)
+        let untrackedPaths = untracked.stdout.components(separatedBy: "\0")
             .filter { !$0.isEmpty && seen.insert($0).inserted }
 
         // `addedLineCount` shells out to `Data(contentsOf:)` against a LOCAL
@@ -98,7 +99,16 @@ extension GitService {
     /// against.
     func diff(worktreePath: URL, againstRef ref: String?, file: String) async throws -> ParsedDiff {
         guard let ref, !ref.isEmpty else {
-            return try await diff(worktreePath: worktreePath, file: file)
+            // `diff(worktreePath:file:)`'s default (`staged: false`) is a
+            // working-tree-vs-INDEX diff, which omits changes that are
+            // staged but not yet committed — so a staged-only file would
+            // show up in `changedFilesAgainstRef`'s own nil-ref fallback
+            // (`status(worktreePath:)`, which includes staged entries) but
+            // open to an empty diff here. `diffAgainstHEAD` compares the
+            // working tree against HEAD (or /dev/null on an unborn branch),
+            // which captures staged AND unstaged changes together, matching
+            // what `status` already reflects in the change list.
+            return try await diffAgainstHEAD(worktreePath: worktreePath, file: file)
         }
 
         if let originalPath = try await renameSource(worktreePath: worktreePath, ref: ref, file: file) {
@@ -137,14 +147,11 @@ extension GitService {
     /// old path entirely.
     private func renameSource(worktreePath: URL, ref: String, file: String) async throws -> String? {
         let result = try await Process.git(
-            ["diff", "--name-status", "-M", "-C", ref], cwd: worktreePath)
+            ["-c", "core.quotePath=false", "diff", "--name-status", "-z", "-M", "-C", ref], cwd: worktreePath)
         guard result.exitCode == 0 else { return nil }
-        for line in result.stdout.split(separator: "\n") {
-            let parts = line.split(separator: "\t").map(String.init)
-            guard parts.count == 3, let status = parts.first, status.hasPrefix("R"), parts[2] == file else { continue }
-            return parts[1]
-        }
-        return nil
+        let parsed = GitService.parseNameStatusZOutput(result.stdout)
+        guard let status = parsed.status[file], status.hasPrefix("R") else { return nil }
+        return parsed.original[file]
     }
 
     /// Sniffs whether the blob at `ref:file` looks binary, for files that no

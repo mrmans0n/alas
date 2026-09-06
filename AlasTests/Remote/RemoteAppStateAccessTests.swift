@@ -1225,6 +1225,62 @@ struct RemoteAppStateAccessTests {
         #expect(outcome == .text(marker))
     }
 
+    /// `AppState.remoteFileTree` must verify remote containment for a
+    /// worktree registered in `RemoteHostRegistry` before listing a
+    /// non-root directory — never trust `RemoteWorktreeFileAccess.resolve`
+    /// alone, since that check only performs LOCAL symlink resolution and
+    /// is a no-op when nothing exists locally at the worktree's path to
+    /// escape from (the real vulnerability: a symlink inside the SSH
+    /// worktree pointing outside it).
+    ///
+    /// As with `readRemoteWorktreeFileRawDoesNotFallBackToLocalDiskWhenTheHostIsUnreachable`,
+    /// there is no reachable SSH server in this environment, so this can't
+    /// drive a real end-to-end escape. Instead it proves the fix's
+    /// fail-closed behavior directly: `repository` is a REAL local git repo
+    /// with a real "alias" subdirectory tracked in git, so — absent the
+    /// fix — `GitService.fileTreeChildren` would happily list its (real,
+    /// local) contents once `resolve` vacuously passes. Registering
+    /// `repository.path` with `RemoteHostRegistry` (as a real remote
+    /// worktree root would be) makes `worktree.path.isRemoteAlasPath` true,
+    /// so the new containment check runs and must fail closed against the
+    /// unreachable host rather than falling through to the real local
+    /// listing. `nonexistent-host.invalid` is used for the same reason as
+    /// the sibling test: an IANA-reserved TLD guaranteed never to resolve.
+    @Test func remoteFileTreeVerifiesRemoteContainmentBeforeListingANonRootDirectory() async throws {
+        let repository = try await makeRemoteBranchesRepository()
+        defer {
+            RemoteHostRegistry.shared.unregister(root: repository.path)
+            try? FileManager.default.removeItem(at: repository)
+        }
+        let aliasDir = repository.appendingPathComponent("alias")
+        try FileManager.default.createDirectory(at: aliasDir, withIntermediateDirectories: true)
+        try "secret\n".write(to: aliasDir.appendingPathComponent("secret.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "alias"], cwd: repository)
+        _ = try await Process.git(["commit", "-q", "-m", "add alias dir"], cwd: repository)
+
+        RemoteHostRegistry.shared.register(root: repository.path, host: "nonexistent-host.invalid")
+
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+        let state = makeRemoteGitBackedState(repositoryPath: repository)
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let tab = try #require(acpTabs(in: state).first)
+
+        let result = await state.remoteFileTree(sessionId: tab.sessionId, path: "alias")
+
+        guard case let .failure(reason, _) = result else {
+            Issue.record("expected remote containment verification to fail closed, got \(result)")
+            return
+        }
+        #expect(reason == .gitFailed)
+    }
+
     /// End-to-end reproduction of the bug: a binary file that existed at the
     /// comparison ref but was deleted from the working tree since must still
     /// surface `.binary`, not an empty "successful" diff (the working-tree
