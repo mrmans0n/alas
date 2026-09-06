@@ -50,6 +50,7 @@ struct WorktreeRowView: View {
     struct GGModeMenuItem: Equatable, Identifiable {
         let mode: GGWorktreeMode
         let title: String
+        let isSelected: Bool
 
         var id: GGWorktreeMode { mode }
     }
@@ -58,15 +59,18 @@ struct WorktreeRowView: View {
         [
             GGModeMenuItem(
                 mode: .inherit,
-                title: selectedMode == .inherit ? "✓ Inherit repository default" : "Inherit repository default"
+                title: "Inherit repository default",
+                isSelected: selectedMode == .inherit
             ),
             GGModeMenuItem(
                 mode: .on,
-                title: selectedMode == .on ? "✓ On" : "On"
+                title: "On",
+                isSelected: selectedMode == .on
             ),
             GGModeMenuItem(
                 mode: .off,
-                title: selectedMode == .off ? "✓ Off" : "Off"
+                title: "Off",
+                isSelected: selectedMode == .off
             )
         ]
     }
@@ -294,12 +298,12 @@ struct WorktreeRowView: View {
                 Divider()
                 if ggMenuModel.isVisible {
                     Menu(Self.ggModeMenuTitle) {
-                        ForEach(Self.ggModeMenuItems(selectedMode: ggMenuModel.selectedMode)) { item in
-                            Button(item.title) {
-                                guard item.mode != ggMenuModel.selectedMode else { return }
-                                onSetGGWorktreeMode(item.mode)
-                            }
-                        }
+                        // Static buttons: a data-driven ForEach inside a hover-revealed
+                        // context-menu submenu renders empty on macOS.
+                        let items = Self.ggModeMenuItems(selectedMode: ggMenuModel.selectedMode)
+                        ggModeMenuButton(items[0])
+                        ggModeMenuButton(items[1])
+                        ggModeMenuButton(items[2])
                     }
                     if let explanation = ggMenuModel.inactiveExplanation {
                         Divider()
@@ -314,6 +318,19 @@ struct WorktreeRowView: View {
                         Button("Delete Worktree, Keep Branch…", role: .destructive, action: onDeleteKeepBranch)
                     }
                 }
+            }
+        }
+    }
+
+    private func ggModeMenuButton(_ item: GGModeMenuItem) -> some View {
+        Button {
+            guard item.mode != ggMenuModel.selectedMode else { return }
+            onSetGGWorktreeMode(item.mode)
+        } label: {
+            if item.isSelected {
+                Label(item.title, systemImage: "checkmark")
+            } else {
+                Text(item.title)
             }
         }
     }
