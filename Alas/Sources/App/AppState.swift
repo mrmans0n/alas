@@ -8178,8 +8178,30 @@ extension AppState: RemoteSessionsProvider {
                     worktreePath: worktree.path, statusEntries: statusEntries)
                 return .success(nodes: Self.remoteFileNodes(nodes))
             }
-            guard RemoteWorktreeFileAccess.resolve(path: path, in: worktree.path) != nil else {
+            guard let normalizedPath = RemoteWorktreeFileAccess.normalizedRelativePath(path),
+                  RemoteWorktreeFileAccess.resolve(path: path, in: worktree.path) != nil
+            else {
                 return .failure(reason: .pathRejected, message: nil)
+            }
+            // `resolve` above only performs LOCAL symlink resolution and
+            // containment checking — a no-op for a remote worktree, since
+            // nothing exists at `worktree.path` on this Mac to escape from.
+            // A symlink inside the SSH worktree that points outside it (or
+            // at `.git`) would otherwise let a remote listing leak directory
+            // names from anywhere on the remote host. Mirrors
+            // `readRemoteWorktreeFileRaw`'s containment check for reads.
+            if worktree.path.isRemoteAlasPath {
+                guard let host = RemoteHostRegistry.shared.host(forPath: worktree.path.path) else {
+                    return .failure(reason: .gitFailed, message: "Remote host is not registered for this worktree.")
+                }
+                do {
+                    try await RemotePathContainment.verifyRemoteContainment(
+                        host: host, path: normalizedPath, worktreeRoot: worktree.path.path)
+                } catch RemotePathContainment.ContainmentError.outsideWorktree(_) {
+                    return .failure(reason: .pathRejected, message: nil)
+                } catch {
+                    return .failure(reason: .gitFailed, message: error.localizedDescription)
+                }
             }
             let nodes = try await git.fileTreeChildren(
                 worktreePath: worktree.path, path: path)

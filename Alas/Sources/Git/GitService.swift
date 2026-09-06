@@ -1225,79 +1225,8 @@ extension GitService {
             )
         }
 
-        // Parse --numstat -z output.
-        // Format per entry (NUL-separated fields within each record):
-        //   "<add>\t<del>\t<path>\0"   (ordinary files)
-        //   "<add>\t<del>\t\0<oldPath>\0<newPath>\0"  (renames/copies)
-        // The -z flag separates records with NUL; we split on NUL and then
-        // handle the tab-delimited first element per record.
-        var addByPath: [String: Int] = [:]
-        var delByPath: [String: Int] = [:]
-
-        // With -z the stream is NUL-terminated. Split and process tokens.
-        let numstatTokens = numstat.stdout.components(separatedBy: "\0").filter { !$0.isEmpty }
-        var ni = 0
-        while ni < numstatTokens.count {
-            let token = numstatTokens[ni]
-            // Split on the first two tabs only so paths containing tab
-            // characters survive intact. Format is `<adds>\t<dels>\t<path>`;
-            // the trailing path field may itself contain tabs.
-            let parts = token.split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
-            guard parts.count >= 3 else { ni += 1
-            continue }
-            let addStr = parts[0]
-            let delStr = parts[1]
-            let pathField = parts[2]
-
-            let newPath: String
-            if pathField.isEmpty {
-                // Rename/copy: next two tokens are old and new path.
-                guard ni + 2 < numstatTokens.count else { ni += 1
-                continue }
-                // ni+1 = old path, ni+2 = new path
-                newPath = numstatTokens[ni + 2]
-                ni += 3
-            } else {
-                newPath = Self.numstatNewPath(pathField)
-                ni += 1
-            }
-            addByPath[newPath] = (addStr == "-") ? 0 : (Int(addStr) ?? 0)
-            delByPath[newPath] = (delStr == "-") ? 0 : (Int(delStr) ?? 0)
-        }
-
-        // Parse --name-status -z output.
-        // Format: "<status>\0<path>\0"  (ordinary)
-        //         "<status>\0<oldPath>\0<newPath>\0"  (R/C)
-        var statusByPath: [String: String] = [:]
-        var originalByPath: [String: String] = [:]
-        var ordered: [String] = []
-        var orderedSet: Set<String> = []
-
-        let nsTokens = nameStatus.stdout.components(separatedBy: "\0").filter { !$0.isEmpty }
-        var si = 0
-        while si < nsTokens.count {
-            let statusField = nsTokens[si]
-            guard !statusField.isEmpty else { si += 1
-            continue }
-            let statusLetter = String(statusField.prefix(1))
-            if statusLetter == "R" || statusLetter == "C" {
-                guard si + 2 < nsTokens.count else { si += 1
-                continue }
-                let oldPath = nsTokens[si + 1]
-                let newPath = nsTokens[si + 2]
-                statusByPath[newPath] = statusLetter
-                originalByPath[newPath] = oldPath
-                if orderedSet.insert(newPath).inserted { ordered.append(newPath) }
-                si += 3
-            } else {
-                guard si + 1 < nsTokens.count else { si += 1
-                continue }
-                let path = nsTokens[si + 1]
-                statusByPath[path] = statusLetter
-                if orderedSet.insert(path).inserted { ordered.append(path) }
-                si += 2
-            }
-        }
+        let (addByPath, delByPath) = Self.parseNumstatZOutput(numstat.stdout)
+        let (statusByPath, originalByPath, ordered) = Self.parseNameStatusZOutput(nameStatus.stdout)
 
         return ordered.map { path in
             CommitChangedFile(
@@ -1308,6 +1237,103 @@ extension GitService {
                 del: delByPath[path] ?? 0
             )
         }
+    }
+
+    /// Parses the NUL-separated token stream produced by `git diff ...
+    /// --numstat -z` (with `-c core.quotePath=false` so non-ASCII paths
+    /// aren't octal-escaped), returning per-path added/deleted line counts.
+    ///
+    /// Format per entry (NUL-separated fields within each record):
+    ///   "<add>\t<del>\t<path>\0"   (ordinary files)
+    ///   "<add>\t<del>\t\0<oldPath>\0<newPath>\0"  (renames/copies)
+    /// The -z flag separates records with NUL; this splits on NUL and then
+    /// handles the tab-delimited first element per record.
+    ///
+    /// Extracted from `stagedChangedFiles` so the remote-changes surface
+    /// (`GitService+RemoteChanges.swift`) can reuse the same
+    /// already-hardened parsing instead of duplicating it.
+    static func parseNumstatZOutput(_ stdout: String) -> (add: [String: Int], del: [String: Int]) {
+        var addByPath: [String: Int] = [:]
+        var delByPath: [String: Int] = [:]
+
+        // With -z the stream is NUL-terminated. Split and process tokens.
+        let tokens = stdout.components(separatedBy: "\0").filter { !$0.isEmpty }
+        var i = 0
+        while i < tokens.count {
+            let token = tokens[i]
+            // Split on the first two tabs only so paths containing tab
+            // characters survive intact. Format is `<adds>\t<dels>\t<path>`;
+            // the trailing path field may itself contain tabs.
+            let parts = token.split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
+            guard parts.count >= 3 else { i += 1
+            continue }
+            let addStr = parts[0]
+            let delStr = parts[1]
+            let pathField = parts[2]
+
+            let newPath: String
+            if pathField.isEmpty {
+                // Rename/copy: next two tokens are old and new path.
+                guard i + 2 < tokens.count else { i += 1
+                continue }
+                // i+1 = old path, i+2 = new path
+                newPath = tokens[i + 2]
+                i += 3
+            } else {
+                newPath = numstatNewPath(pathField)
+                i += 1
+            }
+            addByPath[newPath] = (addStr == "-") ? 0 : (Int(addStr) ?? 0)
+            delByPath[newPath] = (delStr == "-") ? 0 : (Int(delStr) ?? 0)
+        }
+        return (addByPath, delByPath)
+    }
+
+    /// Parses the NUL-separated token stream produced by `git diff ...
+    /// --name-status -z` (with `-c core.quotePath=false`), returning
+    /// per-path status letters, rename/copy source paths, and first-seen
+    /// path order.
+    ///
+    /// Format: "<status>\0<path>\0"  (ordinary)
+    ///         "<status>\0<oldPath>\0<newPath>\0"  (R/C)
+    ///
+    /// Extracted from `stagedChangedFiles` so the remote-changes surface
+    /// (`GitService+RemoteChanges.swift`) can reuse the same
+    /// already-hardened parsing instead of duplicating it.
+    static func parseNameStatusZOutput(
+        _ stdout: String
+    ) -> (status: [String: String], original: [String: String], ordered: [String]) {
+        var statusByPath: [String: String] = [:]
+        var originalByPath: [String: String] = [:]
+        var ordered: [String] = []
+        var orderedSet: Set<String> = []
+
+        let tokens = stdout.components(separatedBy: "\0").filter { !$0.isEmpty }
+        var i = 0
+        while i < tokens.count {
+            let statusField = tokens[i]
+            guard !statusField.isEmpty else { i += 1
+            continue }
+            let statusLetter = String(statusField.prefix(1))
+            if statusLetter == "R" || statusLetter == "C" {
+                guard i + 2 < tokens.count else { i += 1
+                continue }
+                let oldPath = tokens[i + 1]
+                let newPath = tokens[i + 2]
+                statusByPath[newPath] = statusLetter
+                originalByPath[newPath] = oldPath
+                if orderedSet.insert(newPath).inserted { ordered.append(newPath) }
+                i += 3
+            } else {
+                guard i + 1 < tokens.count else { i += 1
+                continue }
+                let path = tokens[i + 1]
+                statusByPath[path] = statusLetter
+                if orderedSet.insert(path).inserted { ordered.append(path) }
+                i += 2
+            }
+        }
+        return (statusByPath, originalByPath, ordered)
     }
 }
 

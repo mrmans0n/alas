@@ -109,6 +109,33 @@ struct GitServiceRemoteChangesTests {
         #expect(deletedLines == ["line3"])
     }
 
+    /// Under git's default `core.quotePath=true`, a non-ASCII filename is
+    /// emitted quoted and octal-escaped (e.g. `café.txt` →
+    /// `"caf\303\251.txt"`). Without `-c core.quotePath=false` (and `-z` to
+    /// make the escaping avoidable in the first place), the client would be
+    /// handed that literal escaped string as the path, which doesn't name
+    /// any real file.
+    @Test func changedFilesAgainstRef_reportsTheExactNonASCIIFilename() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let filename = "café.txt"
+        try "one\n".write(to: repo.appendingPathComponent(filename), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", filename], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "add"], cwd: repo)
+        _ = try await Process.git(["branch", "start"], cwd: repo)
+
+        try "one\ntwo\n".write(to: repo.appendingPathComponent(filename), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", filename], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "edit"], cwd: repo)
+
+        let files = try await GitService().changedFilesAgainstRef(worktreePath: repo, ref: "start")
+        #expect(files.map(\.path) == [filename])
+
+        let diff = try await GitService().diff(worktreePath: repo, againstRef: "start", file: filename)
+        let added = diff.hunks.flatMap(\.lines).filter { $0.kind == .add }
+        #expect(added.map(\.text) == ["two"])
+    }
+
     @Test func changedFilesAgainstRef_handlesRename() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
@@ -135,6 +162,29 @@ struct GitServiceRemoteChangesTests {
         _ = try await Process.git(["commit", "-m", "base"], cwd: repo)
 
         try "one\ntwo\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+
+        let diff = try await GitService().diff(worktreePath: repo, againstRef: nil, file: "a.txt")
+        let added = diff.hunks.flatMap(\.lines).filter { $0.kind == .add }
+        #expect(added.map(\.text) == ["two"])
+    }
+
+    /// `diff(worktreePath:againstRef: nil, file:)` used to fall back to
+    /// `diff(worktreePath:file:)`'s default (unstaged, working-tree-vs-INDEX)
+    /// view, which by definition shows nothing for a change that IS staged
+    /// (the index already matches the working tree). Meanwhile
+    /// `changedFilesAgainstRef`'s own nil-ref fallback (`status`) DOES
+    /// surface staged files, so the file appeared in the change list but
+    /// opened to an empty diff. `diffAgainstHEAD` compares the working tree
+    /// against HEAD, which reflects the staged content as changed.
+    @Test func diffAgainstRef_showsAStagedOnlyChangeWhenRefIsNil() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try "one\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "a.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "base"], cwd: repo)
+
+        try "one\ntwo\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "a.txt"], cwd: repo)
 
         let diff = try await GitService().diff(worktreePath: repo, againstRef: nil, file: "a.txt")
         let added = diff.hunks.flatMap(\.lines).filter { $0.kind == .add }
@@ -300,5 +350,38 @@ struct GitServiceRemoteChangesTests {
         )
 
         #expect(result)
+    }
+
+    // MARK: - parseNumstatZOutput / parseNameStatusZOutput
+
+    @Test func parseNumstatZOutput_parsesOrdinaryRecords() {
+        let stream = "3\t1\tfile1.txt\00\t5\tcafé.txt\0"
+        let (add, del) = GitService.parseNumstatZOutput(stream)
+        #expect(add == ["file1.txt": 3, "café.txt": 0])
+        #expect(del == ["file1.txt": 1, "café.txt": 5])
+    }
+
+    @Test func parseNumstatZOutput_parsesRenameRecords() {
+        // "<add>\t<del>\t\0<oldPath>\0<newPath>\0"
+        let stream = "2\t0\t\0old.txt\0new.txt\0"
+        let (add, del) = GitService.parseNumstatZOutput(stream)
+        #expect(add == ["new.txt": 2])
+        #expect(del == ["new.txt": 0])
+    }
+
+    @Test func parseNameStatusZOutput_parsesOrdinaryRecords() {
+        let stream = "M\0file1.txt\0A\0café.txt\0"
+        let parsed = GitService.parseNameStatusZOutput(stream)
+        #expect(parsed.ordered == ["file1.txt", "café.txt"])
+        #expect(parsed.status == ["file1.txt": "M", "café.txt": "A"])
+        #expect(parsed.original.isEmpty)
+    }
+
+    @Test func parseNameStatusZOutput_parsesRenameAndCopyRecords() {
+        let stream = "R100\0old.txt\0new.txt\0C75\0base.txt\0copy.txt\0"
+        let parsed = GitService.parseNameStatusZOutput(stream)
+        #expect(parsed.ordered == ["new.txt", "copy.txt"])
+        #expect(parsed.status == ["new.txt": "R", "copy.txt": "C"])
+        #expect(parsed.original == ["new.txt": "old.txt", "copy.txt": "base.txt"])
     }
 }
