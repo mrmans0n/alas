@@ -69,6 +69,7 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     var pauseRemoteWorktrees = false
     var pauseRemoteProjects = false
     var pauseRemoteBranches = false
+    var pauseFileDiff = false
     /// 1-indexed call number of `fullToolCallContent` to suspend on (nil = never pause).
     /// Lets a test freeze exactly one in-flight fetch while later calls proceed normally.
     var pauseFullToolCallContentOnCall: Int?
@@ -80,6 +81,8 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     private var remoteProjectsCompletionWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
     private var remoteBranchesCallWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
     private var remoteBranchesCompletionWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
+    private var fileDiffContinuation: CheckedContinuation<RemoteFileDiffResult, Never>?
+    private var fileDiffCallWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
     private var fullToolCallContentContinuation: CheckedContinuation<String?, Never>?
     func sessionSummaries() async -> [RemoteSessionSummary] {
         sessionSummariesCallCount += 1
@@ -189,6 +192,16 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
             remoteBranchesCompletionWaiters.append((count, continuation))
         }
     }
+    func resumeFileDiff() {
+        fileDiffContinuation?.resume(returning: fileDiffResult)
+        fileDiffContinuation = nil
+    }
+    func waitForFileDiffCall(_ count: Int) async {
+        guard fileDiffRequests.count < count else { return }
+        await withCheckedContinuation { continuation in
+            fileDiffCallWaiters.append((count, continuation))
+        }
+    }
     private func resumeWaiters(
         _ waiters: inout [(count: Int, continuation: CheckedContinuation<Void, Never>)],
         through count: Int
@@ -280,6 +293,12 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
 
     func remoteFileDiff(sessionId: String, path: String) async -> RemoteFileDiffResult {
         fileDiffRequests.append((sessionId, path))
+        resumeWaiters(&fileDiffCallWaiters, through: fileDiffRequests.count)
+        if pauseFileDiff {
+            return await withCheckedContinuation { continuation in
+                fileDiffContinuation = continuation
+            }
+        }
         return fileDiffResult
     }
 
@@ -2747,17 +2766,20 @@ struct RemoteSessionGatewayTests {
     @Test func duplicateInFlightRequestsForTheSamePathAreDropped() async {
         let provider = FakeSessionsProvider()
         provider.fileDiffResult = .success(hunks: [], truncated: false)
+        provider.pauseFileDiff = true
         var sent: [RemoteServerMessage] = []
         let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
 
         async let first: Void = gateway.handle(.fileDiff(sessionId: "s1", path: "a.txt"))
-        async let second: Void = gateway.handle(.fileDiff(sessionId: "s1", path: "a.txt"))
-        _ = await (first, second)
+        await provider.waitForFileDiffCall(1)   // first call has entered the provider and is now suspended — the gateway's dedup key is held
 
-        #expect(provider.fileDiffRequests.count <= 2)
-        #expect(sent.allSatisfy { message in
-            if case .fileDiffResult(_, let path, _, _) = message { return path == "a.txt" }
-            return false
-        })
+        await gateway.handle(.fileDiff(sessionId: "s1", path: "a.txt"))   // must be dropped: the key is still held by the suspended first call
+        #expect(provider.fileDiffRequests.count == 1)   // second call never reached the provider
+        #expect(sent.isEmpty)   // dropped call sends nothing
+
+        provider.resumeFileDiff()
+        await first
+        #expect(provider.fileDiffRequests.count == 1)   // still just the one real call
+        #expect(sent == [.fileDiffResult(sessionId: "s1", path: "a.txt", hunks: [], truncated: false)])
     }
 }
