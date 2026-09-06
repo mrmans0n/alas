@@ -153,6 +153,46 @@ struct GitServiceRemoteChangesTests {
         #expect(!ignored)
     }
 
+    @Test func looksBinaryAtRef_sniffsTheBlobWhenTheWorkingTreeFileIsGone() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try Data([0x42, 0x00, 0x43]).write(to: repo.appendingPathComponent("image.bin"))
+        _ = try await Process.git(["add", "image.bin"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "add binary"], cwd: repo)
+        _ = try await Process.git(["branch", "start"], cwd: repo)
+
+        _ = try await Process.git(["rm", "image.bin"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "remove binary"], cwd: repo)
+
+        let result = try await GitService().looksBinaryAtRef(worktreePath: repo, ref: "start", file: "image.bin")
+        #expect(result == true)
+    }
+
+    @Test func looksBinaryAtRef_returnsFalseForATextBlob() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try "plain text\n".write(to: repo.appendingPathComponent("notes.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "notes.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "add notes"], cwd: repo)
+        _ = try await Process.git(["branch", "start"], cwd: repo)
+
+        _ = try await Process.git(["rm", "notes.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "remove notes"], cwd: repo)
+
+        let result = try await GitService().looksBinaryAtRef(worktreePath: repo, ref: "start", file: "notes.txt")
+        #expect(result == false)
+    }
+
+    @Test func looksBinaryAtRef_returnsNilWhenTheFileDoesNotExistAtTheRef() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        _ = try await Process.git(["commit", "--allow-empty", "-m", "init"], cwd: repo)
+        _ = try await Process.git(["branch", "start"], cwd: repo)
+
+        let result = try await GitService().looksBinaryAtRef(worktreePath: repo, ref: "start", file: "missing.bin")
+        #expect(result == nil)
+    }
+
     @Test func isPathIgnored_reportsFalseForAForceAddedTrackedFileMatchingAGitignorePattern() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }

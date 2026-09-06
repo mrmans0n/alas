@@ -93,6 +93,19 @@ extension GitService {
         return DiffParser.parse(result.stdout)
     }
 
+    /// Sniffs whether the blob at `ref:file` looks binary, for files that no
+    /// longer exist in the working tree (so an on-disk sniff can't tell).
+    /// Returns nil when `file` doesn't exist at `ref` either — nothing to
+    /// sniff, so the caller should fall back to its prior on-disk verdict.
+    func looksBinaryAtRef(worktreePath: URL, ref: String, file: String) async throws -> Bool? {
+        let existsAtRef = try await Process.git(
+            ["cat-file", "-e", "\(ref):\(file)"], cwd: worktreePath)
+        guard existsAtRef.exitCode == 0 else { return nil }
+        let blob = try await Process.gitData(["show", "\(ref):\(file)"], cwd: worktreePath)
+        guard blob.exitCode == 0 else { return nil }
+        return Self.looksBinary(blob.stdout)
+    }
+
     /// Line count for an untracked file, or 0 when it is binary or unreadable.
     private static func addedLineCount(worktreePath: URL, path: String) -> Int {
         let url = worktreePath.appendingPathComponent(path)

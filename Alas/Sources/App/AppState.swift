@@ -7904,14 +7904,112 @@ extension AppState: RemoteSessionsProvider {
 
     /// Resolves the worktree backing a session id by scanning the live
     /// per-worktree managers, mirroring how `session(for:)` looks sessions up.
+    ///
+    /// Checks both the live session and the persisted rows — matching every
+    /// other lookup in this file (`session(for:)`, `hydrateIfNeeded`,
+    /// `renameSession`) — because a just-created session is installed into
+    /// `liveSession(for:)` immediately, while `sessionRows` can briefly lag
+    /// behind an in-flight `refreshRecent()` snapshot.
     private func remoteWorktreeContext(sessionId: String) -> RemoteWorktreeContextResult {
-        for mgr in acpManagers.values where mgr.sessionRows.contains(where: { $0.id == sessionId }) {
+        for mgr in acpManagers.values
+        where mgr.liveSession(for: sessionId) != nil || mgr.sessionRows.contains(where: { $0.id == sessionId }) {
             guard let resolved = projectAndWorktree(withWorktreeId: mgr.worktreeId) else {
                 return .worktreeUnavailable
             }
             return .found(resolved.worktree)
         }
         return .sessionUnknown
+    }
+
+    /// Outcome of reading a worktree-relative file's raw bytes from a
+    /// registered SSH host, mirroring the containment + read pipeline
+    /// `ACPRemoteFileServer.read` uses for editor reads — but surfacing raw
+    /// `Data` instead of requiring UTF-8, since the remote Files/Changes
+    /// surface applies its own binary-sniff / size-cap logic on top.
+    ///
+    /// Internal (not `private`) so `AlasTests` can exercise
+    /// `readRemoteWorktreeFileRaw` directly: this environment has no
+    /// reachable SSH host to stand up a full remote-worktree integration
+    /// test against, so this is the seam that lets a test prove the remote
+    /// branch never silently falls back to local-disk I/O.
+    enum RemoteWorktreeRawReadOutcome {
+        case data(Data)
+        /// The remote path is missing, a directory, or a symlink — not a
+        /// readable plain file.
+        case notFound
+        /// Transport or remote-side error unrelated to the containment check.
+        case unreadable(String)
+        /// The resolved path escaped the worktree root.
+        case containmentRejected
+    }
+
+    /// Reads `relativePath` (already validated by
+    /// `RemoteWorktreeFileAccess.normalizedRelativePath`) from `host`,
+    /// applying the same lexical + physical containment checks
+    /// `ACPRemoteFileServer.read` uses before touching the remote
+    /// filesystem. Git-based operations (`GitService.status`/`.diff`/etc.)
+    /// already run correctly against a remote worktree because
+    /// `Process.git` is itself remote-host-aware — this helper exists only
+    /// for the raw, non-git file reads this surface also needs (plain file
+    /// contents, the pre-diff binary sniff).
+    func readRemoteWorktreeFileRaw(
+        host: String, worktreeRoot: String, relativePath: String
+    ) async -> RemoteWorktreeRawReadOutcome {
+        let target: String
+        do {
+            target = try RemotePathContainment.lexicallyResolveInsideWorktree(
+                path: relativePath, worktreeRoot: worktreeRoot)
+        } catch {
+            return .containmentRejected
+        }
+        do {
+            try await RemotePathContainment.verifyRemoteContainment(
+                host: host, path: target, worktreeRoot: worktreeRoot)
+        } catch RemotePathContainment.ContainmentError.outsideWorktree(_) {
+            return .containmentRejected
+        } catch {
+            return .unreadable(String(describing: error))
+        }
+        do {
+            switch try await RemoteFileAccess.read(host: host, path: target) {
+            case let .file(data, _): return .data(data)
+            case .missing, .directory, .symlink: return .notFound
+            case let .unreadable(detail): return .unreadable(detail)
+            }
+        } catch {
+            return .unreadable(String(describing: error))
+        }
+    }
+
+    /// Whether `normalizedPath` looks like a binary file for diff purposes.
+    /// Prefers an on-disk sniff against the current working tree (mirroring
+    /// git's own heuristic). When the file is missing from the working tree
+    /// — the case a binary file deleted since `comparisonRef` hits — falls
+    /// back to sniffing the blob at `comparisonRef` instead, so a deleted
+    /// binary file still reports `.binary` rather than slipping through as
+    /// an empty "successful" diff.
+    private func isDiffTargetBinary(
+        worktree: Worktree, normalizedPath: String, url: URL, comparisonRef: String?, git: GitService
+    ) async -> Bool {
+        let existsOnDisk: Bool
+        let onDiskLooksBinary: Bool
+        if worktree.path.isRemoteAlasPath, let host = RemoteHostRegistry.shared.host(forPath: worktree.path.path) {
+            switch await readRemoteWorktreeFileRaw(host: host, worktreeRoot: worktree.path.path, relativePath: normalizedPath) {
+            case .data(let data):
+                existsOnDisk = true
+                onDiskLooksBinary = GitService.looksBinary(data)
+            case .notFound, .unreadable, .containmentRejected:
+                existsOnDisk = false
+                onDiskLooksBinary = false
+            }
+        } else {
+            existsOnDisk = FileManager.default.fileExists(atPath: url.path)
+            onDiskLooksBinary = await RemoteWorktreeFileAccess.looksBinaryOnDisk(at: url)
+        }
+        if onDiskLooksBinary { return true }
+        if existsOnDisk { return false }
+        guard let comparisonRef, !comparisonRef.isEmpty else { return false }
+        return (try? await git.looksBinaryAtRef(worktreePath: worktree.path, ref: comparisonRef, file: normalizedPath)) ?? false
     }
 
     private static func remoteChangedFile(_ file: ChangedFile) -> RemoteChangedFile {
@@ -8011,15 +8109,18 @@ extension AppState: RemoteSessionsProvider {
         } catch {
             return .failure(reason: .gitFailed, message: error.localizedDescription)
         }
-        if await RemoteWorktreeFileAccess.looksBinaryOnDisk(at: url) {
-            return .failure(reason: .binary, message: nil)
-        }
         do {
             let commits = try await git.commitsAhead(
                 at: worktree.path,
                 baseBranch: config.worktrees.baseBranch,
                 resolution: GitService.BaseResolution.forCommits(
                     mode: config.changes.comparisonMode, userOverrodeBaseBranch: false))
+            if await isDiffTargetBinary(
+                worktree: worktree, normalizedPath: normalizedPath, url: url,
+                comparisonRef: commits.comparisonRef, git: git
+            ) {
+                return .failure(reason: .binary, message: nil)
+            }
             let parsed = try await git.diff(
                 worktreePath: worktree.path,
                 againstRef: commits.comparisonRef,
@@ -8085,6 +8186,34 @@ extension AppState: RemoteSessionsProvider {
         } catch {
             return .failure(reason: .gitFailed, byteSize: nil, message: error.localizedDescription)
         }
+
+        if worktree.path.isRemoteAlasPath {
+            guard let host = RemoteHostRegistry.shared.host(forPath: worktree.path.path) else {
+                return .failure(
+                    reason: .gitFailed, byteSize: nil,
+                    message: "Remote host is not registered for this worktree.")
+            }
+            switch await readRemoteWorktreeFileRaw(host: host, worktreeRoot: worktree.path.path, relativePath: normalizedPath) {
+            case .containmentRejected:
+                return .failure(reason: .pathRejected, byteSize: nil, message: nil)
+            case .notFound:
+                return .failure(reason: .notFound, byteSize: nil, message: nil)
+            case .unreadable(let detail):
+                return .failure(reason: .gitFailed, byteSize: nil, message: detail)
+            case .data(let data):
+                guard data.count <= RemoteWorktreeFileAccess.maxFileBytes else {
+                    return .failure(reason: .tooLarge, byteSize: data.count, message: nil)
+                }
+                guard !GitService.looksBinary(data) else {
+                    return .failure(reason: .binary, byteSize: data.count, message: nil)
+                }
+                guard let text = String(data: data, encoding: .utf8) else {
+                    return .failure(reason: .binary, byteSize: data.count, message: nil)
+                }
+                return .success(text: text, truncated: false)
+            }
+        }
+
         switch await RemoteWorktreeFileAccess.readFileContents(at: url) {
         case .notFound:
             return .failure(reason: .notFound, byteSize: nil, message: nil)

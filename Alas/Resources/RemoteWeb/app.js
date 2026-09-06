@@ -582,14 +582,21 @@ function renderFileTree() {
     button.className = "file-row";
     button.style.paddingLeft = 12 + row.depth * 14 + "px";
 
+    const isSubmodule = row.node.kind === "dir" && row.node.isSubmodule === true;
     const label = row.node.kind === "dir"
-      ? (row.expanded ? "▾ " : "▸ ") + row.node.name
+      ? (isSubmodule ? "◇ " : (row.expanded ? "▾ " : "▸ ")) + row.node.name
       : row.node.name;
     button.append(el("span", "", label));
-    if (row.node.badge) button.append(el("span", "change-counts", row.node.badge));
+    if (isSubmodule) button.append(el("span", "change-counts", "submodule"));
+    else if (row.node.badge) button.append(el("span", "change-counts", row.node.badge));
 
     button.onclick = () => {
       if (row.node.kind === "dir") {
+        // Submodules are a separate git repo: `git check-ignore` / the
+        // server's `listFiles` walk fail on paths inside one ("Pathspec ...
+        // is in submodule"). Treat the row as a non-expandable leaf instead
+        // of sending a `listFiles` request that can only fail.
+        if (isSubmodule) return;
         if (changesTree.toggle(row.node.path)) {
           send({ type: "listFiles", sessionId: currentSession, path: row.node.path });
         }
