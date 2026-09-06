@@ -31,6 +31,14 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     var renamed: [(id: String, title: String)] = []
     var renameSucceeds = true
     var configs: [String: RemoteSessionConfig] = [:]
+    var changeListResult: RemoteChangeListResult = .failure(reason: .sessionUnknown, message: nil)
+    var fileDiffResult: RemoteFileDiffResult = .failure(reason: .sessionUnknown, message: nil)
+    var fileTreeResult: RemoteFileTreeResult = .failure(reason: .sessionUnknown, message: nil)
+    var fileContentsResult: RemoteFileContentsResult = .failure(reason: .sessionUnknown, byteSize: nil, message: nil)
+    var changeListRequests: [String] = []
+    var fileDiffRequests: [(sessionId: String, path: String)] = []
+    var fileTreeRequests: [(sessionId: String, path: String?)] = []
+    var fileContentsRequests: [(sessionId: String, path: String)] = []
     var queueForceSends: [(id: String, itemId: UUID)] = []
     var queueRemoves: [(id: String, itemId: UUID)] = []
     var queueRetries: [(id: String, itemId: UUID)] = []
@@ -264,6 +272,26 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
         return renameSucceeds
     }
     func sessionConfig(for id: String) -> RemoteSessionConfig? { configs[id] }
+
+    func remoteChangeList(sessionId: String) async -> RemoteChangeListResult {
+        changeListRequests.append(sessionId)
+        return changeListResult
+    }
+
+    func remoteFileDiff(sessionId: String, path: String) async -> RemoteFileDiffResult {
+        fileDiffRequests.append((sessionId, path))
+        return fileDiffResult
+    }
+
+    func remoteFileTree(sessionId: String, path: String?) async -> RemoteFileTreeResult {
+        fileTreeRequests.append((sessionId, path))
+        return fileTreeResult
+    }
+
+    func remoteFileContents(sessionId: String, path: String) async -> RemoteFileContentsResult {
+        fileContentsRequests.append((sessionId, path))
+        return fileContentsResult
+    }
 
     func queueForceSend(for id: String, itemId: UUID) { queueForceSends.append((id, itemId)) }
     func queueRemove(for id: String, itemId: UUID) { queueRemoves.append((id, itemId)) }
