@@ -288,3 +288,25 @@ struct RemoteFileNode: Codable, Equatable, Sendable {
     let childrenState: String
     let isSubmodule: Bool
 }
+
+enum RemoteChangeListResult: Equatable, Sendable {
+    case success(
+        comparisonRef: String?, metricsAvailable: Bool,
+        files: [RemoteChangedFile], truncated: Bool)
+    case failure(reason: RemoteFileAccessReason, message: String?)
+}
+
+enum RemoteFileDiffResult: Equatable, Sendable {
+    case success(hunks: [RemoteDiffHunk], truncated: Bool)
+    case failure(reason: RemoteFileAccessReason, message: String?)
+}
+
+enum RemoteFileTreeResult: Equatable, Sendable {
+    case success(nodes: [RemoteFileNode])
+    case failure(reason: RemoteFileAccessReason, message: String?)
+}
+
+enum RemoteFileContentsResult: Equatable, Sendable {
+    case success(text: String, truncated: Bool)
+    case failure(reason: RemoteFileAccessReason, byteSize: Int?, message: String?)
+}

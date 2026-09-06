@@ -1001,6 +1001,30 @@ struct RemoteAppStateAccessTests {
         #expect(FileManager.default.fileExists(atPath: createdWorktree.path.path))
     }
 
+    @Test func remoteChangeListReportsSessionUnknownForAnUnknownSession() async throws {
+        let state = AppState(store: MemoryStore())
+        let result = await state.remoteChangeList(sessionId: "no-such-session")
+        #expect(result == .failure(reason: .sessionUnknown, message: nil))
+    }
+
+    @Test func remoteFileDiffReportsSessionUnknownForAnUnknownSession() async throws {
+        let state = AppState(store: MemoryStore())
+        let result = await state.remoteFileDiff(sessionId: "no-such-session", path: "a.txt")
+        #expect(result == .failure(reason: .sessionUnknown, message: nil))
+    }
+
+    @Test func remoteFileTreeReportsSessionUnknownForAnUnknownSession() async throws {
+        let state = AppState(store: MemoryStore())
+        let result = await state.remoteFileTree(sessionId: "no-such-session", path: nil)
+        #expect(result == .failure(reason: .sessionUnknown, message: nil))
+    }
+
+    @Test func remoteFileContentsReportsSessionUnknownForAnUnknownSession() async throws {
+        let state = AppState(store: MemoryStore())
+        let result = await state.remoteFileContents(sessionId: "no-such-session", path: "a.txt")
+        #expect(result == .failure(reason: .sessionUnknown, byteSize: nil, message: nil))
+    }
+
     private func statusCode(port: UInt16, host: String, path: String) async throws -> Int? {
         var req = URLRequest(url: URL(string: "http://127.0.0.1:\(port)\(path)")!)
         req.setValue(host, forHTTPHeaderField: "Host")
