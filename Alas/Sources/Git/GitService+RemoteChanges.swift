@@ -73,9 +73,11 @@ extension GitService {
             return try await diff(worktreePath: worktreePath, file: file)
         }
 
-        let tracked = try await Process.git(
-            ["ls-files", "--error-unmatch", "--", file], cwd: worktreePath)
-        if tracked.exitCode != 0 {
+        // Check if file exists at ref (not just in current index) to handle deleted files correctly.
+        let existsAtRef = try await Process.git(
+            ["cat-file", "-e", "\(ref):\(file)"], cwd: worktreePath)
+        if existsAtRef.exitCode != 0 {
+            // File doesn't exist at ref (untracked/new file), so diff against /dev/null.
             let result = try await Process.git(
                 ["diff", "--no-color", "--no-index", "--", "/dev/null", file], cwd: worktreePath)
             // `--no-index` exits 1 when there ARE differences, which is the
@@ -84,6 +86,7 @@ extension GitService {
             return DiffParser.parse(result.stdout)
         }
 
+        // File exists at ref (tracked or previously committed), so diff ref to current state.
         let result = try await Process.git(
             ["diff", "--no-color", "-M", "-C", ref, "--", file], cwd: worktreePath)
         guard result.exitCode <= 1 else { return ParsedDiff(hunks: []) }
