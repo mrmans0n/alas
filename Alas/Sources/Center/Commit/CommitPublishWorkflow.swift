@@ -357,6 +357,8 @@ final class CommitPublishWorkflow {
         lastError = nil
 
         do {
+            try onCheckpointChange(checkpoint)
+            try Task.checkCancellation()
             try await continueResuming(checkpoint, runID: runID)
         } catch is CancellationError {
             finishCancellation(runID)

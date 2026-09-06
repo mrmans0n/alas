@@ -553,6 +553,44 @@ struct CommitPublishWorkflowTests {
         #expect(calls == ["head", "remoteContainsCommit", "configureUpstream", "lookupPR"])
     }
 
+    @Test func resumeRepersistsCheckpointBeforeRemoteOperations() async {
+        var calls: [String] = []
+        let checkpoint = WorkflowHarness().checkpoint(nextPhase: .push)
+        let operations = CommitPublishOperations(
+            createCommit: { _, _, _ in .init(commitSHA: "unused", comparisonBase: "main", editorTitle: "Unused") },
+            currentHeadSHA: {
+                calls.append("head")
+                return "commit-sha"
+            },
+            remoteBranchContainsCommit: { _, _ in
+                calls.append("remoteContainsCommit")
+                return false
+            },
+            push: { _, _ in calls.append("push") },
+            currentReviewRequestExists: { _ in
+                calls.append("lookupPR")
+                return false
+            },
+            createReviewRequest: { target, _, _ in
+                calls.append("createPR")
+                return target.webURL
+            },
+            syncGG: {},
+            refreshAfterCompletion: {}
+        )
+        let workflow = CommitPublishWorkflow(operations: operations) { next in
+            calls.append("persist")
+            #expect(next == checkpoint)
+            throw NSError(domain: "CommitPublishWorkflowTests", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "write rejected"])
+        }
+
+        await workflow.resume(checkpoint)
+
+        #expect(calls == ["persist"])
+        #expect(workflow.lastError?.localizedDescription == "write rejected")
+    }
+
     @Test func freshLookupSkipsCreateWhenRequestNowExists() async {
         let harness = WorkflowHarness()
         harness.reviewRequestExists = true
