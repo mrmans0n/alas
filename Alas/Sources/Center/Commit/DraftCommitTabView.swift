@@ -596,17 +596,31 @@ struct DraftCommitTabView: View {
         let draftSnapshot = createReviewRequestAsDraft
         let reviewSnapshot = rps.reviewLoop.snapshot
         let ggMode = rps.ggContext.isActive
+        let ggTarget: GGStackTargetIdentity?
+        if ggMode {
+            guard let target = rps.ggTargetForCommitPublish() else {
+                error = GGMutationError.staleConfirmation.localizedDescription
+                return
+            }
+            ggTarget = target
+        } else {
+            ggTarget = nil
+        }
         let comparisonBase = appState.rightPaneStore.commitEditorComparisonRef(worktreeId: worktreeId)
         error = nil
-        let operations = CommitPublishOperations.live(
+        var operations = CommitPublishOperations.live(
             worktreePath: worktreePath, reviewLoop: rps.reviewLoop, comparisonBase: comparisonBase,
             syncGG: { try await rps.syncGGForCommitPublish() },
             refreshAfterCompletion: { _ = await rps.refresh(forceReviewLoopRemote: true) }
         )
+        operations.validateGGTarget = { try await rps.validateGGTargetForCommitPublish($0) }
+        operations.syncGGForTarget = { try await rps.syncGGForCommitPublish(target: $0) }
         appState.tabs.runCommitPublish(worktreeId: worktreeId, tabId: tabState.id,
             subject: subjectSnapshot, body: bodySnapshot, amend: amendSnapshot,
             operations: operations, prepareDestination: { [worktreePath] in
-                if ggMode { return .gg }
+                if let ggTarget {
+                    return .gg(ggTarget)
+                }
                 guard let reviewSnapshot else { throw CommitPublishWorkflowError.invalidDestination(phase: .push) }
                 return .review(try await CommitPublishReviewTarget.capture(
                     snapshot: reviewSnapshot, createAsDraft: draftSnapshot,

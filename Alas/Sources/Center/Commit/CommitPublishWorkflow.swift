@@ -87,6 +87,7 @@ final class CommitPublishSession {
 @MainActor
 struct CommitPublishOperations {
     var validateReviewTarget: (_ target: CommitPublishReviewTarget) async throws -> Void = { _ in }
+    var validateGGTarget: (_ target: GGStackTargetIdentity) async throws -> Void = { _ in }
     var createCommit: (_ subject: String, _ body: String, _ amend: Bool) async throws -> CommitPublishCreatedCommit
     var currentHeadSHA: () async throws -> String
     var remoteBranchContainsCommit: (_ target: CommitPublishReviewTarget, _ commitSHA: String) async throws -> Bool
@@ -94,6 +95,7 @@ struct CommitPublishOperations {
     var currentReviewRequestExists: (_ target: CommitPublishReviewTarget) async throws -> Bool
     var createReviewRequest: (_ target: CommitPublishReviewTarget, _ subject: String, _ body: String) async throws -> URL
     var syncGG: () async throws -> Void
+    var syncGGForTarget: (_ target: GGStackTargetIdentity) async throws -> Void = { _ in }
     var refreshAfterCompletion: () async -> Void
 
     static func live(
@@ -277,16 +279,27 @@ final class CommitPublishWorkflow {
             if case .review(let target) = destination {
                 try await operations.validateReviewTarget(target)
                 try Task.checkCancellation()
+            } else if case .gg(let target) = destination, let target {
+                try await operations.validateGGTarget(target)
+                try Task.checkCancellation()
             }
             let createdCommit = try await operations.createCommit(subject, body, amend)
+            let checkpointDestination: CommitPublishDestination
+            switch destination {
+            case .review:
+                checkpointDestination = destination
+            case .gg(var target):
+                target?.expectedHeadSHA = createdCommit.commitSHA
+                checkpointDestination = .gg(target)
+            }
             let checkpoint = CommitPublishCheckpoint(
                 commitSHA: createdCommit.commitSHA,
                 baseRef: createdCommit.comparisonBase,
                 commitTitle: createdCommit.editorTitle,
                 subject: subject,
                 body: body,
-                destination: destination,
-                nextPhase: nextPhase(for: destination)
+                destination: checkpointDestination,
+                nextPhase: nextPhase(for: checkpointDestination)
             )
             onCheckpointChange(checkpoint)
             try Task.checkCancellation()
@@ -361,13 +374,19 @@ final class CommitPublishWorkflow {
                 return
 
             case .sync:
-                guard case .gg = checkpoint.destination else {
+                guard case .gg(let target) = checkpoint.destination else {
                     throw CommitPublishWorkflowError.invalidDestination(phase: .sync)
                 }
 
                 activity = .syncing
                 try Task.checkCancellation()
-                try await operations.syncGG()
+                if let target {
+                    try await operations.validateGGTarget(target)
+                    try Task.checkCancellation()
+                    try await operations.syncGGForTarget(target)
+                } else {
+                    try await operations.syncGG()
+                }
                 try await complete(runID)
                 return
             }

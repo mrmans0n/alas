@@ -465,6 +465,14 @@ final class RightPaneState: GGSplitCommitServicing {
                         worktreePath: self.worktree.path.path
                     )
                 },
+                loadCurrentBranch: { [weak self] in
+                    guard let self else { throw GGServiceError.commandFailed(stderr: "Worktree is no longer available.") }
+                    return try await self.git.currentBranch(worktreePath: self.worktree.path)
+                },
+                loadCurrentHead: { [weak self] in
+                    guard let self else { throw GGServiceError.commandFailed(stderr: "Worktree is no longer available.") }
+                    return try await self.git.revParseHEAD(worktreePath: self.worktree.path)
+                },
                 refreshStack: { [weak self] in
                     guard let self else { return }
                     await self.reevaluateGGGate().value
@@ -1864,8 +1872,47 @@ final class RightPaneState: GGSplitCommitServicing {
         return Task { _ = try? await completion.value }
     }
 
-    func syncGGForCommitPublish() async throws {
-        guard let operation = ggMutationCoordinator.startApplying(.sync, confirmedAgainst: nil) else {
+    func ggTargetForCommitPublish() -> GGStackTargetIdentity? {
+        guard let stack = ggStack, !currentHeadSHA.isEmpty else { return nil }
+        return .init(
+            branch: currentBranch,
+            stackName: stack.name,
+            base: stack.base,
+            expectedHeadSHA: currentHeadSHA
+        )
+    }
+
+    private func readCurrentGGTargetForCommitPublish() async throws -> GGStackTargetIdentity {
+        let branch = try await git.currentBranch(worktreePath: worktree.path)
+        let headSHA = try await git.revParseHEAD(worktreePath: worktree.path)
+        let snapshot = try await ggService.currentStackSnapshot(worktreePath: worktree.path.path)
+        guard let identity = snapshot.identity else { throw GGMutationError.staleConfirmation }
+        return .init(
+            branch: branch,
+            stackName: identity.stackName,
+            base: identity.base,
+            expectedHeadSHA: headSHA
+        )
+    }
+
+    func validateGGTargetForCommitPublish(_ target: GGStackTargetIdentity) async throws {
+        let current = try await readCurrentGGTargetForCommitPublish()
+        guard target.matches(
+            branch: current.branch,
+            stackName: current.stackName,
+            base: current.base,
+            headSHA: current.expectedHeadSHA
+        ) else {
+            throw GGMutationError.staleConfirmation
+        }
+    }
+
+    func syncGGForCommitPublish(target: GGStackTargetIdentity? = nil) async throws {
+        guard let operation = ggMutationCoordinator.startApplying(
+            .sync,
+            confirmedAgainst: nil,
+            expectedTarget: target
+        ) else {
             throw GGMutationError.operationInFlight
         }
         try await completeGGMutation(operation, request: .sync).value

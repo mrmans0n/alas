@@ -698,6 +698,21 @@ struct RightPaneGGRefreshSchedulingTests {
 
 @MainActor
 struct RightPaneGGStackTests {
+    @Test func commitPublishTargetCapturesDetachedStackContext() throws {
+        let state = makeState()
+        state.ggContext = .active(stackName: "agent-inbox")
+        state.ggStack = try GGStackSnapshot.decode(fromJSON: Data(GGStackModelsTests.fixture.utf8)).stack
+        state.currentBranch = ""
+        state.currentHeadSHA = "ccccccc"
+
+        #expect(state.ggTargetForCommitPublish() == .init(
+            branch: "",
+            stackName: "agent-inbox",
+            base: "main",
+            expectedHeadSHA: "ccccccc"
+        ))
+    }
+
     @Test func commitPublishSyncAwaitsCoordinatorAndPreservesSummary() async throws {
         let state = makeState()
         let runner = ReentrantSyncFakeGGRunner()

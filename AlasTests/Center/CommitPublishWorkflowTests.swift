@@ -116,6 +116,22 @@ struct CommitPublishWorkflowTests {
         #expect(harness.checkpoint == nil)
     }
 
+    @Test func ggCheckpointUpdatesExpectedHeadBeforeSync() async {
+        let harness = WorkflowHarness()
+        let workflow = harness.makeWorkflow()
+
+        await workflow.start(subject: "Subject", body: "Body", amend: false, destination: .gg(harness.ggTarget))
+
+        #expect(harness.calls == ["validateGGTarget", "commit", "head", "validateGGTarget", "sync"])
+        #expect(harness.validatedGGTargets == [
+            harness.ggTarget,
+            .init(branch: "feature", stackName: "feature", base: "main", expectedHeadSHA: "commit-sha"),
+        ])
+        #expect(harness.syncedGGTargets == [
+            .init(branch: "feature", stackName: "feature", base: "main", expectedHeadSHA: "commit-sha"),
+        ])
+    }
+
     @Test func commitFailureDoesNotCheckpoint() async {
         let harness = WorkflowHarness()
         harness.createCommitError = WorkflowHarness.Failure.commit
@@ -150,6 +166,50 @@ struct CommitPublishWorkflowTests {
 
         #expect(calls == ["validateTarget"])
         #expect(workflow.lastError as? CommitPublishWorkflowError == .headMismatch(expected: "captured", actual: "changed"))
+    }
+
+    @Test func changedGGTargetStopsBeforeCreatingLocalCommit() async {
+        var calls: [String] = []
+        let target = WorkflowHarness().ggTarget
+        let operations = CommitPublishOperations(
+            validateGGTarget: { _ in
+                calls.append("validateTarget")
+                throw GGMutationError.staleConfirmation
+            },
+            createCommit: { _, _, _ in
+                calls.append("commit")
+                return .init(commitSHA: "committed", comparisonBase: "main", editorTitle: "Title")
+            },
+            currentHeadSHA: { "committed" }, remoteBranchContainsCommit: { _, _ in false }, push: { _, _ in },
+            currentReviewRequestExists: { _ in true },
+            createReviewRequest: { target, _, _ in target.webURL }, syncGG: {}, refreshAfterCompletion: {}
+        )
+        let workflow = CommitPublishWorkflow(operations: operations) { _ in }
+
+        await workflow.start(subject: "Subject", body: "", amend: false, destination: .gg(target))
+
+        #expect(calls == ["validateTarget"])
+        #expect(workflow.lastError as? GGMutationError == .staleConfirmation)
+    }
+
+    @Test func changedGGTargetStopsRetryBeforeSync() async {
+        let harness = WorkflowHarness()
+        var checkpoint = harness.ggCheckpoint
+        let operations = CommitPublishOperations(
+            validateGGTarget: { _ in throw GGMutationError.staleConfirmation },
+            createCommit: { _, _, _ in Issue.record("Unexpected commit")
+            return .init(commitSHA: "committed", comparisonBase: "main", editorTitle: "Title") },
+            currentHeadSHA: { "commit-sha" }, remoteBranchContainsCommit: { _, _ in false }, push: { _, _ in },
+            currentReviewRequestExists: { _ in true },
+            createReviewRequest: { target, _, _ in target.webURL }, syncGG: { _ in Issue.record("Unexpected sync") },
+            refreshAfterCompletion: {}
+        )
+        let workflow = CommitPublishWorkflow(operations: operations) { checkpoint = $0 }
+
+        await workflow.resume(checkpoint)
+
+        #expect(checkpoint == harness.ggCheckpoint)
+        #expect(workflow.lastError as? GGMutationError == .staleConfirmation)
     }
 
     @Test func pushFailureRetainsPushCheckpoint() async {
@@ -450,6 +510,8 @@ private final class WorkflowHarness {
     var lookupError: Error?
     var createRequestError: Error?
     var syncError: Error?
+    var validatedGGTargets: [GGStackTargetIdentity] = []
+    var syncedGGTargets: [GGStackTargetIdentity] = []
     var refreshChecksCheckpoint = false
     var checkpointWasClearedBeforeRefresh = false
     var createCommitGate: AsyncGate?
@@ -488,6 +550,30 @@ private final class WorkflowHarness {
         createAsDraft: false
     )
 
+    let ggTarget = GGStackTargetIdentity(
+        branch: "feature",
+        stackName: "feature",
+        base: "main",
+        expectedHeadSHA: "before-commit"
+    )
+
+    var ggCheckpoint: CommitPublishCheckpoint {
+        .init(
+            commitSHA: "commit-sha",
+            baseRef: "origin/main",
+            commitTitle: "Subject",
+            subject: "Subject",
+            body: "Body",
+            destination: .gg(.init(
+                branch: "feature",
+                stackName: "feature",
+                base: "main",
+                expectedHeadSHA: "commit-sha"
+            )),
+            nextPhase: .sync
+        )
+    }
+
     let existingRequestTarget = CommitPublishReviewTarget(
         provider: .github,
         host: "github.com",
@@ -507,6 +593,10 @@ private final class WorkflowHarness {
     func makeWorkflow() -> CommitPublishWorkflow {
         CommitPublishWorkflow(
             operations: CommitPublishOperations(
+                validateGGTarget: { [unowned self] target in
+                    calls.append("validateGGTarget")
+                    validatedGGTargets.append(target)
+                },
                 createCommit: { [unowned self] _, _, _ in
                     calls.append("commit")
                     if let createCommitGate {
@@ -548,6 +638,11 @@ private final class WorkflowHarness {
                 },
                 syncGG: { [unowned self] in
                     calls.append("sync")
+                    if let syncError { throw syncError }
+                },
+                syncGGForTarget: { [unowned self] target in
+                    calls.append("sync")
+                    syncedGGTargets.append(target)
                     if let syncError { throw syncError }
                 },
                 refreshAfterCompletion: { [unowned self] in

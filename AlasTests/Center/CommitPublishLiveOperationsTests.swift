@@ -320,6 +320,24 @@ struct CommitPublishLiveOperationsTests {
         #expect(target.pushRemoteName == nil)
     }
 
+    @Test func legacyGGCheckpointDecodesWithoutCapturedTarget() throws {
+        let data = Data(#"""
+        {
+          "commitSHA": "committed",
+          "baseRef": "main",
+          "commitTitle": "Title",
+          "subject": "Subject",
+          "body": "",
+          "destination": { "gg": {} },
+          "nextPhase": "sync"
+        }
+        """#.utf8)
+
+        let checkpoint = try JSONDecoder().decode(CommitPublishCheckpoint.self, from: data)
+
+        #expect(checkpoint.destination == .gg(nil))
+    }
+
     @Test func legacySinglePushURLDecodesAsOneCapturedDestination() throws {
         var original = makeTarget()
         original.pushURL = "ssh://legacy.example/repo.git"

@@ -278,7 +278,40 @@ struct CommitPublishReviewTarget: Codable, Equatable, Sendable {
 
 enum CommitPublishDestination: Codable, Equatable, Sendable {
     case review(CommitPublishReviewTarget)
-    case gg
+    case gg(GGStackTargetIdentity? = nil)
+
+    private enum CodingKeys: String, CodingKey {
+        case review, gg
+    }
+
+    private enum AssociatedValueKeys: String, CodingKey {
+        case value = "_0"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if container.contains(.review) {
+            let review = try container.nestedContainer(keyedBy: AssociatedValueKeys.self, forKey: .review)
+            self = .review(try review.decode(CommitPublishReviewTarget.self, forKey: .value))
+        } else if container.contains(.gg) {
+            let gg = try container.nestedContainer(keyedBy: AssociatedValueKeys.self, forKey: .gg)
+            self = .gg(try gg.decodeIfPresent(GGStackTargetIdentity.self, forKey: .value))
+        } else {
+            throw DecodingError.dataCorruptedError(forKey: .review, in: container, debugDescription: "Unknown publish destination.")
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .review(let target):
+            var review = container.nestedContainer(keyedBy: AssociatedValueKeys.self, forKey: .review)
+            try review.encode(target, forKey: .value)
+        case .gg(let target):
+            var gg = container.nestedContainer(keyedBy: AssociatedValueKeys.self, forKey: .gg)
+            try gg.encodeIfPresent(target, forKey: .value)
+        }
+    }
 }
 
 struct CommitPublishCheckpoint: Codable, Equatable, Sendable {

@@ -82,6 +82,26 @@ struct GGStackIdentity: Equatable, Sendable {
     var operationID: String?
 }
 
+/// The stable portion of a stack identity used to protect a commit-and-sync
+/// workflow across the local commit that intentionally changes the stack head.
+struct GGStackTargetIdentity: Codable, Equatable, Sendable {
+    var branch: String
+    var stackName: String
+    var base: String
+    var expectedHeadSHA: String
+
+    func matches(branch: String, stackName: String, base: String, headSHA: String) -> Bool {
+        branch == self.branch
+            && stackName == self.stackName
+            && base == self.base
+            && Self.matchesSHA(headSHA, expectedHeadSHA)
+    }
+
+    private static func matchesSHA(_ lhs: String, _ rhs: String) -> Bool {
+        lhs == rhs || lhs.hasPrefix(rhs) || rhs.hasPrefix(lhs)
+    }
+}
+
 struct GGPreparedMutation: Equatable, Sendable {
     var request: GGMutationRequest
     var snapshot: GGStackIdentity
