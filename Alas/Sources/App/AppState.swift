@@ -8000,10 +8000,18 @@ extension AppState: RemoteSessionsProvider {
         guard let url = RemoteWorktreeFileAccess.resolve(path: path, in: worktree.path) else {
             return .failure(reason: .pathRejected, message: nil)
         }
-        if let data = try? Data(contentsOf: url), GitService.looksBinary(data) {
+        let git = GitService()
+        do {
+            let ignored = try await git.isPathIgnored(worktreePath: worktree.path, path: path)
+            if ignored {
+                return .failure(reason: .pathRejected, message: nil)
+            }
+        } catch {
+            return .failure(reason: .gitFailed, message: error.localizedDescription)
+        }
+        if await RemoteWorktreeFileAccess.looksBinaryOnDisk(at: url) {
             return .failure(reason: .binary, message: nil)
         }
-        let git = GitService()
         do {
             let commits = try await git.commitsAhead(
                 at: worktree.path,
@@ -8065,18 +8073,23 @@ extension AppState: RemoteSessionsProvider {
         guard let url = RemoteWorktreeFileAccess.resolve(path: path, in: worktree.path) else {
             return .failure(reason: .pathRejected, byteSize: nil, message: nil)
         }
-        guard let data = try? Data(contentsOf: url) else {
+        do {
+            let ignored = try await GitService().isPathIgnored(worktreePath: worktree.path, path: path)
+            if ignored {
+                return .failure(reason: .pathRejected, byteSize: nil, message: nil)
+            }
+        } catch {
+            return .failure(reason: .gitFailed, byteSize: nil, message: error.localizedDescription)
+        }
+        switch await RemoteWorktreeFileAccess.readFileContents(at: url) {
+        case .notFound:
             return .failure(reason: .notFound, byteSize: nil, message: nil)
+        case .tooLarge(let byteSize):
+            return .failure(reason: .tooLarge, byteSize: byteSize, message: nil)
+        case .binary(let byteSize):
+            return .failure(reason: .binary, byteSize: byteSize, message: nil)
+        case .text(let text):
+            return .success(text: text, truncated: false)
         }
-        guard !GitService.looksBinary(data) else {
-            return .failure(reason: .binary, byteSize: data.count, message: nil)
-        }
-        guard data.count <= RemoteWorktreeFileAccess.maxFileBytes else {
-            return .failure(reason: .tooLarge, byteSize: data.count, message: nil)
-        }
-        guard let text = String(data: data, encoding: .utf8) else {
-            return .failure(reason: .binary, byteSize: data.count, message: nil)
-        }
-        return .success(text: text, truncated: false)
     }
 }

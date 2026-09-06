@@ -121,4 +121,71 @@ struct RemoteWorktreeFileAccessTests {
         #expect(RemoteWorktreeFileAccess.resolve(path: ".Git/config", in: root) == nil)
         #expect(RemoteWorktreeFileAccess.resolve(path: ".gIT/config", in: root) == nil)
     }
+
+    @Test func readFileContentsReportsTooLargeFromStatWithoutReadingTheWholeFile() async throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("big.txt")
+        let oversized = RemoteWorktreeFileAccess.maxFileBytes + 1
+        // A sparse file (seek-then-write) gets the real on-disk byte size
+        // reported by stat without materializing the buffer in memory —
+        // the point of this test is exercising the stat-before-read path,
+        // not proving multi-GB behavior.
+        FileManager.default.createFile(atPath: url.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: url)
+        try handle.seek(toOffset: UInt64(oversized - 1))
+        handle.write(Data([0x41]))
+        try handle.close()
+
+        let outcome = await RemoteWorktreeFileAccess.readFileContents(at: url)
+
+        guard case .tooLarge(let byteSize) = outcome else {
+            Issue.record("expected .tooLarge, got \(outcome)")
+            return
+        }
+        #expect(byteSize == oversized)
+    }
+
+    @Test func readFileContentsReportsNotFoundForAMissingFile() async throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let outcome = await RemoteWorktreeFileAccess.readFileContents(at: root.appendingPathComponent("missing.txt"))
+
+        #expect(outcome == .notFound)
+    }
+
+    @Test func readFileContentsReturnsTextForASmallUTF8File() async throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("small.txt")
+        try "hello\n".write(to: url, atomically: true, encoding: .utf8)
+
+        let outcome = await RemoteWorktreeFileAccess.readFileContents(at: url)
+
+        #expect(outcome == .text("hello\n"))
+    }
+
+    @Test func readFileContentsReportsBinaryForANulContainingFile() async throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("bin.dat")
+        try Data([0x41, 0x00, 0x42]).write(to: url)
+
+        let outcome = await RemoteWorktreeFileAccess.readFileContents(at: url)
+
+        #expect(outcome == .binary(byteSize: 3))
+    }
+
+    @Test func looksBinaryOnDiskSniffsWithoutReadingTheWholeFile() async throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let textURL = root.appendingPathComponent("text.txt")
+        try "clean text\n".write(to: textURL, atomically: true, encoding: .utf8)
+        let binaryURL = root.appendingPathComponent("binary.dat")
+        try Data([0x00, 0x01, 0x02]).write(to: binaryURL)
+
+        #expect(await RemoteWorktreeFileAccess.looksBinaryOnDisk(at: textURL) == false)
+        #expect(await RemoteWorktreeFileAccess.looksBinaryOnDisk(at: binaryURL) == true)
+    }
 }

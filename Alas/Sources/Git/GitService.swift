@@ -788,6 +788,24 @@ extension GitService {
             .filter { !$0.isEmpty }
     }
 
+    /// Whether `path` (worktree-relative) is covered by gitignore rules,
+    /// including local excludes (`.git/info/exclude`, `core.excludesFile`) —
+    /// `--no-index` folds those in the same way `ignoredOrExcludedVisibility`
+    /// does for the file tree. Used to reject reading or diffing a single
+    /// path the client already knows about, mirroring the visibility filter
+    /// that already keeps such paths out of the file tree entirely.
+    func isPathIgnored(worktreePath: URL, path: String) async throws -> Bool {
+        let result = try await Process.git(
+            ["check-ignore", "-q", "--no-index", "--", path],
+            cwd: worktreePath
+        )
+        switch result.exitCode {
+        case 0: return true
+        case 1: return false
+        default: throw ProcessError.nonZeroExit(result.exitCode, result.stderr)
+        }
+    }
+
     private struct RootIgnoreCandidate {
         let path: String
         let isDirectory: Bool

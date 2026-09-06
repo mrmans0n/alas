@@ -1055,6 +1055,60 @@ struct RemoteAppStateAccessTests {
         #expect(result == .failure(reason: .worktreeUnavailable, message: nil))
     }
 
+    @Test func remoteFileContentsAndDiffRejectAGitignoredFile() async throws {
+        let repository = try await makeRemoteBranchesRepository()
+        defer { try? FileManager.default.removeItem(at: repository) }
+        try "secret.env\n".write(
+            to: repository.appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
+        try "TOKEN=abc\n".write(
+            to: repository.appendingPathComponent("secret.env"), atomically: true, encoding: .utf8)
+
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+        let state = makeRemoteGitBackedState(repositoryPath: repository)
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let tab = try #require(acpTabs(in: state).first)
+        let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
+        await settleSessionRowsRace(manager)
+
+        let contentsResult = await state.remoteFileContents(sessionId: tab.sessionId, path: "secret.env")
+        #expect(contentsResult == .failure(reason: .pathRejected, byteSize: nil, message: nil))
+
+        let diffResult = await state.remoteFileDiff(sessionId: tab.sessionId, path: "secret.env")
+        #expect(diffResult == .failure(reason: .pathRejected, message: nil))
+    }
+
+    @Test func remoteFileContentsAndDiffServeATrackedFileNormally() async throws {
+        let repository = try await makeRemoteBranchesRepository()
+        defer { try? FileManager.default.removeItem(at: repository) }
+        try "hello\n".write(to: repository.appendingPathComponent("visible.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "visible.txt"], cwd: repository)
+        _ = try await Process.git(["commit", "-m", "add visible file"], cwd: repository)
+
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+        let state = makeRemoteGitBackedState(repositoryPath: repository)
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let tab = try #require(acpTabs(in: state).first)
+        let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
+        await settleSessionRowsRace(manager)
+
+        let contentsResult = await state.remoteFileContents(sessionId: tab.sessionId, path: "visible.txt")
+        #expect(contentsResult == .success(text: "hello\n", truncated: false))
+    }
+
     private func statusCode(port: UInt16, host: String, path: String) async throws -> Int? {
         var req = URLRequest(url: URL(string: "http://127.0.0.1:\(port)\(path)")!)
         req.setValue(host, forHTTPHeaderField: "Host")
@@ -1116,6 +1170,68 @@ struct RemoteAppStateAccessTests {
             name: "main",
             branch: "main",
             path: URL(fileURLWithPath: project.path),
+            status: .clean,
+            lastActivity: Date()
+        )
+        state.projectsManager.insertOptimisticWorktree(worktree)
+        state.selectedWorktreeId = worktree.id
+        state.config.changes.aiToolId = "test-agent"
+        state.agentRegistry = AgentRegistry(
+            builtinState: [:],
+            customs: [
+                AgentDefinition(
+                    id: "test-agent",
+                    displayName: "Test Agent",
+                    binary: "test-agent",
+                    binaryOverride: nil,
+                    promptModeArgs: [],
+                    bypassPermissionsFlag: nil,
+                    extraTerminalArgs: nil,
+                    isBuiltin: false,
+                    isEnabled: true,
+                    builtinLogoAssetName: nil
+                ),
+            ],
+            installedIds: ["test-agent"]
+        )
+        return state
+    }
+
+    /// `ACPSessionManager.init` fires an untracked background `refreshRecent()`
+    /// when constructed via `persistence:` (as `AppState.acpManager(for:)`
+    /// does) — see its `if store == nil { refreshRecent() }`. That task's own
+    /// DB read can be submitted to the persistence backend before a
+    /// same-tick `createSession()`'s `upsertSession` write, so it can
+    /// overwrite `sessionRows` with a snapshot that doesn't yet include the
+    /// just-created session as soon as this test's first `await` yields the
+    /// MainActor. Flushing the create's own write, then re-reading
+    /// ourselves, settles both writes before `sessionRows` is relied upon —
+    /// otherwise `remoteWorktreeContext` intermittently reports
+    /// `.sessionUnknown` for a session that very much exists.
+    private func settleSessionRowsRace(_ manager: ACPSessionManager) async {
+        await manager.flushPersistence()
+        await manager.refreshRecentNow()
+    }
+
+    /// Like `makeRemoteRenameState()` but points the worktree at a real git
+    /// repository (rather than a bare `/tmp` directory) so `remoteFileDiff`
+    /// / `remoteFileContents`' git-backed checks (ignore status, diffing)
+    /// have a real repo to work against.
+    private func makeRemoteGitBackedState(repositoryPath: URL) -> AppState {
+        let project = ProjectConfig(
+            id: UUID().uuidString,
+            name: "test",
+            path: repositoryPath.path,
+            color: "blue",
+            addedAt: Date()
+        )
+        let state = AppState(store: ProjectMemoryStore(projectsFile: ProjectsFile(projects: [project])))
+        let worktree = Worktree(
+            id: UUID().uuidString,
+            projectId: project.id,
+            name: "main",
+            branch: "main",
+            path: repositoryPath,
             status: .clean,
             lastActivity: Date()
         )

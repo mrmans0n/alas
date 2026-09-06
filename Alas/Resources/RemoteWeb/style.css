@@ -317,6 +317,7 @@ button.create-row.is-selected { border-color: var(--accent); background: color-m
 .change-name { font-weight: 600; }
 .change-counts { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--fg-muted); }
 .change-conflict { color: var(--del); }
+.change-status { color: var(--fg-faint); font-variant-numeric: tabular-nums; }
 
 #diff-rows, #file-view-body {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

@@ -68,4 +68,53 @@ enum RemoteWorktreeFileAccess {
         guard files.count > maxChangedFiles else { return (files, false) }
         return (Array(files.prefix(maxChangedFiles)), true)
     }
+
+    /// Result of an off-main-actor file read for the remote contents
+    /// surface. Deliberately independent of the wire protocol type so this
+    /// file has no dependency on `Remote/Protocol`.
+    enum FileReadOutcome: Equatable {
+        case notFound
+        case tooLarge(byteSize: Int)
+        case binary(byteSize: Int)
+        case text(String)
+    }
+
+    /// Stats, caps, reads, and UTF-8-decodes `url` entirely off the caller's
+    /// actor. The size cap is checked against a cheap `stat` result — BEFORE
+    /// any `Data(contentsOf:)` — so a client naming a huge file never forces
+    /// a full read. Callers on `@MainActor` (`AppState`) must `await` this
+    /// rather than reading the file directly, so an unbounded read never
+    /// blocks the UI thread.
+    static func readFileContents(at url: URL) async -> FileReadOutcome {
+        await Task.detached(priority: .userInitiated) {
+            guard let size = fileByteSize(at: url) else { return .notFound }
+            guard size <= maxFileBytes else { return .tooLarge(byteSize: size) }
+            guard let data = try? Data(contentsOf: url) else { return .notFound }
+            guard !GitService.looksBinary(data) else { return .binary(byteSize: data.count) }
+            guard let text = String(data: data, encoding: .utf8) else {
+                return .binary(byteSize: data.count)
+            }
+            return .text(text)
+        }.value
+    }
+
+    /// Sniffs whether `url` looks binary without reading the whole file, off
+    /// the caller's actor. `GitService.looksBinary` only ever inspects the
+    /// first 8 KB, so a full read buys nothing here but main-thread risk on
+    /// a large file.
+    static func looksBinaryOnDisk(at url: URL) async -> Bool {
+        await Task.detached(priority: .userInitiated) {
+            guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+            defer { try? handle.close() }
+            let sample = (try? handle.read(upToCount: 8192)) ?? Data()
+            return GitService.looksBinary(sample)
+        }.value
+    }
+
+    private static func fileByteSize(at url: URL) -> Int? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path) else {
+            return nil
+        }
+        return (attributes[.size] as? NSNumber)?.intValue
+    }
 }
