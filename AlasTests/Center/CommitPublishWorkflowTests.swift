@@ -144,8 +144,10 @@ struct CommitPublishWorkflowTests {
         let harness = WorkflowHarness()
         harness.refreshChecksCheckpoint = true
         let workflow = harness.makeWorkflow()
+        let checkpoint = harness.checkpoint(nextPhase: .createReviewRequest)
+        harness.checkpoint = checkpoint
 
-        await workflow.resume(harness.checkpoint(nextPhase: .createReviewRequest))
+        await workflow.resume(checkpoint)
 
         #expect(harness.checkpointWasClearedBeforeRefresh)
     }
