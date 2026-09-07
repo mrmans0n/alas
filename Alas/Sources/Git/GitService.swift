@@ -123,12 +123,18 @@ extension GitService {
         var entries = try StatusParser.parse(s.stdout)
 
         // Numstat needs a base revision. Use HEAD if one exists; on unborn
-        // branches diff `--cached` (index vs empty tree) so initial-commit
-        // workflows still see real add/del counts in the Changes pane.
+        // branches diff against git's well-known empty-tree object hash
+        // instead of `--cached` — `--cached` compares only the INDEX
+        // against nothing, so a file staged and then edited AGAIN
+        // (unstaged changes on top of a stage) would report only the staged
+        // version's line count while `remoteFileDiff`'s own all-add diff
+        // (working tree vs /dev/null) shows the current, fuller content.
+        // Diffing the empty tree WITHOUT `--cached` compares the whole
+        // working tree instead, matching that.
         let head = try await hasHead(worktreePath: worktreePath)
         let numstatArgs: [String] = head
             ? ["diff", "--numstat", "HEAD"]
-            : ["diff", "--numstat", "--cached"]
+            : ["diff", "--numstat", "4b825dc642cb6eb9a060e54bf8d69288fbee4904"]   // canonical empty tree
         let numstat = try await Process.git(numstatArgs, cwd: worktreePath)
         let counts = NumstatParser.parse(numstat.stdout)
         let untrackedPaths = entries.filter { $0.add == 0 && $0.del == 0 }.map(\.path)

@@ -726,6 +726,24 @@ struct GitServiceRemoteChangesTests {
         #expect(diff.hunks.isEmpty)
     }
 
+    /// `status`'s no-HEAD numstat used to diff `--cached` (index vs empty
+    /// tree), which only sees the STAGED snapshot. Staging a one-line file
+    /// and then appending a second, unstaged line must still report both
+    /// lines as added — matching `diffAgainstHEAD`'s own all-add diff
+    /// (working tree vs `/dev/null`) above, which always shows the current
+    /// on-disk content regardless of what's staged.
+    @Test func changedFilesAgainstRef_countsPostStageEditsOnAnUnbornBranch() async throws {
+        let repo = try await makeUnbornRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try "line1\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "a.txt"], cwd: repo)
+        try "line1\nline2\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+
+        let files = try await GitService().changedFilesAgainstRef(worktreePath: repo, ref: nil)
+        let entry = try #require(files.first { $0.path == "a.txt" })
+        #expect(entry.add == 2)
+    }
+
     /// `diffAgainstHEAD`'s unborn-HEAD existence check used to be
     /// `FileManager.default.fileExists`, a purely LOCAL filesystem check
     /// that is meaningless for an SSH-backed worktree — nothing exists
