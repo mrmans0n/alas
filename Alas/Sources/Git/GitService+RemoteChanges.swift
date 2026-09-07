@@ -117,7 +117,21 @@ extension GitService {
     /// answer "does this path have a badge, and which one".
     func changedFileBadges(worktreePath: URL, ref: String?) async throws -> [ChangedFile] {
         guard let ref, !ref.isEmpty else {
-            return Self.collapsingStagedAndUnstagedEntries(try await status(worktreePath: worktreePath))
+            // NOT `status(worktreePath:)` — that runs the exact same
+            // numstat-plus-untracked-line-counting work this function
+            // exists to avoid, just working-tree/index-relative instead of
+            // ref-relative. An unborn branch (no resolvable comparison ref)
+            // would otherwise still pay that full cost on every
+            // `listFiles` request. `StatusParser.parse` alone gives
+            // path/status/stage/renameFrom/conflict with add/del left at
+            // their 0 default — exactly what a badge needs.
+            let s = try await Process.git(
+                ["status", "--porcelain=v2", "-z", "--untracked-files=all"], cwd: worktreePath)
+            guard s.exitCode == 0 else {
+                throw ProcessError.nonZeroExit(s.exitCode, s.stderr)
+            }
+            let entries = try StatusParser.parse(s.stdout)
+            return Self.collapsingStagedAndUnstagedEntries(entries)
         }
 
         let nameStatus = try await Process.git(
@@ -357,19 +371,36 @@ extension GitService {
     /// matter (a trailing-newline off-by-one).
     static func addedLineCount(worktreePath: URL, path: String) -> Int {
         let url = worktreePath.appendingPathComponent(path)
+        // Git's object model never follows a symlink to compute its blob:
+        // the blob IS the link's target path string. Handled BEFORE the
+        // regular-file check below (which DOES follow the link via
+        // `.isRegularFileKey`) — otherwise an untracked symlink either
+        // reports 0 (a broken link, or one whose target isn't itself a
+        // regular file) or the TARGET file's own line count (a symlink to a
+        // huge file wrongly inflating this to thousands), neither of which
+        // matches what `git diff`/`numstat` would show for the same path.
+        if (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true {
+            guard let target = try? FileManager.default.destinationOfSymbolicLink(atPath: url.path) else {
+                return 0
+            }
+            return Self.lineCount(of: target)
+        }
         // `Data(contentsOf:)` below performs a plain blocking open+read: on
         // a FIFO with no writer, that blocks indefinitely. Since this runs
         // synchronously on whatever actor called it (ultimately
         // `changedFilesAgainstRef`, reachable from the `@MainActor`
         // `remoteChangeList`), a worktree containing an untracked FIFO
         // would freeze the whole app, not just this one request. Reject
-        // anything that isn't a regular file (a symlink resolving to one is
-        // still fine) before ever opening it.
+        // anything that isn't a regular file before ever opening it.
         guard (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else {
             return 0
         }
         guard let data = try? Data(contentsOf: url), !looksBinary(data),
               let text = String(data: data, encoding: .utf8) else { return 0 }
+        return Self.lineCount(of: text)
+    }
+
+    private static func lineCount(of text: String) -> Int {
         if text.isEmpty { return 0 }
         return text.hasSuffix("\n")
             ? text.split(separator: "\n", omittingEmptySubsequences: false).count - 1

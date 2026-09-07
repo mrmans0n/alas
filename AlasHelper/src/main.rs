@@ -876,12 +876,40 @@ fn fs_line_counts(state: &HelperState, params: Option<Value>) -> Result<Value, H
     let mut entries = Vec::with_capacity(params.paths.len());
     for relative in params.paths {
         let requested = root.join(&relative);
-        let requested = requested.to_string_lossy().into_owned();
-        let path = match contained_existing_path(state, &requested) {
+        let requested_str = requested.to_string_lossy().into_owned();
+        // Git's blob for a symlink IS the link's target path string, never
+        // the target's own file content — `git add`/`diff --numstat` never
+        // follow the link. Checked on the ORIGINAL (pre-containment) path:
+        // `contained_existing_path` below resolves through symlinks via
+        // `std::fs::canonicalize`, so by the time `path` comes back there
+        // is no way to tell the request was ever a symlink at all.
+        let is_symlink = std::fs::symlink_metadata(&requested)
+            .map(|meta| meta.file_type().is_symlink())
+            .unwrap_or(false);
+        let path = match contained_existing_path(state, &requested_str) {
             Ok(path) => path,
             Err(error) if error.code == -32021 => continue,
             Err(error) => return Err(error),
         };
+        if is_symlink {
+            // Containment for the ultimate TARGET was already verified
+            // above (`contained_existing_path`'s canonical resolution must
+            // land inside a registered root); what's counted here is the
+            // LINK'S OWN target string, never the target's contents.
+            let target = std::fs::read_link(&requested)
+                .map_err(|error| jsonrpc_error(-32020, format!("read_link failed: {error}")))?;
+            let target = target.to_string_lossy();
+            let newlines = target.matches('\n').count() as u64;
+            let count = if target.is_empty() {
+                0
+            } else if target.ends_with('\n') {
+                newlines
+            } else {
+                newlines + 1
+            };
+            entries.push(json!({ "path": relative, "lineCount": count }));
+            continue;
+        }
         let metadata = std::fs::metadata(&path)
             .map_err(|error| jsonrpc_error(-32020, format!("metadata failed: {error}")))?;
         if !metadata.is_file() {
@@ -2619,6 +2647,44 @@ mod tests {
         assert_eq!(listing["entries"][0]["name"], "a file.txt");
         assert_eq!(listing["entries"][1]["name"], "folder");
         assert_eq!(listing["entries"][1]["isDirectory"], true);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Git's blob for a symlink IS the link's target path string, never the
+    /// target's own file content. Without special-casing, `metadata` (which
+    /// follows the link) would find the target IS a big multi-line regular
+    /// file and read its whole content instead — wildly overcounting for a
+    /// path git itself always represents as a single-line blob (assuming a
+    /// realistic target path with no embedded newline).
+    #[test]
+    fn line_counts_count_a_symlink_as_its_target_path_string_not_the_targets_content() {
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-stats-symlink-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        std::fs::write(root.join("target.txt"), "one\ntwo\nthree\n").expect("target file");
+        std::os::unix::fs::symlink(root.join("target.txt"), root.join("link.txt"))
+            .expect("symlink");
+
+        let mut state = HelperState::default();
+        state.subscriptions.insert(
+            "1".to_string(),
+            std::fs::canonicalize(&root).expect("canonical root"),
+        );
+        let counts = fs_line_counts(
+            &state,
+            Some(json!({
+                "root": root.display().to_string(),
+                "paths": ["link.txt"]
+            })),
+        )
+        .expect("line counts");
+        assert_eq!(
+            counts["entries"],
+            json!([{"path": "link.txt", "lineCount": 1}])
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 

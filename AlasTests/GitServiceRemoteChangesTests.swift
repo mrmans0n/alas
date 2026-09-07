@@ -973,4 +973,38 @@ struct GitServiceRemoteChangesTests {
         let result = try #require(outcome, "addedLineCount hung on a writerless FIFO instead of returning promptly")
         #expect(result == 0)
     }
+
+    /// Git's blob for a symlink IS the target path string, never the
+    /// target's own file content. An untracked symlink to a real,
+    /// multi-line file must therefore report a line count that matches the
+    /// TARGET PATH STRING (always 1 for a normal path with no embedded
+    /// newline) — not 0 (the old behavior once the target stopped looking
+    /// like a "regular file" through the follow) and not the target
+    /// file's own line count (a symlink to a huge file wrongly inflating
+    /// this).
+    @Test func addedLineCount_countsAnUntrackedSymlinkAsItsTargetPathStringNotTheTargetsContent() async throws {
+        let root = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "one\ntwo\nthree\n".write(to: root.appendingPathComponent("target.txt"), atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(
+            at: root.appendingPathComponent("link.txt"),
+            withDestinationURL: root.appendingPathComponent("target.txt"))
+
+        let result = GitService.addedLineCount(worktreePath: root, path: "link.txt")
+        #expect(result == 1)
+    }
+
+    /// A broken symlink (target doesn't exist) still has a real blob in
+    /// git's object model — the link's target path string — so it must
+    /// still report 1, not 0.
+    @Test func addedLineCount_countsABrokenUntrackedSymlinkAsItsTargetPathString() async throws {
+        let root = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createSymbolicLink(
+            at: root.appendingPathComponent("broken-link.txt"),
+            withDestinationURL: root.appendingPathComponent("does-not-exist.txt"))
+
+        let result = GitService.addedLineCount(worktreePath: root, path: "broken-link.txt")
+        #expect(result == 1)
+    }
 }
