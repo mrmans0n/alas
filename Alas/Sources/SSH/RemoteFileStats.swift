@@ -7,11 +7,31 @@ enum RemoteFileStats {
 
     static func wcCommand(paths: [String]) -> String? {
         guard !paths.isEmpty else { return nil }
-        // `--` stops a filename starting with `-` (e.g. `-c`, `-L`) from
-        // being parsed as a `wc` OPTION instead of a filename argument,
-        // which would silently drop that file from the output (and so
-        // silently report 0 for its line count).
-        return "wc -l -- " + paths.map(SSHCommand.shellQuote).joined(separator: " ")
+        // Plain `wc -l` counts newline BYTES, which undercounts a nonempty
+        // file whose final line has no trailing newline by one — git's
+        // numstat and the local `addedLineCount` diff-parsing logic both
+        // count that trailing partial line, so a one-line file with no
+        // trailing newline has a line count of 1, not 0. Loop per file
+        // (still a single remote exec round trip) so each raw `wc -l`
+        // count is corrected: a nonempty file whose last byte isn't `\n`
+        // gets +1.
+        //
+        // The trailing-newline check pipes `tail -c1` into `wc -l` rather
+        // than comparing a captured shell string, so an embedded NUL as
+        // the file's final byte — which a shell variable can't hold intact
+        // — is still classified correctly: `wc -l` just counts newline
+        // bytes piped to it, unaffected by NUL truncation.
+        //
+        // `--` (on both `wc` and `tail`) stops a filename starting with
+        // `-` (e.g. `-c`, `-L`) from being parsed as an OPTION instead of
+        // a filename argument, which would silently drop that file from
+        // the output (and so silently report 0 for its line count).
+        return paths.map { path in
+            let quoted = SSHCommand.shellQuote(path)
+            return "n=$(wc -l < \(quoted)); " +
+                "if [ -s \(quoted) ] && [ \"$(tail -c1 -- \(quoted) | wc -l)\" -eq 0 ]; then n=$((n + 1)); fi; " +
+                "printf '%s %s\\n' \"$n\" \(quoted)"
+        }.joined(separator: "; ")
     }
 
     static func parseWcOutput(_ output: String, requested: [String]) -> [String: Int] {

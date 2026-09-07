@@ -1,21 +1,69 @@
+import Foundation
 import Testing
 @testable import Alas
 
 struct RemoteFileStatsTests {
     @Test func wcCommandQuotesPathsAndAvoidsEmptyInput() {
         #expect(RemoteFileStats.wcCommand(paths: []) == nil)
-        #expect(RemoteFileStats.wcCommand(paths: ["a.txt", "dir/o'brien.txt"]) == "wc -l -- 'a.txt' 'dir/o'\\''brien.txt'")
+        let command = RemoteFileStats.wcCommand(paths: ["a.txt", "dir/o'brien.txt"])
+        #expect(command == [
+            "n=$(wc -l < 'a.txt'); if [ -s 'a.txt' ] && [ \"$(tail -c1 -- 'a.txt' | wc -l)\" -eq 0 ]; then n=$((n + 1)); fi; printf '%s %s\\n' \"$n\" 'a.txt'",
+            "n=$(wc -l < 'dir/o'\\''brien.txt'); if [ -s 'dir/o'\\''brien.txt' ] && [ \"$(tail -c1 -- 'dir/o'\\''brien.txt' | wc -l)\" -eq 0 ]; then n=$((n + 1)); fi; printf '%s %s\\n' \"$n\" 'dir/o'\\''brien.txt'",
+        ].joined(separator: "; "))
     }
 
     /// Without `--`, a filename starting with `-` (e.g. `-c`) is parsed by
-    /// `wc` as an OPTION rather than a filename, silently dropping it from
-    /// the output — and so silently reporting 0 for its line count.
+    /// `tail` as an OPTION rather than a filename, silently misclassifying
+    /// its trailing-newline check.
     @Test func wcCommandSeparatesOptionsFromFilenamesStartingWithADash() {
-        #expect(RemoteFileStats.wcCommand(paths: ["-c"]) == "wc -l -- '-c'")
+        let command = RemoteFileStats.wcCommand(paths: ["-c"])
+        #expect(command == "n=$(wc -l < '-c'); if [ -s '-c' ] && [ \"$(tail -c1 -- '-c' | wc -l)\" -eq 0 ]; then n=$((n + 1)); fi; printf '%s %s\\n' \"$n\" '-c'")
     }
 
     @Test func parsesWcOutput() {
         #expect(RemoteFileStats.parseWcOutput("      12 a.txt\n       0 b.txt\n      12 total", requested: ["a.txt", "b.txt"]) == ["a.txt": 12, "b.txt": 0])
+    }
+
+    /// End-to-end regression for the trailing-newline undercount: runs the
+    /// generated script through `/bin/sh` against real files, mirroring
+    /// what the SSH exec fallback actually executes remotely.
+    @Test func wcCommandCorrectlyCountsFilesWithoutATrailingNewline() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let cases: [(name: String, contents: String, expected: Int)] = [
+            ("empty.txt", "", 0),
+            ("one-line-no-newline.txt", "hello", 1),
+            ("one-line-with-newline.txt", "hello\n", 1),
+            ("two-lines-no-trailing-newline.txt", "a\nb", 2),
+            ("two-lines-with-trailing-newline.txt", "a\nb\n", 2),
+        ]
+        for testCase in cases {
+            try testCase.contents.write(
+                to: directory.appendingPathComponent(testCase.name),
+                atomically: true,
+                encoding: .utf8
+            )
+        }
+
+        let paths = cases.map(\.name)
+        let command = try #require(RemoteFileStats.wcCommand(paths: paths))
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", command]
+        process.currentDirectoryURL = directory
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        try process.run()
+        process.waitUntilExit()
+        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+
+        let counts = RemoteFileStats.parseWcOutput(output, requested: paths)
+        for testCase in cases {
+            #expect(counts[testCase.name] == testCase.expected, "\(testCase.name)")
+        }
     }
     @Test func helperLineCountsMergeDuplicatePaths() {
         let entries = [

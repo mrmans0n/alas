@@ -883,6 +883,8 @@ fn fs_line_counts(state: &HelperState, params: Option<Value>) -> Result<Value, H
             .map_err(|error| jsonrpc_error(-32020, format!("open failed: {error}")))?;
         let mut buffer = [0_u8; 64 * 1024];
         let mut count = 0_u64;
+        let mut saw_any_bytes = false;
+        let mut last_byte = 0_u8;
         loop {
             let read = file
                 .read(&mut buffer)
@@ -890,7 +892,17 @@ fn fs_line_counts(state: &HelperState, params: Option<Value>) -> Result<Value, H
             if read == 0 {
                 break;
             }
+            saw_any_bytes = true;
             count += buffer[..read].iter().filter(|byte| **byte == b'\n').count() as u64;
+            last_byte = buffer[read - 1];
+        }
+        // Counting newline bytes alone undercounts a nonempty file whose
+        // final line has no trailing newline: git's numstat (and the local
+        // diff-parsing `addedLineCount` logic) both count that trailing
+        // partial line, so a one-line file with no trailing newline has a
+        // line count of 1, not 0.
+        if saw_any_bytes && last_byte != b'\n' {
+            count += 1;
         }
         entries.push(json!({ "path": relative, "lineCount": count }));
     }
@@ -2584,6 +2596,54 @@ mod tests {
         assert_eq!(listing["entries"][0]["name"], "a file.txt");
         assert_eq!(listing["entries"][1]["name"], "folder");
         assert_eq!(listing["entries"][1]["isDirectory"], true);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Counting newline bytes alone undercounts a nonempty file whose final
+    /// line has no trailing newline: git's numstat (and the local Swift
+    /// `addedLineCount` diff-parsing logic) both count that trailing
+    /// partial line, so a one-line file with no trailing newline has a
+    /// line count of 1, not 0.
+    #[test]
+    fn line_counts_account_for_a_missing_trailing_newline() {
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-stats-notrailingnl-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        std::fs::write(root.join("empty.txt"), "").expect("file");
+        std::fs::write(root.join("one-no-newline.txt"), "hello").expect("file");
+        std::fs::write(root.join("one-with-newline.txt"), "hello\n").expect("file");
+        std::fs::write(root.join("two-no-trailing-newline.txt"), "a\nb").expect("file");
+
+        let mut state = HelperState::default();
+        state.subscriptions.insert(
+            "1".to_string(),
+            std::fs::canonicalize(&root).expect("canonical root"),
+        );
+        let counts = fs_line_counts(
+            &state,
+            Some(json!({
+                "root": root.display().to_string(),
+                "paths": [
+                    "empty.txt",
+                    "one-no-newline.txt",
+                    "one-with-newline.txt",
+                    "two-no-trailing-newline.txt",
+                ]
+            })),
+        )
+        .expect("line counts");
+        assert_eq!(
+            counts["entries"],
+            json!([
+                {"path": "empty.txt", "lineCount": 0},
+                {"path": "one-no-newline.txt", "lineCount": 1},
+                {"path": "one-with-newline.txt", "lineCount": 1},
+                {"path": "two-no-trailing-newline.txt", "lineCount": 2},
+            ])
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
