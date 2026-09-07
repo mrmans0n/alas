@@ -639,6 +639,16 @@ private func validateWorkingDirectory(_ cwd: URL?) throws {
 /// 3 bytes short of complete — trying to drop 0, then 1, then 2, then 3
 /// trailing bytes always finds a valid prefix (in the worst case, dropping
 /// all the way back to the last previously-complete character).
+///
+/// If none of those four attempts decode cleanly, the invalid byte isn't a
+/// truncation artifact at all — e.g. a changed file containing genuinely
+/// non-UTF-8 text (Latin-1, Windows-1252, ...) that happens to contain no
+/// NUL byte, so it passed binary sniffing upstream but still isn't valid
+/// UTF-8; git emits its raw bytes straight into the diff. Falling back to
+/// `String(decoding:as:)` (which never fails, replacing each invalid byte
+/// with U+FFFD) means that diff renders with a handful of replacement
+/// characters instead of vanishing into an empty, misleadingly "successful"
+/// response.
 func decodeUTF8DroppingIncompleteTrailingScalar(_ data: Data) -> String {
     if let exact = String(data: data, encoding: .utf8) { return exact }
     for dropCount in 1...3 where dropCount <= data.count {
@@ -646,7 +656,7 @@ func decodeUTF8DroppingIncompleteTrailingScalar(_ data: Data) -> String {
             return decoded
         }
     }
-    return ""
+    return String(decoding: data, as: UTF8.self)
 }
 
 private func terminateProcessWithEscalation(_ process: Process) {

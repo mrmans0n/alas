@@ -241,6 +241,25 @@ struct ProcessGitTests {
         #expect(decodeUTF8DroppingIncompleteTrailingScalar(complete) == "x😀")
     }
 
+    /// An invalid byte NOT at the tail — e.g. a Latin-1-encoded file with no
+    /// NUL byte (so it passes binary sniffing) whose raw bytes git emits
+    /// straight into the diff — isn't fixed by trimming the last 1-3 bytes.
+    /// Falling back to a lossy decode must still preserve the surrounding
+    /// valid text rather than discarding the whole captured diff.
+    @Test func decodeUTF8DroppingIncompleteTrailingScalarFallsBackToLossyDecodingForAnInteriorInvalidByte() {
+        // "café" in Latin-1: 'é' is the single byte 0xE9, which is not valid
+        // UTF-8 in this position (not a valid continuation or lead byte).
+        // Followed by more than 3 valid bytes, so the trailing-scalar-drop
+        // loop (which only ever removes the LAST 1-3 bytes) cannot mask this
+        // by coincidentally trimming the invalid byte away — the lossy
+        // fallback is the only path that can recover this input.
+        let data = Data("caf".utf8) + Data([0xE9]) + Data(" text after\n".utf8)
+        let decoded = decodeUTF8DroppingIncompleteTrailingScalar(data)
+        #expect(decoded.hasPrefix("caf"))
+        #expect(decoded.contains("\u{FFFD}"))
+        #expect(decoded.hasSuffix(" text after\n"))
+    }
+
     @Test func gitCappedConvenienceCallStillWorks() async throws {
         let result = try await Process.gitCapped(["--version"], maxOutputBytes: 1_000_000)
         #expect(!result.stdoutTruncated)
