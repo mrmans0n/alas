@@ -140,7 +140,7 @@ extension GitService {
         let untrackedPaths = entries.filter { $0.add == 0 && $0.del == 0 }.map(\.path)
         let remoteCounts: [String: Int]
         if worktreePath.isRemoteAlasPath, let host = RemoteHostRegistry.shared.host(forPath: worktreePath.path) {
-            remoteCounts = await RemoteFileStats.lineCounts(host: host, cwd: worktreePath.path, paths: untrackedPaths)
+            remoteCounts = try await RemoteFileStats.lineCounts(host: host, cwd: worktreePath.path, paths: untrackedPaths)
         } else {
             remoteCounts = [:]
         }

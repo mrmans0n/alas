@@ -49,12 +49,12 @@ struct RemoteWebAssetTests {
         let sw = try asset("sw.js")
 
         #expect(html.contains(#"/session-ordering.js?v=1"#))
-        #expect(html.range(of: #"/session-ordering.js?v=1"#)!.lowerBound < html.range(of: #"/app.js?v=68"#)!.lowerBound)
-        #expect(html.contains(#"/app.js?v=68"#))
+        #expect(html.range(of: #"/session-ordering.js?v=1"#)!.lowerBound < html.range(of: #"/app.js?v=69"#)!.lowerBound)
+        #expect(html.contains(#"/app.js?v=69"#))
         #expect(html.contains(#"/style.css?v=42"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v46";"#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v47";"#))
         #expect(sw.contains(#""/session-ordering.js?v=1""#))
-        #expect(sw.contains(#""/app.js?v=68""#))
+        #expect(sw.contains(#""/app.js?v=69""#))
         #expect(sw.contains(#""/style.css?v=42""#))
     }
 
@@ -68,10 +68,10 @@ struct RemoteWebAssetTests {
         #expect(app.contains("toggle.tabIndex = 0"))
         #expect(app.contains("function handleCardToggleKeydown"))
         #expect(!app.contains(#"const button = el("button", "tool-toggle")"#))
-        #expect(html.contains(#"/app.js?v=68"#))
+        #expect(html.contains(#"/app.js?v=69"#))
         #expect(html.contains(#"/style.css?v=42"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v46";"#))
-        #expect(sw.contains(#""/app.js?v=68""#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v47";"#))
+        #expect(sw.contains(#""/app.js?v=69""#))
         #expect(sw.contains(#""/style.css?v=42""#))
     }
 
@@ -119,7 +119,7 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".session-section"))
         #expect(css.contains(".session-section-title"))
         #expect(css.contains(".session-section-list"))
-        #expect(html.contains("/app.js?v=68"))
+        #expect(html.contains("/app.js?v=69"))
         #expect(html.contains("/style.css?v=42"))
     }
 
@@ -145,7 +145,7 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".session-open"))
         #expect(css.contains("#detail-title"))
         #expect(css.contains(".sheet-input"))
-        #expect(sw.contains(#""/app.js?v=68""#))
+        #expect(sw.contains(#""/app.js?v=69""#))
         #expect(sw.contains(#""/style.css?v=42""#))
     }
 
@@ -196,7 +196,7 @@ struct RemoteWebAssetTests {
         let sw = try asset("sw.js")
 
         #expect(html.contains(#"/worktree-creation.js?v=1"#))
-        #expect(html.range(of: #"/worktree-creation.js?v=1"#)!.lowerBound < html.range(of: #"/app.js?v=68"#)!.lowerBound)
+        #expect(html.range(of: #"/worktree-creation.js?v=1"#)!.lowerBound < html.range(of: #"/app.js?v=69"#)!.lowerBound)
         #expect(js.contains("const worktreeCreation = RemoteWorktreeCreation.createFlow(send);"))
         #expect(js.contains(#"case "projectList":"#))
         #expect(js.contains(#"case "branchList":"#))
@@ -334,9 +334,9 @@ struct RemoteWebAssetTests {
     @Test func incrementalTranscriptBustsServiceWorkerAssetCache() throws {
         let sw = try asset("sw.js")
         let html = try asset("index.html")
-        #expect(sw.contains("alas-remote-shell-v46"))
-        #expect(sw.contains("/app.js?v=68"))
-        #expect(html.contains("app.js?v=68"))
+        #expect(sw.contains("alas-remote-shell-v47"))
+        #expect(sw.contains("/app.js?v=69"))
+        #expect(html.contains("app.js?v=69"))
     }
 
     // Regression (codex review, PR #775): applyPage used to clear the
@@ -499,10 +499,10 @@ struct RemoteWebAssetTests {
         let html = try asset("index.html")
         let sw = try asset("sw.js")
 
-        #expect(html.contains(#"/app.js?v=68"#))
+        #expect(html.contains(#"/app.js?v=69"#))
         #expect(html.contains(#"/style.css?v=42"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v46";"#))
-        #expect(sw.contains(#""/app.js?v=68""#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v47";"#))
+        #expect(sw.contains(#""/app.js?v=69""#))
         #expect(sw.contains(#""/style.css?v=42""#))
     }
 
@@ -536,9 +536,9 @@ struct RemoteWebAssetTests {
         #expect(html.contains(#"/changes-view.js?v=2"#))
         #expect(html.contains(#"/file-browser.js?v=1"#))
         #expect(html.range(of: #"/changes-view.js?v=2"#)!.lowerBound
-            < html.range(of: #"/app.js?v=68"#)!.lowerBound)
+            < html.range(of: #"/app.js?v=69"#)!.lowerBound)
         #expect(html.range(of: #"/file-browser.js?v=1"#)!.lowerBound
-            < html.range(of: #"/app.js?v=68"#)!.lowerBound)
+            < html.range(of: #"/app.js?v=69"#)!.lowerBound)
         #expect(sw.contains(#""/changes-view.js?v=2""#))
         #expect(sw.contains(#""/file-browser.js?v=1""#))
     }
@@ -573,6 +573,31 @@ struct RemoteWebAssetTests {
         let js = try asset("app.js")
         #expect(js.contains("function noteStreamingStateForChanges(state)"))
         #expect(js.contains(#"activeTab !== "changes""#))
+    }
+
+    /// Regression: the Files tab had no way to invalidate a stale cached
+    /// listing — once loaded, switching back to it (or an idle turn
+    /// transition while it was open) never re-requested the tree, so an
+    /// agent creating/deleting/renaming files left the tab showing the old
+    /// tree for the rest of the session.
+    @Test func remoteWebRefreshesFilesTreeOnReopenAndWhenATurnGoesIdle() throws {
+        let js = try asset("app.js")
+        #expect(js.contains("function refreshFileTree()"))
+        // `showTab`'s files branch must unconditionally refresh on every
+        // reopen, not just the first time (`needsChildren(null)`).
+        let showTabBody = try #require(
+            js.range(of: "function showTab(name) {").map { js[$0.lowerBound...].prefix(1200) })
+        #expect(showTabBody.contains(#"if (name === "files") refreshFileTree();"#))
+        // The old gate (only fetch the FIRST time this tab is opened) must
+        // be gone from the live condition — a bare `needsChildren` check
+        // isn't enough since the explanatory comment above mentions it too.
+        #expect(!showTabBody.contains("changesTree.needsChildren"))
+        // The idle-transition refresh (shared with Changes) must also
+        // dispatch to Files when that's the open tab.
+        let idleBody = try #require(
+            js.range(of: "function noteStreamingStateForChanges(state) {").map { js[$0.lowerBound...].prefix(800) })
+        #expect(idleBody.contains(#"activeTab !== "files""#))
+        #expect(idleBody.contains("refreshFileTree()"))
     }
 
     // Regression (final whole-branch review, finding 4): a `listChanges` per

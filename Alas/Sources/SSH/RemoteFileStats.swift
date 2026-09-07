@@ -3,10 +3,12 @@ import OSLog
 
 enum RemoteFileStatsError: Error, LocalizedError {
     case directoryListingFailed(path: String)
+    case lineCountBatchFailed
 
     var errorDescription: String? {
         switch self {
         case let .directoryListingFailed(path): "Could not list remote directory: \(path)"
+        case .lineCountBatchFailed: "Could not count lines for one or more remote files"
         }
     }
 }
@@ -71,7 +73,14 @@ enum RemoteFileStats {
         }
     }
 
-    static func lineCounts(host: String, cwd: String, paths: [String]) async -> [String: Int] {
+    /// Throws rather than silently returning a partial (or empty)
+    /// dictionary on failure: a caller (`GitService.status`,
+    /// `changedFilesAgainstRef`) that can't tell "no lines" from "the count
+    /// is simply unknown" defaults every missing path to `0` and reports a
+    /// successful change list with wrong addition totals for whichever
+    /// files happened to fall in a failed batch, instead of propagating the
+    /// failure as `changeListFailed`.
+    static func lineCounts(host: String, cwd: String, paths: [String]) async throws -> [String: Int] {
         guard !paths.isEmpty else { return [:] }
         if await RemoteHostCapabilityStore.shared.capabilities(for: host)?.helperHandshake != nil {
             let startedAt = CFAbsoluteTimeGetCurrent()
@@ -83,7 +92,7 @@ enum RemoteFileStats {
             } catch let error as RemoteHelperClientError where !error.shouldFallbackToRemoteExec {
                 RemoteOperationTiming.log("fs/line-counts", host: host, transport: "helper", startedAt: startedAt)
                 logger.debug("helper line counts failed: \(String(describing: error), privacy: .public)")
-                return [:]
+                throw error
             } catch {
                 RemoteOperationTiming.log("fs/line-counts", host: host, transport: "helper-fallback", startedAt: startedAt)
             }
@@ -96,15 +105,19 @@ enum RemoteFileStats {
         // for every untracked file beyond it, even though the caller's own
         // response cap (`RemoteWorktreeFileAccess.maxChangedFiles`, well
         // above `maxBatchedPaths`) still includes and displays them. Chunk
-        // into batches instead, one remote round trip per batch, and merge.
+        // into batches instead, one remote round trip per batch, and merge
+        // — throwing (rather than skipping) the first batch that fails, so
+        // a transient failure on, say, the third of five batches doesn't
+        // silently zero out just those paths.
         let startedAt = CFAbsoluteTimeGetCurrent()
         defer { RemoteOperationTiming.log("fs/line-counts", host: host, transport: "exec", startedAt: startedAt) }
         var counts: [String: Int] = [:]
         for chunk in Self.batches(paths) {
-            guard let command = wcCommand(paths: chunk),
-                  let result = try? await RemoteExec.run(host: host, cwd: cwd, command: command),
-                  !RemoteExec.isConnectionFailure(exitCode: result.exitCode)
-            else { continue }
+            guard let command = wcCommand(paths: chunk) else { continue }
+            let result = try await RemoteExec.run(host: host, cwd: cwd, command: command)
+            guard !RemoteExec.isConnectionFailure(exitCode: result.exitCode) else {
+                throw RemoteFileStatsError.lineCountBatchFailed
+            }
             counts.merge(parseWcOutput(result.stdout, requested: chunk)) { _, new in new }
         }
         return counts

@@ -505,14 +505,30 @@ function showTab(name) {
   $("changes").classList.toggle("hidden", name !== "changes");
   $("files").classList.toggle("hidden", name !== "files");
   if (name === "changes") requestChanges();
-  if (name === "files" && changesTree.needsChildren(null)) {
-    send({ type: "listFiles", sessionId: currentSession });
-  }
+  // Always re-fetch on reopening (not just the first time,
+  // `needsChildren(null)`) — the agent may have created, deleted, or
+  // renamed files since the tree was last loaded, and there's no other
+  // signal that would invalidate the cached listing otherwise.
+  if (name === "files") refreshFileTree();
 }
 
 function requestChanges() {
   if (!currentSession) return;
   send({ type: "listChanges", sessionId: currentSession });
+}
+
+/// Re-requests the Files root PLUS every currently-expanded directory, so a
+/// refresh doesn't collapse the tree back to just the root — `applyNodes`
+/// overwrites a path's children in place, so this is safe to call whether
+/// or not anything actually changed on the host.
+function refreshFileTree() {
+  if (!currentSession) return;
+  send({ type: "listFiles", sessionId: currentSession });
+  for (const row of changesTree.visibleRows()) {
+    if (row.node.kind === "dir" && row.expanded) {
+      send({ type: "listFiles", sessionId: currentSession, path: row.node.path });
+    }
+  }
 }
 
 $("tab-chat").addEventListener("click", () => showTab("chat"));
@@ -729,21 +745,27 @@ let previousChangesStreamingState = "idle";   // so we can edge-trigger on the i
 let changesRefreshDebounceTimer = null;
 const CHANGES_REFRESH_DEBOUNCE_MS = 500;
 
-/// Re-fetch the change list when the agent stops, but only on the actual
-/// transition into idle (not on every idle delta, and not on an
-/// already-idle first delta) and only while the tab is open — the server
-/// keeps no per-tab state. Debounced as defense in depth: the gateway
-/// serializes non-control messages per-connection, so a burst of
-/// transitions must not queue up a pile of listChanges calls.
+/// Re-fetch the change list (or the Files tree, if that's the open tab)
+/// when the agent stops, but only on the actual transition into idle (not
+/// on every idle delta, and not on an already-idle first delta) and only
+/// while the relevant tab is open — the server keeps no per-tab state.
+/// Debounced as defense in depth: the gateway serializes non-control
+/// messages per-connection, so a burst of transitions must not queue up a
+/// pile of list requests. Files shares this edge-trigger rather than
+/// getting its own: an agent turn is the same underlying signal for both
+/// ("something on disk may have changed"), and only one of the two tabs is
+/// ever active at a time.
 function noteStreamingStateForChanges(state) {
   const wasIdle = previousChangesStreamingState === "idle";
   previousChangesStreamingState = state;
   if (state !== "idle" || wasIdle) return;
-  if (activeTab !== "changes" || detailStack.length !== 0) return;
+  if (detailStack.length !== 0) return;
+  if (activeTab !== "changes" && activeTab !== "files") return;
   if (changesRefreshDebounceTimer) clearTimeout(changesRefreshDebounceTimer);
   changesRefreshDebounceTimer = setTimeout(() => {
     changesRefreshDebounceTimer = null;
-    requestChanges();
+    if (activeTab === "changes") requestChanges();
+    else if (activeTab === "files") refreshFileTree();
   }, CHANGES_REFRESH_DEBOUNCE_MS);
 }
 
