@@ -64,6 +64,8 @@ const view = globalThis.RemoteChangesView;
   assert.equal(view.truncationNotice(false, "diff"), "");
   assert.equal(view.truncationNotice(true, "diff"), "Diff truncated — open this file on the desktop to see the rest.");
   assert.equal(view.truncationNotice(true, "files"), "File list truncated — too many changed files to show.");
+  assert.equal(view.truncationNotice(true, "lines"), "File truncated — too many lines to show.");
+  assert.equal(view.truncationNotice(false, "lines"), "");
 }
 
 console.log("remote-web-changes: ok");

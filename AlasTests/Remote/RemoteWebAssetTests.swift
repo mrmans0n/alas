@@ -593,4 +593,20 @@ struct RemoteWebAssetTests {
         #expect(body.contains("clearTimeout"))
         #expect(js.contains("let changesRefreshDebounceTimer = null;"))
     }
+
+    // Regression (sixth review pass, finding 4): the server's byte cap alone
+    // does not bound the NUMBER of DOM rows `renderFileContents` creates — a
+    // file near that cap made of many short lines can still produce enough
+    // rows to freeze a phone browser. The client must cap rendered lines
+    // separately and surface a distinct notice, since this can trip even
+    // when the server reports `truncated: false`.
+    @Test func remoteWebCapsTheNumberOfRenderedFileLines() throws {
+        let js = try asset("app.js")
+        let changesView = try asset("changes-view.js")
+
+        #expect(js.contains("const MAX_RENDERED_FILE_LINES = 5000;"))
+        #expect(js.contains("const linesTruncated = lines.length > MAX_RENDERED_FILE_LINES;"))
+        #expect(js.contains(#"RemoteChangesView.truncationNotice(linesTruncated, "lines")"#))
+        #expect(changesView.contains(#"if (kind === "lines") return "File truncated — too many lines to show.";"#))
+    }
 }

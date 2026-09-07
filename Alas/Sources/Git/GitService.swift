@@ -827,13 +827,18 @@ extension GitService {
     }
 
     private func gitVisibleFilePaths(worktreePath: URL) async throws -> [String] {
+        // `-c core.quotePath=false` plus `-z` keep non-ASCII (and
+        // tab/newline-containing) filenames intact instead of git's default
+        // octal-escaped, quoted rendering — mirrors `changedFilesAgainstRef`,
+        // which needed the same fix for the Changes tab. This feeds the
+        // root Files tree, so a quoted name here would show the wrong
+        // (escaped) filename and fail to resolve when selected.
         let result = try await Process.git(
-            ["ls-files", "--cached", "--others", "--exclude-standard"],
+            ["-c", "core.quotePath=false", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
             cwd: worktreePath
         )
         return result.stdout
-            .split(separator: "\n")
-            .map(String.init)
+            .components(separatedBy: "\0")
             .filter { !$0.isEmpty }
     }
 

@@ -112,8 +112,16 @@ extension GitService {
         }
 
         if let originalPath = try await renameSource(worktreePath: worktreePath, ref: ref, file: file) {
+            // `--literal-pathspecs` (a global flag, so it must precede the
+            // subcommand) stops `file`/`originalPath` from being interpreted
+            // as glob pathspecs — a tracked name containing `*`/`?`/`[...]`
+            // would otherwise also match unrelated files. `-c
+            // core.quotePath=false` keeps a non-ASCII destination name
+            // unquoted in the `diff --git a/<old> b/<new>` header, which
+            // `sliceDiffForFile` below matches on as a raw string.
             let result = try await Process.git(
-                ["diff", "--no-color", "-M", "-C", ref, "--", file, originalPath], cwd: worktreePath)
+                ["--literal-pathspecs", "-c", "core.quotePath=false",
+                 "diff", "--no-color", "-M", "-C", ref, "--", file, originalPath], cwd: worktreePath)
             guard result.exitCode <= 1 else { return ParsedDiff(hunks: []) }
             return DiffParser.parse(Self.sliceDiffForFile(result.stdout, file: file))
         }
@@ -123,8 +131,12 @@ extension GitService {
             ["cat-file", "-e", "\(ref):\(file)"], cwd: worktreePath)
         if existsAtRef.exitCode != 0 {
             // File doesn't exist at ref (untracked/new file), so diff against /dev/null.
+            // `--no-index` compares the two given paths directly rather than
+            // through pathspec matching, so `--literal-pathspecs` is a no-op
+            // here — kept for consistency with the other client-path calls
+            // in this function.
             let result = try await Process.git(
-                ["diff", "--no-color", "--no-index", "--", "/dev/null", file], cwd: worktreePath)
+                ["--literal-pathspecs", "diff", "--no-color", "--no-index", "--", "/dev/null", file], cwd: worktreePath)
             // `--no-index` exits 1 when there ARE differences, which is the
             // normal case here; only >= 2 is a real failure.
             guard result.exitCode <= 1 else { return ParsedDiff(hunks: []) }
@@ -132,8 +144,10 @@ extension GitService {
         }
 
         // File exists at ref (tracked or previously committed), so diff ref to current state.
+        // `--literal-pathspecs` stops `file` from being interpreted as a
+        // glob pathspec (see comment above).
         let result = try await Process.git(
-            ["diff", "--no-color", "-M", "-C", ref, "--", file], cwd: worktreePath)
+            ["--literal-pathspecs", "diff", "--no-color", "-M", "-C", ref, "--", file], cwd: worktreePath)
         guard result.exitCode <= 1 else { return ParsedDiff(hunks: []) }
         return DiffParser.parse(result.stdout)
     }
