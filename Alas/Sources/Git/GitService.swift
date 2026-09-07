@@ -731,7 +731,7 @@ extension GitService {
             var ignoreCandidates: [RootIgnoreCandidate] = []
             if let host = RemoteHostRegistry.shared.host(forPath: worktreePath.path) {
                 let directory = path.isEmpty ? worktreePath.path : worktreePath.appendingPathComponent(path).path
-                for entry in await RemoteFileStats.directoryEntries(host: host, path: directory)
+                for entry in await RemoteFileStats.directoryEntries(host: host, worktreeRoot: worktreePath.path, path: directory)
                     where entry.name != ".git" {
                     let fullPath = path.isEmpty ? entry.name : path + "/" + entry.name
                     if entry.isDirectory { directories.insert(fullPath) }

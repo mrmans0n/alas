@@ -122,7 +122,10 @@ extension GitService {
             let result = try await Process.git(
                 ["--literal-pathspecs", "-c", "core.quotePath=false",
                  "diff", "--no-color", "-M", "-C", ref, "--", file, originalPath], cwd: worktreePath)
-            guard result.exitCode <= 1 else { return ParsedDiff(hunks: []) }
+            // A fatal exit (>= 2, e.g. a dropped SSH connection) must propagate
+            // rather than fall through as a successful, blank diff — see the
+            // matching comment on the tracked-file diff below.
+            guard result.exitCode <= 1 else { throw ProcessError.nonZeroExit(result.exitCode, result.stderr) }
             return DiffParser.parse(Self.sliceDiffForFile(result.stdout, file: file))
         }
 
@@ -153,8 +156,10 @@ extension GitService {
             let result = try await Process.git(
                 ["--literal-pathspecs", "diff", "--no-color", "--no-index", "--", "/dev/null", file], cwd: worktreePath)
             // `--no-index` exits 1 when there ARE differences, which is the
-            // normal case here; only >= 2 is a real failure.
-            guard result.exitCode <= 1 else { return ParsedDiff(hunks: []) }
+            // normal case here; only >= 2 is a real failure that must
+            // propagate — see the matching comment on the tracked-file diff
+            // below.
+            guard result.exitCode <= 1 else { throw ProcessError.nonZeroExit(result.exitCode, result.stderr) }
             return DiffParser.parse(result.stdout)
         }
 
@@ -163,7 +168,12 @@ extension GitService {
         // glob pathspec (see comment above).
         let result = try await Process.git(
             ["--literal-pathspecs", "diff", "--no-color", "-M", "-C", ref, "--", file], cwd: worktreePath)
-        guard result.exitCode <= 1 else { return ParsedDiff(hunks: []) }
+        // A fatal exit here (e.g. an SSH connection dropping after the
+        // preceding probes succeeded) must propagate rather than turn into a
+        // successful, blank diff: `remoteFileDiff` maps a thrown error to
+        // `.gitFailed`, but silently returning empty hunks would instead
+        // report success with nothing to show.
+        guard result.exitCode <= 1 else { throw ProcessError.nonZeroExit(result.exitCode, result.stderr) }
         return DiffParser.parse(result.stdout)
     }
 

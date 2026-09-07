@@ -196,6 +196,62 @@ enum RemotePathContainment {
             return .unreadable
         }
     }
+
+    /// Exit codes for `containedListScript`, layered on top of
+    /// `containmentExcludingGitProbeCommand`'s own 3/4/5/6/7: 9 = resolves
+    /// to something other than a directory.
+    enum ContainedListOutcome {
+        case ok(entries: [(name: String, isDirectory: Bool)])
+        case outsideWorktree
+        case notADirectory
+        case unreadable
+    }
+
+    /// Same one-script pattern as `containedReadScript`, for listing a
+    /// directory instead of reading a file: containment verification and the
+    /// listing itself reuse the SAME `full_phys` value, so there is no later,
+    /// separate `ls` invocation that re-resolves the path string from
+    /// scratch — which is exactly the gap a helperless SSH worktree's
+    /// directory expansion had (containment checked once, then a plain `ls`
+    /// against the raw path a moment later, wide open to an intermediate
+    /// directory being swapped for a symlink in between).
+    ///
+    /// GNU-then-BSD fallback mirrors `RemoteFileStats.lsCommand`: GNU
+    /// coreutils' `--zero` emits NUL-separated entries so an embedded
+    /// newline in a filename can't fragment it; BSD `ls` (a remote macOS
+    /// host) has no such mode and falls back to plain newline-delimited
+    /// output.
+    static func containedListScript(path: String, worktreeRoot: String) -> String {
+        let probe = containmentExcludingGitProbeCommand(path: path, worktreeRoot: worktreeRoot)
+        let probeWithoutFinalExit = probe.hasSuffix("exit 0")
+            ? String(probe.dropLast("exit 0".count))
+            : probe
+        return probeWithoutFinalExit + """
+        [ -d "$full_phys" ] || exit 9; \
+        ls -1Ap --zero -- "$full_phys" 2>/dev/null || ls -1Ap -- "$full_phys"
+        """
+    }
+
+    /// Runs `containedListScript` over one `RemoteExec.run` round trip.
+    static func containedList(host: String, path: String, worktreeRoot: String) async throws -> ContainedListOutcome {
+        let target = try lexicallyResolveInsideWorktree(path: path, worktreeRoot: worktreeRoot)
+        let result = try await RemoteExec.run(
+            host: host, cwd: nil,
+            command: containedListScript(path: target, worktreeRoot: worktreeRoot))
+        if RemoteExec.isConnectionFailure(exitCode: result.exitCode) {
+            throw RemoteFileAccessError.connectionFailed(result.stderr)
+        }
+        switch result.exitCode {
+        case 0:
+            return .ok(entries: RemoteFileStats.parseLsEntries(result.stdout))
+        case 6, 7:
+            return .outsideWorktree
+        case 9:
+            return .notADirectory
+        default:
+            return .unreadable
+        }
+    }
 }
 
 /// Remote ACP file serving uses lexical containment first, then a remote

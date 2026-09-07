@@ -304,13 +304,13 @@ struct SSHIntegrationTests {
         #expect(exists.exitCode != 0)
     }
 
-    /// Finding 1 (2nd Codex pass on PR #1124): a directory symlink alias to
-    /// `.git` used to pass `RemotePathContainment.verifyRemoteContainment`
-    /// because only the physical PARENT's location was checked — the
-    /// resolved path landed inside `.git`, which is still under the
-    /// worktree root. Requires a real SSH connection (the containment probe
-    /// runs remote `cd`/`pwd -P`), so this is gated behind
-    /// `ALAS_SSH_INTEGRATION=1` like the rest of this suite.
+    /// Regression: a directory symlink alias to `.git` used to pass
+    /// `RemotePathContainment.verifyRemoteContainment` because only the
+    /// physical PARENT's location was checked — the resolved path landed
+    /// inside `.git`, which is still under the worktree root. Requires a
+    /// real SSH connection (the containment probe runs remote `cd`/`pwd
+    /// -P`), so this is gated behind `ALAS_SSH_INTEGRATION=1` like the rest
+    /// of this suite.
     @Test func containmentRejectsADirectorySymlinkAliasToGitOverSSHLocalhost() async throws {
         try #require(enabled, "set ALAS_SSH_INTEGRATION=1 to run")
 

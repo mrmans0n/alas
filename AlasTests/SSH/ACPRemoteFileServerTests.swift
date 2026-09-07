@@ -197,4 +197,71 @@ struct ACPRemoteFileServerTests {
         let body = result.stdout[result.stdout.index(after: newline)...]
         #expect(body.count == 10)
     }
+
+    // MARK: - containedListScript / containedList
+
+    /// Same local-`/bin/sh` verification strategy as the read-script tests
+    /// above: `containedListScript` only uses POSIX shell builtins plus
+    /// `ls`, so its behavior locally is identical to what `RemoteExec.run`
+    /// would produce against a real remote host.
+    private func runContainedList(target: String, root: String) async throws -> ProcessResultData {
+        let command = RemotePathContainment.containedListScript(path: target, worktreeRoot: root)
+        return try await Process.runData("/bin/sh", args: ["-c", command])
+    }
+
+    @Test func containedListScriptListsADirectoryInOneShellInvocation() async throws {
+        let root = try makeContainedReadRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "print(1)".write(to: root.appendingPathComponent("main.swift"), atomically: true, encoding: .utf8)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("src"), withIntermediateDirectories: true)
+
+        let result = try await runContainedList(target: root.path, root: root.path)
+
+        #expect(result.exitCode == 0)
+        let entries = RemoteFileStats.parseLsEntries(String(data: result.stdout, encoding: .utf8) ?? "")
+            .sorted { $0.name < $1.name }
+        #expect(entries.map(\.name) == ["main.swift", "src"])
+        #expect(entries.first { $0.name == "src" }?.isDirectory == true)
+        #expect(entries.first { $0.name == "main.swift" }?.isDirectory == false)
+    }
+
+    @Test func containedListScriptRejectsAFile() async throws {
+        let root = try makeContainedReadRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("a.txt")
+        try "hello\n".write(to: file, atomically: true, encoding: .utf8)
+
+        let result = try await runContainedList(target: file.path, root: root.path)
+
+        #expect(result.exitCode == 9)
+    }
+
+    @Test func containedListScriptRejectsPathsOutsideTheWorktree() async throws {
+        let root = try makeContainedReadRoot()
+        let outside = try makeContainedReadRoot()
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: outside)
+        }
+
+        let result = try await runContainedList(target: outside.path, root: root.path)
+
+        #expect(result.exitCode == 6)
+    }
+
+    /// The exact scenario the finding described: containment and the
+    /// listing must resolve the SAME physical path, so a directory symlink
+    /// alias to `.git` is rejected here just as it is for reads.
+    @Test func containedListScriptRejectsADirectorySymlinkAliasToGit() async throws {
+        let root = try makeContainedReadRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let gitDir = root.appendingPathComponent(".git")
+        try FileManager.default.createDirectory(at: gitDir, withIntermediateDirectories: true)
+        let alias = root.appendingPathComponent("alias")
+        try FileManager.default.createSymbolicLink(atPath: alias.path, withDestinationPath: ".git")
+
+        let result = try await runContainedList(target: alias.path, root: root.path)
+
+        #expect(result.exitCode == 7)
+    }
 }

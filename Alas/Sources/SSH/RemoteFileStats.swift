@@ -78,7 +78,13 @@ enum RemoteFileStats {
         return parseWcOutput(result.stdout, requested: fallbackPaths)
     }
 
-    static func directoryEntries(host: String, path: String) async -> [(name: String, isDirectory: Bool)] {
+    /// `worktreeRoot` is only used by the helperless exec fallback, to make
+    /// containment verification and the listing itself a single remote
+    /// script (`RemotePathContainment.containedList`) rather than two
+    /// separate round trips racing an intermediate symlink swap between
+    /// them. The helper path doesn't need it: the persistent helper already
+    /// enforces containment server-side against its own subscribed root.
+    static func directoryEntries(host: String, worktreeRoot: String, path: String) async -> [(name: String, isDirectory: Bool)] {
         if await RemoteHostCapabilityStore.shared.capabilities(for: host)?.helperHandshake != nil {
             let startedAt = CFAbsoluteTimeGetCurrent()
             do {
@@ -97,12 +103,10 @@ enum RemoteFileStats {
 
         let startedAt = CFAbsoluteTimeGetCurrent()
         defer { RemoteOperationTiming.log("fs/list", host: host, transport: "exec", startedAt: startedAt) }
-        guard let result = try? await RemoteExec.run(
-            host: host,
-            cwd: nil,
-            command: lsCommand(path: path)
-        ), result.exitCode == 0 else { return [] }
-        return parseLsEntries(result.stdout)
+        guard let outcome = try? await RemotePathContainment.containedList(host: host, path: path, worktreeRoot: worktreeRoot),
+              case let .ok(entries) = outcome
+        else { return [] }
+        return entries
     }
 
     /// GNU-then-BSD `ls` invocation, chained the same way `statMtime` chains

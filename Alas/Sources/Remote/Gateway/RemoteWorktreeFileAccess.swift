@@ -220,17 +220,17 @@ enum RemoteWorktreeFileAccess {
     /// changes nothing about how the eventual read behaves once `fstat`
     /// confirms `S_IFREG`.
     ///
-    /// This closes the specific TOCTOU gap Codex flagged: `resolve()` already
-    /// canonicalizes and validates the full path (including intermediate
-    /// symlinks) once, up front. The remaining gap was that a LATER, separate
-    /// operation (`Data(contentsOf:)`, or a separate `stat` call) re-resolved
-    /// the same path string from scratch, giving a concurrently-running
-    /// process a window to swap a path component for a symlink between the
-    /// check and that later re-resolution. Threading a single already-opened
-    /// descriptor through open → fstat (regular-file check) → read means
-    /// there is no later re-resolution left to race: whatever the kernel
-    /// resolved when `open` succeeded is exactly what every subsequent
-    /// `fstat`/`read` call on that descriptor sees.
+    /// This closes a specific time-of-check/time-of-use gap: `resolve()`
+    /// already canonicalizes and validates the full path (including
+    /// intermediate symlinks) once, up front. The remaining gap was that a
+    /// LATER, separate operation (`Data(contentsOf:)`, or a separate `stat`
+    /// call) re-resolved the same path string from scratch, giving a
+    /// concurrently-running process a window to swap a path component for a
+    /// symlink between the check and that later re-resolution. Threading a
+    /// single already-opened descriptor through open → fstat (regular-file
+    /// check) → read means there is no later re-resolution left to race:
+    /// whatever the kernel resolved when `open` succeeded is exactly what
+    /// every subsequent `fstat`/`read` call on that descriptor sees.
     ///
     /// Not perfect: `resolve()`'s own canonicalization (`resolvingSymlinksInPath`)
     /// and this `open` call are still two separate filesystem operations, so
