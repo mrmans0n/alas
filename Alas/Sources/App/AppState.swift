@@ -1550,15 +1550,15 @@ final class AppState {
     func stopWorkspaceCheckoutSessions(_ checkout: WorkspaceCheckout) async throws {
         let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
         let liveTerminalSessions = terminal.registry.all
-            .filter { $0.owner == owner }
+            .filter { $0.owner == owner && $0.zmxSessionName != nil }
             .map { TerminalSessionIdentity(owner: owner, leafId: $0.id) }
         let terminalSessions = Array(Set(persistedWorkspaceCheckoutTerminalSessions(checkout) + liveTerminalSessions))
         // The registry is authoritative for live sessions, including a
         // freshly opened terminal whose tab has not been persisted yet.
         // Persisted checkout-owned tab records are archived only after live
         // sessions have drained, so unarchive cannot expose stale processes.
-        terminal.stopSessions(owner: owner)
         try await terminal.terminateSessionsAndWait(terminalSessions, timeout: 5)
+        terminal.unregisterSessions(owner: owner)
         await disposeACPManagerAndWait(owner: owner)
         archiveSessionTabs(owner: owner)
     }
@@ -2315,7 +2315,12 @@ final class AppState {
         }
         var risks: [String] = []
         for member in checkout.members where member.availability != .explicitlyDeleted {
-            let preview = try await workspaceCoordinator().previewMemberDeletion(checkoutID: checkoutID, memberID: member.id)
+            let preview: WorkspaceMemberDeletionPreview
+            do {
+                preview = try await workspaceCoordinator().previewMemberDeletion(checkoutID: checkoutID, memberID: member.id)
+            } catch WorkspaceCheckoutCoordinatorError.cleanupUnavailable where member.canUseSnapshotOnlyCheckoutDeletion {
+                continue
+            }
             var model = WorkspaceLifecycleConfirmationModel.memberDeletion(member: preview.member, preflight: preview.preflight)
             model.risks.append(contentsOf: preview.rootObservation.leftovers)
             risks.append(contentsOf: model.risks.map { "\(member.fallbackProjectName): \($0)" })
@@ -9552,6 +9557,14 @@ final class AppState {
         ) else { return }
         tabs.openOrFocusGGInbox(worktreeId: worktreeId, projectId: projectId, projectName: project.name)
         selectWorktree(id: worktreeId)
+    }
+}
+
+private extension WorkspaceCheckoutMember {
+    var canUseSnapshotOnlyCheckoutDeletion: Bool {
+        cleanup == nil
+            && cleanupOwnership.worktreeCreated == false
+            && (cleanupOwnership.branchOwnership != .created || plan != nil)
     }
 }
 

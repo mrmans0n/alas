@@ -148,7 +148,43 @@ struct WorktreeServiceTests {
             .init(exitCode: 0, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "abc\n", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "abc\n", stderr: ""),
             .init(exitCode: 6, stdout: "", stderr: "marker failed"),
+            .init(exitCode: 0, stdout: "", stderr: "")
+        ])
+
+        await #expect(throws: (any Error).self) {
+            try await service.addFrozen(
+                repoPath: URL(fileURLWithPath: "/repo"),
+                branch: "feature/workspace",
+                destination: URL(fileURLWithPath: "/checkout/member"),
+                projectId: "p",
+                intent: .create(atCommit: "abc"),
+                expectedLineageID: "lineage",
+                remoteHost: "builder.example",
+                remoteExistence: { _, _ in .missing },
+                remoteRun: { host, command in
+                    await runner.run(host: host, command: command)
+                }
+            )
+        }
+
+        let commands = await runner.commands
+        #expect(commands.count == 6)
+        #expect(commands[2].contains("worktree add"))
+        #expect(commands[3].contains("rev-parse --verify HEAD"))
+        #expect(commands[4].contains("alas-worktree-lineage"))
+        #expect(commands[5].contains("worktree remove -f -f --"))
+        #expect(commands[5].contains("/checkout/member"))
+    }
+
+    @Test func remoteAddFrozenRollsBackTheWorktreeWhenCreatedHeadDiffersFromFrozenCommit() async throws {
+        let service = WorktreeService()
+        let runner = FrozenRemoteRunner(results: [
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "abc\n", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "def\n", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: "")
         ])
 
@@ -171,9 +207,8 @@ struct WorktreeServiceTests {
         let commands = await runner.commands
         #expect(commands.count == 5)
         #expect(commands[2].contains("worktree add"))
-        #expect(commands[3].contains("alas-worktree-lineage"))
+        #expect(commands[3].contains("rev-parse --verify HEAD"))
         #expect(commands[4].contains("worktree remove -f -f --"))
-        #expect(commands[4].contains("/checkout/member"))
     }
 
     @Test func remoteAddFrozenRollsBackTheWorktreeWhenLineageRecordingThrows() async throws {
@@ -197,10 +232,11 @@ struct WorktreeServiceTests {
         }
 
         let commands = await runner.commands
-        #expect(commands.count == 5)
+        #expect(commands.count == 6)
         #expect(commands[2].contains("worktree add"))
-        #expect(commands[3].contains("alas-worktree-lineage"))
-        #expect(commands[4].contains("worktree remove -f -f --"))
+        #expect(commands[3].contains("rev-parse --verify HEAD"))
+        #expect(commands[4].contains("alas-worktree-lineage"))
+        #expect(commands[5].contains("worktree remove -f -f --"))
     }
 
     @Test func removeLockedWorktreeUsesDoubleForceWhenRequested() async throws {
@@ -432,6 +468,8 @@ private actor ThrowingFrozenRemoteRunner {
         case 3:
             return .init(exitCode: 0, stdout: "", stderr: "")
         case 4:
+            return .init(exitCode: 0, stdout: "abc\n", stderr: "")
+        case 5:
             throw FrozenRemoteError.transport
         default:
             return .init(exitCode: 0, stdout: "", stderr: "")

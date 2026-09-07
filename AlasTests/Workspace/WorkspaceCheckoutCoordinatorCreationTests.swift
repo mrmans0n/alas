@@ -426,13 +426,14 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
                 creationLaunchPreference: .inherit,
                 globalWorktreeCreateScript: "echo global"
             ),
-            members: [
-                fixture.workspace.members[0].id: .init(
-                    setupScript: "echo global\necho project",
-                    ggMode: .off,
-                    mcpServers: []
-                )
-            ]
+                members: [
+                    fixture.workspace.members[0].id: .init(
+                        setupScript: "echo global\necho project",
+                        setupScriptIncludesInheritedGlobalPrefix: true,
+                        ggMode: .off,
+                        mcpServers: []
+                    )
+                ]
         )
         let coordinator = WorkspaceCheckoutCoordinator(
             store: WorkspaceStore(url: url),
@@ -487,6 +488,45 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
         await coordinator.awaitCreationCompletion(checkoutID: checkout.id)
 
         #expect(await scripts.recordedScripts == ["echo migrate\necho migrate\necho project"])
+    }
+
+    @Test func setupPreservesOverrideMemberScriptThatStartsWithGlobalScript() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-coordinator-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let fixture = makeFixture(count: 1)
+        let scripts = CapturingWorkspaceScriptRunner()
+        let snapshot = WorkspaceCheckoutConfigurationSnapshot(
+            capturedAt: Date(timeIntervalSince1970: 0),
+            shared: .init(
+                sessionOpenScript: "",
+                worktreeCreateScript: "echo global",
+                creationLaunchPreference: .inherit,
+                globalWorktreeCreateScript: "echo global"
+            ),
+            members: [
+                fixture.workspace.members[0].id: .init(
+                    setupScript: "echo global\necho project",
+                    setupScriptIncludesInheritedGlobalPrefix: false,
+                    ggMode: .off,
+                    mcpServers: []
+                )
+            ]
+        )
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: WorkspaceStore(url: url),
+            git: CountingWorkspaceGit(),
+            scripts: scripts,
+            projectMutationGate: ProjectMutationGate()
+        )
+
+        let checkout = try await coordinator.create(
+            workspace: fixture.workspace,
+            plan: fixture.plan,
+            configurationSnapshot: snapshot
+        )
+        await coordinator.awaitCreationCompletion(checkoutID: checkout.id)
+
+        #expect(await scripts.recordedScripts == ["echo global\necho global\necho project"])
     }
 
     @Test func setupKeepsMemberInheritedGlobalWhenSharedWorkspaceOverridesGlobal() async throws {

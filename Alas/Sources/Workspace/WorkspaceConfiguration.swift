@@ -172,8 +172,33 @@ struct WorkspaceSharedConfigurationSnapshot: Codable, Equatable, Sendable {
 
 struct WorkspaceMemberConfigurationSnapshot: Codable, Equatable, Sendable {
     var setupScript: String
+    var setupScriptIncludesInheritedGlobalPrefix: Bool
     var ggMode: GGProjectMode
     var mcpServers: [WorkspaceMCPServerDescriptor]
+
+    init(
+        setupScript: String,
+        setupScriptIncludesInheritedGlobalPrefix: Bool = false,
+        ggMode: GGProjectMode,
+        mcpServers: [WorkspaceMCPServerDescriptor]
+    ) {
+        self.setupScript = setupScript
+        self.setupScriptIncludesInheritedGlobalPrefix = setupScriptIncludesInheritedGlobalPrefix
+        self.ggMode = ggMode
+        self.mcpServers = mcpServers
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case setupScript, setupScriptIncludesInheritedGlobalPrefix, ggMode, mcpServers
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        setupScript = try container.decodeIfPresent(String.self, forKey: .setupScript) ?? ""
+        setupScriptIncludesInheritedGlobalPrefix = try container.decodeIfPresent(Bool.self, forKey: .setupScriptIncludesInheritedGlobalPrefix) ?? false
+        ggMode = try container.decodeIfPresent(GGProjectMode.self, forKey: .ggMode) ?? .off
+        mcpServers = try container.decodeIfPresent([WorkspaceMCPServerDescriptor].self, forKey: .mcpServers) ?? []
+    }
 }
 
 enum WorkspaceConfigurationResolver {
@@ -208,6 +233,8 @@ enum WorkspaceConfigurationResolver {
             let configuration = input.workspaceConfiguration.memberConfigurations[member.id] ?? .init()
             let projectSetup = resolveScript(global: input.globalTerminal.worktreeCreateScript, mode: member.project.startupScripts.worktreeCreateMode, local: member.project.startupScripts.worktreeCreateScript)
             let setup = resolveScript(global: projectSetup, mode: configuration.setupScript.mode.asProjectMode, local: configuration.setupScript.script)
+            let setupIncludesInheritedGlobalPrefix = projectSetup.inheritsGlobalSetupPrefix(input.globalTerminal.worktreeCreateScript)
+                && (configuration.setupScript.mode == .inherit || configuration.setupScript.mode == .append)
             let ggMode: GGProjectMode = switch configuration.ggMode.mode {
             case .inherit, .append: member.project.ggMode
             case .override: configuration.ggMode.value ?? member.project.ggMode
@@ -221,6 +248,7 @@ enum WorkspaceConfigurationResolver {
             }
             members[member.id] = .init(
                 setupScript: setup,
+                setupScriptIncludesInheritedGlobalPrefix: setupIncludesInheritedGlobalPrefix,
                 ggMode: ggMode,
                 mcpServers: servers.enumerated().map { index, server in
                     .init(id: "\(member.id.uuidString):\(index):\(server.id)", server: server, projectDirectory: member.checkoutRoot, worktreeDirectory: member.worktreePath, checkoutRoot: member.checkoutRoot)

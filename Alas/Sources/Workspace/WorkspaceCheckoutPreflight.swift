@@ -183,6 +183,10 @@ struct WorkspaceCheckoutPreflight: Sendable {
             let destinationKey = await paths.destinationCollisionKey(for: destination, location: location)
             let memberIndex = request.workspace.members.firstIndex(where: { $0.id == item.0.id })! + 1
             var memberHasError = false
+            if destinationName == WorkspaceCheckoutManifest.fileName {
+                messages.append("Workspace member \(memberIndex) destination '\(destination)' uses a reserved checkout manifest name.")
+                memberHasError = true
+            }
             if !destinations.insert(destinationKey).inserted {
                 messages.append("Workspace member \(memberIndex) has a duplicate destination '\(destination)'.")
                 memberHasError = true

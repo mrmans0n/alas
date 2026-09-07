@@ -451,6 +451,15 @@ final class TerminalService {
         }
     }
 
+    func unregisterSessions(owner: SessionOwnerID) {
+        for session in registry.all where session.owner == owner {
+            session.surface.removeFromSuperview()
+            registry.unregister(id: session.id)
+            socketReleaseHandler?(session.id)
+            cleanupRcfile(sessionId: session.id)
+        }
+    }
+
     nonisolated static func remoteLaunch(host: String, worktreePath: String, zmxSessionName: String, keepAlive: Bool, startupSuffix: String?, environment: [String: String] = [:]) -> (executable: String, args: [String]) {
         let script = RemoteTerminalScript.attachScript(worktreePath: worktreePath, sessionName: zmxSessionName, useZmx: keepAlive, startupSuffix: startupSuffix, environment: environment)
         let invocation = RemoteTerminalScript.surfaceInvocation(host: host, script: script)
@@ -660,12 +669,19 @@ final class TerminalService {
             }
         }
         let client = zmxClient
-        for name in localNames {
+        let localNamesToKill = localNames
+        let localExistingNames = await Task.detached {
+            Set(client.listSessionInfos().map(\.name))
+        }.value
+        for name in localNamesToKill where localExistingNames.contains(name) {
             let killed = await Task.detached { client.killSessionResult(name: name) }.value
             guard killed else { throw SessionTerminationError.failed(name) }
         }
-        for (host, names) in remoteNamesByHost {
+        let remoteNamesToKill = remoteNamesByHost
+        for (host, names) in remoteNamesToKill {
+            let existingNames = Set((await Self.remoteSessionInfos(host: host)).map(\.name))
             for name in names {
+                guard existingNames.contains(name) else { continue }
                 try await Self.killRemoteSessionChecked(host: host, name: name, timeout: timeout)
             }
         }

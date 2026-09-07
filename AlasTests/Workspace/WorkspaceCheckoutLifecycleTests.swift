@@ -323,6 +323,46 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(state.checkouts.isEmpty)
     }
 
+    @Test func deleteCheckoutDiscardsFailedMemberThatNeverCreatedAWorktree() async throws {
+        let fixture = try await Fixture.make(branchOwnership: .reused)
+        try await fixture.store.mutate { state in
+            state.checkouts[0].members[0].availability = .unavailable
+            state.checkouts[0].members[0].checkpoint = .failed
+            state.checkouts[0].members[0].gitLineageID = nil
+            state.checkouts[0].members[0].cleanupOwnership = .init(worktreeCreated: false, branchOwnership: .reused)
+            state.checkouts[0].members[0].cleanup = nil
+        }
+        let lifecycle = FixtureLifecycle()
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+
+        let checkout = try await coordinator.deleteCheckout(checkoutID: fixture.checkout.id)
+
+        #expect(checkout.members[0].availability == .explicitlyDeleted)
+        #expect(checkout.members[0].cleanup == nil)
+        #expect(await lifecycle.removedMembers.isEmpty)
+    }
+
+    @Test func deleteCheckoutRemovesAttemptCreatedBranchBeforeDiscardingSnapshotOnlyMember() async throws {
+        let fixture = try await Fixture.make()
+        try await fixture.store.mutate { state in
+            state.checkouts[0].members[0].availability = .unavailable
+            state.checkouts[0].members[0].checkpoint = .failed
+            state.checkouts[0].members[0].gitLineageID = nil
+            state.checkouts[0].members[0].cleanupOwnership = .init(worktreeCreated: false, branchOwnership: .created)
+            state.checkouts[0].members[0].cleanup = nil
+        }
+        let lifecycle = FixtureLifecycle()
+        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
+
+        let checkout = try await coordinator.deleteCheckout(checkoutID: fixture.checkout.id)
+
+        #expect(checkout.members[0].availability == .explicitlyDeleted)
+        #expect(checkout.members[0].cleanup?.worktreeRemoved == true)
+        #expect(checkout.members[0].cleanup?.branchRemoved == true)
+        #expect(await lifecycle.deletedBranches == [fixture.member.id])
+        #expect(await lifecycle.removedMembers.isEmpty)
+    }
+
     @Test func forgettingACheckoutStopsOwnedSessionsBeforeRemovingTheSnapshot() async throws {
         let fixture = try await Fixture.make()
         try await fixture.store.mutate { state in

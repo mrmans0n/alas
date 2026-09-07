@@ -628,6 +628,28 @@ struct WorktreeService {
             result = try await Process.git(["worktree", "add", destination.path, branch], cwd: repoPath, usesRemoteHostRegistry: usesRemoteHostRegistry)
         }
         guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
+        let createdHead: ProcessResult
+        if let host = pinnedRemoteHost {
+            createdHead = try await remoteRun(
+                host,
+                "git -C \(SSHCommand.shellQuote(destination.path)) rev-parse --verify HEAD"
+            )
+        } else {
+            createdHead = try await Process.git(["rev-parse", "--verify", "HEAD"], cwd: destination, usesRemoteHostRegistry: usesRemoteHostRegistry)
+        }
+        guard createdHead.exitCode == 0,
+              createdHead.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == expectedCommit
+        else {
+            if let host = pinnedRemoteHost {
+                _ = try? await remoteRun(
+                    host,
+                    "git -C \(SSHCommand.shellQuote(repoPath.path)) worktree remove -f -f -- \(SSHCommand.shellQuote(destination.path))"
+                )
+            } else {
+                _ = try? await Process.git(["worktree", "remove", "-f", "-f", "--", destination.path], cwd: repoPath, usesRemoteHostRegistry: usesRemoteHostRegistry)
+            }
+            throw WorktreeError.gitFailed("Frozen Workspace worktree '\(destination.path)' checked out the wrong commit.")
+        }
         var worktree = makeWorktree(destination: destination, branch: branch, projectId: projectId)
         if let host = pinnedRemoteHost {
             let lineage: ProcessResult

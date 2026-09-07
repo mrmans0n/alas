@@ -457,19 +457,22 @@ struct TerminalServiceZmxTests {
         let checkoutID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
         let owner = SessionOwnerID.workspaceCheckout(checkoutID, .local)
         let recorder = RecordingRunner()
+        let sessionName = ZmxSessionName.derive(owner: owner, leafId: "checkout-leaf")
+        recorder.resultsByFirstArg["ls"] = .init(exitCode: 0, stdout: "name=\(sessionName)\n", stderr: "")
         recorder.resultsByFirstArg["kill"] = .init(exitCode: 1, stdout: "", stderr: "failed")
         let service = TerminalService(
             zmxClient: ZmxClient(env: makeZmxEnv(available: true), runner: recorder.runner())
         )
 
-        await #expect(throws: TerminalService.SessionTerminationError.failed(ZmxSessionName.derive(owner: owner, leafId: "checkout-leaf"))) {
+        await #expect(throws: TerminalService.SessionTerminationError.failed(sessionName)) {
             try await service.terminateSessionsAndWait([
                 TerminalSessionIdentity(owner: owner, leafId: "checkout-leaf"),
             ], timeout: 0.1)
         }
 
         #expect(recorder.calls.map(\.args) == [
-            ["kill", ZmxSessionName.derive(owner: owner, leafId: "checkout-leaf")],
+            ["ls"],
+            ["kill", sessionName],
         ])
     }
 

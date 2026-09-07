@@ -537,12 +537,17 @@ actor WorkspaceCheckoutCoordinator {
             let current = try await checkout(id: checkoutID)
             if current.stopAfterCurrentOperations { break }
             do {
-                _ = try await deleteMember(
-                    checkoutID: checkoutID,
-                    memberID: member.id,
-                    confirmingRisks: confirmingRisks,
-                    checkoutOperationAlreadyClaimed: true
-                )
+                if let currentMember = current.members.first(where: { $0.id == member.id }),
+                   canDiscardSnapshotOnlyMember(currentMember) {
+                    try await discardSnapshotOnlyMember(checkout: current, member: currentMember)
+                } else {
+                    _ = try await deleteMember(
+                        checkoutID: checkoutID,
+                        memberID: member.id,
+                        confirmingRisks: confirmingRisks,
+                        checkoutOperationAlreadyClaimed: true
+                    )
+                }
             } catch {
                 // One member's risk, failure, or conflict must not erase the
                 // independent cleanup opportunity for later members.
@@ -555,6 +560,44 @@ actor WorkspaceCheckoutCoordinator {
             current.stopAfterCurrentOperations = false
         }
         return try await checkout(id: checkoutID)
+    }
+
+    private func canDiscardSnapshotOnlyMember(_ member: WorkspaceCheckoutMember) -> Bool {
+        member.cleanup == nil
+            && member.cleanupOwnership.worktreeCreated == false
+            && (member.cleanupOwnership.branchOwnership != .created || member.plan != nil)
+    }
+
+    private func discardSnapshotOnlyMember(
+        checkout: WorkspaceCheckout,
+        member: WorkspaceCheckoutMember
+    ) async throws {
+        if member.cleanupOwnership.branchOwnership == .created,
+           let plan = makeSnapshotOnlyCleanupPlan(checkout: checkout, member: member) {
+            let branchRemoved = try await projectMutationGate.withMutation(projectID: member.projectID) {
+                try await lifecycle.deleteMergedBranch(plan)
+            }
+            try await mutateCheckout(checkout.id) { current in
+                guard let index = current.members.firstIndex(where: { $0.id == member.id }) else { return }
+                current.members[index].availability = .explicitlyDeleted
+                current.members[index].checkpoint = .planPersisted
+                current.members[index].cleanup = .init(
+                    plan: plan,
+                    checkpoint: branchRemoved ? .complete : .branchDeleteAttempted,
+                    worktreeRemoved: true,
+                    branchRemoved: branchRemoved,
+                    sharedRootLeftovers: []
+                )
+            }
+        } else {
+            try await mutateCheckout(checkout.id) { current in
+                guard let index = current.members.firstIndex(where: { $0.id == member.id }) else { return }
+                current.members[index].availability = .explicitlyDeleted
+                current.members[index].checkpoint = .planPersisted
+                current.members[index].cleanup = nil
+            }
+        }
+        await refreshManifestIfPresent(checkoutID: checkout.id)
     }
 
     /// Forgetting is distinct from deletion: callers may discard a record only
@@ -1346,9 +1389,10 @@ actor WorkspaceCheckoutCoordinator {
         else { return "" }
         let shared = checkout.configurationSnapshot?.shared.worktreeCreateScript ?? ""
         let global = checkout.configurationSnapshot?.shared.globalWorktreeCreateScript ?? ""
-        let memberScript = checkout.configurationSnapshot?.members[member.workspaceMemberID]?.setupScript ?? ""
+        let memberSnapshot = checkout.configurationSnapshot?.members[member.workspaceMemberID]
+        let memberScript = memberSnapshot?.setupScript ?? ""
         let sharedInheritedGlobal = shared.inheritsGlobalSetupPrefix(global)
-        let memberOnlyScript = sharedInheritedGlobal
+        let memberOnlyScript = sharedInheritedGlobal && memberSnapshot?.setupScriptIncludesInheritedGlobalPrefix == true
             ? memberScript.removingInheritedGlobalSetupPrefix(global)
             : memberScript.trimmingCharacters(in: .whitespacesAndNewlines)
         return [shared, memberOnlyScript].filter { !$0.isEmpty }.joined(separator: "\n")
@@ -1443,6 +1487,34 @@ actor WorkspaceCheckoutCoordinator {
         )
     }
 
+    private func makeSnapshotOnlyCleanupPlan(
+        checkout: WorkspaceCheckout,
+        member: WorkspaceCheckoutMember
+    ) -> WorkspaceCheckoutCleanupPlan? {
+        guard let plan = member.plan,
+              plan.checkoutMemberID == member.id,
+              plan.projectID == member.projectID,
+              plan.destinationPath == member.worktreePath,
+              !plan.sourceRepositoryPath.isEmpty
+        else { return nil }
+        return .init(
+            checkoutID: checkout.id,
+            memberID: member.id,
+            executionLocation: checkout.executionLocation,
+            projectID: member.projectID,
+            sourceRepositoryPath: plan.sourceRepositoryPath,
+            baseReference: plan.baseReference,
+            baseCommit: plan.baseCommit,
+            branchCommit: plan.branchIntent.cleanupCommit(defaulting: plan.baseCommit),
+            rootPath: checkout.rootPath,
+            managedMemberPaths: checkout.members.map(\.worktreePath),
+            worktreePath: plan.destinationPath,
+            branch: checkout.branch,
+            expectedLineageID: "",
+            branchOwnership: member.cleanupOwnership.branchOwnership
+        )
+    }
+
     private func finishIfAllMembersTerminal(checkoutID: UUID, owning operation: WorkspaceCheckoutOperation) async {
         try? await store.mutate { state in
             guard let index = state.checkouts.firstIndex(where: { $0.id == checkoutID }),
@@ -1501,7 +1573,7 @@ enum WorkspaceCheckoutCoordinatorError: Error, Equatable, Sendable {
     case cleanupConfirmationRequired
 }
 
-private extension String {
+extension String {
     func inheritsGlobalSetupPrefix(_ global: String) -> Bool {
         let global = global.trimmingCharacters(in: .whitespacesAndNewlines)
         let script = trimmingCharacters(in: .whitespacesAndNewlines)

@@ -39,6 +39,44 @@ import Testing
         #expect(plan.canForceDelete == false)
     }
 
+    @MainActor
+    @Test func checkoutDeletionConfirmationAllowsSnapshotOnlyMembers() async throws {
+        let storeURL = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-confirmation-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: storeURL) }
+        let store = WorkspaceStore(url: storeURL)
+        var member = checkoutMember()
+        member.availability = .unavailable
+        member.checkpoint = .failed
+        member.gitLineageID = nil
+        member.cleanup = nil
+        member.cleanupOwnership = .init(worktreeCreated: false, branchOwnership: .reused)
+        let checkout = WorkspaceCheckout(
+            workspaceID: UUID(),
+            fallbackWorkspaceName: "Release",
+            executionLocation: .local,
+            branch: "release/1091",
+            rootPath: "/checkouts/release",
+            members: [member]
+        )
+        try await store.checkpoint(.init(checkouts: [checkout]))
+        let bridge = WorkspaceSpacePersistenceBridge(workspaceStore: store)
+        let manager = WorkspacesManager(bridge: bridge)
+        _ = await manager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "space", spaces: [
+            SpaceConfig(id: "space", name: "Default", emoji: "folder", projectIds: [], lastSelectedWorktreeId: nil, createdAt: .distantPast)
+        ]))
+        let state = AppState(
+            store: WorkspaceConfirmationMemoryStore(),
+            workspacesManager: manager,
+            workspaceStore: store
+        )
+        state.config.workspacesEnabled = true
+
+        let model = try await state.workspaceCheckoutDeletionConfirmation(checkoutID: checkout.id)
+
+        #expect(model.requiresConfirmation == false)
+        #expect(model.confirmAction == .deleteCheckout(confirmingRisks: false))
+    }
+
     @Test func verifiedFindExistingCandidatesAreExplicitRepairChoices() {
         let candidates = [
             WorkspaceRepairCandidate(path: "/checkouts/release/app", lineageID: "lineage-a", isExactMatch: true),
@@ -123,4 +161,12 @@ import Testing
             branchOwnership: branchOwnership
         )
     }
+}
+
+private final class WorkspaceConfirmationMemoryStore: PersistenceStoreProtocol {
+    func readIfExists<T>(_ type: T.Type, from url: URL) throws -> T? where T: Decodable {
+        nil
+    }
+
+    func write<T>(_ value: T, to url: URL) throws where T: Encodable {}
 }

@@ -140,6 +140,32 @@ struct WorkspaceCheckoutPreflightTests {
         #expect(plannedMember.destinationPath == "/checkouts/release/current-name")
     }
 
+    @Test func rejectsMemberDestinationThatCollidesWithCheckoutManifest() async {
+        let member = WorkspaceMember(projectID: "one", fallbackProjectName: "One", fallbackRepositoryRoot: "/repos/\(WorkspaceCheckoutManifest.fileName)")
+        let workspace = Workspace(name: "Release", executionLocation: .local, members: [member])
+        let git = GitProbe(
+            resolutions: ["/repos/\(WorkspaceCheckoutManifest.fileName)": "base-commit"],
+            branches: ["/repos/\(WorkspaceCheckoutManifest.fileName)": .available]
+        )
+
+        let result = await WorkspaceCheckoutPreflight(
+            projects: [project(id: "one", name: "One", path: "/repos/\(WorkspaceCheckoutManifest.fileName)")],
+            git: git,
+            paths: PathProbe()
+        ).prepare(.init(
+            workspace: workspace,
+            branch: "release/1091",
+            rootPath: "/checkouts/release",
+            baseReference: "main"
+        ))
+
+        guard case .failure(let diagnostics) = result else {
+            Issue.record("Expected manifest destination collision to fail")
+            return
+        }
+        #expect(diagnostics.map(\.message).contains("Workspace member 1 destination '/checkouts/release/\(WorkspaceCheckoutManifest.fileName)' uses a reserved checkout manifest name."))
+    }
+
     @Test func reportsHostBaseBranchAndDestinationFailuresTogetherWithoutMutation() async {
         let local = WorkspaceMember(projectID: "local", fallbackProjectName: "Local", fallbackRepositoryRoot: "/repos/shared")
         let remote = WorkspaceMember(projectID: "remote", fallbackProjectName: "Remote", fallbackRepositoryRoot: "/repos/remote")

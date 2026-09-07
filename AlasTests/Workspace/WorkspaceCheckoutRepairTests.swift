@@ -258,6 +258,7 @@ struct WorkspaceCheckoutRepairTests {
                 members: [
                     member.workspaceMemberID: .init(
                         setupScript: "echo global\necho project",
+                        setupScriptIncludesInheritedGlobalPrefix: true,
                         ggMode: .off,
                         mcpServers: []
                     )
