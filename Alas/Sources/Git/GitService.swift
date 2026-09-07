@@ -275,7 +275,13 @@ extension GitService {
             let noIndexArgs = ["diff", "--no-color", "--no-index", "--", "/dev/null", file]
             if let maxOutputBytes {
                 let result = try await Process.gitCapped(noIndexArgs, cwd: worktreePath, maxOutputBytes: maxOutputBytes)
-                guard result.stdoutTruncated || result.exitCode <= 1 else { return ParsedDiff(hunks: []) }
+                // Same reasoning as the tracked-file branch below: a fatal
+                // exit (e.g. an SSH connection dropping) must propagate
+                // rather than parse whatever (usually empty) stdout came
+                // back as a successful, blank diff.
+                guard result.stdoutTruncated || result.exitCode <= 1 else {
+                    throw ProcessError.nonZeroExit(result.exitCode, result.stderr)
+                }
                 return await Self.parseOffMain(result.stdout)
             }
             let result = try await Process.git(noIndexArgs, cwd: worktreePath)
@@ -292,7 +298,13 @@ extension GitService {
             let noIndexArgs = ["diff", "--no-color", "--no-index", "--", "/dev/null", file]
             if let maxOutputBytes {
                 let result = try await Process.gitCapped(noIndexArgs, cwd: worktreePath, maxOutputBytes: maxOutputBytes)
-                guard result.stdoutTruncated || result.exitCode <= 1 else { return ParsedDiff(hunks: []) }
+                // Same reasoning as the tracked-file branch below: a fatal
+                // exit (e.g. an SSH connection dropping) must propagate
+                // rather than parse whatever (usually empty) stdout came
+                // back as a successful, blank diff.
+                guard result.stdoutTruncated || result.exitCode <= 1 else {
+                    throw ProcessError.nonZeroExit(result.exitCode, result.stderr)
+                }
                 return await Self.parseOffMain(result.stdout)
             }
             let result = try await Process.git(noIndexArgs, cwd: worktreePath)
@@ -309,10 +321,10 @@ extension GitService {
         }
         if let maxOutputBytes {
             let result = try await Process.gitCapped(args, cwd: worktreePath, maxOutputBytes: maxOutputBytes)
-            // Unlike the two branches above, this one previously had NO
-            // exit-code check at all: a fatal exit (e.g. an SSH connection
-            // dropping) parsed whatever (usually empty) stdout came back as
-            // a successful, blank diff. `remoteFileDiff` — reachable here
+            // Same reasoning as the two capped branches above: a fatal exit
+            // (e.g. an SSH connection dropping) must propagate rather than
+            // parse whatever (usually empty) stdout came back as a
+            // successful, blank diff. `remoteFileDiff` — reachable here
             // through the nil-comparison-ref fallback at the top of this
             // function — maps a thrown error to `.gitFailed`; a size-capped
             // exit is NOT fatal (`exitCode` is meaningless there), so it
