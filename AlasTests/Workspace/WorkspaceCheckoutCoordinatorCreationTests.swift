@@ -245,6 +245,43 @@ struct WorkspaceCheckoutCoordinatorCreationTests {
         #expect(persisted.checkouts.first?.diagnostics.map(\.message) == plan.warnings.map(\.message))
     }
 
+    @Test func setupCombinesSharedWorkspaceAndMemberSpecificScriptWithoutRepeatingGlobalPrefix() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-coordinator-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let fixture = makeFixture(count: 1)
+        let scripts = CapturingWorkspaceScriptRunner()
+        let snapshot = WorkspaceCheckoutConfigurationSnapshot(
+            capturedAt: Date(timeIntervalSince1970: 0),
+            shared: .init(
+                sessionOpenScript: "",
+                worktreeCreateScript: "echo global\necho workspace",
+                creationLaunchPreference: .inherit
+            ),
+            members: [
+                fixture.workspace.members[0].id: .init(
+                    setupScript: "echo global\necho project",
+                    ggMode: .off,
+                    mcpServers: []
+                )
+            ]
+        )
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: WorkspaceStore(url: url),
+            git: CountingWorkspaceGit(),
+            scripts: scripts,
+            projectMutationGate: ProjectMutationGate()
+        )
+
+        let checkout = try await coordinator.create(
+            workspace: fixture.workspace,
+            plan: fixture.plan,
+            configurationSnapshot: snapshot
+        )
+        await coordinator.awaitCreationCompletion(checkoutID: checkout.id)
+
+        #expect(await scripts.recordedScripts == ["echo global\necho workspace\necho project"])
+    }
+
     @Test func resumeCreationRecreatesManifestBeforeMemberMutation() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-coordinator-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: url) }
@@ -444,6 +481,14 @@ private actor PersistedPlanInspectingGit: WorkspaceGitOperating {
 
 private struct NoopWorkspaceScriptRunner: WorkspaceScriptRunning {
     func runSetup(for operation: WorkspaceCheckoutSetupOperation) async throws {}
+}
+
+private actor CapturingWorkspaceScriptRunner: WorkspaceScriptRunning {
+    private(set) var recordedScripts: [String] = []
+
+    func runSetup(for operation: WorkspaceCheckoutSetupOperation) async throws {
+        recordedScripts.append(operation.script)
+    }
 }
 
 private actor ConcurrentWorkspaceGit: WorkspaceGitOperating {

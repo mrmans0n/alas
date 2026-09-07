@@ -250,7 +250,15 @@ extension GitService: WorkspaceGitInspecting {
     func resolveRevision(at repositoryPath: String, location: ExecutionLocation, ref: String) async throws -> String {
         switch location.normalized {
         case .local:
-            return try await resolveRevision(at: URL(fileURLWithPath: repositoryPath), ref: ref)
+            let revision = try await Process.git(
+                ["rev-parse", "--verify", "\(ref)^{commit}"],
+                cwd: URL(fileURLWithPath: repositoryPath),
+                usesRemoteHostRegistry: false
+            )
+            guard revision.exitCode == 0 else {
+                throw WorkspaceCheckoutPreflightProbeError.gitInspectionFailed(revision.stderr)
+            }
+            return revision.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         case .ssh(let host):
             let revision = SSHCommand.shellQuote("\(ref)^{commit}")
             let command = "git -C \(SSHCommand.shellQuote(repositoryPath)) rev-parse --verify \(revision)"
@@ -277,13 +285,13 @@ extension GitService: WorkspaceGitInspecting {
 
     private func localBranchDisposition(named branch: String, at repositoryPath: String) async throws -> WorkspaceBranchDisposition {
         let repository = URL(fileURLWithPath: repositoryPath)
-        let ref = try await Process.git(["show-ref", "--verify", "--quiet", "refs/heads/\(branch)"], cwd: repository)
+        let ref = try await Process.git(["show-ref", "--verify", "--quiet", "refs/heads/\(branch)"], cwd: repository, usesRemoteHostRegistry: false)
         if ref.exitCode == 1 { return .available }
         guard ref.exitCode == 0 else {
             throw WorkspaceCheckoutPreflightProbeError.gitInspectionFailed(ref.stderr)
         }
-        let commit = try await resolveRevision(at: repository, ref: branch)
-        let worktrees = try await Process.git(["worktree", "list", "--porcelain"], cwd: repository)
+        let commit = try await resolveRevision(at: repositoryPath, location: .local, ref: branch)
+        let worktrees = try await Process.git(["worktree", "list", "--porcelain"], cwd: repository, usesRemoteHostRegistry: false)
         guard worktrees.exitCode == 0 else { return .unsafeReuse }
         let isCheckedOut = worktrees.stdout.split(separator: "\n").contains { $0 == "branch refs/heads/\(branch)" }
         return isCheckedOut ? .checkedOut : .reusable(atCommit: commit)

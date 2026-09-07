@@ -1367,8 +1367,14 @@ private extension String {
         guard !shared.isEmpty, !script.isEmpty else { return script }
         if script == shared { return "" }
         let prefix = shared + "\n"
-        guard script.hasPrefix(prefix) else { return script }
-        return String(script.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        if script.hasPrefix(prefix) {
+            return String(script.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let sharedLines = shared.split(separator: "\n", omittingEmptySubsequences: false)
+        let scriptLines = script.split(separator: "\n", omittingEmptySubsequences: false)
+        let commonCount = zip(sharedLines, scriptLines).prefix { $0 == $1 }.count
+        guard commonCount > 0 else { return script }
+        return scriptLines.dropFirst(commonCount).joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
@@ -1378,7 +1384,8 @@ struct WorkspaceFrozenGitOperator: WorkspaceGitOperating {
             repoPath: URL(fileURLWithPath: operation.sourceRepositoryPath),
             branch: operation.branch,
             intent: operation.branchIntent,
-            remoteHost: operation.executionLocation.normalized.sshHost
+            remoteHost: operation.executionLocation.normalized.sshHost,
+            usesRemoteHostRegistry: operation.executionLocation.normalized != .local
         )
     }
 
@@ -1387,7 +1394,8 @@ struct WorkspaceFrozenGitOperator: WorkspaceGitOperating {
         case .local:
             let result = try await Process.git(
                 ["rev-parse", "--verify", "refs/heads/\(operation.branch)^{commit}"],
-                cwd: URL(fileURLWithPath: operation.sourceRepositoryPath)
+                cwd: URL(fileURLWithPath: operation.sourceRepositoryPath),
+                usesRemoteHostRegistry: false
             )
             return result.exitCode == 0
                 && result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == operation.baseCommit
@@ -1408,7 +1416,8 @@ struct WorkspaceFrozenGitOperator: WorkspaceGitOperating {
             projectId: operation.projectID,
             intent: operation.branchIntent,
             expectedLineageID: operation.expectedLineageID,
-            remoteHost: operation.executionLocation.normalized.sshHost
+            remoteHost: operation.executionLocation.normalized.sshHost,
+            usesRemoteHostRegistry: operation.executionLocation.normalized != .local
         )
         return worktree.lineageID
     }
@@ -1418,11 +1427,11 @@ struct WorkspaceFrozenGitOperator: WorkspaceGitOperating {
         case .local:
             let destination = URL(fileURLWithPath: operation.destinationPath)
             guard Self.pathEntryExistsOrIsSymlink(destination.path) else { return nil }
-            let head = try await Process.git(["rev-parse", "--verify", "HEAD^{commit}"], cwd: destination)
+            let head = try await Process.git(["rev-parse", "--verify", "HEAD^{commit}"], cwd: destination, usesRemoteHostRegistry: false)
             guard head.exitCode == 0,
                   head.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == operation.baseCommit
             else { return nil }
-            let branch = try await Process.git(["rev-parse", "--abbrev-ref", "HEAD"], cwd: destination)
+            let branch = try await Process.git(["rev-parse", "--abbrev-ref", "HEAD"], cwd: destination, usesRemoteHostRegistry: false)
             guard branch.exitCode == 0,
                   branch.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == operation.branch
             else { return nil }
@@ -1490,7 +1499,10 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
     func deletePreflight(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> WorktreeDeletePreflight {
         switch plan.executionLocation.normalized {
         case .local:
-            return try await WorktreeService().deletePreflight(worktreePath: URL(fileURLWithPath: plan.worktreePath))
+            return try await WorktreeService().deletePreflight(
+                worktreePath: URL(fileURLWithPath: plan.worktreePath),
+                usesRemoteHostRegistry: false
+            )
         case .ssh(let host):
             return try await remoteDeletePreflight(plan, host: host)
         }
@@ -1543,7 +1555,8 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
                 repoPath: URL(fileURLWithPath: plan.sourceRepositoryPath),
                 worktree: worktree,
                 deleteBranchIfMerged: false,
-                force: force
+                force: force,
+                usesRemoteHostRegistry: false
             )
         case .ssh(let host):
             let forceFlag = force ? " -f" : ""
@@ -1556,7 +1569,7 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
     func deleteMergedBranch(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool {
         switch plan.executionLocation.normalized {
         case .local:
-            let result = try await Process.git(["branch", "-d", plan.branch], cwd: URL(fileURLWithPath: plan.sourceRepositoryPath))
+            let result = try await Process.git(["branch", "-d", plan.branch], cwd: URL(fileURLWithPath: plan.sourceRepositoryPath), usesRemoteHostRegistry: false)
             return result.exitCode == 0
         case .ssh(let host):
             let command = "git -C \(SSHCommand.shellQuote(plan.sourceRepositoryPath)) branch -d -- \(SSHCommand.shellQuote(plan.branch))"

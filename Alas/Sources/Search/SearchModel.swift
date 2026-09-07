@@ -11,8 +11,18 @@ struct SearchWorktree: Equatable, Sendable, Identifiable {
     var executionLocation: ExecutionLocation? = nil
 
     var remoteHost: String? {
-        executionLocation?.normalized.sshHost
-            ?? RemoteHostRegistry.shared.host(forPath: absolutePath.path)
+        switch executionLocation?.normalized {
+        case .some(.local):
+            return nil
+        case .some(.ssh(let host)):
+            return host
+        case nil:
+            return RemoteHostRegistry.shared.host(forPath: absolutePath.path)
+        }
+    }
+
+    var usesRemoteHostRegistry: Bool {
+        executionLocation == nil
     }
 
     var cacheKey: String {
