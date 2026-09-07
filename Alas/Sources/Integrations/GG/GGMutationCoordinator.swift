@@ -342,6 +342,10 @@ final class GGMutationCoordinator {
                 clientOperationID: clientOperationID,
                 continuedOperationID: continuedOperationID
             )
+            await recordCompletedRecoveryOperation(
+                after: request,
+                continuedOperationID: continuedOperationID
+            )
             recordSummary(for: request, result: result)
             reconcilePausedState(after: request, error: nil)
             if request == .sync {
@@ -697,6 +701,17 @@ final class GGMutationCoordinator {
             worktreeId: worktreeId
         )
         undoCandidate = GGUndoCandidate(operation: newest)
+    }
+
+    private func recordCompletedRecoveryOperation(
+        after request: GGMutationRequest,
+        continuedOperationID: String?
+    ) async {
+        guard request == .continueOperation || request == .abortOperation,
+              let continuedOperationID,
+              let headSHA = try? await context.loadCurrentHead()
+        else { return }
+        actionState.setCompletedRecoveryOperation(.init(operationID: continuedOperationID, headSHA: headSHA))
     }
 
     private func clearUndoCandidate(forOperationID operationID: String) {

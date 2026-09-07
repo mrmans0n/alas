@@ -542,6 +542,7 @@ struct CommitPublishWorkflowTests {
                 headSHA = "paused-sha"
                 throw GGServiceError.pausedConflict(message: "Resolve conflicts and run gg continue.")
             },
+            currentGGRecoveryOperationID: { "op_paused" },
             refreshAfterCompletion: {}
         )
         let workflow = CommitPublishWorkflow(operations: operations) {
@@ -552,11 +553,12 @@ struct CommitPublishWorkflowTests {
 
         let retryCheckpoint = try #require(persistedCheckpoints.compactMap(\.self).last)
         #expect(retryCheckpoint.commitSHA == "paused-sha")
-        #expect(retryCheckpoint.allowsGGRecoveryHeadReconciliation)
+        #expect(retryCheckpoint.ggRecoveryOperationID == "op_paused")
         #expect(workflow.lastError as? GGServiceError == .pausedConflict(message: "Resolve conflicts and run gg continue."))
 
         headSHA = "recovered-sha"
         syncedTargets = []
+        var validatedRecovery: [String] = []
         var retryPersistedCheckpoints: [CommitPublishCheckpoint?] = []
         let retryOperations = CommitPublishOperations(
             createCommit: { _, _, _ in .init(commitSHA: "unused", comparisonBase: "main", editorTitle: "Unused") },
@@ -567,6 +569,9 @@ struct CommitPublishWorkflowTests {
             createReviewRequest: { target, _, _ in target.webURL },
             syncGG: { _ in Issue.record("Unexpected untargeted sync") },
             syncGGForTarget: { target, _ in syncedTargets.append(target) },
+            validateGGRecoveryHead: { operationID, headSHA in
+                validatedRecovery.append("\(operationID):\(headSHA)")
+            },
             refreshAfterCompletion: {}
         )
         let retryWorkflow = CommitPublishWorkflow(operations: retryOperations) {
@@ -576,12 +581,59 @@ struct CommitPublishWorkflowTests {
         await retryWorkflow.resume(retryCheckpoint)
 
         #expect(retryPersistedCheckpoints.compactMap(\.self).map(\.commitSHA) == ["paused-sha", "recovered-sha"])
-        #expect(retryPersistedCheckpoints.compactMap(\.self).last?.allowsGGRecoveryHeadReconciliation == false)
+        #expect(retryPersistedCheckpoints.compactMap(\.self).last?.ggRecoveryOperationID == nil)
+        #expect(validatedRecovery == ["op_paused:recovered-sha"])
         #expect(syncedTargets == [
             .init(branch: "feature", stackName: "feature", base: "main", expectedHeadSHA: "recovered-sha"),
         ])
         #expect(retryPersistedCheckpoints.last! == nil)
         #expect(retryWorkflow.lastError == nil)
+    }
+
+    @Test func ggRecoveryCheckpointRejectsUnrecordedHeadBeforeSync() async {
+        var persistedCheckpoints: [CommitPublishCheckpoint?] = []
+        var validatedRecovery: [String] = []
+        var syncedTargets: [GGStackTargetIdentity] = []
+        let checkpoint = CommitPublishCheckpoint(
+            commitSHA: "paused-sha",
+            baseRef: "origin/main",
+            commitTitle: "Subject",
+            subject: "Subject",
+            body: "Body",
+            destination: .gg(.init(
+                branch: "feature",
+                stackName: "feature",
+                base: "main",
+                expectedHeadSHA: "paused-sha"
+            )),
+            nextPhase: .sync,
+            ggRecoveryOperationID: "op_paused"
+        )
+        let operations = CommitPublishOperations(
+            createCommit: { _, _, _ in .init(commitSHA: "unused", comparisonBase: "main", editorTitle: "Unused") },
+            currentHeadSHA: { "manual-sha" },
+            remoteBranchContainsCommit: { _, _ in false },
+            push: { _, _ in },
+            currentReviewRequestExists: { _ in true },
+            createReviewRequest: { target, _, _ in target.webURL },
+            syncGG: { _ in Issue.record("Unexpected untargeted sync") },
+            syncGGForTarget: { target, _ in syncedTargets.append(target) },
+            validateGGRecoveryHead: { operationID, headSHA in
+                validatedRecovery.append("\(operationID):\(headSHA)")
+                throw GGMutationError.staleConfirmation
+            },
+            refreshAfterCompletion: {}
+        )
+        let workflow = CommitPublishWorkflow(operations: operations) {
+            persistedCheckpoints.append($0)
+        }
+
+        await workflow.resume(checkpoint)
+
+        #expect(persistedCheckpoints == [checkpoint])
+        #expect(validatedRecovery == ["op_paused:manual-sha"])
+        #expect(syncedTargets.isEmpty)
+        #expect(workflow.lastError as? GGMutationError == .staleConfirmation)
     }
 
     @Test func pushFailureRetainsPushCheckpoint() async {

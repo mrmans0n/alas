@@ -1233,6 +1233,7 @@ struct GGMutationCoordinatorTests {
             stacks: [stack(head: "a", operationID: "op_paused")],
             supportsClientOperationID: true
         )
+        harness.currentHeadSHA = "recovered"
         harness.service.newestOperation = completed
 
         try await harness.coordinator.apply(.continueOperation, confirmedAgainst: nil)
@@ -1241,6 +1242,7 @@ struct GGMutationCoordinatorTests {
         #expect(harness.service.operationListCallCount == 1)
         #expect(harness.markers.operationID(worktreeId: "wt") == completed.id)
         #expect(harness.coordinator.undoCandidate == GGUndoCandidate(operation: completed))
+        #expect(harness.actionState.completedRecoveryOperation == .init(operationID: "op_paused", headSHA: "recovered"))
     }
 
     @Test func continueRejectsANewerOperationThanThePausedOperation() async throws {
@@ -1287,6 +1289,7 @@ struct GGMutationCoordinatorTests {
             stacks: [stack(head: "a", operationID: "op_paused")],
             supportsClientOperationID: true
         )
+        harness.currentHeadSHA = "aborted"
         harness.service.newestOperation = GGOperationSummary(
             id: "op_paused", kind: "restack", status: .completed, createdAtMs: 2,
             args: ["--client-operation-id", "alas:original", "restack"],
@@ -1299,6 +1302,7 @@ struct GGMutationCoordinatorTests {
         #expect(harness.service.operationListCallCount == 0)
         #expect(harness.markers.operationID(worktreeId: "wt") == nil)
         #expect(harness.coordinator.undoCandidate == nil)
+        #expect(harness.actionState.completedRecoveryOperation == .init(operationID: "op_paused", headSHA: "aborted"))
     }
 
     @Test func relaunchRestoresOnlyMatchingPersistedLocalUndoableOperation() async {

@@ -241,7 +241,7 @@ struct CommitPublishModelsTests {
         #expect(try JSONDecoder().decode(CommitPublishCheckpoint.self, from: data) == checkpoint)
     }
 
-    @Test func checkpointDefaultsMissingGGRecoveryFlagToFalse() throws {
+    @Test func checkpointDefaultsMissingGGRecoveryOperationIDToNil() throws {
         let data = """
         {
           "baseRef": "main",
@@ -258,7 +258,7 @@ struct CommitPublishModelsTests {
 
         #expect(checkpoint.commitSHA == "def456")
         #expect(checkpoint.destination == .gg())
-        #expect(!checkpoint.allowsGGRecoveryHeadReconciliation)
+        #expect(checkpoint.ggRecoveryOperationID == nil)
     }
 
     @Test func everyPublishPhaseRoundTrips() throws {

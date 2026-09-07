@@ -1907,6 +1907,16 @@ final class RightPaneState: GGSplitCommitServicing {
         }
     }
 
+    func currentGGRecoveryOperationIDForCommitPublish() async throws -> String? {
+        try await ggService.currentStackSnapshot(worktreePath: worktree.path.path).operationID
+    }
+
+    func validateGGRecoveryHeadForCommitPublish(operationID: String, headSHA: String) throws {
+        guard ggActionState.completedRecoveryOperation == .init(operationID: operationID, headSHA: headSHA) else {
+            throw GGMutationError.staleConfirmation
+        }
+    }
+
     func syncGGForCommitPublish(
         target: GGStackTargetIdentity? = nil,
         markExecutionStarted: @escaping @MainActor () -> Void = {}

@@ -605,7 +605,7 @@ struct DraftCommitTabView: View {
         let reviewSnapshot = rps.reviewLoop.snapshot
         let ggMode = rps.ggContext.isActive
         let ggTarget: GGStackTargetIdentity?
-        if ggMode {
+        if publishCheckpoint == nil, ggMode {
             guard let target = rps.ggTargetForCommitPublish() else {
                 error = GGMutationError.staleConfirmation.localizedDescription
                 return
@@ -623,6 +623,8 @@ struct DraftCommitTabView: View {
         )
         operations.validateGGTarget = { try await rps.validateGGTargetForCommitPublish($0) }
         operations.syncGGForTarget = { try await rps.syncGGForCommitPublish(target: $0, markExecutionStarted: $1.markStarted) }
+        operations.currentGGRecoveryOperationID = { try await rps.currentGGRecoveryOperationIDForCommitPublish() }
+        operations.validateGGRecoveryHead = { try rps.validateGGRecoveryHeadForCommitPublish(operationID: $0, headSHA: $1) }
         appState.tabs.runCommitPublish(worktreeId: worktreeId, tabId: tabState.id,
             subject: subjectSnapshot, body: bodySnapshot, amend: amendSnapshot,
             operations: operations, prepareDestination: { [worktreePath] in

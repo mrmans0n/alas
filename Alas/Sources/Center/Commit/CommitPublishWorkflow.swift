@@ -120,6 +120,10 @@ struct CommitPublishOperations {
     var createReviewRequest: (_ target: CommitPublishReviewTarget, _ subject: String, _ body: String) async throws -> URL
     var syncGG: (_ execution: CommitPublishSyncExecutionMarker) async throws -> Void
     var syncGGForTarget: (_ target: GGStackTargetIdentity, _ execution: CommitPublishSyncExecutionMarker) async throws -> Void = { _, _ in }
+    var currentGGRecoveryOperationID: () async throws -> String? = { nil }
+    var validateGGRecoveryHead: (_ operationID: String, _ headSHA: String) async throws -> Void = { _, _ in
+        throw GGMutationError.staleConfirmation
+    }
     var refreshAfterCompletion: () async -> Void
 
     static func live(
@@ -384,7 +388,9 @@ final class CommitPublishWorkflow {
         try Task.checkCancellation()
         var checkpoint = initialCheckpoint
         if currentHeadSHA != checkpoint.commitSHA,
+           let recoveryOperationID = checkpoint.ggRecoveryOperationID,
            let recoveredCheckpoint = checkpoint.reconcilingGGRecoveryHead(currentHeadSHA) {
+            try await operations.validateGGRecoveryHead(recoveryOperationID, currentHeadSHA)
             checkpoint = recoveredCheckpoint
             try onCheckpointChange(checkpoint)
             try Task.checkCancellation()
@@ -450,9 +456,12 @@ final class CommitPublishWorkflow {
                     }
                 } catch {
                     if syncExecution.started {
+                        let recoveryOperationID = error.isGGPausedConflict
+                            ? try await operations.currentGGRecoveryOperationID()
+                            : nil
                         try await persistPostGGSyncHeadIfNeeded(
                             &checkpoint,
-                            allowRecoveryHeadReconciliation: error.isGGPausedConflict
+                            recoveryOperationID: recoveryOperationID
                         )
                     }
                     throw error
@@ -466,7 +475,7 @@ final class CommitPublishWorkflow {
 
     private func persistPostGGSyncHeadIfNeeded(
         _ checkpoint: inout CommitPublishCheckpoint,
-        allowRecoveryHeadReconciliation: Bool = false
+        recoveryOperationID: String? = nil
     ) async throws {
         let postSyncHeadSHA = try await operations.currentHeadSHA()
         try Task.checkCancellation()
@@ -474,8 +483,8 @@ final class CommitPublishWorkflow {
         if postSyncHeadSHA != checkpoint.commitSHA {
             updatedCheckpoint = checkpoint.resolvingGGCommitSHA(postSyncHeadSHA)
         }
-        if allowRecoveryHeadReconciliation {
-            updatedCheckpoint.allowsGGRecoveryHeadReconciliation = true
+        if let recoveryOperationID {
+            updatedCheckpoint.ggRecoveryOperationID = recoveryOperationID
         }
         guard updatedCheckpoint != checkpoint else { return }
         checkpoint = updatedCheckpoint
@@ -529,11 +538,11 @@ final class CommitPublishWorkflow {
 private extension CommitPublishCheckpoint {
     func reconcilingGGRecoveryHead(_ commitSHA: String) -> Self? {
         guard nextPhase == .sync,
-              allowsGGRecoveryHeadReconciliation,
+              ggRecoveryOperationID != nil,
               case .gg = destination
         else { return nil }
         var checkpoint = resolvingGGCommitSHA(commitSHA)
-        checkpoint.allowsGGRecoveryHeadReconciliation = false
+        checkpoint.ggRecoveryOperationID = nil
         return checkpoint
     }
 
