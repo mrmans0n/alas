@@ -210,7 +210,8 @@ private final class GGMutationHarness {
     var refreshes: [Refresh] = []
     var selectedPaths: [String] = []
     var worktreeExists = true
-    var currentBranch: String? = "feature"
+    var currentBranch = "feature"
+    var currentHeadSHA = "committed"
     var finishPendingStaging: () async -> Bool = { true }
     var onRefreshStack: (() async -> Void)?
     private(set) var coordinator: GGMutationCoordinator!
@@ -242,6 +243,8 @@ private final class GGMutationHarness {
                     defer { loadCount += 1 }
                     return stacks[min(loadCount, stacks.count - 1)]
                 },
+                loadCurrentBranch: { [unowned self] in currentBranch },
+                loadCurrentHead: { [unowned self] in currentHeadSHA },
                 refreshStack: { [unowned self] in
                     refreshes.append(.stack)
                     await onRefreshStack?()
@@ -675,6 +678,91 @@ struct GGMutationCoordinatorTests {
         #expect(harness.refreshes == [.gitChanges, .stack, .providerReviews, .inbox])
         #expect(harness.actionState.lastActionSummary == "Synced")
         #expect(harness.actionState.syncProgress.isEmpty)
+    }
+
+    @Test func syncExpectedTargetRejectsChangedBranchBeforeProcessLaunch() async throws {
+        let harness = GGMutationHarness(stacks: [stack(head: "committed")])
+        harness.currentBranch = "other-feature"
+        let target = GGStackTargetIdentity(
+            branch: "feature",
+            stackName: "feature",
+            base: "main",
+            expectedHeadSHA: "committed"
+        )
+        let operation = try #require(harness.coordinator.startApplying(
+            .sync,
+            confirmedAgainst: nil,
+            expectedTarget: target
+        ))
+
+        await #expect(throws: GGMutationError.staleConfirmation) {
+            try await operation.value
+        }
+
+        #expect(harness.service.requests.isEmpty)
+    }
+
+    @Test func syncExpectedTargetAllowsDetachedStackContext() async throws {
+        let harness = GGMutationHarness(stacks: [stack(head: "committed")])
+        harness.currentBranch = ""
+        let target = GGStackTargetIdentity(
+            branch: "",
+            stackName: "feature",
+            base: "main",
+            expectedHeadSHA: "committed"
+        )
+        let operation = try #require(harness.coordinator.startApplying(
+            .sync,
+            confirmedAgainst: nil,
+            expectedTarget: target
+        ))
+
+        try await operation.value
+
+        #expect(harness.service.requests == [.sync])
+    }
+
+    @Test func syncExpectedTargetRejectsChangedHeadBeforeProcessLaunch() async throws {
+        let harness = GGMutationHarness(stacks: [stack(head: "committed")])
+        harness.currentHeadSHA = "changed"
+        let target = GGStackTargetIdentity(
+            branch: "feature",
+            stackName: "feature",
+            base: "main",
+            expectedHeadSHA: "committed"
+        )
+        let operation = try #require(harness.coordinator.startApplying(
+            .sync,
+            confirmedAgainst: nil,
+            expectedTarget: target
+        ))
+
+        await #expect(throws: GGMutationError.staleConfirmation) {
+            try await operation.value
+        }
+
+        #expect(harness.service.requests.isEmpty)
+    }
+
+    @Test func syncExpectedTargetRejectsChangedStackHeadBeforeProcessLaunch() async throws {
+        let harness = GGMutationHarness(stacks: [stack(head: "changed")])
+        let target = GGStackTargetIdentity(
+            branch: "feature",
+            stackName: "feature",
+            base: "main",
+            expectedHeadSHA: "committed"
+        )
+        let operation = try #require(harness.coordinator.startApplying(
+            .sync,
+            confirmedAgainst: nil,
+            expectedTarget: target
+        ))
+
+        await #expect(throws: GGMutationError.staleConfirmation) {
+            try await operation.value
+        }
+
+        #expect(harness.service.requests.isEmpty)
     }
 
     @Test func terminalSyncSummaryKeepsRefreshProgressVisibleUntilRefreshCompletes() async throws {
@@ -1145,6 +1233,7 @@ struct GGMutationCoordinatorTests {
             stacks: [stack(head: "a", operationID: "op_paused")],
             supportsClientOperationID: true
         )
+        harness.currentHeadSHA = "recovered"
         harness.service.newestOperation = completed
 
         try await harness.coordinator.apply(.continueOperation, confirmedAgainst: nil)
@@ -1153,6 +1242,7 @@ struct GGMutationCoordinatorTests {
         #expect(harness.service.operationListCallCount == 1)
         #expect(harness.markers.operationID(worktreeId: "wt") == completed.id)
         #expect(harness.coordinator.undoCandidate == GGUndoCandidate(operation: completed))
+        #expect(harness.actionState.completedRecoveryOperation == .init(operationID: "op_paused", headSHA: "recovered"))
     }
 
     @Test func continueRejectsANewerOperationThanThePausedOperation() async throws {
@@ -1199,6 +1289,7 @@ struct GGMutationCoordinatorTests {
             stacks: [stack(head: "a", operationID: "op_paused")],
             supportsClientOperationID: true
         )
+        harness.currentHeadSHA = "aborted"
         harness.service.newestOperation = GGOperationSummary(
             id: "op_paused", kind: "restack", status: .completed, createdAtMs: 2,
             args: ["--client-operation-id", "alas:original", "restack"],
@@ -1211,6 +1302,7 @@ struct GGMutationCoordinatorTests {
         #expect(harness.service.operationListCallCount == 0)
         #expect(harness.markers.operationID(worktreeId: "wt") == nil)
         #expect(harness.coordinator.undoCandidate == nil)
+        #expect(harness.actionState.completedRecoveryOperation == .init(operationID: "op_paused", headSHA: "aborted"))
     }
 
     @Test func relaunchRestoresOnlyMatchingPersistedLocalUndoableOperation() async {

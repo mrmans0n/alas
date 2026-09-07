@@ -11,6 +11,8 @@ struct CommitMessageEditorView: View {
     let availableAgents: [AgentDefinition]
     let onGenerate: () -> Void
     let primaryAction: CommitPrimaryAction
+    var alternateAction: CommitPrimaryAction? = nil
+    var preferredActionPosition: CommitComposerActionPosition = .leading
     var iconName: String = "commit"
     var editorDisabled: Bool = false
     var onDismissError: () -> Void = {}
@@ -20,15 +22,15 @@ struct CommitMessageEditorView: View {
     @State private var focused: Field?
     private enum Field: Hashable { case subject, body }
 
-    private var canRunPrimary: Bool {
-        primaryAction.isEnabled && !busy
+    private func canRun(_ action: CommitPrimaryAction) -> Bool {
+        action.isEnabled && !busy
     }
 
-    private var displayedLabel: String {
-        if primaryAction.showSavedState, let saved = primaryAction.savedLabel {
+    private func displayedLabel(for action: CommitPrimaryAction) -> String {
+        if action.showSavedState, let saved = action.savedLabel {
             return saved
         }
-        return primaryAction.label
+        return action.label
     }
 
     var body: some View {
@@ -81,31 +83,71 @@ struct CommitMessageEditorView: View {
                 busy: busy,
                 onGenerate: onGenerate
             )
-            let effectiveShortcut = primaryAction.keyboardShortcut
-                ?? KeyboardShortcut(.return, modifiers: .command)
-            Button(action: primaryAction.handler) {
-                HStack(spacing: 8) {
-                    Text(displayedLabel)
-                        .font(.system(size: 12, weight: .semibold))
-                    HStack(spacing: 2) {
-                        ForEach(Array(kbdGlyphs(for: effectiveShortcut).enumerated()), id: \.offset) { _, g in
-                            kbdBadge(g)
-                        }
+            .disabled(editorDisabled)
+            actionButton(primaryAction, position: .leading)
+            if let alternateAction {
+                actionButton(alternateAction, position: .trailing)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func actionButton(
+        _ action: CommitPrimaryAction,
+        position: CommitComposerActionPosition
+    ) -> some View {
+        let shortcut = shortcut(for: position)
+        let isPreferred = alternateAction == nil || position == preferredActionPosition
+        let emphasis: CommitComposerActionEmphasis = isPreferred ? .preferred : .subtle
+        let enabled = canRun(action)
+        Button(action: action.handler) {
+            HStack(spacing: 8) {
+                Text(displayedLabel(for: action))
+                    .font(.system(size: 12, weight: .semibold))
+                HStack(spacing: 2) {
+                    ForEach(Array(kbdGlyphs(for: shortcut).enumerated()), id: \.offset) { _, glyph in
+                        kbdBadge(glyph, emphasis: emphasis)
                     }
                 }
-                .padding(.leading, 14).padding(.trailing, 12)
-                .frame(height: 28)
-                .foregroundColor(.white)
-                .background(canRunPrimary ? theme.color("accent") : theme.color("accent").opacity(0.4))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
             }
-            .buttonStyle(.plain)
-            .disabled(!canRunPrimary)
-            // Default to ⌘⏎ so existing-commit callers (which pass
-            // nil) keep their save shortcut. Draft callers pass their
-            // own value (which is also ⌘⏎ via shortcut settings).
-            .keyboardShortcut(effectiveShortcut)
+            .padding(.leading, 14)
+            .padding(.trailing, 12)
+            .frame(height: 28)
+            .foregroundColor(isPreferred ? .white : theme.color("fg"))
+            .background(buttonBackground(isPreferred: isPreferred, enabled: enabled))
+            .overlay {
+                if !isPreferred {
+                    RoundedRectangle(cornerRadius: 6)
+                        .strokeBorder(theme.color("line"), lineWidth: 0.5)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 6))
         }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .keyboardShortcut(shortcut)
+        .help(action.help ?? displayedLabel(for: action))
+        .accessibilityIdentifier(action.accessibilityIdentifier ?? "commit-composer-\(position == .leading ? "primary" : "alternate")")
+    }
+
+    private func buttonBackground(isPreferred: Bool, enabled: Bool) -> Color {
+        if isPreferred {
+            return enabled ? theme.color("accent") : theme.color("accent").opacity(0.4)
+        }
+        return enabled ? theme.color("field-bg") : theme.color("field-bg").opacity(0.6)
+    }
+
+    private func shortcut(for position: CommitComposerActionPosition) -> KeyboardShortcut {
+        let base = primaryAction.keyboardShortcut
+            .flatMap { ShortcutBinding(keyboardShortcut: $0) }
+            ?? ShortcutBinding(key: "return", modifiers: [.command])
+        let preferred = alternateAction == nil ? CommitComposerActionPosition.leading : preferredActionPosition
+        let binding = CommitComposerActionPair.shortcuts(preferred: preferred, base: base)
+            .shortcut(at: position)
+        if let shortcut = binding.asKeyboardShortcut() {
+            return shortcut
+        }
+        return KeyboardShortcut(.return, modifiers: .command)
     }
 
     private var subjectField: some View {
@@ -218,13 +260,22 @@ struct CommitMessageEditorView: View {
     }
 
     @ViewBuilder
-    private func kbdBadge(_ text: String) -> some View {
+    private func kbdBadge(_ text: String, emphasis: CommitComposerActionEmphasis) -> some View {
+        let style = emphasis.badgeStyle
         Text(text)
             .font(.system(size: 9.5, weight: .semibold))
             .frame(minWidth: 14, minHeight: 14)
             .padding(.horizontal, 3)
-            .background(Color.black.opacity(0.25))
-            .foregroundColor(.white.opacity(0.85))
+            .background(badgeColor(style.background).opacity(style.backgroundOpacity))
+            .foregroundColor(badgeColor(style.foreground).opacity(style.foregroundOpacity))
             .clipShape(RoundedRectangle(cornerRadius: 2))
+    }
+
+    private func badgeColor(_ color: CommitComposerActionBadgeColor) -> Color {
+        switch color {
+        case .systemWhite: return .white
+        case .systemBlack: return .black
+        case .theme(let token): return theme.color(token)
+        }
     }
 }

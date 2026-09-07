@@ -114,37 +114,7 @@ extension GitService {
     /// on the Amend checkbox. False when no upstream is configured (nothing
     /// to compare against) or on detached HEAD.
     func isHeadAtOrBehindUpstream(worktreePath: URL) async throws -> Bool {
-        // Same resolution shape as `commitsAhead`: read @{u} via rev-parse.
-        let up = try await Process.git(
-            ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
-            cwd: worktreePath
-        )
-        guard up.exitCode == 0 else { return false }
-        let upstream = up.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !upstream.isEmpty, upstream != "@{u}" else { return false }
-
-        // rev-list --count HEAD..@{u} = how many commits we'd need to PULL.
-        let ahead = try await Process.git(
-            ["rev-list", "--count", "HEAD..@{u}"],
-            cwd: worktreePath
-        )
-        guard ahead.exitCode == 0 else { return false }
-        let count = Int(ahead.stdout.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
-        // count > 0 → upstream is ahead of us (we're behind).
-        // count == 0 → at upstream OR diverged. We treat both as "publish risk".
-        // A separate check for HEAD..@{u}.count == 0 AND @{u}..HEAD.count == 0
-        // would distinguish "equal" from "diverged"; equal is the common case
-        // and either way the warning is appropriate.
-        if count > 0 { return true }
-
-        let behindUs = try await Process.git(
-            ["rev-list", "--count", "@{u}..HEAD"],
-            cwd: worktreePath
-        )
-        guard behindUs.exitCode == 0 else { return false }
-        let ours = Int(behindUs.stdout.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
-        // We are ahead → no warning. Otherwise (equal) → warn.
-        return ours == 0
+        try await headPublicationState(worktreePath: worktreePath) == .published
     }
 
     static func assertSuccess(_ result: ProcessResult, op: String) throws {

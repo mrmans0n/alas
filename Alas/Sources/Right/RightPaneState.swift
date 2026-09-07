@@ -465,6 +465,14 @@ final class RightPaneState: GGSplitCommitServicing {
                         worktreePath: self.worktree.path.path
                     )
                 },
+                loadCurrentBranch: { [weak self] in
+                    guard let self else { throw GGServiceError.commandFailed(stderr: "Worktree is no longer available.") }
+                    return try await self.git.currentBranch(worktreePath: self.worktree.path)
+                },
+                loadCurrentHead: { [weak self] in
+                    guard let self else { throw GGServiceError.commandFailed(stderr: "Worktree is no longer available.") }
+                    return try await self.git.revParseHEAD(worktreePath: self.worktree.path)
+                },
                 refreshStack: { [weak self] in
                     guard let self else { return }
                     await self.reevaluateGGGate().value
@@ -1080,11 +1088,14 @@ final class RightPaneState: GGSplitCommitServicing {
         let previousSummary = GGStackSummaryStore.shared.summaries[worktree.path.path]
         let keepsPreviousPresentation = previousKey == key
             && previousLoadState == .loaded
+        var publishedKey: String?
         defer {
+            let retainedKey = publishedKey ?? key
             if Task.isCancelled,
                snapshotGeneration == snapshotInvalidationGeneration,
                refreshGeneration == ggStackRefreshGeneration,
-               !((ggStackLoadState == .loaded || ggStackLoadState == .empty) && ggStackCommitsKey == key) {
+               !((ggStackLoadState == .loaded || ggStackLoadState == .empty)
+                 && ggStackCommitsKey == retainedKey && retainedKey == currentGGStackCommitsKey) {
                 let canRestorePreviousSnapshot = previousKey == key
                     && key == currentGGStackCommitsKey
                     && (previousLoadState == .loaded || previousLoadState == .empty)
@@ -1162,7 +1173,7 @@ final class RightPaneState: GGSplitCommitServicing {
             if deferralGeneration == ggStackRefreshDeferralGeneration {
                 ggStackRefreshDeferredUntilSyncEnds = false
             }
-            ggStackCommitsKey = key
+            ggStackCommitsKey = currentGGStackCommitsKey
             if ggStack != stack { ggStack = stack }
             ggStackDisplayCommits = displayCommits
             let stackIsEmpty = stack.map { $0.totalCommits == 0 || $0.entries.isEmpty } ?? true
@@ -1175,6 +1186,7 @@ final class RightPaneState: GGSplitCommitServicing {
                 GGStackSummaryStore.shared.summaries[worktree.path.path] = summary
             }
             ggStackRemoteMetadataCache = nil
+            publishedKey = ggStackCommitsKey
             await reconcileGGUndoCandidateIfNeeded()
             guard usesLocalSnapshot else { return }
 
@@ -1849,6 +1861,84 @@ final class RightPaneState: GGSplitCommitServicing {
             request,
             confirmedAgainst: identity
         ) else { return nil }
+        let completion = completeGGMutation(operation, request: request)
+        return Task { _ = try? await completion.value }
+    }
+
+    @discardableResult
+    func runGGMutation(_ prepared: GGPreparedMutation) -> Task<Void, Never>? {
+        guard let operation = ggMutationCoordinator.startApplying(prepared) else { return nil }
+        let completion = completeGGMutation(operation, request: prepared.request)
+        return Task { _ = try? await completion.value }
+    }
+
+    func ggTargetForCommitPublish() -> GGStackTargetIdentity? {
+        guard let stack = ggStack, !currentHeadSHA.isEmpty else { return nil }
+        return .init(
+            branch: currentBranch,
+            stackName: stack.name,
+            base: stack.base,
+            expectedHeadSHA: currentHeadSHA
+        )
+    }
+
+    private func readCurrentGGTargetForCommitPublish() async throws -> GGStackTargetIdentity {
+        let branch = try await git.currentBranch(worktreePath: worktree.path)
+        let headSHA = try await git.revParseHEAD(worktreePath: worktree.path)
+        let snapshot = try await ggService.currentStackSnapshot(worktreePath: worktree.path.path)
+        guard let identity = snapshot.identity else { throw GGMutationError.staleConfirmation }
+        return .init(
+            branch: branch,
+            stackName: identity.stackName,
+            base: identity.base,
+            expectedHeadSHA: headSHA
+        )
+    }
+
+    func validateGGTargetForCommitPublish(_ target: GGStackTargetIdentity) async throws {
+        let current = try await readCurrentGGTargetForCommitPublish()
+        guard target.matches(
+            branch: current.branch,
+            stackName: current.stackName,
+            base: current.base,
+            headSHA: current.expectedHeadSHA
+        ) else {
+            throw GGMutationError.staleConfirmation
+        }
+    }
+
+    func currentGGRecoveryOperationIDForCommitPublish() async throws -> String? {
+        try await ggService.currentStackSnapshot(worktreePath: worktree.path.path).operationID
+    }
+
+    func validateGGRecoveryHeadForCommitPublish(operationID: String, headSHA: String) throws {
+        guard ggActionState.completedRecoveryOperation == .init(operationID: operationID, headSHA: headSHA) else {
+            throw GGMutationError.staleConfirmation
+        }
+    }
+
+    func syncGGForCommitPublish(
+        target: GGStackTargetIdentity? = nil,
+        markExecutionStarted: @escaping @MainActor () -> Void = {}
+    ) async throws {
+        guard let operation = ggMutationCoordinator.startApplying(
+            .sync,
+            confirmedAgainst: nil,
+            expectedTarget: target,
+            onExecutionStarted: markExecutionStarted
+        ) else {
+            throw GGMutationError.operationInFlight
+        }
+        try await completeGGMutation(operation, request: .sync).value
+        if ggActionState.syncHasTerminalFailure {
+            throw GGMutationError.syncTerminalFailure(message: ggActionState.lastError ?? "GG sync failed.")
+        }
+    }
+
+    private func completeGGMutation(
+        _ operation: Task<Void, Error>,
+        request: GGMutationRequest
+    ) -> Task<Void, Error> {
         if request == .sync { supersedeGGStackRefreshForSync() }
         let actionGeneration = ggActionState.actionGeneration
         return Task { @MainActor in
@@ -1861,25 +1951,7 @@ final class RightPaneState: GGSplitCommitServicing {
                     for: request.actionKind,
                     actionGeneration: actionGeneration
                 )
-            }
-        }
-    }
-
-    @discardableResult
-    func runGGMutation(_ prepared: GGPreparedMutation) -> Task<Void, Never>? {
-        guard let operation = ggMutationCoordinator.startApplying(prepared) else { return nil }
-        if prepared.request == .sync { supersedeGGStackRefreshForSync() }
-        let actionGeneration = ggActionState.actionGeneration
-        return Task { @MainActor in
-            defer { scheduleDeferredGGStackRefreshIfNeeded() }
-            do {
-                try await operation.value
-            } catch {
-                publishGGMutationPresentationError(
-                    error,
-                    for: prepared.request.actionKind,
-                    actionGeneration: actionGeneration
-                )
+                throw error
             }
         }
     }

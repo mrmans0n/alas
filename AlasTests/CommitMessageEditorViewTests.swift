@@ -133,7 +133,10 @@ struct CommitMessageEditorViewTests {
         await drain(controller.view)
         #expect(model.subject == "`subject`")
 
-        let body = try #require(firstSubview(of: PairedDelimiterTextView.self, in: controller.view))
+        let body = try #require(firstSubview(of: PairedDelimiterTextView.self, in: controller.view) {
+            !$0.isFieldEditor
+        })
+        #expect(body.string == "body")
         body.setSelectedRange(NSRange(location: 0, length: 4))
         body.performKeyboardTextInsertion {
             body.insertText("`", replacementRange: NSRange(location: NSNotFound, length: 0))
@@ -199,10 +202,10 @@ struct CommitMessageEditorViewTests {
         view.layoutSubtreeIfNeeded()
     }
 
-    private func firstSubview<T: NSView>(of type: T.Type, in view: NSView) -> T? {
-        if let match = view as? T { return match }
+    private func firstSubview<T: NSView>(of type: T.Type, in view: NSView, matching predicate: (T) -> Bool = { _ in true }) -> T? {
+        if let match = view as? T, predicate(match) { return match }
         for subview in view.subviews {
-            if let match = firstSubview(of: type, in: subview) { return match }
+            if let match = firstSubview(of: type, in: subview, matching: predicate) { return match }
         }
         return nil
     }

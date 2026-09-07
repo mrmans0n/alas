@@ -64,6 +64,8 @@ final class TabsManager {
     /// Session-only split drafts survive view recreation when the user switches
     /// tabs, but are deliberately not persisted as part of the tab identity.
     private var ggSplitCommitDrafts: [TabID: GGSplitCommitDraft] = [:]
+    private var commitPublishSessions: [TabID: CommitPublishSession] = [:]
+    @ObservationIgnored var onCommitPublishCompletion: ((String, TabID) -> Void)?
     /// Tracks which tab IDs have already had `openExternalDocument` fired so
     /// that cache-hit calls to `externalBuffer` don't double-count the ref.
     private var openedExternalDocs: Set<TabID> = []
@@ -967,29 +969,42 @@ final class TabsManager {
     }
 
     @discardableResult
-    func openOrFocusDraftCommit(worktreeId: String, resetAmend: Bool = false) -> Tab {
+    func openOrFocusDraftCommit(
+        worktreeId: String,
+        resetAmend: Bool = false,
+        preferredAction: DraftCommitPreferredAction? = nil
+    ) -> Tab {
         let baseState = DraftCommitTabState(worktreeId: worktreeId)
         if var file = byWorktree[worktreeId],
            let idx = file.tabs.firstIndex(where: { $0.id == baseState.id }),
            case .draftCommit(var existing) = file.tabs[idx] {
             if resetAmend {
                 existing.prepareForNewCommit()
-                file.tabs[idx] = .draftCommit(existing)
             }
-            file.activeTabId = existing.id
+            if let preferredAction {
+                existing.preferredAction = preferredAction
+            }
+            let tab = Tab.draftCommit(existing)
+            file.tabs[idx] = tab
+            file.activeTabId = tab.id
             byWorktree[worktreeId] = file
             persist(worktreeId)
-            return file.tabs[idx]
+            return tab
         }
         // No live tab — restore from the stash if present, otherwise start fresh.
         var state = byWorktree[worktreeId]?.stashedDraft ?? baseState
         if resetAmend {
             state.prepareForNewCommit()
-            if var file = byWorktree[worktreeId], file.stashedDraft != nil {
-                file.stashedDraft = state
-                byWorktree[worktreeId] = file
-                persist(worktreeId)
-            }
+        }
+        if let preferredAction {
+            state.preferredAction = preferredAction
+        }
+        if var file = byWorktree[worktreeId],
+           file.stashedDraft != nil,
+           resetAmend || preferredAction != nil {
+            file.stashedDraft = state
+            byWorktree[worktreeId] = file
+            persist(worktreeId)
         }
         let tab = Tab.draftCommit(state)
         append(tab, to: worktreeId)
@@ -1012,6 +1027,72 @@ final class TabsManager {
         byWorktree[worktreeId] = file
         persist(worktreeId)
         return tab
+    }
+
+    func commitPublishSession(tabId: TabID) -> CommitPublishSession? {
+        commitPublishSessions[tabId]
+    }
+
+    @discardableResult
+    func runCommitPublish(
+        worktreeId: String,
+        tabId: TabID,
+        subject: String,
+        body: String,
+        amend: Bool,
+        operations: CommitPublishOperations,
+        prepareDestination: @escaping () async throws -> CommitPublishDestination
+    ) -> Task<Void, Never>? {
+        guard case .draftCommit(let draft) = tabs(forWorktree: worktreeId).first(where: { $0.id == tabId }) else {
+            return nil
+        }
+        let session: CommitPublishSession
+        if let existing = commitPublishSessions[tabId] {
+            session = existing
+        } else {
+            session = CommitPublishSession(checkpoint: draft.publishCheckpoint, onCheckpointChange: { [weak self] checkpoint in
+                guard let self else { return }
+                try persistCommitPublishCheckpoint(checkpoint, worktreeId: worktreeId, tabId: tabId)
+            }, onCompletion: { [weak self] checkpoint in
+                guard let self else { return }
+                try completeCommitPublish(worktreeId: worktreeId, tabId: tabId, checkpoint: checkpoint)
+                onCommitPublishCompletion?(worktreeId, tabId)
+            })
+            commitPublishSessions[tabId] = session
+        }
+        return session.run(subject: subject, body: body, amend: amend,
+            operations: operations, prepareDestination: prepareDestination)
+    }
+
+    @discardableResult
+    func abandonCommitPublishCheckpoint(worktreeId: String, tabId: TabID) -> Bool {
+        guard commitPublishSessions[tabId]?.isRunning != true else { return false }
+        do {
+            try persistCommitPublishCheckpoint(nil, worktreeId: worktreeId, tabId: tabId)
+            _ = commitPublishSessions[tabId]?.abandonCheckpoint()
+            commitPublishSessions[tabId] = nil
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    @discardableResult
+    private func persistCommitPublishCheckpoint(_ checkpoint: CommitPublishCheckpoint?, worktreeId: String, tabId: TabID) throws -> Bool {
+        guard var file = byWorktree[worktreeId] else { return false }
+        if let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
+           case .draftCommit(var state) = file.tabs[idx] {
+            state.publishCheckpoint = checkpoint
+            file.tabs[idx] = .draftCommit(state)
+            try persistThrowing(file, worktreeId: worktreeId)
+            byWorktree[worktreeId] = file
+            return true
+        }
+        guard file.stashedDraft?.id == tabId else { return false }
+        file.stashedDraft?.publishCheckpoint = checkpoint
+        try persistThrowing(file, worktreeId: worktreeId)
+        byWorktree[worktreeId] = file
+        return true
     }
 
     @discardableResult
@@ -1055,6 +1136,8 @@ final class TabsManager {
     /// Used when the user explicitly discards the draft (via tab context
     /// menu) or after a successful commit consumes the draft.
     func discardStashedDraft(worktreeId: String) {
+        let tabId = DraftCommitTabState(worktreeId: worktreeId).id
+        if commitPublishSessions[tabId]?.isRunning == false { commitPublishSessions[tabId] = nil }
         guard var file = byWorktree[worktreeId], file.stashedDraft != nil else { return }
         file.stashedDraft = nil
         byWorktree[worktreeId] = file
@@ -1070,9 +1153,68 @@ final class TabsManager {
         title: String
     ) -> Tab? {
         guard var file = byWorktree[worktreeId],
-              let idx = file.tabs.firstIndex(where: { $0.id == draftTabId }),
+              let tab = replaceDraftWithCommitEditor(
+                  in: &file,
+                  worktreeId: worktreeId,
+                  draftTabId: draftTabId,
+                  baseRef: baseRef,
+                  newSha: newSha,
+                  title: title
+              )
+        else { return nil }
+        do {
+            try persistThrowing(file, worktreeId: worktreeId)
+            byWorktree[worktreeId] = file
+            return tab
+        } catch {
+            return nil
+        }
+    }
+
+    @discardableResult
+    private func completeCommitPublish(worktreeId: String, tabId: TabID, checkpoint: CommitPublishCheckpoint) throws -> Tab? {
+        guard var file = byWorktree[worktreeId] else { return nil }
+        if let tab = replaceDraftWithCommitEditor(
+            in: &file,
+            worktreeId: worktreeId,
+            draftTabId: tabId,
+            baseRef: checkpoint.baseRef,
+            newSha: checkpoint.commitSHA,
+            title: checkpoint.commitTitle
+        ) {
+            try persistThrowing(file, worktreeId: worktreeId)
+            byWorktree[worktreeId] = file
+            return tab
+        }
+        guard file.stashedDraft != nil else { return nil }
+        file.stashedDraft = nil
+        try persistThrowing(file, worktreeId: worktreeId)
+        byWorktree[worktreeId] = file
+        return nil
+    }
+
+    private func replaceDraftWithCommitEditor(
+        in file: inout TabsFile,
+        worktreeId: String,
+        draftTabId: TabID,
+        baseRef: String,
+        newSha: String,
+        title: String
+    ) -> Tab? {
+        guard let idx = file.tabs.firstIndex(where: { $0.id == draftTabId }),
               case .draftCommit = file.tabs[idx]
         else { return nil }
+        for existingIdx in file.tabs.indices {
+            guard case .commitEditor(var existing) = file.tabs[existingIdx],
+                  existing.currentSha == newSha else { continue }
+            existing.title = title
+            let tab = Tab.commitEditor(existing)
+            file.tabs[existingIdx] = tab
+            file.tabs.remove(at: idx)
+            file.activeTabId = tab.id
+            file.stashedDraft = nil
+            return tab
+        }
         let editor = CommitEditorTabState(
             worktreeId: worktreeId,
             baseRef: baseRef,
@@ -1086,8 +1228,6 @@ final class TabsManager {
             file.activeTabId = tab.id
         }
         file.stashedDraft = nil
-        byWorktree[worktreeId] = file
-        persist(worktreeId)
         return tab
     }
 
@@ -1304,16 +1444,17 @@ final class TabsManager {
     }
 
     /// Capture a draft commit tab's state into `file.stashedDraft` before
-    /// removal. Non-empty drafts stash so they survive close/reopen. Empty
-    /// drafts CLEAR the stash so a user who opens an old stashed draft,
-    /// wipes the text, and closes the tab actually gets rid of it.
+    /// removal. Non-empty drafts and recovery checkpoints stash so they survive
+    /// close/reopen. Empty drafts without recovery state CLEAR the stash so a
+    /// user who opens an old stashed draft, wipes the text, and closes the tab
+    /// actually gets rid of it.
     /// Silently does nothing if `removingTabId` is not a draftCommit tab.
     private func captureDraftIfNeeded(_ file: inout TabsFile, removingTabId: TabID) {
         guard let tab = file.tabs.first(where: { $0.id == removingTabId }),
               case .draftCommit(let state) = tab else { return }
         let hasSubject = !state.subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let hasBody = !state.bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        file.stashedDraft = (hasSubject || hasBody) ? state : nil
+        file.stashedDraft = (hasSubject || hasBody || state.publishCheckpoint != nil) ? state : nil
     }
 
     func close(worktreeId: String, tabId: TabID) {
@@ -1430,8 +1571,16 @@ final class TabsManager {
     }
 
     private func persist(_ worktreeId: String) {
+        try? persistThrowing(worktreeId)
+    }
+
+    private func persistThrowing(_ worktreeId: String) throws {
         guard let file = byWorktree[worktreeId] else { return }
-        try? store.write(file, to: tabsFile(forWorktreeId: worktreeId))
+        try persistThrowing(file, worktreeId: worktreeId)
+    }
+
+    private func persistThrowing(_ file: TabsFile, worktreeId: String) throws {
+        try store.write(file, to: tabsFile(forWorktreeId: worktreeId))
     }
 
     private func tabsFile(forWorktreeId worktreeId: String) -> URL {
