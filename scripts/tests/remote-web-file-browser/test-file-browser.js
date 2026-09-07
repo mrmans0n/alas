@@ -76,4 +76,32 @@ function file(name, path, badge) {
   );
 }
 
+{
+  // Regression: an expanded directory deleted or renamed by the agent must
+  // be forgotten (not just left in `expanded` forever) once a fresh
+  // listing of its PARENT reveals it's gone — otherwise a refresh keeps
+  // re-requesting a path that no longer exists, failing every time.
+  const tree = browser.createTree();
+  tree.applyNodes(null, [dir("a", "a"), dir("b", "b")]);
+  tree.toggle("a");
+  tree.applyNodes("a", [file("x.txt", "a/x.txt")]);
+  tree.toggle("b");
+  tree.applyNodes("b", [dir("c", "b/c")]);
+  tree.toggle("b/c");
+  tree.applyNodes("b/c", [file("y.txt", "b/c/y.txt")]);
+  assert.deepEqual(tree.expandedPaths().sort(), ["a", "b", "b/c"]);
+
+  // Root refresh: "a" is gone (deleted/renamed), "b" remains.
+  tree.applyNodes(null, [dir("b", "b")]);
+  assert.deepEqual(tree.expandedPaths().sort(), ["b", "b/c"]);
+  assert.equal(tree.isExpanded("a"), false);
+  assert.equal(tree.needsChildren("a"), true);   // forgotten, not just collapsed
+
+  // "b" refresh: "b/c" is gone too — forgetting it recurses into anything
+  // cached under it as well.
+  tree.applyNodes("b", []);
+  assert.deepEqual(tree.expandedPaths(), ["b"]);
+  assert.equal(tree.needsChildren("b/c"), true);
+}
+
 console.log("remote-web-file-browser: ok");

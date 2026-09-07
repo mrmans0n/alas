@@ -16,7 +16,35 @@ function createTree() {
   }
 
   function applyNodes(path, nodes) {
-    childrenByPath.set(key(path), (nodes || []).slice().sort(nodeOrder));
+    const id = key(path);
+    const sorted = (nodes || []).slice().sort(nodeOrder);
+    const previous = childrenByPath.get(id);
+    childrenByPath.set(id, sorted);
+    // A directory the agent deleted or renamed since the last listing no
+    // longer appears here — forget it (and anything cached under it)
+    // rather than leaving it in `expanded`/`childrenByPath` forever: a
+    // refresh (`expandedPaths()`) would otherwise keep re-requesting a
+    // path that no longer exists, failing every single time.
+    if (previous) {
+      const stillPresent = new Set(sorted.map(node => node.path));
+      for (const child of previous) {
+        if (child.kind === "dir" && !stillPresent.has(child.path)) {
+          forgetSubtree(child.path);
+        }
+      }
+    }
+  }
+
+  function forgetSubtree(path) {
+    const id = key(path);
+    expanded.delete(id);
+    const children = childrenByPath.get(id);
+    childrenByPath.delete(id);
+    if (children) {
+      for (const child of children) {
+        if (child.kind === "dir") forgetSubtree(child.path);
+      }
+    }
   }
 
   function isExpanded(path) {

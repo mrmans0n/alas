@@ -52,7 +52,7 @@ struct RemoteWebAssetTests {
         #expect(html.range(of: #"/session-ordering.js?v=1"#)!.lowerBound < html.range(of: #"/app.js?v=70"#)!.lowerBound)
         #expect(html.contains(#"/app.js?v=70"#))
         #expect(html.contains(#"/style.css?v=42"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v48";"#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v49";"#))
         #expect(sw.contains(#""/session-ordering.js?v=1""#))
         #expect(sw.contains(#""/app.js?v=70""#))
         #expect(sw.contains(#""/style.css?v=42""#))
@@ -70,7 +70,7 @@ struct RemoteWebAssetTests {
         #expect(!app.contains(#"const button = el("button", "tool-toggle")"#))
         #expect(html.contains(#"/app.js?v=70"#))
         #expect(html.contains(#"/style.css?v=42"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v48";"#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v49";"#))
         #expect(sw.contains(#""/app.js?v=70""#))
         #expect(sw.contains(#""/style.css?v=42""#))
     }
@@ -334,7 +334,7 @@ struct RemoteWebAssetTests {
     @Test func incrementalTranscriptBustsServiceWorkerAssetCache() throws {
         let sw = try asset("sw.js")
         let html = try asset("index.html")
-        #expect(sw.contains("alas-remote-shell-v48"))
+        #expect(sw.contains("alas-remote-shell-v49"))
         #expect(sw.contains("/app.js?v=70"))
         #expect(html.contains("app.js?v=70"))
     }
@@ -501,7 +501,7 @@ struct RemoteWebAssetTests {
 
         #expect(html.contains(#"/app.js?v=70"#))
         #expect(html.contains(#"/style.css?v=42"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v48";"#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v49";"#))
         #expect(sw.contains(#""/app.js?v=70""#))
         #expect(sw.contains(#""/style.css?v=42""#))
     }
@@ -534,13 +534,13 @@ struct RemoteWebAssetTests {
         #expect(html.contains(#"id="file-view-body""#))
 
         #expect(html.contains(#"/changes-view.js?v=2"#))
-        #expect(html.contains(#"/file-browser.js?v=2"#))
+        #expect(html.contains(#"/file-browser.js?v=3"#))
         #expect(html.range(of: #"/changes-view.js?v=2"#)!.lowerBound
             < html.range(of: #"/app.js?v=70"#)!.lowerBound)
-        #expect(html.range(of: #"/file-browser.js?v=2"#)!.lowerBound
+        #expect(html.range(of: #"/file-browser.js?v=3"#)!.lowerBound
             < html.range(of: #"/app.js?v=70"#)!.lowerBound)
         #expect(sw.contains(#""/changes-view.js?v=2""#))
-        #expect(sw.contains(#""/file-browser.js?v=2""#))
+        #expect(sw.contains(#""/file-browser.js?v=3""#))
     }
 
     @Test func remoteWebWiresTabSwitching() throws {

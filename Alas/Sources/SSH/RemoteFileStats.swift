@@ -49,20 +49,37 @@ enum RemoteFileStats {
         // `-` (e.g. `-c`, `-L`) from being parsed as an OPTION instead of
         // a filename argument, which would silently drop that file from
         // the output (and so silently report 0 for its line count).
+        //
+        // Records are NUL-terminated, not newline-terminated: an untracked
+        // filename containing an embedded newline byte is emitted VERBATIM
+        // here (this is the raw path, not a git-escaped rendering of it),
+        // and a newline-delimited record would fragment that one file's
+        // "<count> <path>" line into two, losing the path→count
+        // association entirely (silently reporting `0` for that file
+        // instead). NUL can't appear in a POSIX path, so it's a safe
+        // separator regardless of what bytes the path itself contains.
         return paths.map { path in
             let quoted = SSHCommand.shellQuote(path)
             return "n=$(wc -l < \(quoted)); " +
                 "if [ -s \(quoted) ] && [ \"$(tail -c1 -- \(quoted) | wc -l)\" -eq 0 ]; then n=$((n + 1)); fi; " +
-                "printf '%s %s\\n' \"$n\" \(quoted)"
+                "printf '%s %s\\0' \"$n\" \(quoted)"
         }.joined(separator: "; ")
     }
 
     static func parseWcOutput(_ output: String, requested: [String]) -> [String: Int] {
         let requested = Set(requested)
-        return output.split(separator: "\n").reduce(into: [:]) { counts, line in
-            let line = line.trimmingCharacters(in: .whitespaces)
-            guard let separator = line.firstIndex(of: " "), let count = Int(line[..<separator]) else { return }
-            let path = String(line[line.index(after: separator)...])
+        return output.split(separator: "\u{0}", omittingEmptySubsequences: true).reduce(into: [:]) { counts, rawRecord in
+            // Drop LEADING whitespace only — `wc -l`'s own count is
+            // right-justified with padding spaces (`n=$(wc -l < file)`
+            // captures those verbatim; command substitution only strips
+            // TRAILING newlines). The path segment must stay untouched:
+            // trimming it too would corrupt a legitimate filename that
+            // itself starts or ends with whitespace.
+            let record = rawRecord.drop { $0 == " " }
+            guard let separator = record.firstIndex(of: " "),
+                  let count = Int(record[record.startIndex..<separator])
+            else { return }
+            let path = String(record[record.index(after: separator)...])
             if requested.contains(path) { counts[path] = count }
         }
     }

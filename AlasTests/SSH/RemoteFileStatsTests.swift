@@ -19,8 +19,8 @@ struct RemoteFileStatsTests {
         #expect(RemoteFileStats.wcCommand(paths: []) == nil)
         let command = RemoteFileStats.wcCommand(paths: ["a.txt", "dir/o'brien.txt"])
         #expect(command == [
-            "n=$(wc -l < 'a.txt'); if [ -s 'a.txt' ] && [ \"$(tail -c1 -- 'a.txt' | wc -l)\" -eq 0 ]; then n=$((n + 1)); fi; printf '%s %s\\n' \"$n\" 'a.txt'",
-            "n=$(wc -l < 'dir/o'\\''brien.txt'); if [ -s 'dir/o'\\''brien.txt' ] && [ \"$(tail -c1 -- 'dir/o'\\''brien.txt' | wc -l)\" -eq 0 ]; then n=$((n + 1)); fi; printf '%s %s\\n' \"$n\" 'dir/o'\\''brien.txt'",
+            "n=$(wc -l < 'a.txt'); if [ -s 'a.txt' ] && [ \"$(tail -c1 -- 'a.txt' | wc -l)\" -eq 0 ]; then n=$((n + 1)); fi; printf '%s %s\\0' \"$n\" 'a.txt'",
+            "n=$(wc -l < 'dir/o'\\''brien.txt'); if [ -s 'dir/o'\\''brien.txt' ] && [ \"$(tail -c1 -- 'dir/o'\\''brien.txt' | wc -l)\" -eq 0 ]; then n=$((n + 1)); fi; printf '%s %s\\0' \"$n\" 'dir/o'\\''brien.txt'",
         ].joined(separator: "; "))
     }
 
@@ -29,11 +29,20 @@ struct RemoteFileStatsTests {
     /// its trailing-newline check.
     @Test func wcCommandSeparatesOptionsFromFilenamesStartingWithADash() {
         let command = RemoteFileStats.wcCommand(paths: ["-c"])
-        #expect(command == "n=$(wc -l < '-c'); if [ -s '-c' ] && [ \"$(tail -c1 -- '-c' | wc -l)\" -eq 0 ]; then n=$((n + 1)); fi; printf '%s %s\\n' \"$n\" '-c'")
+        #expect(command == "n=$(wc -l < '-c'); if [ -s '-c' ] && [ \"$(tail -c1 -- '-c' | wc -l)\" -eq 0 ]; then n=$((n + 1)); fi; printf '%s %s\\0' \"$n\" '-c'")
     }
 
     @Test func parsesWcOutput() {
-        #expect(RemoteFileStats.parseWcOutput("      12 a.txt\n       0 b.txt\n      12 total", requested: ["a.txt", "b.txt"]) == ["a.txt": 12, "b.txt": 0])
+        #expect(RemoteFileStats.parseWcOutput("      12 a.txt\u{0}       0 b.txt\u{0}", requested: ["a.txt", "b.txt"]) == ["a.txt": 12, "b.txt": 0])
+    }
+
+    /// A newline in the path used to fragment a `\n`-delimited record into
+    /// two, losing the path→count association (and so silently reporting
+    /// `0`). NUL-delimiting fixes this since NUL can't appear in a POSIX
+    /// path.
+    @Test func parsesWcOutputPreservesANewlineContainingPath() {
+        let path = "weird\nname.txt"
+        #expect(RemoteFileStats.parseWcOutput("3 \(path)\u{0}", requested: [path]) == [path: 3])
     }
 
     /// End-to-end regression for the trailing-newline undercount: runs the
@@ -77,6 +86,34 @@ struct RemoteFileStatsTests {
             #expect(counts[testCase.name] == testCase.expected, "\(testCase.name)")
         }
     }
+
+    /// End-to-end regression for the newline-fragmentation bug: runs the
+    /// generated script through `/bin/sh` against a real file whose name
+    /// contains an embedded newline byte, mirroring what the SSH exec
+    /// fallback actually executes remotely.
+    @Test func wcCommandCorrectlyCountsAFileWithANewlineInItsName() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let name = "weird\nname.txt"
+        try "a\nb\n".write(to: directory.appendingPathComponent(name), atomically: true, encoding: .utf8)
+
+        let command = try #require(RemoteFileStats.wcCommand(paths: [name]))
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", command]
+        process.currentDirectoryURL = directory
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        try process.run()
+        process.waitUntilExit()
+        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+
+        let counts = RemoteFileStats.parseWcOutput(output, requested: [name])
+        #expect(counts[name] == 2)
+    }
+
     @Test func helperLineCountsMergeDuplicatePaths() {
         let entries = [
             RemoteHelperFSLineCountEntry(path: "file.txt", lineCount: 10),
