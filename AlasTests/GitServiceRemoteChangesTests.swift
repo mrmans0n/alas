@@ -54,6 +54,24 @@ struct GitServiceRemoteChangesTests {
         #expect(files.map(\.path) == ["a.txt"])
     }
 
+    /// Unlike the nil-ref case above, a NON-nil ref that fails its numstat
+    /// diff (an invalid ref, here) is not "no base to compare against" —
+    /// falling back to `status()` would silently report only current
+    /// index/worktree changes as the complete change list, hiding every
+    /// committed change relative to the (bad) ref instead of surfacing the
+    /// failure.
+    @Test func changedFilesAgainstRef_throwsRatherThanFallingBackToStatusForAResolvedButInvalidRef() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try "one\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "a.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "base"], cwd: repo)
+
+        await #expect(throws: (any Error).self) {
+            _ = try await GitService().changedFilesAgainstRef(worktreePath: repo, ref: "not-a-real-ref")
+        }
+    }
+
     @Test func diffAgainstRef_returnsHunksForACommittedChange() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }

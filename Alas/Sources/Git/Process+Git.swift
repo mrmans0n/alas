@@ -344,6 +344,167 @@ extension Process {
         return outAccum.snapshot().prefix(maxBytes)
     }
 
+    /// Same shape as `run(...)`, but caps accumulated stdout at
+    /// `maxOutputBytes`: once that many bytes have been buffered, the child
+    /// is terminated early (SIGTERM) instead of being left running to
+    /// completion and buffering an unbounded amount of output.
+    ///
+    /// Used for `git diff` invocations whose output feeds `DiffParser`: a
+    /// pathologically large changed file (a multi-gigabyte generated
+    /// artifact, say) would otherwise have its ENTIRE diff captured into one
+    /// `String` and fully materialized into hunks before the caller's own
+    /// line/byte caps (`RemoteWorktreeFileAccess.truncateHunks`) ever get a
+    /// chance to trim it down — exhausting memory (or stalling the app) for
+    /// a response that was always going to be capped anyway. Set
+    /// `maxOutputBytes` comfortably above those wire caps (see
+    /// `RemoteWorktreeFileAccess.maxDiffSubprocessBytes`) so ordinary large
+    /// diffs are captured in full and `truncateHunks` still makes the exact
+    /// truncation call; only a genuinely pathological diff is cut short
+    /// here, before parsing.
+    struct ProcessCappedResult: Sendable {
+        let exitCode: Int32
+        let stdout: String
+        let stderr: String
+        /// True when `stdout` was cut short at (approximately —
+        /// `outAccum`'s last chunk can carry it a bit past `maxOutputBytes`
+        /// before the check fires; this is a soft cap, not an exact one)
+        /// `maxOutputBytes`, and the process was terminated early to
+        /// enforce that cap. This is a deliberate stop, not a process
+        /// failure: `exitCode` reflects whatever the early SIGTERM produced
+        /// and callers must not treat it as a normal git exit status when
+        /// this is `true` — proceed to parse the captured (possibly
+        /// hunk-incomplete at the very end, which downstream truncation
+        /// discards anyway) prefix instead.
+        let stdoutTruncated: Bool
+    }
+
+    static func runCapped(
+        _ executable: String,
+        args: [String],
+        cwd: URL? = nil,
+        env: [String: String]? = nil,
+        maxOutputBytes: Int,
+        timeout: TimeInterval = Process.defaultTimeout
+    ) async throws -> ProcessCappedResult {
+        try validateLaunchConfiguration(executable: executable, args: args, cwd: cwd)
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = args
+        if let cwd { process.currentDirectoryURL = cwd }
+        if let env { process.environment = env }
+
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        process.standardOutput = outPipe
+        process.standardError = errPipe
+
+        let exit = ExitGateData()
+        process.terminationHandler = { _ in exit.didExit() }
+
+        let outAccum = ByteAccumulatorData()
+        let errAccum = ByteAccumulatorData()
+        let truncatedFlag = TimedOutFlag()
+        outPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                outAccum.markClosed()
+                return
+            }
+            outAccum.append(data)
+            if outAccum.snapshot().count >= maxOutputBytes {
+                handle.readabilityHandler = nil
+                outAccum.markClosed()
+                truncatedFlag.mark()
+                terminateProcessWithEscalation(process)
+            }
+        }
+        errPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                errAccum.markClosed()
+            } else {
+                errAccum.append(data)
+            }
+        }
+
+        do {
+            try process.run()
+        } catch {
+            throw ProcessError.launchFailed(error.localizedDescription)
+        }
+
+        try? outPipe.fileHandleForWriting.close()
+        try? errPipe.fileHandleForWriting.close()
+
+        let timedOutFlag = TimedOutFlag()
+        let watchdog = Task {
+            try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+            if Task.isCancelled { return }
+            if process.isRunning {
+                timedOutFlag.mark()
+                fputs(
+                    "[Process watchdog] \(timeout)s timeout — terminating: \(executable) \(args.joined(separator: " "))\n",
+                    stderr
+                )
+                terminateProcessWithEscalation(process)
+            }
+        }
+
+        await withTaskCancellationHandler {
+            await exit.wait()
+        } onCancel: {
+            terminateProcessWithEscalation(process)
+        }
+        watchdog.cancel()
+
+        async let outClosed = outAccum.waitForClose(timeoutNanoseconds: 2_000_000_000)
+        async let errClosed = errAccum.waitForClose(timeoutNanoseconds: 2_000_000_000)
+        _ = await (outClosed, errClosed)
+        outPipe.fileHandleForReading.readabilityHandler = nil
+        errPipe.fileHandleForReading.readabilityHandler = nil
+
+        if timedOutFlag.value {
+            throw ProcessError.timedOut(executable: executable, args: args, seconds: timeout)
+        }
+
+        return ProcessCappedResult(
+            exitCode: process.terminationStatus,
+            stdout: String(data: outAccum.snapshot(), encoding: .utf8) ?? "",
+            stderr: String(data: errAccum.snapshot(), encoding: .utf8) ?? "",
+            stdoutTruncated: truncatedFlag.value
+        )
+    }
+
+    /// Bounded-output variant of `git(_:cwd:stdin:timeout:)` — see
+    /// `runCapped` for why this exists.
+    static func gitCapped(
+        _ args: [String],
+        cwd: URL? = nil,
+        maxOutputBytes: Int,
+        timeout: TimeInterval = Process.defaultTimeout
+    ) async throws -> ProcessCappedResult {
+        let host = RemoteHostRegistry.shared.host(forPath: cwd?.path)
+        if host == nil {
+            try validateWorkingDirectory(cwd)
+        }
+        let invocation = GitInvocation.build(
+            gitArgs: args,
+            cwd: cwd,
+            host: host
+        )
+        return try await runCapped(
+            invocation.executable,
+            args: invocation.args,
+            cwd: invocation.cwd,
+            env: invocation.env,
+            maxOutputBytes: maxOutputBytes,
+            timeout: timeout
+        )
+    }
+
     /// Internal: same shape as `run(...)` but emits stdout as `Data`.
     static func runData(
         _ executable: String,

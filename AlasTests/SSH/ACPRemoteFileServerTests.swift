@@ -178,6 +178,10 @@ struct ACPRemoteFileServerTests {
         #expect(result.exitCode == 6)
     }
 
+    /// The script itself reads `maxBytes + 1` bytes (not exactly `maxBytes`)
+    /// — see `containedReadScript`'s doc comment: that extra byte is how
+    /// `parseContainedReadResult` detects a file that grew past `maxBytes`
+    /// between the earlier `stat` and this `head` call.
     @Test func containedReadScriptCapsTheTransferredBodyWithoutMisreportingSize() async throws {
         let root = try makeContainedReadRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -195,7 +199,44 @@ struct ACPRemoteFileServerTests {
         let header = String(data: result.stdout[..<newline], encoding: .utf8)
         #expect(header == "1000")
         let body = result.stdout[result.stdout.index(after: newline)...]
-        #expect(body.count == 10)
+        #expect(body.count == 11)
+    }
+
+    // MARK: - parseContainedReadResult
+
+    @Test func parseContainedReadResultReportsSizeAndPrefixForAnOrdinaryFile() {
+        let stdout = "6\nhello\n".data(using: .utf8)!
+        let outcome = RemotePathContainment.parseContainedReadResult(exitCode: 0, stdout: stdout, maxBytes: 1_000_000)
+        #expect(outcome == .ok(byteSize: 6, prefix: "hello\n".data(using: .utf8)!))
+    }
+
+    /// The exact race the finding described: `stat` observed the file at
+    /// 50 bytes (comfortably under `maxBytes`), but by the time `head -c
+    /// maxBytes + 1` ran, a concurrent write had grown it — so the actual
+    /// transferred body is `maxBytes + 1` bytes despite the stale "50"
+    /// header. The parsed outcome must report the file as over the cap
+    /// (`byteSize > maxBytes`) rather than trusting the header and handing
+    /// back a truncated prefix as if it were the complete file.
+    @Test func parseContainedReadResultOverridesAStaleSmallHeaderWhenTheActualBodyExceedsMaxBytes() {
+        let maxBytes = 10
+        let header = "50\n".data(using: .utf8)!
+        let body = Data(repeating: UInt8(ascii: "x"), count: maxBytes + 1)
+        let outcome = RemotePathContainment.parseContainedReadResult(exitCode: 0, stdout: header + body, maxBytes: maxBytes)
+        guard case let .ok(byteSize, prefix) = outcome else {
+            Issue.record("expected .ok, got \(outcome)")
+            return
+        }
+        #expect(byteSize > maxBytes)
+        #expect(prefix.count == maxBytes)
+    }
+
+    @Test func parseContainedReadResultMapsNonZeroExitCodes() {
+        #expect(RemotePathContainment.parseContainedReadResult(exitCode: 6, stdout: Data(), maxBytes: 10) == .outsideWorktree)
+        #expect(RemotePathContainment.parseContainedReadResult(exitCode: 7, stdout: Data(), maxBytes: 10) == .outsideWorktree)
+        #expect(RemotePathContainment.parseContainedReadResult(exitCode: 8, stdout: Data(), maxBytes: 10) == .symlink)
+        #expect(RemotePathContainment.parseContainedReadResult(exitCode: 9, stdout: Data(), maxBytes: 10) == .directory)
+        #expect(RemotePathContainment.parseContainedReadResult(exitCode: 10, stdout: Data(), maxBytes: 10) == .missing)
+        #expect(RemotePathContainment.parseContainedReadResult(exitCode: 11, stdout: Data(), maxBytes: 10) == .unreadable)
     }
 
     // MARK: - containedListScript / containedList

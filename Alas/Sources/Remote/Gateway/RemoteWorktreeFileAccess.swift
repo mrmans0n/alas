@@ -23,6 +23,14 @@ enum RemoteWorktreeFileAccess {
     /// line can't itself blow the byte budget before the accountant even
     /// gets a chance to stop it.
     static let maxDiffLineBytes = 64 * 1024
+    /// Cap on the RAW `git diff` subprocess output `GitService`'s diff
+    /// methods capture, before `DiffParser` even runs — comfortably above
+    /// `maxDiffBytes` (8x) so an ordinary large diff is captured in full and
+    /// `truncateHunks` below still makes the exact truncation call; only a
+    /// genuinely pathological diff (a multi-gigabyte generated file) is cut
+    /// short here, before parsing ever materializes it into hunks. See
+    /// `Process.runCapped`.
+    static let maxDiffSubprocessBytes = maxDiffBytes * 8
     private static let lineTruncationMarker = "…(line truncated)"
 
     /// Normalizes a client-supplied worktree-relative path: rejects the same

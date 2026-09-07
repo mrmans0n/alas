@@ -18,8 +18,15 @@ extension GitService {
         // whose NUL-token parsers this reuses.
         let numstat = try await Process.git(
             ["-c", "core.quotePath=false", "diff", "--numstat", "-z", "-M", "-C", ref, "--"], cwd: worktreePath)
+        // Unlike the guard at the top of this function, `ref` here is
+        // already resolved and non-empty — this is NOT the "no base to
+        // compare against" case, so a failure (a dropped SSH connection, a
+        // corrupt repository) must propagate rather than fall back to
+        // `status()`: that fallback silently reports only current
+        // index/worktree changes, omitting every committed change relative
+        // to `ref`, as if the request had genuinely been base-less.
         guard numstat.exitCode == 0 else {
-            return try await status(worktreePath: worktreePath)
+            throw ProcessError.nonZeroExit(numstat.exitCode, numstat.stderr)
         }
         let counts = GitService.parseNumstatZOutput(numstat.stdout)
 
@@ -130,13 +137,18 @@ extension GitService {
             // core.quotePath=false` keeps a non-ASCII destination name
             // unquoted in the `diff --git a/<old> b/<new>` header, which
             // `sliceDiffForFile` below matches on as a raw string.
-            let result = try await Process.git(
+            let result = try await Process.gitCapped(
                 ["--literal-pathspecs", "-c", "core.quotePath=false",
-                 "diff", "--no-color", "-M", "-C", ref, "--", file, originalPath], cwd: worktreePath)
+                 "diff", "--no-color", "-M", "-C", ref, "--", file, originalPath], cwd: worktreePath,
+                maxOutputBytes: RemoteWorktreeFileAccess.maxDiffSubprocessBytes)
             // A fatal exit (>= 2, e.g. a dropped SSH connection) must propagate
             // rather than fall through as a successful, blank diff — see the
-            // matching comment on the tracked-file diff below.
-            guard result.exitCode <= 1 else { throw ProcessError.nonZeroExit(result.exitCode, result.stderr) }
+            // matching comment on the tracked-file diff below. A size-capped
+            // exit is NOT fatal — `exitCode` is meaningless there — so it
+            // takes the same path as an ordinary successful diff.
+            guard result.stdoutTruncated || result.exitCode <= 1 else {
+                throw ProcessError.nonZeroExit(result.exitCode, result.stderr)
+            }
             return DiffParser.parse(Self.sliceDiffForFile(result.stdout, file: file))
         }
 
@@ -164,27 +176,37 @@ extension GitService {
             // through pathspec matching, so `--literal-pathspecs` is a no-op
             // here — kept for consistency with the other client-path calls
             // in this function.
-            let result = try await Process.git(
-                ["--literal-pathspecs", "diff", "--no-color", "--no-index", "--", "/dev/null", file], cwd: worktreePath)
+            let result = try await Process.gitCapped(
+                ["--literal-pathspecs", "diff", "--no-color", "--no-index", "--", "/dev/null", file], cwd: worktreePath,
+                maxOutputBytes: RemoteWorktreeFileAccess.maxDiffSubprocessBytes)
             // `--no-index` exits 1 when there ARE differences, which is the
             // normal case here; only >= 2 is a real failure that must
             // propagate — see the matching comment on the tracked-file diff
-            // below.
-            guard result.exitCode <= 1 else { throw ProcessError.nonZeroExit(result.exitCode, result.stderr) }
+            // below. A size-capped exit is NOT fatal.
+            guard result.stdoutTruncated || result.exitCode <= 1 else {
+                throw ProcessError.nonZeroExit(result.exitCode, result.stderr)
+            }
             return DiffParser.parse(result.stdout)
         }
 
         // File exists at ref (tracked or previously committed), so diff ref to current state.
         // `--literal-pathspecs` stops `file` from being interpreted as a
         // glob pathspec (see comment above).
-        let result = try await Process.git(
-            ["--literal-pathspecs", "diff", "--no-color", "-M", "-C", ref, "--", file], cwd: worktreePath)
+        let result = try await Process.gitCapped(
+            ["--literal-pathspecs", "diff", "--no-color", "-M", "-C", ref, "--", file], cwd: worktreePath,
+            maxOutputBytes: RemoteWorktreeFileAccess.maxDiffSubprocessBytes)
         // A fatal exit here (e.g. an SSH connection dropping after the
         // preceding probes succeeded) must propagate rather than turn into a
         // successful, blank diff: `remoteFileDiff` maps a thrown error to
         // `.gitFailed`, but silently returning empty hunks would instead
-        // report success with nothing to show.
-        guard result.exitCode <= 1 else { throw ProcessError.nonZeroExit(result.exitCode, result.stderr) }
+        // report success with nothing to show. A size-capped exit is NOT
+        // fatal — `exitCode` is meaningless there — so it takes the same
+        // path as an ordinary successful diff, letting `DiffParser` and
+        // `truncateHunks` handle the (possibly incomplete at the very end)
+        // captured prefix exactly like any other oversized diff.
+        guard result.stdoutTruncated || result.exitCode <= 1 else {
+            throw ProcessError.nonZeroExit(result.exitCode, result.stderr)
+        }
         return DiffParser.parse(result.stdout)
     }
 

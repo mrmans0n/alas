@@ -190,6 +190,34 @@ struct ProcessGitTests {
         #expect(result.stdout.contains("git version"))
     }
 
+    @Test func runCappedTerminatesEarlyAndReportsTruncationForOversizedOutput() async throws {
+        let result = try await Process.runCapped(
+            "/usr/bin/awk",
+            args: ["BEGIN { for (i = 0; i < 2000000; i++) printf \"x\" }"],
+            maxOutputBytes: 1_000
+        )
+        #expect(result.stdoutTruncated)
+        // Soft cap: allowed to overshoot by up to one pipe chunk, but must
+        // never approach anywhere near the full 2,000,000 bytes the awk
+        // script would otherwise have produced.
+        #expect(result.stdout.count >= 1_000)
+        #expect(result.stdout.count < 500_000)
+    }
+
+    @Test func runCappedDoesNotTruncateOutputUnderTheCap() async throws {
+        let result = try await Process.runCapped("/bin/echo", args: ["hi"], maxOutputBytes: 1_000_000)
+        #expect(!result.stdoutTruncated)
+        #expect(result.exitCode == 0)
+        #expect(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "hi")
+    }
+
+    @Test func gitCappedConvenienceCallStillWorks() async throws {
+        let result = try await Process.gitCapped(["--version"], maxOutputBytes: 1_000_000)
+        #expect(!result.stdoutTruncated)
+        #expect(result.exitCode == 0)
+        #expect(result.stdout.contains("git version"))
+    }
+
     @Test func gitInvocationSurvivesWorkingDirectoryDeletionBeforeLaunch() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-deleted-git-cwd-\(UUID().uuidString)")

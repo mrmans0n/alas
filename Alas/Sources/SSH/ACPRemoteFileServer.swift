@@ -151,13 +151,22 @@ enum RemotePathContainment {
         let probeWithoutFinalExit = probe.hasSuffix("exit 0")
             ? String(probe.dropLast("exit 0".count))
             : probe
+        // Reads ONE byte past `maxBytes`: `stat`'s size header can go stale
+        // if the file grows between it and this `head` call (a concurrently
+        // running remote process, e.g. the very agent whose worktree this
+        // is), and trusting that header alone would let a genuinely
+        // oversized-by-then file slip through as a "complete" `maxBytes`
+        // read. `containedRead` compares the ACTUAL byte count transferred
+        // against `maxBytes` — ground truth from this read, not a
+        // point-in-time stat — to decide whether to report the file as too
+        // large regardless of what the header claims.
         return probeWithoutFinalExit + """
         [ -L "$full_phys" ] && exit 8; \
         [ -d "$full_phys" ] && exit 9; \
         [ -e "$full_phys" ] || exit 10; \
         size=$(stat -c %s -- "$full_phys" 2>/dev/null || stat -f %z "$full_phys") || exit 11; \
         echo "$size"; \
-        head -c \(maxBytes) "$full_phys"
+        head -c \(maxBytes + 1) "$full_phys"
         """
     }
 
@@ -174,15 +183,33 @@ enum RemotePathContainment {
         if RemoteExec.isConnectionFailure(exitCode: result.exitCode) {
             throw RemoteFileAccessError.connectionFailed(result.stderr)
         }
-        switch result.exitCode {
+        return parseContainedReadResult(exitCode: result.exitCode, stdout: result.stdout, maxBytes: maxBytes)
+    }
+
+    /// Pure parsing half of `containedRead`, split out so the
+    /// stat-vs-actual-size reconciliation (the fix for the file-grew-during-
+    /// read race described on `containedReadScript`) is directly testable
+    /// against a synthetic transcript, without a real SSH round trip.
+    static func parseContainedReadResult(exitCode: Int32, stdout: Data, maxBytes: Int) -> ContainedReadOutcome {
+        switch exitCode {
         case 0:
-            guard let newline = result.stdout.firstIndex(of: UInt8(ascii: "\n")),
-                  let header = String(data: result.stdout[result.stdout.startIndex..<newline], encoding: .utf8),
+            guard let newline = stdout.firstIndex(of: UInt8(ascii: "\n")),
+                  let header = String(data: stdout[stdout.startIndex..<newline], encoding: .utf8),
                   let byteSize = Int(header.trimmingCharacters(in: .whitespaces))
             else {
                 return .unreadable
             }
-            let body = Data(result.stdout[result.stdout.index(after: newline)...])
+            let body = Data(stdout[stdout.index(after: newline)...])
+            // More than `maxBytes` actually came back — `containedReadScript`
+            // reads one extra byte specifically to catch this: the file grew
+            // past `maxBytes` between `stat` and `head` inside the script, so
+            // the earlier `byteSize` header is stale. Report the size as
+            // definitely over the cap (regardless of what the header said) so
+            // the caller's own size gate rejects it, rather than serving a
+            // truncated prefix as if it were the file's complete contents.
+            guard body.count <= maxBytes else {
+                return .ok(byteSize: max(byteSize, maxBytes + 1), prefix: body.prefix(maxBytes))
+            }
             return .ok(byteSize: byteSize, prefix: body)
         case 6, 7:
             return .outsideWorktree

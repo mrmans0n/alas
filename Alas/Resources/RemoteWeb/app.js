@@ -207,6 +207,7 @@ async function connect() {
     reconnectDelay = initialReconnectDelay;   // reset back-off after a good connection
     send({ type: "listSessions" });
     if (currentSession) send({ type: "subscribe", sessionId: currentSession });   // re-sync after reconnect
+    replayActiveDetailRequest();   // the file/diff request itself doesn't survive a dropped socket
     if (createState.open) {
       createState.error = "";
       requestCreateLists();
@@ -557,6 +558,25 @@ function closeDetailLevel() {
   $("diff-view").classList.add("hidden");
   $("file-view").classList.add("hidden");
   showTabListLevel();
+}
+
+// If the socket drops while a file or diff detail view is open, `onopen`'s
+// `subscribe` only re-syncs the session's transcript — the `readFile`/
+// `fileDiff` request itself was in flight on the OLD socket and is gone
+// with it, so without this the viewer is stuck on "Loading…" (files) or an
+// empty diff (changes) indefinitely, until the user backs out and reopens
+// it. `detailStack`'s top entry is whichever detail view is currently
+// showing (or none, if the user is at a list level), so replaying its
+// request on every reconnect (a no-op when the stack is empty) covers both
+// "dropped mid-request" and "dropped while idly viewing" the same way.
+function replayActiveDetailRequest() {
+  if (!currentSession || detailStack.length === 0) return;
+  const top = detailStack[detailStack.length - 1];
+  if (top.tab === "files") {
+    send({ type: "readFile", sessionId: currentSession, path: top.path });
+  } else if (top.tab === "changes") {
+    send({ type: "fileDiff", sessionId: currentSession, path: top.path });
+  }
 }
 
 function renderDiff(path, hunks, truncated) {
