@@ -503,6 +503,28 @@ struct GitServiceTests {
         #expect(tracked.visibility == .tracked)
     }
 
+    /// Under git's default `core.quotePath=true`, a non-ASCII filename comes
+    /// back from `ls-files` quoted and octal-escaped (e.g. `café.txt` →
+    /// `"caf\303\251.txt"`). `gitVisibleFilePaths` (which feeds this root
+    /// Files tree) used to run plain `ls-files` with no `-c
+    /// core.quotePath=false`/`-z`, so the tree reported that escaped string
+    /// as the path instead of the real filename.
+    @Test func fileTreeReportsTheExactNonASCIIFilename() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let filename = "café.txt"
+        try "hola\n".write(to: repo.appendingPathComponent(filename), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", filename], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "add café"], cwd: repo)
+
+        let tree = try await GitService().fileTree(worktreePath: repo, statusEntries: [])
+
+        let file = try #require(tree.first { $0.path == filename })
+        #expect(file.visibility == .tracked)
+        #expect(!tree.contains { $0.path.contains("\\303") })
+    }
+
     @Test func fileTreeClassifiesGlobalExcludesAsExcludedRootEntries() async throws {
         let repo = try await makeRepo()
         let globalExcludes = FileManager.default.temporaryDirectory
@@ -716,6 +738,30 @@ struct GitServiceTests {
 
         #expect(children.contains { $0.path == "Sources/App.swift" && $0.visibility == .tracked })
         #expect(children.contains { $0.path == "Sources/cache.log" && $0.visibility == .ignored })
+    }
+
+    /// `fileTreeChildren` used to always build its nodes with `badges: [:]`,
+    /// so a change in a nested directory lost its status badge the moment a
+    /// client expanded into that directory — inconsistent with the root
+    /// Files tree, which DOES show badges. The native desktop caller
+    /// (`RightPaneState.loadFileTreeChildren`) omits the new `badges`
+    /// parameter and must be unaffected (still gets `[:]` by default).
+    @Test func fileTreeChildrenAppliesTheProvidedBadgeMapToNestedEntries() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try FileManager.default.createDirectory(
+            at: repo.appendingPathComponent("Sources"), withIntermediateDirectories: true)
+        try "one\n".write(to: repo.appendingPathComponent("Sources/App.swift"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "Sources/App.swift"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "seed"], cwd: repo)
+        try "one\ntwo\n".write(to: repo.appendingPathComponent("Sources/App.swift"), atomically: true, encoding: .utf8)
+
+        let withoutBadges = try await GitService().fileTreeChildren(worktreePath: repo, path: "Sources")
+        #expect(withoutBadges.first { $0.path == "Sources/App.swift" }?.badge == nil)
+
+        let withBadges = try await GitService().fileTreeChildren(
+            worktreePath: repo, path: "Sources", badges: ["Sources/App.swift": "M"])
+        #expect(withBadges.first { $0.path == "Sources/App.swift" }?.badge == "M")
     }
 
     @Test func submodulePathsDetectsRegisteredSubmodules() async throws {

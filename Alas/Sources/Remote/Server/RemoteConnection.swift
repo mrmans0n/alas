@@ -7,7 +7,8 @@ import CryptoKit
 /// bridges decoded client messages to a `RemoteSessionGateway`.
 ///
 /// Concurrency model: all mutable state (`inbound`, `isWebSocket`, `gateway`,
-/// `closed`, `isClosing`) is confined to the single serial `queue` the connection runs on.
+/// `closed`, `isClosing`, `inFlightFileRequests`) is confined to the single
+/// serial `queue` the connection runs on.
 /// `NWConnection` delivers every `receive`/`send` completion on that queue, so
 /// those callbacks touch state directly. Work that must reach ACP/pairing state
 /// (the responder/authorize/makeGateway closures) hops to `@MainActor`, and any
@@ -45,6 +46,13 @@ final class RemoteConnection: @unchecked Sendable {
     /// work (subscribe/fetchOlder/list*/etc). Mutated only on `queue`.
     private var lastDriveActionTail: Task<Void, Never>?
     private var lastDriveActionID: UUID?
+    /// Keys (`RemoteClientMessage.fileRequestDedupKey`) of file-request
+    /// verbs currently somewhere in `processingTail` — queued or running.
+    /// Checked and inserted in `dispatchMessage`, BEFORE a message enters
+    /// the ordered chain, so an exact duplicate is dropped immediately
+    /// rather than occupying its own serialized slot. Removed once that
+    /// message's `MessageProcessingTask` finishes. Mutated only on `queue`.
+    private var inFlightFileRequests: Set<String> = []
     /// Reassembles fragmented WebSocket messages before they're decoded.
     private var reassembler = WebSocketReassembler()
     /// The device this connection authenticated as, set on `queue` once the WS
@@ -352,11 +360,26 @@ final class RemoteConnection: @unchecked Sendable {
             }
             return
         }
+        let dedupKey = msg.fileRequestDedupKey
+        if let dedupKey, !inFlightFileRequests.insert(dedupKey).inserted {
+            // An identical file-request verb is already queued or running
+            // for this connection; dropping here (before the message ever
+            // reaches `processingTail`) is what actually prevents a burst of
+            // duplicates from each running their own git process in
+            // sequence — checking inside `gateway.handle` is too late, since
+            // this connection already serializes every message before it.
+            return
+        }
         let task = MessageProcessingTask(previous: processingTail)
         task.start(
             operation: { await gateway.handle(msg) },
             onFinish: { [weak self] id in
-                self?.onQueue { [weak self] in self?.finishProcessingTask(id: id) }
+                self?.onQueue { [weak self] in
+                    self?.finishProcessingTask(id: id)
+                    if let dedupKey {
+                        self?.inFlightFileRequests.remove(dedupKey)
+                    }
+                }
             }
         )
         processingTail = task

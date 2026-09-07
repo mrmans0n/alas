@@ -53,6 +53,13 @@ protocol RemoteSessionsProvider: AnyObject {
     /// Projection of the session's config for the `sessionConfig` wire message,
     /// or nil if the session isn't live.
     func sessionConfig(for id: String) -> RemoteSessionConfig?
+    /// Read-only worktree inspection for the remote changes/files tabs. All
+    /// four resolve the session's worktree first and are ungated by the writer
+    /// lease: seeing a session is enough to read its code.
+    func remoteChangeList(sessionId: String) async -> RemoteChangeListResult
+    func remoteFileDiff(sessionId: String, path: String) async -> RemoteFileDiffResult
+    func remoteFileTree(sessionId: String, path: String?) async -> RemoteFileTreeResult
+    func remoteFileContents(sessionId: String, path: String) async -> RemoteFileContentsResult
 }
 
 extension RemoteSessionsProvider {

@@ -110,27 +110,58 @@ extension GitService {
             cwd: worktreePath
         )
         let s = try await statusResult
-        guard s.exitCode == 0 else { return [] }
+        // Unlike `--no-index diff`/`check-ignore`, plain `git status` has no
+        // legitimate nonzero exit for a healthy repo — ANY failure here (a
+        // dropped SSH connection, an invalid/corrupt repository) is fatal
+        // and must propagate. This is a widely shared method (the desktop
+        // Changes panel, the remote nil-ref fallback, `alas` CLI actions);
+        // silently returning `[]` previously meant a genuine failure looked
+        // identical to "nothing has changed" everywhere it's called.
+        guard s.exitCode == 0 else {
+            throw ProcessError.nonZeroExit(s.exitCode, s.stderr)
+        }
         var entries = try StatusParser.parse(s.stdout)
 
         // Numstat needs a base revision. Use HEAD if one exists; on unborn
-        // branches diff `--cached` (index vs empty tree) so initial-commit
-        // workflows still see real add/del counts in the Changes pane.
+        // branches diff against git's well-known empty-tree object hash
+        // instead of `--cached` — `--cached` compares only the INDEX
+        // against nothing, so a file staged and then edited AGAIN
+        // (unstaged changes on top of a stage) would report only the staged
+        // version's line count while `remoteFileDiff`'s own all-add diff
+        // (working tree vs /dev/null) shows the current, fuller content.
+        // Diffing the empty tree WITHOUT `--cached` compares the whole
+        // working tree instead, matching that.
         let head = try await hasHead(worktreePath: worktreePath)
-        let numstatArgs: [String] = head
+        // Whole-working-tree metric (staged + unstaged combined) — correct
+        // for `.unstaged` entries, which must reflect the CURRENT on-disk
+        // content of a path regardless of what's staged, matching
+        // `diffAgainstHEAD`'s own all-add diff (see the comment there).
+        let workingTreeNumstatArgs: [String] = head
             ? ["diff", "--numstat", "HEAD"]
-            : ["diff", "--numstat", "--cached"]
-        let numstat = try await Process.git(numstatArgs, cwd: worktreePath)
-        let counts = NumstatParser.parse(numstat.stdout)
+            : ["diff", "--numstat", "4b825dc642cb6eb9a060e54bf8d69288fbee4904"]   // canonical empty tree
+        let workingTreeNumstat = try await Process.git(workingTreeNumstatArgs, cwd: worktreePath)
+        let workingTreeCounts = NumstatParser.parse(workingTreeNumstat.stdout)
+        // Index-only metric — correct for `.staged` entries. Without this,
+        // an "AM" path (staged, then further modified in the working tree)
+        // got the SAME whole-working-tree count applied to BOTH its staged
+        // and unstaged rows below, so a staged-only consumer (e.g. a
+        // draft-commit summary) reported the unstaged edit's line count as
+        // if it were already staged.
+        let stagedNumstatArgs: [String] = head
+            ? ["diff", "--cached", "--numstat", "HEAD"]
+            : ["diff", "--cached", "--numstat", "4b825dc642cb6eb9a060e54bf8d69288fbee4904"]
+        let stagedNumstat = try await Process.git(stagedNumstatArgs, cwd: worktreePath)
+        let stagedCounts = NumstatParser.parse(stagedNumstat.stdout)
         let untrackedPaths = entries.filter { $0.add == 0 && $0.del == 0 }.map(\.path)
         let remoteCounts: [String: Int]
         if worktreePath.isRemoteAlasPath, let host = RemoteHostRegistry.shared.host(forPath: worktreePath.path) {
-            remoteCounts = await RemoteFileStats.lineCounts(host: host, cwd: worktreePath.path, paths: untrackedPaths)
+            remoteCounts = try await RemoteFileStats.lineCounts(host: host, cwd: worktreePath.path, paths: untrackedPaths)
         } else {
             remoteCounts = [:]
         }
 
         for i in entries.indices {
+            let counts = entries[i].stage == .staged ? stagedCounts : workingTreeCounts
             if let c = counts[entries[i].path] {
                 entries[i] = ChangedFile(path: entries[i].path,
                                           status: entries[i].status,
@@ -146,14 +177,16 @@ extension GitService {
                 // on disk; deleted files (no longer present) stay at 0/0.
                 if worktreePath.isRemoteAlasPath, let lines = remoteCounts[entries[i].path] {
                     entries[i] = ChangedFile(path: entries[i].path, status: entries[i].status, stage: entries[i].stage, add: lines, del: 0, renameFrom: entries[i].renameFrom, conflict: entries[i].conflict)
-                } else {
-                    let url = worktreePath.appendingPathComponent(entries[i].path)
-                    if !worktreePath.isRemoteAlasPath,
-                   let data = try? Data(contentsOf: url),
-                   let text = String(data: data, encoding: .utf8) {
-                    let lines = text.isEmpty
-                        ? 0
-                        : text.split(separator: "\n", omittingEmptySubsequences: false).count
+                } else if !worktreePath.isRemoteAlasPath {
+                    // Shares `addedLineCount`'s exact counting logic (also
+                    // used by `changedFilesAgainstRef`'s ref-resolved
+                    // untracked-file branch) rather than a separately
+                    // maintained duplicate: the duplicate used to omit the
+                    // trailing-newline adjustment `addedLineCount` applies,
+                    // so the SAME untracked file could report a different
+                    // add-count here than in the ref-resolved Changes view
+                    // depending on which code path served the request.
+                    let lines = Self.addedLineCount(worktreePath: worktreePath, path: entries[i].path)
                     entries[i] = ChangedFile(path: entries[i].path,
                                              status: entries[i].status,
                                              stage: entries[i].stage,
@@ -161,7 +194,6 @@ extension GitService {
                                              del: 0,
                                              renameFrom: entries[i].renameFrom,
                                              conflict: entries[i].conflict)
-                    }
                 }
             }
         }
@@ -217,17 +249,58 @@ extension GitService {
         return await Self.parseOffMain(stdout)
     }
 
-    func diffAgainstHEAD(worktreePath: URL, file: String, originalPath: String? = nil) async throws -> ParsedDiff {
+    /// `maxOutputBytes`, when non-nil, bounds the underlying `git diff`
+    /// subprocess's captured stdout the same way
+    /// `GitService+RemoteChanges.diff` bounds its own diff calls — see
+    /// `Process.runCapped`'s doc comment. Left `nil` (the default) for the
+    /// native desktop `DiffTabView` caller: `ParsedDiff` carries no
+    /// truncation state and the desktop UI applies no truncation notice, so
+    /// silently capping there would present a partial diff as complete with
+    /// no indication anything was cut. Only the remote request path (this
+    /// method's OTHER caller, `GitService+RemoteChanges.diff`'s nil-ref
+    /// fallback) passes a byte cap, because ITS caller
+    /// (`RemoteWorktreeFileAccess.truncateHunks`) already knows how to cap
+    /// and report truncation on the wire.
+    func diffAgainstHEAD(
+        worktreePath: URL, file: String, originalPath: String? = nil, maxOutputBytes: Int? = nil
+    ) async throws -> ParsedDiff {
         let head = try await hasHead(worktreePath: worktreePath)
         if !head {
             let fileURL = worktreePath.appendingPathComponent(file)
-            guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            // `FileManager.fileExists` only ever sees this Mac's local
+            // filesystem. For an SSH-backed worktree there is nothing local
+            // at `fileURL.path` to find — the check always reports "missing"
+            // regardless of the file's real state on the remote host, so
+            // every staged/untracked file's diff on an unborn remote branch
+            // silently came back empty. Route the existence check through
+            // the remote host when one is registered for this worktree;
+            // `.missing` is the only outcome treated as absent (mirrors
+            // `WorktreeService`'s use of the same primitive) so a transient
+            // "unknown" result doesn't itself suppress a real diff — the
+            // `--no-index` invocation below is still the actual source of
+            // truth and fails harmlessly if the file truly isn't there.
+            let exists: Bool
+            if worktreePath.isRemoteAlasPath, let host = RemoteHostRegistry.shared.host(forPath: worktreePath.path) {
+                exists = await RemoteFileAccess.existence(host: host, path: fileURL.path) != .missing
+            } else {
+                exists = FileManager.default.fileExists(atPath: fileURL.path)
+            }
+            guard exists else {
                 return ParsedDiff(hunks: [])
             }
-            let result = try await Process.git(
-                ["diff", "--no-color", "--no-index", "--", "/dev/null", file],
-                cwd: worktreePath
-            )
+            let noIndexArgs = ["diff", "--no-color", "--no-index", "--", "/dev/null", file]
+            if let maxOutputBytes {
+                let result = try await Process.gitCapped(noIndexArgs, cwd: worktreePath, maxOutputBytes: maxOutputBytes)
+                // Same reasoning as the tracked-file branch below: a fatal
+                // exit (e.g. an SSH connection dropping) must propagate
+                // rather than parse whatever (usually empty) stdout came
+                // back as a successful, blank diff.
+                guard result.stdoutTruncated || result.exitCode <= 1 else {
+                    throw ProcessError.nonZeroExit(result.exitCode, result.stderr)
+                }
+                return await Self.parseOffMain(result.stdout)
+            }
+            let result = try await Process.git(noIndexArgs, cwd: worktreePath)
             guard result.exitCode <= 1 else { return ParsedDiff(hunks: []) }
             return await Self.parseOffMain(result.stdout)
         }
@@ -238,10 +311,19 @@ extension GitService {
             cwd: worktreePath
         )
         if headBlob.exitCode != 0 {
-            let result = try await Process.git(
-                ["diff", "--no-color", "--no-index", "--", "/dev/null", file],
-                cwd: worktreePath
-            )
+            let noIndexArgs = ["diff", "--no-color", "--no-index", "--", "/dev/null", file]
+            if let maxOutputBytes {
+                let result = try await Process.gitCapped(noIndexArgs, cwd: worktreePath, maxOutputBytes: maxOutputBytes)
+                // Same reasoning as the tracked-file branch below: a fatal
+                // exit (e.g. an SSH connection dropping) must propagate
+                // rather than parse whatever (usually empty) stdout came
+                // back as a successful, blank diff.
+                guard result.stdoutTruncated || result.exitCode <= 1 else {
+                    throw ProcessError.nonZeroExit(result.exitCode, result.stderr)
+                }
+                return await Self.parseOffMain(result.stdout)
+            }
+            let result = try await Process.git(noIndexArgs, cwd: worktreePath)
             guard result.exitCode <= 1 else { return ParsedDiff(hunks: []) }
             return await Self.parseOffMain(result.stdout)
         }
@@ -252,6 +334,21 @@ extension GitService {
         args.append(file)
         if let originalPath, !originalPath.isEmpty {
             args.append(originalPath)
+        }
+        if let maxOutputBytes {
+            let result = try await Process.gitCapped(args, cwd: worktreePath, maxOutputBytes: maxOutputBytes)
+            // Same reasoning as the two capped branches above: a fatal exit
+            // (e.g. an SSH connection dropping) must propagate rather than
+            // parse whatever (usually empty) stdout came back as a
+            // successful, blank diff. `remoteFileDiff` — reachable here
+            // through the nil-comparison-ref fallback at the top of this
+            // function — maps a thrown error to `.gitFailed`; a size-capped
+            // exit is NOT fatal (`exitCode` is meaningless there), so it
+            // takes the same path as an ordinary successful diff.
+            guard result.stdoutTruncated || result.exitCode <= 1 else {
+                throw ProcessError.nonZeroExit(result.exitCode, result.stderr)
+            }
+            return await Self.parseOffMain(result.stdout)
         }
         let result = try await Process.git(args, cwd: worktreePath)
         return await Self.parseOffMain(result.stdout)
@@ -545,17 +642,23 @@ extension GitService {
     static func sliceDiffForFile(_ raw: String, file: String) -> String {
         let lines = raw.components(separatedBy: "\n")
         let bMarker = "b/\(file)"
+        // Git quotes AND escapes the whole `b/<path>` header token (wrapping
+        // it in `"..."`) when the path contains a byte that always needs
+        // escaping — a tab, newline, double quote, or backslash — REGARDLESS
+        // of `core.quotePath` (that setting only suppresses quoting for
+        // non-ASCII bytes; every caller of this function already passes
+        // `-c core.quotePath=false`, which covers that case, but not this
+        // one). Without also matching that quoted form, a renamed/copied
+        // destination containing one of those bytes would never match any
+        // section here, silently returning an empty diff despite real hunks.
+        let quotedBMarker = Self.gitEscapedPathIfNeeded(file).map { "\"b/\($0)\"" }
         var sections: [(matches: Bool, lines: [String])] = []
         var current: (matches: Bool, lines: [String])? = nil
         for line in lines {
             if line.hasPrefix("diff --git ") {
                 if let c = current { sections.append(c) }
-                // The header reads `diff --git a/<old> b/<new>`. Check the
-                // b/<...> token by suffix; we already know the new path
-                // doesn't contain whitespace because git emits the raw
-                // path here (no quoting unless the path contains special
-                // chars, which we don't generate in tests / typical use).
                 let matches = line.hasSuffix(" " + bMarker)
+                    || quotedBMarker.map { line.hasSuffix(" " + $0) } == true
                 current = (matches: matches, lines: [line])
             } else if current != nil {
                 current!.lines.append(line)
@@ -564,6 +667,57 @@ extension GitService {
         if let c = current { sections.append(c) }
         let kept = sections.first(where: { $0.matches })?.lines ?? []
         return kept.joined(separator: "\n")
+    }
+
+    /// Mirrors the ESCAPING half of git's `quote_c_style` (not the
+    /// surrounding `"..."` wrapping, which the caller adds) for the bytes
+    /// that always trigger quoting regardless of `core.quotePath`: double
+    /// quote, backslash, and control characters. `core.quotePath=false`
+    /// only suppresses quoting for non-ASCII bytes — irrelevant here, since
+    /// this only handles the bytes that setting does NOT affect. Returns
+    /// nil when `path` contains none of those bytes (git leaves such names
+    /// completely unquoted, matching `sliceDiffForFile`'s plain match).
+    static func gitEscapedPathIfNeeded(_ path: String) -> String? {
+        var needsQuoting = false
+        var bytes: [UInt8] = []
+        for byte in path.utf8 {
+            switch byte {
+            case 0x22:   // "
+                bytes += Array("\\\"".utf8)
+                needsQuoting = true
+            case 0x5C:   // \
+                bytes += Array("\\\\".utf8)
+                needsQuoting = true
+            case 0x07:
+                bytes += Array("\\a".utf8)
+                needsQuoting = true
+            case 0x08:
+                bytes += Array("\\b".utf8)
+                needsQuoting = true
+            case 0x0C:
+                bytes += Array("\\f".utf8)
+                needsQuoting = true
+            case 0x0A:
+                bytes += Array("\\n".utf8)
+                needsQuoting = true
+            case 0x0D:
+                bytes += Array("\\r".utf8)
+                needsQuoting = true
+            case 0x09:
+                bytes += Array("\\t".utf8)
+                needsQuoting = true
+            case 0x0B:
+                bytes += Array("\\v".utf8)
+                needsQuoting = true
+            case 0x00...0x06, 0x0E...0x1F, 0x7F:
+                bytes += Array(String(format: "\\%03o", byte).utf8)
+                needsQuoting = true
+            default:
+                bytes.append(byte)
+            }
+        }
+        guard needsQuoting else { return nil }
+        return String(decoding: bytes, as: UTF8.self)
     }
 
     func fileTree(worktreePath: URL, statusEntries: [ChangedFile]) async throws -> [FileTreeNode] {
@@ -674,11 +828,25 @@ extension GitService {
         return paths
     }
 
-    func fileTreeChildren(worktreePath: URL, path: String) async throws -> [FileTreeNode] {
+    /// `badges` maps a worktree-relative path to its status letter (e.g.
+    /// `"M"`, `"A"`, `"D"`), mirroring what `fileTree`'s ROOT listing already
+    /// receives from `status(worktreePath:)`. Defaults to `[:]` — the native
+    /// desktop Files tab (`RightPaneState.loadFileTreeChildren`) calls this
+    /// without a badge map and specifically relies on the returned nodes
+    /// having no badge of their own (see `RightPaneState.replacingChildren`'s
+    /// doc comment): it treats an incoming nil badge as "keep whatever badge
+    /// the existing node already had" rather than "this node has no badge".
+    /// Passing a real map here is opt-in for callers (the remote Files tree)
+    /// that want a directory expansion's badges to match the root listing's.
+    func fileTreeChildren(worktreePath: URL, path: String, badges: [String: String] = [:]) async throws -> [FileTreeNode] {
         if worktreePath.isRemoteAlasPath {
             let prefix = path.isEmpty ? "" : path + "/"
             var paths = try await gitVisibleFilePaths(worktreePath: worktreePath)
                 .filter { path.isEmpty || $0.hasPrefix(prefix) }
+            // Snapshot before the remote-listing loop below starts appending
+            // newly discovered (untracked/ignored) entries to `paths`, so
+            // descendant lookups only ever see paths git already knows about.
+            let gitVisiblePaths = Set(paths)
             var directories = Set<String>()
             for candidate in paths {
                 let components = candidate.split(separator: "/")
@@ -687,20 +855,47 @@ extension GitService {
                     directories.insert(components.prefix(index).joined(separator: "/"))
                 }
             }
+            // Entries the remote directory listing surfaces that git itself
+            // doesn't already know about (untracked, and — unlike
+            // `gitVisibleFilePaths`, which excludes them — gitignored) need
+            // the same ignore/exclude classification the local branch below
+            // applies, so `.ignored`/`.excluded` names (e.g. `node_modules`,
+            // `.env`) get filtered out at the wire boundary
+            // (`AppState.remoteFileNodes`) instead of leaking their names to
+            // the client.
+            var ignoreCandidates: [RootIgnoreCandidate] = []
             if let host = RemoteHostRegistry.shared.host(forPath: worktreePath.path) {
                 let directory = path.isEmpty ? worktreePath.path : worktreePath.appendingPathComponent(path).path
-                for entry in await RemoteFileStats.directoryEntries(host: host, path: directory)
+                for entry in try await RemoteFileStats.directoryEntries(host: host, worktreeRoot: worktreePath.path, path: directory)
                     where entry.name != ".git" {
                     let fullPath = path.isEmpty ? entry.name : path + "/" + entry.name
                     if entry.isDirectory { directories.insert(fullPath) }
-                    if !paths.contains(fullPath) { paths.append(fullPath) }
+                    if !paths.contains(fullPath) {
+                        paths.append(fullPath)
+                        if shouldClassifyRemotelyDiscoveredEntry(
+                            fullPath: fullPath,
+                            isDirectory: entry.isDirectory,
+                            gitVisiblePaths: gitVisiblePaths
+                        ) {
+                            ignoreCandidates.append(RootIgnoreCandidate(path: fullPath, isDirectory: entry.isDirectory))
+                        }
+                    }
                 }
+            }
+            var visibility: [String: FileVisibility] = [:]
+            if !ignoreCandidates.isEmpty {
+                let excludedSources = try await excludedSourcePaths(worktreePath: worktreePath)
+                visibility = try await ignoredOrExcludedVisibility(
+                    candidates: ignoreCandidates,
+                    worktreePath: worktreePath,
+                    excludedSourcePaths: excludedSources
+                )
             }
             let lazyDirectories = path.isEmpty ? directories : directories.subtracting([path])
             let built = FileTreeBuilder.build(
                 paths: paths,
-                badges: [:],
-                visibility: [:],
+                badges: badges,
+                visibility: visibility,
                 directories: directories,
                 lazyDirectories: lazyDirectories,
                 submodules: (try? await submodulePaths(worktreePath: worktreePath)) ?? []
@@ -754,7 +949,7 @@ extension GitService {
 
         let built = FileTreeBuilder.build(
             paths: childPaths,
-            badges: [:],
+            badges: badges,
             visibility: visibility,
             directories: directories,
             lazyDirectories: lazyDirectories,
@@ -778,14 +973,71 @@ extension GitService {
     }
 
     private func gitVisibleFilePaths(worktreePath: URL) async throws -> [String] {
+        // `-c core.quotePath=false` plus `-z` keep non-ASCII (and
+        // tab/newline-containing) filenames intact instead of git's default
+        // octal-escaped, quoted rendering — mirrors `changedFilesAgainstRef`,
+        // which needed the same fix for the Changes tab. This feeds the
+        // root Files tree, so a quoted name here would show the wrong
+        // (escaped) filename and fail to resolve when selected.
         let result = try await Process.git(
-            ["ls-files", "--cached", "--others", "--exclude-standard"],
+            ["-c", "core.quotePath=false", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
             cwd: worktreePath
         )
+        // A transport failure on an SSH worktree (disconnected helper, etc.)
+        // produces a nonzero exit with empty stdout — parsing that as "zero
+        // files" would make a real failure look like a successful, empty
+        // repository instead of propagating as `.gitFailed`.
+        guard result.exitCode == 0 else {
+            throw ProcessError.nonZeroExit(result.exitCode, result.stderr)
+        }
         return result.stdout
-            .split(separator: "\n")
-            .map(String.init)
+            .components(separatedBy: "\0")
             .filter { !$0.isEmpty }
+    }
+
+    /// Whether `path` (worktree-relative) is covered by gitignore rules,
+    /// including local excludes (`.git/info/exclude`, `core.excludesFile`).
+    /// Used to reject reading or diffing a single path the client already
+    /// knows about, mirroring the visibility filter that already keeps such
+    /// paths out of the file tree entirely.
+    ///
+    /// Deliberately does NOT pass `--no-index`: that flag makes git ignore
+    /// the index entirely, which would report a force-added tracked file
+    /// (`git add -f`) matching a `.gitignore` pattern as "ignored" even
+    /// though it's correctly shown as tracked in the Files/Changes tabs.
+    /// Without the flag, git consults the index first, so a tracked path
+    /// always reports as not ignored while a genuinely untracked, gitignored
+    /// path still reports as ignored.
+    ///
+    /// `comparisonRef`, when given, exempts a path that existed there even
+    /// if it's since been deleted (staged or committed): a deleted file is
+    /// no longer in the CURRENT index, so without this exemption
+    /// `check-ignore` falls back to matching purely by name and reports a
+    /// legitimately-tracked-at-`comparisonRef`, since-deleted file as
+    /// "ignored" whenever its name happens to match a `.gitignore` pattern
+    /// — blocking its otherwise-correct deletion diff. Mirrors the
+    /// force-added-tracked-file exemption above, extended to a ref instead
+    /// of just the current index.
+    func isPathIgnored(worktreePath: URL, path: String, comparisonRef: String? = nil) async throws -> Bool {
+        let result = try await Process.git(
+            ["check-ignore", "-q", "--", path],
+            cwd: worktreePath
+        )
+        let ignoredByPattern: Bool
+        switch result.exitCode {
+        case 0: ignoredByPattern = true
+        case 1: return false
+        default: throw ProcessError.nonZeroExit(result.exitCode, result.stderr)
+        }
+        guard ignoredByPattern else { return false }
+        if let comparisonRef, !comparisonRef.isEmpty {
+            let existedAtRef = try await Process.git(
+                ["cat-file", "-e", "\(comparisonRef):\(path)"], cwd: worktreePath)
+            if existedAtRef.exitCode == 0 {
+                return false
+            }
+        }
+        return true
     }
 
     private struct RootIgnoreCandidate {
@@ -817,7 +1069,16 @@ extension GitService {
             cwd: worktreePath,
             stdin: inputPaths.joined(separator: "\0") + "\0"
         )
-        guard result.exitCode == 0 else { return [:] }
+        // `check-ignore` exits 1 when NONE of the input paths matched an
+        // ignore pattern — a legitimate, common result (an empty visibility
+        // map is exactly right here), not a failure. Only >= 2 is fatal (a
+        // dropped SSH connection, an invalid invocation): conflating that
+        // with "nothing is ignored" would let every candidate default to
+        // `.tracked` visibility and serialize names (e.g. `.env`) that
+        // should have been hidden, or fail the whole request outright.
+        guard result.exitCode <= 1 else {
+            throw ProcessError.nonZeroExit(result.exitCode, result.stderr)
+        }
 
         var visibility: [String: FileVisibility] = [:]
         for entry in checkIgnoreMatches(result.stdout) {
@@ -849,6 +1110,32 @@ extension GitService {
     private func hasVisibleDescendant(of root: String, in paths: Set<String>) -> Bool {
         let prefix = "\(root)/"
         return paths.contains { $0.hasPrefix(prefix) }
+    }
+
+    /// Whether an entry discovered only by listing the remote filesystem
+    /// (i.e. not already known to git) should be run through
+    /// `ignoredOrExcludedVisibility`.
+    ///
+    /// A directory that matches a `.gitignore` pattern can still contain a
+    /// tracked, force-added (`git add -f`) descendant. Unlike the local/eager
+    /// file tree — where `FileTreeNode.children` is a real nested array the
+    /// native UI recurses into even when the parent is `.ignored` — the
+    /// remote wire protocol's `RemoteFileNode` has no `children` field:
+    /// directory contents are fetched lazily, one flat `listFiles` request
+    /// per directory the client expands. If this directory is classified
+    /// `.ignored`/`.excluded`, `AppState.remoteFileNodes` drops it from its
+    /// PARENT's listing entirely, and the client can never issue the
+    /// `listFiles` request that would reveal the tracked descendant — there
+    /// is no way to "promote" that descendant up to reappear elsewhere.
+    /// Skipping classification here instead lets the directory default to
+    /// `.tracked` visibility (`FileTreeBuilder`'s default for any path with
+    /// no explicit entry), keeping it expandable.
+    func shouldClassifyRemotelyDiscoveredEntry(
+        fullPath: String,
+        isDirectory: Bool,
+        gitVisiblePaths: Set<String>
+    ) -> Bool {
+        !(isDirectory && hasVisibleDescendant(of: fullPath, in: gitVisiblePaths))
     }
 
     private func excludedSourcePaths(worktreePath: URL) async throws -> Set<String> {
@@ -1143,79 +1430,8 @@ extension GitService {
             )
         }
 
-        // Parse --numstat -z output.
-        // Format per entry (NUL-separated fields within each record):
-        //   "<add>\t<del>\t<path>\0"   (ordinary files)
-        //   "<add>\t<del>\t\0<oldPath>\0<newPath>\0"  (renames/copies)
-        // The -z flag separates records with NUL; we split on NUL and then
-        // handle the tab-delimited first element per record.
-        var addByPath: [String: Int] = [:]
-        var delByPath: [String: Int] = [:]
-
-        // With -z the stream is NUL-terminated. Split and process tokens.
-        let numstatTokens = numstat.stdout.components(separatedBy: "\0").filter { !$0.isEmpty }
-        var ni = 0
-        while ni < numstatTokens.count {
-            let token = numstatTokens[ni]
-            // Split on the first two tabs only so paths containing tab
-            // characters survive intact. Format is `<adds>\t<dels>\t<path>`;
-            // the trailing path field may itself contain tabs.
-            let parts = token.split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
-            guard parts.count >= 3 else { ni += 1
-            continue }
-            let addStr = parts[0]
-            let delStr = parts[1]
-            let pathField = parts[2]
-
-            let newPath: String
-            if pathField.isEmpty {
-                // Rename/copy: next two tokens are old and new path.
-                guard ni + 2 < numstatTokens.count else { ni += 1
-                continue }
-                // ni+1 = old path, ni+2 = new path
-                newPath = numstatTokens[ni + 2]
-                ni += 3
-            } else {
-                newPath = Self.numstatNewPath(pathField)
-                ni += 1
-            }
-            addByPath[newPath] = (addStr == "-") ? 0 : (Int(addStr) ?? 0)
-            delByPath[newPath] = (delStr == "-") ? 0 : (Int(delStr) ?? 0)
-        }
-
-        // Parse --name-status -z output.
-        // Format: "<status>\0<path>\0"  (ordinary)
-        //         "<status>\0<oldPath>\0<newPath>\0"  (R/C)
-        var statusByPath: [String: String] = [:]
-        var originalByPath: [String: String] = [:]
-        var ordered: [String] = []
-        var orderedSet: Set<String> = []
-
-        let nsTokens = nameStatus.stdout.components(separatedBy: "\0").filter { !$0.isEmpty }
-        var si = 0
-        while si < nsTokens.count {
-            let statusField = nsTokens[si]
-            guard !statusField.isEmpty else { si += 1
-            continue }
-            let statusLetter = String(statusField.prefix(1))
-            if statusLetter == "R" || statusLetter == "C" {
-                guard si + 2 < nsTokens.count else { si += 1
-                continue }
-                let oldPath = nsTokens[si + 1]
-                let newPath = nsTokens[si + 2]
-                statusByPath[newPath] = statusLetter
-                originalByPath[newPath] = oldPath
-                if orderedSet.insert(newPath).inserted { ordered.append(newPath) }
-                si += 3
-            } else {
-                guard si + 1 < nsTokens.count else { si += 1
-                continue }
-                let path = nsTokens[si + 1]
-                statusByPath[path] = statusLetter
-                if orderedSet.insert(path).inserted { ordered.append(path) }
-                si += 2
-            }
-        }
+        let (addByPath, delByPath) = Self.parseNumstatZOutput(numstat.stdout)
+        let (statusByPath, originalByPath, ordered) = Self.parseNameStatusZOutput(nameStatus.stdout)
 
         return ordered.map { path in
             CommitChangedFile(
@@ -1226,6 +1442,103 @@ extension GitService {
                 del: delByPath[path] ?? 0
             )
         }
+    }
+
+    /// Parses the NUL-separated token stream produced by `git diff ...
+    /// --numstat -z` (with `-c core.quotePath=false` so non-ASCII paths
+    /// aren't octal-escaped), returning per-path added/deleted line counts.
+    ///
+    /// Format per entry (NUL-separated fields within each record):
+    ///   "<add>\t<del>\t<path>\0"   (ordinary files)
+    ///   "<add>\t<del>\t\0<oldPath>\0<newPath>\0"  (renames/copies)
+    /// The -z flag separates records with NUL; this splits on NUL and then
+    /// handles the tab-delimited first element per record.
+    ///
+    /// Extracted from `stagedChangedFiles` so the remote-changes surface
+    /// (`GitService+RemoteChanges.swift`) can reuse the same
+    /// already-hardened parsing instead of duplicating it.
+    static func parseNumstatZOutput(_ stdout: String) -> (add: [String: Int], del: [String: Int]) {
+        var addByPath: [String: Int] = [:]
+        var delByPath: [String: Int] = [:]
+
+        // With -z the stream is NUL-terminated. Split and process tokens.
+        let tokens = stdout.components(separatedBy: "\0").filter { !$0.isEmpty }
+        var i = 0
+        while i < tokens.count {
+            let token = tokens[i]
+            // Split on the first two tabs only so paths containing tab
+            // characters survive intact. Format is `<adds>\t<dels>\t<path>`;
+            // the trailing path field may itself contain tabs.
+            let parts = token.split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
+            guard parts.count >= 3 else { i += 1
+            continue }
+            let addStr = parts[0]
+            let delStr = parts[1]
+            let pathField = parts[2]
+
+            let newPath: String
+            if pathField.isEmpty {
+                // Rename/copy: next two tokens are old and new path.
+                guard i + 2 < tokens.count else { i += 1
+                continue }
+                // i+1 = old path, i+2 = new path
+                newPath = tokens[i + 2]
+                i += 3
+            } else {
+                newPath = numstatNewPath(pathField)
+                i += 1
+            }
+            addByPath[newPath] = (addStr == "-") ? 0 : (Int(addStr) ?? 0)
+            delByPath[newPath] = (delStr == "-") ? 0 : (Int(delStr) ?? 0)
+        }
+        return (addByPath, delByPath)
+    }
+
+    /// Parses the NUL-separated token stream produced by `git diff ...
+    /// --name-status -z` (with `-c core.quotePath=false`), returning
+    /// per-path status letters, rename/copy source paths, and first-seen
+    /// path order.
+    ///
+    /// Format: "<status>\0<path>\0"  (ordinary)
+    ///         "<status>\0<oldPath>\0<newPath>\0"  (R/C)
+    ///
+    /// Extracted from `stagedChangedFiles` so the remote-changes surface
+    /// (`GitService+RemoteChanges.swift`) can reuse the same
+    /// already-hardened parsing instead of duplicating it.
+    static func parseNameStatusZOutput(
+        _ stdout: String
+    ) -> (status: [String: String], original: [String: String], ordered: [String]) {
+        var statusByPath: [String: String] = [:]
+        var originalByPath: [String: String] = [:]
+        var ordered: [String] = []
+        var orderedSet: Set<String> = []
+
+        let tokens = stdout.components(separatedBy: "\0").filter { !$0.isEmpty }
+        var i = 0
+        while i < tokens.count {
+            let statusField = tokens[i]
+            guard !statusField.isEmpty else { i += 1
+            continue }
+            let statusLetter = String(statusField.prefix(1))
+            if statusLetter == "R" || statusLetter == "C" {
+                guard i + 2 < tokens.count else { i += 1
+                continue }
+                let oldPath = tokens[i + 1]
+                let newPath = tokens[i + 2]
+                statusByPath[newPath] = statusLetter
+                originalByPath[newPath] = oldPath
+                if orderedSet.insert(newPath).inserted { ordered.append(newPath) }
+                i += 3
+            } else {
+                guard i + 1 < tokens.count else { i += 1
+                continue }
+                let path = tokens[i + 1]
+                statusByPath[path] = statusLetter
+                if orderedSet.insert(path).inserted { ordered.append(path) }
+                i += 2
+            }
+        }
+        return (statusByPath, originalByPath, ordered)
     }
 }
 

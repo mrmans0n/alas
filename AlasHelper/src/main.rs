@@ -18,6 +18,14 @@ use watch::{SubscriptionWatcher, WatchKind, WatchNotification};
 
 const PROTOCOL_VERSION: u32 = 1;
 
+/// Per-file byte budget for `fs_line_counts`. This request loop is shared by
+/// every filesystem/process request on this host, so counting a
+/// multi-gigabyte file's lines in full would monopolize it and delay
+/// unrelated requests. Matches the Swift-side `RemoteWorktreeFileAccess
+/// .maxFileBytes` order of magnitude: a file this large was never going to
+/// have its exact line count displayed precisely anyway.
+const FS_LINE_COUNT_MAX_BYTES: u64 = 512 * 1024;
+
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Handshake<'a> {
@@ -868,8 +876,40 @@ fn fs_line_counts(state: &HelperState, params: Option<Value>) -> Result<Value, H
     let mut entries = Vec::with_capacity(params.paths.len());
     for relative in params.paths {
         let requested = root.join(&relative);
-        let requested = requested.to_string_lossy().into_owned();
-        let path = match contained_existing_path(state, &requested) {
+        // Git's blob for a symlink IS the link's target path string, never
+        // the target's own file content — `git add`/`diff --numstat` never
+        // follow the link. Checked, and containment-validated, BEFORE ever
+        // calling `contained_existing_path` below: that call canonicalizes
+        // through the link to its TARGET, which is wrong on two counts for
+        // a symlink — a dangling target fails canonicalize entirely
+        // (silently dropping the entry, which the Changes list then shows
+        // as `+0`), and a target outside every registered root fails
+        // containment and aborts this whole request, even though reading
+        // the link's own destination string never touches that target at
+        // all. Containment here is validated against the LINK'S OWN
+        // location instead (`contained_symlink_path`, whose canonical
+        // parent is what has to land inside a root — the final,
+        // potentially-symlink component is deliberately left unresolved).
+        if let Ok(symlink_meta) = std::fs::symlink_metadata(&requested) {
+            if symlink_meta.file_type().is_symlink() {
+                let linked = contained_symlink_path(state, &requested)?;
+                let target = std::fs::read_link(&linked)
+                    .map_err(|error| jsonrpc_error(-32020, format!("read_link failed: {error}")))?;
+                let target = target.to_string_lossy();
+                let newlines = target.matches('\n').count() as u64;
+                let count = if target.is_empty() {
+                    0
+                } else if target.ends_with('\n') {
+                    newlines
+                } else {
+                    newlines + 1
+                };
+                entries.push(json!({ "path": relative, "lineCount": count }));
+                continue;
+            }
+        }
+        let requested_str = requested.to_string_lossy().into_owned();
+        let path = match contained_existing_path(state, &requested_str) {
             Ok(path) => path,
             Err(error) if error.code == -32021 => continue,
             Err(error) => return Err(error),
@@ -883,14 +923,41 @@ fn fs_line_counts(state: &HelperState, params: Option<Value>) -> Result<Value, H
             .map_err(|error| jsonrpc_error(-32020, format!("open failed: {error}")))?;
         let mut buffer = [0_u8; 64 * 1024];
         let mut count = 0_u64;
-        loop {
+        let mut saw_any_bytes = false;
+        let mut last_byte = 0_u8;
+        let mut total_read: u64 = 0;
+        let mut reached_eof = false;
+        // Caps the work per file, not just the response: this request loop
+        // is shared by every filesystem/process request on this host, so an
+        // untracked multi-gigabyte generated file read in full here would
+        // monopolize it and delay unrelated requests, even though the
+        // eventual Changes response is capped downstream regardless. Once
+        // the cap is hit, the count is a lower bound on the real line count
+        // (an approximation) rather than an exact figure — good enough for
+        // a Changes-list badge, which was never going to display the exact
+        // total for a file this large anyway.
+        while total_read < FS_LINE_COUNT_MAX_BYTES {
             let read = file
                 .read(&mut buffer)
                 .map_err(|error| jsonrpc_error(-32020, format!("read failed: {error}")))?;
             if read == 0 {
+                reached_eof = true;
                 break;
             }
+            saw_any_bytes = true;
             count += buffer[..read].iter().filter(|byte| **byte == b'\n').count() as u64;
+            last_byte = buffer[read - 1];
+            total_read += read as u64;
+        }
+        // Counting newline bytes alone undercounts a nonempty file whose
+        // final line has no trailing newline: git's numstat (and the local
+        // diff-parsing `addedLineCount` logic) both count that trailing
+        // partial line, so a one-line file with no trailing newline has a
+        // line count of 1, not 0. Only applies when the read actually
+        // reached EOF — `last_byte` after a cap-triggered stop is just
+        // wherever reading happened to end, not the file's true last byte.
+        if saw_any_bytes && reached_eof && last_byte != b'\n' {
+            count += 1;
         }
         entries.push(json!({ "path": relative, "lineCount": count }));
     }
@@ -2012,6 +2079,38 @@ fn contained_existing_path(state: &HelperState, path: &str) -> Result<PathBuf, H
     }
 }
 
+/// Containment for a symlink's OWN location, not wherever it points.
+/// `contained_existing_path` canonicalizes all the way through to the
+/// TARGET, which is wrong for an operation (like reading `read_link`'s
+/// destination string) that never actually touches the target: a dangling
+/// target fails that canonicalize outright, and a target outside every
+/// registered root fails containment even though nothing there is ever
+/// read. Canonicalizing just the PARENT directory resolves any symlinks in
+/// the ancestry (as intended) while deliberately leaving the final
+/// component — the symlink itself — untouched, then re-joins its file name
+/// onto that canonical parent.
+fn contained_symlink_path(state: &HelperState, path: &Path) -> Result<PathBuf, HelperError> {
+    if state.subscriptions.is_empty() {
+        return Err(jsonrpc_error(-32022, "no registered roots"));
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| jsonrpc_error(-32020, "path has no parent"))?;
+    let canonical_parent = std::fs::canonicalize(parent)
+        .map_err(|error| jsonrpc_error(-32020, format!("parent failed: {error}")))?;
+    if !state
+        .subscriptions
+        .values()
+        .any(|root| canonical_parent.starts_with(root))
+    {
+        return Err(jsonrpc_error(-32023, "path outside registered roots"));
+    }
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| jsonrpc_error(-32020, "path has no file name"))?;
+    Ok(canonical_parent.join(file_name))
+}
+
 fn contained_write_path(state: &HelperState, path: &str) -> Result<PathBuf, HelperError> {
     if state.subscriptions.is_empty() {
         return Err(jsonrpc_error(-32022, "no registered roots"));
@@ -2584,6 +2683,220 @@ mod tests {
         assert_eq!(listing["entries"][0]["name"], "a file.txt");
         assert_eq!(listing["entries"][1]["name"], "folder");
         assert_eq!(listing["entries"][1]["isDirectory"], true);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Git's blob for a symlink IS the link's target path string, never the
+    /// target's own file content. Without special-casing, `metadata` (which
+    /// follows the link) would find the target IS a big multi-line regular
+    /// file and read its whole content instead — wildly overcounting for a
+    /// path git itself always represents as a single-line blob (assuming a
+    /// realistic target path with no embedded newline).
+    #[test]
+    fn line_counts_count_a_symlink_as_its_target_path_string_not_the_targets_content() {
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-stats-symlink-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        std::fs::write(root.join("target.txt"), "one\ntwo\nthree\n").expect("target file");
+        std::os::unix::fs::symlink(root.join("target.txt"), root.join("link.txt"))
+            .expect("symlink");
+
+        let mut state = HelperState::default();
+        state.subscriptions.insert(
+            "1".to_string(),
+            std::fs::canonicalize(&root).expect("canonical root"),
+        );
+        let counts = fs_line_counts(
+            &state,
+            Some(json!({
+                "root": root.display().to_string(),
+                "paths": ["link.txt"]
+            })),
+        )
+        .expect("line counts");
+        assert_eq!(
+            counts["entries"],
+            json!([{"path": "link.txt", "lineCount": 1}])
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A dangling symlink (target doesn't exist) still has a real blob in
+    /// git's object model — the link's own destination string — counted
+    /// the same way as one whose target exists. `contained_existing_path`
+    /// would canonicalize straight through to the (missing) target and
+    /// fail outright; symlink handling must run BEFORE that call, using
+    /// containment on the link's own location instead.
+    #[test]
+    fn line_counts_count_a_dangling_symlink_as_its_target_path_string() {
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-stats-dangling-symlink-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        std::os::unix::fs::symlink(
+            root.join("does-not-exist.txt"),
+            root.join("broken-link.txt"),
+        )
+        .expect("symlink");
+
+        let mut state = HelperState::default();
+        state.subscriptions.insert(
+            "1".to_string(),
+            std::fs::canonicalize(&root).expect("canonical root"),
+        );
+        let counts = fs_line_counts(
+            &state,
+            Some(json!({
+                "root": root.display().to_string(),
+                "paths": ["broken-link.txt"]
+            })),
+        )
+        .expect("line counts");
+        assert_eq!(
+            counts["entries"],
+            json!([{"path": "broken-link.txt", "lineCount": 1}])
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A symlink pointing OUTSIDE every registered root is still safe to
+    /// count — reading `read_link`'s destination string never touches the
+    /// target at all — so this must succeed rather than aborting the whole
+    /// request the way `contained_existing_path`'s target-following
+    /// containment check would.
+    #[test]
+    fn line_counts_count_a_symlink_pointing_outside_every_registered_root() {
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-stats-outside-symlink-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        let outside = std::env::temp_dir().join(format!(
+            "alas-helper-stats-outside-target-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        std::fs::write(&outside, "secret\ncontent\n").expect("outside target");
+        std::os::unix::fs::symlink(&outside, root.join("outside-link.txt")).expect("symlink");
+
+        let mut state = HelperState::default();
+        state.subscriptions.insert(
+            "1".to_string(),
+            std::fs::canonicalize(&root).expect("canonical root"),
+        );
+        let counts = fs_line_counts(
+            &state,
+            Some(json!({
+                "root": root.display().to_string(),
+                "paths": ["outside-link.txt"]
+            })),
+        )
+        .expect("line counts");
+        assert_eq!(
+            counts["entries"],
+            json!([{"path": "outside-link.txt", "lineCount": 1}])
+        );
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_file(outside);
+    }
+
+    /// Counting newline bytes alone undercounts a nonempty file whose final
+    /// line has no trailing newline: git's numstat (and the local Swift
+    /// `addedLineCount` diff-parsing logic) both count that trailing
+    /// partial line, so a one-line file with no trailing newline has a
+    /// line count of 1, not 0.
+    #[test]
+    fn line_counts_account_for_a_missing_trailing_newline() {
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-stats-notrailingnl-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        std::fs::write(root.join("empty.txt"), "").expect("file");
+        std::fs::write(root.join("one-no-newline.txt"), "hello").expect("file");
+        std::fs::write(root.join("one-with-newline.txt"), "hello\n").expect("file");
+        std::fs::write(root.join("two-no-trailing-newline.txt"), "a\nb").expect("file");
+
+        let mut state = HelperState::default();
+        state.subscriptions.insert(
+            "1".to_string(),
+            std::fs::canonicalize(&root).expect("canonical root"),
+        );
+        let counts = fs_line_counts(
+            &state,
+            Some(json!({
+                "root": root.display().to_string(),
+                "paths": [
+                    "empty.txt",
+                    "one-no-newline.txt",
+                    "one-with-newline.txt",
+                    "two-no-trailing-newline.txt",
+                ]
+            })),
+        )
+        .expect("line counts");
+        assert_eq!(
+            counts["entries"],
+            json!([
+                {"path": "empty.txt", "lineCount": 0},
+                {"path": "one-no-newline.txt", "lineCount": 1},
+                {"path": "one-with-newline.txt", "lineCount": 1},
+                {"path": "two-no-trailing-newline.txt", "lineCount": 2},
+            ])
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A file larger than `FS_LINE_COUNT_MAX_BYTES` must not be read in
+    /// full: this request loop is shared by every filesystem/process
+    /// request on the host, so counting a multi-gigabyte generated file's
+    /// lines line-by-line would monopolize it and delay unrelated
+    /// requests. The count for an oversized file is an approximation (a
+    /// lower bound), not exact — asserted here as "less than the true
+    /// count" specifically, so a regression that silently reads the whole
+    /// file (making this assertion trivially true by coincidence) doesn't
+    /// slip through unnoticed.
+    #[test]
+    fn line_counts_cap_the_read_for_an_oversized_file() {
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-stats-oversized-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        // One line well past the cap, so a full read would report exactly
+        // 1 (no trailing newline) — capped counting must report something
+        // ELSE (0, since a `\n`-free prefix has no newlines) instead.
+        let huge_line = "x".repeat(FS_LINE_COUNT_MAX_BYTES as usize + 1024);
+        std::fs::write(root.join("huge.txt"), &huge_line).expect("file");
+
+        let mut state = HelperState::default();
+        state.subscriptions.insert(
+            "1".to_string(),
+            std::fs::canonicalize(&root).expect("canonical root"),
+        );
+        let counts = fs_line_counts(
+            &state,
+            Some(json!({
+                "root": root.display().to_string(),
+                "paths": ["huge.txt"]
+            })),
+        )
+        .expect("line counts");
+        let reported = counts["entries"][0]["lineCount"]
+            .as_u64()
+            .expect("lineCount");
+        assert_eq!(
+            reported, 0,
+            "capped read must not reach EOF and apply the no-trailing-newline +1"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 

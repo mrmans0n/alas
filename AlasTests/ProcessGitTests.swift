@@ -190,6 +190,83 @@ struct ProcessGitTests {
         #expect(result.stdout.contains("git version"))
     }
 
+    @Test func runCappedTerminatesEarlyAndReportsTruncationForOversizedOutput() async throws {
+        let result = try await Process.runCapped(
+            "/usr/bin/awk",
+            args: ["BEGIN { for (i = 0; i < 2000000; i++) printf \"x\" }"],
+            maxOutputBytes: 1_000
+        )
+        #expect(result.stdoutTruncated)
+        // Soft cap: allowed to overshoot by up to one pipe chunk, but must
+        // never approach anywhere near the full 2,000,000 bytes the awk
+        // script would otherwise have produced.
+        #expect(result.stdout.count >= 1_000)
+        #expect(result.stdout.count < 500_000)
+    }
+
+    @Test func runCappedDoesNotTruncateOutputUnderTheCap() async throws {
+        let result = try await Process.runCapped("/bin/echo", args: ["hi"], maxOutputBytes: 1_000_000)
+        #expect(!result.stdoutTruncated)
+        #expect(result.exitCode == 0)
+        #expect(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "hi")
+    }
+
+    /// `maxOutputBytes` cuts the byte stream wherever it happens to land —
+    /// including mid-way through a multibyte UTF-8 character. A strict
+    /// `String(data:encoding:.utf8)` decode fails closed on that, silently
+    /// turning an otherwise valid captured prefix into an empty string.
+    @Test func runCappedDecodesCleanlyWhenTheCapSplitsAMultibyteUTF8Character() async throws {
+        // "😀" (U+1F600) is 4 bytes in UTF-8 (F0 9F 98 80). Ask for exactly
+        // one leading ASCII byte plus the first 2 of those 4 bytes, so the
+        // cap lands inside the character.
+        let result = try await Process.runCapped(
+            "/bin/sh",
+            args: ["-c", "printf 'x\\360\\237\\230'"],   // "x" + 0xF0 0x9F 0x98 (missing the final 0x80)
+            maxOutputBytes: 3
+        )
+        #expect(result.stdout == "x")
+    }
+
+    @Test func decodeUTF8DroppingIncompleteTrailingScalarReturnsCompleteInputUnchanged() {
+        #expect(decodeUTF8DroppingIncompleteTrailingScalar(Data("hello".utf8)) == "hello")
+        #expect(decodeUTF8DroppingIncompleteTrailingScalar(Data()) == "")
+    }
+
+    @Test func decodeUTF8DroppingIncompleteTrailingScalarTrimsATruncatedTrailingCharacter() {
+        let complete = Data("x".utf8) + Data([0xF0, 0x9F, 0x98, 0x80])   // "x😀"
+        // Missing 1, 2, and 3 of the emoji's 4 bytes, respectively.
+        #expect(decodeUTF8DroppingIncompleteTrailingScalar(complete.dropLast(1)) == "x")
+        #expect(decodeUTF8DroppingIncompleteTrailingScalar(complete.dropLast(2)) == "x")
+        #expect(decodeUTF8DroppingIncompleteTrailingScalar(complete.dropLast(3)) == "x")
+        #expect(decodeUTF8DroppingIncompleteTrailingScalar(complete) == "x😀")
+    }
+
+    /// An invalid byte NOT at the tail — e.g. a Latin-1-encoded file with no
+    /// NUL byte (so it passes binary sniffing) whose raw bytes git emits
+    /// straight into the diff — isn't fixed by trimming the last 1-3 bytes.
+    /// Falling back to a lossy decode must still preserve the surrounding
+    /// valid text rather than discarding the whole captured diff.
+    @Test func decodeUTF8DroppingIncompleteTrailingScalarFallsBackToLossyDecodingForAnInteriorInvalidByte() {
+        // "café" in Latin-1: 'é' is the single byte 0xE9, which is not valid
+        // UTF-8 in this position (not a valid continuation or lead byte).
+        // Followed by more than 3 valid bytes, so the trailing-scalar-drop
+        // loop (which only ever removes the LAST 1-3 bytes) cannot mask this
+        // by coincidentally trimming the invalid byte away — the lossy
+        // fallback is the only path that can recover this input.
+        let data = Data("caf".utf8) + Data([0xE9]) + Data(" text after\n".utf8)
+        let decoded = decodeUTF8DroppingIncompleteTrailingScalar(data)
+        #expect(decoded.hasPrefix("caf"))
+        #expect(decoded.contains("\u{FFFD}"))
+        #expect(decoded.hasSuffix(" text after\n"))
+    }
+
+    @Test func gitCappedConvenienceCallStillWorks() async throws {
+        let result = try await Process.gitCapped(["--version"], maxOutputBytes: 1_000_000)
+        #expect(!result.stdoutTruncated)
+        #expect(result.exitCode == 0)
+        #expect(result.stdout.contains("git version"))
+    }
+
     @Test func gitInvocationSurvivesWorkingDirectoryDeletionBeforeLaunch() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-deleted-git-cwd-\(UUID().uuidString)")

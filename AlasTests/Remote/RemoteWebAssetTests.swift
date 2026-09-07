@@ -49,13 +49,13 @@ struct RemoteWebAssetTests {
         let sw = try asset("sw.js")
 
         #expect(html.contains(#"/session-ordering.js?v=1"#))
-        #expect(html.range(of: #"/session-ordering.js?v=1"#)!.lowerBound < html.range(of: #"/app.js?v=63"#)!.lowerBound)
-        #expect(html.contains(#"/app.js?v=63"#))
-        #expect(html.contains(#"/style.css?v=41"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v41";"#))
+        #expect(html.range(of: #"/session-ordering.js?v=1"#)!.lowerBound < html.range(of: #"/app.js?v=72"#)!.lowerBound)
+        #expect(html.contains(#"/app.js?v=72"#))
+        #expect(html.contains(#"/style.css?v=42"#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v51";"#))
         #expect(sw.contains(#""/session-ordering.js?v=1""#))
-        #expect(sw.contains(#""/app.js?v=63""#))
-        #expect(sw.contains(#""/style.css?v=41""#))
+        #expect(sw.contains(#""/app.js?v=72""#))
+        #expect(sw.contains(#""/style.css?v=42""#))
     }
 
     @Test func remoteWebToolRowsAvoidNativeButtonRenderingOnMobileSafari() throws {
@@ -68,11 +68,11 @@ struct RemoteWebAssetTests {
         #expect(app.contains("toggle.tabIndex = 0"))
         #expect(app.contains("function handleCardToggleKeydown"))
         #expect(!app.contains(#"const button = el("button", "tool-toggle")"#))
-        #expect(html.contains(#"/app.js?v=63"#))
-        #expect(html.contains(#"/style.css?v=41"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v41";"#))
-        #expect(sw.contains(#""/app.js?v=63""#))
-        #expect(sw.contains(#""/style.css?v=41""#))
+        #expect(html.contains(#"/app.js?v=72"#))
+        #expect(html.contains(#"/style.css?v=42"#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v51";"#))
+        #expect(sw.contains(#""/app.js?v=72""#))
+        #expect(sw.contains(#""/style.css?v=42""#))
     }
 
     @Test func remoteBareURLLinkifierPreservesIndentedCodeBlocks() throws {
@@ -119,8 +119,8 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".session-section"))
         #expect(css.contains(".session-section-title"))
         #expect(css.contains(".session-section-list"))
-        #expect(html.contains("/app.js?v=63"))
-        #expect(html.contains("/style.css?v=41"))
+        #expect(html.contains("/app.js?v=72"))
+        #expect(html.contains("/style.css?v=42"))
     }
 
     @Test func remoteWebExposesSessionRenameControls() throws {
@@ -145,8 +145,8 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".session-open"))
         #expect(css.contains("#detail-title"))
         #expect(css.contains(".sheet-input"))
-        #expect(sw.contains(#""/app.js?v=63""#))
-        #expect(sw.contains(#""/style.css?v=41""#))
+        #expect(sw.contains(#""/app.js?v=72""#))
+        #expect(sw.contains(#""/style.css?v=42""#))
     }
 
     @Test func configSheetScrollsWhenModelListOverflows() throws {
@@ -196,7 +196,7 @@ struct RemoteWebAssetTests {
         let sw = try asset("sw.js")
 
         #expect(html.contains(#"/worktree-creation.js?v=1"#))
-        #expect(html.range(of: #"/worktree-creation.js?v=1"#)!.lowerBound < html.range(of: #"/app.js?v=63"#)!.lowerBound)
+        #expect(html.range(of: #"/worktree-creation.js?v=1"#)!.lowerBound < html.range(of: #"/app.js?v=72"#)!.lowerBound)
         #expect(js.contains("const worktreeCreation = RemoteWorktreeCreation.createFlow(send);"))
         #expect(js.contains(#"case "projectList":"#))
         #expect(js.contains(#"case "branchList":"#))
@@ -334,9 +334,9 @@ struct RemoteWebAssetTests {
     @Test func incrementalTranscriptBustsServiceWorkerAssetCache() throws {
         let sw = try asset("sw.js")
         let html = try asset("index.html")
-        #expect(sw.contains("alas-remote-shell-v41"))
-        #expect(sw.contains("/app.js?v=63"))
-        #expect(html.contains("app.js?v=63"))
+        #expect(sw.contains("alas-remote-shell-v51"))
+        #expect(sw.contains("/app.js?v=72"))
+        #expect(html.contains("app.js?v=72"))
     }
 
     // Regression (codex review, PR #775): applyPage used to clear the
@@ -499,11 +499,11 @@ struct RemoteWebAssetTests {
         let html = try asset("index.html")
         let sw = try asset("sw.js")
 
-        #expect(html.contains(#"/app.js?v=63"#))
-        #expect(html.contains(#"/style.css?v=41"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v41";"#))
-        #expect(sw.contains(#""/app.js?v=63""#))
-        #expect(sw.contains(#""/style.css?v=41""#))
+        #expect(html.contains(#"/app.js?v=72"#))
+        #expect(html.contains(#"/style.css?v=42"#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v51";"#))
+        #expect(sw.contains(#""/app.js?v=72""#))
+        #expect(sw.contains(#""/style.css?v=42""#))
     }
 
     @Test func remoteWebOffersUndoAfterASteerDiscardsTheQueue() throws {
@@ -514,5 +514,208 @@ struct RemoteWebAssetTests {
         #expect(js.contains(#""queueSteerUndo""#))
         #expect(js.contains("Queue cleared by steer"))
         #expect(css.contains(".steer-undo"))
+    }
+
+    @Test func remoteWebShipsChangesAndFilesTabs() throws {
+        let html = try asset("index.html")
+        let sw = try asset("sw.js")
+
+        #expect(html.contains(#"id="detail-tabs""#))
+        #expect(html.contains(#"id="tab-chat""#))
+        #expect(html.contains(#"id="tab-changes""#))
+        #expect(html.contains(#"id="tab-files""#))
+        #expect(html.contains(#"<section id="changes" class="view hidden">"#))
+        #expect(html.contains(#"<section id="files" class="view hidden">"#))
+        #expect(html.contains(#"id="changes-summary""#))
+        #expect(html.contains(#"id="changes-refresh""#))
+        #expect(html.contains(#"id="changes-list""#))
+        #expect(html.contains(#"id="diff-rows""#))
+        #expect(html.contains(#"id="file-list""#))
+        #expect(html.contains(#"id="file-view-body""#))
+
+        #expect(html.contains(#"/changes-view.js?v=3"#))
+        #expect(html.contains(#"/file-browser.js?v=3"#))
+        #expect(html.range(of: #"/changes-view.js?v=3"#)!.lowerBound
+            < html.range(of: #"/app.js?v=72"#)!.lowerBound)
+        #expect(html.range(of: #"/file-browser.js?v=3"#)!.lowerBound
+            < html.range(of: #"/app.js?v=72"#)!.lowerBound)
+        #expect(sw.contains(#""/changes-view.js?v=3""#))
+        #expect(sw.contains(#""/file-browser.js?v=3""#))
+    }
+
+    @Test func remoteWebWiresTabSwitching() throws {
+        let js = try asset("app.js")
+        #expect(js.contains("function showTab(name)"))
+        #expect(js.contains("const changesTree = RemoteFileBrowser.createTree();"))
+        #expect(js.contains(#"type: "listChanges""#))
+        #expect(js.contains(#"type: "listFiles""#))
+    }
+
+    @Test func remoteWebHandlesChangesAndFilesMessages() throws {
+        let js = try asset("app.js")
+
+        #expect(js.contains(#"case "changeList":"#))
+        #expect(js.contains(#"case "changeListFailed":"#))
+        #expect(js.contains(#"case "fileDiffResult":"#))
+        #expect(js.contains(#"case "fileDiffFailed":"#))
+        #expect(js.contains(#"case "fileTree":"#))
+        #expect(js.contains(#"case "fileTreeFailed":"#))
+        #expect(js.contains(#"case "fileContents":"#))
+        #expect(js.contains(#"case "fileUnavailable":"#))
+        #expect(js.contains("function renderChanges()"))
+        #expect(js.contains("function renderDiff("))
+        #expect(js.contains("function renderFileTree()"))
+        #expect(js.contains("RemoteChangesView.diffRows("))
+        #expect(js.contains("RemoteChangesView.formatSummary("))
+    }
+
+    @Test func remoteWebRefreshesChangesWhenATurnGoesIdle() throws {
+        let js = try asset("app.js")
+        #expect(js.contains("function noteStreamingStateForChanges(state)"))
+        #expect(js.contains(#"activeTab !== "changes""#))
+    }
+
+    /// Regression: the Files tab had no way to invalidate a stale cached
+    /// listing — once loaded, switching back to it (or an idle turn
+    /// transition while it was open) never re-requested the tree, so an
+    /// agent creating/deleting/renaming files left the tab showing the old
+    /// tree for the rest of the session.
+    @Test func remoteWebRefreshesFilesTreeOnReopenAndWhenATurnGoesIdle() throws {
+        let js = try asset("app.js")
+        #expect(js.contains("function refreshFileTree()"))
+        // `showTab`'s files branch must unconditionally refresh on every
+        // reopen, not just the first time (`needsChildren(null)`).
+        let showTabBody = try #require(
+            js.range(of: "function showTab(name) {").map { js[$0.lowerBound...].prefix(1200) })
+        #expect(showTabBody.contains(#"if (name === "files") refreshFileTree();"#))
+        // The old gate (only fetch the FIRST time this tab is opened) must
+        // be gone from the live condition — a bare `needsChildren` check
+        // isn't enough since the explanatory comment above mentions it too.
+        #expect(!showTabBody.contains("changesTree.needsChildren"))
+        // The idle-transition refresh (shared with Changes) must also cover
+        // Files when that's the open tab.
+        let idleBody = try #require(
+            js.range(of: "function noteStreamingStateForChanges(state) {").map { js[$0.lowerBound...].prefix(500) })
+        #expect(idleBody.contains(#"activeTab !== "files""#))
+        let scheduleBody = try #require(
+            js.range(of: "function scheduleListRefresh() {").map { js[$0.lowerBound...].prefix(400) })
+        #expect(scheduleBody.contains("refreshFileTree()"))
+    }
+
+    /// Regression: `refreshFileTree()` used to send the root request AND
+    /// every expanded descendant's request in the same synchronous burst,
+    /// before the root response could prune a since-deleted/renamed
+    /// directory from `expandedPaths()` — so a vanished nested directory's
+    /// (now-invalid) request still went out, failing with `fileTreeFailed`
+    /// and leaving a stale error banner over the freshly refreshed tree.
+    /// Descendant requests must wait for the root response to be applied.
+    @Test func remoteWebRequestsExpandedDescendantsOnlyAfterTheRootResponseIsApplied() throws {
+        let js = try asset("app.js")
+        #expect(js.contains("let pendingExpandedPathsRefresh = false;"))
+        let refreshBody = try #require(
+            js.range(of: "function refreshFileTree() {").map { js[$0.lowerBound...].prefix(300) })
+        #expect(refreshBody.contains("pendingExpandedPathsRefresh = true;"))
+        #expect(!refreshBody.contains("expandedPaths()"))
+        let fileTreeBody = try #require(
+            js.range(of: #"case "fileTree": {"#).map { js[$0.lowerBound...].prefix(3000) })
+        #expect(fileTreeBody.contains("changesTree.applyNodes("))
+        #expect(fileTreeBody.range(of: "changesTree.applyNodes(")!.lowerBound
+            < fileTreeBody.range(of: "changesTree.expandedPaths()")!.lowerBound)
+        let fileTreeFailedBody = try #require(
+            js.range(of: #"case "fileTreeFailed":"#).map { js[$0.lowerBound...].prefix(300) })
+        #expect(fileTreeFailedBody.contains("pendingExpandedPathsRefresh = false;"))
+    }
+
+    /// Regression: refreshing several expanded directories in one
+    /// `refreshFileTree()` batch succeeds or fails per directory. The
+    /// `fileTree` success handler used to unconditionally hide the shared
+    /// error banner, so ONE sibling directory succeeding wiped out the
+    /// error a DIFFERENT sibling's failure had just shown — leaving that
+    /// failed directory's stale cached children on screen with no
+    /// indication anything went wrong. The banner must only clear once
+    /// every request in the batch has resolved AND none of them failed.
+    @Test func remoteWebPreservesTheFileErrorBannerAcrossASiblingDirectorysSuccessInTheSameRefreshBatch() throws {
+        let js = try asset("app.js")
+        #expect(js.contains("let expandedPathsRefreshInFlight = 0;"))
+        #expect(js.contains("let expandedPathsRefreshHadFailure = false;"))
+
+        // The unconditional top-of-case hide (any successful `fileTree`
+        // response, root or not, immediately clearing the banner) is gone.
+        #expect(!js.contains("""
+        $("file-error").classList.add("hidden");
+              const treeKey = msg.path === undefined || msg.path === null ? "" : msg.path;
+        """))
+
+        let fileTreeBody = try #require(
+            js.range(of: #"case "fileTree": {"#).map { js[$0.lowerBound...].prefix(3000) })
+        // Replaced by a gate that gives up clearing unless every in-flight
+        // sibling has resolved without a failure.
+        #expect(fileTreeBody.contains("expandedPathsRefreshInFlight -= 1;"))
+        #expect(fileTreeBody.contains("expandedPathsRefreshInFlight === 0 && !expandedPathsRefreshHadFailure"))
+        #expect(fileTreeBody.contains("expandedPathsRefreshInFlight = expandedPaths.length;"))
+        #expect(fileTreeBody.contains("expandedPathsRefreshHadFailure = false;"))
+
+        let fileTreeFailedBody = try #require(
+            js.range(of: #"case "fileTreeFailed":"#).map { js[$0.lowerBound...].prefix(500) })
+        #expect(fileTreeFailedBody.contains("expandedPathsRefreshInFlight -= 1;"))
+        #expect(fileTreeFailedBody.contains("expandedPathsRefreshHadFailure = true;"))
+    }
+
+    // Regression (final whole-branch review, finding 4): a `listChanges` per
+    // idle DELTA (rather than per idle TRANSITION) can back up the gateway's
+    // serialized per-connection message queue behind a burst of git
+    // subprocess calls. The fix must edge-trigger on the transition into
+    // idle AND debounce as defense in depth — either alone was flagged as
+    // insufficient during the plan's self-review.
+    @Test func remoteWebEdgeTriggersAndDebouncesTheIdleChangesRefresh() throws {
+        let js = try asset("app.js")
+        let body = try #require(
+            js.range(of: "function noteStreamingStateForChanges(state) {")
+                .map { js[$0.lowerBound...].prefix(800) }
+        )
+        #expect(body.contains("previousChangesStreamingState"))
+        #expect(body.contains("wasIdle"))
+        let scheduleBody = try #require(
+            js.range(of: "function scheduleListRefresh() {")
+                .map { js[$0.lowerBound...].prefix(400) }
+        )
+        #expect(scheduleBody.contains("setTimeout"))
+        #expect(scheduleBody.contains("clearTimeout"))
+        #expect(js.contains("let changesRefreshDebounceTimer = null;"))
+    }
+
+    /// Regression: an idle transition while a diff/file detail view is open
+    /// used to be dropped entirely — `previousChangesStreamingState` was
+    /// already updated to "idle" before the `detailStack` check, so no LATER
+    /// edge would ever fire once the user closed the detail, leaving the
+    /// list showing the pre-turn snapshot until a manual refresh or tab
+    /// switch. The refresh must be deferred (not dropped) and delivered when
+    /// the detail view closes.
+    @Test func remoteWebDefersTheIdleRefreshUntilADetailViewCloses() throws {
+        let js = try asset("app.js")
+        #expect(js.contains("let pendingListRefresh = false;"))
+        let idleBody = try #require(
+            js.range(of: "function noteStreamingStateForChanges(state) {").map { js[$0.lowerBound...].prefix(500) })
+        #expect(idleBody.contains("pendingListRefresh = true;"))
+        let closeBody = try #require(
+            js.range(of: "function closeDetailLevel() {").map { js[$0.lowerBound...].prefix(400) })
+        #expect(closeBody.contains("pendingListRefresh"))
+        #expect(closeBody.contains("scheduleListRefresh()"))
+    }
+
+    // Regression (sixth review pass, finding 4): the server's byte cap alone
+    // does not bound the NUMBER of DOM rows `renderFileContents` creates — a
+    // file near that cap made of many short lines can still produce enough
+    // rows to freeze a phone browser. The client must cap rendered lines
+    // separately and surface a distinct notice, since this can trip even
+    // when the server reports `truncated: false`.
+    @Test func remoteWebCapsTheNumberOfRenderedFileLines() throws {
+        let js = try asset("app.js")
+        let changesView = try asset("changes-view.js")
+
+        #expect(js.contains("const MAX_RENDERED_FILE_LINES = 5000;"))
+        #expect(js.contains("const linesTruncated = lines.length > MAX_RENDERED_FILE_LINES;"))
+        #expect(js.contains(#"RemoteChangesView.truncationNotice(linesTruncated, "lines")"#))
+        #expect(changesView.contains(#"if (kind === "lines") return "File truncated — too many lines to show.";"#))
     }
 }

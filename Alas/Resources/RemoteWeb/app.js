@@ -26,6 +26,12 @@ let everConnected = false;      // has any onopen fired this page load? separate
 let escalationTimer = null;     // fires after a continuous not-connected grace window, then shows the alarming gate
 let escalated = false;          // true once the grace window elapsed and the alarming gate is showing
 const GRACE_MS = 5000;          // total not-connected budget before escalating "Connecting…" → "Can't reach Alas"
+// A file within the server's byte cap can still contain an enormous NUMBER
+// of (short or empty) lines — one DOM row per line would freeze the browser
+// or exhaust memory on a phone. 5000 rows is comfortably more than a human
+// scrolls through in the file viewer while staying well short of causing
+// jank on mobile Safari.
+const MAX_RENDERED_FILE_LINES = 5000;
 let dismissedQuestion = null;   // {sessionId, requestId} the user closed; suppress re-shows of that exact prompt (ids aren't unique across sessions)
 let lastSentText = null;        // text of the most recent sendPrompt, kept so a server promptRejected can restore it instead of losing the message
 let lastSentAttachments = [];   // images of the most recent sendPrompt, restored alongside the text on promptRejected
@@ -46,6 +52,16 @@ let createState = {
 };
 const worktreeCreation = RemoteWorktreeCreation.createFlow(send);
 worktreeCreation.subscribe(() => renderCreateSheet());
+const changesTree = RemoteFileBrowser.createTree();
+let activeTab = "chat";
+let changesState = { comparisonRef: null, metricsAvailable: true, files: [], truncated: false, loaded: false };
+// Paths (root as "") of directory listings the server reported as truncated
+// (more immediate children than RemoteWorktreeFileAccess.maxFileTreeNodes).
+// `visibleRows()` shows the whole expanded tree at once, so a single notice
+// covering any truncated level (rather than per-directory placement) keeps
+// this simple.
+let fileTreeTruncatedPaths = new Set();
+let detailStack = [];   // [{ tab, path }] for the in-tab list → detail level
 const ATTACH_CAP = 10 * 1000 * 1000;   // 10 MB running total — matches the server's maxAttachmentsBytes
 
 // state ∈ {connecting, ok, bad} drives the chip's dot/border color via [data-state].
@@ -197,6 +213,8 @@ async function connect() {
     reconnectDelay = initialReconnectDelay;   // reset back-off after a good connection
     send({ type: "listSessions" });
     if (currentSession) send({ type: "subscribe", sessionId: currentSession });   // re-sync after reconnect
+    replayActiveDetailRequest();   // the file/diff request itself doesn't survive a dropped socket
+    replayActiveListRequest();     // ...and neither does a listChanges/root listFiles request
     if (createState.open) {
       createState.error = "";
       requestCreateLists();
@@ -297,6 +315,102 @@ function handle(msg) {
       break;
     case "sessionClosed": if (msg.sessionId === currentSession) showSessions(); break;
     case "promptRejected": if (msg.sessionId === currentSession) restoreRejectedPrompt(); break;
+    case "changeList":
+      if (msg.sessionId !== currentSession) break;
+      $("changes-error").classList.add("hidden");
+      changesState = {
+        comparisonRef: msg.comparisonRef || null,
+        metricsAvailable: msg.metricsAvailable !== false,
+        files: msg.files || [],
+        truncated: !!msg.truncated,
+        loaded: true
+      };
+      renderChanges();
+      break;
+    case "changeListFailed":
+      if (msg.sessionId !== currentSession) break;
+      changesState.loaded = true;
+      showChangesError(fileAccessMessage(msg.reason, null));
+      break;
+    case "fileDiffResult":
+      if (msg.sessionId !== currentSession) break;
+      renderDiff(msg.path, msg.hunks || [], !!msg.truncated, msg.metadataNote || null);
+      break;
+    case "fileDiffFailed":
+      if (msg.sessionId !== currentSession) break;
+      if ($("diff-path").textContent === msg.path) {
+        $("diff-rows").innerHTML = "";
+        $("diff-rows").append(el("p", "placeholder-card", fileAccessMessage(msg.reason, null)));
+      }
+      break;
+    case "fileTree": {
+      if (msg.sessionId !== currentSession) break;
+      const treeKey = msg.path === undefined || msg.path === null ? "" : msg.path;
+      if (treeKey === "") {
+        // Starting a fresh refresh (or an ad-hoc root reload): whatever
+        // error a PRIOR cycle left behind no longer applies.
+        $("file-error").classList.add("hidden");
+      } else if (expandedPathsRefreshInFlight > 0) {
+        // Part of an in-flight refreshFileTree() batch — refreshing
+        // several expanded directories independently succeeds or fails
+        // per directory. Clearing the shared banner on every individual
+        // success would hide a still-outstanding (or already failed)
+        // sibling's error while that directory keeps showing its stale
+        // cached children with no indication anything went wrong. Only
+        // clear once every request in this batch has resolved AND none
+        // of them failed.
+        expandedPathsRefreshInFlight -= 1;
+        if (expandedPathsRefreshInFlight === 0 && !expandedPathsRefreshHadFailure) {
+          $("file-error").classList.add("hidden");
+        }
+      } else {
+        // An ad-hoc, user-initiated directory expansion outside any
+        // refresh batch — its own success clearing the banner is fine.
+        $("file-error").classList.add("hidden");
+      }
+      if (msg.truncated) fileTreeTruncatedPaths.add(treeKey);
+      else fileTreeTruncatedPaths.delete(treeKey);
+      changesTree.applyNodes(msg.path === undefined ? null : msg.path, msg.nodes || []);
+      // Only AFTER applying the root response — not synchronously alongside
+      // the root request in `refreshFileTree()` — does `expandedPaths()`
+      // reflect any directory that response just pruned (deleted/renamed
+      // since the last listing). Requesting descendants any earlier would
+      // still include a since-vanished path, which the server processes
+      // right after the (by-then-already-superseded) root response and
+      // fails, leaving a stale error banner over the freshly refreshed tree.
+      if (treeKey === "" && pendingExpandedPathsRefresh) {
+        pendingExpandedPathsRefresh = false;
+        const expandedPaths = changesTree.expandedPaths();
+        expandedPathsRefreshInFlight = expandedPaths.length;
+        expandedPathsRefreshHadFailure = false;
+        for (const path of expandedPaths) {
+          send({ type: "listFiles", sessionId: currentSession, path });
+        }
+      }
+      renderFileTree();
+      break;
+    }
+    case "fileTreeFailed":
+      if (msg.sessionId !== currentSession) break;
+      if (msg.path === undefined || msg.path === null) {
+        pendingExpandedPathsRefresh = false;
+      } else if (expandedPathsRefreshInFlight > 0) {
+        expandedPathsRefreshInFlight -= 1;
+        expandedPathsRefreshHadFailure = true;
+      }
+      showFileError(fileAccessMessage(msg.reason, null));
+      break;
+    case "fileContents":
+      if (msg.sessionId !== currentSession) break;
+      renderFileContents(msg.path, msg.text || "", !!msg.truncated);
+      break;
+    case "fileUnavailable":
+      if (msg.sessionId !== currentSession) break;
+      if ($("file-view-path").textContent === msg.path) {
+        $("file-view-body").innerHTML = "";
+        $("file-view-body").append(el("p", "placeholder-card", fileAccessMessage(msg.reason, msg.byteSize)));
+      }
+      break;
     case "error": setStatus("Error", "bad"); $("status").title = msg.message ?? ""; break;
     default: console.warn("unknown message type", msg.type);
   }
@@ -382,6 +496,16 @@ function plural(count, singular) {
   return `${count} ${singular}${count === 1 ? "" : "s"}`;
 }
 
+function resetChangesAndFilesDOM() {
+  $("changes-list").innerHTML = "";
+  $("changes-summary").textContent = "";
+  $("changes-error").textContent = ""; $("changes-error").classList.add("hidden");
+  $("file-list").innerHTML = "";
+  $("file-error").textContent = ""; $("file-error").classList.add("hidden");
+  $("diff-rows").innerHTML = ""; $("diff-path").textContent = "";
+  $("file-view-body").innerHTML = ""; $("file-view-path").textContent = "";
+}
+
 function openSession(id) {
   clearSessionSheetsForOpen();
   currentSession = id; messages = new Map(); messageNodes = new Map(); transcriptMeta = null; olderFetchInFlight = false;
@@ -393,6 +517,345 @@ function openSession(id) {
   $("messages").innerHTML = ""; renderConfigAffordances();
   queueItems = []; steerUndoAvailable = false; renderQueue();
   renderDriveBar("idle"); send({ type: "subscribe", sessionId: id });
+  changesTree.reset();
+  changesState = { comparisonRef: null, metricsAvailable: true, files: [], truncated: false, loaded: false };
+  fileTreeTruncatedPaths = new Set();
+  detailStack = [];
+  resetChangesAndFilesDOM();
+  if (changesRefreshDebounceTimer) { clearTimeout(changesRefreshDebounceTimer); changesRefreshDebounceTimer = null; }
+  previousChangesStreamingState = "idle";
+  pendingListRefresh = false;
+  pendingExpandedPathsRefresh = false;
+  const summary = listedSessions.get(id);
+  $("detail-tabs").classList.toggle("hidden", !summary || !summary.worktree);
+  showTab("chat");
+}
+
+function showTabListLevel() {
+  $("changes-list").classList.remove("hidden");
+  $("changes-header").classList.remove("hidden");
+  $("file-list").classList.remove("hidden");
+}
+
+function showTab(name) {
+  activeTab = name;
+  detailStack = [];
+  pendingListRefresh = false;   // this switch's own unconditional fetch below covers it
+  pendingExpandedPathsRefresh = false;   // ditto
+  $("diff-view").classList.add("hidden");
+  $("file-view").classList.add("hidden");
+  showTabListLevel();
+  for (const [id, tab] of [["tab-chat", "chat"], ["tab-changes", "changes"], ["tab-files", "files"]]) {
+    $(id).classList.toggle("is-active", tab === name);
+  }
+  $("transcript").classList.toggle("hidden", name !== "chat");
+  $("changes").classList.toggle("hidden", name !== "changes");
+  $("files").classList.toggle("hidden", name !== "files");
+  if (name === "changes") requestChanges();
+  // Always re-fetch on reopening (not just the first time,
+  // `needsChildren(null)`) — the agent may have created, deleted, or
+  // renamed files since the tree was last loaded, and there's no other
+  // signal that would invalidate the cached listing otherwise.
+  if (name === "files") refreshFileTree();
+}
+
+function requestChanges() {
+  if (!currentSession) return;
+  send({ type: "listChanges", sessionId: currentSession });
+}
+
+/// Re-requests the Files root PLUS every currently-expanded directory, so a
+/// refresh doesn't collapse the tree back to just the root — `applyNodes`
+/// overwrites a path's children in place, so this is safe to call whether
+/// or not anything actually changed on the host.
+// Set by `refreshFileTree()`; consumed by the `fileTree`/`fileTreeFailed`
+// handlers once the ROOT response for that refresh comes back. See the
+// `fileTree` case for why the expanded-descendant requests wait for it
+// instead of going out in the same burst as the root request.
+let pendingExpandedPathsRefresh = false;
+// Number of expanded-directory `listFiles` requests still outstanding for
+// the CURRENT refresh batch (0 when no batch is in flight), and whether any
+// of them has failed so far — together these let the `fileTree`/
+// `fileTreeFailed` handlers clear the shared error banner only once every
+// sibling directory in the batch has resolved AND none of them failed,
+// instead of one sibling's success wiping out another's still-visible
+// failure.
+let expandedPathsRefreshInFlight = 0;
+let expandedPathsRefreshHadFailure = false;
+
+function refreshFileTree() {
+  if (!currentSession) return;
+  send({ type: "listFiles", sessionId: currentSession });
+  pendingExpandedPathsRefresh = true;
+}
+
+$("tab-chat").addEventListener("click", () => showTab("chat"));
+$("tab-changes").addEventListener("click", () => showTab("changes"));
+$("tab-files").addEventListener("click", () => showTab("files"));
+$("changes-refresh").addEventListener("click", requestChanges);
+
+function renderChanges() {
+  const list = $("changes-list");
+  list.innerHTML = "";
+  $("changes-summary").textContent = changesState.loaded
+    ? RemoteChangesView.formatSummary(changesState)
+    : "Loading changes…";
+
+  if (changesState.loaded && !changesState.metricsAvailable) {
+    list.append(el("p", "placeholder-card", "Change metrics are unavailable for this worktree."));
+    return;
+  }
+
+  if (changesState.loaded && changesState.files.length === 0) {
+    list.append(el("p", "placeholder-card", "No changes yet."));
+    return;
+  }
+
+  for (const file of RemoteChangesView.sortFiles(changesState.files)) {
+    const parts = RemoteChangesView.splitPath(file.path);
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "change-row";
+    row.onclick = () => openDiff(file.path);
+
+    row.append(el("span", "change-dir", parts.dir), el("span", "change-name", parts.name));
+    if (file.conflict) row.append(el("span", "change-conflict", "conflict"));
+    row.append(el("span", "change-status", file.status));
+    row.append(el("span", "change-counts", RemoteChangesView.formatFileCounts(file)));
+    list.appendChild(row);
+  }
+
+  const notice = RemoteChangesView.truncationNotice(changesState.truncated, "files");
+  if (notice) list.append(el("p", "placeholder-card", notice));
+}
+
+function openDiff(path) {
+  detailStack.push({ tab: "changes", path });
+  $("changes-list").classList.add("hidden");
+  $("changes-header").classList.add("hidden");
+  $("diff-view").classList.remove("hidden");
+  $("diff-path").textContent = path;
+  $("diff-rows").innerHTML = "";
+  send({ type: "fileDiff", sessionId: currentSession, path });
+}
+
+function closeDetailLevel() {
+  detailStack.pop();
+  $("diff-view").classList.add("hidden");
+  $("file-view").classList.add("hidden");
+  showTabListLevel();
+  if (pendingListRefresh && detailStack.length === 0) {
+    pendingListRefresh = false;
+    scheduleListRefresh();
+  }
+}
+
+// If the socket drops while a file or diff detail view is open, `onopen`'s
+// `subscribe` only re-syncs the session's transcript — the `readFile`/
+// `fileDiff` request itself was in flight on the OLD socket and is gone
+// with it, so without this the viewer is stuck on "Loading…" (files) or an
+// empty diff (changes) indefinitely, until the user backs out and reopens
+// it. `detailStack`'s top entry is whichever detail view is currently
+// showing (or none, if the user is at a list level), so replaying its
+// request on every reconnect (a no-op when the stack is empty) covers both
+// "dropped mid-request" and "dropped while idly viewing" the same way.
+function replayActiveDetailRequest() {
+  if (!currentSession || detailStack.length === 0) return;
+  const top = detailStack[detailStack.length - 1];
+  if (top.tab === "files") {
+    send({ type: "readFile", sessionId: currentSession, path: top.path });
+  } else if (top.tab === "changes") {
+    send({ type: "fileDiff", sessionId: currentSession, path: top.path });
+  }
+}
+
+// Same reconnect problem as `replayActiveDetailRequest`, one level up: if
+// the socket drops right after the INITIAL `listChanges`/root `listFiles`
+// request but before its response, `detailStack` is still empty (the user
+// never got past the list level), so `replayActiveDetailRequest` has
+// nothing to replay — the Changes list or Files root would otherwise sit
+// blank/loading indefinitely until the user switches tabs or manually
+// refreshes. Only fires at the list level (`detailStack` empty); once a
+// detail view is open, replaying its request above takes priority.
+//
+// The Files branch uses `refreshFileTree()` rather than a bare root
+// `listFiles` — a plain root request only repopulates top-level nodes and
+// leaves every already-expanded directory's cached children untouched, so
+// an edit made to a file beneath an expanded directory while disconnected
+// stayed stale until another manual refresh or tab switch. Also covers the
+// case where the socket dropped WHILE already showing the Files list (not
+// just before its first response ever arrived) — same code path, since
+// `detailStack` is empty in both.
+function replayActiveListRequest() {
+  if (!currentSession || detailStack.length > 0) return;
+  if (activeTab === "changes") {
+    requestChanges();
+  } else if (activeTab === "files") {
+    refreshFileTree();
+  }
+}
+
+function renderDiff(path, hunks, truncated, metadataNote) {
+  if ($("diff-path").textContent !== path) return;   // a newer file is open
+  const container = $("diff-rows");
+  container.innerHTML = "";
+  const metadataNotice = RemoteChangesView.metadataOnlyNotice(hunks, metadataNote);
+  if (metadataNotice) {
+    container.append(el("p", "placeholder-card", metadataNotice));
+    return;
+  }
+  for (const row of RemoteChangesView.diffRows(hunks)) {
+    if (row.type === "hunk") {
+      container.append(el("div", "diff-hunk", row.text));
+      continue;
+    }
+    const line = el("div", "diff-line " + row.kind);
+    line.append(
+      el("span", "diff-gutter", row.oldNumber === null ? "" : String(row.oldNumber)),
+      el("span", "diff-gutter", row.newNumber === null ? "" : String(row.newNumber)),
+      el("span", "", row.text));
+    if (row.noTrailingNewline) {
+      line.append(el("span", "diff-no-newline", " (no newline at end of file)"));
+    }
+    container.appendChild(line);
+  }
+  const notice = RemoteChangesView.truncationNotice(truncated, "diff");
+  if (notice) container.append(el("p", "placeholder-card", notice));
+}
+
+function renderFileTree() {
+  const list = $("file-list");
+  list.innerHTML = "";
+  for (const row of changesTree.visibleRows()) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "file-row";
+    button.style.paddingLeft = 12 + row.depth * 14 + "px";
+
+    const isSubmodule = row.node.kind === "dir" && row.node.isSubmodule === true;
+    const label = row.node.kind === "dir"
+      ? (isSubmodule ? "◇ " : (row.expanded ? "▾ " : "▸ ")) + row.node.name
+      : row.node.name;
+    button.append(el("span", "", label));
+    if (isSubmodule) button.append(el("span", "change-counts", "submodule"));
+    else if (row.node.badge) button.append(el("span", "change-counts", row.node.badge));
+
+    button.onclick = () => {
+      if (row.node.kind === "dir") {
+        // Submodules are a separate git repo: `git check-ignore` / the
+        // server's `listFiles` walk fail on paths inside one ("Pathspec ...
+        // is in submodule"). Treat the row as a non-expandable leaf instead
+        // of sending a `listFiles` request that can only fail.
+        if (isSubmodule) return;
+        if (changesTree.toggle(row.node.path)) {
+          send({ type: "listFiles", sessionId: currentSession, path: row.node.path });
+        }
+        renderFileTree();
+        return;
+      }
+      openFileView(row.node.path);
+    };
+    list.appendChild(button);
+  }
+
+  const notice = RemoteChangesView.truncationNotice(fileTreeTruncatedPaths.size > 0, "directory");
+  if (notice) list.append(el("p", "placeholder-card", notice));
+}
+
+function openFileView(path) {
+  detailStack.push({ tab: "files", path });
+  $("file-list").classList.add("hidden");
+  $("file-view").classList.remove("hidden");
+  $("file-view-path").textContent = path;
+  $("file-view-body").textContent = "Loading…";
+  send({ type: "readFile", sessionId: currentSession, path });
+}
+
+function renderFileContents(path, text, truncated) {
+  if ($("file-view-path").textContent !== path) return;
+  const body = $("file-view-body");
+  body.innerHTML = "";
+  const lines = text.split("\n");
+  const linesTruncated = lines.length > MAX_RENDERED_FILE_LINES;
+  const shown = linesTruncated ? lines.slice(0, MAX_RENDERED_FILE_LINES) : lines;
+  shown.forEach((line, index) => {
+    const row = el("div", "diff-line");
+    row.append(el("span", "diff-gutter", String(index + 1)), el("span", "", line));
+    body.appendChild(row);
+  });
+  if (truncated) body.append(el("p", "placeholder-card", "File truncated."));
+  // Distinct from the byte-based `truncated` flag above: a file can be under
+  // the server's byte cap (so `truncated` is false) yet still have more
+  // lines than we're willing to render as individual DOM rows.
+  const notice = RemoteChangesView.truncationNotice(linesTruncated, "lines");
+  if (notice) body.append(el("p", "placeholder-card", notice));
+}
+
+function fileAccessMessage(reason, byteSize) {
+  switch (reason) {
+    case "binary": return "Binary file — not shown.";
+    case "tooLarge": return byteSize
+      ? "File is " + Math.round(byteSize / 1024) + " KB — too large to view."
+      : "File is too large to view.";
+    case "pathRejected": return "That path is outside this worktree.";
+    case "notFound": return "File not found.";
+    case "worktreeUnavailable": return "This session's worktree is unavailable.";
+    case "sessionUnknown": return "This session is no longer open on the host.";
+    default: return "Could not read this file.";
+  }
+}
+
+function showChangesError(text) {
+  const error = $("changes-error");
+  error.textContent = text;
+  error.classList.remove("hidden");
+}
+
+function showFileError(text) {
+  const error = $("file-error");
+  error.textContent = text;
+  error.classList.remove("hidden");
+}
+
+let previousChangesStreamingState = "idle";   // so we can edge-trigger on the idle TRANSITION only
+let changesRefreshDebounceTimer = null;
+const CHANGES_REFRESH_DEBOUNCE_MS = 500;
+// Set when an idle transition wants to refresh the open tab's list but a
+// detail view (diff/file) is in the way — closing the detail only toggles
+// DOM visibility (`showTabListLevel()`), so without this the list would
+// otherwise show the pre-turn snapshot until a manual refresh or tab
+// switch. Consumed by `closeDetailLevel()`.
+let pendingListRefresh = false;
+
+function scheduleListRefresh() {
+  if (changesRefreshDebounceTimer) clearTimeout(changesRefreshDebounceTimer);
+  changesRefreshDebounceTimer = setTimeout(() => {
+    changesRefreshDebounceTimer = null;
+    if (activeTab === "changes") requestChanges();
+    else if (activeTab === "files") refreshFileTree();
+  }, CHANGES_REFRESH_DEBOUNCE_MS);
+}
+
+/// Re-fetch the change list (or the Files tree, if that's the open tab)
+/// when the agent stops, but only on the actual transition into idle (not
+/// on every idle delta, and not on an already-idle first delta) and only
+/// while the relevant tab is open — the server keeps no per-tab state.
+/// Debounced as defense in depth: the gateway serializes non-control
+/// messages per-connection, so a burst of transitions must not queue up a
+/// pile of list requests. Files shares this edge-trigger rather than
+/// getting its own: an agent turn is the same underlying signal for both
+/// ("something on disk may have changed"), and only one of the two tabs is
+/// ever active at a time.
+function noteStreamingStateForChanges(state) {
+  const wasIdle = previousChangesStreamingState === "idle";
+  previousChangesStreamingState = state;
+  if (state !== "idle" || wasIdle) return;
+  if (activeTab !== "changes" && activeTab !== "files") return;
+  if (detailStack.length !== 0) {
+    pendingListRefresh = true;
+    return;
+  }
+  scheduleListRefresh();
 }
 
 function clearSessionSheetsForOpen() {
@@ -414,6 +877,19 @@ function showSessions() {
   $("detail-title").classList.add("hidden"); $("detail-rename").classList.add("hidden");
   $("drivebar").classList.add("hidden");
   $("transcript").classList.add("hidden"); $("sessions").classList.remove("hidden");
+  changesTree.reset();
+  changesState = { comparisonRef: null, metricsAvailable: true, files: [], truncated: false, loaded: false };
+  fileTreeTruncatedPaths = new Set();
+  detailStack = [];
+  resetChangesAndFilesDOM();
+  if (changesRefreshDebounceTimer) { clearTimeout(changesRefreshDebounceTimer); changesRefreshDebounceTimer = null; }
+  previousChangesStreamingState = "idle";
+  pendingListRefresh = false;
+  pendingExpandedPathsRefresh = false;
+  activeTab = "chat";
+  $("detail-tabs").classList.add("hidden");
+  $("changes").classList.add("hidden");
+  $("files").classList.add("hidden");
   send({ type: "listSessions" });
 }
 
@@ -2406,6 +2882,7 @@ function markStopping(on) {
 function syncStreamingState(streamingState) {
   if (streamingState === "idle" && stopPending) markStopping(false);
   renderDriveBar(streamingState);
+  noteStreamingStateForChanges(streamingState);
 }
 
 // takeOver seizes the lease synchronously server-side and messages are ordered,
@@ -2639,7 +3116,10 @@ $("question").onclick = (e) => { if (e.target.id === "question") dismissQuestion
 $("permission").onclick = (e) => { if (e.target.id === "permission") hidePermission(); };
 $("elicitation").onclick = (e) => { if (e.target.id === "elicitation") resolveElicitation("cancel"); };
 
-$("back").onclick = showSessions;
+$("back").onclick = () => {
+  if (detailStack.length > 0) { closeDetailLevel(); return; }
+  showSessions();
+};
 $("gate-retry").onclick = retryConnection;
 
 // iOS overlays the keyboard without shrinking the layout viewport, so a

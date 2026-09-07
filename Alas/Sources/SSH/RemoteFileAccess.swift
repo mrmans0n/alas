@@ -127,6 +127,45 @@ enum RemoteFileAccess {
         }
     }
 
+    /// Bounded-prefix variant of `readScript`: reads only the first
+    /// `maxBytes` bytes via `head -c` instead of the whole file (`cat`).
+    /// Mirrors `readScript`'s exact quoting and exit-code conventions
+    /// (0 = readable, 3 = directory, 4 = missing, 5 = symlink) so it can
+    /// share `readViaExec`'s result mapping — this is the exec-only
+    /// counterpart to a helper-RPC bounded read, which doesn't exist: the
+    /// filesystem/v0.4 `fs/read` contract (`RemoteHelperProtocol.swift`)
+    /// only accepts an `offset`, not a byte cap.
+    ///
+    /// Used only for binary sniffing ahead of a diff
+    /// (`AppState.isDiffTargetBinary`), never to serve real file contents —
+    /// callers that need the whole file still go through `read(host:path:)`.
+    static func readPrefixScript(path: String, maxBytes: Int) -> String {
+        "f=\(SSHCommand.shellQuote(path)); "
+            + "[ -L \"$f\" ] && exit 5; "
+            + "[ -d \"$f\" ] && exit 3; "
+            + "[ -e \"$f\" ] || exit 4; "
+            + "head -c \(maxBytes) \"$f\""
+    }
+
+    /// Returns the first `maxBytes` bytes of the remote file at `path` over
+    /// exec, or nil when it's missing, a directory, a symlink, or otherwise
+    /// unreadable. There is no on-disk size check here (unlike `read`) —
+    /// the whole point is a bounded read that never needs to know the
+    /// file's total size.
+    static func readPrefix(host: String, path: String, maxBytes: Int) async throws -> Data? {
+        let startedAt = CFAbsoluteTimeGetCurrent()
+        defer { RemoteOperationTiming.log("fs/readPrefix", host: host, transport: "exec", startedAt: startedAt) }
+        let result = try await RemoteExec.runData(
+            host: host,
+            cwd: nil,
+            command: readPrefixScript(path: path, maxBytes: maxBytes)
+        )
+        if RemoteExec.isConnectionFailure(exitCode: result.exitCode) {
+            throw RemoteFileAccessError.connectionFailed(result.stderr)
+        }
+        return result.exitCode == 0 ? result.stdout : nil
+    }
+
     private static func readViaExec(host: String, path: String) async throws -> RemoteReadResult {
         let startedAt = CFAbsoluteTimeGetCurrent()
         defer { RemoteOperationTiming.log("fs/read", host: host, transport: "exec", startedAt: startedAt) }
@@ -310,6 +349,52 @@ enum RemoteFileAccess {
         case "missing": return .missing
         default: return .unknown
         }
+    }
+
+    /// Returns nil when the target does not exist (or size could not be
+    /// determined). Throws only for an ssh connection failure. Mirrors
+    /// `mtime`'s helper-first, exec-fallback structure so a caller can
+    /// reject an oversized remote file BEFORE transferring its bytes —
+    /// see `AppState.readRemoteWorktreeFileRaw`.
+    static func size(host: String, path: String) async throws -> UInt64? {
+        if await helperIsInstalled(host: host) {
+            let startedAt = CFAbsoluteTimeGetCurrent()
+            do {
+                let client = await RemoteHelperClientPool.shared.client(for: host)
+                let result = try await client.stat(paths: [path])
+                RemoteOperationTiming.log("fs/stat", host: host, transport: "helper", startedAt: startedAt)
+                guard let entry = result.entries.first, entry.exists else { return nil }
+                return entry.size
+            } catch let error as RemoteHelperClientError where !error.shouldFallbackToRemoteExec {
+                RemoteOperationTiming.log("fs/stat", host: host, transport: "helper", startedAt: startedAt)
+                return nil
+            } catch {
+                RemoteOperationTiming.log("fs/stat", host: host, transport: "helper-fallback", startedAt: startedAt)
+            }
+        }
+        return try await sizeViaExec(host: host, path: path)
+    }
+
+    /// Chained GNU-then-BSD byte-size probe, mirroring `statMtime`'s
+    /// GNU/BSD-`stat` fallback pattern. Exposed (not `private`) so tests can
+    /// exercise the exact script text locally via `sh -c`, the same seam
+    /// `readScript`/`writeScript` already provide.
+    static func sizeScript(path: String) -> String {
+        let f = SSHCommand.shellQuote(path)
+        return "f=\(f); stat -c %s -- \"$f\" 2>/dev/null || stat -f %z \"$f\""
+    }
+
+    private static func sizeViaExec(host: String, path: String) async throws -> UInt64? {
+        let startedAt = CFAbsoluteTimeGetCurrent()
+        defer { RemoteOperationTiming.log("fs/stat", host: host, transport: "exec", startedAt: startedAt) }
+        let result = try await RemoteExec.run(host: host, cwd: nil, command: sizeScript(path: path))
+        if RemoteExec.isConnectionFailure(exitCode: result.exitCode) {
+            throw RemoteFileAccessError.connectionFailed(result.stderr)
+        }
+        guard result.exitCode == 0,
+              let bytes = UInt64(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines))
+        else { return nil }
+        return bytes
     }
 
     private static func mtimeViaExec(host: String, path: String) async throws -> Date? {

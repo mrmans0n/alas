@@ -245,6 +245,272 @@ extension Process {
         )
     }
 
+    /// Bounded-prefix variant of `gitData`: returns only the first
+    /// `maxBytes` of stdout, terminating the child process as soon as that
+    /// much has been buffered instead of waiting for it to exit naturally.
+    /// Used for binary sniffing (`GitService.looksBinaryAtRef`), where a
+    /// huge historical blob (`git show <ref>:<file>`) only needs its first
+    /// 8 KB inspected — mirrors `RemoteWorktreeFileAccess.looksBinaryOnDisk`'s
+    /// bounded `FileHandle.read(upToCount:)` for the on-disk case, for a
+    /// git-subprocess-sourced blob instead. Local git invocations have no
+    /// shell to pipe stdout through `head -c`, so this hooks the early stop
+    /// into the existing readability-handler loop rather than adding a
+    /// shell-pipeline codepath.
+    ///
+    /// An early SIGTERM here is the expected happy path, not a failure — the
+    /// caller only wants a bounded PREFIX (e.g. a binary sniff), not a
+    /// verdict on whether the process exited cleanly, so this never surfaces
+    /// an exit code: it returns whatever bytes were captured, up to
+    /// `maxBytes`, including an empty `Data` if the command produced
+    /// nothing or failed outright.
+    static func gitDataPrefix(
+        _ args: [String],
+        cwd: URL? = nil,
+        maxBytes: Int,
+        timeout: TimeInterval = Process.defaultTimeout
+    ) async throws -> Data {
+        let host = RemoteHostRegistry.shared.host(forPath: cwd?.path)
+        if host == nil {
+            try validateWorkingDirectory(cwd)
+        }
+        let invocation = GitInvocation.build(
+            gitArgs: args,
+            cwd: cwd,
+            host: host
+        )
+        try validateLaunchConfiguration(
+            executable: invocation.executable, args: invocation.args, cwd: invocation.cwd)
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: invocation.executable)
+        process.arguments = invocation.args
+        if let cwd = invocation.cwd { process.currentDirectoryURL = cwd }
+        if let env = invocation.env { process.environment = env }
+
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        process.standardOutput = outPipe
+        process.standardError = errPipe
+
+        let exit = ExitGateData()
+        process.terminationHandler = { _ in exit.didExit() }
+
+        let outAccum = ByteAccumulatorData()
+        outPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                outAccum.markClosed()
+                return
+            }
+            outAccum.append(data)
+            if outAccum.snapshot().count >= maxBytes {
+                handle.readabilityHandler = nil
+                outAccum.markClosed()
+                terminateProcessWithEscalation(process)
+            }
+        }
+        errPipe.fileHandleForReading.readabilityHandler = { handle in
+            if handle.availableData.isEmpty { handle.readabilityHandler = nil }
+        }
+
+        do {
+            try process.run()
+        } catch {
+            throw ProcessError.launchFailed(error.localizedDescription)
+        }
+        try? outPipe.fileHandleForWriting.close()
+        try? errPipe.fileHandleForWriting.close()
+
+        let watchdog = Task {
+            try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+            if Task.isCancelled { return }
+            if process.isRunning {
+                terminateProcessWithEscalation(process)
+            }
+        }
+
+        await withTaskCancellationHandler {
+            await exit.wait()
+        } onCancel: {
+            terminateProcessWithEscalation(process)
+        }
+        watchdog.cancel()
+
+        _ = await outAccum.waitForClose(timeoutNanoseconds: 2_000_000_000)
+        outPipe.fileHandleForReading.readabilityHandler = nil
+        errPipe.fileHandleForReading.readabilityHandler = nil
+
+        return outAccum.snapshot().prefix(maxBytes)
+    }
+
+    /// Same shape as `run(...)`, but caps accumulated stdout at
+    /// `maxOutputBytes`: once that many bytes have been buffered, the child
+    /// is terminated early (SIGTERM) instead of being left running to
+    /// completion and buffering an unbounded amount of output.
+    ///
+    /// Used for `git diff` invocations whose output feeds `DiffParser`: a
+    /// pathologically large changed file (a multi-gigabyte generated
+    /// artifact, say) would otherwise have its ENTIRE diff captured into one
+    /// `String` and fully materialized into hunks before the caller's own
+    /// line/byte caps (`RemoteWorktreeFileAccess.truncateHunks`) ever get a
+    /// chance to trim it down — exhausting memory (or stalling the app) for
+    /// a response that was always going to be capped anyway. Set
+    /// `maxOutputBytes` comfortably above those wire caps (see
+    /// `RemoteWorktreeFileAccess.maxDiffSubprocessBytes`) so ordinary large
+    /// diffs are captured in full and `truncateHunks` still makes the exact
+    /// truncation call; only a genuinely pathological diff is cut short
+    /// here, before parsing.
+    struct ProcessCappedResult: Sendable {
+        let exitCode: Int32
+        let stdout: String
+        let stderr: String
+        /// True when `stdout` was cut short at (approximately —
+        /// `outAccum`'s last chunk can carry it a bit past `maxOutputBytes`
+        /// before the check fires; this is a soft cap, not an exact one)
+        /// `maxOutputBytes`, and the process was terminated early to
+        /// enforce that cap. This is a deliberate stop, not a process
+        /// failure: `exitCode` reflects whatever the early SIGTERM produced
+        /// and callers must not treat it as a normal git exit status when
+        /// this is `true` — proceed to parse the captured (possibly
+        /// hunk-incomplete at the very end, which downstream truncation
+        /// discards anyway) prefix instead.
+        let stdoutTruncated: Bool
+    }
+
+    static func runCapped(
+        _ executable: String,
+        args: [String],
+        cwd: URL? = nil,
+        env: [String: String]? = nil,
+        maxOutputBytes: Int,
+        timeout: TimeInterval = Process.defaultTimeout
+    ) async throws -> ProcessCappedResult {
+        try validateLaunchConfiguration(executable: executable, args: args, cwd: cwd)
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = args
+        if let cwd { process.currentDirectoryURL = cwd }
+        if let env { process.environment = env }
+
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        process.standardOutput = outPipe
+        process.standardError = errPipe
+
+        let exit = ExitGateData()
+        process.terminationHandler = { _ in exit.didExit() }
+
+        let outAccum = ByteAccumulatorData()
+        let errAccum = ByteAccumulatorData()
+        let truncatedFlag = TimedOutFlag()
+        outPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                outAccum.markClosed()
+                return
+            }
+            outAccum.append(data)
+            if outAccum.snapshot().count >= maxOutputBytes {
+                handle.readabilityHandler = nil
+                outAccum.markClosed()
+                truncatedFlag.mark()
+                terminateProcessWithEscalation(process)
+            }
+        }
+        errPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                errAccum.markClosed()
+            } else {
+                errAccum.append(data)
+            }
+        }
+
+        do {
+            try process.run()
+        } catch {
+            throw ProcessError.launchFailed(error.localizedDescription)
+        }
+
+        try? outPipe.fileHandleForWriting.close()
+        try? errPipe.fileHandleForWriting.close()
+
+        let timedOutFlag = TimedOutFlag()
+        let watchdog = Task {
+            try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+            if Task.isCancelled { return }
+            if process.isRunning {
+                timedOutFlag.mark()
+                fputs(
+                    "[Process watchdog] \(timeout)s timeout — terminating: \(executable) \(args.joined(separator: " "))\n",
+                    stderr
+                )
+                terminateProcessWithEscalation(process)
+            }
+        }
+
+        await withTaskCancellationHandler {
+            await exit.wait()
+        } onCancel: {
+            terminateProcessWithEscalation(process)
+        }
+        watchdog.cancel()
+
+        async let outClosed = outAccum.waitForClose(timeoutNanoseconds: 2_000_000_000)
+        async let errClosed = errAccum.waitForClose(timeoutNanoseconds: 2_000_000_000)
+        _ = await (outClosed, errClosed)
+        outPipe.fileHandleForReading.readabilityHandler = nil
+        errPipe.fileHandleForReading.readabilityHandler = nil
+
+        if timedOutFlag.value {
+            throw ProcessError.timedOut(executable: executable, args: args, seconds: timeout)
+        }
+
+        return ProcessCappedResult(
+            exitCode: process.terminationStatus,
+            // `decodeUTF8DroppingIncompleteTrailingScalar`, not a strict
+            // `String(data:encoding:)`: cutting `outAccum`'s snapshot at
+            // `maxOutputBytes` can land mid-way through a multibyte UTF-8
+            // character, and a strict decode fails CLOSED on that — turning
+            // an otherwise perfectly valid captured prefix into an empty
+            // string and silently presenting a large diff as blank.
+            stdout: decodeUTF8DroppingIncompleteTrailingScalar(outAccum.snapshot()),
+            stderr: String(data: errAccum.snapshot(), encoding: .utf8) ?? "",
+            stdoutTruncated: truncatedFlag.value
+        )
+    }
+
+    /// Bounded-output variant of `git(_:cwd:stdin:timeout:)` — see
+    /// `runCapped` for why this exists.
+    static func gitCapped(
+        _ args: [String],
+        cwd: URL? = nil,
+        maxOutputBytes: Int,
+        timeout: TimeInterval = Process.defaultTimeout
+    ) async throws -> ProcessCappedResult {
+        let host = RemoteHostRegistry.shared.host(forPath: cwd?.path)
+        if host == nil {
+            try validateWorkingDirectory(cwd)
+        }
+        let invocation = GitInvocation.build(
+            gitArgs: args,
+            cwd: cwd,
+            host: host
+        )
+        return try await runCapped(
+            invocation.executable,
+            args: invocation.args,
+            cwd: invocation.cwd,
+            env: invocation.env,
+            maxOutputBytes: maxOutputBytes,
+            timeout: timeout
+        )
+    }
+
     /// Internal: same shape as `run(...)` but emits stdout as `Data`.
     static func runData(
         _ executable: String,
@@ -361,6 +627,36 @@ private func validateWorkingDirectory(_ cwd: URL?) throws {
     guard FileManager.default.fileExists(atPath: cwd.path, isDirectory: &isDirectory), isDirectory.boolValue else {
         throw ProcessError.launchFailed("Working directory does not exist: \(cwd.path)")
     }
+}
+
+/// Decodes `data` as UTF-8, tolerating an incomplete multibyte scalar at the
+/// very end by dropping just that trailing partial sequence rather than
+/// failing the whole decode.
+///
+/// `runCapped` cuts the byte stream at an arbitrary point (`maxOutputBytes`),
+/// which has no reason to land on a UTF-8 character boundary. A UTF-8
+/// sequence is at most 4 bytes, so an incomplete one at the tail is at most
+/// 3 bytes short of complete — trying to drop 0, then 1, then 2, then 3
+/// trailing bytes always finds a valid prefix (in the worst case, dropping
+/// all the way back to the last previously-complete character).
+///
+/// If none of those four attempts decode cleanly, the invalid byte isn't a
+/// truncation artifact at all — e.g. a changed file containing genuinely
+/// non-UTF-8 text (Latin-1, Windows-1252, ...) that happens to contain no
+/// NUL byte, so it passed binary sniffing upstream but still isn't valid
+/// UTF-8; git emits its raw bytes straight into the diff. Falling back to
+/// `String(decoding:as:)` (which never fails, replacing each invalid byte
+/// with U+FFFD) means that diff renders with a handful of replacement
+/// characters instead of vanishing into an empty, misleadingly "successful"
+/// response.
+func decodeUTF8DroppingIncompleteTrailingScalar(_ data: Data) -> String {
+    if let exact = String(data: data, encoding: .utf8) { return exact }
+    for dropCount in 1...3 where dropCount <= data.count {
+        if let decoded = String(data: data.dropLast(dropCount), encoding: .utf8) {
+            return decoded
+        }
+    }
+    return String(decoding: data, as: UTF8.self)
 }
 
 private func terminateProcessWithEscalation(_ process: Process) {
