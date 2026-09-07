@@ -1547,16 +1547,18 @@ final class AppState {
     /// Shared checkout sessions are owned by their frozen checkout identity,
     /// not by the member currently driving repository panes. Lifecycle code
     /// calls this when archiving a checkout.
-    func stopWorkspaceCheckoutSessions(_ checkout: WorkspaceCheckout) async {
+    func stopWorkspaceCheckoutSessions(_ checkout: WorkspaceCheckout) async throws {
         let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
-        let persistedTerminalSessions = persistedWorkspaceCheckoutTerminalSessions(checkout)
+        let liveTerminalSessions = terminal.registry.all
+            .filter { $0.owner == owner }
+            .map { TerminalSessionIdentity(owner: owner, leafId: $0.id) }
+        let terminalSessions = Array(Set(persistedWorkspaceCheckoutTerminalSessions(checkout) + liveTerminalSessions))
         // The registry is authoritative for live sessions, including a
         // freshly opened terminal whose tab has not been persisted yet.
         // Persisted checkout-owned tab records are archived only after live
         // sessions have drained, so unarchive cannot expose stale processes.
         terminal.stopSessions(owner: owner)
-        terminal.terminateSessions(persistedTerminalSessions)
-        await terminal.drainPendingKills(timeout: 5)
+        try await terminal.terminateSessionsAndWait(terminalSessions, timeout: 5)
         await disposeACPManagerAndWait(owner: owner)
         archiveSessionTabs(owner: owner)
     }
@@ -1881,7 +1883,7 @@ final class AppState {
             store: workspaceStore,
             sessions: WorkspaceCheckoutSessionStopper(
                 store: workspaceStore,
-                stop: { [weak self] checkout in await self?.stopWorkspaceCheckoutSessions(checkout) }
+                stop: { [weak self] checkout in try await self?.stopWorkspaceCheckoutSessions(checkout) }
             )
         )
         workspaceCheckoutCoordinator = coordinator

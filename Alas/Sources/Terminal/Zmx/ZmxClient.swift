@@ -71,16 +71,21 @@ final class ZmxClient: Sendable {
     /// caller for up to ~5s (the SubprocessRunner timeout); MainActor
     /// callers should dispatch via `Task.detached`.
     func killSession(name: String) {
-        guard env.isAvailable, let binary = env.binaryURL else { return }
+        _ = killSessionResult(name: name)
+    }
+
+    func killSessionResult(name: String) -> Bool {
+        guard env.isAvailable, let binary = env.binaryURL else { return true }
         let result = runner.run(binary, ["kill", name], zmxEnv(), 5.0)
         switch result.exitCode {
         case 0?:
-            return
+            return true
         case let code?:
             logger.warning("zmx kill \(name, privacy: .public) exited \(code, privacy: .public): \(result.stderr, privacy: .public)")
         case nil:
             logger.warning("zmx kill \(name, privacy: .public) timed out")
         }
+        return false
     }
 
     /// Parse `zmx ls --short` into session names. Returns `[]` on any error

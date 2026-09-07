@@ -86,6 +86,29 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(await sessions.stopped == [fixture.checkout.id])
     }
 
+    @Test func archivingRetainsTheDurableClaimWhenSessionShutdownFails() async throws {
+        let fixture = try await Fixture.make()
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: fixture.store,
+            git: FixtureGit(),
+            scripts: FixtureScripts(),
+            sessions: FailingLifecycleSessions(),
+            lifecycle: FixtureLifecycle()
+        )
+
+        await #expect(throws: TestLifecycleError.failed) {
+            try await coordinator.archive(checkoutID: fixture.checkout.id)
+        }
+        guard case .loaded(let state) = await fixture.store.load(),
+              let checkout = state.checkouts.first(where: { $0.id == fixture.checkout.id })
+        else {
+            Issue.record("Expected checkout to remain persisted")
+            return
+        }
+        #expect(checkout.archivedAt == nil)
+        #expect(checkout.operation == .archiving)
+    }
+
     @Test func deletingAMemberPersistsTheFrozenCleanupPlanBeforeRemovingTheWorktree() async throws {
         let fixture = try await Fixture.make()
         let lifecycle = PersistedCleanupLifecycle(store: fixture.store, checkoutID: fixture.checkout.id)
@@ -616,7 +639,7 @@ struct WorkspaceCheckoutLifecycleTests {
         let commands = await runner.commands.joined(separator: "\n")
         #expect(commands.contains("worktree remove -f -f --"))
         #expect(commands.contains("rev-parse --verify"))
-        #expect(commands.contains("branch -d"))
+        #expect(commands.contains("branch -d") == false)
         #expect(commands.contains("m=$(cd") == false)
     }
 
@@ -638,7 +661,8 @@ struct WorkspaceCheckoutLifecycleTests {
 
     @Test func concreteRemoteCleanupPrunesStaleRegistrationBeforeMarkingMissingWorktreeRemoved() async throws {
         let runner = RemoteLifecycleRunner(results: [
-            .init(exitCode: 0, stdout: "worktree /checkout/a\nprunable gitdir file points to non-existent location\n", stderr: ""),
+            .init(exitCode: 0, stdout: "worktree /checkout/a\nlocked\nprunable gitdir file points to non-existent location\n", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
         ])
@@ -650,7 +674,30 @@ struct WorkspaceCheckoutLifecycleTests {
 
         let commands = await runner.commands.joined(separator: "\n")
         #expect(commands.contains("worktree list --porcelain"))
+        #expect(commands.contains("worktree unlock --"))
+        #expect(commands.contains("/checkout/a"))
         #expect(commands.contains("worktree prune"))
+    }
+
+    @Test func remoteMergedBranchDeletionUsesAtomicExpectedOldValue() async throws {
+        let runner = RemoteLifecycleRunner(results: [
+            .init(exitCode: 0, stdout: "abc\n", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+        ])
+        let lifecycle = WorkspaceCheckoutLifecycleOperator(remote: .init { executable, args, timeout in
+            try await runner.run(executable: executable, args: args, timeout: timeout)
+        })
+
+        let removed = try await lifecycle.deleteMergedBranch(Self.sshCleanupPlan())
+
+        #expect(removed)
+        let commands = await runner.commands.joined(separator: "\n")
+        #expect(commands.contains("merge-base --is-ancestor"))
+        #expect(commands.contains("update-ref -d"))
+        #expect(commands.contains("refs/heads/feature"))
+        #expect(commands.contains("abc"))
+        #expect(commands.contains("branch -d") == false)
     }
 
     private static func sshCleanupPlan() -> WorkspaceCheckoutCleanupPlan {
@@ -843,7 +890,10 @@ private struct FixtureGit: WorkspaceGitOperating {
 private struct FixtureScripts: WorkspaceScriptRunning { func runSetup(for operation: WorkspaceCheckoutSetupOperation) async throws {} }
 private actor LifecycleSessions: WorkspaceCheckoutSessionStopping {
     private(set) var stopped: [UUID] = []
-    func stopSessions(for checkoutID: UUID) async { stopped.append(checkoutID) }
+    func stopSessions(for checkoutID: UUID) async throws { stopped.append(checkoutID) }
+}
+private struct FailingLifecycleSessions: WorkspaceCheckoutSessionStopping {
+    func stopSessions(for checkoutID: UUID) async throws { throw TestLifecycleError.failed }
 }
 private actor FixtureLifecycle: WorkspaceCheckoutLifecycleOperating {
     let verification: WorkspaceCheckoutMemberObservation

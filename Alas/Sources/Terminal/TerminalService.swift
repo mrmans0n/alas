@@ -52,6 +52,10 @@ final class TerminalService {
         let startupScript: String
     }
 
+    enum SessionTerminationError: Error, Equatable {
+        case failed(String)
+    }
+
     /// Builds the narrow, repository-independent context for a shared
     /// checkout terminal. Kept separate from `EnvBuilder` because the latter
     /// is the compatibility contract for existing Worktree sessions.
@@ -644,6 +648,29 @@ final class TerminalService {
         }
     }
 
+    func terminateSessionsAndWait(_ sessions: [TerminalSessionIdentity], timeout: TimeInterval) async throws {
+        var localNames = Set<String>()
+        var remoteNamesByHost: [String: Set<String>] = [:]
+        for session in Set(sessions) {
+            let scoped = session.zmxSessionName
+            if let host = Self.remoteHostForCleanup(session: session) {
+                remoteNamesByHost[host, default: []].insert(scoped)
+            } else {
+                localNames.insert(scoped)
+            }
+        }
+        let client = zmxClient
+        for name in localNames {
+            let killed = await Task.detached { client.killSessionResult(name: name) }.value
+            guard killed else { throw SessionTerminationError.failed(name) }
+        }
+        for (host, names) in remoteNamesByHost {
+            for name in names {
+                try await Self.killRemoteSessionChecked(host: host, name: name, timeout: timeout)
+            }
+        }
+    }
+
     private nonisolated static func remoteHostForCleanup(session: TerminalSessionIdentity) -> String? {
         switch session.owner {
         case .worktree:
@@ -713,6 +740,16 @@ final class TerminalService {
             command: RemoteTerminalScript.zmxBatchCommand(["kill", name]),
             timeout: 10
         )
+    }
+
+    nonisolated static func killRemoteSessionChecked(host: String, name: String, timeout: TimeInterval) async throws {
+        let result = try await RemoteExec.run(
+            host: host,
+            cwd: nil,
+            command: RemoteTerminalScript.zmxBatchCommand(["kill", name]),
+            timeout: timeout
+        )
+        guard result.exitCode == 0 else { throw SessionTerminationError.failed(name) }
     }
 
     nonisolated static func remoteSessionInfos(host: String) async -> [ZmxSessionInfo] {

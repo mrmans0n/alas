@@ -26,7 +26,7 @@ protocol WorkspaceScriptRunning: Sendable {
 /// The concrete owner-aware implementation lands with shared Terminal/ACP
 /// storage; this seam already makes archive a durable lifecycle operation.
 protocol WorkspaceCheckoutSessionStopping: Sendable {
-    func stopSessions(for checkoutID: UUID) async
+    func stopSessions(for checkoutID: UUID) async throws
 }
 
 /// Bridges checkout lifecycle orchestration to AppState without letting the
@@ -34,11 +34,11 @@ protocol WorkspaceCheckoutSessionStopping: Sendable {
 /// the complete snapshot so the location-qualified owner is preserved.
 struct WorkspaceCheckoutSessionStopper: WorkspaceCheckoutSessionStopping {
     let store: WorkspaceStore
-    let stop: @MainActor @Sendable (WorkspaceCheckout) async -> Void
+    let stop: @MainActor @Sendable (WorkspaceCheckout) async throws -> Void
 
-    func stopSessions(for checkoutID: UUID) async {
+    func stopSessions(for checkoutID: UUID) async throws {
         guard let checkout = await store.checkout(id: checkoutID) else { return }
-        await stop(checkout)
+        try await stop(checkout)
     }
 }
 
@@ -62,7 +62,7 @@ extension WorkspaceCheckoutLifecycleOperating {
 }
 
 struct NoopWorkspaceCheckoutSessionStopper: WorkspaceCheckoutSessionStopping {
-    func stopSessions(for checkoutID: UUID) async {}
+    func stopSessions(for checkoutID: UUID) async throws {}
 }
 
 struct WorkspaceFrozenWorktreeOperation: Sendable {
@@ -220,7 +220,7 @@ actor WorkspaceCheckoutCoordinator {
             }
             state.checkouts[index].operation = .archiving
         }
-        await sessions.stopSessions(for: checkoutID)
+        try await sessions.stopSessions(for: checkoutID)
         try await mutateCheckout(checkoutID) {
             guard $0.operation == .archiving else { return }
             $0.archivedAt = .now
@@ -598,7 +598,7 @@ actor WorkspaceCheckoutCoordinator {
             }
             state.checkouts[index].operation = .deleting
         }
-        await sessions.stopSessions(for: checkoutID)
+        try await sessions.stopSessions(for: checkoutID)
         try await lifecycle.removeCheckoutRootArtifacts(for: checkout)
         try await store.mutate { state in state.checkouts.removeAll { $0.id == checkoutID } }
     }
@@ -1690,6 +1690,10 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
             let registrations = try await Process.git(["worktree", "list", "--porcelain"], cwd: repo, usesRemoteHostRegistry: false)
             guard registrations.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(registrations.stderr) }
             guard Self.porcelainContainsWorktree(registrations.stdout, path: plan.worktreePath) else { return }
+            if Self.porcelainWorktreeIsLocked(registrations.stdout, path: plan.worktreePath) {
+                let unlock = try await Process.git(["worktree", "unlock", destination.path], cwd: repo, usesRemoteHostRegistry: false)
+                guard unlock.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(unlock.stderr) }
+            }
             try await WorktreeService().prune(repoPath: repo)
             let refreshed = try await Process.git(["worktree", "list", "--porcelain"], cwd: repo, usesRemoteHostRegistry: false)
             guard refreshed.exitCode == 0,
@@ -1700,6 +1704,10 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
             let registrations = try await remote.run(host: host, command: "git -C \(repo) worktree list --porcelain")
             guard registrations.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(registrations.stderr) }
             guard Self.porcelainContainsWorktree(registrations.stdout, path: plan.worktreePath) else { return }
+            if Self.porcelainWorktreeIsLocked(registrations.stdout, path: plan.worktreePath) {
+                let unlock = try await remote.run(host: host, command: "git -C \(repo) worktree unlock -- \(SSHCommand.shellQuote(plan.worktreePath))")
+                guard unlock.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(unlock.stderr) }
+            }
             let prune = try await remote.run(host: host, command: "git -C \(repo) worktree prune")
             guard prune.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(prune.stderr) }
             let refreshed = try await remote.run(host: host, command: "git -C \(repo) worktree list --porcelain")
@@ -1710,7 +1718,24 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
     }
 
     private static func porcelainContainsWorktree(_ porcelain: String, path: String) -> Bool {
-        porcelain.split(separator: "\n").contains { $0 == "worktree \(path)" }
+        porcelainWorktreeEntry(porcelain, path: path) != nil
+    }
+
+    private static func porcelainWorktreeIsLocked(_ porcelain: String, path: String) -> Bool {
+        porcelainWorktreeEntry(porcelain, path: path)?.contains("locked") == true
+    }
+
+    private static func porcelainWorktreeEntry(_ porcelain: String, path: String) -> [Substring]? {
+        var current: [Substring] = []
+        for line in porcelain.split(separator: "\n", omittingEmptySubsequences: false) {
+            if line.hasPrefix("worktree ") {
+                if current.first == "worktree \(path)" { return current }
+                current = [line]
+            } else if !current.isEmpty {
+                current.append(line)
+            }
+        }
+        return current.first == "worktree \(path)" ? current : nil
     }
 
     func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan, force: Bool, forceTwice: Bool) async throws {
@@ -1742,24 +1767,31 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
         guard let branchCommit = plan.branchCommit, !branchCommit.isEmpty else { return false }
         switch plan.executionLocation.normalized {
         case .local:
+            let repo = URL(fileURLWithPath: plan.sourceRepositoryPath)
+            let branchRef = "refs/heads/\(plan.branch)"
             let ref = try await Process.git(
-                ["rev-parse", "--verify", "\(plan.branch)^{commit}"],
-                cwd: URL(fileURLWithPath: plan.sourceRepositoryPath),
+                ["rev-parse", "--verify", "\(branchRef)^{commit}"],
+                cwd: repo,
                 usesRemoteHostRegistry: false
             )
             guard ref.exitCode == 0,
                   ref.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == branchCommit
             else { return false }
-            let result = try await Process.git(["branch", "-d", plan.branch], cwd: URL(fileURLWithPath: plan.sourceRepositoryPath), usesRemoteHostRegistry: false)
+            let merged = try await Process.git(["merge-base", "--is-ancestor", branchCommit, "HEAD"], cwd: repo, usesRemoteHostRegistry: false)
+            guard merged.exitCode == 0 else { return false }
+            let result = try await Process.git(["update-ref", "-d", branchRef, branchCommit], cwd: repo, usesRemoteHostRegistry: false)
             return result.exitCode == 0
         case .ssh(let host):
             let repo = SSHCommand.shellQuote(plan.sourceRepositoryPath)
-            let branch = SSHCommand.shellQuote(plan.branch)
+            let branchRef = "refs/heads/\(plan.branch)"
+            let branch = SSHCommand.shellQuote(branchRef)
             let expected = SSHCommand.shellQuote(branchCommit)
             let verify = "test \"$(git -C \(repo) rev-parse --verify \(branch)^{commit})\" = \(expected)"
             let verified = try await remote.run(host: host, command: verify)
             guard verified.exitCode == 0 else { return false }
-            let command = "git -C \(SSHCommand.shellQuote(plan.sourceRepositoryPath)) branch -d -- \(SSHCommand.shellQuote(plan.branch))"
+            let merged = try await remote.run(host: host, command: "git -C \(repo) merge-base --is-ancestor \(expected) HEAD")
+            guard merged.exitCode == 0 else { return false }
+            let command = "git -C \(repo) update-ref -d \(branch) \(expected)"
             let result = try await remote.run(host: host, command: command)
             return result.exitCode == 0
         }
