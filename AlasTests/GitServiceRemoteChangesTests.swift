@@ -291,6 +291,51 @@ struct GitServiceRemoteChangesTests {
         #expect(renamed.renameFrom == "old.txt")
     }
 
+    /// The exact shape the finding described: `file` ("zzz.txt") is a copy
+    /// of "aaa.txt", which sorts BEFORE it — so git emits aaa.txt's own
+    /// section of the two-path diff FIRST. When that section alone exceeds
+    /// the byte cap, the capped subprocess terminates before zzz.txt's
+    /// section ever appears, and `sliceDiffForFile` finds nothing to return
+    /// for it — indistinguishable from a genuinely empty diff unless this is
+    /// treated as a failure instead.
+    @Test func diffAgainstRef_throwsWhenACopySourceSectionAloneExceedsTheOutputCap() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let original = (1 ... 100).map { "line\($0)\n" }.joined()
+        try original.write(to: repo.appendingPathComponent("aaa.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "aaa.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "base"], cwd: repo)
+        _ = try await Process.git(["branch", "start"], cwd: repo)
+
+        // Append enough new content to aaa.txt that its OWN diff section
+        // (measured at ~611 bytes for this exact fixture) exceeds the
+        // test's small cap below, while staying similar enough to its prior
+        // version for git's default (no --find-copies-harder) copy
+        // detection to still recognize zzz.txt as a copy of it — appending
+        // materially more than 10 lines here drops the similarity score
+        // below git's 50% threshold and the fixture stops producing a copy
+        // at all, defeating the point of the test.
+        let appended = original + (1 ... 10).map { "appended-line-\($0)-with-enough-padding-to-add-up\n" }.joined()
+        try appended.write(to: repo.appendingPathComponent("aaa.txt"), atomically: true, encoding: .utf8)
+        // zzz.txt: a copy of the now-appended aaa.txt, sorting AFTER it, with
+        // one more line so it's a distinct file highly similar to its source.
+        try (appended + "zzz-marker\n").write(to: repo.appendingPathComponent("zzz.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "-A"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "copy with modification"], cwd: repo)
+
+        // Confirm the fixture actually produces the copy relationship this
+        // test depends on before asserting anything about the cap.
+        let files = try await GitService().changedFilesAgainstRef(worktreePath: repo, ref: "start")
+        let copy = try #require(files.first { $0.path == "zzz.txt" })
+        #expect(copy.status == "C")
+        #expect(copy.renameFrom == "aaa.txt")
+
+        await #expect(throws: (any Error).self) {
+            _ = try await GitService().diff(
+                worktreePath: repo, againstRef: "start", file: "zzz.txt", maxOutputBytes: 300)
+        }
+    }
+
     @Test func diffAgainstRef_fallsBackToWorkingTreeWhenRefIsNil() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }

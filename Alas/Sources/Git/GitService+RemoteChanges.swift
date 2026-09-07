@@ -115,7 +115,10 @@ extension GitService {
     /// <file>` does NOT detect the rename, because git's pathspec filtering
     /// happens before rename pairing, so it never sees the old path to pair
     /// against.
-    func diff(worktreePath: URL, againstRef ref: String?, file: String) async throws -> ParsedDiff {
+    func diff(
+        worktreePath: URL, againstRef ref: String?, file: String,
+        maxOutputBytes: Int = RemoteWorktreeFileAccess.maxDiffSubprocessBytes
+    ) async throws -> ParsedDiff {
         guard let ref, !ref.isEmpty else {
             // `diff(worktreePath:file:)`'s default (`staged: false`) is a
             // working-tree-vs-INDEX diff, which omits changes that are
@@ -128,7 +131,7 @@ extension GitService {
             // what `status` already reflects in the change list.
             return try await diffAgainstHEAD(
                 worktreePath: worktreePath, file: file,
-                maxOutputBytes: RemoteWorktreeFileAccess.maxDiffSubprocessBytes)
+                maxOutputBytes: maxOutputBytes)
         }
 
         if let originalPath = try await renameSource(worktreePath: worktreePath, ref: ref, file: file) {
@@ -142,7 +145,7 @@ extension GitService {
             let result = try await Process.gitCapped(
                 ["--literal-pathspecs", "-c", "core.quotePath=false",
                  "diff", "--no-color", "-M", "-C", ref, "--", file, originalPath], cwd: worktreePath,
-                maxOutputBytes: RemoteWorktreeFileAccess.maxDiffSubprocessBytes)
+                maxOutputBytes: maxOutputBytes)
             // A fatal exit (>= 2, e.g. a dropped SSH connection) must propagate
             // rather than fall through as a successful, blank diff — see the
             // matching comment on the tracked-file diff below. A size-capped
@@ -151,7 +154,24 @@ extension GitService {
             guard result.stdoutTruncated || result.exitCode <= 1 else {
                 throw ProcessError.nonZeroExit(result.exitCode, result.stderr)
             }
-            return DiffParser.parse(Self.sliceDiffForFile(result.stdout, file: file))
+            let sliced = Self.sliceDiffForFile(result.stdout, file: file)
+            // This is a two-path diff (`file` plus `originalPath`), and git
+            // emits sections in the order the two paths sort — when
+            // `originalPath` sorts first and its OWN section alone exceeds
+            // `maxOutputBytes`, `gitCapped` can terminate before `file`'s
+            // section ever appears. `sliceDiffForFile` then finds no
+            // matching section and returns "", indistinguishable from a
+            // genuinely empty diff. There's no way to tell those apart from
+            // the captured bytes alone, so — only when the process was
+            // ACTUALLY size-capped — treat an empty slice as a failure
+            // rather than silently showing "no changes" for a file that
+            // definitely has some.
+            guard !(result.stdoutTruncated && sliced.isEmpty) else {
+                throw ProcessError.nonZeroExit(
+                    result.exitCode,
+                    "diff for \(file) exceeded the size cap before its section was captured")
+            }
+            return DiffParser.parse(sliced)
         }
 
         // Check if file exists at ref (not just in current index) to handle deleted files correctly.
@@ -180,7 +200,7 @@ extension GitService {
             // in this function.
             let result = try await Process.gitCapped(
                 ["--literal-pathspecs", "diff", "--no-color", "--no-index", "--", "/dev/null", file], cwd: worktreePath,
-                maxOutputBytes: RemoteWorktreeFileAccess.maxDiffSubprocessBytes)
+                maxOutputBytes: maxOutputBytes)
             // `--no-index` exits 1 when there ARE differences, which is the
             // normal case here; only >= 2 is a real failure that must
             // propagate — see the matching comment on the tracked-file diff
@@ -196,7 +216,7 @@ extension GitService {
         // glob pathspec (see comment above).
         let result = try await Process.gitCapped(
             ["--literal-pathspecs", "diff", "--no-color", "-M", "-C", ref, "--", file], cwd: worktreePath,
-            maxOutputBytes: RemoteWorktreeFileAccess.maxDiffSubprocessBytes)
+            maxOutputBytes: maxOutputBytes)
         // A fatal exit here (e.g. an SSH connection dropping after the
         // preceding probes succeeded) must propagate rather than turn into a
         // successful, blank diff: `remoteFileDiff` maps a thrown error to
