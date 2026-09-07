@@ -85,14 +85,13 @@ struct ClosedTabHistory: Equatable {
         entries.removeAll { $0.snapshot.worktreeID == worktreeID }
     }
 
-    mutating func purgeCompletedCommitPublishDraft(worktreeID: String, tabID: TabID) {
+    mutating func purgeCommitPublishDraft(worktreeID: String, tabID: TabID) {
         entries.removeAll { entry in
             guard case .worktree(let entryWorktreeID, .draftCommit(let state)) = entry.snapshot else {
                 return false
             }
             return entryWorktreeID == worktreeID
                 && state.id == tabID
-                && state.publishCheckpoint != nil
         }
     }
 }

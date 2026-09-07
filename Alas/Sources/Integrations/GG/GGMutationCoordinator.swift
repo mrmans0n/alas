@@ -194,7 +194,8 @@ final class GGMutationCoordinator {
     func startApplying(
         _ request: GGMutationRequest,
         confirmedAgainst identity: GGStackIdentity?,
-        expectedTarget: GGStackTargetIdentity? = nil
+        expectedTarget: GGStackTargetIdentity? = nil,
+        onExecutionStarted: @escaping @MainActor () -> Void = {}
     ) -> Task<Void, Error>? {
         guard reserve(request) else { return nil }
         return Task {
@@ -202,7 +203,8 @@ final class GGMutationCoordinator {
                 request,
                 confirmedAgainst: identity,
                 confirmedWith: nil,
-                expectedTarget: expectedTarget
+                expectedTarget: expectedTarget,
+                onExecutionStarted: onExecutionStarted
             )
         }
     }
@@ -230,7 +232,8 @@ final class GGMutationCoordinator {
         _ request: GGMutationRequest,
         confirmedAgainst identity: GGStackIdentity?,
         confirmedWith confirmation: GGMutationConfirmation?,
-        expectedTarget: GGStackTargetIdentity? = nil
+        expectedTarget: GGStackTargetIdentity? = nil,
+        onExecutionStarted: @escaping @MainActor () -> Void = {}
     ) async throws {
         var didReleaseAction = false
         func releaseAction() {
@@ -314,6 +317,7 @@ final class GGMutationCoordinator {
         GGStackGate.markAlasGGOperationInProgress(repoPath: worktreePath)
 
         do {
+            onExecutionStarted()
             let result = try await service.execute(
                 request,
                 worktreePath: worktreePath,

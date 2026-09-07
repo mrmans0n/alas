@@ -158,6 +158,46 @@ struct CommitPublishLiveOperationsTests {
         #expect(try JSONDecoder().decode(CommitPublishReviewTarget.self, from: JSONEncoder().encode(target)) == target)
     }
 
+    @Test func captureRejectsChangedPushRepositoryBeforeCommit() async {
+        let snapshot = ReviewLoopSnapshot(
+            local: ReviewLoopLocalState(branchName: "feature", headSHA: "captured-head", baseBranch: "main",
+                hasWorkingTreeChanges: true, hasStagedChanges: true, aheadCommitCount: 1,
+                hasUpstream: true, upstreamRemoteName: "fork", upstreamBranchName: "review/feature",
+                headRemoteName: "fork", headRemoteOwner: "contributor",
+                upstreamAheadCommitCount: 0, needsPush: true),
+            remote: .init(kind: .github, host: "github.com", owner: "team", repository: "repo",
+                remoteName: "origin", webURL: URL(string: "https://github.com/team/repo")!),
+            reviewRequest: nil, providerAvailable: true, providerAuthenticated: true,
+            providerCapabilities: .githubCLI, errorMessage: nil
+        )
+        var commands: [[String]] = []
+
+        await #expect(throws: CommitPublishWorkflowError.pushDestinationChanged) {
+            try await CommitPublishReviewTarget.capture(
+                snapshot: snapshot, createAsDraft: false, runGit: { args in
+                    commands.append(args)
+                    switch args {
+                    case ["symbolic-ref", "--short", "HEAD"]:
+                        return .init(exitCode: 0, stdout: "feature\n", stderr: "")
+                    case ["rev-parse", "--verify", "HEAD"]:
+                        return .init(exitCode: 0, stdout: "captured-head\n", stderr: "")
+                    case ["remote", "get-url", "--push", "--all", "fork"]:
+                        return .init(exitCode: 0, stdout: "ssh://git@github.com/attacker/repo.git\n", stderr: "")
+                    default:
+                        Issue.record("Unexpected Git command: \(args)")
+                        return .init(exitCode: 1, stdout: "", stderr: "")
+                    }
+                }
+            )
+        }
+
+        #expect(commands == [
+            ["symbolic-ref", "--short", "HEAD"],
+            ["rev-parse", "--verify", "HEAD"],
+            ["remote", "get-url", "--push", "--all", "fork"],
+        ])
+    }
+
     @Test func livePushUsesCapturedTargetWithoutUpstreamAndReportsOutput() async throws {
         var target = makeTarget()
         target.pushURL = "ssh://git@github.com/contributor/repo.git"
@@ -166,7 +206,7 @@ struct CommitPublishLiveOperationsTests {
         let operations = CommitPublishOperations.live(
             worktreePath: URL(fileURLWithPath: "/tmp"),
             reviewLoop: ReviewLoopState(worktreePath: URL(fileURLWithPath: "/tmp"), baseBranch: "changed"),
-            comparisonBase: "captured-base", syncGG: {}, refreshAfterCompletion: {},
+            comparisonBase: "captured-base", syncGG: { _ in }, refreshAfterCompletion: {},
             runGit: { args in
                 if args == ["remote", "get-url", "--push", "--all", "fork"] {
                     return .init(exitCode: 0, stdout: "ssh://git@github.com/contributor/repo.git\n", stderr: "")
@@ -196,7 +236,7 @@ struct CommitPublishLiveOperationsTests {
         let path = URL(fileURLWithPath: "/tmp/captured-worktree")
         let review = ReviewLoopState(worktreePath: path, baseBranch: "main")
         let branchOperations = CommitPublishOperations.live(worktreePath: path, reviewLoop: review,
-            comparisonBase: nil, syncGG: {}, refreshAfterCompletion: {}, runGit: { args in
+            comparisonBase: nil, syncGG: { _ in }, refreshAfterCompletion: {}, runGit: { args in
                 #expect(args == ["symbolic-ref", "--short", "HEAD"])
                 return .init(exitCode: 0, stdout: "other-feature\n", stderr: "")
             })
@@ -205,7 +245,7 @@ struct CommitPublishLiveOperationsTests {
         }
 
         let headOperations = CommitPublishOperations.live(worktreePath: path, reviewLoop: review,
-            comparisonBase: nil, syncGG: {}, refreshAfterCompletion: {}, runGit: { args in
+            comparisonBase: nil, syncGG: { _ in }, refreshAfterCompletion: {}, runGit: { args in
                 switch args {
                 case ["symbolic-ref", "--short", "HEAD"]:
                     return .init(exitCode: 0, stdout: "feature\n", stderr: "")
@@ -231,7 +271,7 @@ struct CommitPublishLiveOperationsTests {
         var pushed = false
         let operations = CommitPublishOperations.live(worktreePath: URL(fileURLWithPath: "/tmp"),
             reviewLoop: ReviewLoopState(worktreePath: URL(fileURLWithPath: "/tmp"), baseBranch: "main"),
-            comparisonBase: nil, syncGG: {}, refreshAfterCompletion: {}, runGit: { args in
+            comparisonBase: nil, syncGG: { _ in }, refreshAfterCompletion: {}, runGit: { args in
                 switch args.first {
                 case "rev-parse": return .init(exitCode: 0, stdout: "committed", stderr: "")
                 case "remote": return .init(exitCode: 0, stdout: "ssh://git@github.com/other/repo.git", stderr: "")
@@ -254,7 +294,7 @@ struct CommitPublishLiveOperationsTests {
         var calls: [[String]] = []
         let operations = CommitPublishOperations.live(worktreePath: URL(fileURLWithPath: "/tmp"),
             reviewLoop: ReviewLoopState(worktreePath: URL(fileURLWithPath: "/tmp"), baseBranch: "main"),
-            comparisonBase: nil, syncGG: {}, refreshAfterCompletion: {}, runGit: { args in
+            comparisonBase: nil, syncGG: { _ in }, refreshAfterCompletion: {}, runGit: { args in
                 calls.append(args)
                 return .init(exitCode: 0, stdout: target.pushURL!, stderr: "")
             }, containsCommit: { remote, branch, sha in
@@ -276,7 +316,7 @@ struct CommitPublishLiveOperationsTests {
         var pushed = false
         let operations = CommitPublishOperations.live(worktreePath: URL(fileURLWithPath: "/tmp"),
             reviewLoop: ReviewLoopState(worktreePath: URL(fileURLWithPath: "/tmp"), baseBranch: "main"),
-            comparisonBase: nil, syncGG: {}, refreshAfterCompletion: {}, runGit: { args in
+            comparisonBase: nil, syncGG: { _ in }, refreshAfterCompletion: {}, runGit: { args in
                 if args.first == "remote" {
                     #expect(args == ["remote", "get-url", "--push", "--all", "fork"])
                     let urls = args.contains("--all") ? target.pushURL! + "\nssh://unexpected.example/repo.git\n" : target.pushURL!
@@ -299,7 +339,7 @@ struct CommitPublishLiveOperationsTests {
         var pushArguments: [String]?
         var operations = CommitPublishOperations.live(worktreePath: URL(fileURLWithPath: "/tmp"),
             reviewLoop: ReviewLoopState(worktreePath: URL(fileURLWithPath: "/tmp"), baseBranch: "main"),
-            comparisonBase: nil, syncGG: {}, refreshAfterCompletion: {}, runGit: { args in
+            comparisonBase: nil, syncGG: { _ in }, refreshAfterCompletion: {}, runGit: { args in
                 if args.first == "rev-parse" { return .init(exitCode: 0, stdout: head, stderr: "") }
                 if args.first == "remote" { return .init(exitCode: 0, stdout: target.pushURL!, stderr: "") }
                 pushArguments = args
@@ -322,7 +362,7 @@ struct CommitPublishLiveOperationsTests {
         var checked: [String] = []
         let operations = CommitPublishOperations.live(worktreePath: URL(fileURLWithPath: "/tmp"),
             reviewLoop: ReviewLoopState(worktreePath: URL(fileURLWithPath: "/tmp"), baseBranch: "main"),
-            comparisonBase: nil, syncGG: {}, refreshAfterCompletion: {}, containsCommit: { remote, _, _ in
+            comparisonBase: nil, syncGG: { _ in }, refreshAfterCompletion: {}, containsCommit: { remote, _, _ in
                 checked.append(remote)
                 return remote == target.pushURL
             })
@@ -349,7 +389,7 @@ struct CommitPublishLiveOperationsTests {
         target.pushRemoteName = "fork"
         let operations = CommitPublishOperations.live(worktreePath: repo,
             reviewLoop: ReviewLoopState(worktreePath: repo, baseBranch: "main"), comparisonBase: nil,
-            syncGG: {}, refreshAfterCompletion: {})
+            syncGG: { _ in }, refreshAfterCompletion: {})
         try await operations.push(target, sha)
         try await operations.configureUpstreamTracking(target)
         let upstream = try await Process.git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], cwd: repo)
@@ -380,7 +420,7 @@ struct CommitPublishLiveOperationsTests {
         target.pushRemoteName = "fork"
         let operations = CommitPublishOperations.live(worktreePath: repo,
             reviewLoop: ReviewLoopState(worktreePath: repo, baseBranch: "main"), comparisonBase: nil,
-            syncGG: {}, refreshAfterCompletion: {})
+            syncGG: { _ in }, refreshAfterCompletion: {})
 
         #expect(try await operations.remoteBranchContainsCommit(target, sha))
         let stillMissingTracking = try await Process.git(["rev-parse", "--verify", "refs/remotes/fork/feature"], cwd: repo)
@@ -401,7 +441,7 @@ struct CommitPublishLiveOperationsTests {
         let review = ReviewLoopState(worktreePath: path, baseBranch: "main",
             providerRegistry: .init(providers: [.github: provider]))
         let operations = CommitPublishOperations.live(worktreePath: path, reviewLoop: review,
-            comparisonBase: "main", syncGG: {}, refreshAfterCompletion: {},
+            comparisonBase: "main", syncGG: { _ in }, refreshAfterCompletion: {},
             runGit: { args in
                 if args == ["symbolic-ref", "--short", "HEAD"] {
                     return .init(exitCode: 0, stdout: "feature", stderr: "")
@@ -431,7 +471,7 @@ struct CommitPublishLiveOperationsTests {
         let operations = CommitPublishOperations.live(
             worktreePath: URL(fileURLWithPath: "/tmp"),
             reviewLoop: ReviewLoopState(worktreePath: URL(fileURLWithPath: "/tmp"), baseBranch: "main"),
-            comparisonBase: "captured-base", syncGG: {}, refreshAfterCompletion: {},
+            comparisonBase: "captured-base", syncGG: { _ in }, refreshAfterCompletion: {},
             commit: { subject, body, amend in
                 calls.append("commit")
                 #expect(subject == "Subject")
@@ -453,7 +493,7 @@ struct CommitPublishLiveOperationsTests {
         let operations = CommitPublishOperations.live(
             worktreePath: URL(fileURLWithPath: "/tmp"),
             reviewLoop: ReviewLoopState(worktreePath: URL(fileURLWithPath: "/tmp"), baseBranch: "main"),
-            comparisonBase: nil, syncGG: {}, refreshAfterCompletion: {},
+            comparisonBase: nil, syncGG: { _ in }, refreshAfterCompletion: {},
             commit: { _, _, _ in committed = true
             return "new" }, publicationState: { .published }
         )
@@ -512,7 +552,7 @@ struct CommitPublishLiveOperationsTests {
             commitTitle: "Title", subject: "Subject", body: "Body", destination: .review(target), nextPhase: .createReviewRequest)
         var refreshed = false
         let operations = CommitPublishOperations.live(worktreePath: path, reviewLoop: review,
-            comparisonBase: "changed-base", syncGG: {}, refreshAfterCompletion: {
+            comparisonBase: "changed-base", syncGG: { _ in }, refreshAfterCompletion: {
                 #expect(checkpoint == nil)
                 #expect(await provider.creationCount == 1)
                 refreshed = true
@@ -531,7 +571,7 @@ struct CommitPublishLiveOperationsTests {
         for parentExists in [true, false] {
             let operations = CommitPublishOperations.live(worktreePath: URL(fileURLWithPath: "/tmp"),
                 reviewLoop: ReviewLoopState(worktreePath: URL(fileURLWithPath: "/tmp"), baseBranch: "main"),
-                comparisonBase: nil, syncGG: {}, refreshAfterCompletion: {},
+                comparisonBase: nil, syncGG: { _ in }, refreshAfterCompletion: {},
                 runGit: { args in
                     #expect(args == ["rev-parse", "--verify", "new-sha^"])
                     return .init(exitCode: parentExists ? 0 : 1, stdout: "parent-sha\n", stderr: "")

@@ -8,6 +8,15 @@ struct CommitPublishCreatedCommit: Equatable, Sendable {
 }
 
 @MainActor
+final class CommitPublishSyncExecutionMarker {
+    private(set) var started = false
+
+    func markStarted() {
+        started = true
+    }
+}
+
+@MainActor
 @Observable
 final class CommitPublishSession {
     private(set) var checkpoint: CommitPublishCheckpoint?
@@ -107,15 +116,15 @@ struct CommitPublishOperations {
     var configureUpstreamTracking: (_ target: CommitPublishReviewTarget) async throws -> Void = { _ in }
     var currentReviewRequestExists: (_ target: CommitPublishReviewTarget) async throws -> Bool
     var createReviewRequest: (_ target: CommitPublishReviewTarget, _ subject: String, _ body: String) async throws -> URL
-    var syncGG: () async throws -> Void
-    var syncGGForTarget: (_ target: GGStackTargetIdentity) async throws -> Void = { _ in }
+    var syncGG: (_ execution: CommitPublishSyncExecutionMarker) async throws -> Void
+    var syncGGForTarget: (_ target: GGStackTargetIdentity, _ execution: CommitPublishSyncExecutionMarker) async throws -> Void = { _, _ in }
     var refreshAfterCompletion: () async -> Void
 
     static func live(
         worktreePath: URL,
         reviewLoop: ReviewLoopState,
         comparisonBase: String?,
-        syncGG: @escaping () async throws -> Void,
+        syncGG: @escaping (_ execution: CommitPublishSyncExecutionMarker) async throws -> Void,
         refreshAfterCompletion: @escaping () async -> Void,
         runGit: (([String]) async throws -> ProcessResult)? = nil,
         commit: ((String, String, Bool) async throws -> String)? = nil,
@@ -422,19 +431,17 @@ final class CommitPublishWorkflow {
 
                 activity = .syncing
                 try Task.checkCancellation()
-                var syncStarted = false
+                let syncExecution = CommitPublishSyncExecutionMarker()
                 do {
                     if let target {
                         try await operations.validateGGTarget(target)
                         try Task.checkCancellation()
-                        syncStarted = true
-                        try await operations.syncGGForTarget(target)
+                        try await operations.syncGGForTarget(target, syncExecution)
                     } else {
-                        syncStarted = true
-                        try await operations.syncGG()
+                        try await operations.syncGG(syncExecution)
                     }
                 } catch {
-                    if syncStarted {
+                    if syncExecution.started {
                         try await persistPostGGSyncHeadIfNeeded(&checkpoint)
                     }
                     throw error

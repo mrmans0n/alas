@@ -71,7 +71,7 @@ final class AppState {
         if let _tabs { return _tabs }
         let manager = TabsManager(lsp: lsp)
         manager.onCommitPublishCompletion = { [weak self] worktreeId, tabId in
-            self?.closedTabHistory.purgeCompletedCommitPublishDraft(worktreeID: worktreeId, tabID: tabId)
+            self?.closedTabHistory.purgeCommitPublishDraft(worktreeID: worktreeId, tabID: tabId)
         }
         _tabs = manager
         return manager

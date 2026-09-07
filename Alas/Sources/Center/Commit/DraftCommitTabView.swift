@@ -618,11 +618,11 @@ struct DraftCommitTabView: View {
         error = nil
         var operations = CommitPublishOperations.live(
             worktreePath: worktreePath, reviewLoop: rps.reviewLoop, comparisonBase: comparisonBase,
-            syncGG: { try await rps.syncGGForCommitPublish() },
+            syncGG: { execution in try await rps.syncGGForCommitPublish(markExecutionStarted: execution.markStarted) },
             refreshAfterCompletion: { _ = await rps.refresh(forceReviewLoopRemote: true) }
         )
         operations.validateGGTarget = { try await rps.validateGGTargetForCommitPublish($0) }
-        operations.syncGGForTarget = { try await rps.syncGGForCommitPublish(target: $0) }
+        operations.syncGGForTarget = { try await rps.syncGGForCommitPublish(target: $0, markExecutionStarted: $1.markStarted) }
         appState.tabs.runCommitPublish(worktreeId: worktreeId, tabId: tabState.id,
             subject: subjectSnapshot, body: bodySnapshot, amend: amendSnapshot,
             operations: operations, prepareDestination: { [worktreePath] in

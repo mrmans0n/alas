@@ -1907,11 +1907,15 @@ final class RightPaneState: GGSplitCommitServicing {
         }
     }
 
-    func syncGGForCommitPublish(target: GGStackTargetIdentity? = nil) async throws {
+    func syncGGForCommitPublish(
+        target: GGStackTargetIdentity? = nil,
+        markExecutionStarted: @escaping @MainActor () -> Void = {}
+    ) async throws {
         guard let operation = ggMutationCoordinator.startApplying(
             .sync,
             confirmedAgainst: nil,
-            expectedTarget: target
+            expectedTarget: target,
+            onExecutionStarted: markExecutionStarted
         ) else {
             throw GGMutationError.operationInFlight
         }

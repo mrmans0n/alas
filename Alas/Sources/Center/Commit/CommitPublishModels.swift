@@ -279,6 +279,7 @@ struct CommitPublishReviewTarget: Codable, Equatable, Sendable {
         try GitService.assertSuccess(result, op: "Resolve push destination")
         let pushURLs = result.stdout.split(whereSeparator: \.isNewline).map(String.init)
         guard let pushURL = pushURLs.first, !pushURL.isEmpty else { throw CommitPublishWorkflowError.missingPushDestination }
+        try validatePushDestinations(pushURLs, remoteName: pushRemote, snapshotRemote: remote, local: local)
         return Self(
             provider: remote.kind, host: remote.host, owner: remote.owner, repository: remote.repository,
             repositorySlug: remote.repositorySlug, remoteName: remote.remoteName, webURL: remote.webURL,
@@ -287,6 +288,27 @@ struct CommitPublishReviewTarget: Codable, Equatable, Sendable {
             reviewRequestExisted: snapshot.reviewRequest != nil, createAsDraft: createAsDraft,
             pushURL: pushURL, pushURLs: pushURLs, pushRemoteName: pushRemote
         )
+    }
+
+    private static func validatePushDestinations(
+        _ urls: [String],
+        remoteName: String,
+        snapshotRemote: CodeHostRemote,
+        local: ReviewLoopLocalState
+    ) throws {
+        let expectedOwner = local.headRemoteOwner ?? snapshotRemote.owner
+        for url in urls {
+            guard let destination = CodeHostRemoteDetector.detect(from: [GitRemote(name: remoteName, url: url)]) else {
+                continue
+            }
+            guard destination.kind == snapshotRemote.kind,
+                  destination.host == snapshotRemote.host,
+                  destination.repository == snapshotRemote.repository,
+                  destination.owner == expectedOwner
+            else {
+                throw CommitPublishWorkflowError.pushDestinationChanged
+            }
+        }
     }
 }
 
