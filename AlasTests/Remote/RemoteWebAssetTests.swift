@@ -49,12 +49,12 @@ struct RemoteWebAssetTests {
         let sw = try asset("sw.js")
 
         #expect(html.contains(#"/session-ordering.js?v=1"#))
-        #expect(html.range(of: #"/session-ordering.js?v=1"#)!.lowerBound < html.range(of: #"/app.js?v=70"#)!.lowerBound)
-        #expect(html.contains(#"/app.js?v=70"#))
+        #expect(html.range(of: #"/session-ordering.js?v=1"#)!.lowerBound < html.range(of: #"/app.js?v=71"#)!.lowerBound)
+        #expect(html.contains(#"/app.js?v=71"#))
         #expect(html.contains(#"/style.css?v=42"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v49";"#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v50";"#))
         #expect(sw.contains(#""/session-ordering.js?v=1""#))
-        #expect(sw.contains(#""/app.js?v=70""#))
+        #expect(sw.contains(#""/app.js?v=71""#))
         #expect(sw.contains(#""/style.css?v=42""#))
     }
 
@@ -68,10 +68,10 @@ struct RemoteWebAssetTests {
         #expect(app.contains("toggle.tabIndex = 0"))
         #expect(app.contains("function handleCardToggleKeydown"))
         #expect(!app.contains(#"const button = el("button", "tool-toggle")"#))
-        #expect(html.contains(#"/app.js?v=70"#))
+        #expect(html.contains(#"/app.js?v=71"#))
         #expect(html.contains(#"/style.css?v=42"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v49";"#))
-        #expect(sw.contains(#""/app.js?v=70""#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v50";"#))
+        #expect(sw.contains(#""/app.js?v=71""#))
         #expect(sw.contains(#""/style.css?v=42""#))
     }
 
@@ -119,7 +119,7 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".session-section"))
         #expect(css.contains(".session-section-title"))
         #expect(css.contains(".session-section-list"))
-        #expect(html.contains("/app.js?v=70"))
+        #expect(html.contains("/app.js?v=71"))
         #expect(html.contains("/style.css?v=42"))
     }
 
@@ -145,7 +145,7 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".session-open"))
         #expect(css.contains("#detail-title"))
         #expect(css.contains(".sheet-input"))
-        #expect(sw.contains(#""/app.js?v=70""#))
+        #expect(sw.contains(#""/app.js?v=71""#))
         #expect(sw.contains(#""/style.css?v=42""#))
     }
 
@@ -196,7 +196,7 @@ struct RemoteWebAssetTests {
         let sw = try asset("sw.js")
 
         #expect(html.contains(#"/worktree-creation.js?v=1"#))
-        #expect(html.range(of: #"/worktree-creation.js?v=1"#)!.lowerBound < html.range(of: #"/app.js?v=70"#)!.lowerBound)
+        #expect(html.range(of: #"/worktree-creation.js?v=1"#)!.lowerBound < html.range(of: #"/app.js?v=71"#)!.lowerBound)
         #expect(js.contains("const worktreeCreation = RemoteWorktreeCreation.createFlow(send);"))
         #expect(js.contains(#"case "projectList":"#))
         #expect(js.contains(#"case "branchList":"#))
@@ -334,9 +334,9 @@ struct RemoteWebAssetTests {
     @Test func incrementalTranscriptBustsServiceWorkerAssetCache() throws {
         let sw = try asset("sw.js")
         let html = try asset("index.html")
-        #expect(sw.contains("alas-remote-shell-v49"))
-        #expect(sw.contains("/app.js?v=70"))
-        #expect(html.contains("app.js?v=70"))
+        #expect(sw.contains("alas-remote-shell-v50"))
+        #expect(sw.contains("/app.js?v=71"))
+        #expect(html.contains("app.js?v=71"))
     }
 
     // Regression (codex review, PR #775): applyPage used to clear the
@@ -499,10 +499,10 @@ struct RemoteWebAssetTests {
         let html = try asset("index.html")
         let sw = try asset("sw.js")
 
-        #expect(html.contains(#"/app.js?v=70"#))
+        #expect(html.contains(#"/app.js?v=71"#))
         #expect(html.contains(#"/style.css?v=42"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v49";"#))
-        #expect(sw.contains(#""/app.js?v=70""#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v50";"#))
+        #expect(sw.contains(#""/app.js?v=71""#))
         #expect(sw.contains(#""/style.css?v=42""#))
     }
 
@@ -536,9 +536,9 @@ struct RemoteWebAssetTests {
         #expect(html.contains(#"/changes-view.js?v=2"#))
         #expect(html.contains(#"/file-browser.js?v=3"#))
         #expect(html.range(of: #"/changes-view.js?v=2"#)!.lowerBound
-            < html.range(of: #"/app.js?v=70"#)!.lowerBound)
+            < html.range(of: #"/app.js?v=71"#)!.lowerBound)
         #expect(html.range(of: #"/file-browser.js?v=3"#)!.lowerBound
-            < html.range(of: #"/app.js?v=70"#)!.lowerBound)
+            < html.range(of: #"/app.js?v=71"#)!.lowerBound)
         #expect(sw.contains(#""/changes-view.js?v=2""#))
         #expect(sw.contains(#""/file-browser.js?v=3""#))
     }
@@ -600,6 +600,28 @@ struct RemoteWebAssetTests {
         let scheduleBody = try #require(
             js.range(of: "function scheduleListRefresh() {").map { js[$0.lowerBound...].prefix(400) })
         #expect(scheduleBody.contains("refreshFileTree()"))
+    }
+
+    /// Regression: `refreshFileTree()` used to send the root request AND
+    /// every expanded descendant's request in the same synchronous burst,
+    /// before the root response could prune a since-deleted/renamed
+    /// directory from `expandedPaths()` — so a vanished nested directory's
+    /// (now-invalid) request still went out, failing with `fileTreeFailed`
+    /// and leaving a stale error banner over the freshly refreshed tree.
+    /// Descendant requests must wait for the root response to be applied.
+    @Test func remoteWebRequestsExpandedDescendantsOnlyAfterTheRootResponseIsApplied() throws {
+        let js = try asset("app.js")
+        #expect(js.contains("let pendingExpandedPathsRefresh = false;"))
+        let refreshBody = try #require(
+            js.range(of: "function refreshFileTree() {").map { js[$0.lowerBound...].prefix(300) })
+        #expect(refreshBody.contains("pendingExpandedPathsRefresh = true;"))
+        #expect(!refreshBody.contains("expandedPaths()"))
+        let fileTreeBody = try #require(
+            js.range(of: #"case "fileTree": {"#).map { js[$0.lowerBound...].prefix(1200) })
+        #expect(fileTreeBody.contains("changesTree.applyNodes("))
+        #expect(fileTreeBody.range(of: "changesTree.applyNodes(")!.lowerBound
+            < fileTreeBody.range(of: "changesTree.expandedPaths()")!.lowerBound)
+        #expect(js.contains("if (msg.path === undefined || msg.path === null) pendingExpandedPathsRefresh = false;"))
     }
 
     // Regression (final whole-branch review, finding 4): a `listChanges` per

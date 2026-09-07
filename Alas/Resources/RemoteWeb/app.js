@@ -350,11 +350,25 @@ function handle(msg) {
       if (msg.truncated) fileTreeTruncatedPaths.add(treeKey);
       else fileTreeTruncatedPaths.delete(treeKey);
       changesTree.applyNodes(msg.path === undefined ? null : msg.path, msg.nodes || []);
+      // Only AFTER applying the root response — not synchronously alongside
+      // the root request in `refreshFileTree()` — does `expandedPaths()`
+      // reflect any directory that response just pruned (deleted/renamed
+      // since the last listing). Requesting descendants any earlier would
+      // still include a since-vanished path, which the server processes
+      // right after the (by-then-already-superseded) root response and
+      // fails, leaving a stale error banner over the freshly refreshed tree.
+      if (treeKey === "" && pendingExpandedPathsRefresh) {
+        pendingExpandedPathsRefresh = false;
+        for (const path of changesTree.expandedPaths()) {
+          send({ type: "listFiles", sessionId: currentSession, path });
+        }
+      }
       renderFileTree();
       break;
     }
     case "fileTreeFailed":
       if (msg.sessionId !== currentSession) break;
+      if (msg.path === undefined || msg.path === null) pendingExpandedPathsRefresh = false;
       showFileError(fileAccessMessage(msg.reason, null));
       break;
     case "fileContents":
@@ -482,6 +496,7 @@ function openSession(id) {
   if (changesRefreshDebounceTimer) { clearTimeout(changesRefreshDebounceTimer); changesRefreshDebounceTimer = null; }
   previousChangesStreamingState = "idle";
   pendingListRefresh = false;
+  pendingExpandedPathsRefresh = false;
   const summary = listedSessions.get(id);
   $("detail-tabs").classList.toggle("hidden", !summary || !summary.worktree);
   showTab("chat");
@@ -497,6 +512,7 @@ function showTab(name) {
   activeTab = name;
   detailStack = [];
   pendingListRefresh = false;   // this switch's own unconditional fetch below covers it
+  pendingExpandedPathsRefresh = false;   // ditto
   $("diff-view").classList.add("hidden");
   $("file-view").classList.add("hidden");
   showTabListLevel();
@@ -523,16 +539,16 @@ function requestChanges() {
 /// refresh doesn't collapse the tree back to just the root — `applyNodes`
 /// overwrites a path's children in place, so this is safe to call whether
 /// or not anything actually changed on the host.
+// Set by `refreshFileTree()`; consumed by the `fileTree`/`fileTreeFailed`
+// handlers once the ROOT response for that refresh comes back. See the
+// `fileTree` case for why the expanded-descendant requests wait for it
+// instead of going out in the same burst as the root request.
+let pendingExpandedPathsRefresh = false;
+
 function refreshFileTree() {
   if (!currentSession) return;
   send({ type: "listFiles", sessionId: currentSession });
-  // `expandedPaths()`, not `visibleRows()`: a directory expanded behind a
-  // since-collapsed ancestor is invisible right now but still cached, and
-  // re-expanding the ancestor later would otherwise render it straight from
-  // that stale cache with no request in between.
-  for (const path of changesTree.expandedPaths()) {
-    send({ type: "listFiles", sessionId: currentSession, path });
-  }
+  pendingExpandedPathsRefresh = true;
 }
 
 $("tab-chat").addEventListener("click", () => showTab("chat"));
@@ -817,6 +833,7 @@ function showSessions() {
   if (changesRefreshDebounceTimer) { clearTimeout(changesRefreshDebounceTimer); changesRefreshDebounceTimer = null; }
   previousChangesStreamingState = "idle";
   pendingListRefresh = false;
+  pendingExpandedPathsRefresh = false;
   activeTab = "chat";
   $("detail-tabs").classList.add("hidden");
   $("changes").classList.add("hidden");

@@ -18,6 +18,14 @@ use watch::{SubscriptionWatcher, WatchKind, WatchNotification};
 
 const PROTOCOL_VERSION: u32 = 1;
 
+/// Per-file byte budget for `fs_line_counts`. This request loop is shared by
+/// every filesystem/process request on this host, so counting a
+/// multi-gigabyte file's lines in full would monopolize it and delay
+/// unrelated requests. Matches the Swift-side `RemoteWorktreeFileAccess
+/// .maxFileBytes` order of magnitude: a file this large was never going to
+/// have its exact line count displayed precisely anyway.
+const FS_LINE_COUNT_MAX_BYTES: u64 = 512 * 1024;
+
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Handshake<'a> {
@@ -885,23 +893,38 @@ fn fs_line_counts(state: &HelperState, params: Option<Value>) -> Result<Value, H
         let mut count = 0_u64;
         let mut saw_any_bytes = false;
         let mut last_byte = 0_u8;
-        loop {
+        let mut total_read: u64 = 0;
+        let mut reached_eof = false;
+        // Caps the work per file, not just the response: this request loop
+        // is shared by every filesystem/process request on this host, so an
+        // untracked multi-gigabyte generated file read in full here would
+        // monopolize it and delay unrelated requests, even though the
+        // eventual Changes response is capped downstream regardless. Once
+        // the cap is hit, the count is a lower bound on the real line count
+        // (an approximation) rather than an exact figure — good enough for
+        // a Changes-list badge, which was never going to display the exact
+        // total for a file this large anyway.
+        while total_read < FS_LINE_COUNT_MAX_BYTES {
             let read = file
                 .read(&mut buffer)
                 .map_err(|error| jsonrpc_error(-32020, format!("read failed: {error}")))?;
             if read == 0 {
+                reached_eof = true;
                 break;
             }
             saw_any_bytes = true;
             count += buffer[..read].iter().filter(|byte| **byte == b'\n').count() as u64;
             last_byte = buffer[read - 1];
+            total_read += read as u64;
         }
         // Counting newline bytes alone undercounts a nonempty file whose
         // final line has no trailing newline: git's numstat (and the local
         // diff-parsing `addedLineCount` logic) both count that trailing
         // partial line, so a one-line file with no trailing newline has a
-        // line count of 1, not 0.
-        if saw_any_bytes && last_byte != b'\n' {
+        // line count of 1, not 0. Only applies when the read actually
+        // reached EOF — `last_byte` after a cap-triggered stop is just
+        // wherever reading happened to end, not the file's true last byte.
+        if saw_any_bytes && reached_eof && last_byte != b'\n' {
             count += 1;
         }
         entries.push(json!({ "path": relative, "lineCount": count }));
@@ -2643,6 +2666,52 @@ mod tests {
                 {"path": "one-with-newline.txt", "lineCount": 1},
                 {"path": "two-no-trailing-newline.txt", "lineCount": 2},
             ])
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A file larger than `FS_LINE_COUNT_MAX_BYTES` must not be read in
+    /// full: this request loop is shared by every filesystem/process
+    /// request on the host, so counting a multi-gigabyte generated file's
+    /// lines line-by-line would monopolize it and delay unrelated
+    /// requests. The count for an oversized file is an approximation (a
+    /// lower bound), not exact — asserted here as "less than the true
+    /// count" specifically, so a regression that silently reads the whole
+    /// file (making this assertion trivially true by coincidence) doesn't
+    /// slip through unnoticed.
+    #[test]
+    fn line_counts_cap_the_read_for_an_oversized_file() {
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-stats-oversized-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        // One line well past the cap, so a full read would report exactly
+        // 1 (no trailing newline) — capped counting must report something
+        // ELSE (0, since a `\n`-free prefix has no newlines) instead.
+        let huge_line = "x".repeat(FS_LINE_COUNT_MAX_BYTES as usize + 1024);
+        std::fs::write(root.join("huge.txt"), &huge_line).expect("file");
+
+        let mut state = HelperState::default();
+        state.subscriptions.insert(
+            "1".to_string(),
+            std::fs::canonicalize(&root).expect("canonical root"),
+        );
+        let counts = fs_line_counts(
+            &state,
+            Some(json!({
+                "root": root.display().to_string(),
+                "paths": ["huge.txt"]
+            })),
+        )
+        .expect("line counts");
+        let reported = counts["entries"][0]["lineCount"]
+            .as_u64()
+            .expect("lineCount");
+        assert_eq!(
+            reported, 0,
+            "capped read must not reach EOF and apply the no-trailing-newline +1"
         );
         let _ = std::fs::remove_dir_all(root);
     }
