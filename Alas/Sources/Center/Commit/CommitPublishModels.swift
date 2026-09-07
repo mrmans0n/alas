@@ -363,4 +363,42 @@ struct CommitPublishCheckpoint: Codable, Equatable, Sendable {
     let body: String
     let destination: CommitPublishDestination
     var nextPhase: CommitPublishPhase
+    var allowsGGRecoveryHeadReconciliation: Bool
+
+    init(
+        commitSHA: String,
+        baseRef: String,
+        commitTitle: String,
+        subject: String,
+        body: String,
+        destination: CommitPublishDestination,
+        nextPhase: CommitPublishPhase,
+        allowsGGRecoveryHeadReconciliation: Bool = false
+    ) {
+        self.commitSHA = commitSHA
+        self.baseRef = baseRef
+        self.commitTitle = commitTitle
+        self.subject = subject
+        self.body = body
+        self.destination = destination
+        self.nextPhase = nextPhase
+        self.allowsGGRecoveryHeadReconciliation = allowsGGRecoveryHeadReconciliation
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case commitSHA, baseRef, commitTitle, subject, body, destination, nextPhase, allowsGGRecoveryHeadReconciliation
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        commitSHA = try container.decode(String.self, forKey: .commitSHA)
+        baseRef = try container.decode(String.self, forKey: .baseRef)
+        commitTitle = try container.decode(String.self, forKey: .commitTitle)
+        subject = try container.decode(String.self, forKey: .subject)
+        body = try container.decode(String.self, forKey: .body)
+        destination = try container.decode(CommitPublishDestination.self, forKey: .destination)
+        nextPhase = try container.decode(CommitPublishPhase.self, forKey: .nextPhase)
+        allowsGGRecoveryHeadReconciliation = try container.decodeIfPresent(Bool.self,
+            forKey: .allowsGGRecoveryHeadReconciliation) ?? false
+    }
 }

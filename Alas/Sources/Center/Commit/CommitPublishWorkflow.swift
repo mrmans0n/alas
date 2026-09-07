@@ -383,6 +383,12 @@ final class CommitPublishWorkflow {
         let currentHeadSHA = try await operations.currentHeadSHA()
         try Task.checkCancellation()
         var checkpoint = initialCheckpoint
+        if currentHeadSHA != checkpoint.commitSHA,
+           let recoveredCheckpoint = checkpoint.reconcilingGGRecoveryHead(currentHeadSHA) {
+            checkpoint = recoveredCheckpoint
+            try onCheckpointChange(checkpoint)
+            try Task.checkCancellation()
+        }
         guard currentHeadSHA == checkpoint.commitSHA else {
             throw CommitPublishWorkflowError.headMismatch(
                 expected: checkpoint.commitSHA,
@@ -444,7 +450,10 @@ final class CommitPublishWorkflow {
                     }
                 } catch {
                     if syncExecution.started {
-                        try await persistPostGGSyncHeadIfNeeded(&checkpoint)
+                        try await persistPostGGSyncHeadIfNeeded(
+                            &checkpoint,
+                            allowRecoveryHeadReconciliation: error.isGGPausedConflict
+                        )
                     }
                     throw error
                 }
@@ -455,11 +464,21 @@ final class CommitPublishWorkflow {
         }
     }
 
-    private func persistPostGGSyncHeadIfNeeded(_ checkpoint: inout CommitPublishCheckpoint) async throws {
+    private func persistPostGGSyncHeadIfNeeded(
+        _ checkpoint: inout CommitPublishCheckpoint,
+        allowRecoveryHeadReconciliation: Bool = false
+    ) async throws {
         let postSyncHeadSHA = try await operations.currentHeadSHA()
         try Task.checkCancellation()
-        guard postSyncHeadSHA != checkpoint.commitSHA else { return }
-        checkpoint = checkpoint.resolvingGGCommitSHA(postSyncHeadSHA)
+        var updatedCheckpoint = checkpoint
+        if postSyncHeadSHA != checkpoint.commitSHA {
+            updatedCheckpoint = checkpoint.resolvingGGCommitSHA(postSyncHeadSHA)
+        }
+        if allowRecoveryHeadReconciliation {
+            updatedCheckpoint.allowsGGRecoveryHeadReconciliation = true
+        }
+        guard updatedCheckpoint != checkpoint else { return }
+        checkpoint = updatedCheckpoint
         try onCheckpointChange(checkpoint)
         try Task.checkCancellation()
     }
@@ -508,6 +527,16 @@ final class CommitPublishWorkflow {
 }
 
 private extension CommitPublishCheckpoint {
+    func reconcilingGGRecoveryHead(_ commitSHA: String) -> Self? {
+        guard nextPhase == .sync,
+              allowsGGRecoveryHeadReconciliation,
+              case .gg = destination
+        else { return nil }
+        var checkpoint = resolvingGGCommitSHA(commitSHA)
+        checkpoint.allowsGGRecoveryHeadReconciliation = false
+        return checkpoint
+    }
+
     func resolvingGGCommitSHA(_ commitSHA: String) -> Self {
         var destination = destination
         if case .gg(var target) = destination {
@@ -523,5 +552,13 @@ private extension CommitPublishCheckpoint {
             destination: destination,
             nextPhase: nextPhase
         )
+    }
+}
+
+private extension Error {
+    var isGGPausedConflict: Bool {
+        guard let error = self as? GGServiceError else { return false }
+        if case .pausedConflict = error { return true }
+        return false
     }
 }

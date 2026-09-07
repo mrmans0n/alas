@@ -522,6 +522,68 @@ struct CommitPublishWorkflowTests {
         #expect(retryWorkflow.lastError == nil)
     }
 
+    @Test func ggPausedRecoveryReconcilesRewrittenHeadForRetry() async throws {
+        let harness = WorkflowHarness()
+        var headSHA = "commit-sha"
+        var persistedCheckpoints: [CommitPublishCheckpoint?] = []
+        var syncedTargets: [GGStackTargetIdentity] = []
+        let checkpoint = harness.ggCheckpoint
+        let operations = CommitPublishOperations(
+            createCommit: { _, _, _ in .init(commitSHA: "unused", comparisonBase: "main", editorTitle: "Unused") },
+            currentHeadSHA: { headSHA },
+            remoteBranchContainsCommit: { _, _ in false },
+            push: { _, _ in },
+            currentReviewRequestExists: { _ in true },
+            createReviewRequest: { target, _, _ in target.webURL },
+            syncGG: { _ in Issue.record("Unexpected untargeted sync") },
+            syncGGForTarget: { target, execution in
+                execution.markStarted()
+                syncedTargets.append(target)
+                headSHA = "paused-sha"
+                throw GGServiceError.pausedConflict(message: "Resolve conflicts and run gg continue.")
+            },
+            refreshAfterCompletion: {}
+        )
+        let workflow = CommitPublishWorkflow(operations: operations) {
+            persistedCheckpoints.append($0)
+        }
+
+        await workflow.resume(checkpoint)
+
+        let retryCheckpoint = try #require(persistedCheckpoints.compactMap(\.self).last)
+        #expect(retryCheckpoint.commitSHA == "paused-sha")
+        #expect(retryCheckpoint.allowsGGRecoveryHeadReconciliation)
+        #expect(workflow.lastError as? GGServiceError == .pausedConflict(message: "Resolve conflicts and run gg continue."))
+
+        headSHA = "recovered-sha"
+        syncedTargets = []
+        var retryPersistedCheckpoints: [CommitPublishCheckpoint?] = []
+        let retryOperations = CommitPublishOperations(
+            createCommit: { _, _, _ in .init(commitSHA: "unused", comparisonBase: "main", editorTitle: "Unused") },
+            currentHeadSHA: { headSHA },
+            remoteBranchContainsCommit: { _, _ in false },
+            push: { _, _ in },
+            currentReviewRequestExists: { _ in true },
+            createReviewRequest: { target, _, _ in target.webURL },
+            syncGG: { _ in Issue.record("Unexpected untargeted sync") },
+            syncGGForTarget: { target, _ in syncedTargets.append(target) },
+            refreshAfterCompletion: {}
+        )
+        let retryWorkflow = CommitPublishWorkflow(operations: retryOperations) {
+            retryPersistedCheckpoints.append($0)
+        }
+
+        await retryWorkflow.resume(retryCheckpoint)
+
+        #expect(retryPersistedCheckpoints.compactMap(\.self).map(\.commitSHA) == ["paused-sha", "recovered-sha"])
+        #expect(retryPersistedCheckpoints.compactMap(\.self).last?.allowsGGRecoveryHeadReconciliation == false)
+        #expect(syncedTargets == [
+            .init(branch: "feature", stackName: "feature", base: "main", expectedHeadSHA: "recovered-sha"),
+        ])
+        #expect(retryPersistedCheckpoints.last! == nil)
+        #expect(retryWorkflow.lastError == nil)
+    }
+
     @Test func pushFailureRetainsPushCheckpoint() async {
         let harness = WorkflowHarness()
         harness.pushError = WorkflowHarness.Failure.push
