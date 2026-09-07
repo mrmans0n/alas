@@ -143,6 +143,21 @@ struct RemoteWorktreeFileAccessTests {
         #expect(short.files.count == 3)
     }
 
+    @Test func truncatesFileTreeNodesAtTheNodeCap() {
+        let nodes = (0..<(RemoteWorktreeFileAccess.maxFileTreeNodes + 5)).map { index in
+            RemoteFileNode(
+                name: "f\(index).txt", path: "f\(index).txt", kind: "file",
+                badge: nil, childrenState: "loaded", isSubmodule: false)
+        }
+        let result = RemoteWorktreeFileAccess.truncateFileNodes(nodes)
+        #expect(result.truncated)
+        #expect(result.nodes.count == RemoteWorktreeFileAccess.maxFileTreeNodes)
+
+        let short = RemoteWorktreeFileAccess.truncateFileNodes(Array(nodes.prefix(3)))
+        #expect(!short.truncated)
+        #expect(short.nodes.count == 3)
+    }
+
     @Test func rejectsSymlinkAliasToGit() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }

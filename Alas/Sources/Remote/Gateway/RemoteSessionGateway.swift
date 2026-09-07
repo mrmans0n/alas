@@ -311,8 +311,8 @@ final class RemoteSessionGateway {
             guard inFlightFileRequests.insert(key).inserted else { return }
             defer { inFlightFileRequests.remove(key) }
             switch await provider.remoteFileTree(sessionId: id, path: path) {
-            case .success(let nodes):
-                send(.fileTree(sessionId: id, path: path, nodes: nodes))
+            case .success(let nodes, let truncated):
+                send(.fileTree(sessionId: id, path: path, nodes: nodes, truncated: truncated))
             case .failure(let reason, let message):
                 send(.fileTreeFailed(sessionId: id, path: path, reason: reason, message: message))
             }

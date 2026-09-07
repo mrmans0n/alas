@@ -1390,7 +1390,7 @@ struct RemoteAppStateAccessTests {
 
         let result = await state.remoteFileTree(sessionId: tab.sessionId, path: nil)
 
-        guard case let .success(nodes) = result else {
+        guard case let .success(nodes, _) = result else {
             Issue.record("expected a successful root file tree listing, got \(result)")
             return
         }

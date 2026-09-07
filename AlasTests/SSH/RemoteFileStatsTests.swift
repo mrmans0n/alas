@@ -3,6 +3,18 @@ import Testing
 @testable import Alas
 
 struct RemoteFileStatsTests {
+    @Test func batchesSplitsIntoMaxBatchedPathsSizedChunksInOrder() {
+        #expect(RemoteFileStats.batches([]).isEmpty)
+        let single = ["a", "b", "c"]
+        #expect(RemoteFileStats.batches(single) == [single])
+
+        // 450 paths -> 200/200/50, not silently truncated to the first 200.
+        let paths = (0 ..< 450).map { "f\($0).txt" }
+        let batches = RemoteFileStats.batches(paths)
+        #expect(batches.map(\.count) == [200, 200, 50])
+        #expect(batches.flatMap { $0 } == paths)
+    }
+
     @Test func wcCommandQuotesPathsAndAvoidsEmptyInput() {
         #expect(RemoteFileStats.wcCommand(paths: []) == nil)
         let command = RemoteFileStats.wcCommand(paths: ["a.txt", "dir/o'brien.txt"])

@@ -55,6 +55,12 @@ worktreeCreation.subscribe(() => renderCreateSheet());
 const changesTree = RemoteFileBrowser.createTree();
 let activeTab = "chat";
 let changesState = { comparisonRef: null, metricsAvailable: true, files: [], truncated: false, loaded: false };
+// Paths (root as "") of directory listings the server reported as truncated
+// (more immediate children than RemoteWorktreeFileAccess.maxFileTreeNodes).
+// `visibleRows()` shows the whole expanded tree at once, so a single notice
+// covering any truncated level (rather than per-directory placement) keeps
+// this simple.
+let fileTreeTruncatedPaths = new Set();
 let detailStack = [];   // [{ tab, path }] for the in-tab list → detail level
 const ATTACH_CAP = 10 * 1000 * 1000;   // 10 MB running total — matches the server's maxAttachmentsBytes
 
@@ -337,12 +343,16 @@ function handle(msg) {
         $("diff-rows").append(el("p", "placeholder-card", fileAccessMessage(msg.reason, null)));
       }
       break;
-    case "fileTree":
+    case "fileTree": {
       if (msg.sessionId !== currentSession) break;
       $("file-error").classList.add("hidden");
+      const treeKey = msg.path === undefined || msg.path === null ? "" : msg.path;
+      if (msg.truncated) fileTreeTruncatedPaths.add(treeKey);
+      else fileTreeTruncatedPaths.delete(treeKey);
       changesTree.applyNodes(msg.path === undefined ? null : msg.path, msg.nodes || []);
       renderFileTree();
       break;
+    }
     case "fileTreeFailed":
       if (msg.sessionId !== currentSession) break;
       showFileError(fileAccessMessage(msg.reason, null));
@@ -466,6 +476,7 @@ function openSession(id) {
   renderDriveBar("idle"); send({ type: "subscribe", sessionId: id });
   changesTree.reset();
   changesState = { comparisonRef: null, metricsAvailable: true, files: [], truncated: false, loaded: false };
+  fileTreeTruncatedPaths = new Set();
   detailStack = [];
   resetChangesAndFilesDOM();
   if (changesRefreshDebounceTimer) { clearTimeout(changesRefreshDebounceTimer); changesRefreshDebounceTimer = null; }
@@ -654,6 +665,9 @@ function renderFileTree() {
     };
     list.appendChild(button);
   }
+
+  const notice = RemoteChangesView.truncationNotice(fileTreeTruncatedPaths.size > 0, "directory");
+  if (notice) list.append(el("p", "placeholder-card", notice));
 }
 
 function openFileView(path) {
@@ -754,6 +768,7 @@ function showSessions() {
   $("transcript").classList.add("hidden"); $("sessions").classList.remove("hidden");
   changesTree.reset();
   changesState = { comparisonRef: null, metricsAvailable: true, files: [], truncated: false, loaded: false };
+  fileTreeTruncatedPaths = new Set();
   detailStack = [];
   resetChangesAndFilesDOM();
   if (changesRefreshDebounceTimer) { clearTimeout(changesRefreshDebounceTimer); changesRefreshDebounceTimer = null; }

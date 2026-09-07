@@ -49,12 +49,12 @@ struct RemoteWebAssetTests {
         let sw = try asset("sw.js")
 
         #expect(html.contains(#"/session-ordering.js?v=1"#))
-        #expect(html.range(of: #"/session-ordering.js?v=1"#)!.lowerBound < html.range(of: #"/app.js?v=67"#)!.lowerBound)
-        #expect(html.contains(#"/app.js?v=67"#))
+        #expect(html.range(of: #"/session-ordering.js?v=1"#)!.lowerBound < html.range(of: #"/app.js?v=68"#)!.lowerBound)
+        #expect(html.contains(#"/app.js?v=68"#))
         #expect(html.contains(#"/style.css?v=42"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v45";"#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v46";"#))
         #expect(sw.contains(#""/session-ordering.js?v=1""#))
-        #expect(sw.contains(#""/app.js?v=67""#))
+        #expect(sw.contains(#""/app.js?v=68""#))
         #expect(sw.contains(#""/style.css?v=42""#))
     }
 
@@ -68,10 +68,10 @@ struct RemoteWebAssetTests {
         #expect(app.contains("toggle.tabIndex = 0"))
         #expect(app.contains("function handleCardToggleKeydown"))
         #expect(!app.contains(#"const button = el("button", "tool-toggle")"#))
-        #expect(html.contains(#"/app.js?v=67"#))
+        #expect(html.contains(#"/app.js?v=68"#))
         #expect(html.contains(#"/style.css?v=42"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v45";"#))
-        #expect(sw.contains(#""/app.js?v=67""#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v46";"#))
+        #expect(sw.contains(#""/app.js?v=68""#))
         #expect(sw.contains(#""/style.css?v=42""#))
     }
 
@@ -119,7 +119,7 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".session-section"))
         #expect(css.contains(".session-section-title"))
         #expect(css.contains(".session-section-list"))
-        #expect(html.contains("/app.js?v=67"))
+        #expect(html.contains("/app.js?v=68"))
         #expect(html.contains("/style.css?v=42"))
     }
 
@@ -145,7 +145,7 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".session-open"))
         #expect(css.contains("#detail-title"))
         #expect(css.contains(".sheet-input"))
-        #expect(sw.contains(#""/app.js?v=67""#))
+        #expect(sw.contains(#""/app.js?v=68""#))
         #expect(sw.contains(#""/style.css?v=42""#))
     }
 
@@ -196,7 +196,7 @@ struct RemoteWebAssetTests {
         let sw = try asset("sw.js")
 
         #expect(html.contains(#"/worktree-creation.js?v=1"#))
-        #expect(html.range(of: #"/worktree-creation.js?v=1"#)!.lowerBound < html.range(of: #"/app.js?v=67"#)!.lowerBound)
+        #expect(html.range(of: #"/worktree-creation.js?v=1"#)!.lowerBound < html.range(of: #"/app.js?v=68"#)!.lowerBound)
         #expect(js.contains("const worktreeCreation = RemoteWorktreeCreation.createFlow(send);"))
         #expect(js.contains(#"case "projectList":"#))
         #expect(js.contains(#"case "branchList":"#))
@@ -334,9 +334,9 @@ struct RemoteWebAssetTests {
     @Test func incrementalTranscriptBustsServiceWorkerAssetCache() throws {
         let sw = try asset("sw.js")
         let html = try asset("index.html")
-        #expect(sw.contains("alas-remote-shell-v45"))
-        #expect(sw.contains("/app.js?v=67"))
-        #expect(html.contains("app.js?v=67"))
+        #expect(sw.contains("alas-remote-shell-v46"))
+        #expect(sw.contains("/app.js?v=68"))
+        #expect(html.contains("app.js?v=68"))
     }
 
     // Regression (codex review, PR #775): applyPage used to clear the
@@ -499,10 +499,10 @@ struct RemoteWebAssetTests {
         let html = try asset("index.html")
         let sw = try asset("sw.js")
 
-        #expect(html.contains(#"/app.js?v=67"#))
+        #expect(html.contains(#"/app.js?v=68"#))
         #expect(html.contains(#"/style.css?v=42"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v45";"#))
-        #expect(sw.contains(#""/app.js?v=67""#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v46";"#))
+        #expect(sw.contains(#""/app.js?v=68""#))
         #expect(sw.contains(#""/style.css?v=42""#))
     }
 
@@ -533,13 +533,13 @@ struct RemoteWebAssetTests {
         #expect(html.contains(#"id="file-list""#))
         #expect(html.contains(#"id="file-view-body""#))
 
-        #expect(html.contains(#"/changes-view.js?v=1"#))
+        #expect(html.contains(#"/changes-view.js?v=2"#))
         #expect(html.contains(#"/file-browser.js?v=1"#))
-        #expect(html.range(of: #"/changes-view.js?v=1"#)!.lowerBound
-            < html.range(of: #"/app.js?v=67"#)!.lowerBound)
+        #expect(html.range(of: #"/changes-view.js?v=2"#)!.lowerBound
+            < html.range(of: #"/app.js?v=68"#)!.lowerBound)
         #expect(html.range(of: #"/file-browser.js?v=1"#)!.lowerBound
-            < html.range(of: #"/app.js?v=67"#)!.lowerBound)
-        #expect(sw.contains(#""/changes-view.js?v=1""#))
+            < html.range(of: #"/app.js?v=68"#)!.lowerBound)
+        #expect(sw.contains(#""/changes-view.js?v=2""#))
         #expect(sw.contains(#""/file-browser.js?v=1""#))
     }
 

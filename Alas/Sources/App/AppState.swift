@@ -8290,7 +8290,8 @@ extension AppState: RemoteSessionsProvider {
                 let statusEntries = try await git.status(worktreePath: worktree.path)
                 let nodes = try await git.fileTree(
                     worktreePath: worktree.path, statusEntries: statusEntries)
-                return .success(nodes: Self.remoteFileNodes(nodes))
+                let capped = RemoteWorktreeFileAccess.truncateFileNodes(Self.remoteFileNodes(nodes))
+                return .success(nodes: capped.nodes, truncated: capped.truncated)
             }
             guard let normalizedPath = RemoteWorktreeFileAccess.normalizedRelativePath(path),
                   RemoteWorktreeFileAccess.resolve(path: path, in: worktree.path) != nil
@@ -8329,7 +8330,8 @@ extension AppState: RemoteSessionsProvider {
                 statusEntries.map { ($0.path, $0.status) }, uniquingKeysWith: { first, _ in first })
             let nodes = try await git.fileTreeChildren(
                 worktreePath: worktree.path, path: path, badges: badges)
-            return .success(nodes: Self.remoteFileNodes(nodes))
+            let capped = RemoteWorktreeFileAccess.truncateFileNodes(Self.remoteFileNodes(nodes))
+            return .success(nodes: capped.nodes, truncated: capped.truncated)
         } catch {
             return .failure(reason: .gitFailed, message: error.localizedDescription)
         }

@@ -2737,7 +2737,7 @@ struct RemoteSessionGatewayTests {
         let node = RemoteFileNode(
             name: "src", path: "src", kind: "dir", badge: nil,
             childrenState: "notLoaded", isSubmodule: false)
-        provider.fileTreeResult = .success(nodes: [node])
+        provider.fileTreeResult = .success(nodes: [node], truncated: false)
         provider.fileContentsResult = .success(text: "# Alas\n", truncated: false)
         var sent: [RemoteServerMessage] = []
         let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
@@ -2746,7 +2746,7 @@ struct RemoteSessionGatewayTests {
         await gateway.handle(.readFile(sessionId: "s1", path: "README.md"))
 
         #expect(sent == [
-            .fileTree(sessionId: "s1", path: nil, nodes: [node]),
+            .fileTree(sessionId: "s1", path: nil, nodes: [node], truncated: false),
             .fileContents(sessionId: "s1", path: "README.md", text: "# Alas\n", truncated: false)
         ])
     }

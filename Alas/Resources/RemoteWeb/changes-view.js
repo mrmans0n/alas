@@ -55,6 +55,7 @@ function truncationNotice(truncated, kind) {
   if (!truncated) return "";
   if (kind === "files") return "File list truncated — too many changed files to show.";
   if (kind === "lines") return "File truncated — too many lines to show.";
+  if (kind === "directory") return "Directory truncated — too many entries to show.";
   return "Diff truncated — open this file on the desktop to see the rest.";
 }
 

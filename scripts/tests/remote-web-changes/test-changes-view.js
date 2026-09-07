@@ -66,6 +66,8 @@ const view = globalThis.RemoteChangesView;
   assert.equal(view.truncationNotice(true, "files"), "File list truncated — too many changed files to show.");
   assert.equal(view.truncationNotice(true, "lines"), "File truncated — too many lines to show.");
   assert.equal(view.truncationNotice(false, "lines"), "");
+  assert.equal(view.truncationNotice(true, "directory"), "Directory truncated — too many entries to show.");
+  assert.equal(view.truncationNotice(false, "directory"), "");
 }
 
 {

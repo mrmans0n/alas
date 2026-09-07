@@ -387,7 +387,7 @@ enum RemoteServerMessage: Equatable, Sendable {
     case changeListFailed(sessionId: String, reason: RemoteFileAccessReason, message: String?)
     case fileDiffResult(sessionId: String, path: String, hunks: [RemoteDiffHunk], truncated: Bool)
     case fileDiffFailed(sessionId: String, path: String, reason: RemoteFileAccessReason, message: String?)
-    case fileTree(sessionId: String, path: String?, nodes: [RemoteFileNode])
+    case fileTree(sessionId: String, path: String?, nodes: [RemoteFileNode], truncated: Bool)
     case fileTreeFailed(sessionId: String, path: String?, reason: RemoteFileAccessReason, message: String?)
     case fileContents(sessionId: String, path: String, text: String, truncated: Bool)
     case fileUnavailable(
@@ -541,7 +541,8 @@ extension RemoteServerMessage: Codable {
             self = .fileTree(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
                 path: try c.decodeIfPresent(String.self, forKey: .path),
-                nodes: try c.decode([RemoteFileNode].self, forKey: .nodes))
+                nodes: try c.decode([RemoteFileNode].self, forKey: .nodes),
+                truncated: try c.decodeIfPresent(Bool.self, forKey: .truncated) ?? false)
         case "fileTreeFailed":
             self = .fileTreeFailed(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
@@ -707,11 +708,12 @@ extension RemoteServerMessage: Codable {
             try c.encode(path, forKey: .path)
             try c.encode(reason.rawValue, forKey: .reason)
             try c.encodeIfPresent(message, forKey: .message)
-        case .fileTree(let s, let path, let nodes):
+        case .fileTree(let s, let path, let nodes, let truncated):
             try c.encode("fileTree", forKey: .type)
             try c.encode(s, forKey: .sessionId)
             try c.encodeIfPresent(path, forKey: .path)
             try c.encode(nodes, forKey: .nodes)
+            try c.encode(truncated, forKey: .truncated)
         case .fileTreeFailed(let s, let path, let reason, let message):
             try c.encode("fileTreeFailed", forKey: .type)
             try c.encode(s, forKey: .sessionId)

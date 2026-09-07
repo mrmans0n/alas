@@ -342,7 +342,7 @@ enum RemoteFileDiffResult: Equatable, Sendable {
 }
 
 enum RemoteFileTreeResult: Equatable, Sendable {
-    case success(nodes: [RemoteFileNode])
+    case success(nodes: [RemoteFileNode], truncated: Bool)
     case failure(reason: RemoteFileAccessReason, message: String?)
 }
 

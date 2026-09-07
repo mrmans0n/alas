@@ -747,8 +747,16 @@ struct RemoteProtocolTests {
         let node = RemoteFileNode(
             name: "src", path: "src", kind: "dir", badge: nil,
             childrenState: "notLoaded", isSubmodule: false)
-        let tree = RemoteServerMessage.fileTree(sessionId: "s1", path: nil, nodes: [node])
+        let tree = RemoteServerMessage.fileTree(sessionId: "s1", path: nil, nodes: [node], truncated: false)
         #expect(try roundTrip(tree) == tree)
+
+        // Lenient decoding: an older paired host might not send `truncated`
+        // at all — must default to `false` rather than failing to decode.
+        let legacyTreeJSON = Data("""
+        {"type": "fileTree", "sessionId": "s1", "nodes": []}
+        """.utf8)
+        let legacyTree = try JSONDecoder().decode(RemoteServerMessage.self, from: legacyTreeJSON)
+        #expect(legacyTree == .fileTree(sessionId: "s1", path: nil, nodes: [], truncated: false))
 
         let treeFailure = RemoteServerMessage.fileTreeFailed(
             sessionId: "s1", path: "../etc", reason: .pathRejected, message: nil)

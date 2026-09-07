@@ -15,6 +15,17 @@ enum RemoteFileStats {
     private static let logger = Logger(subsystem: "app.alas", category: "RemoteFileStats")
     static let maxBatchedPaths = 200
 
+    /// Splits `paths` into `maxBatchedPaths`-sized chunks, in order —
+    /// extracted so the chunk boundaries themselves (e.g. that 450 paths
+    /// become 200/200/50, not silently truncated to the first 200) are
+    /// directly unit-testable without a real remote exec call.
+    static func batches(_ paths: [String]) -> [[String]] {
+        guard !paths.isEmpty else { return [] }
+        return stride(from: 0, to: paths.count, by: maxBatchedPaths).map {
+            Array(paths[$0 ..< min($0 + maxBatchedPaths, paths.count)])
+        }
+    }
+
     static func wcCommand(paths: [String]) -> String? {
         guard !paths.isEmpty else { return nil }
         // Plain `wc -l` counts newline BYTES, which undercounts a nonempty
@@ -78,14 +89,25 @@ enum RemoteFileStats {
             }
         }
 
-        let fallbackPaths = Array(paths.prefix(maxBatchedPaths))
+        // `maxBatchedPaths` bounds a single remote command line's length,
+        // not how many paths this function can ever count — silently
+        // dropping everything past the first batch (as a single
+        // `paths.prefix(maxBatchedPaths)` call used to) would report `0`
+        // for every untracked file beyond it, even though the caller's own
+        // response cap (`RemoteWorktreeFileAccess.maxChangedFiles`, well
+        // above `maxBatchedPaths`) still includes and displays them. Chunk
+        // into batches instead, one remote round trip per batch, and merge.
         let startedAt = CFAbsoluteTimeGetCurrent()
         defer { RemoteOperationTiming.log("fs/line-counts", host: host, transport: "exec", startedAt: startedAt) }
-        guard let command = wcCommand(paths: fallbackPaths),
-              let result = try? await RemoteExec.run(host: host, cwd: cwd, command: command),
-              !RemoteExec.isConnectionFailure(exitCode: result.exitCode)
-        else { return [:] }
-        return parseWcOutput(result.stdout, requested: fallbackPaths)
+        var counts: [String: Int] = [:]
+        for chunk in Self.batches(paths) {
+            guard let command = wcCommand(paths: chunk),
+                  let result = try? await RemoteExec.run(host: host, cwd: cwd, command: command),
+                  !RemoteExec.isConnectionFailure(exitCode: result.exitCode)
+            else { continue }
+            counts.merge(parseWcOutput(result.stdout, requested: chunk)) { _, new in new }
+        }
+        return counts
     }
 
     /// `worktreeRoot` is only used by the helperless exec fallback, to make

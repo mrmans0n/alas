@@ -11,6 +11,13 @@ enum RemoteWorktreeFileAccess {
     static let maxFileBytes = 512 * 1024
     static let maxDiffLines = 2_000
     static let maxChangedFiles = 500
+    /// Caps a single directory listing (the root, or one expanded
+    /// subdirectory — `fileTreeChildren` returns immediate children only,
+    /// never a deep tree) at this many entries. Without a cap, a tracked
+    /// directory with an enormous number of immediate children would ship
+    /// every one of them in a single `fileTree` response and have the
+    /// client build one DOM row per node.
+    static let maxFileTreeNodes = 1_000
     /// Overall byte budget for a diff payload, on top of the line-count cap.
     /// A single pathological line (e.g. minified/generated code) can stay
     /// under `maxDiffLines` while still being megabytes long, so the line
@@ -187,6 +194,20 @@ enum RemoteWorktreeFileAccess {
     static func truncateFiles(_ files: [ChangedFile]) -> (files: [ChangedFile], truncated: Bool) {
         guard files.count > maxChangedFiles else { return (files, false) }
         return (Array(files.prefix(maxChangedFiles)), true)
+    }
+
+    /// Caps a single directory listing at `maxFileTreeNodes` entries.
+    ///
+    /// Operates on the already wire-mapped `[RemoteFileNode]` — i.e. AFTER
+    /// `FileTreeNode.filteredKeepingVisibleDescendants` has dropped
+    /// ignored/excluded entries — rather than the raw `[FileTreeNode]` walk
+    /// result. Capping before that filter would waste the budget on entries
+    /// that were never going to be shown anyway, potentially truncating
+    /// away legitimate tracked files that simply sorted after a large run
+    /// of filtered-out ones.
+    static func truncateFileNodes(_ nodes: [RemoteFileNode]) -> (nodes: [RemoteFileNode], truncated: Bool) {
+        guard nodes.count > maxFileTreeNodes else { return (nodes, false) }
+        return (Array(nodes.prefix(maxFileTreeNodes)), true)
     }
 
     /// Result of an off-main-actor file read for the remote contents
