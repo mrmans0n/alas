@@ -26,6 +26,12 @@ let everConnected = false;      // has any onopen fired this page load? separate
 let escalationTimer = null;     // fires after a continuous not-connected grace window, then shows the alarming gate
 let escalated = false;          // true once the grace window elapsed and the alarming gate is showing
 const GRACE_MS = 5000;          // total not-connected budget before escalating "Connecting…" → "Can't reach Alas"
+// A file within the server's byte cap can still contain an enormous NUMBER
+// of (short or empty) lines — one DOM row per line would freeze the browser
+// or exhaust memory on a phone. 5000 rows is comfortably more than a human
+// scrolls through in the file viewer while staying well short of causing
+// jank on mobile Safari.
+const MAX_RENDERED_FILE_LINES = 5000;
 let dismissedQuestion = null;   // {sessionId, requestId} the user closed; suppress re-shows of that exact prompt (ids aren't unique across sessions)
 let lastSentText = null;        // text of the most recent sendPrompt, kept so a server promptRejected can restore it instead of losing the message
 let lastSentAttachments = [];   // images of the most recent sendPrompt, restored alongside the text on promptRejected
@@ -622,12 +628,20 @@ function renderFileContents(path, text, truncated) {
   if ($("file-view-path").textContent !== path) return;
   const body = $("file-view-body");
   body.innerHTML = "";
-  text.split("\n").forEach((line, index) => {
+  const lines = text.split("\n");
+  const linesTruncated = lines.length > MAX_RENDERED_FILE_LINES;
+  const shown = linesTruncated ? lines.slice(0, MAX_RENDERED_FILE_LINES) : lines;
+  shown.forEach((line, index) => {
     const row = el("div", "diff-line");
     row.append(el("span", "diff-gutter", String(index + 1)), el("span", "", line));
     body.appendChild(row);
   });
   if (truncated) body.append(el("p", "placeholder-card", "File truncated."));
+  // Distinct from the byte-based `truncated` flag above: a file can be under
+  // the server's byte cap (so `truncated` is false) yet still have more
+  // lines than we're willing to render as individual DOM rows.
+  const notice = RemoteChangesView.truncationNotice(linesTruncated, "lines");
+  if (notice) body.append(el("p", "placeholder-card", notice));
 }
 
 function fileAccessMessage(reason, byteSize) {

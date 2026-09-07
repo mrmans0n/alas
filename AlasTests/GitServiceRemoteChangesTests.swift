@@ -118,6 +118,36 @@ struct GitServiceRemoteChangesTests {
     /// diff — verified empirically before writing this test — so the
     /// original file is edited alongside the copy to reliably reproduce a
     /// `"C"` status rather than `"R"`.
+    /// The rename-diff branch of `diff(worktreePath:againstRef:file:)` used
+    /// to omit `-c core.quotePath=false` from the actual diff-producing
+    /// `Process.git` call (unlike `renameSource`'s own internal
+    /// `--name-status` lookup, which already had it). Under the default
+    /// quoting, a non-ASCII rename DESTINATION name comes back escaped in
+    /// the `diff --git a/<old> b/<new>` header (e.g. `b/cr\303\250me.txt`),
+    /// so `sliceDiffForFile`'s raw, unquoted `b/<file>` suffix match fails
+    /// to find the section and the file opens with an empty diff.
+    @Test func diffAgainstRef_showsChangesForARenamedFileWithANonASCIIDestinationName() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try "line1\nline2\nline3\nline4\nline5\n".write(
+            to: repo.appendingPathComponent("café.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "café.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "base"], cwd: repo)
+        _ = try await Process.git(["branch", "start"], cwd: repo)
+
+        _ = try await Process.git(["mv", "café.txt", "crème.txt"], cwd: repo)
+        try "line1\nline2\nline3-changed\nline4\nline5\n".write(
+            to: repo.appendingPathComponent("crème.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "-A"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "rename and edit"], cwd: repo)
+
+        let diff = try await GitService().diff(worktreePath: repo, againstRef: "start", file: "crème.txt")
+        let addedLines = diff.hunks.flatMap(\.lines).filter { $0.kind == .add }.map(\.text)
+        let deletedLines = diff.hunks.flatMap(\.lines).filter { $0.kind == .delete }.map(\.text)
+        #expect(addedLines == ["line3-changed"])
+        #expect(deletedLines == ["line3"])
+    }
+
     @Test func diffAgainstRef_showsOnlyTheChangedLineForACopiedAndEditedFile() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
@@ -179,6 +209,33 @@ struct GitServiceRemoteChangesTests {
         let diff = try await GitService().diff(worktreePath: repo, againstRef: "start", file: filename)
         let added = diff.hunks.flatMap(\.lines).filter { $0.kind == .add }
         #expect(added.map(\.text) == ["two"])
+    }
+
+    /// A bare `--` pathspec argument is interpreted as a glob pattern by
+    /// default, and `[...]` is pathspec-magic for a character class — so
+    /// `report[1].txt` as a pathspec actually matches the UNRELATED tracked
+    /// file `report1.txt` (verified empirically: `git diff -- 'report[1].txt'`
+    /// without `--literal-pathspecs` returns both files' diffs). Without
+    /// `--literal-pathspecs`, requesting the diff for `report[1].txt` would
+    /// leak `report1.txt`'s changes into the result.
+    @Test func diffAgainstRef_treatsAFileNameContainingPathspecMagicAsLiteral() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try "one\n".write(to: repo.appendingPathComponent("report1.txt"), atomically: true, encoding: .utf8)
+        try "one\n".write(to: repo.appendingPathComponent("report[1].txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "-A"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "base"], cwd: repo)
+        _ = try await Process.git(["branch", "start"], cwd: repo)
+
+        try "one\ntwo\n".write(to: repo.appendingPathComponent("report1.txt"), atomically: true, encoding: .utf8)
+        try "one\nthree\n".write(to: repo.appendingPathComponent("report[1].txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "-A"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "edit both"], cwd: repo)
+
+        let diff = try await GitService().diff(worktreePath: repo, againstRef: "start", file: "report[1].txt")
+        let added = diff.hunks.flatMap(\.lines).filter { $0.kind == .add }.map(\.text)
+        #expect(added == ["three"])
+        #expect(!added.contains("two"))
     }
 
     @Test func changedFilesAgainstRef_handlesRename() async throws {

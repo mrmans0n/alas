@@ -503,6 +503,28 @@ struct GitServiceTests {
         #expect(tracked.visibility == .tracked)
     }
 
+    /// Under git's default `core.quotePath=true`, a non-ASCII filename comes
+    /// back from `ls-files` quoted and octal-escaped (e.g. `café.txt` →
+    /// `"caf\303\251.txt"`). `gitVisibleFilePaths` (which feeds this root
+    /// Files tree) used to run plain `ls-files` with no `-c
+    /// core.quotePath=false`/`-z`, so the tree reported that escaped string
+    /// as the path instead of the real filename.
+    @Test func fileTreeReportsTheExactNonASCIIFilename() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let filename = "café.txt"
+        try "hola\n".write(to: repo.appendingPathComponent(filename), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", filename], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "add café"], cwd: repo)
+
+        let tree = try await GitService().fileTree(worktreePath: repo, statusEntries: [])
+
+        let file = try #require(tree.first { $0.path == filename })
+        #expect(file.visibility == .tracked)
+        #expect(!tree.contains { $0.path.contains("\\303") })
+    }
+
     @Test func fileTreeClassifiesGlobalExcludesAsExcludedRootEntries() async throws {
         let repo = try await makeRepo()
         let globalExcludes = FileManager.default.temporaryDirectory
