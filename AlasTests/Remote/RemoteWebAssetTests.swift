@@ -49,13 +49,13 @@ struct RemoteWebAssetTests {
         let sw = try asset("sw.js")
 
         #expect(html.contains(#"/session-ordering.js?v=1"#))
-        #expect(html.range(of: #"/session-ordering.js?v=1"#)!.lowerBound < html.range(of: #"/app.js?v=63"#)!.lowerBound)
-        #expect(html.contains(#"/app.js?v=63"#))
-        #expect(html.contains(#"/style.css?v=41"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v41";"#))
+        #expect(html.range(of: #"/session-ordering.js?v=1"#)!.lowerBound < html.range(of: #"/app.js?v=65"#)!.lowerBound)
+        #expect(html.contains(#"/app.js?v=65"#))
+        #expect(html.contains(#"/style.css?v=42"#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v43";"#))
         #expect(sw.contains(#""/session-ordering.js?v=1""#))
-        #expect(sw.contains(#""/app.js?v=63""#))
-        #expect(sw.contains(#""/style.css?v=41""#))
+        #expect(sw.contains(#""/app.js?v=65""#))
+        #expect(sw.contains(#""/style.css?v=42""#))
     }
 
     @Test func remoteWebToolRowsAvoidNativeButtonRenderingOnMobileSafari() throws {
@@ -68,11 +68,11 @@ struct RemoteWebAssetTests {
         #expect(app.contains("toggle.tabIndex = 0"))
         #expect(app.contains("function handleCardToggleKeydown"))
         #expect(!app.contains(#"const button = el("button", "tool-toggle")"#))
-        #expect(html.contains(#"/app.js?v=63"#))
-        #expect(html.contains(#"/style.css?v=41"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v41";"#))
-        #expect(sw.contains(#""/app.js?v=63""#))
-        #expect(sw.contains(#""/style.css?v=41""#))
+        #expect(html.contains(#"/app.js?v=65"#))
+        #expect(html.contains(#"/style.css?v=42"#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v43";"#))
+        #expect(sw.contains(#""/app.js?v=65""#))
+        #expect(sw.contains(#""/style.css?v=42""#))
     }
 
     @Test func remoteBareURLLinkifierPreservesIndentedCodeBlocks() throws {
@@ -119,8 +119,8 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".session-section"))
         #expect(css.contains(".session-section-title"))
         #expect(css.contains(".session-section-list"))
-        #expect(html.contains("/app.js?v=63"))
-        #expect(html.contains("/style.css?v=41"))
+        #expect(html.contains("/app.js?v=65"))
+        #expect(html.contains("/style.css?v=42"))
     }
 
     @Test func remoteWebExposesSessionRenameControls() throws {
@@ -145,8 +145,8 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".session-open"))
         #expect(css.contains("#detail-title"))
         #expect(css.contains(".sheet-input"))
-        #expect(sw.contains(#""/app.js?v=63""#))
-        #expect(sw.contains(#""/style.css?v=41""#))
+        #expect(sw.contains(#""/app.js?v=65""#))
+        #expect(sw.contains(#""/style.css?v=42""#))
     }
 
     @Test func configSheetScrollsWhenModelListOverflows() throws {
@@ -196,7 +196,7 @@ struct RemoteWebAssetTests {
         let sw = try asset("sw.js")
 
         #expect(html.contains(#"/worktree-creation.js?v=1"#))
-        #expect(html.range(of: #"/worktree-creation.js?v=1"#)!.lowerBound < html.range(of: #"/app.js?v=63"#)!.lowerBound)
+        #expect(html.range(of: #"/worktree-creation.js?v=1"#)!.lowerBound < html.range(of: #"/app.js?v=65"#)!.lowerBound)
         #expect(js.contains("const worktreeCreation = RemoteWorktreeCreation.createFlow(send);"))
         #expect(js.contains(#"case "projectList":"#))
         #expect(js.contains(#"case "branchList":"#))
@@ -334,9 +334,9 @@ struct RemoteWebAssetTests {
     @Test func incrementalTranscriptBustsServiceWorkerAssetCache() throws {
         let sw = try asset("sw.js")
         let html = try asset("index.html")
-        #expect(sw.contains("alas-remote-shell-v41"))
-        #expect(sw.contains("/app.js?v=63"))
-        #expect(html.contains("app.js?v=63"))
+        #expect(sw.contains("alas-remote-shell-v43"))
+        #expect(sw.contains("/app.js?v=65"))
+        #expect(html.contains("app.js?v=65"))
     }
 
     // Regression (codex review, PR #775): applyPage used to clear the
@@ -499,11 +499,11 @@ struct RemoteWebAssetTests {
         let html = try asset("index.html")
         let sw = try asset("sw.js")
 
-        #expect(html.contains(#"/app.js?v=63"#))
-        #expect(html.contains(#"/style.css?v=41"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v41";"#))
-        #expect(sw.contains(#""/app.js?v=63""#))
-        #expect(sw.contains(#""/style.css?v=41""#))
+        #expect(html.contains(#"/app.js?v=65"#))
+        #expect(html.contains(#"/style.css?v=42"#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v43";"#))
+        #expect(sw.contains(#""/app.js?v=65""#))
+        #expect(sw.contains(#""/style.css?v=42""#))
     }
 
     @Test func remoteWebOffersUndoAfterASteerDiscardsTheQueue() throws {
@@ -514,5 +514,99 @@ struct RemoteWebAssetTests {
         #expect(js.contains(#""queueSteerUndo""#))
         #expect(js.contains("Queue cleared by steer"))
         #expect(css.contains(".steer-undo"))
+    }
+
+    @Test func remoteWebShipsChangesAndFilesTabs() throws {
+        let html = try asset("index.html")
+        let sw = try asset("sw.js")
+
+        #expect(html.contains(#"id="detail-tabs""#))
+        #expect(html.contains(#"id="tab-chat""#))
+        #expect(html.contains(#"id="tab-changes""#))
+        #expect(html.contains(#"id="tab-files""#))
+        #expect(html.contains(#"<section id="changes" class="view hidden">"#))
+        #expect(html.contains(#"<section id="files" class="view hidden">"#))
+        #expect(html.contains(#"id="changes-summary""#))
+        #expect(html.contains(#"id="changes-refresh""#))
+        #expect(html.contains(#"id="changes-list""#))
+        #expect(html.contains(#"id="diff-rows""#))
+        #expect(html.contains(#"id="file-list""#))
+        #expect(html.contains(#"id="file-view-body""#))
+
+        #expect(html.contains(#"/changes-view.js?v=1"#))
+        #expect(html.contains(#"/file-browser.js?v=1"#))
+        #expect(html.range(of: #"/changes-view.js?v=1"#)!.lowerBound
+            < html.range(of: #"/app.js?v=65"#)!.lowerBound)
+        #expect(html.range(of: #"/file-browser.js?v=1"#)!.lowerBound
+            < html.range(of: #"/app.js?v=65"#)!.lowerBound)
+        #expect(sw.contains(#""/changes-view.js?v=1""#))
+        #expect(sw.contains(#""/file-browser.js?v=1""#))
+    }
+
+    @Test func remoteWebWiresTabSwitching() throws {
+        let js = try asset("app.js")
+        #expect(js.contains("function showTab(name)"))
+        #expect(js.contains("const changesTree = RemoteFileBrowser.createTree();"))
+        #expect(js.contains(#"type: "listChanges""#))
+        #expect(js.contains(#"type: "listFiles""#))
+    }
+
+    @Test func remoteWebHandlesChangesAndFilesMessages() throws {
+        let js = try asset("app.js")
+
+        #expect(js.contains(#"case "changeList":"#))
+        #expect(js.contains(#"case "changeListFailed":"#))
+        #expect(js.contains(#"case "fileDiffResult":"#))
+        #expect(js.contains(#"case "fileDiffFailed":"#))
+        #expect(js.contains(#"case "fileTree":"#))
+        #expect(js.contains(#"case "fileTreeFailed":"#))
+        #expect(js.contains(#"case "fileContents":"#))
+        #expect(js.contains(#"case "fileUnavailable":"#))
+        #expect(js.contains("function renderChanges()"))
+        #expect(js.contains("function renderDiff("))
+        #expect(js.contains("function renderFileTree()"))
+        #expect(js.contains("RemoteChangesView.diffRows("))
+        #expect(js.contains("RemoteChangesView.formatSummary("))
+    }
+
+    @Test func remoteWebRefreshesChangesWhenATurnGoesIdle() throws {
+        let js = try asset("app.js")
+        #expect(js.contains("function noteStreamingStateForChanges(state)"))
+        #expect(js.contains(#"activeTab !== "changes""#))
+    }
+
+    // Regression (final whole-branch review, finding 4): a `listChanges` per
+    // idle DELTA (rather than per idle TRANSITION) can back up the gateway's
+    // serialized per-connection message queue behind a burst of git
+    // subprocess calls. The fix must edge-trigger on the transition into
+    // idle AND debounce as defense in depth — either alone was flagged as
+    // insufficient during the plan's self-review.
+    @Test func remoteWebEdgeTriggersAndDebouncesTheIdleChangesRefresh() throws {
+        let js = try asset("app.js")
+        let body = try #require(
+            js.range(of: "function noteStreamingStateForChanges(state) {")
+                .map { js[$0.lowerBound...].prefix(800) }
+        )
+        #expect(body.contains("previousChangesStreamingState"))
+        #expect(body.contains("wasIdle"))
+        #expect(body.contains("setTimeout"))
+        #expect(body.contains("clearTimeout"))
+        #expect(js.contains("let changesRefreshDebounceTimer = null;"))
+    }
+
+    // Regression (sixth review pass, finding 4): the server's byte cap alone
+    // does not bound the NUMBER of DOM rows `renderFileContents` creates — a
+    // file near that cap made of many short lines can still produce enough
+    // rows to freeze a phone browser. The client must cap rendered lines
+    // separately and surface a distinct notice, since this can trip even
+    // when the server reports `truncated: false`.
+    @Test func remoteWebCapsTheNumberOfRenderedFileLines() throws {
+        let js = try asset("app.js")
+        let changesView = try asset("changes-view.js")
+
+        #expect(js.contains("const MAX_RENDERED_FILE_LINES = 5000;"))
+        #expect(js.contains("const linesTruncated = lines.length > MAX_RENDERED_FILE_LINES;"))
+        #expect(js.contains(#"RemoteChangesView.truncationNotice(linesTruncated, "lines")"#))
+        #expect(changesView.contains(#"if (kind === "lines") return "File truncated — too many lines to show.";"#))
     }
 }

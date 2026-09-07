@@ -11,13 +11,18 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/icon-180.png" />
   <title>Alas Remote</title>
-  <link rel="stylesheet" href="/style.css?v=41" />
+  <link rel="stylesheet" href="/style.css?v=42" />
 </head>
 <body>
   <header id="bar">
     <button id="back" class="hidden">‹ Sessions</button>
     <span id="detail-title" class="hidden"></span>
     <button id="detail-rename" class="rename-btn hidden" aria-label="Rename session">✎</button>
+    <div id="detail-tabs" class="tabs hidden" role="tablist">
+      <button id="tab-chat" class="tab is-active" role="tab" type="button">Chat</button>
+      <button id="tab-changes" class="tab" role="tab" type="button">Changes</button>
+      <button id="tab-files" class="tab" role="tab" type="button">Files</button>
+    </div>
     <span id="nav-title">Alas Remote</span>
     <button id="new-session" aria-label="New session">+ New</button>
     <span id="status" class="chip" data-state="connecting">connecting…</span>
@@ -59,6 +64,26 @@
           </div>
           <input id="file" type="file" accept="image/*" multiple hidden />
         </div>
+      </div>
+    </section>
+    <section id="changes" class="view hidden">
+      <div id="changes-header">
+        <span id="changes-summary"></span>
+        <button id="changes-refresh" type="button" aria-label="Refresh changes">↻</button>
+      </div>
+      <p id="changes-error" class="sheet-error hidden" role="alert"></p>
+      <div id="changes-list"></div>
+      <div id="diff-view" class="hidden">
+        <p id="diff-path" class="detail-path"></p>
+        <div id="diff-rows"></div>
+      </div>
+    </section>
+    <section id="files" class="view hidden">
+      <p id="file-error" class="sheet-error hidden" role="alert"></p>
+      <div id="file-list"></div>
+      <div id="file-view" class="hidden">
+        <p id="file-view-path" class="detail-path"></p>
+        <div id="file-view-body"></div>
       </div>
     </section>
   </main>
@@ -171,7 +196,9 @@
   <script src="/purify.min.js?v=28"></script>
   <script src="/session-ordering.js?v=1"></script>
   <script src="/worktree-creation.js?v=1"></script>
-  <script src="/app.js?v=63"></script>
+  <script src="/changes-view.js?v=1"></script>
+  <script src="/file-browser.js?v=1"></script>
+  <script src="/app.js?v=65"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {

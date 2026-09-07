@@ -26,6 +26,12 @@ let everConnected = false;      // has any onopen fired this page load? separate
 let escalationTimer = null;     // fires after a continuous not-connected grace window, then shows the alarming gate
 let escalated = false;          // true once the grace window elapsed and the alarming gate is showing
 const GRACE_MS = 5000;          // total not-connected budget before escalating "Connecting…" → "Can't reach Alas"
+// A file within the server's byte cap can still contain an enormous NUMBER
+// of (short or empty) lines — one DOM row per line would freeze the browser
+// or exhaust memory on a phone. 5000 rows is comfortably more than a human
+// scrolls through in the file viewer while staying well short of causing
+// jank on mobile Safari.
+const MAX_RENDERED_FILE_LINES = 5000;
 let dismissedQuestion = null;   // {sessionId, requestId} the user closed; suppress re-shows of that exact prompt (ids aren't unique across sessions)
 let lastSentText = null;        // text of the most recent sendPrompt, kept so a server promptRejected can restore it instead of losing the message
 let lastSentAttachments = [];   // images of the most recent sendPrompt, restored alongside the text on promptRejected
@@ -46,6 +52,10 @@ let createState = {
 };
 const worktreeCreation = RemoteWorktreeCreation.createFlow(send);
 worktreeCreation.subscribe(() => renderCreateSheet());
+const changesTree = RemoteFileBrowser.createTree();
+let activeTab = "chat";
+let changesState = { comparisonRef: null, metricsAvailable: true, files: [], truncated: false, loaded: false };
+let detailStack = [];   // [{ tab, path }] for the in-tab list → detail level
 const ATTACH_CAP = 10 * 1000 * 1000;   // 10 MB running total — matches the server's maxAttachmentsBytes
 
 // state ∈ {connecting, ok, bad} drives the chip's dot/border color via [data-state].
@@ -297,6 +307,55 @@ function handle(msg) {
       break;
     case "sessionClosed": if (msg.sessionId === currentSession) showSessions(); break;
     case "promptRejected": if (msg.sessionId === currentSession) restoreRejectedPrompt(); break;
+    case "changeList":
+      if (msg.sessionId !== currentSession) break;
+      $("changes-error").classList.add("hidden");
+      changesState = {
+        comparisonRef: msg.comparisonRef || null,
+        metricsAvailable: msg.metricsAvailable !== false,
+        files: msg.files || [],
+        truncated: !!msg.truncated,
+        loaded: true
+      };
+      renderChanges();
+      break;
+    case "changeListFailed":
+      if (msg.sessionId !== currentSession) break;
+      changesState.loaded = true;
+      showChangesError(fileAccessMessage(msg.reason, null));
+      break;
+    case "fileDiffResult":
+      if (msg.sessionId !== currentSession) break;
+      renderDiff(msg.path, msg.hunks || [], !!msg.truncated);
+      break;
+    case "fileDiffFailed":
+      if (msg.sessionId !== currentSession) break;
+      if ($("diff-path").textContent === msg.path) {
+        $("diff-rows").innerHTML = "";
+        $("diff-rows").append(el("p", "placeholder-card", fileAccessMessage(msg.reason, null)));
+      }
+      break;
+    case "fileTree":
+      if (msg.sessionId !== currentSession) break;
+      $("file-error").classList.add("hidden");
+      changesTree.applyNodes(msg.path === undefined ? null : msg.path, msg.nodes || []);
+      renderFileTree();
+      break;
+    case "fileTreeFailed":
+      if (msg.sessionId !== currentSession) break;
+      showFileError(fileAccessMessage(msg.reason, null));
+      break;
+    case "fileContents":
+      if (msg.sessionId !== currentSession) break;
+      renderFileContents(msg.path, msg.text || "", !!msg.truncated);
+      break;
+    case "fileUnavailable":
+      if (msg.sessionId !== currentSession) break;
+      if ($("file-view-path").textContent === msg.path) {
+        $("file-view-body").innerHTML = "";
+        $("file-view-body").append(el("p", "placeholder-card", fileAccessMessage(msg.reason, msg.byteSize)));
+      }
+      break;
     case "error": setStatus("Error", "bad"); $("status").title = msg.message ?? ""; break;
     default: console.warn("unknown message type", msg.type);
   }
@@ -382,6 +441,16 @@ function plural(count, singular) {
   return `${count} ${singular}${count === 1 ? "" : "s"}`;
 }
 
+function resetChangesAndFilesDOM() {
+  $("changes-list").innerHTML = "";
+  $("changes-summary").textContent = "";
+  $("changes-error").textContent = ""; $("changes-error").classList.add("hidden");
+  $("file-list").innerHTML = "";
+  $("file-error").textContent = ""; $("file-error").classList.add("hidden");
+  $("diff-rows").innerHTML = ""; $("diff-path").textContent = "";
+  $("file-view-body").innerHTML = ""; $("file-view-path").textContent = "";
+}
+
 function openSession(id) {
   clearSessionSheetsForOpen();
   currentSession = id; messages = new Map(); messageNodes = new Map(); transcriptMeta = null; olderFetchInFlight = false;
@@ -393,6 +462,234 @@ function openSession(id) {
   $("messages").innerHTML = ""; renderConfigAffordances();
   queueItems = []; steerUndoAvailable = false; renderQueue();
   renderDriveBar("idle"); send({ type: "subscribe", sessionId: id });
+  changesTree.reset();
+  changesState = { comparisonRef: null, metricsAvailable: true, files: [], truncated: false, loaded: false };
+  detailStack = [];
+  resetChangesAndFilesDOM();
+  if (changesRefreshDebounceTimer) { clearTimeout(changesRefreshDebounceTimer); changesRefreshDebounceTimer = null; }
+  previousChangesStreamingState = "idle";
+  const summary = listedSessions.get(id);
+  $("detail-tabs").classList.toggle("hidden", !summary || !summary.worktree);
+  showTab("chat");
+}
+
+function showTabListLevel() {
+  $("changes-list").classList.remove("hidden");
+  $("changes-header").classList.remove("hidden");
+  $("file-list").classList.remove("hidden");
+}
+
+function showTab(name) {
+  activeTab = name;
+  detailStack = [];
+  $("diff-view").classList.add("hidden");
+  $("file-view").classList.add("hidden");
+  showTabListLevel();
+  for (const [id, tab] of [["tab-chat", "chat"], ["tab-changes", "changes"], ["tab-files", "files"]]) {
+    $(id).classList.toggle("is-active", tab === name);
+  }
+  $("transcript").classList.toggle("hidden", name !== "chat");
+  $("changes").classList.toggle("hidden", name !== "changes");
+  $("files").classList.toggle("hidden", name !== "files");
+  if (name === "changes") requestChanges();
+  if (name === "files" && changesTree.needsChildren(null)) {
+    send({ type: "listFiles", sessionId: currentSession });
+  }
+}
+
+function requestChanges() {
+  if (!currentSession) return;
+  send({ type: "listChanges", sessionId: currentSession });
+}
+
+$("tab-chat").addEventListener("click", () => showTab("chat"));
+$("tab-changes").addEventListener("click", () => showTab("changes"));
+$("tab-files").addEventListener("click", () => showTab("files"));
+$("changes-refresh").addEventListener("click", requestChanges);
+
+function renderChanges() {
+  const list = $("changes-list");
+  list.innerHTML = "";
+  $("changes-summary").textContent = changesState.loaded
+    ? RemoteChangesView.formatSummary(changesState)
+    : "Loading changes…";
+
+  if (changesState.loaded && !changesState.metricsAvailable) {
+    list.append(el("p", "placeholder-card", "Change metrics are unavailable for this worktree."));
+    return;
+  }
+
+  if (changesState.loaded && changesState.files.length === 0) {
+    list.append(el("p", "placeholder-card", "No changes yet."));
+    return;
+  }
+
+  for (const file of RemoteChangesView.sortFiles(changesState.files)) {
+    const parts = RemoteChangesView.splitPath(file.path);
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "change-row";
+    row.onclick = () => openDiff(file.path);
+
+    row.append(el("span", "change-dir", parts.dir), el("span", "change-name", parts.name));
+    if (file.conflict) row.append(el("span", "change-conflict", "conflict"));
+    row.append(el("span", "change-status", file.status));
+    row.append(el("span", "change-counts", RemoteChangesView.formatFileCounts(file)));
+    list.appendChild(row);
+  }
+
+  const notice = RemoteChangesView.truncationNotice(changesState.truncated, "files");
+  if (notice) list.append(el("p", "placeholder-card", notice));
+}
+
+function openDiff(path) {
+  detailStack.push({ tab: "changes", path });
+  $("changes-list").classList.add("hidden");
+  $("changes-header").classList.add("hidden");
+  $("diff-view").classList.remove("hidden");
+  $("diff-path").textContent = path;
+  $("diff-rows").innerHTML = "";
+  send({ type: "fileDiff", sessionId: currentSession, path });
+}
+
+function closeDetailLevel() {
+  detailStack.pop();
+  $("diff-view").classList.add("hidden");
+  $("file-view").classList.add("hidden");
+  showTabListLevel();
+}
+
+function renderDiff(path, hunks, truncated) {
+  if ($("diff-path").textContent !== path) return;   // a newer file is open
+  const container = $("diff-rows");
+  container.innerHTML = "";
+  for (const row of RemoteChangesView.diffRows(hunks)) {
+    if (row.type === "hunk") {
+      container.append(el("div", "diff-hunk", row.text));
+      continue;
+    }
+    const line = el("div", "diff-line " + row.kind);
+    line.append(
+      el("span", "diff-gutter", row.oldNumber === null ? "" : String(row.oldNumber)),
+      el("span", "diff-gutter", row.newNumber === null ? "" : String(row.newNumber)),
+      el("span", "", row.text));
+    container.appendChild(line);
+  }
+  const notice = RemoteChangesView.truncationNotice(truncated, "diff");
+  if (notice) container.append(el("p", "placeholder-card", notice));
+}
+
+function renderFileTree() {
+  const list = $("file-list");
+  list.innerHTML = "";
+  for (const row of changesTree.visibleRows()) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "file-row";
+    button.style.paddingLeft = 12 + row.depth * 14 + "px";
+
+    const isSubmodule = row.node.kind === "dir" && row.node.isSubmodule === true;
+    const label = row.node.kind === "dir"
+      ? (isSubmodule ? "◇ " : (row.expanded ? "▾ " : "▸ ")) + row.node.name
+      : row.node.name;
+    button.append(el("span", "", label));
+    if (isSubmodule) button.append(el("span", "change-counts", "submodule"));
+    else if (row.node.badge) button.append(el("span", "change-counts", row.node.badge));
+
+    button.onclick = () => {
+      if (row.node.kind === "dir") {
+        // Submodules are a separate git repo: `git check-ignore` / the
+        // server's `listFiles` walk fail on paths inside one ("Pathspec ...
+        // is in submodule"). Treat the row as a non-expandable leaf instead
+        // of sending a `listFiles` request that can only fail.
+        if (isSubmodule) return;
+        if (changesTree.toggle(row.node.path)) {
+          send({ type: "listFiles", sessionId: currentSession, path: row.node.path });
+        }
+        renderFileTree();
+        return;
+      }
+      openFileView(row.node.path);
+    };
+    list.appendChild(button);
+  }
+}
+
+function openFileView(path) {
+  detailStack.push({ tab: "files", path });
+  $("file-list").classList.add("hidden");
+  $("file-view").classList.remove("hidden");
+  $("file-view-path").textContent = path;
+  $("file-view-body").textContent = "Loading…";
+  send({ type: "readFile", sessionId: currentSession, path });
+}
+
+function renderFileContents(path, text, truncated) {
+  if ($("file-view-path").textContent !== path) return;
+  const body = $("file-view-body");
+  body.innerHTML = "";
+  const lines = text.split("\n");
+  const linesTruncated = lines.length > MAX_RENDERED_FILE_LINES;
+  const shown = linesTruncated ? lines.slice(0, MAX_RENDERED_FILE_LINES) : lines;
+  shown.forEach((line, index) => {
+    const row = el("div", "diff-line");
+    row.append(el("span", "diff-gutter", String(index + 1)), el("span", "", line));
+    body.appendChild(row);
+  });
+  if (truncated) body.append(el("p", "placeholder-card", "File truncated."));
+  // Distinct from the byte-based `truncated` flag above: a file can be under
+  // the server's byte cap (so `truncated` is false) yet still have more
+  // lines than we're willing to render as individual DOM rows.
+  const notice = RemoteChangesView.truncationNotice(linesTruncated, "lines");
+  if (notice) body.append(el("p", "placeholder-card", notice));
+}
+
+function fileAccessMessage(reason, byteSize) {
+  switch (reason) {
+    case "binary": return "Binary file — not shown.";
+    case "tooLarge": return byteSize
+      ? "File is " + Math.round(byteSize / 1024) + " KB — too large to view."
+      : "File is too large to view.";
+    case "pathRejected": return "That path is outside this worktree.";
+    case "notFound": return "File not found.";
+    case "worktreeUnavailable": return "This session's worktree is unavailable.";
+    case "sessionUnknown": return "This session is no longer open on the host.";
+    default: return "Could not read this file.";
+  }
+}
+
+function showChangesError(text) {
+  const error = $("changes-error");
+  error.textContent = text;
+  error.classList.remove("hidden");
+}
+
+function showFileError(text) {
+  const error = $("file-error");
+  error.textContent = text;
+  error.classList.remove("hidden");
+}
+
+let previousChangesStreamingState = "idle";   // so we can edge-trigger on the idle TRANSITION only
+let changesRefreshDebounceTimer = null;
+const CHANGES_REFRESH_DEBOUNCE_MS = 500;
+
+/// Re-fetch the change list when the agent stops, but only on the actual
+/// transition into idle (not on every idle delta, and not on an
+/// already-idle first delta) and only while the tab is open — the server
+/// keeps no per-tab state. Debounced as defense in depth: the gateway
+/// serializes non-control messages per-connection, so a burst of
+/// transitions must not queue up a pile of listChanges calls.
+function noteStreamingStateForChanges(state) {
+  const wasIdle = previousChangesStreamingState === "idle";
+  previousChangesStreamingState = state;
+  if (state !== "idle" || wasIdle) return;
+  if (activeTab !== "changes" || detailStack.length !== 0) return;
+  if (changesRefreshDebounceTimer) clearTimeout(changesRefreshDebounceTimer);
+  changesRefreshDebounceTimer = setTimeout(() => {
+    changesRefreshDebounceTimer = null;
+    requestChanges();
+  }, CHANGES_REFRESH_DEBOUNCE_MS);
 }
 
 function clearSessionSheetsForOpen() {
@@ -414,6 +711,16 @@ function showSessions() {
   $("detail-title").classList.add("hidden"); $("detail-rename").classList.add("hidden");
   $("drivebar").classList.add("hidden");
   $("transcript").classList.add("hidden"); $("sessions").classList.remove("hidden");
+  changesTree.reset();
+  changesState = { comparisonRef: null, metricsAvailable: true, files: [], truncated: false, loaded: false };
+  detailStack = [];
+  resetChangesAndFilesDOM();
+  if (changesRefreshDebounceTimer) { clearTimeout(changesRefreshDebounceTimer); changesRefreshDebounceTimer = null; }
+  previousChangesStreamingState = "idle";
+  activeTab = "chat";
+  $("detail-tabs").classList.add("hidden");
+  $("changes").classList.add("hidden");
+  $("files").classList.add("hidden");
   send({ type: "listSessions" });
 }
 
@@ -2406,6 +2713,7 @@ function markStopping(on) {
 function syncStreamingState(streamingState) {
   if (streamingState === "idle" && stopPending) markStopping(false);
   renderDriveBar(streamingState);
+  noteStreamingStateForChanges(streamingState);
 }
 
 // takeOver seizes the lease synchronously server-side and messages are ordered,
@@ -2639,7 +2947,10 @@ $("question").onclick = (e) => { if (e.target.id === "question") dismissQuestion
 $("permission").onclick = (e) => { if (e.target.id === "permission") hidePermission(); };
 $("elicitation").onclick = (e) => { if (e.target.id === "elicitation") resolveElicitation("cancel"); };
 
-$("back").onclick = showSessions;
+$("back").onclick = () => {
+  if (detailStack.length > 0) { closeDetailLevel(); return; }
+  showSessions();
+};
 $("gate-retry").onclick = retryConnection;
 
 // iOS overlays the keyboard without shrinking the layout viewport, so a

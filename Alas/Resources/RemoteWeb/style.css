@@ -295,3 +295,44 @@ button.create-row.is-selected { border-color: var(--accent); background: color-m
 
 .steer-undo { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 12px; border: 0.5px solid var(--line); border-radius: 10px; background: color-mix(in oklab, var(--bg-2) 80%, transparent); color: var(--fg-muted); font-size: 12px; }
 .steer-undo-btn { border: none; background: none; color: var(--accent); font: inherit; font-size: 12px; font-weight: 650; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+
+.tabs { display: flex; gap: 2px; }
+.tab {
+  background: none; border: none; padding: 6px 10px;
+  font: inherit; color: var(--fg-muted); border-radius: 6px;
+}
+.tab.is-active { color: var(--fg); background: color-mix(in oklab, var(--bg-3) 70%, transparent); }
+
+#changes-header {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; padding: 10px 12px; color: var(--fg-muted);
+}
+#changes-refresh { background: none; border: none; color: var(--fg-muted); font-size: 16px; }
+.change-row, .file-row {
+  display: flex; align-items: baseline; gap: 8px; width: 100%;
+  padding: 10px 12px; background: none; border: none;
+  border-bottom: 0.5px solid var(--line-soft); text-align: left; font: inherit; color: var(--fg);
+}
+.change-dir { color: var(--fg-faint); }
+.change-name { font-weight: 600; }
+.change-counts { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--fg-muted); }
+.change-conflict { color: var(--del); }
+.change-status { color: var(--fg-faint); font-variant-numeric: tabular-nums; }
+
+#diff-rows, #file-view-body {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px; overflow-x: auto;
+}
+.diff-hunk {
+  padding: 6px 12px; color: var(--fg-muted);
+  background: color-mix(in oklab, var(--bg-3) 70%, transparent); position: sticky; top: 0;
+}
+.diff-line { display: flex; gap: 8px; padding: 0 12px; white-space: pre; }
+.diff-line.add { background: color-mix(in oklab, var(--add) 16%, transparent); }
+.diff-line.delete { background: color-mix(in oklab, var(--del) 16%, transparent); }
+.diff-gutter { min-width: 4ch; text-align: right; color: var(--fg-faint); }
+.detail-path { padding: 8px 12px; color: var(--fg-muted); word-break: break-all; }
+.placeholder-card {
+  margin: 16px 12px; padding: 12px; border: 0.5px solid var(--line);
+  border-radius: 10px; color: var(--fg-muted);
+}

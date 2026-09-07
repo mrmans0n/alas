@@ -300,24 +300,14 @@ struct FilesTabView: View {
         showIgnored: Bool
     ) -> [FileTreeNode] {
         guard !showIgnored else { return nodes }
-        return nodes.compactMap { node in
-            let offGit = node.visibility == .ignored || node.visibility == .excluded
-            // Files: drop if ignored/excluded.
-            if node.kind == .file {
-                return offGit ? nil : node
-            }
-            // Directories: filter children first. An ignored directory may
-            // still contain tracked descendants (gitignore rules don't
-            // un-track a path that's already in the index), so we only drop
-            // the directory if it has no visible children left.
-            var copy = node
-            let visibleChildren = filteredNodes(node.children ?? [], showIgnored: showIgnored)
-            copy.children = visibleChildren
-            if offGit && visibleChildren.isEmpty {
-                return nil
-            }
-            return copy
-        }
+        // Directories: filter children first. An ignored directory may
+        // still contain tracked descendants (gitignore rules don't
+        // un-track a path that's already in the index), so we only drop
+        // the directory if it has no visible children left. Shared with
+        // `AppState.remoteFileNodes`, which needs the exact same
+        // recursive keep-if-has-visible-children behavior at the remote
+        // wire boundary.
+        return FileTreeNode.filteredKeepingVisibleDescendants(nodes)
     }
 
     nonisolated static func revealDisplayName(for path: String) -> String {

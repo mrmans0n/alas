@@ -221,7 +221,25 @@ extension GitService {
         let head = try await hasHead(worktreePath: worktreePath)
         if !head {
             let fileURL = worktreePath.appendingPathComponent(file)
-            guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            // `FileManager.fileExists` only ever sees this Mac's local
+            // filesystem. For an SSH-backed worktree there is nothing local
+            // at `fileURL.path` to find — the check always reports "missing"
+            // regardless of the file's real state on the remote host, so
+            // every staged/untracked file's diff on an unborn remote branch
+            // silently came back empty. Route the existence check through
+            // the remote host when one is registered for this worktree;
+            // `.missing` is the only outcome treated as absent (mirrors
+            // `WorktreeService`'s use of the same primitive) so a transient
+            // "unknown" result doesn't itself suppress a real diff — the
+            // `--no-index` invocation below is still the actual source of
+            // truth and fails harmlessly if the file truly isn't there.
+            let exists: Bool
+            if worktreePath.isRemoteAlasPath, let host = RemoteHostRegistry.shared.host(forPath: worktreePath.path) {
+                exists = await RemoteFileAccess.existence(host: host, path: fileURL.path) != .missing
+            } else {
+                exists = FileManager.default.fileExists(atPath: fileURL.path)
+            }
+            guard exists else {
                 return ParsedDiff(hunks: [])
             }
             let result = try await Process.git(
@@ -679,6 +697,10 @@ extension GitService {
             let prefix = path.isEmpty ? "" : path + "/"
             var paths = try await gitVisibleFilePaths(worktreePath: worktreePath)
                 .filter { path.isEmpty || $0.hasPrefix(prefix) }
+            // Snapshot before the remote-listing loop below starts appending
+            // newly discovered (untracked/ignored) entries to `paths`, so
+            // descendant lookups only ever see paths git already knows about.
+            let gitVisiblePaths = Set(paths)
             var directories = Set<String>()
             for candidate in paths {
                 let components = candidate.split(separator: "/")
@@ -687,20 +709,47 @@ extension GitService {
                     directories.insert(components.prefix(index).joined(separator: "/"))
                 }
             }
+            // Entries the remote directory listing surfaces that git itself
+            // doesn't already know about (untracked, and — unlike
+            // `gitVisibleFilePaths`, which excludes them — gitignored) need
+            // the same ignore/exclude classification the local branch below
+            // applies, so `.ignored`/`.excluded` names (e.g. `node_modules`,
+            // `.env`) get filtered out at the wire boundary
+            // (`AppState.remoteFileNodes`) instead of leaking their names to
+            // the client.
+            var ignoreCandidates: [RootIgnoreCandidate] = []
             if let host = RemoteHostRegistry.shared.host(forPath: worktreePath.path) {
                 let directory = path.isEmpty ? worktreePath.path : worktreePath.appendingPathComponent(path).path
                 for entry in await RemoteFileStats.directoryEntries(host: host, path: directory)
                     where entry.name != ".git" {
                     let fullPath = path.isEmpty ? entry.name : path + "/" + entry.name
                     if entry.isDirectory { directories.insert(fullPath) }
-                    if !paths.contains(fullPath) { paths.append(fullPath) }
+                    if !paths.contains(fullPath) {
+                        paths.append(fullPath)
+                        if shouldClassifyRemotelyDiscoveredEntry(
+                            fullPath: fullPath,
+                            isDirectory: entry.isDirectory,
+                            gitVisiblePaths: gitVisiblePaths
+                        ) {
+                            ignoreCandidates.append(RootIgnoreCandidate(path: fullPath, isDirectory: entry.isDirectory))
+                        }
+                    }
                 }
+            }
+            var visibility: [String: FileVisibility] = [:]
+            if !ignoreCandidates.isEmpty {
+                let excludedSources = try await excludedSourcePaths(worktreePath: worktreePath)
+                visibility = try await ignoredOrExcludedVisibility(
+                    candidates: ignoreCandidates,
+                    worktreePath: worktreePath,
+                    excludedSourcePaths: excludedSources
+                )
             }
             let lazyDirectories = path.isEmpty ? directories : directories.subtracting([path])
             let built = FileTreeBuilder.build(
                 paths: paths,
                 badges: [:],
-                visibility: [:],
+                visibility: visibility,
                 directories: directories,
                 lazyDirectories: lazyDirectories,
                 submodules: (try? await submodulePaths(worktreePath: worktreePath)) ?? []
@@ -778,14 +827,44 @@ extension GitService {
     }
 
     private func gitVisibleFilePaths(worktreePath: URL) async throws -> [String] {
+        // `-c core.quotePath=false` plus `-z` keep non-ASCII (and
+        // tab/newline-containing) filenames intact instead of git's default
+        // octal-escaped, quoted rendering — mirrors `changedFilesAgainstRef`,
+        // which needed the same fix for the Changes tab. This feeds the
+        // root Files tree, so a quoted name here would show the wrong
+        // (escaped) filename and fail to resolve when selected.
         let result = try await Process.git(
-            ["ls-files", "--cached", "--others", "--exclude-standard"],
+            ["-c", "core.quotePath=false", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
             cwd: worktreePath
         )
         return result.stdout
-            .split(separator: "\n")
-            .map(String.init)
+            .components(separatedBy: "\0")
             .filter { !$0.isEmpty }
+    }
+
+    /// Whether `path` (worktree-relative) is covered by gitignore rules,
+    /// including local excludes (`.git/info/exclude`, `core.excludesFile`).
+    /// Used to reject reading or diffing a single path the client already
+    /// knows about, mirroring the visibility filter that already keeps such
+    /// paths out of the file tree entirely.
+    ///
+    /// Deliberately does NOT pass `--no-index`: that flag makes git ignore
+    /// the index entirely, which would report a force-added tracked file
+    /// (`git add -f`) matching a `.gitignore` pattern as "ignored" even
+    /// though it's correctly shown as tracked in the Files/Changes tabs.
+    /// Without the flag, git consults the index first, so a tracked path
+    /// always reports as not ignored while a genuinely untracked, gitignored
+    /// path still reports as ignored.
+    func isPathIgnored(worktreePath: URL, path: String) async throws -> Bool {
+        let result = try await Process.git(
+            ["check-ignore", "-q", "--", path],
+            cwd: worktreePath
+        )
+        switch result.exitCode {
+        case 0: return true
+        case 1: return false
+        default: throw ProcessError.nonZeroExit(result.exitCode, result.stderr)
+        }
     }
 
     private struct RootIgnoreCandidate {
@@ -849,6 +928,32 @@ extension GitService {
     private func hasVisibleDescendant(of root: String, in paths: Set<String>) -> Bool {
         let prefix = "\(root)/"
         return paths.contains { $0.hasPrefix(prefix) }
+    }
+
+    /// Whether an entry discovered only by listing the remote filesystem
+    /// (i.e. not already known to git) should be run through
+    /// `ignoredOrExcludedVisibility`.
+    ///
+    /// A directory that matches a `.gitignore` pattern can still contain a
+    /// tracked, force-added (`git add -f`) descendant. Unlike the local/eager
+    /// file tree — where `FileTreeNode.children` is a real nested array the
+    /// native UI recurses into even when the parent is `.ignored` — the
+    /// remote wire protocol's `RemoteFileNode` has no `children` field:
+    /// directory contents are fetched lazily, one flat `listFiles` request
+    /// per directory the client expands. If this directory is classified
+    /// `.ignored`/`.excluded`, `AppState.remoteFileNodes` drops it from its
+    /// PARENT's listing entirely, and the client can never issue the
+    /// `listFiles` request that would reveal the tracked descendant — there
+    /// is no way to "promote" that descendant up to reappear elsewhere.
+    /// Skipping classification here instead lets the directory default to
+    /// `.tracked` visibility (`FileTreeBuilder`'s default for any path with
+    /// no explicit entry), keeping it expandable.
+    func shouldClassifyRemotelyDiscoveredEntry(
+        fullPath: String,
+        isDirectory: Bool,
+        gitVisiblePaths: Set<String>
+    ) -> Bool {
+        !(isDirectory && hasVisibleDescendant(of: fullPath, in: gitVisiblePaths))
     }
 
     private func excludedSourcePaths(worktreePath: URL) async throws -> Set<String> {
@@ -1143,79 +1248,8 @@ extension GitService {
             )
         }
 
-        // Parse --numstat -z output.
-        // Format per entry (NUL-separated fields within each record):
-        //   "<add>\t<del>\t<path>\0"   (ordinary files)
-        //   "<add>\t<del>\t\0<oldPath>\0<newPath>\0"  (renames/copies)
-        // The -z flag separates records with NUL; we split on NUL and then
-        // handle the tab-delimited first element per record.
-        var addByPath: [String: Int] = [:]
-        var delByPath: [String: Int] = [:]
-
-        // With -z the stream is NUL-terminated. Split and process tokens.
-        let numstatTokens = numstat.stdout.components(separatedBy: "\0").filter { !$0.isEmpty }
-        var ni = 0
-        while ni < numstatTokens.count {
-            let token = numstatTokens[ni]
-            // Split on the first two tabs only so paths containing tab
-            // characters survive intact. Format is `<adds>\t<dels>\t<path>`;
-            // the trailing path field may itself contain tabs.
-            let parts = token.split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
-            guard parts.count >= 3 else { ni += 1
-            continue }
-            let addStr = parts[0]
-            let delStr = parts[1]
-            let pathField = parts[2]
-
-            let newPath: String
-            if pathField.isEmpty {
-                // Rename/copy: next two tokens are old and new path.
-                guard ni + 2 < numstatTokens.count else { ni += 1
-                continue }
-                // ni+1 = old path, ni+2 = new path
-                newPath = numstatTokens[ni + 2]
-                ni += 3
-            } else {
-                newPath = Self.numstatNewPath(pathField)
-                ni += 1
-            }
-            addByPath[newPath] = (addStr == "-") ? 0 : (Int(addStr) ?? 0)
-            delByPath[newPath] = (delStr == "-") ? 0 : (Int(delStr) ?? 0)
-        }
-
-        // Parse --name-status -z output.
-        // Format: "<status>\0<path>\0"  (ordinary)
-        //         "<status>\0<oldPath>\0<newPath>\0"  (R/C)
-        var statusByPath: [String: String] = [:]
-        var originalByPath: [String: String] = [:]
-        var ordered: [String] = []
-        var orderedSet: Set<String> = []
-
-        let nsTokens = nameStatus.stdout.components(separatedBy: "\0").filter { !$0.isEmpty }
-        var si = 0
-        while si < nsTokens.count {
-            let statusField = nsTokens[si]
-            guard !statusField.isEmpty else { si += 1
-            continue }
-            let statusLetter = String(statusField.prefix(1))
-            if statusLetter == "R" || statusLetter == "C" {
-                guard si + 2 < nsTokens.count else { si += 1
-                continue }
-                let oldPath = nsTokens[si + 1]
-                let newPath = nsTokens[si + 2]
-                statusByPath[newPath] = statusLetter
-                originalByPath[newPath] = oldPath
-                if orderedSet.insert(newPath).inserted { ordered.append(newPath) }
-                si += 3
-            } else {
-                guard si + 1 < nsTokens.count else { si += 1
-                continue }
-                let path = nsTokens[si + 1]
-                statusByPath[path] = statusLetter
-                if orderedSet.insert(path).inserted { ordered.append(path) }
-                si += 2
-            }
-        }
+        let (addByPath, delByPath) = Self.parseNumstatZOutput(numstat.stdout)
+        let (statusByPath, originalByPath, ordered) = Self.parseNameStatusZOutput(nameStatus.stdout)
 
         return ordered.map { path in
             CommitChangedFile(
@@ -1226,6 +1260,103 @@ extension GitService {
                 del: delByPath[path] ?? 0
             )
         }
+    }
+
+    /// Parses the NUL-separated token stream produced by `git diff ...
+    /// --numstat -z` (with `-c core.quotePath=false` so non-ASCII paths
+    /// aren't octal-escaped), returning per-path added/deleted line counts.
+    ///
+    /// Format per entry (NUL-separated fields within each record):
+    ///   "<add>\t<del>\t<path>\0"   (ordinary files)
+    ///   "<add>\t<del>\t\0<oldPath>\0<newPath>\0"  (renames/copies)
+    /// The -z flag separates records with NUL; this splits on NUL and then
+    /// handles the tab-delimited first element per record.
+    ///
+    /// Extracted from `stagedChangedFiles` so the remote-changes surface
+    /// (`GitService+RemoteChanges.swift`) can reuse the same
+    /// already-hardened parsing instead of duplicating it.
+    static func parseNumstatZOutput(_ stdout: String) -> (add: [String: Int], del: [String: Int]) {
+        var addByPath: [String: Int] = [:]
+        var delByPath: [String: Int] = [:]
+
+        // With -z the stream is NUL-terminated. Split and process tokens.
+        let tokens = stdout.components(separatedBy: "\0").filter { !$0.isEmpty }
+        var i = 0
+        while i < tokens.count {
+            let token = tokens[i]
+            // Split on the first two tabs only so paths containing tab
+            // characters survive intact. Format is `<adds>\t<dels>\t<path>`;
+            // the trailing path field may itself contain tabs.
+            let parts = token.split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
+            guard parts.count >= 3 else { i += 1
+            continue }
+            let addStr = parts[0]
+            let delStr = parts[1]
+            let pathField = parts[2]
+
+            let newPath: String
+            if pathField.isEmpty {
+                // Rename/copy: next two tokens are old and new path.
+                guard i + 2 < tokens.count else { i += 1
+                continue }
+                // i+1 = old path, i+2 = new path
+                newPath = tokens[i + 2]
+                i += 3
+            } else {
+                newPath = numstatNewPath(pathField)
+                i += 1
+            }
+            addByPath[newPath] = (addStr == "-") ? 0 : (Int(addStr) ?? 0)
+            delByPath[newPath] = (delStr == "-") ? 0 : (Int(delStr) ?? 0)
+        }
+        return (addByPath, delByPath)
+    }
+
+    /// Parses the NUL-separated token stream produced by `git diff ...
+    /// --name-status -z` (with `-c core.quotePath=false`), returning
+    /// per-path status letters, rename/copy source paths, and first-seen
+    /// path order.
+    ///
+    /// Format: "<status>\0<path>\0"  (ordinary)
+    ///         "<status>\0<oldPath>\0<newPath>\0"  (R/C)
+    ///
+    /// Extracted from `stagedChangedFiles` so the remote-changes surface
+    /// (`GitService+RemoteChanges.swift`) can reuse the same
+    /// already-hardened parsing instead of duplicating it.
+    static func parseNameStatusZOutput(
+        _ stdout: String
+    ) -> (status: [String: String], original: [String: String], ordered: [String]) {
+        var statusByPath: [String: String] = [:]
+        var originalByPath: [String: String] = [:]
+        var ordered: [String] = []
+        var orderedSet: Set<String> = []
+
+        let tokens = stdout.components(separatedBy: "\0").filter { !$0.isEmpty }
+        var i = 0
+        while i < tokens.count {
+            let statusField = tokens[i]
+            guard !statusField.isEmpty else { i += 1
+            continue }
+            let statusLetter = String(statusField.prefix(1))
+            if statusLetter == "R" || statusLetter == "C" {
+                guard i + 2 < tokens.count else { i += 1
+                continue }
+                let oldPath = tokens[i + 1]
+                let newPath = tokens[i + 2]
+                statusByPath[newPath] = statusLetter
+                originalByPath[newPath] = oldPath
+                if orderedSet.insert(newPath).inserted { ordered.append(newPath) }
+                i += 3
+            } else {
+                guard i + 1 < tokens.count else { i += 1
+                continue }
+                let path = tokens[i + 1]
+                statusByPath[path] = statusLetter
+                if orderedSet.insert(path).inserted { ordered.append(path) }
+                i += 2
+            }
+        }
+        return (statusByPath, originalByPath, ordered)
     }
 }
 

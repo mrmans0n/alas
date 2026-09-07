@@ -37,6 +37,10 @@ final class RemoteSessionGateway {
     private var lastPermissionReq: [String: Int] = [:]
     private var lastQuestionReq: [String: Int] = [:]
     private var lastElicitationReq: [String: String] = [:]
+    /// Requests currently being served, keyed by "<verb>\0<sessionId>\0<path>".
+    /// A repeat while one is in flight is dropped: the client re-renders from
+    /// the response either way, and each of these spawns a git process.
+    private var inFlightFileRequests: Set<String> = []
     private static let coalesceNanos: UInt64 = 80_000_000  // ~80ms
 
     init(provider: RemoteSessionsProvider, send: @escaping (RemoteServerMessage) -> Void) {
@@ -280,6 +284,50 @@ final class RemoteSessionGateway {
         case .queueSteerUndo(let id):
             guard provider.isWriter(for: id) else { return }
             await provider.queueSteerUndo(for: id)
+        case .listChanges(let id):
+            let key = "listChanges\u{0}\(id)"
+            guard inFlightFileRequests.insert(key).inserted else { return }
+            defer { inFlightFileRequests.remove(key) }
+            switch await provider.remoteChangeList(sessionId: id) {
+            case .success(let ref, let available, let files, let truncated):
+                send(.changeList(
+                    sessionId: id, comparisonRef: ref, metricsAvailable: available,
+                    files: files, truncated: truncated))
+            case .failure(let reason, let message):
+                send(.changeListFailed(sessionId: id, reason: reason, message: message))
+            }
+        case .fileDiff(let id, let path):
+            let key = "fileDiff\u{0}\(id)\u{0}\(path)"
+            guard inFlightFileRequests.insert(key).inserted else { return }
+            defer { inFlightFileRequests.remove(key) }
+            switch await provider.remoteFileDiff(sessionId: id, path: path) {
+            case .success(let hunks, let truncated):
+                send(.fileDiffResult(sessionId: id, path: path, hunks: hunks, truncated: truncated))
+            case .failure(let reason, let message):
+                send(.fileDiffFailed(sessionId: id, path: path, reason: reason, message: message))
+            }
+        case .listFiles(let id, let path):
+            let key = "listFiles\u{0}\(id)\u{0}\(path ?? "")"
+            guard inFlightFileRequests.insert(key).inserted else { return }
+            defer { inFlightFileRequests.remove(key) }
+            switch await provider.remoteFileTree(sessionId: id, path: path) {
+            case .success(let nodes):
+                send(.fileTree(sessionId: id, path: path, nodes: nodes))
+            case .failure(let reason, let message):
+                send(.fileTreeFailed(sessionId: id, path: path, reason: reason, message: message))
+            }
+        case .readFile(let id, let path):
+            let key = "readFile\u{0}\(id)\u{0}\(path)"
+            guard inFlightFileRequests.insert(key).inserted else { return }
+            defer { inFlightFileRequests.remove(key) }
+            switch await provider.remoteFileContents(sessionId: id, path: path) {
+            case .success(let text, let truncated):
+                send(.fileContents(sessionId: id, path: path, text: text, truncated: truncated))
+            case .failure(let reason, let byteSize, let message):
+                send(.fileUnavailable(
+                    sessionId: id, path: path, reason: reason,
+                    byteSize: byteSize, message: message))
+            }
         }
     }
 

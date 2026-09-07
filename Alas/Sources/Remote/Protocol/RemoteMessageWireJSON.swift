@@ -231,3 +231,82 @@ struct RemoteElicitationPayload: Codable, Equatable, Sendable {
     let elicitationId: String?
     let url: String?
 }
+
+/// Why a changes/files request could not be served. Decoded leniently so an
+/// older client keeps working against a newer host that adds reasons.
+enum RemoteFileAccessReason: String, Codable, Equatable, Sendable {
+    case sessionUnknown
+    case worktreeUnavailable
+    case pathRejected
+    case notFound
+    case binary
+    case tooLarge
+    case gitFailed
+    case unknown
+
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = RemoteFileAccessReason(rawValue: raw) ?? .unknown
+    }
+}
+
+/// Wire projection of `ChangedFile`. `conflict` carries `ConflictKind`'s raw
+/// value so the client can mark conflicted files without knowing the enum.
+struct RemoteChangedFile: Codable, Equatable, Sendable {
+    let path: String
+    let status: String
+    let add: Int
+    let del: Int
+    let conflict: String?
+    let renameFrom: String?
+}
+
+/// Wire projection of `ParsedDiff.Hunk.Line`. `kind` is "context", "add", or
+/// "delete"; `text` has no leading +/-/space.
+struct RemoteDiffLine: Codable, Equatable, Sendable {
+    let kind: String
+    let text: String
+    let oldNumber: Int?
+    let newNumber: Int?
+}
+
+/// Wire projection of `ParsedDiff.Hunk`.
+struct RemoteDiffHunk: Codable, Equatable, Sendable {
+    let header: String
+    let oldStart: Int
+    let newStart: Int
+    let lines: [RemoteDiffLine]
+}
+
+/// Wire projection of `FileTreeNode`. `kind` is "dir" or "file";
+/// `childrenState` carries `DirectoryChildrenState`'s raw value.
+struct RemoteFileNode: Codable, Equatable, Sendable {
+    let name: String
+    let path: String
+    let kind: String
+    let badge: String?
+    let childrenState: String
+    let isSubmodule: Bool
+}
+
+enum RemoteChangeListResult: Equatable, Sendable {
+    case success(
+        comparisonRef: String?, metricsAvailable: Bool,
+        files: [RemoteChangedFile], truncated: Bool)
+    case failure(reason: RemoteFileAccessReason, message: String?)
+}
+
+enum RemoteFileDiffResult: Equatable, Sendable {
+    case success(hunks: [RemoteDiffHunk], truncated: Bool)
+    case failure(reason: RemoteFileAccessReason, message: String?)
+}
+
+enum RemoteFileTreeResult: Equatable, Sendable {
+    case success(nodes: [RemoteFileNode])
+    case failure(reason: RemoteFileAccessReason, message: String?)
+}
+
+enum RemoteFileContentsResult: Equatable, Sendable {
+    case success(text: String, truncated: Bool)
+    case failure(reason: RemoteFileAccessReason, byteSize: Int?, message: String?)
+}

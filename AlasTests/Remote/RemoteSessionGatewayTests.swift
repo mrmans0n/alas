@@ -31,6 +31,14 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     var renamed: [(id: String, title: String)] = []
     var renameSucceeds = true
     var configs: [String: RemoteSessionConfig] = [:]
+    var changeListResult: RemoteChangeListResult = .failure(reason: .sessionUnknown, message: nil)
+    var fileDiffResult: RemoteFileDiffResult = .failure(reason: .sessionUnknown, message: nil)
+    var fileTreeResult: RemoteFileTreeResult = .failure(reason: .sessionUnknown, message: nil)
+    var fileContentsResult: RemoteFileContentsResult = .failure(reason: .sessionUnknown, byteSize: nil, message: nil)
+    var changeListRequests: [String] = []
+    var fileDiffRequests: [(sessionId: String, path: String)] = []
+    var fileTreeRequests: [(sessionId: String, path: String?)] = []
+    var fileContentsRequests: [(sessionId: String, path: String)] = []
     var queueForceSends: [(id: String, itemId: UUID)] = []
     var queueRemoves: [(id: String, itemId: UUID)] = []
     var queueRetries: [(id: String, itemId: UUID)] = []
@@ -61,6 +69,7 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     var pauseRemoteWorktrees = false
     var pauseRemoteProjects = false
     var pauseRemoteBranches = false
+    var pauseFileDiff = false
     /// 1-indexed call number of `fullToolCallContent` to suspend on (nil = never pause).
     /// Lets a test freeze exactly one in-flight fetch while later calls proceed normally.
     var pauseFullToolCallContentOnCall: Int?
@@ -72,6 +81,8 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     private var remoteProjectsCompletionWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
     private var remoteBranchesCallWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
     private var remoteBranchesCompletionWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
+    private var fileDiffContinuation: CheckedContinuation<RemoteFileDiffResult, Never>?
+    private var fileDiffCallWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
     private var fullToolCallContentContinuation: CheckedContinuation<String?, Never>?
     func sessionSummaries() async -> [RemoteSessionSummary] {
         sessionSummariesCallCount += 1
@@ -181,6 +192,16 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
             remoteBranchesCompletionWaiters.append((count, continuation))
         }
     }
+    func resumeFileDiff() {
+        fileDiffContinuation?.resume(returning: fileDiffResult)
+        fileDiffContinuation = nil
+    }
+    func waitForFileDiffCall(_ count: Int) async {
+        guard fileDiffRequests.count < count else { return }
+        await withCheckedContinuation { continuation in
+            fileDiffCallWaiters.append((count, continuation))
+        }
+    }
     private func resumeWaiters(
         _ waiters: inout [(count: Int, continuation: CheckedContinuation<Void, Never>)],
         through count: Int
@@ -264,6 +285,32 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
         return renameSucceeds
     }
     func sessionConfig(for id: String) -> RemoteSessionConfig? { configs[id] }
+
+    func remoteChangeList(sessionId: String) async -> RemoteChangeListResult {
+        changeListRequests.append(sessionId)
+        return changeListResult
+    }
+
+    func remoteFileDiff(sessionId: String, path: String) async -> RemoteFileDiffResult {
+        fileDiffRequests.append((sessionId, path))
+        resumeWaiters(&fileDiffCallWaiters, through: fileDiffRequests.count)
+        if pauseFileDiff {
+            return await withCheckedContinuation { continuation in
+                fileDiffContinuation = continuation
+            }
+        }
+        return fileDiffResult
+    }
+
+    func remoteFileTree(sessionId: String, path: String?) async -> RemoteFileTreeResult {
+        fileTreeRequests.append((sessionId, path))
+        return fileTreeResult
+    }
+
+    func remoteFileContents(sessionId: String, path: String) async -> RemoteFileContentsResult {
+        fileContentsRequests.append((sessionId, path))
+        return fileContentsResult
+    }
 
     func queueForceSend(for id: String, itemId: UUID) { queueForceSends.append((id, itemId)) }
     func queueRemove(for id: String, itemId: UUID) { queueRemoves.append((id, itemId)) }
@@ -2633,5 +2680,106 @@ struct RemoteSessionGatewayTests {
 
         #expect(provider.prompts.map(\.text) == ["queue me"])
         #expect(provider.steerPrompts.isEmpty)
+    }
+
+    @Test func listChangesSendsChangeListFromTheProvider() async {
+        let provider = FakeSessionsProvider()
+        let file = RemoteChangedFile(
+            path: "a.txt", status: "M", add: 2, del: 1, conflict: nil, renameFrom: nil)
+        provider.changeListResult = .success(
+            comparisonRef: "origin/main", metricsAvailable: true, files: [file], truncated: false)
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gateway.handle(.listChanges(sessionId: "s1"))
+
+        #expect(provider.changeListRequests == ["s1"])
+        #expect(sent == [.changeList(
+            sessionId: "s1", comparisonRef: "origin/main", metricsAvailable: true,
+            files: [file], truncated: false)])
+    }
+
+    @Test func listChangesSendsFailureMessageOnProviderFailure() async {
+        let provider = FakeSessionsProvider()
+        provider.changeListResult = .failure(reason: .worktreeUnavailable, message: "gone")
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gateway.handle(.listChanges(sessionId: "s1"))
+
+        #expect(sent == [.changeListFailed(
+            sessionId: "s1", reason: .worktreeUnavailable, message: "gone")])
+    }
+
+    @Test func fileDiffSendsHunksAndFailures() async {
+        let provider = FakeSessionsProvider()
+        let hunk = RemoteDiffHunk(
+            header: "@@ -1 +1,2 @@", oldStart: 1, newStart: 1,
+            lines: [RemoteDiffLine(kind: "add", text: "new", oldNumber: nil, newNumber: 2)])
+        provider.fileDiffResult = .success(hunks: [hunk], truncated: true)
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gateway.handle(.fileDiff(sessionId: "s1", path: "a.txt"))
+        #expect(provider.fileDiffRequests.map(\.path) == ["a.txt"])
+        #expect(sent == [.fileDiffResult(
+            sessionId: "s1", path: "a.txt", hunks: [hunk], truncated: true)])
+
+        provider.fileDiffResult = .failure(reason: .pathRejected, message: nil)
+        sent.removeAll()
+        await gateway.handle(.fileDiff(sessionId: "s1", path: "../etc/passwd"))
+        #expect(sent == [.fileDiffFailed(
+            sessionId: "s1", path: "../etc/passwd", reason: .pathRejected, message: nil)])
+    }
+
+    @Test func listFilesAndReadFileSendTreeAndContents() async {
+        let provider = FakeSessionsProvider()
+        let node = RemoteFileNode(
+            name: "src", path: "src", kind: "dir", badge: nil,
+            childrenState: "notLoaded", isSubmodule: false)
+        provider.fileTreeResult = .success(nodes: [node])
+        provider.fileContentsResult = .success(text: "# Alas\n", truncated: false)
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gateway.handle(.listFiles(sessionId: "s1", path: nil))
+        await gateway.handle(.readFile(sessionId: "s1", path: "README.md"))
+
+        #expect(sent == [
+            .fileTree(sessionId: "s1", path: nil, nodes: [node]),
+            .fileContents(sessionId: "s1", path: "README.md", text: "# Alas\n", truncated: false)
+        ])
+    }
+
+    @Test func readFileSendsUnavailableWithByteSize() async {
+        let provider = FakeSessionsProvider()
+        provider.fileContentsResult = .failure(reason: .tooLarge, byteSize: 900_000, message: nil)
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gateway.handle(.readFile(sessionId: "s1", path: "big.bin"))
+
+        #expect(sent == [.fileUnavailable(
+            sessionId: "s1", path: "big.bin", reason: .tooLarge, byteSize: 900_000, message: nil)])
+    }
+
+    @Test func duplicateInFlightRequestsForTheSamePathAreDropped() async {
+        let provider = FakeSessionsProvider()
+        provider.fileDiffResult = .success(hunks: [], truncated: false)
+        provider.pauseFileDiff = true
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        async let first: Void = gateway.handle(.fileDiff(sessionId: "s1", path: "a.txt"))
+        await provider.waitForFileDiffCall(1)   // first call has entered the provider and is now suspended — the gateway's dedup key is held
+
+        await gateway.handle(.fileDiff(sessionId: "s1", path: "a.txt"))   // must be dropped: the key is still held by the suspended first call
+        #expect(provider.fileDiffRequests.count == 1)   // second call never reached the provider
+        #expect(sent.isEmpty)   // dropped call sends nothing
+
+        provider.resumeFileDiff()
+        await first
+        #expect(provider.fileDiffRequests.count == 1)   // still just the one real call
+        #expect(sent == [.fileDiffResult(sessionId: "s1", path: "a.txt", hunks: [], truncated: false)])
     }
 }

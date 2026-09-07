@@ -118,6 +118,37 @@ struct FileTreeNode: Identifiable, Equatable, Codable {
     var isSubmodule: Bool = false
 
     enum Kind: String, Codable { case dir, file }
+
+    /// Recursively drops `.ignored`/`.excluded` nodes, but keeps a directory
+    /// if any of its (recursively filtered) children remain visible —
+    /// gitignore rules don't un-track a path that's already in the index, so
+    /// an ignored directory can still contain tracked descendants reachable
+    /// only through it. Operates on the EAGER `children` arrays a tree build
+    /// populates for a directory with a visible descendant (see
+    /// `GitService.fileTree`'s `hasVisibleDescendant` check); a node whose
+    /// `children` is nil (lazy, not-yet-loaded) is treated as having none.
+    ///
+    /// Shared by `FilesTabView.filteredNodes` (native desktop Files tab) and
+    /// `AppState.remoteFileNodes` (remote wire boundary) so both surfaces
+    /// keep such a directory reachable, without the data-layer function
+    /// depending on a SwiftUI view type.
+    nonisolated static func filteredKeepingVisibleDescendants(
+        _ nodes: [FileTreeNode]
+    ) -> [FileTreeNode] {
+        nodes.compactMap { node in
+            let offGit = node.visibility == .ignored || node.visibility == .excluded
+            if node.kind == .file {
+                return offGit ? nil : node
+            }
+            var copy = node
+            let visibleChildren = filteredKeepingVisibleDescendants(node.children ?? [])
+            copy.children = visibleChildren
+            if offGit && visibleChildren.isEmpty {
+                return nil
+            }
+            return copy
+        }
+    }
 }
 
 /// Classification of a git unmerged (conflicted) file. Mirrors git's

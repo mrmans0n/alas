@@ -1001,6 +1001,443 @@ struct RemoteAppStateAccessTests {
         #expect(FileManager.default.fileExists(atPath: createdWorktree.path.path))
     }
 
+    @Test func remoteChangeListReportsSessionUnknownForAnUnknownSession() async throws {
+        let state = AppState(store: MemoryStore())
+        let result = await state.remoteChangeList(sessionId: "no-such-session")
+        #expect(result == .failure(reason: .sessionUnknown, message: nil))
+    }
+
+    @Test func remoteFileDiffReportsSessionUnknownForAnUnknownSession() async throws {
+        let state = AppState(store: MemoryStore())
+        let result = await state.remoteFileDiff(sessionId: "no-such-session", path: "a.txt")
+        #expect(result == .failure(reason: .sessionUnknown, message: nil))
+    }
+
+    @Test func remoteFileTreeReportsSessionUnknownForAnUnknownSession() async throws {
+        let state = AppState(store: MemoryStore())
+        let result = await state.remoteFileTree(sessionId: "no-such-session", path: nil)
+        #expect(result == .failure(reason: .sessionUnknown, message: nil))
+    }
+
+    @Test func remoteFileContentsReportsSessionUnknownForAnUnknownSession() async throws {
+        let state = AppState(store: MemoryStore())
+        let result = await state.remoteFileContents(sessionId: "no-such-session", path: "a.txt")
+        #expect(result == .failure(reason: .sessionUnknown, byteSize: nil, message: nil))
+    }
+
+    @Test func remoteChangeListReportsWorktreeUnavailableWhenProjectAndWorktreeReturnsNil() async throws {
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+
+        let state = makeRemoteRenameState()
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let tab = try #require(acpTabs(in: state).first)
+
+        // Simulate worktree deletion while manager still holds session reference.
+        // First ensure the session is in the manager's rows.
+        let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
+        #expect(manager.sessionRows.contains(where: { $0.id == tab.sessionId }))
+
+        // Now delete the worktree from projectsManager, making projectAndWorktree return nil
+        let project = try #require(state.projects.first)
+        let visibleWorktrees = state.projectsManager.visibleWorktrees(projectId: project.id)
+        for wt in visibleWorktrees {
+            state.projectsManager.removeOptimisticWorktree(id: wt.id, projectId: project.id)
+        }
+
+        let result = await state.remoteChangeList(sessionId: tab.sessionId)
+        #expect(result == .failure(reason: .worktreeUnavailable, message: nil))
+    }
+
+    @Test func remoteFileContentsAndDiffRejectAGitignoredFile() async throws {
+        let repository = try await makeRemoteBranchesRepository()
+        defer { try? FileManager.default.removeItem(at: repository) }
+        try "secret.env\n".write(
+            to: repository.appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
+        try "TOKEN=abc\n".write(
+            to: repository.appendingPathComponent("secret.env"), atomically: true, encoding: .utf8)
+
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+        let state = makeRemoteGitBackedState(repositoryPath: repository)
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let tab = try #require(acpTabs(in: state).first)
+        let contentsResult = await state.remoteFileContents(sessionId: tab.sessionId, path: "secret.env")
+        #expect(contentsResult == .failure(reason: .pathRejected, byteSize: nil, message: nil))
+
+        let diffResult = await state.remoteFileDiff(sessionId: tab.sessionId, path: "secret.env")
+        #expect(diffResult == .failure(reason: .pathRejected, message: nil))
+    }
+
+    /// `normalizedRelativePath` used to trim the path before resolving it,
+    /// which happened to close this bypass for the wrong reason (a real
+    /// file legitimately named with leading/trailing whitespace would have
+    /// been silently misrouted to a different, trimmed path). Now that
+    /// resolution preserves the client's exact bytes, the padded path
+    /// simply doesn't name the real `secret.env` file — it fails to resolve
+    /// to anything, rather than being caught by the ignore check — so the
+    /// outcome shape changes (not-found / empty diff instead of path
+    /// rejected), but the actual security guarantee (the real, ignored
+    /// content is never served) must still hold.
+    @Test func remoteFileContentsAndDiffRejectAGitignoredFileWithAWhitespacePaddedPath() async throws {
+        let repository = try await makeRemoteBranchesRepository()
+        defer { try? FileManager.default.removeItem(at: repository) }
+        try "secret.env\n".write(
+            to: repository.appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
+        try "TOKEN=abc\n".write(
+            to: repository.appendingPathComponent("secret.env"), atomically: true, encoding: .utf8)
+
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+        let state = makeRemoteGitBackedState(repositoryPath: repository)
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let tab = try #require(acpTabs(in: state).first)
+        let contentsResult = await state.remoteFileContents(sessionId: tab.sessionId, path: " secret.env")
+        if case .success(let text, _) = contentsResult {
+            Issue.record("secret content must never be served for a whitespace-padded path, got: \(text)")
+        }
+        #expect(contentsResult == .failure(reason: .notFound, byteSize: nil, message: nil))
+
+        let diffResult = await state.remoteFileDiff(sessionId: tab.sessionId, path: " secret.env")
+        if case .success(let hunks, _) = diffResult {
+            let text = hunks.flatMap(\.lines).map(\.text).joined()
+            #expect(!text.contains("abc"), "secret content must never be served for a whitespace-padded path")
+        }
+    }
+
+    /// A TRACKED symlink whose own name doesn't match any ignore pattern
+    /// (`public-env`) but whose target does (`.env`) must not have the
+    /// target's content served. `isPathIgnored("public-env")` correctly
+    /// reports "not ignored" — the check runs against the alias's own name,
+    /// which is the whole point of a symlink alias — so the read/diff path
+    /// itself must independently reject any symlink rather than trusting
+    /// the ignore check alone.
+    @Test func remoteFileContentsAndDiffRejectATrackedSymlinkAliasingAGitignoredTarget() async throws {
+        let repository = try await makeRemoteBranchesRepository()
+        defer { try? FileManager.default.removeItem(at: repository) }
+        try ".env\n".write(
+            to: repository.appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
+        try "TOKEN=super-secret\n".write(
+            to: repository.appendingPathComponent(".env"), atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(
+            at: repository.appendingPathComponent("public-env"),
+            withDestinationURL: repository.appendingPathComponent(".env"))
+        _ = try await Process.git(["add", "public-env"], cwd: repository)
+        _ = try await Process.git(["commit", "-q", "-m", "add public-env symlink"], cwd: repository)
+
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+        let state = makeRemoteGitBackedState(repositoryPath: repository)
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let tab = try #require(acpTabs(in: state).first)
+
+        // Confirm the premise: the alias's own name is genuinely not ignored.
+        let ignored = try await GitService().isPathIgnored(worktreePath: repository, path: "public-env")
+        #expect(!ignored)
+
+        let contentsResult = await state.remoteFileContents(sessionId: tab.sessionId, path: "public-env")
+        #expect(contentsResult == .failure(reason: .notFound, byteSize: nil, message: nil))
+        if case .success(let text, _) = contentsResult {
+            Issue.record("secret content must never be served through a symlink alias, got: \(text)")
+        }
+
+        let diffResult = await state.remoteFileDiff(sessionId: tab.sessionId, path: "public-env")
+        #expect(diffResult == .failure(reason: .notFound, message: nil))
+        if case .success(let hunks, _) = diffResult {
+            let text = hunks.flatMap(\.lines).map(\.text).joined()
+            #expect(!text.contains("super-secret"), "secret content must never be served through a symlink alias diff")
+        }
+    }
+
+    @Test func remoteFileContentsAndDiffServeATrackedFileNormally() async throws {
+        let repository = try await makeRemoteBranchesRepository()
+        defer { try? FileManager.default.removeItem(at: repository) }
+        try "hello\n".write(to: repository.appendingPathComponent("visible.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "visible.txt"], cwd: repository)
+        _ = try await Process.git(["commit", "-m", "add visible file"], cwd: repository)
+
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+        let state = makeRemoteGitBackedState(repositoryPath: repository)
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let tab = try #require(acpTabs(in: state).first)
+
+        let contentsResult = await state.remoteFileContents(sessionId: tab.sessionId, path: "visible.txt")
+        #expect(contentsResult == .success(text: "hello\n", truncated: false))
+    }
+
+    /// Reproduces the race `remoteWorktreeContext` used to lose: a manager's
+    /// own background `refreshRecentNow()` (fired from `init` before any
+    /// session exists) can land its `recentSessions()` read after
+    /// `createSession()` has already installed the session live but before
+    /// that session's own `upsertSession` write is visible to a fresh read —
+    /// overwriting `sessionRows` with a snapshot that omits the new session.
+    /// Forcing an extra `refreshRecentNow()` here — without first flushing
+    /// the just-created session's write — reproduces exactly that ordering.
+    /// Whether or not `sessionRows` actually loses the row on a given run,
+    /// the session is live either way, so the assertion must hold
+    /// regardless — this is what distinguishes the fix (checking
+    /// `liveSession` too) from the old `sessionRows`-only lookup.
+    @Test func remoteFileContentsSucceedsWhenLiveSessionRacesAheadOfPersistedSessionRows() async throws {
+        let repository = try await makeRemoteBranchesRepository()
+        defer { try? FileManager.default.removeItem(at: repository) }
+        try "hello\n".write(to: repository.appendingPathComponent("visible.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "visible.txt"], cwd: repository)
+        _ = try await Process.git(["commit", "-m", "add visible file"], cwd: repository)
+
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+        let state = makeRemoteGitBackedState(repositoryPath: repository)
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let tab = try #require(acpTabs(in: state).first)
+        let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
+
+        await manager.refreshRecentNow()
+
+        let contentsResult = await state.remoteFileContents(sessionId: tab.sessionId, path: "visible.txt")
+        #expect(contentsResult == .success(text: "hello\n", truncated: false))
+    }
+
+    /// `AppState.readRemoteWorktreeFileRaw` must go over the (attempted) SSH
+    /// transport for a worktree whose root is registered in
+    /// `RemoteHostRegistry` — never silently fall back to reading local
+    /// disk. There is no reachable SSH server in this environment, so this
+    /// test can't drive a real end-to-end remote read; instead it proves the
+    /// negative that matters: given a local directory that genuinely
+    /// contains the requested file with known content, reading it through
+    /// the "remote" branch does NOT return that local content. A regression
+    /// that reintroduced a local-disk fallback would make this test fail by
+    /// returning `.data(...)` with the real bytes.
+    ///
+    /// Uses `nonexistent-host.invalid` rather than `127.0.0.1`: `127.0.0.1`
+    /// is a real, routable address that would silently exercise an actual
+    /// local SSH server on any machine with Remote Login enabled, making
+    /// this test pass for the wrong reason (or fail outright) instead of
+    /// proving the no-fallback invariant it's named for. `.invalid` is an
+    /// IANA-reserved TLD (RFC 2606) guaranteed never to resolve, and DNS
+    /// resolution failure is fast — unlike a non-routable IP (e.g.
+    /// TEST-NET-1), which would instead hang for the configured SSH
+    /// `ConnectTimeout` (10-30s) waiting for packets nothing ever answers.
+    @Test func readRemoteWorktreeFileRawDoesNotFallBackToLocalDiskWhenTheHostIsUnreachable() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-remote-raw-read-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let marker = "local content that a remote read must never return\n"
+        try marker.write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+
+        let state = AppState(store: MemoryStore())
+        let outcome = await state.readRemoteWorktreeFileRaw(
+            host: "nonexistent-host.invalid", worktreeRoot: root.path, relativePath: "a.txt")
+
+        switch outcome {
+        case .data(let data):
+            Issue.record("remote read must not fall back to local disk, got local bytes: \(data)")
+        case .notFound, .unreadable, .containmentRejected, .tooLarge:
+            break // any failure kind is fine — the point is it did not read local disk
+        }
+    }
+
+    /// Companion to the above: confirms the fixture actually would have
+    /// produced a misleadingly "successful" local read had the code taken
+    /// the local-disk branch instead — otherwise the test above would pass
+    /// vacuously (any host, reachable or not, "not returning local content"
+    /// is meaningless if there's no local content to begin with).
+    @Test func readRemoteWorktreeFileRawFixtureWouldSucceedIfReadLocally() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-remote-raw-read-control-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let marker = "local content that a remote read must never return\n"
+        try marker.write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+
+        let outcome = await RemoteWorktreeFileAccess.readFileContents(at: root.appendingPathComponent("a.txt"))
+        #expect(outcome == .text(marker))
+    }
+
+    /// `AppState.remoteFileTree` must verify remote containment for a
+    /// worktree registered in `RemoteHostRegistry` before listing a
+    /// non-root directory — never trust `RemoteWorktreeFileAccess.resolve`
+    /// alone, since that check only performs LOCAL symlink resolution and
+    /// is a no-op when nothing exists locally at the worktree's path to
+    /// escape from (the real vulnerability: a symlink inside the SSH
+    /// worktree pointing outside it).
+    ///
+    /// As with `readRemoteWorktreeFileRawDoesNotFallBackToLocalDiskWhenTheHostIsUnreachable`,
+    /// there is no reachable SSH server in this environment, so this can't
+    /// drive a real end-to-end escape. Instead it proves the fix's
+    /// fail-closed behavior directly: `repository` is a REAL local git repo
+    /// with a real "alias" subdirectory tracked in git, so — absent the
+    /// fix — `GitService.fileTreeChildren` would happily list its (real,
+    /// local) contents once `resolve` vacuously passes. Registering
+    /// `repository.path` with `RemoteHostRegistry` (as a real remote
+    /// worktree root would be) makes `worktree.path.isRemoteAlasPath` true,
+    /// so the new containment check runs and must fail closed against the
+    /// unreachable host rather than falling through to the real local
+    /// listing. `nonexistent-host.invalid` is used for the same reason as
+    /// the sibling test: an IANA-reserved TLD guaranteed never to resolve.
+    @Test func remoteFileTreeVerifiesRemoteContainmentBeforeListingANonRootDirectory() async throws {
+        let repository = try await makeRemoteBranchesRepository()
+        defer {
+            RemoteHostRegistry.shared.unregister(root: repository.path)
+            try? FileManager.default.removeItem(at: repository)
+        }
+        let aliasDir = repository.appendingPathComponent("alias")
+        try FileManager.default.createDirectory(at: aliasDir, withIntermediateDirectories: true)
+        try "secret\n".write(to: aliasDir.appendingPathComponent("secret.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "alias"], cwd: repository)
+        _ = try await Process.git(["commit", "-q", "-m", "add alias dir"], cwd: repository)
+
+        RemoteHostRegistry.shared.register(root: repository.path, host: "nonexistent-host.invalid")
+
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+        let state = makeRemoteGitBackedState(repositoryPath: repository)
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let tab = try #require(acpTabs(in: state).first)
+
+        let result = await state.remoteFileTree(sessionId: tab.sessionId, path: "alias")
+
+        guard case let .failure(reason, _) = result else {
+            Issue.record("expected remote containment verification to fail closed, got \(result)")
+            return
+        }
+        #expect(reason == .gitFailed)
+    }
+
+    /// LOCAL-worktree counterpart of the SSH-specific
+    /// `shouldClassifyRemotelyDiscoveredEntry` fix: `GitService.fileTree`'s
+    /// LOCAL root scan can mark a directory `.ignored` even though it holds
+    /// a tracked, force-added descendant (gitignore rules don't un-track a
+    /// path already in the index) — intentional, since the native desktop
+    /// Files tab keeps such a directory visible via
+    /// `FilesTabView.filteredNodes`'s recursive keep-if-has-visible-children
+    /// check. `AppState.remoteFileNodes` used to do a flat, non-recursive
+    /// `compactMap` that dropped the directory outright — since
+    /// `RemoteFileNode` carries no `children`, once dropped from the ROOT
+    /// listing the client could never issue the `listFiles` request that
+    /// would reveal `generated/keep.txt`. This exercises the fix via the
+    /// same seam other tests in this file use for the root-level remote file
+    /// tree (`state.remoteFileTree(sessionId:path: nil)`), against a real
+    /// LOCAL git repo (not registered with `RemoteHostRegistry`), so it
+    /// actually drives `GitService.fileTree`'s local branch end-to-end.
+    @Test func remoteFileTreeSurfacesAnIgnoredRootDirectoryWithATrackedDescendant() async throws {
+        let repository = try await makeRemoteBranchesRepository()
+        defer { try? FileManager.default.removeItem(at: repository) }
+        try "generated/\n".write(
+            to: repository.appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
+        try FileManager.default.createDirectory(
+            at: repository.appendingPathComponent("generated"), withIntermediateDirectories: true)
+        try "tracked\n".write(
+            to: repository.appendingPathComponent("generated/keep.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", ".gitignore"], cwd: repository)
+        _ = try await Process.git(["add", "-f", "generated/keep.txt"], cwd: repository)
+        _ = try await Process.git(["commit", "-q", "-m", "seed"], cwd: repository)
+
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+        let state = makeRemoteGitBackedState(repositoryPath: repository)
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let tab = try #require(acpTabs(in: state).first)
+
+        let result = await state.remoteFileTree(sessionId: tab.sessionId, path: nil)
+
+        guard case let .success(nodes) = result else {
+            Issue.record("expected a successful root file tree listing, got \(result)")
+            return
+        }
+        let generated = try #require(nodes.first { $0.path == "generated" })
+        #expect(generated.kind == "dir")
+    }
+
+    /// End-to-end reproduction of the bug: a binary file that existed at the
+    /// comparison ref but was deleted from the working tree since must still
+    /// surface `.binary`, not an empty "successful" diff (the working-tree
+    /// sniff alone can't tell — the file isn't there to sniff).
+    @Test func remoteFileDiffReportsBinaryForABinaryFileDeletedSinceTheComparisonRef() async throws {
+        let repository = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-remote-binary-delete-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: repository, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: repository) }
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: repository)
+        _ = try await Process.git(["config", "user.email", "test@example.com"], cwd: repository)
+        _ = try await Process.git(["config", "user.name", "Test User"], cwd: repository)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "initial"], cwd: repository)
+
+        try Data([0x89, 0x50, 0x4E, 0x47, 0x00, 0x01, 0x02]).write(
+            to: repository.appendingPathComponent("image.bin"))
+        _ = try await Process.git(["add", "image.bin"], cwd: repository)
+        _ = try await Process.git(["commit", "-q", "-m", "add binary"], cwd: repository)
+        _ = try await Process.git(["branch", "start"], cwd: repository)
+
+        _ = try await Process.git(["rm", "-q", "image.bin"], cwd: repository)
+        _ = try await Process.git(["commit", "-q", "-m", "remove binary"], cwd: repository)
+
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+        let state = makeRemoteGitBackedState(repositoryPath: repository)
+        state.config.worktrees.baseBranch = "start"
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let tab = try #require(acpTabs(in: state).first)
+
+        let diffResult = await state.remoteFileDiff(sessionId: tab.sessionId, path: "image.bin")
+        #expect(diffResult == .failure(reason: .binary, message: nil))
+    }
+
     private func statusCode(port: UInt16, host: String, path: String) async throws -> Int? {
         var req = URLRequest(url: URL(string: "http://127.0.0.1:\(port)\(path)")!)
         req.setValue(host, forHTTPHeaderField: "Host")
@@ -1062,6 +1499,52 @@ struct RemoteAppStateAccessTests {
             name: "main",
             branch: "main",
             path: URL(fileURLWithPath: project.path),
+            status: .clean,
+            lastActivity: Date()
+        )
+        state.projectsManager.insertOptimisticWorktree(worktree)
+        state.selectedWorktreeId = worktree.id
+        state.config.changes.aiToolId = "test-agent"
+        state.agentRegistry = AgentRegistry(
+            builtinState: [:],
+            customs: [
+                AgentDefinition(
+                    id: "test-agent",
+                    displayName: "Test Agent",
+                    binary: "test-agent",
+                    binaryOverride: nil,
+                    promptModeArgs: [],
+                    bypassPermissionsFlag: nil,
+                    extraTerminalArgs: nil,
+                    isBuiltin: false,
+                    isEnabled: true,
+                    builtinLogoAssetName: nil
+                ),
+            ],
+            installedIds: ["test-agent"]
+        )
+        return state
+    }
+
+    /// Like `makeRemoteRenameState()` but points the worktree at a real git
+    /// repository (rather than a bare `/tmp` directory) so `remoteFileDiff`
+    /// / `remoteFileContents`' git-backed checks (ignore status, diffing)
+    /// have a real repo to work against.
+    private func makeRemoteGitBackedState(repositoryPath: URL) -> AppState {
+        let project = ProjectConfig(
+            id: UUID().uuidString,
+            name: "test",
+            path: repositoryPath.path,
+            color: "blue",
+            addedAt: Date()
+        )
+        let state = AppState(store: ProjectMemoryStore(projectsFile: ProjectsFile(projects: [project])))
+        let worktree = Worktree(
+            id: UUID().uuidString,
+            projectId: project.id,
+            name: "main",
+            branch: "main",
+            path: repositoryPath,
             status: .clean,
             lastActivity: Date()
         )
