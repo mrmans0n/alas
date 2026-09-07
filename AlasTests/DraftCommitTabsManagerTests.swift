@@ -119,6 +119,33 @@ struct DraftCommitTabsManagerTests {
         #expect(state.publishCheckpoint == checkpoint)
     }
 
+    @Test func failedCheckpointClearPreservesRetryStateForLaterClose() {
+        let worktreeId = "draft-commit-tabs-mgr-checkpoint-clear-fails"
+        let store = FlakyTabsStore()
+        let manager = TabsManager(store: store)
+        let draft = manager.openOrFocusDraftCommit(worktreeId: worktreeId)
+        let checkpoint = makePublishCheckpoint()
+        manager.updateDraftCommit(worktreeId: worktreeId, tabId: draft.id) { state in
+            state.publishCheckpoint = checkpoint
+        }
+
+        store.failWrites = true
+        #expect(!manager.abandonCommitPublishCheckpoint(worktreeId: worktreeId, tabId: draft.id))
+
+        guard case .draftCommit(let liveState) = manager.tabs(forWorktree: worktreeId).first(where: { $0.id == draft.id }) else {
+            Issue.record("expected live draftCommit tab")
+            return
+        }
+        #expect(liveState.publishCheckpoint == checkpoint)
+
+        store.failWrites = false
+        manager.close(worktreeId: worktreeId, tabId: draft.id)
+
+        let persisted = store.files[Paths.tabsFile(forWorktreeId: worktreeId)]
+        #expect(manager.stashedDraft(worktreeId: worktreeId)?.publishCheckpoint == checkpoint)
+        #expect(persisted?.stashedDraft?.publishCheckpoint == checkpoint)
+    }
+
     @Test func openOrFocusDraftCommit_createsTabFirstTime() {
         let worktreeId = "draft-commit-tabs-mgr-create"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
@@ -460,5 +487,24 @@ struct DraftCommitTabsManagerTests {
             destination: .gg(),
             nextPhase: .push
         )
+    }
+}
+
+private final class FlakyTabsStore: PersistenceStoreProtocol, @unchecked Sendable {
+    var failWrites = false
+    var files: [URL: TabsFile] = [:]
+
+    func write<T: Encodable>(_ value: T, to url: URL) throws {
+        if failWrites {
+            throw NSError(domain: "DraftCommitTabsManagerTests", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "write rejected"])
+        }
+        if let file = value as? TabsFile {
+            files[url] = file
+        }
+    }
+
+    func readIfExists<T: Decodable>(_: T.Type, from url: URL) throws -> T? {
+        files[url] as? T
     }
 }

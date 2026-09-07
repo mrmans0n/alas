@@ -198,6 +198,46 @@ struct CommitPublishLiveOperationsTests {
         ])
     }
 
+    @Test func captureRejectsUndetectablePushDestinationsBeforeCommit() async {
+        let snapshot = ReviewLoopSnapshot(
+            local: ReviewLoopLocalState(branchName: "feature", headSHA: "captured-head", baseBranch: "main",
+                hasWorkingTreeChanges: true, hasStagedChanges: true, aheadCommitCount: 1,
+                hasUpstream: true, upstreamRemoteName: "fork", upstreamBranchName: "review/feature",
+                headRemoteName: "fork", headRemoteOwner: "contributor",
+                upstreamAheadCommitCount: 0, needsPush: true),
+            remote: .init(kind: .github, host: "github.com", owner: "team", repository: "repo",
+                remoteName: "origin", webURL: URL(string: "https://github.com/team/repo")!),
+            reviewRequest: nil, providerAvailable: true, providerAuthenticated: true,
+            providerCapabilities: .githubCLI, errorMessage: nil
+        )
+        var commands: [[String]] = []
+
+        await #expect(throws: CommitPublishWorkflowError.pushDestinationChanged) {
+            try await CommitPublishReviewTarget.capture(
+                snapshot: snapshot, createAsDraft: false, runGit: { args in
+                    commands.append(args)
+                    switch args {
+                    case ["symbolic-ref", "--short", "HEAD"]:
+                        return .init(exitCode: 0, stdout: "feature\n", stderr: "")
+                    case ["rev-parse", "--verify", "HEAD"]:
+                        return .init(exitCode: 0, stdout: "captured-head\n", stderr: "")
+                    case ["remote", "get-url", "--push", "--all", "fork"]:
+                        return .init(exitCode: 0, stdout: "../repo.git\nssh://mirror.example/repo.git\n", stderr: "")
+                    default:
+                        Issue.record("Unexpected Git command: \(args)")
+                        return .init(exitCode: 1, stdout: "", stderr: "")
+                    }
+                }
+            )
+        }
+
+        #expect(commands == [
+            ["symbolic-ref", "--short", "HEAD"],
+            ["rev-parse", "--verify", "HEAD"],
+            ["remote", "get-url", "--push", "--all", "fork"],
+        ])
+    }
+
     @Test func livePushUsesCapturedTargetWithoutUpstreamAndReportsOutput() async throws {
         var target = makeTarget()
         target.pushURL = "ssh://git@github.com/contributor/repo.git"

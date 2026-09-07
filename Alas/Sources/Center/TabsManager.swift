@@ -1087,14 +1087,14 @@ final class TabsManager {
            case .draftCommit(var state) = file.tabs[idx] {
             state.publishCheckpoint = checkpoint
             file.tabs[idx] = .draftCommit(state)
+            try persistThrowing(file, worktreeId: worktreeId)
             byWorktree[worktreeId] = file
-            try persistThrowing(worktreeId)
             return true
         }
         guard file.stashedDraft?.id == tabId else { return false }
         file.stashedDraft?.publishCheckpoint = checkpoint
+        try persistThrowing(file, worktreeId: worktreeId)
         byWorktree[worktreeId] = file
-        try persistThrowing(worktreeId)
         return true
     }
 
@@ -1535,6 +1535,10 @@ final class TabsManager {
 
     private func persistThrowing(_ worktreeId: String) throws {
         guard let file = byWorktree[worktreeId] else { return }
+        try persistThrowing(file, worktreeId: worktreeId)
+    }
+
+    private func persistThrowing(_ file: TabsFile, worktreeId: String) throws {
         try store.write(file, to: tabsFile(forWorktreeId: worktreeId))
     }
 

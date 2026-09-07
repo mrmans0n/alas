@@ -297,6 +297,7 @@ struct CommitPublishReviewTarget: Codable, Equatable, Sendable {
         local: ReviewLoopLocalState
     ) throws {
         let expectedOwner = local.headRemoteOwner ?? snapshotRemote.owner
+        var matchedCodeHostDestination = false
         for url in urls {
             guard let destination = CodeHostRemoteDetector.detect(from: [GitRemote(name: remoteName, url: url)]) else {
                 continue
@@ -308,6 +309,10 @@ struct CommitPublishReviewTarget: Codable, Equatable, Sendable {
             else {
                 throw CommitPublishWorkflowError.pushDestinationChanged
             }
+            matchedCodeHostDestination = true
+        }
+        guard matchedCodeHostDestination else {
+            throw CommitPublishWorkflowError.pushDestinationChanged
         }
     }
 }
