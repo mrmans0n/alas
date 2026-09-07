@@ -617,11 +617,48 @@ struct RemoteWebAssetTests {
         #expect(refreshBody.contains("pendingExpandedPathsRefresh = true;"))
         #expect(!refreshBody.contains("expandedPaths()"))
         let fileTreeBody = try #require(
-            js.range(of: #"case "fileTree": {"#).map { js[$0.lowerBound...].prefix(1200) })
+            js.range(of: #"case "fileTree": {"#).map { js[$0.lowerBound...].prefix(3000) })
         #expect(fileTreeBody.contains("changesTree.applyNodes("))
         #expect(fileTreeBody.range(of: "changesTree.applyNodes(")!.lowerBound
             < fileTreeBody.range(of: "changesTree.expandedPaths()")!.lowerBound)
-        #expect(js.contains("if (msg.path === undefined || msg.path === null) pendingExpandedPathsRefresh = false;"))
+        let fileTreeFailedBody = try #require(
+            js.range(of: #"case "fileTreeFailed":"#).map { js[$0.lowerBound...].prefix(300) })
+        #expect(fileTreeFailedBody.contains("pendingExpandedPathsRefresh = false;"))
+    }
+
+    /// Regression: refreshing several expanded directories in one
+    /// `refreshFileTree()` batch succeeds or fails per directory. The
+    /// `fileTree` success handler used to unconditionally hide the shared
+    /// error banner, so ONE sibling directory succeeding wiped out the
+    /// error a DIFFERENT sibling's failure had just shown — leaving that
+    /// failed directory's stale cached children on screen with no
+    /// indication anything went wrong. The banner must only clear once
+    /// every request in the batch has resolved AND none of them failed.
+    @Test func remoteWebPreservesTheFileErrorBannerAcrossASiblingDirectorysSuccessInTheSameRefreshBatch() throws {
+        let js = try asset("app.js")
+        #expect(js.contains("let expandedPathsRefreshInFlight = 0;"))
+        #expect(js.contains("let expandedPathsRefreshHadFailure = false;"))
+
+        // The unconditional top-of-case hide (any successful `fileTree`
+        // response, root or not, immediately clearing the banner) is gone.
+        #expect(!js.contains("""
+        $("file-error").classList.add("hidden");
+              const treeKey = msg.path === undefined || msg.path === null ? "" : msg.path;
+        """))
+
+        let fileTreeBody = try #require(
+            js.range(of: #"case "fileTree": {"#).map { js[$0.lowerBound...].prefix(3000) })
+        // Replaced by a gate that gives up clearing unless every in-flight
+        // sibling has resolved without a failure.
+        #expect(fileTreeBody.contains("expandedPathsRefreshInFlight -= 1;"))
+        #expect(fileTreeBody.contains("expandedPathsRefreshInFlight === 0 && !expandedPathsRefreshHadFailure"))
+        #expect(fileTreeBody.contains("expandedPathsRefreshInFlight = expandedPaths.length;"))
+        #expect(fileTreeBody.contains("expandedPathsRefreshHadFailure = false;"))
+
+        let fileTreeFailedBody = try #require(
+            js.range(of: #"case "fileTreeFailed":"#).map { js[$0.lowerBound...].prefix(500) })
+        #expect(fileTreeFailedBody.contains("expandedPathsRefreshInFlight -= 1;"))
+        #expect(fileTreeFailedBody.contains("expandedPathsRefreshHadFailure = true;"))
     }
 
     // Regression (final whole-branch review, finding 4): a `listChanges` per

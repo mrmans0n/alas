@@ -876,40 +876,44 @@ fn fs_line_counts(state: &HelperState, params: Option<Value>) -> Result<Value, H
     let mut entries = Vec::with_capacity(params.paths.len());
     for relative in params.paths {
         let requested = root.join(&relative);
-        let requested_str = requested.to_string_lossy().into_owned();
         // Git's blob for a symlink IS the link's target path string, never
         // the target's own file content — `git add`/`diff --numstat` never
-        // follow the link. Checked on the ORIGINAL (pre-containment) path:
-        // `contained_existing_path` below resolves through symlinks via
-        // `std::fs::canonicalize`, so by the time `path` comes back there
-        // is no way to tell the request was ever a symlink at all.
-        let is_symlink = std::fs::symlink_metadata(&requested)
-            .map(|meta| meta.file_type().is_symlink())
-            .unwrap_or(false);
+        // follow the link. Checked, and containment-validated, BEFORE ever
+        // calling `contained_existing_path` below: that call canonicalizes
+        // through the link to its TARGET, which is wrong on two counts for
+        // a symlink — a dangling target fails canonicalize entirely
+        // (silently dropping the entry, which the Changes list then shows
+        // as `+0`), and a target outside every registered root fails
+        // containment and aborts this whole request, even though reading
+        // the link's own destination string never touches that target at
+        // all. Containment here is validated against the LINK'S OWN
+        // location instead (`contained_symlink_path`, whose canonical
+        // parent is what has to land inside a root — the final,
+        // potentially-symlink component is deliberately left unresolved).
+        if let Ok(symlink_meta) = std::fs::symlink_metadata(&requested) {
+            if symlink_meta.file_type().is_symlink() {
+                let linked = contained_symlink_path(state, &requested)?;
+                let target = std::fs::read_link(&linked)
+                    .map_err(|error| jsonrpc_error(-32020, format!("read_link failed: {error}")))?;
+                let target = target.to_string_lossy();
+                let newlines = target.matches('\n').count() as u64;
+                let count = if target.is_empty() {
+                    0
+                } else if target.ends_with('\n') {
+                    newlines
+                } else {
+                    newlines + 1
+                };
+                entries.push(json!({ "path": relative, "lineCount": count }));
+                continue;
+            }
+        }
+        let requested_str = requested.to_string_lossy().into_owned();
         let path = match contained_existing_path(state, &requested_str) {
             Ok(path) => path,
             Err(error) if error.code == -32021 => continue,
             Err(error) => return Err(error),
         };
-        if is_symlink {
-            // Containment for the ultimate TARGET was already verified
-            // above (`contained_existing_path`'s canonical resolution must
-            // land inside a registered root); what's counted here is the
-            // LINK'S OWN target string, never the target's contents.
-            let target = std::fs::read_link(&requested)
-                .map_err(|error| jsonrpc_error(-32020, format!("read_link failed: {error}")))?;
-            let target = target.to_string_lossy();
-            let newlines = target.matches('\n').count() as u64;
-            let count = if target.is_empty() {
-                0
-            } else if target.ends_with('\n') {
-                newlines
-            } else {
-                newlines + 1
-            };
-            entries.push(json!({ "path": relative, "lineCount": count }));
-            continue;
-        }
         let metadata = std::fs::metadata(&path)
             .map_err(|error| jsonrpc_error(-32020, format!("metadata failed: {error}")))?;
         if !metadata.is_file() {
@@ -2075,6 +2079,38 @@ fn contained_existing_path(state: &HelperState, path: &str) -> Result<PathBuf, H
     }
 }
 
+/// Containment for a symlink's OWN location, not wherever it points.
+/// `contained_existing_path` canonicalizes all the way through to the
+/// TARGET, which is wrong for an operation (like reading `read_link`'s
+/// destination string) that never actually touches the target: a dangling
+/// target fails that canonicalize outright, and a target outside every
+/// registered root fails containment even though nothing there is ever
+/// read. Canonicalizing just the PARENT directory resolves any symlinks in
+/// the ancestry (as intended) while deliberately leaving the final
+/// component — the symlink itself — untouched, then re-joins its file name
+/// onto that canonical parent.
+fn contained_symlink_path(state: &HelperState, path: &Path) -> Result<PathBuf, HelperError> {
+    if state.subscriptions.is_empty() {
+        return Err(jsonrpc_error(-32022, "no registered roots"));
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| jsonrpc_error(-32020, "path has no parent"))?;
+    let canonical_parent = std::fs::canonicalize(parent)
+        .map_err(|error| jsonrpc_error(-32020, format!("parent failed: {error}")))?;
+    if !state
+        .subscriptions
+        .values()
+        .any(|root| canonical_parent.starts_with(root))
+    {
+        return Err(jsonrpc_error(-32023, "path outside registered roots"));
+    }
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| jsonrpc_error(-32020, "path has no file name"))?;
+    Ok(canonical_parent.join(file_name))
+}
+
 fn contained_write_path(state: &HelperState, path: &str) -> Result<PathBuf, HelperError> {
     if state.subscriptions.is_empty() {
         return Err(jsonrpc_error(-32022, "no registered roots"));
@@ -2686,6 +2722,88 @@ mod tests {
             json!([{"path": "link.txt", "lineCount": 1}])
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A dangling symlink (target doesn't exist) still has a real blob in
+    /// git's object model — the link's own destination string — counted
+    /// the same way as one whose target exists. `contained_existing_path`
+    /// would canonicalize straight through to the (missing) target and
+    /// fail outright; symlink handling must run BEFORE that call, using
+    /// containment on the link's own location instead.
+    #[test]
+    fn line_counts_count_a_dangling_symlink_as_its_target_path_string() {
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-stats-dangling-symlink-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        std::os::unix::fs::symlink(
+            root.join("does-not-exist.txt"),
+            root.join("broken-link.txt"),
+        )
+        .expect("symlink");
+
+        let mut state = HelperState::default();
+        state.subscriptions.insert(
+            "1".to_string(),
+            std::fs::canonicalize(&root).expect("canonical root"),
+        );
+        let counts = fs_line_counts(
+            &state,
+            Some(json!({
+                "root": root.display().to_string(),
+                "paths": ["broken-link.txt"]
+            })),
+        )
+        .expect("line counts");
+        assert_eq!(
+            counts["entries"],
+            json!([{"path": "broken-link.txt", "lineCount": 1}])
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A symlink pointing OUTSIDE every registered root is still safe to
+    /// count — reading `read_link`'s destination string never touches the
+    /// target at all — so this must succeed rather than aborting the whole
+    /// request the way `contained_existing_path`'s target-following
+    /// containment check would.
+    #[test]
+    fn line_counts_count_a_symlink_pointing_outside_every_registered_root() {
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-stats-outside-symlink-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        let outside = std::env::temp_dir().join(format!(
+            "alas-helper-stats-outside-target-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        std::fs::write(&outside, "secret\ncontent\n").expect("outside target");
+        std::os::unix::fs::symlink(&outside, root.join("outside-link.txt")).expect("symlink");
+
+        let mut state = HelperState::default();
+        state.subscriptions.insert(
+            "1".to_string(),
+            std::fs::canonicalize(&root).expect("canonical root"),
+        );
+        let counts = fs_line_counts(
+            &state,
+            Some(json!({
+                "root": root.display().to_string(),
+                "paths": ["outside-link.txt"]
+            })),
+        )
+        .expect("line counts");
+        assert_eq!(
+            counts["entries"],
+            json!([{"path": "outside-link.txt", "lineCount": 1}])
+        );
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_file(outside);
     }
 
     /// Counting newline bytes alone undercounts a nonempty file whose final

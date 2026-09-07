@@ -345,8 +345,29 @@ function handle(msg) {
       break;
     case "fileTree": {
       if (msg.sessionId !== currentSession) break;
-      $("file-error").classList.add("hidden");
       const treeKey = msg.path === undefined || msg.path === null ? "" : msg.path;
+      if (treeKey === "") {
+        // Starting a fresh refresh (or an ad-hoc root reload): whatever
+        // error a PRIOR cycle left behind no longer applies.
+        $("file-error").classList.add("hidden");
+      } else if (expandedPathsRefreshInFlight > 0) {
+        // Part of an in-flight refreshFileTree() batch — refreshing
+        // several expanded directories independently succeeds or fails
+        // per directory. Clearing the shared banner on every individual
+        // success would hide a still-outstanding (or already failed)
+        // sibling's error while that directory keeps showing its stale
+        // cached children with no indication anything went wrong. Only
+        // clear once every request in this batch has resolved AND none
+        // of them failed.
+        expandedPathsRefreshInFlight -= 1;
+        if (expandedPathsRefreshInFlight === 0 && !expandedPathsRefreshHadFailure) {
+          $("file-error").classList.add("hidden");
+        }
+      } else {
+        // An ad-hoc, user-initiated directory expansion outside any
+        // refresh batch — its own success clearing the banner is fine.
+        $("file-error").classList.add("hidden");
+      }
       if (msg.truncated) fileTreeTruncatedPaths.add(treeKey);
       else fileTreeTruncatedPaths.delete(treeKey);
       changesTree.applyNodes(msg.path === undefined ? null : msg.path, msg.nodes || []);
@@ -359,7 +380,10 @@ function handle(msg) {
       // fails, leaving a stale error banner over the freshly refreshed tree.
       if (treeKey === "" && pendingExpandedPathsRefresh) {
         pendingExpandedPathsRefresh = false;
-        for (const path of changesTree.expandedPaths()) {
+        const expandedPaths = changesTree.expandedPaths();
+        expandedPathsRefreshInFlight = expandedPaths.length;
+        expandedPathsRefreshHadFailure = false;
+        for (const path of expandedPaths) {
           send({ type: "listFiles", sessionId: currentSession, path });
         }
       }
@@ -368,7 +392,12 @@ function handle(msg) {
     }
     case "fileTreeFailed":
       if (msg.sessionId !== currentSession) break;
-      if (msg.path === undefined || msg.path === null) pendingExpandedPathsRefresh = false;
+      if (msg.path === undefined || msg.path === null) {
+        pendingExpandedPathsRefresh = false;
+      } else if (expandedPathsRefreshInFlight > 0) {
+        expandedPathsRefreshInFlight -= 1;
+        expandedPathsRefreshHadFailure = true;
+      }
       showFileError(fileAccessMessage(msg.reason, null));
       break;
     case "fileContents":
@@ -544,6 +573,15 @@ function requestChanges() {
 // `fileTree` case for why the expanded-descendant requests wait for it
 // instead of going out in the same burst as the root request.
 let pendingExpandedPathsRefresh = false;
+// Number of expanded-directory `listFiles` requests still outstanding for
+// the CURRENT refresh batch (0 when no batch is in flight), and whether any
+// of them has failed so far — together these let the `fileTree`/
+// `fileTreeFailed` handlers clear the shared error banner only once every
+// sibling directory in the batch has resolved AND none of them failed,
+// instead of one sibling's success wiping out another's still-visible
+// failure.
+let expandedPathsRefreshInFlight = 0;
+let expandedPathsRefreshHadFailure = false;
 
 function refreshFileTree() {
   if (!currentSession) return;
