@@ -8074,6 +8074,15 @@ extension AppState: RemoteSessionsProvider {
                 existsOnDisk = false
                 onDiskLooksBinary = false
             }
+        } else if RemoteWorktreeFileAccess.isSymlink(at: url) {
+            // A symlink's git-tracked "content" is its destination path
+            // string, never the target's bytes — never binary in any
+            // meaningful sense. `looksBinaryOnDisk` opens through the link
+            // to sniff the TARGET's bytes, which could otherwise leak
+            // whether an ignored/secret target looks binary; short-circuit
+            // before ever following it.
+            existsOnDisk = true
+            onDiskLooksBinary = false
         } else {
             existsOnDisk = FileManager.default.fileExists(atPath: url.path)
             onDiskLooksBinary = await RemoteWorktreeFileAccess.looksBinaryOnDisk(at: url)
@@ -8191,19 +8200,17 @@ extension AppState: RemoteSessionsProvider {
         else {
             return .failure(reason: .pathRejected, message: nil)
         }
-        // `resolve` returns the UNRESOLVED candidate URL, so this checks the
-        // alias itself (lstat), not whatever it points to. A tracked
-        // symlink whose own name isn't ignored but whose target is (e.g.
-        // `public-env -> .env`) would otherwise pass `isPathIgnored` below
-        // and then have its target's content served transparently, first
-        // by the on-disk binary sniff and then by the `git diff` subprocess
-        // itself resolving the link at the OS level. Reject ANY local
-        // symlink outright rather than trying to resolve-and-recheck the
-        // target — the same choice already made for `.git` symlink aliases
-        // and for the SSH read path's `.symlink` outcome.
-        if !worktree.path.isRemoteAlasPath, RemoteWorktreeFileAccess.isSymlink(at: url) {
-            return .failure(reason: .notFound, message: nil)
-        }
+        // Unlike a direct content read, a symlink is safe to DIFF: git
+        // tracks a symlink's blob as its destination path STRING, never
+        // the target's content, and `git diff` reads that side via
+        // `lstat`/`readlink` — it never opens through the link at the OS
+        // level (verified empirically: a changed symlink's diff shows only
+        // the old/new destination strings). So a tracked symlink whose own
+        // name isn't ignored but whose target is (e.g. `public-env ->
+        // .env`) can't leak the target's content through `git diff` itself
+        // — the one place that WOULD leak it is the on-disk binary sniff
+        // below, which `isDiffTargetBinary` guards against by special-
+        // casing a symlink path before ever following it.
         let git = GitService()
         do {
             let commits = try await git.commitsAhead(
@@ -8228,26 +8235,6 @@ extension AppState: RemoteSessionsProvider {
                 comparisonRef: commits.comparisonRef, git: git
             ) {
                 return .failure(reason: .binary, message: nil)
-            }
-            // Re-check the symlink alias immediately before the actual
-            // read, rather than relying solely on the check made at the top
-            // of this function. `git.diff` below spawns an external `git`
-            // subprocess that opens `normalizedPath` itself, at the OS
-            // level, from a path STRING — there is no file descriptor to
-            // thread through a subprocess boundary the way
-            // `RemoteWorktreeFileAccess.readFileContents` now does for
-            // direct content reads, so this specific read can't be made
-            // fully atomic with its containment check without a much larger
-            // change (e.g. piping the file through our own already-open,
-            // already-validated descriptor instead of letting `git diff`
-            // touch the path itself). Moving the recheck to just before the
-            // subprocess spawn — after `isPathIgnored`, `commitsAhead`, and
-            // `isDiffTargetBinary` have all already run — substantially
-            // narrows the TOCTOU window (from "the whole async pipeline
-            // above" down to "the gap between this check and the subprocess
-            // spawn") without closing it completely.
-            if !worktree.path.isRemoteAlasPath, RemoteWorktreeFileAccess.isSymlink(at: url) {
-                return .failure(reason: .notFound, message: nil)
             }
             let parsed = try await git.diff(
                 worktreePath: worktree.path,

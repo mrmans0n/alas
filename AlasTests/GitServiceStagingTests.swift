@@ -100,6 +100,28 @@ struct GitServiceStagingTests {
         #expect(status.allSatisfy { $0.status == "A" && $0.stage == .unstaged })
     }
 
+    /// An "AM" path (staged, then further modified in the working tree) has
+    /// TWO status() entries — one per stage — and each must report its OWN
+    /// correct metric: the staged entry reflects ONLY what's in the index
+    /// (1 line here), the unstaged entry reflects the WHOLE current working
+    /// tree (2 lines). Before this fix, a single numstat call (against the
+    /// whole working tree, with no `--cached` counterpart) fed BOTH
+    /// entries the same whole-tree count, so a staged-only consumer (e.g.
+    /// a draft-commit summary) over-reported what was actually staged.
+    @Test func statusReportsIndexOnlyMetricsForTheStagedSideOfAnAMFile() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try writeFile(repo, "a.txt", "line1\n")
+        _ = try await Process.git(["add", "a.txt"], cwd: repo)
+        try writeFile(repo, "a.txt", "line1\nline2\n")
+
+        let status = try await GitService().status(worktreePath: repo)
+        let staged = try #require(status.first { $0.path == "a.txt" && $0.stage == .staged })
+        let unstaged = try #require(status.first { $0.path == "a.txt" && $0.stage == .unstaged })
+        #expect(staged.add == 1)
+        #expect(unstaged.add == 2)
+    }
+
     @Test func unstageAllClearsIndex() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }

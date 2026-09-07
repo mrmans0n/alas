@@ -1130,7 +1130,7 @@ struct RemoteAppStateAccessTests {
     /// which is the whole point of a symlink alias — so the read/diff path
     /// itself must independently reject any symlink rather than trusting
     /// the ignore check alone.
-    @Test func remoteFileContentsAndDiffRejectATrackedSymlinkAliasingAGitignoredTarget() async throws {
+    @Test func remoteFileContentsRejectsButDiffSafelyShowsATrackedSymlinkAliasingAGitignoredTarget() async throws {
         let repository = try await makeRemoteBranchesRepository()
         defer { try? FileManager.default.removeItem(at: repository) }
         try ".env\n".write(
@@ -1150,6 +1150,12 @@ struct RemoteAppStateAccessTests {
             }
         }
         let state = makeRemoteGitBackedState(repositoryPath: repository)
+        // "feature/remote" still points at the initial commit, from before
+        // public-env existed — comparing against it makes public-env show
+        // up as a genuinely ADDED path in the diff, exercising the actual
+        // "does this leak secret content" question instead of trivially
+        // passing on an empty (nothing-changed-since-HEAD) diff.
+        state.config.worktrees.baseBranch = "feature/remote"
         let worktreeId = try #require(state.selectedWorktreeId)
         cleanupWorktreeId = worktreeId
         state.openNewACPSession(agentID: "test-agent")
@@ -1165,12 +1171,18 @@ struct RemoteAppStateAccessTests {
             Issue.record("secret content must never be served through a symlink alias, got: \(text)")
         }
 
+        // Unlike a direct content read, a DIFF of a symlink is safe: git
+        // tracks a symlink's blob as its destination path string only,
+        // never the target's content — this must SUCCEED and show `.env`
+        // (the destination), never the secret token inside it.
         let diffResult = await state.remoteFileDiff(sessionId: tab.sessionId, path: "public-env")
-        #expect(diffResult == .failure(reason: .notFound, message: nil))
-        if case .success(let hunks, _, _) = diffResult {
-            let text = hunks.flatMap(\.lines).map(\.text).joined()
-            #expect(!text.contains("super-secret"), "secret content must never be served through a symlink alias diff")
+        guard case let .success(hunks, _, _) = diffResult else {
+            Issue.record("expected a successful symlink diff, got \(diffResult)")
+            return
         }
+        let text = hunks.flatMap(\.lines).map(\.text).joined()
+        #expect(text.contains(".env"))
+        #expect(!text.contains("super-secret"), "secret content must never be served through a symlink alias diff")
     }
 
     @Test func remoteFileContentsAndDiffServeATrackedFileNormally() async throws {

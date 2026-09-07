@@ -410,33 +410,54 @@ extension GitService {
     /// `status()` (used verbatim by the desktop Changes panel, which shows
     /// separate Staged/Unstaged sections) returns TWO entries for a path
     /// that's both staged and further modified in the working tree — one
-    /// per stage (e.g. an "AM" file). This function's ref-resolved path
-    /// above already hardcodes `stage: .unstaged` for every entry, since
-    /// stage isn't meaningful when comparing against a base commit instead
-    /// of the index; the nil-ref fallback (the only caller of this
-    /// function) needs the same collapsing, or the remote Changes list
-    /// renders a duplicate row for the path and double-counts its (now
-    /// whole-working-tree, per the numstat fix above) add/del total across
-    /// both entries when a caller sums them.
+    /// per stage (e.g. an "AM" file), each with its OWN correct metric
+    /// (`status()` computes a separate index-only numstat for the staged
+    /// side and a whole-working-tree one for the unstaged side). This
+    /// function's ref-resolved path above already hardcodes `stage:
+    /// .unstaged` for every entry, since stage isn't meaningful when
+    /// comparing against a base commit instead of the index; the nil-ref
+    /// fallback (the only caller of this function) needs the same
+    /// collapsing, or the remote Changes list renders a duplicate row for
+    /// the path.
     ///
-    /// On the unborn branch this fallback is reached for, the index side of
-    /// such a pair is always "added" (there is no HEAD for it to be
-    /// anything else relative to), so the staged entry — not the unstaged
-    /// one, which would misleadingly read "M" as if a base version existed
-    /// — is kept whenever a path has both.
+    /// The merged row takes its IDENTITY (status/renameFrom/conflict) from
+    /// the staged side — on the unborn branch this fallback is reached
+    /// for, the index side of such a pair is always "added" (there is no
+    /// HEAD for it to be anything else relative to), so the unstaged
+    /// sibling would misleadingly read "M" as if a base version existed —
+    /// but its METRICS from the unstaged side, which reflect the WHOLE
+    /// working tree, matching what `remoteFileDiff` actually renders for
+    /// this single-row-per-path list. Using the staged side's own
+    /// (correctly index-only) metrics here instead would undercount
+    /// relative to that diff view for a file staged and then further
+    /// edited.
     static func collapsingStagedAndUnstagedEntries(_ files: [ChangedFile]) -> [ChangedFile] {
-        var byPath: [String: ChangedFile] = [:]
+        var staged: [String: ChangedFile] = [:]
+        var unstaged: [String: ChangedFile] = [:]
         var order: [String] = []
         for file in files {
-            if let existing = byPath[file.path] {
-                if existing.stage != .staged, file.stage == .staged {
-                    byPath[file.path] = file
-                }
-            } else {
-                byPath[file.path] = file
+            if staged[file.path] == nil, unstaged[file.path] == nil {
                 order.append(file.path)
             }
+            if file.stage == .staged {
+                staged[file.path] = file
+            } else {
+                unstaged[file.path] = file
+            }
         }
-        return order.compactMap { byPath[$0] }
+        return order.map { path in
+            switch (staged[path], unstaged[path]) {
+            case (let s?, let u?):
+                return ChangedFile(
+                    path: path, status: s.status, stage: s.stage,
+                    add: u.add, del: u.del, renameFrom: s.renameFrom, conflict: s.conflict)
+            case (let s?, nil):
+                return s
+            case (nil, let u?):
+                return u
+            case (nil, nil):
+                preconditionFailure("path \(path) tracked in `order` without a staged or unstaged entry")
+            }
+        }
     }
 }

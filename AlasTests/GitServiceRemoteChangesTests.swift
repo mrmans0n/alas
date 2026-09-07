@@ -934,12 +934,21 @@ struct GitServiceRemoteChangesTests {
 
     // MARK: - collapsingStagedAndUnstagedEntries
 
-    @Test func collapsingStagedAndUnstagedEntries_mergesAStagedAndUnstagedPairKeepingTheStagedOne() {
-        let staged = ChangedFile(path: "a.txt", status: "A", stage: .staged, add: 2, del: 0, renameFrom: nil)
+    /// The merged row takes its IDENTITY (status/renameFrom/conflict) from
+    /// the staged side — the unstaged sibling would misleadingly read "M"
+    /// as if a base version existed (there is no HEAD on the unborn branch
+    /// this collapsing exists for) — but its METRICS from the unstaged
+    /// side, which `status()` now computes against the WHOLE working tree,
+    /// matching what `remoteFileDiff` actually renders for the path. The
+    /// staged side's own metrics are index-only (`status()`'s per-stage
+    /// fix) and would undercount here if used for the merged row instead.
+    @Test func collapsingStagedAndUnstagedEntries_mergesAStagedAndUnstagedPairKeepingStagedIdentityAndUnstagedMetrics() {
+        let staged = ChangedFile(path: "a.txt", status: "A", stage: .staged, add: 1, del: 0, renameFrom: nil)
         let unstaged = ChangedFile(path: "a.txt", status: "M", stage: .unstaged, add: 2, del: 0, renameFrom: nil)
-        #expect(GitService.collapsingStagedAndUnstagedEntries([staged, unstaged]) == [staged])
-        // Order of the pair shouldn't matter — the staged entry always wins.
-        #expect(GitService.collapsingStagedAndUnstagedEntries([unstaged, staged]) == [staged])
+        let expected = ChangedFile(path: "a.txt", status: "A", stage: .staged, add: 2, del: 0, renameFrom: nil)
+        #expect(GitService.collapsingStagedAndUnstagedEntries([staged, unstaged]) == [expected])
+        // Order of the pair shouldn't matter.
+        #expect(GitService.collapsingStagedAndUnstagedEntries([unstaged, staged]) == [expected])
     }
 
     @Test func collapsingStagedAndUnstagedEntries_leavesUnrelatedPathsAndSingleEntriesAlone() {

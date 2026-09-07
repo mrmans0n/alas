@@ -132,11 +132,26 @@ extension GitService {
         // Diffing the empty tree WITHOUT `--cached` compares the whole
         // working tree instead, matching that.
         let head = try await hasHead(worktreePath: worktreePath)
-        let numstatArgs: [String] = head
+        // Whole-working-tree metric (staged + unstaged combined) — correct
+        // for `.unstaged` entries, which must reflect the CURRENT on-disk
+        // content of a path regardless of what's staged, matching
+        // `diffAgainstHEAD`'s own all-add diff (see the comment there).
+        let workingTreeNumstatArgs: [String] = head
             ? ["diff", "--numstat", "HEAD"]
             : ["diff", "--numstat", "4b825dc642cb6eb9a060e54bf8d69288fbee4904"]   // canonical empty tree
-        let numstat = try await Process.git(numstatArgs, cwd: worktreePath)
-        let counts = NumstatParser.parse(numstat.stdout)
+        let workingTreeNumstat = try await Process.git(workingTreeNumstatArgs, cwd: worktreePath)
+        let workingTreeCounts = NumstatParser.parse(workingTreeNumstat.stdout)
+        // Index-only metric — correct for `.staged` entries. Without this,
+        // an "AM" path (staged, then further modified in the working tree)
+        // got the SAME whole-working-tree count applied to BOTH its staged
+        // and unstaged rows below, so a staged-only consumer (e.g. a
+        // draft-commit summary) reported the unstaged edit's line count as
+        // if it were already staged.
+        let stagedNumstatArgs: [String] = head
+            ? ["diff", "--cached", "--numstat", "HEAD"]
+            : ["diff", "--cached", "--numstat", "4b825dc642cb6eb9a060e54bf8d69288fbee4904"]
+        let stagedNumstat = try await Process.git(stagedNumstatArgs, cwd: worktreePath)
+        let stagedCounts = NumstatParser.parse(stagedNumstat.stdout)
         let untrackedPaths = entries.filter { $0.add == 0 && $0.del == 0 }.map(\.path)
         let remoteCounts: [String: Int]
         if worktreePath.isRemoteAlasPath, let host = RemoteHostRegistry.shared.host(forPath: worktreePath.path) {
@@ -146,6 +161,7 @@ extension GitService {
         }
 
         for i in entries.indices {
+            let counts = entries[i].stage == .staged ? stagedCounts : workingTreeCounts
             if let c = counts[entries[i].path] {
                 entries[i] = ChangedFile(path: entries[i].path,
                                           status: entries[i].status,
