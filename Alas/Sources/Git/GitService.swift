@@ -110,7 +110,16 @@ extension GitService {
             cwd: worktreePath
         )
         let s = try await statusResult
-        guard s.exitCode == 0 else { return [] }
+        // Unlike `--no-index diff`/`check-ignore`, plain `git status` has no
+        // legitimate nonzero exit for a healthy repo — ANY failure here (a
+        // dropped SSH connection, an invalid/corrupt repository) is fatal
+        // and must propagate. This is a widely shared method (the desktop
+        // Changes panel, the remote nil-ref fallback, `alas` CLI actions);
+        // silently returning `[]` previously meant a genuine failure looked
+        // identical to "nothing has changed" everywhere it's called.
+        guard s.exitCode == 0 else {
+            throw ProcessError.nonZeroExit(s.exitCode, s.stderr)
+        }
         var entries = try StatusParser.parse(s.stdout)
 
         // Numstat needs a base revision. Use HEAD if one exists; on unborn

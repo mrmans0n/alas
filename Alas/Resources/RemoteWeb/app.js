@@ -208,6 +208,7 @@ async function connect() {
     send({ type: "listSessions" });
     if (currentSession) send({ type: "subscribe", sessionId: currentSession });   // re-sync after reconnect
     replayActiveDetailRequest();   // the file/diff request itself doesn't survive a dropped socket
+    replayActiveListRequest();     // ...and neither does a listChanges/root listFiles request
     if (createState.open) {
       createState.error = "";
       requestCreateLists();
@@ -576,6 +577,23 @@ function replayActiveDetailRequest() {
     send({ type: "readFile", sessionId: currentSession, path: top.path });
   } else if (top.tab === "changes") {
     send({ type: "fileDiff", sessionId: currentSession, path: top.path });
+  }
+}
+
+// Same reconnect problem as `replayActiveDetailRequest`, one level up: if
+// the socket drops right after the INITIAL `listChanges`/root `listFiles`
+// request but before its response, `detailStack` is still empty (the user
+// never got past the list level), so `replayActiveDetailRequest` has
+// nothing to replay — the Changes list or Files root would otherwise sit
+// blank/loading indefinitely until the user switches tabs or manually
+// refreshes. Only fires at the list level (`detailStack` empty); once a
+// detail view is open, replaying its request above takes priority.
+function replayActiveListRequest() {
+  if (!currentSession || detailStack.length > 0) return;
+  if (activeTab === "changes") {
+    requestChanges();
+  } else if (activeTab === "files") {
+    send({ type: "listFiles", sessionId: currentSession });
   }
 }
 

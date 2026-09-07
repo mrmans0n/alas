@@ -759,6 +759,29 @@ struct GitServiceRemoteChangesTests {
         #expect(diff.hunks.isEmpty)
     }
 
+    /// `changedFilesAgainstRef`'s nil-ref case (no resolvable base, e.g. an
+    /// unborn branch) falls back to `status(worktreePath:)`. `status` used
+    /// to swallow ANY nonzero `git status` exit into `[]` — a dropped SSH
+    /// connection would then look identical to "nothing has changed"
+    /// instead of surfacing as a failure. Registering a real, but
+    /// unreachable, remote host forces every `git` subprocess for this
+    /// worktree through a failing SSH invocation (`ssh` itself fails fast on
+    /// the invalid TLD, no real network wait), which is exactly the shape of
+    /// failure `status` must now propagate.
+    @Test func changedFilesAgainstRef_propagatesAStatusFailureOnTheNilRefFallback() async throws {
+        let repo = try await makeUnbornRepo()
+        defer {
+            RemoteHostRegistry.shared.unregister(root: repo.path)
+            try? FileManager.default.removeItem(at: repo)
+        }
+        try "fresh\n".write(to: repo.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
+        RemoteHostRegistry.shared.register(root: repo.path, host: "nonexistent-host.invalid")
+
+        await #expect(throws: (any Error).self) {
+            _ = try await GitService().changedFilesAgainstRef(worktreePath: repo, ref: nil)
+        }
+    }
+
     /// A transport failure (disconnected helper, unreachable host) on the
     /// root Files-tree request used to parse as "zero files" — an empty,
     /// misleadingly "successful" repository — because `gitVisibleFilePaths`
