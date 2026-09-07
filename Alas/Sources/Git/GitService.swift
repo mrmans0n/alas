@@ -218,7 +218,21 @@ extension GitService {
         return await Self.parseOffMain(stdout)
     }
 
-    func diffAgainstHEAD(worktreePath: URL, file: String, originalPath: String? = nil) async throws -> ParsedDiff {
+    /// `maxOutputBytes`, when non-nil, bounds the underlying `git diff`
+    /// subprocess's captured stdout the same way
+    /// `GitService+RemoteChanges.diff` bounds its own diff calls — see
+    /// `Process.runCapped`'s doc comment. Left `nil` (the default) for the
+    /// native desktop `DiffTabView` caller: `ParsedDiff` carries no
+    /// truncation state and the desktop UI applies no truncation notice, so
+    /// silently capping there would present a partial diff as complete with
+    /// no indication anything was cut. Only the remote request path (this
+    /// method's OTHER caller, `GitService+RemoteChanges.diff`'s nil-ref
+    /// fallback) passes a byte cap, because ITS caller
+    /// (`RemoteWorktreeFileAccess.truncateHunks`) already knows how to cap
+    /// and report truncation on the wire.
+    func diffAgainstHEAD(
+        worktreePath: URL, file: String, originalPath: String? = nil, maxOutputBytes: Int? = nil
+    ) async throws -> ParsedDiff {
         let head = try await hasHead(worktreePath: worktreePath)
         if !head {
             let fileURL = worktreePath.appendingPathComponent(file)
@@ -243,18 +257,14 @@ extension GitService {
             guard exists else {
                 return ParsedDiff(hunks: [])
             }
-            // Capped like the ref-comparison diffs in `GitService+RemoteChanges`:
-            // an ordinary diff is captured in full (the cap sits far above the
-            // wire truncation caps `parseOffMain`'s caller applies), but a
-            // pathologically large file no longer has its ENTIRE diff
-            // buffered and materialized into hunks before those caps get a
-            // chance to trim it down.
-            let result = try await Process.gitCapped(
-                ["diff", "--no-color", "--no-index", "--", "/dev/null", file],
-                cwd: worktreePath,
-                maxOutputBytes: RemoteWorktreeFileAccess.maxDiffSubprocessBytes
-            )
-            guard result.stdoutTruncated || result.exitCode <= 1 else { return ParsedDiff(hunks: []) }
+            let noIndexArgs = ["diff", "--no-color", "--no-index", "--", "/dev/null", file]
+            if let maxOutputBytes {
+                let result = try await Process.gitCapped(noIndexArgs, cwd: worktreePath, maxOutputBytes: maxOutputBytes)
+                guard result.stdoutTruncated || result.exitCode <= 1 else { return ParsedDiff(hunks: []) }
+                return await Self.parseOffMain(result.stdout)
+            }
+            let result = try await Process.git(noIndexArgs, cwd: worktreePath)
+            guard result.exitCode <= 1 else { return ParsedDiff(hunks: []) }
             return await Self.parseOffMain(result.stdout)
         }
 
@@ -264,12 +274,14 @@ extension GitService {
             cwd: worktreePath
         )
         if headBlob.exitCode != 0 {
-            let result = try await Process.gitCapped(
-                ["diff", "--no-color", "--no-index", "--", "/dev/null", file],
-                cwd: worktreePath,
-                maxOutputBytes: RemoteWorktreeFileAccess.maxDiffSubprocessBytes
-            )
-            guard result.stdoutTruncated || result.exitCode <= 1 else { return ParsedDiff(hunks: []) }
+            let noIndexArgs = ["diff", "--no-color", "--no-index", "--", "/dev/null", file]
+            if let maxOutputBytes {
+                let result = try await Process.gitCapped(noIndexArgs, cwd: worktreePath, maxOutputBytes: maxOutputBytes)
+                guard result.stdoutTruncated || result.exitCode <= 1 else { return ParsedDiff(hunks: []) }
+                return await Self.parseOffMain(result.stdout)
+            }
+            let result = try await Process.git(noIndexArgs, cwd: worktreePath)
+            guard result.exitCode <= 1 else { return ParsedDiff(hunks: []) }
             return await Self.parseOffMain(result.stdout)
         }
 
@@ -280,8 +292,11 @@ extension GitService {
         if let originalPath, !originalPath.isEmpty {
             args.append(originalPath)
         }
-        let result = try await Process.gitCapped(
-            args, cwd: worktreePath, maxOutputBytes: RemoteWorktreeFileAccess.maxDiffSubprocessBytes)
+        if let maxOutputBytes {
+            let result = try await Process.gitCapped(args, cwd: worktreePath, maxOutputBytes: maxOutputBytes)
+            return await Self.parseOffMain(result.stdout)
+        }
+        let result = try await Process.git(args, cwd: worktreePath)
         return await Self.parseOffMain(result.stdout)
     }
 

@@ -126,7 +126,9 @@ extension GitService {
             // working tree against HEAD (or /dev/null on an unborn branch),
             // which captures staged AND unstaged changes together, matching
             // what `status` already reflects in the change list.
-            return try await diffAgainstHEAD(worktreePath: worktreePath, file: file)
+            return try await diffAgainstHEAD(
+                worktreePath: worktreePath, file: file,
+                maxOutputBytes: RemoteWorktreeFileAccess.maxDiffSubprocessBytes)
         }
 
         if let originalPath = try await renameSource(worktreePath: worktreePath, ref: ref, file: file) {

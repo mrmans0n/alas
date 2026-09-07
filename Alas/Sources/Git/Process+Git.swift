@@ -472,7 +472,13 @@ extension Process {
 
         return ProcessCappedResult(
             exitCode: process.terminationStatus,
-            stdout: String(data: outAccum.snapshot(), encoding: .utf8) ?? "",
+            // `decodeUTF8DroppingIncompleteTrailingScalar`, not a strict
+            // `String(data:encoding:)`: cutting `outAccum`'s snapshot at
+            // `maxOutputBytes` can land mid-way through a multibyte UTF-8
+            // character, and a strict decode fails CLOSED on that — turning
+            // an otherwise perfectly valid captured prefix into an empty
+            // string and silently presenting a large diff as blank.
+            stdout: decodeUTF8DroppingIncompleteTrailingScalar(outAccum.snapshot()),
             stderr: String(data: errAccum.snapshot(), encoding: .utf8) ?? "",
             stdoutTruncated: truncatedFlag.value
         )
@@ -621,6 +627,26 @@ private func validateWorkingDirectory(_ cwd: URL?) throws {
     guard FileManager.default.fileExists(atPath: cwd.path, isDirectory: &isDirectory), isDirectory.boolValue else {
         throw ProcessError.launchFailed("Working directory does not exist: \(cwd.path)")
     }
+}
+
+/// Decodes `data` as UTF-8, tolerating an incomplete multibyte scalar at the
+/// very end by dropping just that trailing partial sequence rather than
+/// failing the whole decode.
+///
+/// `runCapped` cuts the byte stream at an arbitrary point (`maxOutputBytes`),
+/// which has no reason to land on a UTF-8 character boundary. A UTF-8
+/// sequence is at most 4 bytes, so an incomplete one at the tail is at most
+/// 3 bytes short of complete — trying to drop 0, then 1, then 2, then 3
+/// trailing bytes always finds a valid prefix (in the worst case, dropping
+/// all the way back to the last previously-complete character).
+func decodeUTF8DroppingIncompleteTrailingScalar(_ data: Data) -> String {
+    if let exact = String(data: data, encoding: .utf8) { return exact }
+    for dropCount in 1...3 where dropCount <= data.count {
+        if let decoded = String(data: data.dropLast(dropCount), encoding: .utf8) {
+            return decoded
+        }
+    }
+    return ""
 }
 
 private func terminateProcessWithEscalation(_ process: Process) {

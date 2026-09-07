@@ -211,6 +211,36 @@ struct ProcessGitTests {
         #expect(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "hi")
     }
 
+    /// `maxOutputBytes` cuts the byte stream wherever it happens to land —
+    /// including mid-way through a multibyte UTF-8 character. A strict
+    /// `String(data:encoding:.utf8)` decode fails closed on that, silently
+    /// turning an otherwise valid captured prefix into an empty string.
+    @Test func runCappedDecodesCleanlyWhenTheCapSplitsAMultibyteUTF8Character() async throws {
+        // "😀" (U+1F600) is 4 bytes in UTF-8 (F0 9F 98 80). Ask for exactly
+        // one leading ASCII byte plus the first 2 of those 4 bytes, so the
+        // cap lands inside the character.
+        let result = try await Process.runCapped(
+            "/bin/sh",
+            args: ["-c", "printf 'x\\360\\237\\230'"],   // "x" + 0xF0 0x9F 0x98 (missing the final 0x80)
+            maxOutputBytes: 3
+        )
+        #expect(result.stdout == "x")
+    }
+
+    @Test func decodeUTF8DroppingIncompleteTrailingScalarReturnsCompleteInputUnchanged() {
+        #expect(decodeUTF8DroppingIncompleteTrailingScalar(Data("hello".utf8)) == "hello")
+        #expect(decodeUTF8DroppingIncompleteTrailingScalar(Data()) == "")
+    }
+
+    @Test func decodeUTF8DroppingIncompleteTrailingScalarTrimsATruncatedTrailingCharacter() {
+        let complete = Data("x".utf8) + Data([0xF0, 0x9F, 0x98, 0x80])   // "x😀"
+        // Missing 1, 2, and 3 of the emoji's 4 bytes, respectively.
+        #expect(decodeUTF8DroppingIncompleteTrailingScalar(complete.dropLast(1)) == "x")
+        #expect(decodeUTF8DroppingIncompleteTrailingScalar(complete.dropLast(2)) == "x")
+        #expect(decodeUTF8DroppingIncompleteTrailingScalar(complete.dropLast(3)) == "x")
+        #expect(decodeUTF8DroppingIncompleteTrailingScalar(complete) == "x😀")
+    }
+
     @Test func gitCappedConvenienceCallStillWorks() async throws {
         let result = try await Process.gitCapped(["--version"], maxOutputBytes: 1_000_000)
         #expect(!result.stdoutTruncated)

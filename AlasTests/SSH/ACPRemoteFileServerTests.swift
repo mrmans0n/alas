@@ -1,6 +1,23 @@
 import Foundation
 import Testing
+import Darwin
 @testable import Alas
+
+/// Races `operation` against a timeout so a regression that reintroduces a
+/// blocking read (e.g. `head` against a writerless FIFO) fails the test
+/// loudly and promptly instead of hanging the whole suite.
+private func withTimeout<T: Sendable>(seconds: Double, _ operation: @escaping @Sendable () async -> T) async -> T? {
+    await withTaskGroup(of: T?.self) { group in
+        group.addTask { await operation() }
+        group.addTask {
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            return nil
+        }
+        let result = await group.next() ?? nil
+        group.cancelAll()
+        return result
+    }
+}
 
 struct ACPRemoteFileServerTests {
     private let server = ACPRemoteFileServer(host: "devbox", worktreeRoot: "/srv/repo")
@@ -152,6 +169,29 @@ struct ACPRemoteFileServerTests {
         let result = try await runContainedRead(target: dir.path, root: root.path)
 
         #expect(result.exitCode == 9)
+    }
+
+    /// A FIFO passes the symlink/directory/existence checks above it, so
+    /// without an explicit regular-file check `head` would block
+    /// indefinitely waiting for a writer that never arrives. `mkfifo`
+    /// creates a real named pipe; nothing ever opens it for writing, so a
+    /// regression that drops the `[ -f ]` check would hang this test until
+    /// the timeout — asserted against explicitly so it fails loudly rather
+    /// than hanging the whole suite.
+    @Test func containedReadScriptRejectsAFIFOWithoutBlockingOnHead() async throws {
+        let root = try makeContainedReadRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fifo = root.appendingPathComponent("pipe")
+        #expect(fifo.path.withCString { mkfifo($0, 0o600) } == 0)
+
+        let outcome = await withTimeout(seconds: 5) {
+            try? await runContainedRead(target: fifo.path, root: root.path)
+        }
+        let result = try #require(
+            outcome.flatMap { $0 },
+            "containedReadScript hung on a writerless FIFO instead of returning promptly")
+
+        #expect(result.exitCode == 12)
     }
 
     @Test func containedReadScriptReportsMissingFile() async throws {

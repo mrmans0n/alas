@@ -97,7 +97,9 @@ enum RemotePathContainment {
     /// `containmentExcludingGitProbeCommand`'s own 3/4/5/6/7 (see that
     /// function's doc comment): 8 = resolves to a symlink; 9 = resolves to a
     /// directory; 10 = resolves to something that no longer exists by the
-    /// time the read runs; 11 = `stat` on the resolved path failed.
+    /// time the read runs; 11 = `stat` on the resolved path failed; 12 =
+    /// resolves to something other than a regular file (a FIFO, socket, or
+    /// device — reading one of these would otherwise block indefinitely).
     enum ContainedReadOutcome: Equatable {
         case ok(byteSize: Int, prefix: Data)
         case outsideWorktree
@@ -160,10 +162,18 @@ enum RemotePathContainment {
         // against `maxBytes` — ground truth from this read, not a
         // point-in-time stat — to decide whether to report the file as too
         // large regardless of what the header claims.
+        //
+        // `[ -f ]` rejects anything that isn't a regular file — in
+        // particular a FIFO, which passes every check above it (not a
+        // symlink, not a directory, exists) and then blocks `head`
+        // indefinitely waiting for a writer that will never come, stalling
+        // this request (and, since the connection serializes messages, every
+        // later one) until the process watchdog eventually kills it.
         return probeWithoutFinalExit + """
         [ -L "$full_phys" ] && exit 8; \
         [ -d "$full_phys" ] && exit 9; \
         [ -e "$full_phys" ] || exit 10; \
+        [ -f "$full_phys" ] || exit 12; \
         size=$(stat -c %s -- "$full_phys" 2>/dev/null || stat -f %z "$full_phys") || exit 11; \
         echo "$size"; \
         head -c \(maxBytes + 1) "$full_phys"
