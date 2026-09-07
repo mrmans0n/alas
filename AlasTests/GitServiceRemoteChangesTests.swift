@@ -740,8 +740,13 @@ struct GitServiceRemoteChangesTests {
         try "line1\nline2\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
 
         let files = try await GitService().changedFilesAgainstRef(worktreePath: repo, ref: nil)
+        // Exactly one row for "a.txt" — an "AM" file (staged, then further
+        // edited) must not appear twice just because `status()` itself
+        // tracks stage separately.
+        #expect(files.filter { $0.path == "a.txt" }.count == 1)
         let entry = try #require(files.first { $0.path == "a.txt" })
         #expect(entry.add == 2)
+        #expect(entry.status == "A")
     }
 
     /// `diffAgainstHEAD`'s unborn-HEAD existence check used to be
@@ -855,6 +860,22 @@ struct GitServiceRemoteChangesTests {
         #expect(parsed.ordered == ["new.txt", "copy.txt"])
         #expect(parsed.status == ["new.txt": "R", "copy.txt": "C"])
         #expect(parsed.original == ["new.txt": "old.txt", "copy.txt": "base.txt"])
+    }
+
+    // MARK: - collapsingStagedAndUnstagedEntries
+
+    @Test func collapsingStagedAndUnstagedEntries_mergesAStagedAndUnstagedPairKeepingTheStagedOne() {
+        let staged = ChangedFile(path: "a.txt", status: "A", stage: .staged, add: 2, del: 0, renameFrom: nil)
+        let unstaged = ChangedFile(path: "a.txt", status: "M", stage: .unstaged, add: 2, del: 0, renameFrom: nil)
+        #expect(GitService.collapsingStagedAndUnstagedEntries([staged, unstaged]) == [staged])
+        // Order of the pair shouldn't matter — the staged entry always wins.
+        #expect(GitService.collapsingStagedAndUnstagedEntries([unstaged, staged]) == [staged])
+    }
+
+    @Test func collapsingStagedAndUnstagedEntries_leavesUnrelatedPathsAndSingleEntriesAlone() {
+        let a = ChangedFile(path: "a.txt", status: "A", stage: .staged, add: 1, del: 0, renameFrom: nil)
+        let b = ChangedFile(path: "b.txt", status: "M", stage: .unstaged, add: 1, del: 0, renameFrom: nil)
+        #expect(GitService.collapsingStagedAndUnstagedEntries([a, b]) == [a, b])
     }
 
     // MARK: - addedLineCount

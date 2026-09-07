@@ -9,7 +9,7 @@ extension GitService {
     /// A nil `ref` (unborn branch, no resolvable base) falls back to `status`.
     func changedFilesAgainstRef(worktreePath: URL, ref: String?) async throws -> [ChangedFile] {
         guard let ref, !ref.isEmpty else {
-            return try await status(worktreePath: worktreePath)
+            return Self.collapsingStagedAndUnstagedEntries(try await status(worktreePath: worktreePath))
         }
 
         // `-c core.quotePath=false` plus `-z` keep non-ASCII (and
@@ -317,5 +317,38 @@ extension GitService {
         return text.hasSuffix("\n")
             ? text.split(separator: "\n", omittingEmptySubsequences: false).count - 1
             : text.split(separator: "\n", omittingEmptySubsequences: false).count
+    }
+
+    /// `status()` (used verbatim by the desktop Changes panel, which shows
+    /// separate Staged/Unstaged sections) returns TWO entries for a path
+    /// that's both staged and further modified in the working tree — one
+    /// per stage (e.g. an "AM" file). This function's ref-resolved path
+    /// above already hardcodes `stage: .unstaged` for every entry, since
+    /// stage isn't meaningful when comparing against a base commit instead
+    /// of the index; the nil-ref fallback (the only caller of this
+    /// function) needs the same collapsing, or the remote Changes list
+    /// renders a duplicate row for the path and double-counts its (now
+    /// whole-working-tree, per the numstat fix above) add/del total across
+    /// both entries when a caller sums them.
+    ///
+    /// On the unborn branch this fallback is reached for, the index side of
+    /// such a pair is always "added" (there is no HEAD for it to be
+    /// anything else relative to), so the staged entry — not the unstaged
+    /// one, which would misleadingly read "M" as if a base version existed
+    /// — is kept whenever a path has both.
+    static func collapsingStagedAndUnstagedEntries(_ files: [ChangedFile]) -> [ChangedFile] {
+        var byPath: [String: ChangedFile] = [:]
+        var order: [String] = []
+        for file in files {
+            if let existing = byPath[file.path] {
+                if existing.stage != .staged, file.stage == .staged {
+                    byPath[file.path] = file
+                }
+            } else {
+                byPath[file.path] = file
+                order.append(file.path)
+            }
+        }
+        return order.compactMap { byPath[$0] }
     }
 }

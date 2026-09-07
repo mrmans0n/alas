@@ -614,17 +614,23 @@ extension GitService {
     static func sliceDiffForFile(_ raw: String, file: String) -> String {
         let lines = raw.components(separatedBy: "\n")
         let bMarker = "b/\(file)"
+        // Git quotes AND escapes the whole `b/<path>` header token (wrapping
+        // it in `"..."`) when the path contains a byte that always needs
+        // escaping — a tab, newline, double quote, or backslash — REGARDLESS
+        // of `core.quotePath` (that setting only suppresses quoting for
+        // non-ASCII bytes; every caller of this function already passes
+        // `-c core.quotePath=false`, which covers that case, but not this
+        // one). Without also matching that quoted form, a renamed/copied
+        // destination containing one of those bytes would never match any
+        // section here, silently returning an empty diff despite real hunks.
+        let quotedBMarker = Self.gitEscapedPathIfNeeded(file).map { "\"b/\($0)\"" }
         var sections: [(matches: Bool, lines: [String])] = []
         var current: (matches: Bool, lines: [String])? = nil
         for line in lines {
             if line.hasPrefix("diff --git ") {
                 if let c = current { sections.append(c) }
-                // The header reads `diff --git a/<old> b/<new>`. Check the
-                // b/<...> token by suffix; we already know the new path
-                // doesn't contain whitespace because git emits the raw
-                // path here (no quoting unless the path contains special
-                // chars, which we don't generate in tests / typical use).
                 let matches = line.hasSuffix(" " + bMarker)
+                    || quotedBMarker.map { line.hasSuffix(" " + $0) } == true
                 current = (matches: matches, lines: [line])
             } else if current != nil {
                 current!.lines.append(line)
@@ -633,6 +639,57 @@ extension GitService {
         if let c = current { sections.append(c) }
         let kept = sections.first(where: { $0.matches })?.lines ?? []
         return kept.joined(separator: "\n")
+    }
+
+    /// Mirrors the ESCAPING half of git's `quote_c_style` (not the
+    /// surrounding `"..."` wrapping, which the caller adds) for the bytes
+    /// that always trigger quoting regardless of `core.quotePath`: double
+    /// quote, backslash, and control characters. `core.quotePath=false`
+    /// only suppresses quoting for non-ASCII bytes — irrelevant here, since
+    /// this only handles the bytes that setting does NOT affect. Returns
+    /// nil when `path` contains none of those bytes (git leaves such names
+    /// completely unquoted, matching `sliceDiffForFile`'s plain match).
+    static func gitEscapedPathIfNeeded(_ path: String) -> String? {
+        var needsQuoting = false
+        var bytes: [UInt8] = []
+        for byte in path.utf8 {
+            switch byte {
+            case 0x22:   // "
+                bytes += Array("\\\"".utf8)
+                needsQuoting = true
+            case 0x5C:   // \
+                bytes += Array("\\\\".utf8)
+                needsQuoting = true
+            case 0x07:
+                bytes += Array("\\a".utf8)
+                needsQuoting = true
+            case 0x08:
+                bytes += Array("\\b".utf8)
+                needsQuoting = true
+            case 0x0C:
+                bytes += Array("\\f".utf8)
+                needsQuoting = true
+            case 0x0A:
+                bytes += Array("\\n".utf8)
+                needsQuoting = true
+            case 0x0D:
+                bytes += Array("\\r".utf8)
+                needsQuoting = true
+            case 0x09:
+                bytes += Array("\\t".utf8)
+                needsQuoting = true
+            case 0x0B:
+                bytes += Array("\\v".utf8)
+                needsQuoting = true
+            case 0x00...0x06, 0x0E...0x1F, 0x7F:
+                bytes += Array(String(format: "\\%03o", byte).utf8)
+                needsQuoting = true
+            default:
+                bytes.append(byte)
+            }
+        }
+        guard needsQuoting else { return nil }
+        return String(decoding: bytes, as: UTF8.self)
     }
 
     func fileTree(worktreePath: URL, statusEntries: [ChangedFile]) async throws -> [FileTreeNode] {

@@ -267,6 +267,42 @@ struct CommitDetailsTests {
         #expect(!kept.contains("@@ -1,3 +1,3 @@"))
     }
 
+    /// Real captured output of `git -c core.quotePath=false diff -M -C --
+    /// "na\tme.txt" old.txt` on a rename where the destination contains a
+    /// tab: git quotes+escapes the WHOLE `b/<path>` header token
+    /// (`"b/na\tme.txt"`) regardless of `core.quotePath`, since that
+    /// setting only suppresses quoting for non-ASCII bytes.
+    @Test func sliceDiffForFileMatchesAQuotedHeaderForAPathContainingATab() {
+        let raw = """
+        diff --git a/old.txt "b/na\\tme.txt"
+        similarity index 50%
+        rename from old.txt
+        rename to "na\\tme.txt"
+        index a29bdeb..c0d0fb4 100644
+        --- a/old.txt
+        +++ "b/na\\tme.txt"
+        @@ -1 +1,2 @@
+         line1
+        +line2
+        """
+        let kept = GitService.sliceDiffForFile(raw, file: "na\tme.txt")
+        #expect(kept.contains("@@ -1 +1,2 @@"))
+        #expect(kept.contains("+line2"))
+    }
+
+    @Test func gitEscapedPathIfNeededReturnsNilWhenNoSpecialBytesArePresent() {
+        #expect(GitService.gitEscapedPathIfNeeded("plain.txt") == nil)
+        #expect(GitService.gitEscapedPathIfNeeded("café.txt") == nil)   // non-ASCII: quotePath=false already handles this
+    }
+
+    @Test func gitEscapedPathIfNeededEscapesControlCharsQuoteAndBackslash() {
+        #expect(GitService.gitEscapedPathIfNeeded("na\tme.txt") == "na\\tme.txt")
+        #expect(GitService.gitEscapedPathIfNeeded("na\nme.txt") == "na\\nme.txt")
+        #expect(GitService.gitEscapedPathIfNeeded("na\"me.txt") == "na\\\"me.txt")
+        #expect(GitService.gitEscapedPathIfNeeded("na\\me.txt") == "na\\\\me.txt")
+        #expect(GitService.gitEscapedPathIfNeeded("na\u{01}me.txt") == "na\\001me.txt")
+    }
+
     @Test func diffOfMergeCommitFollowsFirstParent() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
