@@ -6,6 +6,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.15.2] - 2026-09-07
+
+### ✨ Features
+
+- Add web-based worktree creation (#1122).
+- Add the commit and publish workflow to the Changes view (#1125).
+
+### 🐛 Fixes
+
+- Keep long outdated-thread lists inside a scrollable drawer (#1126).
+- Populate the stacked-diffs mode submenu in worktree rows (#1127).
+
+### 🏗️ Internal
+
+- Render Codex commentary as prose instead of raw-text cards (#1123).
+
 ## [0.15.1] - 2026-09-05
 
 ### ✨ Features
