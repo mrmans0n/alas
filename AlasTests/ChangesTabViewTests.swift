@@ -4,6 +4,73 @@ import Testing
 
 @MainActor
 struct ChangesTabViewTests {
+    @Test func unchangedReviewRefreshRetriesFailedAmendProbe() async {
+        let reviewLoop = ReviewLoopState(worktreePath: URL(fileURLWithPath: "/tmp/probe"), baseBranch: "main")
+        let local = ReviewLoopLocalState(branchName: "feature", headSHA: "abc", baseBranch: "main",
+            hasWorkingTreeChanges: true, hasStagedChanges: true, aheadCommitCount: 1,
+            hasUpstream: false, needsPush: true)
+        let initialRefresh = reviewLoop.beginLocalRefresh(local: local)
+        reviewLoop.finishLocalRefresh(initialRefresh, preservingRemoteWith: local)
+        let initialSnapshot = reviewLoop.snapshot
+        let loader = CommitPublishAmendProbeLoader()
+        let initialKey = amendProbeKey(reviewLoop)
+        await loader.load(key: initialKey) { throw AmendProbeTestError.failed }
+        #expect(loader.result(for: initialKey) == .failed("Probe failed"))
+
+        let refresh = reviewLoop.beginLocalRefresh(local: local)
+        reviewLoop.finishLocalRefresh(refresh, preservingRemoteWith: local)
+        let refreshedKey = amendProbeKey(reviewLoop)
+        #expect(reviewLoop.snapshot == initialSnapshot)
+        #expect(refreshedKey != initialKey)
+        #expect(loader.result(for: refreshedKey) == .loading)
+
+        let gate = AmendProbeTestGate()
+        let retry = Task { await loader.load(key: refreshedKey) { await gate.probe() } }
+        await gate.waitForEntry()
+        #expect(loader.result(for: refreshedKey) == .loading)
+        gate.finish(.noUpstream)
+        await retry.value
+        #expect(loader.result(for: refreshedKey) == .notPublished)
+    }
+
+    @Test func supersededAmendProbeCannotReplaceRetryResult() async {
+        let loader = CommitPublishAmendProbeLoader()
+        let gate = AmendProbeTestGate()
+        let original = Task { await loader.load(key: "original") { await gate.probe() } }
+        await gate.waitForEntry()
+        await loader.load(key: "retry") { .unpublished }
+        gate.finish(.published)
+        await original.value
+        #expect(loader.result(for: "retry") == .notPublished)
+        #expect(loader.result(for: "original") == .loading)
+    }
+
+    @Test func cancelledAmendProbeDiscardsUncooperativeCompletion() async {
+        let loader = CommitPublishAmendProbeLoader()
+        let gate = AmendProbeTestGate()
+        let task = Task { await loader.load(key: "head") { await gate.probe() } }
+        await gate.waitForEntry()
+        task.cancel()
+        gate.finish(.published)
+        await task.value
+        #expect(loader.result(for: "head") == .loading)
+        await loader.load(key: "head") { .unpublished }
+        #expect(loader.result(for: "head") == .notPublished)
+    }
+
+    private func amendProbeKey(_ reviewLoop: ReviewLoopState) -> String {
+        ChangesTabView.amendPublicationProbeKey(worktreeID: "worktree", branch: "feature",
+            headSHA: "abc", amend: true, ggModeActive: false, reviewLoop: reviewLoop)
+    }
+
+    @Test func ggFirstRowRoutesToDraftWithExplicitIntent() {
+        #expect(ChangesTabView.draftPreferredAction(for: .newStackCommit) == .commit)
+        #expect(ChangesTabView.draftPreferredAction(for: .commitAndSync) == .publish)
+        #expect(ChangesTabView.stackAction(for: .commitAndSync) == nil)
+        #expect(ChangesTabView.draftPreferredAction(for: .amendCurrent) == nil)
+        #expect(ChangesTabView.draftPreferredAction(for: .absorbIntoStack) == nil)
+    }
+
     @Test func appKitCommitHeaderTracksCommitCounts() {
         #expect(ChangesTabView.commitHeaderCountsToken(primary: 1, older: 23)
             != ChangesTabView.commitHeaderCountsToken(primary: 12, older: 3))
@@ -384,5 +451,34 @@ struct ChangesTabViewTests {
             behindBase: behindBase,
             entries: [entry]
         )
+    }
+}
+
+private enum AmendProbeTestError: LocalizedError {
+    case failed
+    var errorDescription: String? { "Probe failed" }
+}
+
+@MainActor
+private final class AmendProbeTestGate {
+    private var probeContinuation: CheckedContinuation<HeadPublicationState, Never>?
+    private var entryContinuation: CheckedContinuation<Void, Never>?
+
+    func probe() async -> HeadPublicationState {
+        await withCheckedContinuation { continuation in
+            probeContinuation = continuation
+            entryContinuation?.resume()
+            entryContinuation = nil
+        }
+    }
+
+    func waitForEntry() async {
+        guard probeContinuation == nil else { return }
+        await withCheckedContinuation { entryContinuation = $0 }
+    }
+
+    func finish(_ state: HeadPublicationState) {
+        probeContinuation?.resume(returning: state)
+        probeContinuation = nil
     }
 }

@@ -59,4 +59,33 @@ struct ShortcutBindingTests {
         #expect(ShortcutBinding(key: "f13", modifiers: [.command]).asKeyboardShortcut() == nil)
         #expect(ShortcutBinding(key: "🙂", modifiers: [.command]).asKeyboardShortcut() == nil)
     }
+
+    @Test func shiftVariantAddsShift() {
+        let base = ShortcutBinding(key: "return", modifiers: [.command])
+
+        #expect(base.togglingShift() == .init(key: "return", modifiers: [.command, .shift]))
+    }
+
+    @Test func shiftVariantRemovesExistingShift() {
+        let base = ShortcutBinding(key: "j", modifiers: [.command, .shift])
+
+        #expect(base.togglingShift() == .init(key: "j", modifiers: [.command]))
+    }
+
+    @Test func keyboardShortcutConvertsToBinding() throws {
+        let shortcut = KeyboardShortcut(.return, modifiers: [.command, .shift])
+
+        #expect(try #require(ShortcutBinding(keyboardShortcut: shortcut)) == .init(
+            key: "return",
+            modifiers: [.shift, .command]
+        ))
+    }
+
+    @Test func keyboardShortcutConversionPreservesUppercaseLiteralKey() throws {
+        let shortcut = KeyboardShortcut("P", modifiers: [.command])
+        let binding = try #require(ShortcutBinding(keyboardShortcut: shortcut))
+
+        #expect(binding == .init(key: "P", modifiers: [.command]))
+        #expect(binding.asKeyboardShortcut() == shortcut)
+    }
 }

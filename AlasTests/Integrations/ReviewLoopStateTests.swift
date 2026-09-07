@@ -5,6 +5,43 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct ReviewLoopStateTests {
+    @Test func explicitTargetLookupAndCreationUseCapturedProviderAndArguments() async throws {
+        let remote = CodeHostRemote(
+            kind: .gitlab, host: "gitlab.com", owner: "captured", repository: "project",
+            remoteName: "publish", webURL: URL(string: "https://gitlab.com/captured/project")!
+        )
+        let provider = FakeCodeHostProvider(kind: .gitlab)
+        let state = ReviewLoopState(
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-review-loop"), baseBranch: "main",
+            providerRegistry: CodeHostProviderRegistry(providers: [.github: FakeCodeHostProvider(kind: .github), .gitlab: provider])
+        )
+        await state.refresh(local: Self.makeLocal(branchName: "current"), remotes: [Self.makeGitHubRemote()])
+        provider.request = Self.makeReviewRequest(remote: remote, checks: [])
+        let request = try await state.currentReviewRequest(remote: remote, branch: "captured", headOwner: "fork", baseBranch: "release")
+        #expect(request?.number == 42)
+        #expect(provider.lookupTargets.last == .init(remote: remote, branch: "captured", headOwner: "fork", baseBranch: "release"))
+        let url = try await state.createReviewRequest(remote: remote, branch: "captured", headOwner: "fork", baseBranch: "release", title: "Title", body: "Body", draft: true)
+        #expect(url == remote.webURL)
+        #expect(provider.creationRemotes == [remote])
+        #expect(provider.createdReviewRequests == [.init(branch: "captured", headOwner: "fork", baseBranch: "release", title: "Title", body: "Body", isDraft: true)])
+        let error = CodeHostProviderError.commandFailed(command: "lookup", stderr: "offline")
+        provider.requestError = error
+        await #expect(throws: error) {
+            try await state.currentReviewRequest(remote: remote, branch: "captured", headOwner: "fork", baseBranch: "release")
+        }
+        provider.createError = error
+        await #expect(throws: error) {
+            try await state.createReviewRequest(remote: remote, branch: "captured", headOwner: "fork", baseBranch: "release", title: "Title", body: "Body", draft: true)
+        }
+        let unsupported = ReviewLoopState(worktreePath: URL(fileURLWithPath: "/tmp"), baseBranch: "main", providerRegistry: CodeHostProviderRegistry(providers: [:]))
+        await #expect(throws: CodeHostProviderError.unsupportedProvider(.gitlab)) {
+            try await unsupported.currentReviewRequest(remote: remote, branch: "captured", headOwner: nil, baseBranch: "main")
+        }
+        await #expect(throws: CodeHostProviderError.unsupportedProvider(.gitlab)) {
+            try await unsupported.createReviewRequest(remote: remote, branch: "captured", headOwner: nil, baseBranch: "main", title: "Title", body: "Body", draft: false)
+        }
+    }
+
     @Test func rightPaneStoreForwardsCompletedRemoteReviewSnapshot() {
         let store = RightPaneStore()
         let worktree = Worktree(
@@ -1206,6 +1243,14 @@ private struct StubError: LocalizedError {
 }
 
 private final class FakeCodeHostProvider: CodeHostProvider, @unchecked Sendable {
+    struct LookupTarget: Equatable {
+        let remote: CodeHostRemote
+        let branch: String
+        let headOwner: String?
+        let baseBranch: String
+    }
+    var lookupTargets: [LookupTarget] = []
+    var creationRemotes: [CodeHostRemote] = []
     struct CreatedReviewRequest: Equatable {
         let branch: String
         let headOwner: String?
@@ -1287,6 +1332,7 @@ private final class FakeCodeHostProvider: CodeHostProvider, @unchecked Sendable 
         baseBranch: String,
         cwd: URL
     ) async throws -> ReviewRequest? {
+        lookupTargets.append(.init(remote: remote, branch: branch, headOwner: headOwner, baseBranch: baseBranch))
         if let requestError { throw requestError }
         if let delay = delayForBranch[branch] {
             try? await Task.sleep(nanoseconds: delay)
@@ -1305,6 +1351,7 @@ private final class FakeCodeHostProvider: CodeHostProvider, @unchecked Sendable 
         cwd: URL
     ) async throws -> URL {
         if let createError { throw createError }
+        creationRemotes.append(remote)
         createdReviewRequests.append(CreatedReviewRequest(
             branch: branch,
             headOwner: headOwner,

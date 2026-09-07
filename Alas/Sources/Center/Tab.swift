@@ -484,7 +484,23 @@ struct DraftCommitTabState: Codable, Equatable, Identifiable {
     var bodyText: String
     var amend: Bool
     var selectedPath: String?
+    var preferredAction: DraftCommitPreferredAction
+    var createReviewRequestAsDraft: Bool
+    var publishCheckpoint: CommitPublishCheckpoint?
     private var presentationRevision: Int?
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case worktreeId
+        case subject
+        case bodyText
+        case amend
+        case selectedPath
+        case preferredAction
+        case createReviewRequestAsDraft
+        case publishCheckpoint
+        case presentationRevision
+    }
 
     var presentationID: String {
         "\(id):presentation:\(presentationRevision ?? 0)"
@@ -495,7 +511,10 @@ struct DraftCommitTabState: Codable, Equatable, Identifiable {
         subject: String = "",
         bodyText: String = "",
         amend: Bool = false,
-        selectedPath: String? = nil
+        selectedPath: String? = nil,
+        preferredAction: DraftCommitPreferredAction = .commit,
+        createReviewRequestAsDraft: Bool = false,
+        publishCheckpoint: CommitPublishCheckpoint? = nil
     ) {
         self.id = "draft-commit:\(worktreeId)"
         self.worktreeId = worktreeId
@@ -503,7 +522,38 @@ struct DraftCommitTabState: Codable, Equatable, Identifiable {
         self.bodyText = bodyText
         self.amend = amend
         self.selectedPath = selectedPath
+        self.preferredAction = preferredAction
+        self.createReviewRequestAsDraft = createReviewRequestAsDraft
+        self.publishCheckpoint = publishCheckpoint
         self.presentationRevision = nil
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(TabID.self, forKey: .id)
+        worktreeId = try container.decode(String.self, forKey: .worktreeId)
+        subject = try container.decode(String.self, forKey: .subject)
+        bodyText = try container.decode(String.self, forKey: .bodyText)
+        amend = try container.decode(Bool.self, forKey: .amend)
+        selectedPath = try container.decodeIfPresent(String.self, forKey: .selectedPath)
+        preferredAction = try container.decodeIfPresent(DraftCommitPreferredAction.self, forKey: .preferredAction) ?? .commit
+        createReviewRequestAsDraft = try container.decodeIfPresent(Bool.self, forKey: .createReviewRequestAsDraft) ?? false
+        publishCheckpoint = try container.decodeIfPresent(CommitPublishCheckpoint.self, forKey: .publishCheckpoint)
+        presentationRevision = try container.decodeIfPresent(Int.self, forKey: .presentationRevision)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(worktreeId, forKey: .worktreeId)
+        try container.encode(subject, forKey: .subject)
+        try container.encode(bodyText, forKey: .bodyText)
+        try container.encode(amend, forKey: .amend)
+        try container.encodeIfPresent(selectedPath, forKey: .selectedPath)
+        try container.encode(preferredAction, forKey: .preferredAction)
+        try container.encode(createReviewRequestAsDraft, forKey: .createReviewRequestAsDraft)
+        try container.encodeIfPresent(publishCheckpoint, forKey: .publishCheckpoint)
+        try container.encodeIfPresent(presentationRevision, forKey: .presentationRevision)
     }
 
     mutating func prepareForNewCommit() {

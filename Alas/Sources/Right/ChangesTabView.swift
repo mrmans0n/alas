@@ -10,6 +10,7 @@ struct ChangesTabView: View {
 
     @State private var collapsedChangePaths: Set<String> = []
     @State private var appKitActionRelay = ChangesAppKitActionRelay()
+    @State private var amendProbe = CommitPublishAmendProbeLoader()
     @Environment(\.theme) private var theme
 
     private var conflicts: [ChangedFile] {
@@ -64,7 +65,18 @@ struct ChangesTabView: View {
             draftNonEmpty: draftNonEmpty,
             aheadCommitCount: rps.commits.count,
             local: rps.reviewLoop.snapshot?.local,
-            readinessActions: readiness.actions
+            readinessActions: readiness.actions,
+            publishAvailability: CommitPublishAvailability.review(
+                snapshot: rps.reviewLoop.snapshot,
+                supportedRemote: rps.commitRemote ?? rps.primaryCommitRemote,
+                isRefreshing: rps.reviewLoop.isRefreshing,
+                currentBranch: rps.currentBranch,
+                currentBaseBranch: rps.baseBranch,
+                lastError: rps.reviewLoop.lastError,
+                mutationDisabledReason: publishMutationDisabledReason,
+                amend: currentDraft?.amend == true,
+                amendProbe: amendProbe.result(for: amendProbeKey)
+            )
         )
     }
 
@@ -92,6 +104,38 @@ struct ChangesTabView: View {
                 )
             }
         }
+        .task(id: amendProbeKey) {
+            let key = amendProbeKey
+            guard currentDraft?.amend == true, !isGGDrawerActive else { return }
+            await amendProbe.load(key: key) {
+                try await GitService().headPublicationState(worktreePath: rps.worktree.path)
+            }
+        }
+    }
+
+    private var publishMutationDisabledReason: String? {
+        if rps.mergeOp.current != nil { return "Finish the current Git operation first." }
+        if rps.reviewLoop.inFlightAction != nil || rps.pullInFlight || rps.stashOperationInFlight {
+            return "Another Git operation is running."
+        }
+        return nil
+    }
+
+    private var amendProbeKey: String {
+        Self.amendPublicationProbeKey(
+            worktreeID: rps.worktree.id, branch: rps.currentBranch, headSHA: rps.currentHeadSHA,
+            amend: currentDraft?.amend == true, ggModeActive: isGGDrawerActive,
+            reviewLoop: rps.reviewLoop
+        )
+    }
+
+    static func amendPublicationProbeKey(
+        worktreeID: String, branch: String, headSHA: String, amend: Bool,
+        ggModeActive: Bool, reviewLoop: ReviewLoopState
+    ) -> String {
+        [worktreeID, branch, headSHA, String(amend), String(ggModeActive),
+         String(reviewLoop.refreshGeneration),
+         String(reflecting: reviewLoop.snapshot?.local)].joined(separator: "\u{0}")
     }
 
     private var isGGDrawerActive: Bool {
@@ -273,6 +317,7 @@ struct ChangesTabView: View {
                     model: preparation,
                     onReviewChanges: openReviewChangesTab,
                     onDraftCommit: openDraftTab,
+                    onPublishCommit: openPublishTab,
                     onGGAction: handleGGPreparationAction,
                     onGGStackAction: { rps.onGGStackAction($0, appState: appState) },
                     onReviewRequestAction: { rps.handleReviewReadinessAction($0, appState: appState) },
@@ -666,10 +711,25 @@ struct ChangesTabView: View {
 
     static func stackAction(for action: GGChangesPreparationAction) -> GGStackActionKind? {
         switch action {
-        case .newStackCommit: nil
+        case .newStackCommit, .commitAndSync: nil
         case .amendCurrent: .amendCurrent
         case .absorbIntoStack: .absorbStaged
         }
+    }
+
+    static func draftPreferredAction(for action: GGChangesPreparationAction) -> DraftCommitPreferredAction? {
+        switch action {
+        case .newStackCommit: .commit
+        case .commitAndSync: .publish
+        case .amendCurrent, .absorbIntoStack: nil
+        }
+    }
+
+    private var currentDraft: DraftCommitTabState? {
+        for tab in appState.tabs.tabs(forWorktree: rps.worktree.id) {
+            if case .draftCommit(let state) = tab { return state }
+        }
+        return appState.tabs.stashedDraft(worktreeId: rps.worktree.id)
     }
 
     private var hasDraftTab: Bool {
@@ -694,14 +754,19 @@ struct ChangesTabView: View {
     }
 
     private func openDraftTab() {
-        _ = appState.tabs.openOrFocusDraftCommit(worktreeId: rps.worktree.id)
+        _ = appState.tabs.openOrFocusDraftCommit(worktreeId: rps.worktree.id, preferredAction: .commit)
+    }
+
+    private func openPublishTab() {
+        _ = appState.tabs.openOrFocusDraftCommit(worktreeId: rps.worktree.id, preferredAction: .publish)
     }
 
     private func handleGGPreparationAction(_ action: GGChangesPreparationAction) {
-        if action == .newStackCommit {
+        if let preferredAction = Self.draftPreferredAction(for: action) {
             _ = appState.tabs.openOrFocusDraftCommit(
                 worktreeId: rps.worktree.id,
-                resetAmend: true
+                resetAmend: true,
+                preferredAction: preferredAction
             )
             return
         }

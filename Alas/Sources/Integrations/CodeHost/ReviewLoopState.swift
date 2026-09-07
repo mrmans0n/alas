@@ -17,7 +17,7 @@ final class ReviewLoopState {
     private let worktreePath: URL
     private var baseBranch: String
     private let providerRegistry: CodeHostProviderRegistry
-    private var refreshGeneration: Int = 0
+    private(set) var refreshGeneration: Int = 0
 
     private(set) var snapshot: ReviewLoopSnapshot?
     private(set) var isRefreshing: Bool = false
@@ -345,10 +345,41 @@ final class ReviewLoopState {
         body: String,
         isDraft: Bool
     ) async throws -> URL {
-        guard let remote = snapshot.remote,
-              let provider = providerRegistry.provider(for: remote.kind)
-        else {
+        guard let remote = snapshot.remote else {
             throw CodeHostProviderError.unsupportedProvider(snapshot.remote?.kind ?? .github)
+        }
+        return try await createReviewRequest(
+            remote: remote, branch: branch, headOwner: headOwner, baseBranch: baseBranch,
+            title: title, body: body, draft: isDraft
+        )
+    }
+
+    func currentReviewRequest(
+        remote: CodeHostRemote,
+        branch: String,
+        headOwner: String?,
+        baseBranch: String
+    ) async throws -> ReviewRequest? {
+        guard let provider = providerRegistry.provider(for: remote.kind) else {
+            throw CodeHostProviderError.unsupportedProvider(remote.kind)
+        }
+        return try await provider.currentReviewRequest(
+            remote: remote, branch: branch, headOwner: headOwner,
+            baseBranch: baseBranch, cwd: worktreePath
+        )
+    }
+
+    func createReviewRequest(
+        remote: CodeHostRemote,
+        branch: String,
+        headOwner: String?,
+        baseBranch: String,
+        title: String,
+        body: String,
+        draft: Bool
+    ) async throws -> URL {
+        guard let provider = providerRegistry.provider(for: remote.kind) else {
+            throw CodeHostProviderError.unsupportedProvider(remote.kind)
         }
         return try await provider.createReviewRequest(
             remote: remote,
@@ -357,7 +388,7 @@ final class ReviewLoopState {
             baseBranch: baseBranch,
             title: title,
             body: body,
-            isDraft: isDraft,
+            isDraft: draft,
             cwd: worktreePath
         )
     }

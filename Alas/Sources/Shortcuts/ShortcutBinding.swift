@@ -45,6 +45,16 @@ struct ShortcutBinding: Codable, Equatable, Hashable, Sendable {
         keyEquivalent != nil
     }
 
+    func togglingShift() -> Self {
+        var toggledModifiers = modifiers
+        if let shiftIndex = toggledModifiers.firstIndex(of: .shift) {
+            toggledModifiers.remove(at: shiftIndex)
+        } else {
+            toggledModifiers.append(.shift)
+        }
+        return Self(key: key, modifiers: toggledModifiers)
+    }
+
     func asKeyboardShortcut() -> KeyboardShortcut? {
         guard let keyEquivalent else { return nil }
         return KeyboardShortcut(keyEquivalent, modifiers: eventModifiers)
@@ -79,5 +89,34 @@ struct ShortcutBinding: Codable, Equatable, Hashable, Sendable {
         if modifiers.contains(.option)  { m.insert(.option) }
         if modifiers.contains(.control) { m.insert(.control) }
         return m
+    }
+}
+
+extension ShortcutBinding {
+    init?(keyboardShortcut: KeyboardShortcut) {
+        let key: String
+        switch keyboardShortcut.key {
+        case .return:     key = "return"
+        case .leftArrow:  key = "leftArrow"
+        case .rightArrow: key = "rightArrow"
+        case .upArrow:    key = "upArrow"
+        case .downArrow:  key = "downArrow"
+        case .delete:     key = "delete"
+        case .escape:     key = "escape"
+        case .tab:        key = "tab"
+        case .space:      key = "space"
+        default:
+            let literalKey = String(keyboardShortcut.key.character)
+            guard Self.isSupportedLiteralKey(literalKey) else { return nil }
+            key = literalKey
+        }
+
+        let eventModifiers = keyboardShortcut.modifiers
+        var modifiers: [Modifier] = []
+        if eventModifiers.contains(.control) { modifiers.append(.control) }
+        if eventModifiers.contains(.option) { modifiers.append(.option) }
+        if eventModifiers.contains(.shift) { modifiers.append(.shift) }
+        if eventModifiers.contains(.command) { modifiers.append(.command) }
+        self.init(key: key, modifiers: modifiers)
     }
 }

@@ -4,6 +4,8 @@ import Observation
 @MainActor
 struct GGMutationContext {
     var loadFreshStack: () async throws -> GGStackSnapshot
+    var loadCurrentBranch: () async throws -> String
+    var loadCurrentHead: () async throws -> String
     var refreshStack: () async -> Void
     var refreshGitChanges: () async -> Void
     var refreshProviderReviews: () async -> Void
@@ -191,10 +193,20 @@ final class GGMutationCoordinator {
 
     func startApplying(
         _ request: GGMutationRequest,
-        confirmedAgainst identity: GGStackIdentity?
+        confirmedAgainst identity: GGStackIdentity?,
+        expectedTarget: GGStackTargetIdentity? = nil,
+        onExecutionStarted: @escaping @MainActor () -> Void = {}
     ) -> Task<Void, Error>? {
         guard reserve(request) else { return nil }
-        return Task { try await self.applyReserved(request, confirmedAgainst: identity, confirmedWith: nil) }
+        return Task {
+            try await self.applyReserved(
+                request,
+                confirmedAgainst: identity,
+                confirmedWith: nil,
+                expectedTarget: expectedTarget,
+                onExecutionStarted: onExecutionStarted
+            )
+        }
     }
 
     func startApplying(_ prepared: GGPreparedMutation) -> Task<Void, Error>? {
@@ -219,7 +231,9 @@ final class GGMutationCoordinator {
     private func applyReserved(
         _ request: GGMutationRequest,
         confirmedAgainst identity: GGStackIdentity?,
-        confirmedWith confirmation: GGMutationConfirmation?
+        confirmedWith confirmation: GGMutationConfirmation?,
+        expectedTarget: GGStackTargetIdentity? = nil,
+        onExecutionStarted: @escaping @MainActor () -> Void = {}
     ) async throws {
         var didReleaseAction = false
         func releaseAction() {
@@ -247,6 +261,26 @@ final class GGMutationCoordinator {
         } catch {
             guard isRecoveryRequest else { throw error }
             snapshot = nil
+        }
+        if let expectedTarget {
+            let branch = try await context.loadCurrentBranch()
+            let headSHA = try await context.loadCurrentHead()
+            guard let identity = snapshot?.identity,
+                  expectedTarget.matches(
+                      branch: branch,
+                      stackName: identity.stackName,
+                      base: identity.base,
+                      headSHA: identity.headSHA
+                  ),
+                  expectedTarget.matches(
+                      branch: branch,
+                      stackName: identity.stackName,
+                      base: identity.base,
+                      headSHA: headSHA
+                  )
+            else {
+                throw GGMutationError.staleConfirmation
+            }
         }
         let continuedOperationID: String?
         switch request {
@@ -283,6 +317,7 @@ final class GGMutationCoordinator {
         GGStackGate.markAlasGGOperationInProgress(repoPath: worktreePath)
 
         do {
+            onExecutionStarted()
             let result = try await service.execute(
                 request,
                 worktreePath: worktreePath,
@@ -305,6 +340,10 @@ final class GGMutationCoordinator {
                 after: request,
                 result: result,
                 clientOperationID: clientOperationID,
+                continuedOperationID: continuedOperationID
+            )
+            await recordCompletedRecoveryOperation(
+                after: request,
                 continuedOperationID: continuedOperationID
             )
             recordSummary(for: request, result: result)
@@ -662,6 +701,17 @@ final class GGMutationCoordinator {
             worktreeId: worktreeId
         )
         undoCandidate = GGUndoCandidate(operation: newest)
+    }
+
+    private func recordCompletedRecoveryOperation(
+        after request: GGMutationRequest,
+        continuedOperationID: String?
+    ) async {
+        guard request == .continueOperation || request == .abortOperation,
+              let continuedOperationID,
+              let headSHA = try? await context.loadCurrentHead()
+        else { return }
+        actionState.setCompletedRecoveryOperation(.init(operationID: continuedOperationID, headSHA: headSHA))
     }
 
     private func clearUndoCandidate(forOperationID operationID: String) {

@@ -2,6 +2,7 @@ import Foundation
 
 enum GGChangesPreparationAction: Equatable, Sendable {
     case newStackCommit
+    case commitAndSync
     case amendCurrent
     case absorbIntoStack
 }
@@ -54,6 +55,7 @@ struct ChangesPreparationModel: Equatable {
 
     let reviewAction: ReviewAction?
     let draftAction: DraftAction?
+    let publishAction: CommitPublishAvailability?
     let reviewRequestActions: [ReviewRequestAction]
     let reconciliationAction: GGStackReadinessModel.Action?
     let syncProgress: GGSyncProgressPresentation?
@@ -81,7 +83,8 @@ struct ChangesPreparationModel: Equatable {
         draftNonEmpty: Bool,
         aheadCommitCount: Int = 0,
         local: ReviewLoopLocalState? = nil,
-        readinessActions: [ReviewReadinessModel.Action]
+        readinessActions: [ReviewReadinessModel.Action],
+        publishAvailability: CommitPublishAvailability? = nil
     ) {
         let builtReviewAction: ReviewAction?
         if let summary = ReviewChangesTriggerSummary.summary(for: changes) {
@@ -111,12 +114,16 @@ struct ChangesPreparationModel: Equatable {
 
         reviewAction = builtReviewAction
         draftAction = builtDraftAction
+        publishAction = builtDraftAction == nil ? nil : publishAvailability
         reconciliationAction = nil
         syncProgress = nil
         canDismissSyncFailure = false
         ggActions = []
         mutationError = nil
-        let builtActions = Self.compactReviewRequestActions(from: readinessActions)
+        let availableActions = publishAction == nil ? readinessActions : readinessActions.filter {
+            $0.kind != .pushBranch && $0.kind != .createReviewRequest
+        }
+        let builtActions = Self.compactReviewRequestActions(from: availableActions)
         let effectiveAheadCommitCount = local?.aheadCommitCount ?? aheadCommitCount
         reviewRequestActions = Self.applyingHideRules(
             builtActions,
@@ -252,6 +259,14 @@ struct ChangesPreparationModel: Equatable {
                     isInFlight: false
                 ),
                 GGAction(
+                    kind: .commitAndSync,
+                    title: "Commit & sync",
+                    stats: staged,
+                    hasNonEmptyDraft: hasDraft,
+                    disabledReason: effectiveNewCommitDisabledReason,
+                    isInFlight: false
+                ),
+                GGAction(
                     kind: .amendCurrent,
                     title: "Amend current",
                     stats: staged,
@@ -281,6 +296,7 @@ struct ChangesPreparationModel: Equatable {
     ) {
         self.reviewAction = reviewAction
         draftAction = nil
+        publishAction = nil
         reviewRequestActions = []
         self.reconciliationAction = reconciliationAction
         self.syncProgress = syncProgress

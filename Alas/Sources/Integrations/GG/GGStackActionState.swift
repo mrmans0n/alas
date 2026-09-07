@@ -16,8 +16,13 @@ enum GGLandRequest: Equatable {
 
 /// A gg operation left paused on a conflict (rebase-in-progress), awaiting
 /// `gg continue` / `gg abort`.
-struct GGPausedOperation: Equatable {
+struct GGPausedOperation: Equatable, Sendable {
     let pausedBy: GGStackActionKind
+}
+
+struct GGCompletedRecoveryOperation: Equatable, Sendable {
+    let operationID: String
+    let headSHA: String
 }
 
 /// Per-worktree observable backing the stack-mode drawer's actions. The
@@ -31,6 +36,7 @@ final class GGStackActionState {
     private(set) var lastError: String?
     private(set) var lastErrorAction: GGStackActionKind?
     private(set) var pausedOperation: GGPausedOperation?
+    private(set) var completedRecoveryOperation: GGCompletedRecoveryOperation?
     private(set) var lastActionSummary: String?
     @ObservationIgnored private(set) var actionGeneration: UInt = 0
 
@@ -79,8 +85,14 @@ final class GGStackActionState {
         if lastError != nil { lastError = nil }
         if lastErrorAction != nil { lastErrorAction = nil }
     }
-    func setPaused(_ paused: GGPausedOperation) { if pausedOperation != paused { pausedOperation = paused } }
+    func setPaused(_ paused: GGPausedOperation) {
+        if pausedOperation != paused { pausedOperation = paused }
+        if completedRecoveryOperation != nil { completedRecoveryOperation = nil }
+    }
     func clearPaused() { if pausedOperation != nil { pausedOperation = nil } }
+    func setCompletedRecoveryOperation(_ operation: GGCompletedRecoveryOperation) {
+        if completedRecoveryOperation != operation { completedRecoveryOperation = operation }
+    }
     func setActionSummary(_ message: String) { lastActionSummary = message }
 
     /// One-line result for a completed sync, from the accumulated stream

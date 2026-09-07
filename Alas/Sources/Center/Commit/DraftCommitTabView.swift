@@ -10,7 +10,8 @@ struct DraftCommitTabView: View {
     @State private var subject: String = ""
     @State private var bodyText: String = ""
     @State private var amend: Bool = false
-    @State private var busy = false
+    @State private var localBusy = false
+    @State private var committingLocally = false
     @State private var error: String?
     @State private var amendPrefilled: Bool = false
     @State private var amendPrefilledSubject: String = ""
@@ -18,6 +19,8 @@ struct DraftCommitTabView: View {
     @State private var amendWarning: Bool = false
     @State private var canAmend: Bool = true
     @State private var generation: Task<Void, Never>? = nil
+    @State private var createReviewRequestAsDraft = false
+    @State private var publicationProbe = CommitPublishAmendProbeLoader()
 
     @State private var stagedSession: DiffReviewLoadedSession?
     @State private var sessionWithActions: DiffReviewLoadedSession?
@@ -46,7 +49,74 @@ struct DraftCommitTabView: View {
         guard let rps = appState.rightPaneStore.activeState(worktreeId: worktreeId) else { return false }
         return rps.changes.contains { $0.stage == .staged }
     }
-    private var canCommit: Bool { hasStaged && !trimmedSubject.isEmpty && !busy }
+    private var canCommit: Bool { presentation.commit.isEnabled }
+    private var busy: Bool { localBusy || publishSession?.isRunning == true }
+    private var publishSession: CommitPublishSession? { appState.tabs.commitPublishSession(tabId: tabState.id) }
+    private var publishError: String? { publishSession?.lastError?.localizedDescription }
+    private var publishCheckpoint: CommitPublishCheckpoint? {
+        if let publishSession { return publishSession.checkpoint }
+        return tabState.publishCheckpoint
+    }
+    private var mutationsDisabled: Bool { presentation.mutationsDisabled }
+    private var rightPane: RightPaneState? { appState.rightPaneStore.activeState(worktreeId: worktreeId) }
+
+    private var publicationProbeKey: String {
+        guard let rps = rightPane else { return "" }
+        return ChangesTabView.amendPublicationProbeKey(
+            worktreeID: worktreeId, branch: rps.currentBranch, headSHA: rps.currentHeadSHA,
+            amend: amend, ggModeActive: rps.ggContext.isActive, reviewLoop: rps.reviewLoop
+        )
+    }
+
+    private var publishAvailability: CommitPublishAvailability? {
+        guard let rps = rightPane else { return nil }
+        if rps.ggContext.isActive {
+            let reason = ChangesTabView.ggPreparationMutationDisabledReason(
+                contextIsActive: true, stackLoadState: rps.ggStackLoadState,
+                pausedOperation: rps.ggActionState.pausedOperation,
+                inFlightAction: rps.ggActionState.inFlightAction, mergeOperation: rps.mergeOp.current
+            ) ?? ChangesTabView.ggNewStackCommitDisabledReason(
+                contextIsActive: true, stackLoadState: rps.ggStackLoadState,
+                stack: rps.ggStack, currentHeadSHA: rps.currentHeadSHA
+            ) ?? (amend ? publicationProbe.result(for: publicationProbeKey).disabledReason : nil)
+            return .gg(disabledReason: reason)
+        }
+        let mutationReason: String?
+        if rps.mergeOp.current != nil {
+            mutationReason = "Finish the current Git operation first."
+        } else if rps.reviewLoop.inFlightAction != nil || rps.pullInFlight || rps.stashOperationInFlight {
+            mutationReason = "Another Git operation is running."
+        } else {
+            mutationReason = nil
+        }
+        return .review(
+            snapshot: rps.reviewLoop.snapshot, supportedRemote: rps.commitRemote ?? rps.primaryCommitRemote,
+            isRefreshing: rps.reviewLoop.isRefreshing, currentBranch: rps.currentBranch,
+            currentBaseBranch: rps.baseBranch, lastError: rps.reviewLoop.lastError,
+            mutationDisabledReason: mutationReason, amend: amend,
+            amendProbe: publicationProbe.result(for: publicationProbeKey)
+        )
+    }
+
+    private var publishAction: CommitPrimaryAction? {
+        guard let action = presentation.publish else { return nil }
+        return .init(label: action.label, isEnabled: action.isEnabled,
+            help: action.help, accessibilityIdentifier: "commit-composer-publish", handler: runPublish)
+    }
+
+    private var publishActivityText: String? {
+        presentation.activityText
+    }
+
+    private var activity: CommitPublishActivity {
+        committingLocally ? .committing : publishSession?.activity ?? .idle
+    }
+
+    private var presentation: CommitPublishPresentation {
+        CommitPublishPresentation(subject: subject, hasStaged: hasStaged, amend: amend,
+            busy: busy, activity: activity, checkpoint: publishCheckpoint,
+            preferredAction: tabState.preferredAction, availability: publishAvailability)
+    }
 
     /// A key that changes whenever the staged set changes in the sidebar.
     /// SwiftUI tracks reads of `@Observable` properties, so this recomputes
@@ -80,7 +150,7 @@ struct DraftCommitTabView: View {
     // DiffReviewFileSection can detect a `busy` flip even when the session's
     // content is otherwise unchanged — see `refreshActionsOverlay`.
     private func overlayingActions(on session: DiffReviewLoadedSession) -> DiffReviewLoadedSession {
-        let unstageEnabledBase = !busy
+        let unstageEnabledBase = !mutationsDisabled
         let filesWithActions = session.files.map { model in
             var m = model
             m.stagedMutationActions = DiffReviewStagedMutationActions(
@@ -128,26 +198,63 @@ struct DraftCommitTabView: View {
                 aiToolId: appState.bind(\.changes.aiToolId),
                 title: amend ? "Amend HEAD" : "Draft commit",
                 busy: busy,
-                error: error,
+                error: publishError ?? error,
                 availableAgents: appState.agentRegistry.enabled(),
                 onGenerate: handleGenerate,
                 primaryAction: CommitPrimaryAction(
-                    label: amend ? "Amend" : "Commit",
+                    label: presentation.commit.label,
                     savedLabel: nil,
                     isEnabled: canCommit,
                     showSavedState: false,
                     keyboardShortcut: appState.shortcut(for: .commitInComposer),
+                    help: presentation.commit.help,
+                    accessibilityIdentifier: "commit-composer-commit",
                     handler: runCommit
                 ),
+                alternateAction: publishAction,
+                preferredActionPosition: presentation.preferredActionPosition,
+                editorDisabled: presentation.editorDisabled,
+                onDismissError: {
+                    publishSession?.clearError()
+                    error = nil
+                },
                 accessory: AnyView(
-                    Toggle(isOn: $amend) {
-                        Text("Amend").font(.system(size: 11)).foregroundColor(theme.color("fg-dim"))
+                    HStack(spacing: 8) {
+                        Toggle(isOn: $amend) {
+                            Text("Amend").font(.system(size: 11)).foregroundColor(theme.color("fg-dim"))
+                        }
+                        .toggleStyle(.checkbox)
+                        .disabled(mutationsDisabled || !canAmend)
+                        .help(canAmend ? "" : "No previous commit to amend")
+                        if let label = presentation.draftToggleLabel {
+                            Toggle(label, isOn: $createReviewRequestAsDraft)
+                                .font(.system(size: 11))
+                                .toggleStyle(.checkbox)
+                                .disabled(!presentation.draftToggleEnabled)
+                                .help(presentation.draftToggleHelp)
+                                .accessibilityIdentifier("commit-composer-draft-review-request")
+                        }
+                        if publishCheckpoint != nil {
+                            AlasButton(title: "Abandon retry", style: .subtle) {
+                                abandonPublishCheckpoint()
+                            }
+                            .disabled(busy)
+                            .help("Clear the paused publish retry.")
+                            .accessibilityIdentifier("commit-composer-abandon-publish")
+                        }
                     }
-                    .toggleStyle(.checkbox)
-                    .disabled(busy || !canAmend)
-                    .help(canAmend ? "" : "No previous commit to amend")
                 )
             )
+            if let activity = publishActivityText {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text(activity).font(.system(size: 11))
+                    Spacer()
+                }.padding(.horizontal, 12).padding(.vertical, 6)
+            } else if publishCheckpoint == nil, let reason = publishAvailability?.disabledReason {
+                Text(reason).font(.system(size: 11)).foregroundColor(theme.color("fg-dim"))
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12).padding(.vertical, 6)
+            }
             if amend && amendWarning {
                 Text("Amending a pushed commit will rewrite history.")
                     .font(.system(size: 10.5))
@@ -163,6 +270,17 @@ struct DraftCommitTabView: View {
         // HEAD-changing event (external commit, rebase, reset, etc.). On
         // mount the key is "" → "<sha>" so the task fires once.
         .task(id: amendProbeKey) { await refreshCanAmend() }
+        .task(id: publicationProbeKey) {
+            guard amend else { return }
+            await publicationProbe.load(key: publicationProbeKey) {
+                try await git.headPublicationState(worktreePath: worktreePath)
+            }
+        }
+        .onChange(of: createReviewRequestAsDraft) { _, new in
+            appState.tabs.updateDraftCommit(worktreeId: worktreeId, tabId: tabState.id) {
+                $0.createReviewRequestAsDraft = new
+            }
+        }
         .onChange(of: subject) { _, new in persist(subject: new) }
         .onChange(of: bodyText) { _, new in persist(body: new) }
         .onChange(of: amend) { _, new in
@@ -175,6 +293,7 @@ struct DraftCommitTabView: View {
         }
         .onChange(of: selectedFileID) { _, new in persist(selectedPath: new?.path) }
         .onChange(of: busy) { _, _ in refreshActionsOverlay() }
+        .onChange(of: publishCheckpoint) { _, _ in refreshActionsOverlay() }
         .task(id: stagedKey) {
             if await loadStagedSession() {
                 onStartupRecoveryReady()
@@ -219,6 +338,7 @@ struct DraftCommitTabView: View {
         subject = tabState.subject
         bodyText = tabState.bodyText
         amend = tabState.amend
+        createReviewRequestAsDraft = tabState.createReviewRequestAsDraft
         selectedFileID = tabState.selectedPath.map { DiffReviewFileID(namespace: "staged", path: $0) }
     }
 
@@ -232,8 +352,9 @@ struct DraftCommitTabView: View {
     }
 
     private func applyAmendPrefill() async {
+        guard publishCheckpoint == nil else { return }
         let head = (try? await git.headMessage(worktreePath: worktreePath)) ?? nil
-        guard amend else { return }
+        guard amend, publishCheckpoint == nil else { return }
         if let head,
            let prefill = DraftAmendPrefill.apply(
                priorSubject: head.subject,
@@ -274,6 +395,7 @@ struct DraftCommitTabView: View {
     }
 
     private func handleGenerate() {
+        guard publishCheckpoint == nil else { return }
         if busy {
             generation?.cancel()
             // Do not clear generation or busy here — runGenerate's defer handles both.
@@ -283,6 +405,7 @@ struct DraftCommitTabView: View {
     }
 
     private func runGenerate() {
+        publishSession?.clearError()
         guard let agent = appState.agent(id: appState.config.changes.aiToolId) else {
             error = "Select an AI tool to generate a commit message."
             return
@@ -292,12 +415,12 @@ struct DraftCommitTabView: View {
         let prompt = appState.config.changes.prompt
         let baseBranch = appState.rightPaneStore.commitEditorComparisonRef(worktreeId: worktreeId) ?? "HEAD"
 
-        busy = true
+        localBusy = true
         error = nil
 
         generation = Task { @MainActor in
             defer {
-                busy = false
+                localBusy = false
                 generation = nil
             }
             do {
@@ -381,11 +504,12 @@ struct DraftCommitTabView: View {
     }
 
     private func unstageFileByPaths(path: String, originalPath: String?) {
-        guard !busy else { return }
-        busy = true
+        guard !mutationsDisabled else { return }
+        localBusy = true
         error = nil
+        publishSession?.clearError()
         Task { @MainActor in
-            defer { busy = false }
+            defer { localBusy = false }
             do {
                 var paths = [path]
                 if let original = originalPath, !original.isEmpty {
@@ -401,11 +525,12 @@ struct DraftCommitTabView: View {
     }
 
     private func unstageHunk(path: String, hunk: ParsedDiff.Hunk) {
-        guard !busy else { return }
-        busy = true
+        guard !mutationsDisabled else { return }
+        localBusy = true
         error = nil
+        publishSession?.clearError()
         Task { @MainActor in
-            defer { busy = false }
+            defer { localBusy = false }
             do {
                 try await git.unstageHunk(worktreePath: worktreePath, path: path, hunk: hunk)
                 await loadStagedSession()
@@ -417,16 +542,21 @@ struct DraftCommitTabView: View {
     }
 
     private func runCommit() {
-        guard !busy else { return }
+        guard canCommit else { return }
         let subjectSnapshot = trimmedSubject
         let bodySnapshot = bodyText
         let amendSnapshot = amend
 
-        busy = true
+        localBusy = true
+        committingLocally = true
         error = nil
+        publishSession?.clearError()
 
         Task { @MainActor in
-            defer { busy = false }
+            defer {
+                localBusy = false
+                committingLocally = false
+            }
             do {
                 let newSha = try await git.commit(
                     worktreePath: worktreePath,
@@ -462,6 +592,58 @@ struct DraftCommitTabView: View {
             } catch {
                 self.error = (error as NSError).localizedDescription
             }
+        }
+    }
+
+    private func runPublish() {
+        guard presentation.publish?.isEnabled == true, let rps = rightPane
+        else { return }
+        let subjectSnapshot = subject
+        let bodySnapshot = bodyText
+        let amendSnapshot = amend
+        let draftSnapshot = createReviewRequestAsDraft
+        let reviewSnapshot = rps.reviewLoop.snapshot
+        let ggMode = rps.ggContext.isActive
+        let ggTarget: GGStackTargetIdentity?
+        if publishCheckpoint == nil, ggMode {
+            guard let target = rps.ggTargetForCommitPublish() else {
+                error = GGMutationError.staleConfirmation.localizedDescription
+                return
+            }
+            ggTarget = target
+        } else {
+            ggTarget = nil
+        }
+        let comparisonBase = appState.rightPaneStore.commitEditorComparisonRef(worktreeId: worktreeId)
+        error = nil
+        var operations = CommitPublishOperations.live(
+            worktreePath: worktreePath, reviewLoop: rps.reviewLoop, comparisonBase: comparisonBase,
+            syncGG: { execution in try await rps.syncGGForCommitPublish(markExecutionStarted: execution.markStarted) },
+            refreshAfterCompletion: { _ = await rps.refresh(forceReviewLoopRemote: true) }
+        )
+        operations.validateGGTarget = { try await rps.validateGGTargetForCommitPublish($0) }
+        operations.syncGGForTarget = { try await rps.syncGGForCommitPublish(target: $0, markExecutionStarted: $1.markStarted) }
+        operations.currentGGRecoveryOperationID = { try await rps.currentGGRecoveryOperationIDForCommitPublish() }
+        operations.validateGGRecoveryHead = { try rps.validateGGRecoveryHeadForCommitPublish(operationID: $0, headSHA: $1) }
+        appState.tabs.runCommitPublish(worktreeId: worktreeId, tabId: tabState.id,
+            subject: subjectSnapshot, body: bodySnapshot, amend: amendSnapshot,
+            operations: operations, prepareDestination: { [worktreePath] in
+                if let ggTarget {
+                    return .gg(ggTarget)
+                }
+                guard let reviewSnapshot else { throw CommitPublishWorkflowError.invalidDestination(phase: .push) }
+                return .review(try await CommitPublishReviewTarget.capture(
+                    snapshot: reviewSnapshot, createAsDraft: draftSnapshot,
+                    runGit: { try await Process.git($0, cwd: worktreePath) }
+                ))
+            })
+    }
+
+    private func abandonPublishCheckpoint() {
+        guard !busy else { return }
+        if appState.tabs.abandonCommitPublishCheckpoint(worktreeId: worktreeId, tabId: tabState.id) {
+            error = nil
+            refreshActionsOverlay()
         }
     }
 }
