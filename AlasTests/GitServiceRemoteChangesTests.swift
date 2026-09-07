@@ -1,6 +1,23 @@
 import Testing
 import Foundation
+import Darwin
 @testable import Alas
+
+/// Races `operation` against a timeout so a regression that reintroduces a
+/// blocking read (e.g. `Data(contentsOf:)` against a writerless FIFO) fails
+/// the test loudly and promptly instead of hanging the whole suite.
+private func withTimeout<T: Sendable>(seconds: Double, _ operation: @escaping @Sendable () async -> T) async -> T? {
+    await withTaskGroup(of: T?.self) { group in
+        group.addTask { await operation() }
+        group.addTask {
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            return nil
+        }
+        let result = await group.next() ?? nil
+        group.cancelAll()
+        return result
+    }
+}
 
 @Suite(.serialized)
 @MainActor
@@ -752,5 +769,31 @@ struct GitServiceRemoteChangesTests {
         #expect(parsed.ordered == ["new.txt", "copy.txt"])
         #expect(parsed.status == ["new.txt": "R", "copy.txt": "C"])
         #expect(parsed.original == ["new.txt": "old.txt", "copy.txt": "base.txt"])
+    }
+
+    // MARK: - addedLineCount
+
+    /// `addedLineCount` runs synchronously on whatever actor called it —
+    /// ultimately `changedFilesAgainstRef`, reachable from the `@MainActor`
+    /// `remoteChangeList` (this test struct is itself `@MainActor`, matching
+    /// that). A FIFO passes every check `Data(contentsOf:)` doesn't itself
+    /// perform, so without an explicit regular-file guard, opening Changes
+    /// on a worktree containing an untracked FIFO would block the READ
+    /// indefinitely waiting for a writer that never arrives — freezing the
+    /// whole app, not just this one request. `mkfifo` creates a real named
+    /// pipe; nothing ever opens it for writing, so a regression would hang
+    /// this test until the timeout — asserted against explicitly so it
+    /// fails loudly rather than hanging the whole suite.
+    @Test func addedLineCount_returnsPromptlyForAFIFOWithNoWriter() async throws {
+        let root = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fifo = root.appendingPathComponent("pipe")
+        #expect(fifo.path.withCString { mkfifo($0, 0o600) } == 0)
+
+        let outcome = await withTimeout(seconds: 5) {
+            GitService.addedLineCount(worktreePath: root, path: "pipe")
+        }
+        let result = try #require(outcome, "addedLineCount hung on a writerless FIFO instead of returning promptly")
+        #expect(result == 0)
     }
 }

@@ -1,6 +1,16 @@
 import Foundation
 import OSLog
 
+enum RemoteFileStatsError: Error, LocalizedError {
+    case directoryListingFailed(path: String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .directoryListingFailed(path): "Could not list remote directory: \(path)"
+        }
+    }
+}
+
 enum RemoteFileStats {
     private static let logger = Logger(subsystem: "app.alas", category: "RemoteFileStats")
     static let maxBatchedPaths = 200
@@ -84,7 +94,14 @@ enum RemoteFileStats {
     /// separate round trips racing an intermediate symlink swap between
     /// them. The helper path doesn't need it: the persistent helper already
     /// enforces containment server-side against its own subscribed root.
-    static func directoryEntries(host: String, worktreeRoot: String, path: String) async -> [(name: String, isDirectory: Bool)] {
+    /// Throws rather than returning `[]` on failure: a directory that
+    /// genuinely has no entries and a directory whose listing FAILED (a
+    /// dropped connection, a helper error, containment rejection) look
+    /// identical to a caller that only sees an empty array — which
+    /// `fileTreeChildren` (and, through it, `remoteFileTree`) previously
+    /// turned into a misleadingly "successful" empty directory instead of
+    /// `fileTreeFailed`.
+    static func directoryEntries(host: String, worktreeRoot: String, path: String) async throws -> [(name: String, isDirectory: Bool)] {
         if await RemoteHostCapabilityStore.shared.capabilities(for: host)?.helperHandshake != nil {
             let startedAt = CFAbsoluteTimeGetCurrent()
             do {
@@ -95,7 +112,7 @@ enum RemoteFileStats {
             } catch let error as RemoteHelperClientError where !error.shouldFallbackToRemoteExec {
                 RemoteOperationTiming.log("fs/list", host: host, transport: "helper", startedAt: startedAt)
                 logger.debug("helper directory listing failed: \(String(describing: error), privacy: .public)")
-                return []
+                throw error
             } catch {
                 RemoteOperationTiming.log("fs/list", host: host, transport: "helper-fallback", startedAt: startedAt)
             }
@@ -103,10 +120,14 @@ enum RemoteFileStats {
 
         let startedAt = CFAbsoluteTimeGetCurrent()
         defer { RemoteOperationTiming.log("fs/list", host: host, transport: "exec", startedAt: startedAt) }
-        guard let outcome = try? await RemotePathContainment.containedList(host: host, path: path, worktreeRoot: worktreeRoot),
-              case let .ok(entries) = outcome
-        else { return [] }
-        return entries
+        switch try await RemotePathContainment.containedList(host: host, path: path, worktreeRoot: worktreeRoot) {
+        case .ok(let entries):
+            return entries
+        case .outsideWorktree:
+            throw RemotePathContainment.ContainmentError.outsideWorktree(path)
+        case .notADirectory, .unreadable:
+            throw RemoteFileStatsError.directoryListingFailed(path: path)
+        }
     }
 
     /// GNU-then-BSD `ls` invocation, chained the same way `statMtime` chains

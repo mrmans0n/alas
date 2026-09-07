@@ -755,7 +755,7 @@ extension GitService {
             var ignoreCandidates: [RootIgnoreCandidate] = []
             if let host = RemoteHostRegistry.shared.host(forPath: worktreePath.path) {
                 let directory = path.isEmpty ? worktreePath.path : worktreePath.appendingPathComponent(path).path
-                for entry in await RemoteFileStats.directoryEntries(host: host, worktreeRoot: worktreePath.path, path: directory)
+                for entry in try await RemoteFileStats.directoryEntries(host: host, worktreeRoot: worktreePath.path, path: directory)
                     where entry.name != ".git" {
                     let fullPath = path.isEmpty ? entry.name : path + "/" + entry.name
                     if entry.isDirectory { directories.insert(fullPath) }
@@ -958,7 +958,16 @@ extension GitService {
             cwd: worktreePath,
             stdin: inputPaths.joined(separator: "\0") + "\0"
         )
-        guard result.exitCode == 0 else { return [:] }
+        // `check-ignore` exits 1 when NONE of the input paths matched an
+        // ignore pattern — a legitimate, common result (an empty visibility
+        // map is exactly right here), not a failure. Only >= 2 is fatal (a
+        // dropped SSH connection, an invalid invocation): conflating that
+        // with "nothing is ignored" would let every candidate default to
+        // `.tracked` visibility and serialize names (e.g. `.env`) that
+        // should have been hidden, or fail the whole request outright.
+        guard result.exitCode <= 1 else {
+            throw ProcessError.nonZeroExit(result.exitCode, result.stderr)
+        }
 
         var visibility: [String: FileVisibility] = [:]
         for entry in checkIgnoreMatches(result.stdout) {

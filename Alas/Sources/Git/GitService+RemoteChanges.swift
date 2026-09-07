@@ -280,6 +280,17 @@ extension GitService {
     /// matter (a trailing-newline off-by-one).
     static func addedLineCount(worktreePath: URL, path: String) -> Int {
         let url = worktreePath.appendingPathComponent(path)
+        // `Data(contentsOf:)` below performs a plain blocking open+read: on
+        // a FIFO with no writer, that blocks indefinitely. Since this runs
+        // synchronously on whatever actor called it (ultimately
+        // `changedFilesAgainstRef`, reachable from the `@MainActor`
+        // `remoteChangeList`), a worktree containing an untracked FIFO
+        // would freeze the whole app, not just this one request. Reject
+        // anything that isn't a regular file (a symlink resolving to one is
+        // still fine) before ever opening it.
+        guard (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else {
+            return 0
+        }
         guard let data = try? Data(contentsOf: url), !looksBinary(data),
               let text = String(data: data, encoding: .utf8) else { return 0 }
         if text.isEmpty { return 0 }
