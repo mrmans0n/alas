@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 /// Path validation and payload caps for the remote changes/files surface.
 ///
@@ -142,10 +143,22 @@ enum RemoteWorktreeFileAccess {
                     break
                 }
                 let line = clampedLine(rawLine)
+                // `clampedLine` only bounds a single line to
+                // `maxDiffLineBytes` — that clamped size can still be
+                // larger than what's left of the OVERALL `maxDiffBytes`
+                // budget. Check the fit BEFORE appending (not just
+                // `remainingBytes <= 0` at the top of the loop, which only
+                // catches an ALREADY-exhausted budget) so the very last line
+                // kept can never itself push the total past the cap.
+                let lineByteCount = line.text.utf8.count
+                guard lineByteCount <= remainingBytes else {
+                    truncated = true
+                    break
+                }
                 if line.text != rawLine.text { truncated = true }
                 keptLines.append(line)
                 remainingLines -= 1
-                remainingBytes -= line.text.utf8.count
+                remainingBytes -= lineByteCount
             }
             if !keptLines.isEmpty {
                 kept.append(ParsedDiff.Hunk(
@@ -178,44 +191,154 @@ enum RemoteWorktreeFileAccess {
         case text(String)
     }
 
+    /// Number of bytes `looksBinaryOnDisk` sniffs — matches
+    /// `GitService.looksBinary`'s own 8 KB inspection window, so a binary
+    /// sniff never needs more than that.
+    private static let binarySniffPrefixBytes = 8192
+
+    /// Outcome of `openReadCapped`, the single-descriptor open+fstat+read
+    /// primitive both `readFileContents` and `looksBinaryOnDisk` funnel
+    /// through.
+    private enum RawReadOutcome {
+        case notFound
+        case tooLarge(byteSize: Int)
+        case data(Data)
+    }
+
+    /// Opens `url` and, on success, returns a descriptor already `fstat`-
+    /// verified as a *regular file* — never a symlink, directory, FIFO, or
+    /// other special file. Callers own the returned descriptor and must
+    /// `close` it.
+    ///
+    /// `O_NOFOLLOW` rejects a symlink at the FINAL path component atomically
+    /// with the open itself (no separate `lstat`-then-`open` gap to race).
+    /// `O_NONBLOCK` prevents `open` from blocking forever on a FIFO with no
+    /// writer — without it, opening a named pipe for reading blocks
+    /// indefinitely, which (since `RemoteSessionGateway` serializes ordinary
+    /// messages per connection) would hang every subsequent message on that
+    /// connection too. `O_NONBLOCK` is a no-op for regular files, so it
+    /// changes nothing about how the eventual read behaves once `fstat`
+    /// confirms `S_IFREG`.
+    ///
+    /// This closes the specific TOCTOU gap Codex flagged: `resolve()` already
+    /// canonicalizes and validates the full path (including intermediate
+    /// symlinks) once, up front. The remaining gap was that a LATER, separate
+    /// operation (`Data(contentsOf:)`, or a separate `stat` call) re-resolved
+    /// the same path string from scratch, giving a concurrently-running
+    /// process a window to swap a path component for a symlink between the
+    /// check and that later re-resolution. Threading a single already-opened
+    /// descriptor through open → fstat (regular-file check) → read means
+    /// there is no later re-resolution left to race: whatever the kernel
+    /// resolved when `open` succeeded is exactly what every subsequent
+    /// `fstat`/`read` call on that descriptor sees.
+    ///
+    /// Not perfect: `resolve()`'s own canonicalization (`resolvingSymlinksInPath`)
+    /// and this `open` call are still two separate filesystem operations, so
+    /// an intermediate directory component could theoretically be swapped
+    /// for a symlink in between them. That residual window is far narrower
+    /// than the one this closes (a single open syscall's worth of time, vs.
+    /// the entire duration of an unrelated later read), and closing it
+    /// completely would require a hand-rolled `openat`-per-component walk;
+    /// not implemented here as disproportionate to the residual risk.
+    private static func openRegularFileNoFollow(at url: URL) -> Int32? {
+        let fd = url.withUnsafeFileSystemRepresentation { representation -> Int32 in
+            guard let representation else { return -1 }
+            return open(representation, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        }
+        guard fd >= 0 else { return nil }
+        var status = stat()
+        guard fstat(fd, &status) == 0, (status.st_mode & S_IFMT) == S_IFREG else {
+            close(fd)
+            return nil
+        }
+        return fd
+    }
+
+    /// Reads the ENTIRE contents of `url` via a single open/fstat/read
+    /// sequence (see `openRegularFileNoFollow`), capped at `maxBytes`. The
+    /// size check and the read both happen against the SAME already-opened
+    /// descriptor — no re-`stat`, no re-`open` by path — so a concurrent
+    /// write growing the file past the cap after `fstat` is still caught by
+    /// the read loop's own running total rather than a stale earlier stat.
+    private static func openReadCapped(at url: URL, maxBytes: Int) -> RawReadOutcome {
+        guard let fd = openRegularFileNoFollow(at: url) else { return .notFound }
+        defer { close(fd) }
+
+        var status = stat()
+        guard fstat(fd, &status) == 0 else { return .notFound }
+        let statedSize = Int(clamping: status.st_size)
+        if statedSize > maxBytes {
+            return .tooLarge(byteSize: statedSize)
+        }
+
+        // Read via the SAME fd, capped at `maxBytes + 1` so a file that
+        // grows past the cap after `fstat` (e.g. a concurrent writer) is
+        // still caught here rather than silently served in full.
+        var data = Data()
+        data.reserveCapacity(min(statedSize, maxBytes) + 1)
+        var buffer = [UInt8](repeating: 0, count: 64 * 1024)
+        while data.count <= maxBytes {
+            let bytesRead = buffer.withUnsafeMutableBytes { pointer -> Int in
+                read(fd, pointer.baseAddress, pointer.count)
+            }
+            guard bytesRead > 0 else { break }
+            data.append(contentsOf: buffer[0..<bytesRead])
+        }
+        if data.count > maxBytes {
+            return .tooLarge(byteSize: data.count)
+        }
+        return .data(data)
+    }
+
+    /// Reads only the first `maxBytes` of `url` (or fewer if the file is
+    /// smaller), via the same `openRegularFileNoFollow` open+fstat sequence,
+    /// WITHOUT treating a larger total file size as an error — this is a
+    /// bounded-prefix sniff, not a capped whole-file read. Returns nil when
+    /// the path can't be opened as a validated regular file.
+    private static func openReadPrefix(at url: URL, maxBytes: Int) -> Data? {
+        guard let fd = openRegularFileNoFollow(at: url) else { return nil }
+        defer { close(fd) }
+        var buffer = [UInt8](repeating: 0, count: maxBytes)
+        let bytesRead = buffer.withUnsafeMutableBytes { pointer -> Int in
+            read(fd, pointer.baseAddress, pointer.count)
+        }
+        guard bytesRead >= 0 else { return nil }
+        return Data(buffer[0..<bytesRead])
+    }
+
     /// Stats, caps, reads, and UTF-8-decodes `url` entirely off the caller's
-    /// actor. The size cap is checked against a cheap `stat` result — BEFORE
-    /// any `Data(contentsOf:)` — so a client naming a huge file never forces
-    /// a full read. Callers on `@MainActor` (`AppState`) must `await` this
-    /// rather than reading the file directly, so an unbounded read never
-    /// blocks the UI thread.
+    /// actor, via a single open/fstat/read sequence (`openReadCapped`) so no
+    /// path is ever re-resolved between the size check and the actual read.
+    /// Callers on `@MainActor` (`AppState`) must `await` this rather than
+    /// reading the file directly, so an unbounded read never blocks the UI
+    /// thread.
     static func readFileContents(at url: URL) async -> FileReadOutcome {
         await Task.detached(priority: .userInitiated) {
-            guard !isSymlink(at: url) else { return .notFound }
-            guard let size = fileByteSize(at: url) else { return .notFound }
-            guard size <= maxFileBytes else { return .tooLarge(byteSize: size) }
-            guard let data = try? Data(contentsOf: url) else { return .notFound }
-            guard !GitService.looksBinary(data) else { return .binary(byteSize: data.count) }
-            guard let text = String(data: data, encoding: .utf8) else {
-                return .binary(byteSize: data.count)
+            switch openReadCapped(at: url, maxBytes: maxFileBytes) {
+            case .notFound: return .notFound
+            case .tooLarge(let byteSize): return .tooLarge(byteSize: byteSize)
+            case .data(let data):
+                guard !GitService.looksBinary(data) else { return .binary(byteSize: data.count) }
+                guard let text = String(data: data, encoding: .utf8) else {
+                    return .binary(byteSize: data.count)
+                }
+                return .text(text)
             }
-            return .text(text)
         }.value
     }
 
     /// Sniffs whether `url` looks binary without reading the whole file, off
-    /// the caller's actor. `GitService.looksBinary` only ever inspects the
-    /// first 8 KB, so a full read buys nothing here but main-thread risk on
-    /// a large file.
+    /// the caller's actor, via the same `openRegularFileNoFollow` open+fstat
+    /// sequence so a symlink or non-regular file (including a FIFO with no
+    /// writer — see `openRegularFileNoFollow`'s doc comment) can never block
+    /// or bypass validation here either. Reads only a bounded PREFIX
+    /// (`openReadPrefix`), regardless of the file's total size — a file
+    /// larger than the sniff window is not itself an error here, unlike the
+    /// whole-file cap `readFileContents` enforces.
     static func looksBinaryOnDisk(at url: URL) async -> Bool {
         await Task.detached(priority: .userInitiated) {
-            guard !isSymlink(at: url) else { return false }
-            guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
-            defer { try? handle.close() }
-            let sample = (try? handle.read(upToCount: 8192)) ?? Data()
+            guard let sample = openReadPrefix(at: url, maxBytes: binarySniffPrefixBytes) else { return false }
             return GitService.looksBinary(sample)
         }.value
-    }
-
-    private static func fileByteSize(at url: URL) -> Int? {
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path) else {
-            return nil
-        }
-        return (attributes[.size] as? NSNumber)?.intValue
     }
 }

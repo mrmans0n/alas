@@ -331,6 +331,7 @@ button.create-row.is-selected { border-color: var(--accent); background: color-m
 .diff-line.add { background: color-mix(in oklab, var(--add) 16%, transparent); }
 .diff-line.delete { background: color-mix(in oklab, var(--del) 16%, transparent); }
 .diff-gutter { min-width: 4ch; text-align: right; color: var(--fg-faint); }
+.diff-no-newline { color: var(--fg-faint); font-style: italic; }
 .detail-path { padding: 8px 12px; color: var(--fg-muted); word-break: break-all; }
 .placeholder-card {
   margin: 16px 12px; padding: 12px; border: 0.5px solid var(--line);

@@ -697,11 +697,23 @@ struct RemoteProtocolTests {
             header: "@@ -1,2 +1,3 @@", oldStart: 1, newStart: 1,
             lines: [
                 RemoteDiffLine(kind: "context", text: "import Foundation", oldNumber: 1, newNumber: 1),
-                RemoteDiffLine(kind: "add", text: "import Testing", oldNumber: nil, newNumber: 2)
+                RemoteDiffLine(kind: "add", text: "import Testing", oldNumber: nil, newNumber: 2),
+                RemoteDiffLine(kind: "delete", text: "old", oldNumber: 3, newNumber: nil, noTrailingNewline: true)
             ])
         let diff = RemoteServerMessage.fileDiffResult(
             sessionId: "s1", path: "src/main.swift", hunks: [hunk], truncated: true)
         #expect(try roundTrip(diff) == diff)
+        #expect(try roundTrip(hunk) == hunk)
+        #expect(try roundTrip(hunk).lines.last?.noTrailingNewline == true)
+
+        // Decoded leniently when the field is absent entirely (an older
+        // host that hasn't been rebuilt yet), defaulting to `false` rather
+        // than failing to decode.
+        let legacyJSON = Data("""
+        {"kind": "context", "text": "hi", "oldNumber": 1, "newNumber": 1}
+        """.utf8)
+        let legacyLine = try JSONDecoder().decode(RemoteDiffLine.self, from: legacyJSON)
+        #expect(legacyLine.noTrailingNewline == false)
 
         let diffFailure = RemoteServerMessage.fileDiffFailed(
             sessionId: "s1", path: "logo.png", reason: .binary, message: nil)

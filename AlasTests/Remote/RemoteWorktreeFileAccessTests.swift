@@ -1,6 +1,23 @@
 import Testing
 import Foundation
+import Darwin
 @testable import Alas
+
+/// Races `operation` against a timeout so a regression that reintroduces a
+/// blocking open/read (e.g. a FIFO with no writer) fails the test loudly
+/// and promptly instead of hanging the whole suite.
+private func withTimeout<T: Sendable>(seconds: Double, _ operation: @escaping @Sendable () async -> T) async -> T? {
+    await withTaskGroup(of: T?.self) { group in
+        group.addTask { await operation() }
+        group.addTask {
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            return nil
+        }
+        let result = await group.next() ?? nil
+        group.cancelAll()
+        return result
+    }
+}
 
 struct RemoteWorktreeFileAccessTests {
     private func makeRoot() throws -> URL {
@@ -306,5 +323,100 @@ struct RemoteWorktreeFileAccessTests {
 
         #expect(await RemoteWorktreeFileAccess.looksBinaryOnDisk(at: textURL) == false)
         #expect(await RemoteWorktreeFileAccess.looksBinaryOnDisk(at: binaryURL) == true)
+    }
+
+    /// `looksBinaryOnDisk` sniffs a file larger than its 8 KB sniff window
+    /// via a bounded prefix read (`openReadPrefix`), NOT the whole-file cap
+    /// path (`openReadCapped`) — a file whose total size exceeds 8 KB must
+    /// still be sniffed rather than being reported as "too large" and
+    /// treated as not-binary. This guards the read-prefix/read-capped split
+    /// introduced by the single-open TOCTOU fix.
+    @Test func looksBinaryOnDiskSniffsAFileLargerThanTheSniffWindow() async throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("large-text.txt")
+        let text = String(repeating: "clean text line\n", count: 4000) // well over 8 KB
+        try text.write(to: url, atomically: true, encoding: .utf8)
+
+        #expect(await RemoteWorktreeFileAccess.looksBinaryOnDisk(at: url) == false)
+    }
+
+    /// Both `readFileContents` and `looksBinaryOnDisk` open the target via
+    /// `O_NOFOLLOW | O_NONBLOCK`, so a FIFO with no writer must never block:
+    /// opening a named pipe for reading normally blocks indefinitely without
+    /// `O_NONBLOCK`, which (since ordinary remote-session messages are
+    /// processed serially per connection) would hang every subsequent
+    /// message too. `mkfifo` creates a real named pipe; nothing ever opens
+    /// it for writing, so a regression that drops `O_NONBLOCK` or the
+    /// regular-file `fstat` check would hang this test until the timeout —
+    /// asserted against explicitly so a real regression fails loudly rather
+    /// than hanging the whole suite.
+    @Test func readFileContentsReturnsPromptlyForAFIFOWithNoWriter() async throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fifoURL = root.appendingPathComponent("pipe")
+        #expect(fifoURL.path.withCString { mkfifo($0, 0o600) } == 0)
+
+        let outcome = await withTimeout(seconds: 5) {
+            await RemoteWorktreeFileAccess.readFileContents(at: fifoURL)
+        }
+        let result = try #require(outcome, "readFileContents hung on a writerless FIFO instead of returning promptly")
+        #expect(result == .notFound)
+    }
+
+    @Test func looksBinaryOnDiskReturnsPromptlyForAFIFOWithNoWriter() async throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fifoURL = root.appendingPathComponent("pipe")
+        #expect(fifoURL.path.withCString { mkfifo($0, 0o600) } == 0)
+
+        let outcome: Bool? = await withTimeout(seconds: 5) {
+            await RemoteWorktreeFileAccess.looksBinaryOnDisk(at: fifoURL)
+        }
+        let result = try #require(outcome as Bool?, "looksBinaryOnDisk hung on a writerless FIFO instead of returning promptly")
+        #expect(result == false)
+    }
+
+    /// Structural proof of the single-open TOCTOU fix: the last line
+    /// appended to a truncated diff must never itself push the payload past
+    /// `maxDiffBytes`, even when its (already per-line-clamped) size would
+    /// have fit under the OLD "check remainingBytes > 0 before the NEXT
+    /// line" logic while still exceeding what's actually left of the
+    /// budget.
+    @Test func truncateHunksNeverExceedsTheByteBudgetOnTheFinalKeptLine() {
+        // 8 filler lines, each individually UNDER `maxDiffLineBytes` (so
+        // `clampedLine` never touches them), consume all but a small sliver
+        // of the overall `maxDiffBytes` budget. The final line is also
+        // under `maxDiffLineBytes` but far larger than that sliver — the
+        // old "check `remainingBytes > 0` before the NEXT line" logic would
+        // have appended it anyway (0 > 0 is false, but the sliver here is
+        // small and positive), pushing the total thousands of bytes past
+        // the cap.
+        let fillerSize = 65_000
+        precondition(fillerSize < RemoteWorktreeFileAccess.maxDiffLineBytes)
+        let fillerLine = ParsedDiff.Hunk.Line(
+            kind: .add, text: String(repeating: "a", count: fillerSize), oldNumber: nil, newNumber: 1)
+        let fillerCount = 8
+        let remainingBeforeFinalLine = RemoteWorktreeFileAccess.maxDiffBytes - fillerCount * fillerSize
+        precondition(remainingBeforeFinalLine > 0)
+        let finalLineSize = 10_000
+        precondition(finalLineSize < RemoteWorktreeFileAccess.maxDiffLineBytes)
+        precondition(finalLineSize > remainingBeforeFinalLine, "final line must NOT fit in what's left of the budget")
+        let finalLine = ParsedDiff.Hunk.Line(
+            kind: .add, text: String(repeating: "b", count: finalLineSize), oldNumber: nil, newNumber: 2)
+        let hunk = ParsedDiff.Hunk(
+            header: "@@ -0,0 +1,2 @@", oldStart: 0, newStart: 1,
+            lines: Array(repeating: fillerLine, count: fillerCount) + [finalLine])
+
+        let result = RemoteWorktreeFileAccess.truncateHunks([hunk])
+
+        #expect(result.truncated)
+        let totalBytes = result.hunks.reduce(0) { total, hunk in
+            total + hunk.lines.reduce(0) { $0 + $1.text.utf8.count }
+        }
+        #expect(totalBytes <= RemoteWorktreeFileAccess.maxDiffBytes)
+        // The final line must have been dropped entirely (not partially
+        // appended) since it can't fit in the remaining budget.
+        #expect(result.hunks.first?.lines.count == fillerCount)
     }
 }

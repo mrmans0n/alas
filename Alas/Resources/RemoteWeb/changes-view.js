@@ -36,14 +36,15 @@ function formatSummary(state) {
 function diffRows(hunks) {
   const rows = [];
   for (const hunk of hunks || []) {
-    rows.push({ type: "hunk", text: hunk.header, kind: null, oldNumber: null, newNumber: null });
+    rows.push({ type: "hunk", text: hunk.header, kind: null, oldNumber: null, newNumber: null, noTrailingNewline: false });
     for (const line of hunk.lines || []) {
       rows.push({
         type: "line",
         text: line.text,
         kind: line.kind,
         oldNumber: typeof line.oldNumber === "number" ? line.oldNumber : null,
-        newNumber: typeof line.newNumber === "number" ? line.newNumber : null
+        newNumber: typeof line.newNumber === "number" ? line.newNumber : null,
+        noTrailingNewline: !!line.noTrailingNewline
       });
     }
   }

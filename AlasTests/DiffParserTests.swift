@@ -26,6 +26,23 @@ struct DiffParserTests {
     @Test func emptyDiff() {
         let diff = DiffParser.parse("")
         #expect(diff.hunks.isEmpty)
+        #expect(!diff.isBinary)
+    }
+
+    /// A file git classifies as binary (whether by content sniffing or a
+    /// `.gitattributes` `binary` declaration) produces no `@@` hunks at
+    /// all — just a `Binary files ... differ` line. Without detecting this
+    /// explicitly, a hunk-less result is indistinguishable from a
+    /// legitimately empty diff.
+    @Test func detectsGitsOwnBinaryClassificationLine() {
+        let raw = """
+        diff --git a/image.dat b/image.dat
+        index abc..def 100644
+        Binary files a/image.dat and b/image.dat differ
+        """
+        let diff = DiffParser.parse(raw)
+        #expect(diff.hunks.isEmpty)
+        #expect(diff.isBinary)
     }
 
     @Test func capturesNoTrailingNewlineOnDeleteAndAddSides() {

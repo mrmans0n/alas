@@ -2,6 +2,15 @@ import Foundation
 
 struct ParsedDiff: Equatable {
     var hunks: [Hunk]
+    /// True when git's raw diff output reported `Binary files ... differ`
+    /// instead of any renderable hunks. A file can be declared binary via
+    /// `.gitattributes` (e.g. `*.dat binary`) even when its content happens
+    /// to look like valid UTF-8 at the byte level — an on-disk content
+    /// sniff alone would miss that case and treat a hunk-less result as a
+    /// legitimate empty diff. Detected directly from the raw diff text here
+    /// (before hunk parsing discards everything that isn't a `@@` line),
+    /// rather than a separate git call.
+    var isBinary: Bool = false
     struct Hunk: Equatable {
         let header: String          // raw "@@ ... @@" line
         let oldStart: Int
@@ -28,6 +37,7 @@ enum DiffParser {
         var current: (header: String, oldStart: Int, newStart: Int, lines: [ParsedDiff.Hunk.Line])? = nil
         var oldCounter = 0
         var newCounter = 0
+        var isBinary = false
 
         func flush() {
             if let c = current {
@@ -38,6 +48,10 @@ enum DiffParser {
         }
 
         for line in raw.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
+            if line.hasPrefix("Binary files ") && line.hasSuffix(" differ") {
+                isBinary = true
+                continue
+            }
             if line.hasPrefix("@@") {
                 flush()
                 let (oldStart, newStart) = parseHunkHeader(line)
@@ -71,7 +85,7 @@ enum DiffParser {
             }
         }
         flush()
-        return ParsedDiff(hunks: hunks)
+        return ParsedDiff(hunks: hunks, isBinary: isBinary)
     }
 
     private static func parseHunkHeader(_ header: String) -> (Int, Int) {

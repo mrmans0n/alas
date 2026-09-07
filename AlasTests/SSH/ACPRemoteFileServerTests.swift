@@ -97,4 +97,104 @@ struct ACPRemoteFileServerTests {
         let result = try await Process.run("/bin/sh", args: ["-c", command])
         return result.exitCode
     }
+
+    // MARK: - containedReadScript / containedRead
+
+    /// Same local-`/bin/sh` verification strategy as
+    /// `containmentExcludingGitProbeCommandRejectsADirectorySymlinkAliasToGit`:
+    /// `containedReadScript` only uses POSIX shell builtins plus
+    /// `stat`/`head`, so its behavior locally is identical to what
+    /// `RemoteExec.run` would produce against a real remote host.
+    private func runContainedRead(target: String, root: String, maxBytes: Int = 1_000_000) async throws -> ProcessResultData {
+        let command = RemotePathContainment.containedReadScript(path: target, worktreeRoot: root, maxBytes: maxBytes)
+        return try await Process.runData("/bin/sh", args: ["-c", command])
+    }
+
+    private func makeContainedReadRoot() throws -> URL {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-contained-read-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        return root
+    }
+
+    @Test func containedReadScriptReadsAnOrdinaryFileInOneShellInvocation() async throws {
+        let root = try makeContainedReadRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("a.txt")
+        try "hello\n".write(to: file, atomically: true, encoding: .utf8)
+
+        let result = try await runContainedRead(target: file.path, root: root.path)
+
+        #expect(result.exitCode == 0)
+        let text = String(data: result.stdout, encoding: .utf8)
+        #expect(text == "6\nhello\n")
+    }
+
+    @Test func containedReadScriptRejectsASymlink() async throws {
+        let root = try makeContainedReadRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let target = root.appendingPathComponent("real.txt")
+        try "secret\n".write(to: target, atomically: true, encoding: .utf8)
+        let alias = root.appendingPathComponent("alias.txt")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: target)
+
+        let result = try await runContainedRead(target: alias.path, root: root.path)
+
+        #expect(result.exitCode == 8)
+    }
+
+    @Test func containedReadScriptRejectsADirectory() async throws {
+        let root = try makeContainedReadRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let dir = root.appendingPathComponent("subdir")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+        let result = try await runContainedRead(target: dir.path, root: root.path)
+
+        #expect(result.exitCode == 9)
+    }
+
+    @Test func containedReadScriptReportsMissingFile() async throws {
+        let root = try makeContainedReadRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let result = try await runContainedRead(target: root.appendingPathComponent("nope.txt").path, root: root.path)
+
+        #expect(result.exitCode == 10)
+    }
+
+    @Test func containedReadScriptRejectsPathsOutsideTheWorktree() async throws {
+        let root = try makeContainedReadRoot()
+        let outside = try makeContainedReadRoot()
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: outside)
+        }
+        let file = outside.appendingPathComponent("secret.txt")
+        try "nope\n".write(to: file, atomically: true, encoding: .utf8)
+
+        let result = try await runContainedRead(target: file.path, root: root.path)
+
+        #expect(result.exitCode == 6)
+    }
+
+    @Test func containedReadScriptCapsTheTransferredBodyWithoutMisreportingSize() async throws {
+        let root = try makeContainedReadRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("big.txt")
+        let content = String(repeating: "x", count: 1000)
+        try content.write(to: file, atomically: true, encoding: .utf8)
+
+        let result = try await runContainedRead(target: file.path, root: root.path, maxBytes: 10)
+
+        #expect(result.exitCode == 0)
+        guard let newline = result.stdout.firstIndex(of: UInt8(ascii: "\n")) else {
+            Issue.record("expected a size header line")
+            return
+        }
+        let header = String(data: result.stdout[..<newline], encoding: .utf8)
+        #expect(header == "1000")
+        let body = result.stdout[result.stdout.index(after: newline)...]
+        #expect(body.count == 10)
+    }
 }

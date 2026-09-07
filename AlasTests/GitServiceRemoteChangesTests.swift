@@ -408,6 +408,141 @@ struct GitServiceRemoteChangesTests {
         #expect(!ignored)
     }
 
+    /// A file tracked at `comparisonRef` but since deleted is no longer in
+    /// the current index, so plain `check-ignore` (no `--no-index`) falls
+    /// back to matching purely by name — reporting it "ignored" whenever a
+    /// LATER-added `.gitignore` pattern happens to match its name, even
+    /// though its legitimate deletion diff should still be servable.
+    /// `comparisonRef` must exempt it the same way the force-added-tracked
+    /// exemption above exempts a currently-indexed path.
+    @Test func isPathIgnored_reportsFalseForAFileTrackedAtTheComparisonRefButSinceDeleted() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try "keep me\n".write(to: repo.appendingPathComponent("was-tracked.log"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "was-tracked.log"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "add tracked file"], cwd: repo)
+        _ = try await Process.git(["branch", "start"], cwd: repo)
+
+        // Gitignore does not untrack an already-tracked file, so adding this
+        // pattern now still leaves `was-tracked.log` tracked at HEAD.
+        try "*.log\n".write(to: repo.appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", ".gitignore"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "add gitignore pattern"], cwd: repo)
+
+        _ = try await Process.git(["rm", "was-tracked.log"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "delete tracked file"], cwd: repo)
+
+        // Without the ref exemption, this reports true (ignored-by-name):
+        let ignoredWithoutRef = try await GitService().isPathIgnored(worktreePath: repo, path: "was-tracked.log")
+        #expect(ignoredWithoutRef)
+
+        let ignoredWithRef = try await GitService().isPathIgnored(
+            worktreePath: repo, path: "was-tracked.log", comparisonRef: "start")
+        #expect(!ignoredWithRef)
+    }
+
+    /// End-to-end confirmation via the actual diff entry point: requesting
+    /// the diff for a deleted, ignore-pattern-matching file must show the
+    /// deletion rather than throwing/being blocked.
+    @Test func diffAgainstRef_showsADeletedFileEvenWhenItsNameMatchesALaterAddedGitignorePattern() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try "keep me\n".write(to: repo.appendingPathComponent("was-tracked.log"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "was-tracked.log"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "add tracked file"], cwd: repo)
+        _ = try await Process.git(["branch", "start"], cwd: repo)
+
+        try "*.log\n".write(to: repo.appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", ".gitignore"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "add gitignore pattern"], cwd: repo)
+        _ = try await Process.git(["rm", "was-tracked.log"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "delete tracked file"], cwd: repo)
+
+        let diff = try await GitService().diff(worktreePath: repo, againstRef: "start", file: "was-tracked.log")
+        let deleted = diff.hunks.flatMap(\.lines).filter { $0.kind == .delete }
+        #expect(deleted.map(\.text).contains("keep me"))
+    }
+
+    /// `cat-file -e` exits with the SAME code for a genuinely missing object
+    /// AND for an invalid ref name — the exit code alone can't distinguish
+    /// them (verified empirically: both are 128 on git 2.50). `diff` must
+    /// not silently treat the invalid-ref case as "new/untracked file"; it
+    /// must propagate the failure.
+    @Test func diffAgainstRef_throwsRatherThanTreatingAnInvalidRefAsANewFile() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try "one\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "a.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "base"], cwd: repo)
+
+        await #expect(throws: (any Error).self) {
+            _ = try await GitService().diff(worktreePath: repo, againstRef: "not-a-real-ref", file: "a.txt")
+        }
+    }
+
+    /// The genuinely-missing-object case (a real ref, a path that doesn't
+    /// exist there) must still take the untracked/new-file branch rather
+    /// than throwing — this is the behavior `diffAgainstRef_showsUntrackedFileAsAllAdd`
+    /// already covers for a NEVER-committed file; this covers the "valid
+    /// ref, path absent at that ref" shape explicitly to guard the
+    /// cat-file-exit-code fix above from over-rejecting the legitimate case.
+    @Test func diffAgainstRef_stillShowsANewFileAsAllAddWhenItGenuinelyDidNotExistAtAValidRef() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        _ = try await Process.git(["commit", "--allow-empty", "-m", "init"], cwd: repo)
+        _ = try await Process.git(["branch", "start"], cwd: repo)
+        try "fresh\n".write(to: repo.appendingPathComponent("brand-new.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "brand-new.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "add new file"], cwd: repo)
+
+        let diff = try await GitService().diff(worktreePath: repo, againstRef: "start", file: "brand-new.txt")
+        let added = diff.hunks.flatMap(\.lines).filter { $0.kind == .add }
+        #expect(added.map(\.text) == ["fresh"])
+    }
+
+    /// A file declared binary purely via `.gitattributes` (content that
+    /// still looks like valid UTF-8 at the byte level) produces a
+    /// hunk-less diff with `Binary files ... differ` instead of `@@` hunks
+    /// — `ParsedDiff.isBinary` must pick that up so callers don't mistake
+    /// it for a legitimately empty diff.
+    @Test func diffAgainstRef_flagsAGitattributesDeclaredBinaryFileWithUTF8Content() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try "*.dat binary\n".write(to: repo.appendingPathComponent(".gitattributes"), atomically: true, encoding: .utf8)
+        try "hello world this is text\n".write(to: repo.appendingPathComponent("f.dat"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", ".gitattributes", "f.dat"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "base"], cwd: repo)
+        _ = try await Process.git(["branch", "start"], cwd: repo)
+        try "hello world this is text CHANGED\n".write(to: repo.appendingPathComponent("f.dat"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "f.dat"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "change binary-declared file"], cwd: repo)
+
+        let diff = try await GitService().diff(worktreePath: repo, againstRef: "start", file: "f.dat")
+        #expect(diff.hunks.isEmpty)
+        #expect(diff.isBinary)
+    }
+
+    /// An untracked file ending in exactly one trailing newline must report
+    /// the same add-count whether or not a comparison ref happens to
+    /// resolve — `status(worktreePath:)`'s own line counting used to
+    /// disagree with `addedLineCount`'s (used by the ref-resolved path) by
+    /// exactly one for this shape.
+    @Test func changedFilesAgainstRef_reportsTheSameAddCountForAnUntrackedFileRegardlessOfRefResolution() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        _ = try await Process.git(["commit", "--allow-empty", "-m", "init"], cwd: repo)
+        try "one\n".write(to: repo.appendingPathComponent("untracked.txt"), atomically: true, encoding: .utf8)
+
+        let withNilRef = try await GitService().changedFilesAgainstRef(worktreePath: repo, ref: nil)
+        let untrackedNilRef = try #require(withNilRef.first { $0.path == "untracked.txt" })
+        #expect(untrackedNilRef.add == 1)
+
+        _ = try await Process.git(["branch", "start"], cwd: repo)
+        let withResolvedRef = try await GitService().changedFilesAgainstRef(worktreePath: repo, ref: "start")
+        let untrackedResolvedRef = try #require(withResolvedRef.first { $0.path == "untracked.txt" })
+        #expect(untrackedResolvedRef.add == 1)
+    }
+
     // MARK: - fileTreeChildren (remote branch) ignored-directory-with-tracked-descendant
 
     /// `fileTreeChildren`'s remote branch discovers directory entries by
@@ -542,6 +677,30 @@ struct GitServiceRemoteChangesTests {
 
         let diff = try await GitService().diffAgainstHEAD(worktreePath: repo, file: "new.txt")
         #expect(diff.hunks.isEmpty)
+    }
+
+    /// A transport failure (disconnected helper, unreachable host) on the
+    /// root Files-tree request used to parse as "zero files" — an empty,
+    /// misleadingly "successful" repository — because `gitVisibleFilePaths`
+    /// didn't check `ls-files`'s exit code. Registering a real, but
+    /// unreachable, remote host forces exactly that shape of failure (`ssh`
+    /// itself fails fast on the invalid TLD, no real network wait) and
+    /// `fileTree` must now propagate it as a thrown error instead of
+    /// returning an empty node list.
+    @Test func fileTreePropagatesAGitVisibleFilePathsFailureInsteadOfReportingAnEmptyTree() async throws {
+        let repo = try await makeRepo()
+        defer {
+            RemoteHostRegistry.shared.unregister(root: repo.path)
+            try? FileManager.default.removeItem(at: repo)
+        }
+        try "one\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "a.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "base"], cwd: repo)
+        RemoteHostRegistry.shared.register(root: repo.path, host: "nonexistent-host.invalid")
+
+        await #expect(throws: (any Error).self) {
+            _ = try await GitService().fileTree(worktreePath: repo, statusEntries: [])
+        }
     }
 
     // MARK: - parseNumstatZOutput / parseNameStatusZOutput

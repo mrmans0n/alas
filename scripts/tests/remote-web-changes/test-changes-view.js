@@ -68,4 +68,23 @@ const view = globalThis.RemoteChangesView;
   assert.equal(view.truncationNotice(false, "lines"), "");
 }
 
+{
+  // `noTrailingNewline` must round-trip through `diffRows` so a diff that
+  // only adds/removes a trailing newline doesn't render as two
+  // identical-looking lines with no visual distinction.
+  const rows = view.diffRows([
+    {
+      header: "@@ -1,1 +1,1 @@",
+      oldStart: 1,
+      newStart: 1,
+      lines: [
+        { kind: "delete", text: "old", oldNumber: 1, newNumber: null, noTrailingNewline: true },
+        { kind: "add", text: "new", oldNumber: null, newNumber: 1 }
+      ]
+    }
+  ]);
+  assert.equal(rows[1].noTrailingNewline, true);
+  assert.equal(rows[2].noTrailingNewline, false);
+}
+
 console.log("remote-web-changes: ok");

@@ -573,6 +573,9 @@ function renderDiff(path, hunks, truncated) {
       el("span", "diff-gutter", row.oldNumber === null ? "" : String(row.oldNumber)),
       el("span", "diff-gutter", row.newNumber === null ? "" : String(row.newNumber)),
       el("span", "", row.text));
+    if (row.noTrailingNewline) {
+      line.append(el("span", "diff-no-newline", " (no newline at end of file)"));
+    }
     container.appendChild(line);
   }
   const notice = RemoteChangesView.truncationNotice(truncated, "diff");

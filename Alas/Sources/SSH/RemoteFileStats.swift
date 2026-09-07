@@ -7,7 +7,11 @@ enum RemoteFileStats {
 
     static func wcCommand(paths: [String]) -> String? {
         guard !paths.isEmpty else { return nil }
-        return "wc -l " + paths.map(SSHCommand.shellQuote).joined(separator: " ")
+        // `--` stops a filename starting with `-` (e.g. `-c`, `-L`) from
+        // being parsed as a `wc` OPTION instead of a filename argument,
+        // which would silently drop that file from the output (and so
+        // silently report 0 for its line count).
+        return "wc -l -- " + paths.map(SSHCommand.shellQuote).joined(separator: " ")
     }
 
     static func parseWcOutput(_ output: String, requested: [String]) -> [String: Int] {
@@ -76,13 +80,43 @@ enum RemoteFileStats {
         guard let result = try? await RemoteExec.run(
             host: host,
             cwd: nil,
-            command: "ls -1Ap " + SSHCommand.shellQuote(path)
+            command: lsCommand(path: path)
         ), result.exitCode == 0 else { return [] }
         return parseLsEntries(result.stdout)
     }
 
+    /// GNU-then-BSD `ls` invocation, chained the same way `statMtime` chains
+    /// GNU-then-BSD `stat` above: GNU coreutils' `ls --zero` emits
+    /// NUL-separated entries so a filename containing an embedded newline
+    /// byte doesn't fragment into bogus extra entries when parsed — this
+    /// mirrors the NUL-delimited fix already applied to the root Files-tree
+    /// listing source (`GitService.gitVisibleFilePaths`'s `git ls-files -z`),
+    /// which this exec-fallback directory listing (used for expanding a
+    /// directory on a helperless SSH host) hadn't been touched by.
+    ///
+    /// BSD `ls` (a remote macOS host) has no NUL-delimited output mode at
+    /// all, so this falls back to ordinary newline-delimited output there —
+    /// a residual, narrower gap: a directory name containing an embedded
+    /// newline byte can still fragment when listed via exec on a BSD/macOS
+    /// remote host specifically. A host with the persistent helper
+    /// installed never hits this at all (it lists via a JSON-safe RPC
+    /// instead, where an embedded newline in a name is just another JSON
+    /// string byte); this only matters for a helperless remote macOS host,
+    /// which is expected to be rare.
+    static func lsCommand(path: String) -> String {
+        let quoted = SSHCommand.shellQuote(path)
+        return "ls -1Ap --zero -- \(quoted) 2>/dev/null || ls -1Ap -- \(quoted)"
+    }
+
+    /// Parses `lsCommand`'s output. Detects which branch of the GNU/BSD
+    /// fallback actually ran by checking for an embedded NUL byte — a
+    /// legitimate filename can never itself contain one on a POSIX
+    /// filesystem, so its presence unambiguously means the NUL-delimited
+    /// (GNU) branch produced this output rather than the newline-delimited
+    /// (BSD) fallback.
     static func parseLsEntries(_ output: String) -> [(name: String, isDirectory: Bool)] {
-        output.split(separator: "\n").map {
+        let separator: Character = output.contains("\0") ? "\0" : "\n"
+        return output.split(separator: separator).map {
             let name = String($0)
             return name.hasSuffix("/") ? (String(name.dropLast()), true) : (name, false)
         }

@@ -262,12 +262,52 @@ struct RemoteChangedFile: Codable, Equatable, Sendable {
 }
 
 /// Wire projection of `ParsedDiff.Hunk.Line`. `kind` is "context", "add", or
-/// "delete"; `text` has no leading +/-/space.
-struct RemoteDiffLine: Codable, Equatable, Sendable {
+/// "delete"; `text` has no leading +/-/space. `noTrailingNewline` mirrors
+/// the source line's `\ No newline at end of file` sentinel, so a diff that
+/// only adds/removes a trailing newline doesn't render as two
+/// identical-looking lines with no visual distinction.
+struct RemoteDiffLine: Equatable, Sendable {
     let kind: String
     let text: String
     let oldNumber: Int?
     let newNumber: Int?
+    let noTrailingNewline: Bool
+
+    init(kind: String, text: String, oldNumber: Int?, newNumber: Int?, noTrailingNewline: Bool = false) {
+        self.kind = kind
+        self.text = text
+        self.oldNumber = oldNumber
+        self.newNumber = newNumber
+        self.noTrailingNewline = noTrailingNewline
+    }
+}
+
+extension RemoteDiffLine: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case kind, text, oldNumber, newNumber, noTrailingNewline
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            kind: try c.decode(String.self, forKey: .kind),
+            text: try c.decode(String.self, forKey: .text),
+            oldNumber: try c.decodeIfPresent(Int.self, forKey: .oldNumber),
+            newNumber: try c.decodeIfPresent(Int.self, forKey: .newNumber),
+            // Decoded leniently so an older host that hasn't sent this field
+            // yet still decodes (a client ahead of a not-yet-updated host).
+            noTrailingNewline: try c.decodeIfPresent(Bool.self, forKey: .noTrailingNewline) ?? false
+        )
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(kind, forKey: .kind)
+        try c.encode(text, forKey: .text)
+        try c.encodeIfPresent(oldNumber, forKey: .oldNumber)
+        try c.encodeIfPresent(newNumber, forKey: .newNumber)
+        try c.encode(noTrailingNewline, forKey: .noTrailingNewline)
+    }
 }
 
 /// Wire projection of `ParsedDiff.Hunk`.

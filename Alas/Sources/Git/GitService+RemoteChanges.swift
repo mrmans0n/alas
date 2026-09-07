@@ -130,6 +130,21 @@ extension GitService {
         let existsAtRef = try await Process.git(
             ["cat-file", "-e", "\(ref):\(file)"], cwd: worktreePath)
         if existsAtRef.exitCode != 0 {
+            // `cat-file -e` exits with the SAME code (128, empirically, on
+            // git 2.50) both when the object genuinely doesn't exist at
+            // `ref` AND for unrelated fatal errors — an invalid ref name, a
+            // corrupt/inaccessible repository, a dropped SSH connection on a
+            // remote worktree. The exit code alone can't tell these apart;
+            // blindly treating every nonzero exit as "new/untracked file"
+            // means a real failure silently shows the wrong diff (or, if the
+            // fallback below also fails to find a difference, a misleadingly
+            // "successful" empty one). Git's own fatal message text is the
+            // only distinguishing signal available: a missing object says
+            // "does not exist in"; every other failure mode says something
+            // else entirely.
+            guard Self.isMissingObjectAtRef(existsAtRef) else {
+                throw ProcessError.nonZeroExit(existsAtRef.exitCode, existsAtRef.stderr)
+            }
             // File doesn't exist at ref (untracked/new file), so diff against /dev/null.
             // `--no-index` compares the two given paths directly rather than
             // through pathspec matching, so `--literal-pathspecs` is a no-op
@@ -194,8 +209,31 @@ extension GitService {
         return Self.looksBinary(prefix)
     }
 
+    /// `git cat-file -e <ref>:<file>` exits with the SAME code (128,
+    /// empirically, on git 2.50) both when the object genuinely doesn't
+    /// exist at `ref` AND for unrelated fatal errors (an invalid ref name,
+    /// a corrupt/inaccessible repository, a dropped SSH connection). The
+    /// exit code alone can't distinguish these; git's own fatal message
+    /// text is the only signal available. Empirically, a missing object
+    /// says one of two things depending on whether the path also exists on
+    /// disk right now:
+    ///   - "path 'X' does not exist in 'REF'" (path absent everywhere), or
+    ///   - "path 'X' exists on disk, but not in 'REF'" (the common
+    ///     untracked-file shape: never committed, so absent from every ref).
+    /// Every OTHER failure says something else entirely (invalid ref name:
+    /// "invalid object name"; run outside a repository: "not a git
+    /// repository").
+    private static func isMissingObjectAtRef(_ result: ProcessResult) -> Bool {
+        result.stderr.contains("does not exist in") || result.stderr.contains("exists on disk, but not in")
+    }
+
     /// Line count for an untracked file, or 0 when it is binary or unreadable.
-    private static func addedLineCount(worktreePath: URL, path: String) -> Int {
+    /// `internal` (not `private`) so `GitService.status(worktreePath:)`
+    /// (a different file/extension of the same type) can share this exact
+    /// counting logic instead of duplicating a slightly different one — see
+    /// the comment at its call site there for why that duplication used to
+    /// matter (a trailing-newline off-by-one).
+    static func addedLineCount(worktreePath: URL, path: String) -> Int {
         let url = worktreePath.appendingPathComponent(path)
         guard let data = try? Data(contentsOf: url), !looksBinary(data),
               let text = String(data: data, encoding: .utf8) else { return 0 }

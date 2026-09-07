@@ -146,14 +146,16 @@ extension GitService {
                 // on disk; deleted files (no longer present) stay at 0/0.
                 if worktreePath.isRemoteAlasPath, let lines = remoteCounts[entries[i].path] {
                     entries[i] = ChangedFile(path: entries[i].path, status: entries[i].status, stage: entries[i].stage, add: lines, del: 0, renameFrom: entries[i].renameFrom, conflict: entries[i].conflict)
-                } else {
-                    let url = worktreePath.appendingPathComponent(entries[i].path)
-                    if !worktreePath.isRemoteAlasPath,
-                   let data = try? Data(contentsOf: url),
-                   let text = String(data: data, encoding: .utf8) {
-                    let lines = text.isEmpty
-                        ? 0
-                        : text.split(separator: "\n", omittingEmptySubsequences: false).count
+                } else if !worktreePath.isRemoteAlasPath {
+                    // Shares `addedLineCount`'s exact counting logic (also
+                    // used by `changedFilesAgainstRef`'s ref-resolved
+                    // untracked-file branch) rather than a separately
+                    // maintained duplicate: the duplicate used to omit the
+                    // trailing-newline adjustment `addedLineCount` applies,
+                    // so the SAME untracked file could report a different
+                    // add-count here than in the ref-resolved Changes view
+                    // depending on which code path served the request.
+                    let lines = Self.addedLineCount(worktreePath: worktreePath, path: entries[i].path)
                     entries[i] = ChangedFile(path: entries[i].path,
                                              status: entries[i].status,
                                              stage: entries[i].stage,
@@ -161,7 +163,6 @@ extension GitService {
                                              del: 0,
                                              renameFrom: entries[i].renameFrom,
                                              conflict: entries[i].conflict)
-                    }
                 }
             }
         }
@@ -692,7 +693,17 @@ extension GitService {
         return paths
     }
 
-    func fileTreeChildren(worktreePath: URL, path: String) async throws -> [FileTreeNode] {
+    /// `badges` maps a worktree-relative path to its status letter (e.g.
+    /// `"M"`, `"A"`, `"D"`), mirroring what `fileTree`'s ROOT listing already
+    /// receives from `status(worktreePath:)`. Defaults to `[:]` — the native
+    /// desktop Files tab (`RightPaneState.loadFileTreeChildren`) calls this
+    /// without a badge map and specifically relies on the returned nodes
+    /// having no badge of their own (see `RightPaneState.replacingChildren`'s
+    /// doc comment): it treats an incoming nil badge as "keep whatever badge
+    /// the existing node already had" rather than "this node has no badge".
+    /// Passing a real map here is opt-in for callers (the remote Files tree)
+    /// that want a directory expansion's badges to match the root listing's.
+    func fileTreeChildren(worktreePath: URL, path: String, badges: [String: String] = [:]) async throws -> [FileTreeNode] {
         if worktreePath.isRemoteAlasPath {
             let prefix = path.isEmpty ? "" : path + "/"
             var paths = try await gitVisibleFilePaths(worktreePath: worktreePath)
@@ -748,7 +759,7 @@ extension GitService {
             let lazyDirectories = path.isEmpty ? directories : directories.subtracting([path])
             let built = FileTreeBuilder.build(
                 paths: paths,
-                badges: [:],
+                badges: badges,
                 visibility: visibility,
                 directories: directories,
                 lazyDirectories: lazyDirectories,
@@ -803,7 +814,7 @@ extension GitService {
 
         let built = FileTreeBuilder.build(
             paths: childPaths,
-            badges: [:],
+            badges: badges,
             visibility: visibility,
             directories: directories,
             lazyDirectories: lazyDirectories,
@@ -837,6 +848,13 @@ extension GitService {
             ["-c", "core.quotePath=false", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
             cwd: worktreePath
         )
+        // A transport failure on an SSH worktree (disconnected helper, etc.)
+        // produces a nonzero exit with empty stdout — parsing that as "zero
+        // files" would make a real failure look like a successful, empty
+        // repository instead of propagating as `.gitFailed`.
+        guard result.exitCode == 0 else {
+            throw ProcessError.nonZeroExit(result.exitCode, result.stderr)
+        }
         return result.stdout
             .components(separatedBy: "\0")
             .filter { !$0.isEmpty }
@@ -855,16 +873,36 @@ extension GitService {
     /// Without the flag, git consults the index first, so a tracked path
     /// always reports as not ignored while a genuinely untracked, gitignored
     /// path still reports as ignored.
-    func isPathIgnored(worktreePath: URL, path: String) async throws -> Bool {
+    ///
+    /// `comparisonRef`, when given, exempts a path that existed there even
+    /// if it's since been deleted (staged or committed): a deleted file is
+    /// no longer in the CURRENT index, so without this exemption
+    /// `check-ignore` falls back to matching purely by name and reports a
+    /// legitimately-tracked-at-`comparisonRef`, since-deleted file as
+    /// "ignored" whenever its name happens to match a `.gitignore` pattern
+    /// — blocking its otherwise-correct deletion diff. Mirrors the
+    /// force-added-tracked-file exemption above, extended to a ref instead
+    /// of just the current index.
+    func isPathIgnored(worktreePath: URL, path: String, comparisonRef: String? = nil) async throws -> Bool {
         let result = try await Process.git(
             ["check-ignore", "-q", "--", path],
             cwd: worktreePath
         )
+        let ignoredByPattern: Bool
         switch result.exitCode {
-        case 0: return true
+        case 0: ignoredByPattern = true
         case 1: return false
         default: throw ProcessError.nonZeroExit(result.exitCode, result.stderr)
         }
+        guard ignoredByPattern else { return false }
+        if let comparisonRef, !comparisonRef.isEmpty {
+            let existedAtRef = try await Process.git(
+                ["cat-file", "-e", "\(comparisonRef):\(path)"], cwd: worktreePath)
+            if existedAtRef.exitCode == 0 {
+                return false
+            }
+        }
+        return true
     }
 
     private struct RootIgnoreCandidate {

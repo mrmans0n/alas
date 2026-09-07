@@ -7951,52 +7951,48 @@ extension AppState: RemoteSessionsProvider {
     }
 
     /// Reads `relativePath` (already validated by
-    /// `RemoteWorktreeFileAccess.normalizedRelativePath`) from `host`,
-    /// applying the same lexical + physical containment checks
-    /// `ACPRemoteFileServer.read` uses before touching the remote
-    /// filesystem. Git-based operations (`GitService.status`/`.diff`/etc.)
-    /// already run correctly against a remote worktree because
-    /// `Process.git` is itself remote-host-aware — this helper exists only
-    /// for the raw, non-git file reads this surface also needs (plain file
-    /// contents, the pre-diff binary sniff).
+    /// `RemoteWorktreeFileAccess.normalizedRelativePath`) from `host` via
+    /// `RemotePathContainment.containedRead`: a SINGLE remote script that
+    /// performs the physical containment/`.git`-exclusion check and the
+    /// bounded content read together, off the SAME resolved path, in one
+    /// `RemoteExec.runData` round trip.
     ///
-    /// Stats the remote file and rejects an oversized one BEFORE
-    /// transferring its bytes, mirroring the local path's stat-before-read
-    /// discipline (`RemoteWorktreeFileAccess.readFileContents`) — a client
-    /// naming a huge remote file must not force a full network transfer
-    /// just to be told `.tooLarge`.
+    /// This replaces what used to be three separate round trips —
+    /// `verifyRemoteContainment`, then `RemoteFileAccess.size`, then
+    /// `RemoteFileAccess.read` — each of which re-resolved `target` by
+    /// STRING independently. Between those round trips, a concurrently
+    /// running remote process could swap a path component for a symlink:
+    /// the containment check saw a safe path, but a later, separately
+    /// re-resolved read could still escape the worktree. See
+    /// `RemotePathContainment.containedReadScript`'s doc comment for exactly
+    /// what this closes and what residual (much narrower) race remains.
+    ///
+    /// Only ever transfers up to `RemoteWorktreeFileAccess.maxFileBytes`
+    /// bytes of the file's body regardless of its actual size — the
+    /// oversized case is reported from the script's own `stat`-derived size
+    /// header, never from having transferred the whole file.
     func readRemoteWorktreeFileRaw(
         host: String, worktreeRoot: String, relativePath: String
     ) async -> RemoteWorktreeRawReadOutcome {
-        let target: String
         do {
-            target = try RemotePathContainment.lexicallyResolveInsideWorktree(
-                path: relativePath, worktreeRoot: worktreeRoot)
-        } catch {
-            return .containmentRejected
-        }
-        do {
-            try await RemotePathContainment.verifyRemoteContainment(
-                host: host, path: target, worktreeRoot: worktreeRoot)
+            switch try await RemotePathContainment.containedRead(
+                host: host, path: relativePath, worktreeRoot: worktreeRoot,
+                maxBytes: RemoteWorktreeFileAccess.maxFileBytes
+            ) {
+            case .outsideWorktree:
+                return .containmentRejected
+            case .symlink, .directory, .missing:
+                return .notFound
+            case .unreadable:
+                return .unreadable("remote read failed")
+            case let .ok(byteSize, prefix):
+                guard byteSize <= RemoteWorktreeFileAccess.maxFileBytes else {
+                    return .tooLarge(byteSize: byteSize)
+                }
+                return .data(prefix)
+            }
         } catch RemotePathContainment.ContainmentError.outsideWorktree(_) {
             return .containmentRejected
-        } catch {
-            return .unreadable(String(describing: error))
-        }
-        do {
-            if let byteSize = try await RemoteFileAccess.size(host: host, path: target),
-               byteSize > UInt64(RemoteWorktreeFileAccess.maxFileBytes) {
-                return .tooLarge(byteSize: Int(clamping: byteSize))
-            }
-        } catch {
-            return .unreadable(String(describing: error))
-        }
-        do {
-            switch try await RemoteFileAccess.read(host: host, path: target) {
-            case let .file(data, _): return .data(data)
-            case .missing, .directory, .symlink: return .notFound
-            case let .unreadable(detail): return .unreadable(detail)
-            }
         } catch {
             return .unreadable(String(describing: error))
         }
@@ -8112,7 +8108,8 @@ extension AppState: RemoteSessionsProvider {
                 }
                 return RemoteDiffLine(
                     kind: kind, text: line.text,
-                    oldNumber: line.oldNumber, newNumber: line.newNumber)
+                    oldNumber: line.oldNumber, newNumber: line.newNumber,
+                    noTrailingNewline: line.noTrailingNewline)
             })
     }
 
@@ -8209,29 +8206,65 @@ extension AppState: RemoteSessionsProvider {
         }
         let git = GitService()
         do {
-            let ignored = try await git.isPathIgnored(worktreePath: worktree.path, path: normalizedPath)
-            if ignored {
-                return .failure(reason: .pathRejected, message: nil)
-            }
-        } catch {
-            return .failure(reason: .gitFailed, message: error.localizedDescription)
-        }
-        do {
             let commits = try await git.commitsAhead(
                 at: worktree.path,
                 baseBranch: config.worktrees.baseBranch,
                 resolution: GitService.BaseResolution.forCommits(
                     mode: config.changes.comparisonMode, userOverrodeBaseBranch: false))
+            // Threading `comparisonRef` through lets `isPathIgnored` exempt a
+            // path that existed there even though it's since been deleted —
+            // otherwise a deleted, gitignore-pattern-matching file's
+            // legitimate deletion diff (shown correctly with status `D` in
+            // the Changes list) gets wrongly rejected as `.pathRejected`,
+            // because a deleted path is no longer in the current index for
+            // `check-ignore` to exempt the way a force-added tracked file is.
+            let ignored = try await git.isPathIgnored(
+                worktreePath: worktree.path, path: normalizedPath, comparisonRef: commits.comparisonRef)
+            if ignored {
+                return .failure(reason: .pathRejected, message: nil)
+            }
             if await isDiffTargetBinary(
                 worktree: worktree, normalizedPath: normalizedPath, url: url,
                 comparisonRef: commits.comparisonRef, git: git
             ) {
                 return .failure(reason: .binary, message: nil)
             }
+            // Re-check the symlink alias immediately before the actual
+            // read, rather than relying solely on the check made at the top
+            // of this function. `git.diff` below spawns an external `git`
+            // subprocess that opens `normalizedPath` itself, at the OS
+            // level, from a path STRING — there is no file descriptor to
+            // thread through a subprocess boundary the way
+            // `RemoteWorktreeFileAccess.readFileContents` now does for
+            // direct content reads, so this specific read can't be made
+            // fully atomic with its containment check without a much larger
+            // change (e.g. piping the file through our own already-open,
+            // already-validated descriptor instead of letting `git diff`
+            // touch the path itself). Moving the recheck to just before the
+            // subprocess spawn — after `isPathIgnored`, `commitsAhead`, and
+            // `isDiffTargetBinary` have all already run — substantially
+            // narrows the TOCTOU window (from "the whole async pipeline
+            // above" down to "the gap between this check and the subprocess
+            // spawn") without closing it completely.
+            if !worktree.path.isRemoteAlasPath, RemoteWorktreeFileAccess.isSymlink(at: url) {
+                return .failure(reason: .notFound, message: nil)
+            }
             let parsed = try await git.diff(
                 worktreePath: worktree.path,
                 againstRef: commits.comparisonRef,
                 file: normalizedPath)
+            // `isDiffTargetBinary` above only sniffs byte content, which
+            // misses a file declared binary purely via `.gitattributes`
+            // (e.g. `*.dat binary`) whose bytes happen to still look like
+            // valid UTF-8. Catch that case here instead: git's OWN binary
+            // classification survives into `parsed.isBinary`, detected from
+            // the raw `Binary files ... differ` line before hunk parsing
+            // discarded it — so a hunk-less result from this specific
+            // reason reports `.binary` rather than a misleading empty
+            // "successful" diff.
+            guard !parsed.isBinary else {
+                return .failure(reason: .binary, message: nil)
+            }
             let capped = RemoteWorktreeFileAccess.truncateHunks(parsed.hunks)
             return .success(
                 hunks: capped.hunks.map(Self.remoteDiffHunk),
@@ -8284,8 +8317,18 @@ extension AppState: RemoteSessionsProvider {
                     return .failure(reason: .gitFailed, message: error.localizedDescription)
                 }
             }
+            // Same badge source the ROOT branch above uses
+            // (`status(worktreePath:)`), so a nested directory expansion
+            // shows the same status badges the root listing would if it
+            // eagerly built this far — without this, `fileTreeChildren`
+            // always built its nodes with `badges: [:]`, so any change in a
+            // subdirectory lost its badge the moment a client expanded into
+            // that directory.
+            let statusEntries = try await git.status(worktreePath: worktree.path)
+            let badges = Dictionary(
+                statusEntries.map { ($0.path, $0.status) }, uniquingKeysWith: { first, _ in first })
             let nodes = try await git.fileTreeChildren(
-                worktreePath: worktree.path, path: path)
+                worktreePath: worktree.path, path: path, badges: badges)
             return .success(nodes: Self.remoteFileNodes(nodes))
         } catch {
             return .failure(reason: .gitFailed, message: error.localizedDescription)
@@ -8309,10 +8352,11 @@ extension AppState: RemoteSessionsProvider {
         }
         // See the matching comment in `remoteFileDiff`: a tracked symlink
         // whose alias name isn't itself ignored can still point at an
-        // ignored (or otherwise off-limits) target, and `readFileContents`
-        // below would otherwise transparently follow it via
-        // `Data(contentsOf:)`. Reject the alias outright rather than
-        // resolving-and-rechecking the target.
+        // ignored (or otherwise off-limits) target. `readFileContents`
+        // below rejects a symlink itself (`O_NOFOLLOW` in its single
+        // open/fstat/read sequence), but this earlier, cheaper check lets
+        // the request fail fast with the right reason before doing the
+        // ignore-check git call at all.
         if !worktree.path.isRemoteAlasPath, RemoteWorktreeFileAccess.isSymlink(at: url) {
             return .failure(reason: .notFound, byteSize: nil, message: nil)
         }

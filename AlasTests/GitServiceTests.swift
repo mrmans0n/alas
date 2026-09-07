@@ -740,6 +740,30 @@ struct GitServiceTests {
         #expect(children.contains { $0.path == "Sources/cache.log" && $0.visibility == .ignored })
     }
 
+    /// `fileTreeChildren` used to always build its nodes with `badges: [:]`,
+    /// so a change in a nested directory lost its status badge the moment a
+    /// client expanded into that directory — inconsistent with the root
+    /// Files tree, which DOES show badges. The native desktop caller
+    /// (`RightPaneState.loadFileTreeChildren`) omits the new `badges`
+    /// parameter and must be unaffected (still gets `[:]` by default).
+    @Test func fileTreeChildrenAppliesTheProvidedBadgeMapToNestedEntries() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try FileManager.default.createDirectory(
+            at: repo.appendingPathComponent("Sources"), withIntermediateDirectories: true)
+        try "one\n".write(to: repo.appendingPathComponent("Sources/App.swift"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "Sources/App.swift"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "seed"], cwd: repo)
+        try "one\ntwo\n".write(to: repo.appendingPathComponent("Sources/App.swift"), atomically: true, encoding: .utf8)
+
+        let withoutBadges = try await GitService().fileTreeChildren(worktreePath: repo, path: "Sources")
+        #expect(withoutBadges.first { $0.path == "Sources/App.swift" }?.badge == nil)
+
+        let withBadges = try await GitService().fileTreeChildren(
+            worktreePath: repo, path: "Sources", badges: ["Sources/App.swift": "M"])
+        #expect(withBadges.first { $0.path == "Sources/App.swift" }?.badge == "M")
+    }
+
     @Test func submodulePathsDetectsRegisteredSubmodules() async throws {
         let repo = try await makeRepo()
         let submoduleRepo = FileManager.default.temporaryDirectory
