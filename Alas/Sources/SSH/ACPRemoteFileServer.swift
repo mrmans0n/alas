@@ -253,11 +253,11 @@ enum RemotePathContainment {
     /// against the raw path a moment later, wide open to an intermediate
     /// directory being swapped for a symlink in between).
     ///
-    /// GNU-then-BSD fallback mirrors `RemoteFileStats.lsCommand`: GNU
-    /// coreutils' `--zero` emits NUL-separated entries so an embedded
-    /// newline in a filename can't fragment it; BSD `ls` (a remote macOS
-    /// host) has no such mode and falls back to plain newline-delimited
-    /// output.
+    /// Lists via `find -print0`, split into a directories batch and a files
+    /// batch by `RemoteFileStats.lsSplitMarker` — mirrors
+    /// `RemoteFileStats.lsCommand` (see its doc comment for why: `find
+    /// -print0` is NUL-safe on BOTH GNU findutils and BSD `find`, unlike
+    /// `ls`'s `--zero` mode, which BSD `ls` has no equivalent for at all).
     static func containedListScript(path: String, worktreeRoot: String) -> String {
         let probe = containmentExcludingGitProbeCommand(path: path, worktreeRoot: worktreeRoot)
         let probeWithoutFinalExit = probe.hasSuffix("exit 0")
@@ -265,7 +265,9 @@ enum RemotePathContainment {
             : probe
         return probeWithoutFinalExit + """
         [ -d "$full_phys" ] || exit 9; \
-        ls -1Ap --zero -- "$full_phys" 2>/dev/null || ls -1Ap -- "$full_phys"
+        find "$full_phys" -mindepth 1 -maxdepth 1 -type d -print0; \
+        printf '\\0\(RemoteFileStats.lsSplitMarker)\\0'; \
+        find "$full_phys" -mindepth 1 -maxdepth 1 ! -type d -print0
         """
     }
 

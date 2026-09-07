@@ -58,10 +58,28 @@ enum RemoteFileStats {
         // association entirely (silently reporting `0` for that file
         // instead). NUL can't appear in a POSIX path, so it's a safe
         // separator regardless of what bytes the path itself contains.
+        //
+        // A file over `RemoteWorktreeFileAccess.maxFileBytes` is counted via
+        // a capped `head -c` prefix instead of `wc -l < file` reading it in
+        // full: this exec fallback shares the same serialized remote
+        // connection every other message on it uses, so a multi-gigabyte
+        // untracked file would otherwise occupy that connection (and delay
+        // every later message) until the process timeout, mirroring the
+        // same cap the persistent-helper path (`AlasHelper`'s
+        // `fs_line_counts`) already applies. The capped count is an
+        // approximation (a lower bound) — the no-trailing-newline +1
+        // adjustment is skipped in that case, since the file's true last
+        // byte is outside what was actually read.
+        let cap = RemoteWorktreeFileAccess.maxFileBytes
         return paths.map { path in
             let quoted = SSHCommand.shellQuote(path)
-            return "n=$(wc -l < \(quoted)); " +
+            return "size=$(wc -c < \(quoted)); " +
+                "if [ \"$size\" -gt \(cap) ]; then " +
+                "n=$(head -c \(cap) -- \(quoted) | wc -l); " +
+                "else " +
+                "n=$(wc -l < \(quoted)); " +
                 "if [ -s \(quoted) ] && [ \"$(tail -c1 -- \(quoted) | wc -l)\" -eq 0 ]; then n=$((n + 1)); fi; " +
+                "fi; " +
                 "printf '%s %s\\0' \"$n\" \(quoted)"
         }.joined(separator: "; ")
     }
@@ -182,40 +200,56 @@ enum RemoteFileStats {
         }
     }
 
-    /// GNU-then-BSD `ls` invocation, chained the same way `statMtime` chains
-    /// GNU-then-BSD `stat` above: GNU coreutils' `ls --zero` emits
-    /// NUL-separated entries so a filename containing an embedded newline
-    /// byte doesn't fragment into bogus extra entries when parsed — this
-    /// mirrors the NUL-delimited fix already applied to the root Files-tree
-    /// listing source (`GitService.gitVisibleFilePaths`'s `git ls-files -z`),
-    /// which this exec-fallback directory listing (used for expanding a
-    /// directory on a helperless SSH host) hadn't been touched by.
+    /// Sentinel marking the boundary between the directory- and file-type
+    /// records `lsCommand` prints, as a NUL-delimited "entry" of its own.
+    /// Only misclassifies a real filesystem entry if it happens to be named
+    /// EXACTLY this string — an astronomically unlikely collision, and a
+    /// far narrower failure mode than the one this replaces (see
+    /// `lsCommand`'s doc comment).
+    static let lsSplitMarker = "__alas_ls_split__"
+
+    /// Two `find` invocations, immediate children only, NUL-delimited,
+    /// split into a directories batch and a files batch by a sentinel
+    /// record in between — used instead of `ls -1Ap`/GNU `ls --zero` (which
+    /// this used to be) because `find -print0` is NUL-safe on BOTH GNU
+    /// findutils AND BSD `find` (unlike `ls`, whose `--zero` NUL-delimited
+    /// mode has no BSD equivalent at all). A filename containing an
+    /// embedded newline byte previously fragmented into bogus extra entries
+    /// whenever a helperless SSH host's `ls` fell back to its
+    /// newline-delimited form (any remote macOS host, since BSD `ls` never
+    /// supports `--zero`) — including possible ignore-rule misclassification
+    /// from those bogus fragments. `find`'s NUL-safety applies uniformly
+    /// everywhere, so there's no GNU/BSD branch left to fall back from.
     ///
-    /// BSD `ls` (a remote macOS host) has no NUL-delimited output mode at
-    /// all, so this falls back to ordinary newline-delimited output there —
-    /// a residual, narrower gap: a directory name containing an embedded
-    /// newline byte can still fragment when listed via exec on a BSD/macOS
-    /// remote host specifically. A host with the persistent helper
-    /// installed never hits this at all (it lists via a JSON-safe RPC
-    /// instead, where an embedded newline in a name is just another JSON
-    /// string byte); this only matters for a helperless remote macOS host,
-    /// which is expected to be rare.
+    /// `-mindepth 1` excludes the directory itself (matching `ls -A`'s
+    /// omission of `.`/`..`); dotfiles are included by default (`find` has
+    /// no separate "hidden" concept requiring an extra flag, unlike `ls`'s
+    /// `-A`).
     static func lsCommand(path: String) -> String {
         let quoted = SSHCommand.shellQuote(path)
-        return "ls -1Ap --zero -- \(quoted) 2>/dev/null || ls -1Ap -- \(quoted)"
+        return "find \(quoted) -mindepth 1 -maxdepth 1 -type d -print0; " +
+            "printf '\\0\(lsSplitMarker)\\0'; " +
+            "find \(quoted) -mindepth 1 -maxdepth 1 ! -type d -print0"
     }
 
-    /// Parses `lsCommand`'s output. Detects which branch of the GNU/BSD
-    /// fallback actually ran by checking for an embedded NUL byte — a
-    /// legitimate filename can never itself contain one on a POSIX
-    /// filesystem, so its presence unambiguously means the NUL-delimited
-    /// (GNU) branch produced this output rather than the newline-delimited
-    /// (BSD) fallback.
+    /// Parses `lsCommand`'s output: NUL-delimited full paths, split into
+    /// directories (before the sentinel) and files (after it). The
+    /// basename is taken as everything after the LAST `/` — safe
+    /// regardless of what other bytes (including an embedded newline) the
+    /// name itself contains, since `/` can never be part of a POSIX
+    /// filename component.
     static func parseLsEntries(_ output: String) -> [(name: String, isDirectory: Bool)] {
-        let separator: Character = output.contains("\0") ? "\0" : "\n"
-        return output.split(separator: separator).map {
-            let name = String($0)
-            return name.hasSuffix("/") ? (String(name.dropLast()), true) : (name, false)
+        let records = output.split(separator: "\u{0}", omittingEmptySubsequences: true).map(String.init)
+        guard let splitIndex = records.firstIndex(of: lsSplitMarker) else {
+            return records.map { (basename(of: $0), false) }
         }
+        let directories = records[..<splitIndex].map { (basename(of: $0), true) }
+        let files = records[(splitIndex + 1)...].map { (basename(of: $0), false) }
+        return directories + files
+    }
+
+    private static func basename(of fullPath: String) -> String {
+        guard let lastSlash = fullPath.lastIndex(of: "/") else { return fullPath }
+        return String(fullPath[fullPath.index(after: lastSlash)...])
     }
 }

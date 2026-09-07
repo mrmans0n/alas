@@ -8286,10 +8286,25 @@ extension AppState: RemoteSessionsProvider {
         }
         let git = GitService()
         do {
+            // Base-relative (against `comparisonRef`), matching the Changes
+            // tab — not working-tree/index `status()` — so a file with
+            // committed-but-not-working-tree-dirty changes (a clean
+            // checkout of a branch with real commits on it, the common
+            // case for reviewing an agent's finished work) still shows the
+            // same badge here that Changes already reports for it, instead
+            // of appearing unbadged just because `status()` alone has
+            // nothing to say about it.
+            let commits = try await git.commitsAhead(
+                at: worktree.path,
+                baseBranch: config.worktrees.baseBranch,
+                resolution: GitService.BaseResolution.forCommits(
+                    mode: config.changes.comparisonMode, userOverrodeBaseBranch: false))
+            let changedEntries = try await git.changedFilesAgainstRef(
+                worktreePath: worktree.path, ref: commits.comparisonRef)
+
             guard let path, !path.isEmpty else {
-                let statusEntries = try await git.status(worktreePath: worktree.path)
                 let nodes = try await git.fileTree(
-                    worktreePath: worktree.path, statusEntries: statusEntries)
+                    worktreePath: worktree.path, statusEntries: changedEntries)
                 let capped = RemoteWorktreeFileAccess.truncateFileNodes(Self.remoteFileNodes(nodes))
                 return .success(nodes: capped.nodes, truncated: capped.truncated)
             }
@@ -8318,16 +8333,15 @@ extension AppState: RemoteSessionsProvider {
                     return .failure(reason: .gitFailed, message: error.localizedDescription)
                 }
             }
-            // Same badge source the ROOT branch above uses
-            // (`status(worktreePath:)`), so a nested directory expansion
-            // shows the same status badges the root listing would if it
+            // Same badge source the ROOT branch above uses (`changedEntries`,
+            // base-relative against `comparisonRef`), so a nested directory
+            // expansion shows the same badges the root listing would if it
             // eagerly built this far — without this, `fileTreeChildren`
             // always built its nodes with `badges: [:]`, so any change in a
             // subdirectory lost its badge the moment a client expanded into
             // that directory.
-            let statusEntries = try await git.status(worktreePath: worktree.path)
             let badges = Dictionary(
-                statusEntries.map { ($0.path, $0.status) }, uniquingKeysWith: { first, _ in first })
+                changedEntries.map { ($0.path, $0.status) }, uniquingKeysWith: { first, _ in first })
             let nodes = try await git.fileTreeChildren(
                 worktreePath: worktree.path, path: path, badges: badges)
             let capped = RemoteWorktreeFileAccess.truncateFileNodes(Self.remoteFileNodes(nodes))

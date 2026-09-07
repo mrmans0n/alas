@@ -1398,6 +1398,83 @@ struct RemoteAppStateAccessTests {
         #expect(generated.kind == "dir")
     }
 
+    /// Regression for the Files-tab badge source: `remoteFileTree` used to
+    /// badge nodes from `GitService.status(worktreePath:)`, which is
+    /// working-tree/index-relative and so has nothing to say about a file
+    /// that was changed in a COMMIT already on the branch — the common case
+    /// when reviewing an agent's finished work on a clean checkout. The
+    /// Changes tab already badges this correctly via
+    /// `changedFilesAgainstRef(ref: comparisonRef)`; the Files tab must
+    /// report the same badge for the same file instead of showing it
+    /// unbadged just because the working tree itself is clean.
+    @Test func remoteFileTreeBadgesACommittedChangeEvenWithACleanWorkingTree() async throws {
+        let repository = try await makeRemoteBranchesRepository()
+        defer { try? FileManager.default.removeItem(at: repository) }
+        _ = try await Process.git(["checkout", "-q", "feature/remote"], cwd: repository)
+        try "hello\n".write(
+            to: repository.appendingPathComponent("example.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "example.txt"], cwd: repository)
+        _ = try await Process.git(["commit", "-q", "-m", "add example"], cwd: repository)
+
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+        let state = makeRemoteGitBackedState(repositoryPath: repository)
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let tab = try #require(acpTabs(in: state).first)
+
+        let result = await state.remoteFileTree(sessionId: tab.sessionId, path: nil)
+
+        guard case let .success(nodes, _) = result else {
+            Issue.record("expected a successful root file tree listing, got \(result)")
+            return
+        }
+        let example = try #require(nodes.first { $0.path == "example.txt" })
+        #expect(example.badge != nil)
+    }
+
+    /// Nested-directory counterpart: `fileTreeChildren` used to always build
+    /// its nodes with `badges: [:]`, so a change in a subdirectory lost its
+    /// badge the moment a client expanded into that directory, even though
+    /// the root listing (or the Changes tab) would show it badged.
+    @Test func remoteFileTreeChildrenBadgesACommittedChangeInASubdirectory() async throws {
+        let repository = try await makeRemoteBranchesRepository()
+        defer { try? FileManager.default.removeItem(at: repository) }
+        _ = try await Process.git(["checkout", "-q", "feature/remote"], cwd: repository)
+        try FileManager.default.createDirectory(
+            at: repository.appendingPathComponent("subdir"), withIntermediateDirectories: true)
+        try "hello\n".write(
+            to: repository.appendingPathComponent("subdir/example.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "subdir/example.txt"], cwd: repository)
+        _ = try await Process.git(["commit", "-q", "-m", "add example"], cwd: repository)
+
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+        let state = makeRemoteGitBackedState(repositoryPath: repository)
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let tab = try #require(acpTabs(in: state).first)
+
+        let result = await state.remoteFileTree(sessionId: tab.sessionId, path: "subdir")
+
+        guard case let .success(nodes, _) = result else {
+            Issue.record("expected a successful subdirectory file tree listing, got \(result)")
+            return
+        }
+        let example = try #require(nodes.first { $0.path == "subdir/example.txt" })
+        #expect(example.badge != nil)
+    }
+
     /// End-to-end reproduction of the bug: a binary file that existed at the
     /// comparison ref but was deleted from the working tree since must still
     /// surface `.binary`, not an empty "successful" diff (the working-tree

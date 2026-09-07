@@ -283,7 +283,7 @@ struct ACPRemoteFileServerTests {
 
     /// Same local-`/bin/sh` verification strategy as the read-script tests
     /// above: `containedListScript` only uses POSIX shell builtins plus
-    /// `ls`, so its behavior locally is identical to what `RemoteExec.run`
+    /// `find`, so its behavior locally is identical to what `RemoteExec.run`
     /// would produce against a real remote host.
     private func runContainedList(target: String, root: String) async throws -> ProcessResultData {
         let command = RemotePathContainment.containedListScript(path: target, worktreeRoot: root)
@@ -304,6 +304,23 @@ struct ACPRemoteFileServerTests {
         #expect(entries.map(\.name) == ["main.swift", "src"])
         #expect(entries.first { $0.name == "src" }?.isDirectory == true)
         #expect(entries.first { $0.name == "main.swift" }?.isDirectory == false)
+    }
+
+    /// Regression: `find -print0` (unlike `ls --zero`, which BSD `ls` has
+    /// no equivalent for at all) is NUL-safe on both GNU findutils and BSD
+    /// `find`, so a filename containing an embedded newline byte must stay
+    /// intact as one entry here too.
+    @Test func containedListScriptKeepsAnEmbeddedNewlineIntact() async throws {
+        let root = try makeContainedReadRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "".write(to: root.appendingPathComponent("weird\nname.txt"), atomically: true, encoding: .utf8)
+
+        let result = try await runContainedList(target: root.path, root: root.path)
+
+        #expect(result.exitCode == 0)
+        let entries = RemoteFileStats.parseLsEntries(String(data: result.stdout, encoding: .utf8) ?? "")
+        #expect(entries.map(\.name) == ["weird\nname.txt"])
+        #expect(entries.first?.isDirectory == false)
     }
 
     @Test func containedListScriptRejectsAFile() async throws {
