@@ -59,11 +59,23 @@ function truncationNotice(truncated, kind) {
   return "Diff truncated — open this file on the desktop to see the rest.";
 }
 
+// A pure rename/copy or executable-bit-only change has no `@@` hunks to
+// render — an empty diff would look indistinguishable from "nothing
+// changed", so the server sends `metadataNote` describing what actually
+// happened (see `ParsedDiff.metadataSummary`). Only surfaced when there
+// really are no hunks: a rename/mode change alongside real content edits
+// already has hunks to show, and the note would just be noise there.
+function metadataOnlyNotice(hunks, metadataNote) {
+  if ((hunks || []).length > 0) return "";
+  return metadataNote || "";
+}
+
 globalThis.RemoteChangesView = {
   sortFiles,
   splitPath,
   formatSummary,
   formatFileCounts,
   diffRows,
-  truncationNotice
+  truncationNotice,
+  metadataOnlyNotice
 };

@@ -8268,7 +8268,8 @@ extension AppState: RemoteSessionsProvider {
             let capped = RemoteWorktreeFileAccess.truncateHunks(parsed.hunks)
             return .success(
                 hunks: capped.hunks.map(Self.remoteDiffHunk),
-                truncated: capped.truncated)
+                truncated: capped.truncated,
+                metadataNote: parsed.metadataSummary)
         } catch {
             return .failure(reason: .gitFailed, message: error.localizedDescription)
         }
@@ -8293,13 +8294,19 @@ extension AppState: RemoteSessionsProvider {
             // case for reviewing an agent's finished work) still shows the
             // same badge here that Changes already reports for it, instead
             // of appearing unbadged just because `status()` alone has
-            // nothing to say about it.
+            // nothing to say about it. `changedFileBadges` (not
+            // `changedFilesAgainstRef`) — this endpoint only needs a badge
+            // letter per path, and computing full add/del metrics (a local
+            // untracked file read whole, or a remote line-count round trip)
+            // on every `listFiles` request, for the root AND every
+            // directory a client expands, did substantial repeated I/O for
+            // numbers nothing here displays.
             let commits = try await git.commitsAhead(
                 at: worktree.path,
                 baseBranch: config.worktrees.baseBranch,
                 resolution: GitService.BaseResolution.forCommits(
                     mode: config.changes.comparisonMode, userOverrodeBaseBranch: false))
-            let changedEntries = try await git.changedFilesAgainstRef(
+            let changedEntries = try await git.changedFileBadges(
                 worktreePath: worktree.path, ref: commits.comparisonRef)
 
             guard let path, !path.isEmpty else {

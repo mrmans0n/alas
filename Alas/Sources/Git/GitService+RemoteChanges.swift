@@ -101,6 +101,63 @@ extension GitService {
         return files.sorted { $0.path < $1.path }
     }
 
+    /// Badge-only variant of `changedFilesAgainstRef`: just `path` + status
+    /// letter (+ rename source), skipping the `numstat` call AND
+    /// per-untracked-file line counting entirely.
+    ///
+    /// `remoteFileTree` only needs a badge letter per path (the Files tab's
+    /// `RemoteFileNode` has no add/del or conflict fields at all) — unlike
+    /// `remoteChangeList`, which needs real metrics to display. Computing
+    /// full `changedFilesAgainstRef` metrics for every `listFiles` request
+    /// (the root listing AND every directory a client expands) redid that
+    /// work from scratch each time: a local untracked file gets read whole
+    /// via `addedLineCount`, and a remote one costs an SSH round trip
+    /// through `RemoteFileStats.lineCounts` — for a worktree with many or
+    /// large untracked files, that's substantial, repeated I/O just to
+    /// answer "does this path have a badge, and which one".
+    func changedFileBadges(worktreePath: URL, ref: String?) async throws -> [ChangedFile] {
+        guard let ref, !ref.isEmpty else {
+            return Self.collapsingStagedAndUnstagedEntries(try await status(worktreePath: worktreePath))
+        }
+
+        let nameStatus = try await Process.git(
+            ["-c", "core.quotePath=false", "diff", "--name-status", "-z", "-M", "-C", ref, "--"], cwd: worktreePath)
+        guard nameStatus.exitCode == 0 else {
+            throw ProcessError.nonZeroExit(nameStatus.exitCode, nameStatus.stderr)
+        }
+
+        var files: [ChangedFile] = []
+        var seen = Set<String>()
+        let parsedNameStatus = GitService.parseNameStatusZOutput(nameStatus.stdout)
+        for path in parsedNameStatus.ordered {
+            guard seen.insert(path).inserted else { continue }
+            let letter = parsedNameStatus.status[path] ?? "M"
+            files.append(ChangedFile(
+                path: path,
+                status: letter,
+                stage: .unstaged,
+                add: 0,
+                del: 0,
+                renameFrom: parsedNameStatus.original[path],
+                conflict: nil))
+        }
+
+        let untracked = try await Process.git(
+            ["ls-files", "--others", "--exclude-standard", "-z"], cwd: worktreePath)
+        guard untracked.exitCode == 0 else {
+            throw ProcessError.nonZeroExit(untracked.exitCode, untracked.stderr)
+        }
+        let untrackedPaths = untracked.stdout.components(separatedBy: "\0")
+            .filter { !$0.isEmpty && seen.insert($0).inserted }
+        for path in untrackedPaths {
+            files.append(ChangedFile(
+                path: path, status: "A", stage: .unstaged, add: 0, del: 0,
+                renameFrom: nil, conflict: nil))
+        }
+
+        return files.sorted { $0.path < $1.path }
+    }
+
     /// Diff of one file between `ref` and the working tree. Untracked files
     /// diff against /dev/null so they render as a single all-add hunk. A nil
     /// `ref` falls back to the working-tree diff.

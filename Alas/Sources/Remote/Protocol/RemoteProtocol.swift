@@ -385,7 +385,9 @@ enum RemoteServerMessage: Equatable, Sendable {
         sessionId: String, comparisonRef: String?, metricsAvailable: Bool,
         files: [RemoteChangedFile], truncated: Bool)
     case changeListFailed(sessionId: String, reason: RemoteFileAccessReason, message: String?)
-    case fileDiffResult(sessionId: String, path: String, hunks: [RemoteDiffHunk], truncated: Bool)
+    case fileDiffResult(
+        sessionId: String, path: String, hunks: [RemoteDiffHunk], truncated: Bool,
+        metadataNote: String? = nil)
     case fileDiffFailed(sessionId: String, path: String, reason: RemoteFileAccessReason, message: String?)
     case fileTree(sessionId: String, path: String?, nodes: [RemoteFileNode], truncated: Bool)
     case fileTreeFailed(sessionId: String, path: String?, reason: RemoteFileAccessReason, message: String?)
@@ -403,6 +405,7 @@ extension RemoteServerMessage: Codable {
         case firstIndex, totalCount, epoch, revision
         case items, steerUndoAvailable, itemId, text
         case path, files, comparisonRef, metricsAvailable, truncated, hunks, nodes, reason, byteSize
+        case metadataNote
     }
 
     init(from decoder: Decoder) throws {
@@ -530,7 +533,8 @@ extension RemoteServerMessage: Codable {
                 sessionId: try c.decode(String.self, forKey: .sessionId),
                 path: try c.decode(String.self, forKey: .path),
                 hunks: try c.decode([RemoteDiffHunk].self, forKey: .hunks),
-                truncated: try c.decodeIfPresent(Bool.self, forKey: .truncated) ?? false)
+                truncated: try c.decodeIfPresent(Bool.self, forKey: .truncated) ?? false,
+                metadataNote: try c.decodeIfPresent(String.self, forKey: .metadataNote))
         case "fileDiffFailed":
             self = .fileDiffFailed(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
@@ -696,12 +700,13 @@ extension RemoteServerMessage: Codable {
             try c.encode(s, forKey: .sessionId)
             try c.encode(reason.rawValue, forKey: .reason)
             try c.encodeIfPresent(message, forKey: .message)
-        case .fileDiffResult(let s, let path, let hunks, let truncated):
+        case .fileDiffResult(let s, let path, let hunks, let truncated, let metadataNote):
             try c.encode("fileDiffResult", forKey: .type)
             try c.encode(s, forKey: .sessionId)
             try c.encode(path, forKey: .path)
             try c.encode(hunks, forKey: .hunks)
             try c.encode(truncated, forKey: .truncated)
+            try c.encodeIfPresent(metadataNote, forKey: .metadataNote)
         case .fileDiffFailed(let s, let path, let reason, let message):
             try c.encode("fileDiffFailed", forKey: .type)
             try c.encode(s, forKey: .sessionId)

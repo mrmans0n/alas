@@ -740,6 +740,19 @@ struct RemoteProtocolTests {
         let legacyLine = try JSONDecoder().decode(RemoteDiffLine.self, from: legacyJSON)
         #expect(legacyLine.noTrailingNewline == false)
 
+        let metadataOnlyDiff = RemoteServerMessage.fileDiffResult(
+            sessionId: "s1", path: "old.swift", hunks: [], truncated: false,
+            metadataNote: "Renamed from old.swift to new.swift — no content changes.")
+        #expect(try roundTrip(metadataOnlyDiff) == metadataOnlyDiff)
+
+        // Lenient decoding: an older paired host wouldn't send `metadataNote`
+        // at all — must default to nil rather than failing to decode.
+        let legacyDiffJSON = Data("""
+        {"type": "fileDiffResult", "sessionId": "s1", "path": "a.txt", "hunks": [], "truncated": false}
+        """.utf8)
+        let legacyDiff = try JSONDecoder().decode(RemoteServerMessage.self, from: legacyDiffJSON)
+        #expect(legacyDiff == .fileDiffResult(sessionId: "s1", path: "a.txt", hunks: [], truncated: false))
+
         let diffFailure = RemoteServerMessage.fileDiffFailed(
             sessionId: "s1", path: "logo.png", reason: .binary, message: nil)
         #expect(try roundTrip(diffFailure) == diffFailure)

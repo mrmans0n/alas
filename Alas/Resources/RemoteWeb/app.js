@@ -334,7 +334,7 @@ function handle(msg) {
       break;
     case "fileDiffResult":
       if (msg.sessionId !== currentSession) break;
-      renderDiff(msg.path, msg.hunks || [], !!msg.truncated);
+      renderDiff(msg.path, msg.hunks || [], !!msg.truncated, msg.metadataNote || null);
       break;
     case "fileDiffFailed":
       if (msg.sessionId !== currentSession) break;
@@ -639,19 +639,33 @@ function replayActiveDetailRequest() {
 // blank/loading indefinitely until the user switches tabs or manually
 // refreshes. Only fires at the list level (`detailStack` empty); once a
 // detail view is open, replaying its request above takes priority.
+//
+// The Files branch uses `refreshFileTree()` rather than a bare root
+// `listFiles` — a plain root request only repopulates top-level nodes and
+// leaves every already-expanded directory's cached children untouched, so
+// an edit made to a file beneath an expanded directory while disconnected
+// stayed stale until another manual refresh or tab switch. Also covers the
+// case where the socket dropped WHILE already showing the Files list (not
+// just before its first response ever arrived) — same code path, since
+// `detailStack` is empty in both.
 function replayActiveListRequest() {
   if (!currentSession || detailStack.length > 0) return;
   if (activeTab === "changes") {
     requestChanges();
   } else if (activeTab === "files") {
-    send({ type: "listFiles", sessionId: currentSession });
+    refreshFileTree();
   }
 }
 
-function renderDiff(path, hunks, truncated) {
+function renderDiff(path, hunks, truncated, metadataNote) {
   if ($("diff-path").textContent !== path) return;   // a newer file is open
   const container = $("diff-rows");
   container.innerHTML = "";
+  const metadataNotice = RemoteChangesView.metadataOnlyNotice(hunks, metadataNote);
+  if (metadataNotice) {
+    container.append(el("p", "placeholder-card", metadataNotice));
+    return;
+  }
   for (const row of RemoteChangesView.diffRows(hunks)) {
     if (row.type === "hunk") {
       container.append(el("div", "diff-hunk", row.text));

@@ -89,6 +89,76 @@ struct GitServiceRemoteChangesTests {
         }
     }
 
+    /// `changedFileBadges` reports the same paths/statuses as
+    /// `changedFilesAgainstRef` — just without ever populating add/del
+    /// (proving the numstat call and per-untracked-file line counting were
+    /// actually skipped, not merely unused by this particular fixture).
+    @Test func changedFileBadges_includesCommittedAndUncommittedAndUntrackedWithoutMetrics() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try "one\n".write(to: repo.appendingPathComponent("base.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "base.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "base"], cwd: repo)
+        _ = try await Process.git(["branch", "start"], cwd: repo)
+
+        try "one\ntwo\n".write(to: repo.appendingPathComponent("base.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "base.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "committed change"], cwd: repo)
+
+        try "new\n".write(to: repo.appendingPathComponent("untracked.txt"), atomically: true, encoding: .utf8)
+
+        let files = try await GitService().changedFileBadges(worktreePath: repo, ref: "start")
+        #expect(files.map(\.path).sorted() == ["base.txt", "untracked.txt"])
+        let base = try #require(files.first { $0.path == "base.txt" })
+        #expect(base.status == "M")
+        #expect(base.add == 0 && base.del == 0)
+        let untracked = try #require(files.first { $0.path == "untracked.txt" })
+        #expect(untracked.status == "A")
+        #expect(untracked.add == 0 && untracked.del == 0)
+    }
+
+    @Test func changedFileBadges_fallsBackToStatusWhenRefIsNil() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        _ = try await Process.git(["commit", "--allow-empty", "-m", "init"], cwd: repo)
+        try "hello\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+
+        let files = try await GitService().changedFileBadges(worktreePath: repo, ref: nil)
+        #expect(files.map(\.path) == ["a.txt"])
+    }
+
+    /// Same "must propagate, not silently fall back" contract as
+    /// `changedFilesAgainstRef_throwsRatherThanFallingBackToStatusForAResolvedButInvalidRef`.
+    @Test func changedFileBadges_throwsRatherThanFallingBackToStatusForAResolvedButInvalidRef() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try "one\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "a.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "base"], cwd: repo)
+
+        await #expect(throws: (any Error).self) {
+            _ = try await GitService().changedFileBadges(worktreePath: repo, ref: "not-a-real-ref")
+        }
+    }
+
+    @Test func changedFileBadges_handlesRename() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try "content\n".write(to: repo.appendingPathComponent("old.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "old.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "add file"], cwd: repo)
+        _ = try await Process.git(["branch", "start"], cwd: repo)
+
+        _ = try await Process.git(["mv", "old.txt", "new.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "rename"], cwd: repo)
+
+        let files = try await GitService().changedFileBadges(worktreePath: repo, ref: "start")
+        #expect(files.map(\.path) == ["new.txt"])
+        let renamed = try #require(files.first { $0.path == "new.txt" })
+        #expect(renamed.status == "R")
+        #expect(renamed.renameFrom == "old.txt")
+    }
+
     @Test func diffAgainstRef_returnsHunksForACommittedChange() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }

@@ -1117,7 +1117,7 @@ struct RemoteAppStateAccessTests {
         #expect(contentsResult == .failure(reason: .notFound, byteSize: nil, message: nil))
 
         let diffResult = await state.remoteFileDiff(sessionId: tab.sessionId, path: " secret.env")
-        if case .success(let hunks, _) = diffResult {
+        if case .success(let hunks, _, _) = diffResult {
             let text = hunks.flatMap(\.lines).map(\.text).joined()
             #expect(!text.contains("abc"), "secret content must never be served for a whitespace-padded path")
         }
@@ -1167,7 +1167,7 @@ struct RemoteAppStateAccessTests {
 
         let diffResult = await state.remoteFileDiff(sessionId: tab.sessionId, path: "public-env")
         #expect(diffResult == .failure(reason: .notFound, message: nil))
-        if case .success(let hunks, _) = diffResult {
+        if case .success(let hunks, _, _) = diffResult {
             let text = hunks.flatMap(\.lines).map(\.text).joined()
             #expect(!text.contains("super-secret"), "secret content must never be served through a symlink alias diff")
         }

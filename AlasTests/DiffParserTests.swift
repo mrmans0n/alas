@@ -66,4 +66,70 @@ struct DiffParserTests {
         #expect(lines[0].kind == .delete && lines[0].noTrailingNewline)
         #expect(lines[1].kind == .add && lines[1].noTrailingNewline)
     }
+
+    /// A pure rename (100% similarity, no content edits) produces no `@@`
+    /// hunks — without `metadataSummary`, the caller would report a
+    /// misleadingly "successful" empty diff, indistinguishable from a file
+    /// with genuinely no changes at all.
+    @Test func pureRenameProducesAMetadataSummary() {
+        let raw = """
+        diff --git a/old.txt b/new.txt
+        similarity index 100%
+        rename from old.txt
+        rename to new.txt
+        """
+        let diff = DiffParser.parse(raw)
+        #expect(diff.hunks.isEmpty)
+        #expect(!diff.isBinary)
+        #expect(diff.metadataSummary == "Renamed from old.txt to new.txt — no content changes.")
+    }
+
+    /// Same as a pure rename, but for `-C` copy detection (source path
+    /// still exists after the copy).
+    @Test func pureCopyProducesAMetadataSummary() {
+        let raw = """
+        diff --git a/old.txt b/new.txt
+        similarity index 100%
+        copy from old.txt
+        copy to new.txt
+        """
+        let diff = DiffParser.parse(raw)
+        #expect(diff.hunks.isEmpty)
+        #expect(diff.metadataSummary == "Copied from old.txt to new.txt — no content changes.")
+    }
+
+    /// An executable-bit-only change (no rename, no content edits).
+    @Test func pureModeChangeProducesAMetadataSummary() {
+        let raw = """
+        diff --git a/script.sh b/script.sh
+        old mode 100644
+        new mode 100755
+        """
+        let diff = DiffParser.parse(raw)
+        #expect(diff.hunks.isEmpty)
+        #expect(diff.metadataSummary == "File mode changed from 100644 to 100755 — no content changes.")
+    }
+
+    /// A rename that ALSO has content edits has real hunks to show — the
+    /// summary would just be noise layered over an actual diff, so it must
+    /// stay nil here.
+    @Test func renameWithContentChangesDoesNotProduceAMetadataSummary() {
+        let raw = """
+        diff --git a/old.txt b/new.txt
+        similarity index 66%
+        rename from old.txt
+        rename to new.txt
+        index abc..def 100644
+        --- a/old.txt
+        +++ b/new.txt
+        @@ -1,3 +1,3 @@
+         unchanged
+        -removed
+        +added
+         unchanged
+        """
+        let diff = DiffParser.parse(raw)
+        #expect(!diff.hunks.isEmpty)
+        #expect(diff.metadataSummary == nil)
+    }
 }

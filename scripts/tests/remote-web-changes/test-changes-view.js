@@ -89,4 +89,23 @@ const view = globalThis.RemoteChangesView;
   assert.equal(rows[2].noTrailingNewline, false);
 }
 
+{
+  // No hunks and no note: a genuinely empty diff (shouldn't normally
+  // happen, but must not crash or show a stray empty banner).
+  assert.equal(view.metadataOnlyNotice([], null), "");
+  assert.equal(view.metadataOnlyNotice([], undefined), "");
+
+  // No hunks, note present: a pure rename/copy/mode change — the note IS
+  // the payload.
+  assert.equal(
+    view.metadataOnlyNotice([], "Renamed from old.txt to new.txt — no content changes."),
+    "Renamed from old.txt to new.txt — no content changes."
+  );
+
+  // Hunks present alongside a note: real content changes take priority —
+  // the note would just be noise over an actual diff.
+  const hunks = [{ header: "@@ -1,1 +1,1 @@", oldStart: 1, newStart: 1, lines: [] }];
+  assert.equal(view.metadataOnlyNotice(hunks, "should not surface"), "");
+}
+
 console.log("remote-web-changes: ok");

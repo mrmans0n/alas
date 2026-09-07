@@ -337,7 +337,12 @@ enum RemoteChangeListResult: Equatable, Sendable {
 }
 
 enum RemoteFileDiffResult: Equatable, Sendable {
-    case success(hunks: [RemoteDiffHunk], truncated: Bool)
+    /// `metadataNote` is set when `hunks` is empty because the change was
+    /// metadata-only (a pure rename/copy or executable-bit change with no
+    /// content edits) — see `ParsedDiff.metadataSummary`. The client shows
+    /// it in place of the hunk viewer instead of rendering a blank diff
+    /// that looks indistinguishable from "nothing changed".
+    case success(hunks: [RemoteDiffHunk], truncated: Bool, metadataNote: String? = nil)
     case failure(reason: RemoteFileAccessReason, message: String?)
 }
 
