@@ -334,6 +334,38 @@ struct CommitPublishWorkflowTests {
         #expect(workflow.lastError as? CommitPublishWorkflowError == .headMismatch(expected: "commit-sha", actual: "rebased-sha"))
     }
 
+    @Test func ggValidationFailureDoesNotPersistRewrittenHeadForRetry() async {
+        let harness = WorkflowHarness()
+        var headSHA = "commit-sha"
+        var persistedCheckpoints: [CommitPublishCheckpoint?] = []
+        var syncedTargets: [GGStackTargetIdentity] = []
+        let checkpoint = harness.ggCheckpoint
+        let operations = CommitPublishOperations(
+            validateGGTarget: { _ in
+                headSHA = "unrelated-sha"
+                throw GGMutationError.staleConfirmation
+            },
+            createCommit: { _, _, _ in .init(commitSHA: "unused", comparisonBase: "main", editorTitle: "Unused") },
+            currentHeadSHA: { headSHA },
+            remoteBranchContainsCommit: { _, _ in false },
+            push: { _, _ in },
+            currentReviewRequestExists: { _ in true },
+            createReviewRequest: { target, _, _ in target.webURL },
+            syncGG: { Issue.record("Unexpected untargeted sync") },
+            syncGGForTarget: { target in syncedTargets.append(target) },
+            refreshAfterCompletion: {}
+        )
+        let workflow = CommitPublishWorkflow(operations: operations) {
+            persistedCheckpoints.append($0)
+        }
+
+        await workflow.resume(checkpoint)
+
+        #expect(persistedCheckpoints == [checkpoint])
+        #expect(syncedTargets.isEmpty)
+        #expect(workflow.lastError as? GGMutationError == .staleConfirmation)
+    }
+
     @Test func ggSyncFailurePersistsRewrittenHeadForRetry() async throws {
         let harness = WorkflowHarness()
         var headSHA = "commit-sha"

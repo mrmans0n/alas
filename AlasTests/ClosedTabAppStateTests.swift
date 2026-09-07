@@ -150,6 +150,44 @@ struct ClosedTabAppStateTests {
         #expect(!fixture.state.canReopenClosedTab)
     }
 
+    @Test func completedCommitPublishRemovesClosedDraftHistory() async throws {
+        let fixture = makeFixture()
+        let draft = fixture.state.tabs.openOrFocusDraftCommit(worktreeId: fixture.first.id)
+        let syncGate = AsyncGate()
+        let operations = CommitPublishOperations(
+            createCommit: { _, _, _ in
+                .init(commitSHA: "commit-sha", comparisonBase: "origin/main", editorTitle: "commit-sha Subject")
+            },
+            currentHeadSHA: { "commit-sha" },
+            remoteBranchContainsCommit: { _, _ in false },
+            push: { _, _ in },
+            currentReviewRequestExists: { _ in true },
+            createReviewRequest: { target, _, _ in target.webURL },
+            syncGG: { await syncGate.enterAndWait() },
+            refreshAfterCompletion: {}
+        )
+
+        let task = try #require(fixture.state.tabs.runCommitPublish(
+            worktreeId: fixture.first.id,
+            tabId: draft.id,
+            subject: "Subject",
+            body: "",
+            amend: false,
+            operations: operations,
+            prepareDestination: { .gg() }
+        ))
+        await syncGate.waitUntilEntered()
+        fixture.state.requestCloseTab(worktreeId: fixture.first.id, tabId: draft.id)
+        #expect(fixture.state.canReopenClosedTab)
+
+        await syncGate.release()
+        await task.value
+
+        #expect(!fixture.state.canReopenClosedTab)
+        await fixture.state.reopenLastClosedTab()
+        #expect(fixture.state.tabs.tabs(forWorktree: fixture.first.id).isEmpty)
+    }
+
     @Test func reopenACPSessionWaitsForCloseDetachBeforeRestoring() async {
         let gate = AsyncGate()
         var detachCalls = 0

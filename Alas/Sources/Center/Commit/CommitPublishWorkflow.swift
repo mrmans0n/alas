@@ -422,16 +422,21 @@ final class CommitPublishWorkflow {
 
                 activity = .syncing
                 try Task.checkCancellation()
+                var syncStarted = false
                 do {
                     if let target {
                         try await operations.validateGGTarget(target)
                         try Task.checkCancellation()
+                        syncStarted = true
                         try await operations.syncGGForTarget(target)
                     } else {
+                        syncStarted = true
                         try await operations.syncGG()
                     }
                 } catch {
-                    try await persistPostGGSyncHeadIfNeeded(&checkpoint)
+                    if syncStarted {
+                        try await persistPostGGSyncHeadIfNeeded(&checkpoint)
+                    }
                     throw error
                 }
                 try await persistPostGGSyncHeadIfNeeded(&checkpoint)

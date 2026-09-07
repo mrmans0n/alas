@@ -65,6 +65,7 @@ final class TabsManager {
     /// tabs, but are deliberately not persisted as part of the tab identity.
     private var ggSplitCommitDrafts: [TabID: GGSplitCommitDraft] = [:]
     private var commitPublishSessions: [TabID: CommitPublishSession] = [:]
+    @ObservationIgnored var onCommitPublishCompletion: ((String, TabID) -> Void)?
     /// Tracks which tab IDs have already had `openExternalDocument` fired so
     /// that cache-hit calls to `externalBuffer` don't double-count the ref.
     private var openedExternalDocs: Set<TabID> = []
@@ -1054,6 +1055,7 @@ final class TabsManager {
                 try persistCommitPublishCheckpoint(checkpoint, worktreeId: worktreeId, tabId: tabId)
             }, onCompletion: { [weak self] checkpoint in
                 guard let self else { return }
+                onCommitPublishCompletion?(worktreeId, tabId)
                 if replaceDraftWithCommitEditor(worktreeId: worktreeId, draftTabId: tabId,
                     baseRef: checkpoint.baseRef, newSha: checkpoint.commitSHA, title: checkpoint.commitTitle) == nil {
                     discardStashedDraft(worktreeId: worktreeId)
