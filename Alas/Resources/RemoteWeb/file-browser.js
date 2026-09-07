@@ -27,6 +27,17 @@ function createTree() {
     return !childrenByPath.has(key(path));
   }
 
+  /// Every expanded directory's path, root excluded (the caller re-requests
+  /// root separately). Unlike `visibleRows()`, this includes a directory
+  /// expanded behind a since-collapsed ancestor — collapsing a parent
+  /// doesn't clear its descendants' own expanded state, so re-expanding the
+  /// parent later reveals them again straight from cache with no request in
+  /// between. A refresh that only walked `visibleRows()` would miss exactly
+  /// that hidden-but-still-expanded subtree.
+  function expandedPaths() {
+    return Array.from(expanded).filter(path => path !== "");
+  }
+
   function toggle(path) {
     const id = key(path);
     if (expanded.has(id)) {
@@ -57,7 +68,7 @@ function createTree() {
     expanded.clear();
   }
 
-  return { applyNodes, isExpanded, needsChildren, toggle, visibleRows, reset };
+  return { applyNodes, isExpanded, needsChildren, toggle, visibleRows, reset, expandedPaths };
 }
 
 globalThis.RemoteFileBrowser = { createTree };

@@ -51,4 +51,29 @@ function file(name, path, badge) {
   assert.equal(tree.isExpanded("a"), false);
 }
 
+{
+  // expandedPaths() must survive a collapsed ancestor: expand a, then a/b,
+  // then collapse a. `a/b` is no longer visible (its parent is collapsed)
+  // but is still in the expanded set, so a refresh that walks
+  // expandedPaths() (not visibleRows()) must still request it — otherwise
+  // re-expanding "a" later would render "a/b" from stale cached children.
+  const tree = browser.createTree();
+  tree.applyNodes(null, [dir("a", "a")]);
+  tree.toggle("a");
+  tree.applyNodes("a", [dir("b", "a/b")]);
+  tree.toggle("a/b");
+  tree.applyNodes("a/b", [file("x.txt", "a/b/x.txt")]);
+  assert.deepEqual(tree.expandedPaths().sort(), ["a", "a/b"]);
+
+  tree.toggle("a");   // collapse a; a/b's OWN expanded state is untouched
+  assert.deepEqual(tree.visibleRows().map((r) => r.node.path), ["a"]);
+  assert.deepEqual(tree.expandedPaths().sort(), ["a/b"]);
+
+  tree.toggle("a");   // re-expand a; a/b reappears, still expanded
+  assert.deepEqual(
+    tree.visibleRows().map((r) => r.node.path),
+    ["a", "a/b", "a/b/x.txt"]
+  );
+}
+
 console.log("remote-web-file-browser: ok");

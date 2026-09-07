@@ -49,12 +49,12 @@ struct RemoteWebAssetTests {
         let sw = try asset("sw.js")
 
         #expect(html.contains(#"/session-ordering.js?v=1"#))
-        #expect(html.range(of: #"/session-ordering.js?v=1"#)!.lowerBound < html.range(of: #"/app.js?v=69"#)!.lowerBound)
-        #expect(html.contains(#"/app.js?v=69"#))
+        #expect(html.range(of: #"/session-ordering.js?v=1"#)!.lowerBound < html.range(of: #"/app.js?v=70"#)!.lowerBound)
+        #expect(html.contains(#"/app.js?v=70"#))
         #expect(html.contains(#"/style.css?v=42"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v47";"#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v48";"#))
         #expect(sw.contains(#""/session-ordering.js?v=1""#))
-        #expect(sw.contains(#""/app.js?v=69""#))
+        #expect(sw.contains(#""/app.js?v=70""#))
         #expect(sw.contains(#""/style.css?v=42""#))
     }
 
@@ -68,10 +68,10 @@ struct RemoteWebAssetTests {
         #expect(app.contains("toggle.tabIndex = 0"))
         #expect(app.contains("function handleCardToggleKeydown"))
         #expect(!app.contains(#"const button = el("button", "tool-toggle")"#))
-        #expect(html.contains(#"/app.js?v=69"#))
+        #expect(html.contains(#"/app.js?v=70"#))
         #expect(html.contains(#"/style.css?v=42"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v47";"#))
-        #expect(sw.contains(#""/app.js?v=69""#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v48";"#))
+        #expect(sw.contains(#""/app.js?v=70""#))
         #expect(sw.contains(#""/style.css?v=42""#))
     }
 
@@ -119,7 +119,7 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".session-section"))
         #expect(css.contains(".session-section-title"))
         #expect(css.contains(".session-section-list"))
-        #expect(html.contains("/app.js?v=69"))
+        #expect(html.contains("/app.js?v=70"))
         #expect(html.contains("/style.css?v=42"))
     }
 
@@ -145,7 +145,7 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".session-open"))
         #expect(css.contains("#detail-title"))
         #expect(css.contains(".sheet-input"))
-        #expect(sw.contains(#""/app.js?v=69""#))
+        #expect(sw.contains(#""/app.js?v=70""#))
         #expect(sw.contains(#""/style.css?v=42""#))
     }
 
@@ -196,7 +196,7 @@ struct RemoteWebAssetTests {
         let sw = try asset("sw.js")
 
         #expect(html.contains(#"/worktree-creation.js?v=1"#))
-        #expect(html.range(of: #"/worktree-creation.js?v=1"#)!.lowerBound < html.range(of: #"/app.js?v=69"#)!.lowerBound)
+        #expect(html.range(of: #"/worktree-creation.js?v=1"#)!.lowerBound < html.range(of: #"/app.js?v=70"#)!.lowerBound)
         #expect(js.contains("const worktreeCreation = RemoteWorktreeCreation.createFlow(send);"))
         #expect(js.contains(#"case "projectList":"#))
         #expect(js.contains(#"case "branchList":"#))
@@ -334,9 +334,9 @@ struct RemoteWebAssetTests {
     @Test func incrementalTranscriptBustsServiceWorkerAssetCache() throws {
         let sw = try asset("sw.js")
         let html = try asset("index.html")
-        #expect(sw.contains("alas-remote-shell-v47"))
-        #expect(sw.contains("/app.js?v=69"))
-        #expect(html.contains("app.js?v=69"))
+        #expect(sw.contains("alas-remote-shell-v48"))
+        #expect(sw.contains("/app.js?v=70"))
+        #expect(html.contains("app.js?v=70"))
     }
 
     // Regression (codex review, PR #775): applyPage used to clear the
@@ -499,10 +499,10 @@ struct RemoteWebAssetTests {
         let html = try asset("index.html")
         let sw = try asset("sw.js")
 
-        #expect(html.contains(#"/app.js?v=69"#))
+        #expect(html.contains(#"/app.js?v=70"#))
         #expect(html.contains(#"/style.css?v=42"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v47";"#))
-        #expect(sw.contains(#""/app.js?v=69""#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v48";"#))
+        #expect(sw.contains(#""/app.js?v=70""#))
         #expect(sw.contains(#""/style.css?v=42""#))
     }
 
@@ -534,13 +534,13 @@ struct RemoteWebAssetTests {
         #expect(html.contains(#"id="file-view-body""#))
 
         #expect(html.contains(#"/changes-view.js?v=2"#))
-        #expect(html.contains(#"/file-browser.js?v=1"#))
+        #expect(html.contains(#"/file-browser.js?v=2"#))
         #expect(html.range(of: #"/changes-view.js?v=2"#)!.lowerBound
-            < html.range(of: #"/app.js?v=69"#)!.lowerBound)
-        #expect(html.range(of: #"/file-browser.js?v=1"#)!.lowerBound
-            < html.range(of: #"/app.js?v=69"#)!.lowerBound)
+            < html.range(of: #"/app.js?v=70"#)!.lowerBound)
+        #expect(html.range(of: #"/file-browser.js?v=2"#)!.lowerBound
+            < html.range(of: #"/app.js?v=70"#)!.lowerBound)
         #expect(sw.contains(#""/changes-view.js?v=2""#))
-        #expect(sw.contains(#""/file-browser.js?v=1""#))
+        #expect(sw.contains(#""/file-browser.js?v=2""#))
     }
 
     @Test func remoteWebWiresTabSwitching() throws {
@@ -592,12 +592,14 @@ struct RemoteWebAssetTests {
         // be gone from the live condition — a bare `needsChildren` check
         // isn't enough since the explanatory comment above mentions it too.
         #expect(!showTabBody.contains("changesTree.needsChildren"))
-        // The idle-transition refresh (shared with Changes) must also
-        // dispatch to Files when that's the open tab.
+        // The idle-transition refresh (shared with Changes) must also cover
+        // Files when that's the open tab.
         let idleBody = try #require(
-            js.range(of: "function noteStreamingStateForChanges(state) {").map { js[$0.lowerBound...].prefix(800) })
+            js.range(of: "function noteStreamingStateForChanges(state) {").map { js[$0.lowerBound...].prefix(500) })
         #expect(idleBody.contains(#"activeTab !== "files""#))
-        #expect(idleBody.contains("refreshFileTree()"))
+        let scheduleBody = try #require(
+            js.range(of: "function scheduleListRefresh() {").map { js[$0.lowerBound...].prefix(400) })
+        #expect(scheduleBody.contains("refreshFileTree()"))
     }
 
     // Regression (final whole-branch review, finding 4): a `listChanges` per
@@ -614,9 +616,32 @@ struct RemoteWebAssetTests {
         )
         #expect(body.contains("previousChangesStreamingState"))
         #expect(body.contains("wasIdle"))
-        #expect(body.contains("setTimeout"))
-        #expect(body.contains("clearTimeout"))
+        let scheduleBody = try #require(
+            js.range(of: "function scheduleListRefresh() {")
+                .map { js[$0.lowerBound...].prefix(400) }
+        )
+        #expect(scheduleBody.contains("setTimeout"))
+        #expect(scheduleBody.contains("clearTimeout"))
         #expect(js.contains("let changesRefreshDebounceTimer = null;"))
+    }
+
+    /// Regression: an idle transition while a diff/file detail view is open
+    /// used to be dropped entirely — `previousChangesStreamingState` was
+    /// already updated to "idle" before the `detailStack` check, so no LATER
+    /// edge would ever fire once the user closed the detail, leaving the
+    /// list showing the pre-turn snapshot until a manual refresh or tab
+    /// switch. The refresh must be deferred (not dropped) and delivered when
+    /// the detail view closes.
+    @Test func remoteWebDefersTheIdleRefreshUntilADetailViewCloses() throws {
+        let js = try asset("app.js")
+        #expect(js.contains("let pendingListRefresh = false;"))
+        let idleBody = try #require(
+            js.range(of: "function noteStreamingStateForChanges(state) {").map { js[$0.lowerBound...].prefix(500) })
+        #expect(idleBody.contains("pendingListRefresh = true;"))
+        let closeBody = try #require(
+            js.range(of: "function closeDetailLevel() {").map { js[$0.lowerBound...].prefix(400) })
+        #expect(closeBody.contains("pendingListRefresh"))
+        #expect(closeBody.contains("scheduleListRefresh()"))
     }
 
     // Regression (sixth review pass, finding 4): the server's byte cap alone

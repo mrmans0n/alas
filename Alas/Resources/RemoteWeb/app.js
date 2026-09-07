@@ -481,6 +481,7 @@ function openSession(id) {
   resetChangesAndFilesDOM();
   if (changesRefreshDebounceTimer) { clearTimeout(changesRefreshDebounceTimer); changesRefreshDebounceTimer = null; }
   previousChangesStreamingState = "idle";
+  pendingListRefresh = false;
   const summary = listedSessions.get(id);
   $("detail-tabs").classList.toggle("hidden", !summary || !summary.worktree);
   showTab("chat");
@@ -495,6 +496,7 @@ function showTabListLevel() {
 function showTab(name) {
   activeTab = name;
   detailStack = [];
+  pendingListRefresh = false;   // this switch's own unconditional fetch below covers it
   $("diff-view").classList.add("hidden");
   $("file-view").classList.add("hidden");
   showTabListLevel();
@@ -524,10 +526,12 @@ function requestChanges() {
 function refreshFileTree() {
   if (!currentSession) return;
   send({ type: "listFiles", sessionId: currentSession });
-  for (const row of changesTree.visibleRows()) {
-    if (row.node.kind === "dir" && row.expanded) {
-      send({ type: "listFiles", sessionId: currentSession, path: row.node.path });
-    }
+  // `expandedPaths()`, not `visibleRows()`: a directory expanded behind a
+  // since-collapsed ancestor is invisible right now but still cached, and
+  // re-expanding the ancestor later would otherwise render it straight from
+  // that stale cache with no request in between.
+  for (const path of changesTree.expandedPaths()) {
+    send({ type: "listFiles", sessionId: currentSession, path });
   }
 }
 
@@ -586,6 +590,10 @@ function closeDetailLevel() {
   $("diff-view").classList.add("hidden");
   $("file-view").classList.add("hidden");
   showTabListLevel();
+  if (pendingListRefresh && detailStack.length === 0) {
+    pendingListRefresh = false;
+    scheduleListRefresh();
+  }
 }
 
 // If the socket drops while a file or diff detail view is open, `onopen`'s
@@ -744,6 +752,21 @@ function showFileError(text) {
 let previousChangesStreamingState = "idle";   // so we can edge-trigger on the idle TRANSITION only
 let changesRefreshDebounceTimer = null;
 const CHANGES_REFRESH_DEBOUNCE_MS = 500;
+// Set when an idle transition wants to refresh the open tab's list but a
+// detail view (diff/file) is in the way — closing the detail only toggles
+// DOM visibility (`showTabListLevel()`), so without this the list would
+// otherwise show the pre-turn snapshot until a manual refresh or tab
+// switch. Consumed by `closeDetailLevel()`.
+let pendingListRefresh = false;
+
+function scheduleListRefresh() {
+  if (changesRefreshDebounceTimer) clearTimeout(changesRefreshDebounceTimer);
+  changesRefreshDebounceTimer = setTimeout(() => {
+    changesRefreshDebounceTimer = null;
+    if (activeTab === "changes") requestChanges();
+    else if (activeTab === "files") refreshFileTree();
+  }, CHANGES_REFRESH_DEBOUNCE_MS);
+}
 
 /// Re-fetch the change list (or the Files tree, if that's the open tab)
 /// when the agent stops, but only on the actual transition into idle (not
@@ -759,14 +782,12 @@ function noteStreamingStateForChanges(state) {
   const wasIdle = previousChangesStreamingState === "idle";
   previousChangesStreamingState = state;
   if (state !== "idle" || wasIdle) return;
-  if (detailStack.length !== 0) return;
   if (activeTab !== "changes" && activeTab !== "files") return;
-  if (changesRefreshDebounceTimer) clearTimeout(changesRefreshDebounceTimer);
-  changesRefreshDebounceTimer = setTimeout(() => {
-    changesRefreshDebounceTimer = null;
-    if (activeTab === "changes") requestChanges();
-    else if (activeTab === "files") refreshFileTree();
-  }, CHANGES_REFRESH_DEBOUNCE_MS);
+  if (detailStack.length !== 0) {
+    pendingListRefresh = true;
+    return;
+  }
+  scheduleListRefresh();
 }
 
 function clearSessionSheetsForOpen() {
@@ -795,6 +816,7 @@ function showSessions() {
   resetChangesAndFilesDOM();
   if (changesRefreshDebounceTimer) { clearTimeout(changesRefreshDebounceTimer); changesRefreshDebounceTimer = null; }
   previousChangesStreamingState = "idle";
+  pendingListRefresh = false;
   activeTab = "chat";
   $("detail-tabs").classList.add("hidden");
   $("changes").classList.add("hidden");
