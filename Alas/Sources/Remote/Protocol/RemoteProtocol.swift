@@ -296,6 +296,37 @@ extension RemoteClientMessage {
         return false
     }
 
+    /// Dedup key for the read-only file-request verbs, matching
+    /// `RemoteSessionGateway`'s own per-verb key shape (kept identical so
+    /// the two dedup layers agree on identity). `nil` for every other
+    /// message.
+    ///
+    /// `RemoteConnection.dispatchMessage` checks this BEFORE enqueueing into
+    /// the per-connection processing chain: these verbs are not `isControl`,
+    /// so they're always serialized behind `processingTail` like any other
+    /// ordered message — by the time a duplicate's `handle` call would run,
+    /// the original's has already completed and released its key, so a
+    /// dedup guard that only lives inside `handle` never actually rejects
+    /// anything for a real client. Checking here, at enqueue time, catches a
+    /// duplicate that arrives while the original is still queued or
+    /// in-flight, before it wastes a spot in the ordered chain (and,
+    /// downstream, a git process) on a request that will show identical
+    /// results to the one already running.
+    var fileRequestDedupKey: String? {
+        switch self {
+        case .listChanges(let sessionId):
+            return "listChanges\u{0}\(sessionId)"
+        case .fileDiff(let sessionId, let path):
+            return "fileDiff\u{0}\(sessionId)\u{0}\(path)"
+        case .listFiles(let sessionId, let path):
+            return "listFiles\u{0}\(sessionId)\u{0}\(path ?? "")"
+        case .readFile(let sessionId, let path):
+            return "readFile\u{0}\(sessionId)\u{0}\(path)"
+        default:
+            return nil
+        }
+    }
+
     /// Messages that establish or change which turn is active, and so a
     /// following `stop` must wait for them specifically (not the whole
     /// ordered queue) before running — otherwise stop could land before a

@@ -25,6 +25,14 @@ extension GitService {
 
         let nameStatus = try await Process.git(
             ["-c", "core.quotePath=false", "diff", "--name-status", "-z", "-M", "-C", ref, "--"], cwd: worktreePath)
+        // A dropped SSH connection (or any other fatal exit) between the
+        // numstat call above and this one must propagate, not be parsed as
+        // an empty (and so misleadingly valid) name-status list: that would
+        // report only untracked files, or nothing at all, as the whole set
+        // of base-relative changes.
+        guard nameStatus.exitCode == 0 else {
+            throw ProcessError.nonZeroExit(nameStatus.exitCode, nameStatus.stderr)
+        }
         let statusEntries = try await status(worktreePath: worktreePath)
         let conflicts = Dictionary(
             statusEntries.compactMap { entry in entry.conflict.map { (entry.path, $0) } },
@@ -51,6 +59,9 @@ extension GitService {
 
         let untracked = try await Process.git(
             ["ls-files", "--others", "--exclude-standard", "-z"], cwd: worktreePath)
+        guard untracked.exitCode == 0 else {
+            throw ProcessError.nonZeroExit(untracked.exitCode, untracked.stderr)
+        }
         let untrackedPaths = untracked.stdout.components(separatedBy: "\0")
             .filter { !$0.isEmpty && seen.insert($0).inserted }
 

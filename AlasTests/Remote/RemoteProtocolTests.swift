@@ -657,6 +657,31 @@ struct RemoteProtocolTests {
         #expect(!RemoteClientMessage.listSessions.isDriveOrdering)
     }
 
+    @Test func fileRequestDedupKeyCoversOnlyTheFourFileVerbs() {
+        #expect(RemoteClientMessage.listChanges(sessionId: "s1").fileRequestDedupKey == "listChanges\u{0}s1")
+        #expect(RemoteClientMessage.fileDiff(sessionId: "s1", path: "a.txt").fileRequestDedupKey == "fileDiff\u{0}s1\u{0}a.txt")
+        #expect(RemoteClientMessage.listFiles(sessionId: "s1", path: "src").fileRequestDedupKey == "listFiles\u{0}s1\u{0}src")
+        #expect(RemoteClientMessage.listFiles(sessionId: "s1", path: nil).fileRequestDedupKey == "listFiles\u{0}s1\u{0}")
+        #expect(RemoteClientMessage.readFile(sessionId: "s1", path: "a.txt").fileRequestDedupKey == "readFile\u{0}s1\u{0}a.txt")
+        #expect(RemoteClientMessage.listSessions.fileRequestDedupKey == nil)
+        #expect(RemoteClientMessage.stop(sessionId: "s1").fileRequestDedupKey == nil)
+        #expect(RemoteClientMessage.sendPrompt(sessionId: "s1", text: "hi", attachments: [], intent: "auto").fileRequestDedupKey == nil)
+    }
+
+    /// Two different sessions (or two different paths within the same
+    /// session) must never collide on the same key — the `\u{0}` separator
+    /// is what makes "s1" + path "2/x" distinguishable from "s12" + path "x".
+    @Test func fileRequestDedupKeyDoesNotCollideAcrossSessionsOrPaths() {
+        #expect(
+            RemoteClientMessage.fileDiff(sessionId: "s1", path: "a.txt").fileRequestDedupKey
+                != RemoteClientMessage.fileDiff(sessionId: "s2", path: "a.txt").fileRequestDedupKey
+        )
+        #expect(
+            RemoteClientMessage.listFiles(sessionId: "s1", path: "a").fileRequestDedupKey
+                != RemoteClientMessage.listFiles(sessionId: "s1", path: "b").fileRequestDedupKey
+        )
+    }
+
     @Test func changesAndFilesClientMessagesRoundTripAndEncodeRequiredFields() throws {
         let listChanges = RemoteClientMessage.listChanges(sessionId: "s1")
         #expect(try roundTrip(listChanges) == listChanges)
