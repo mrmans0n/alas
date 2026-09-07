@@ -25,7 +25,7 @@ final class CommitPublishSession {
     private var workflow: CommitPublishWorkflow?
     @ObservationIgnored private var task: Task<Void, Never>?
     private let onCheckpointChange: (CommitPublishCheckpoint?) throws -> Void
-    private let onCompletion: (CommitPublishCheckpoint) -> Void
+    private let onCompletion: (CommitPublishCheckpoint) throws -> Void
 
     var activity: CommitPublishActivity { workflow?.activity ?? .idle }
     var isRunning: Bool { activeRunID != nil }
@@ -33,7 +33,7 @@ final class CommitPublishSession {
     init(
         checkpoint: CommitPublishCheckpoint?,
         onCheckpointChange: @escaping (CommitPublishCheckpoint?) throws -> Void,
-        onCompletion: @escaping (CommitPublishCheckpoint) -> Void
+        onCompletion: @escaping (CommitPublishCheckpoint) throws -> Void
     ) {
         self.checkpoint = checkpoint
         self.onCheckpointChange = onCheckpointChange
@@ -58,16 +58,18 @@ final class CommitPublishSession {
             defer { finish(runID) }
             let workflow = CommitPublishWorkflow(operations: operations) { [weak self] next in
                 guard let self, activeRunID == runID else { return }
-                let previous = checkpoint
-                if next != nil {
+                if let next {
                     checkpoint = next
+                    try onCheckpointChange(next)
+                    return
                 }
-                try onCheckpointChange(next)
-                if next == nil, let previous {
-                    checkpoint = nil
-                    finish(runID)
-                    onCompletion(previous)
+                guard let previous = checkpoint else {
+                    try onCheckpointChange(nil)
+                    return
                 }
+                try onCompletion(previous)
+                checkpoint = nil
+                finish(runID)
             }
             self.workflow = workflow
             do {

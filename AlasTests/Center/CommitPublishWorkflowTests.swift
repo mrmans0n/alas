@@ -116,6 +116,61 @@ struct CommitPublishWorkflowTests {
         #expect(session.lastError?.localizedDescription == "write rejected")
     }
 
+    @Test func tabsManagerKeepsCheckpointWhenCompletionPersistenceFails() async throws {
+        let store = FlakyCommitPublishTabsStore()
+        let manager = TabsManager(store: store)
+        let worktreeId = "completion-persist-failure"
+        let draft = manager.openOrFocusDraftCommit(worktreeId: worktreeId)
+        let target = WorkflowHarness().target
+        var calls: [String] = []
+        let operations = CommitPublishOperations(
+            createCommit: { _, _, _ in
+                calls.append("commit")
+                return .init(commitSHA: "committed", comparisonBase: "main", editorTitle: "Title")
+            },
+            currentHeadSHA: {
+                calls.append("head")
+                return "committed"
+            },
+            remoteBranchContainsCommit: { _, _ in
+                calls.append("remoteContainsCommit")
+                return false
+            },
+            push: { _, _ in calls.append("push") },
+            currentReviewRequestExists: { _ in
+                calls.append("lookupPR")
+                store.failWrites = true
+                return true
+            },
+            createReviewRequest: { target, _, _ in target.webURL },
+            syncGG: { _ in },
+            refreshAfterCompletion: {}
+        )
+
+        let task = try #require(manager.runCommitPublish(worktreeId: worktreeId, tabId: draft.id,
+            subject: "Subject", body: "Body", amend: false, operations: operations,
+            prepareDestination: { .review(target) }))
+        await task.value
+
+        let session = try #require(manager.commitPublishSession(tabId: draft.id))
+        #expect(calls == ["commit", "head", "remoteContainsCommit", "push", "lookupPR"])
+        #expect(session.checkpoint?.nextPhase == .createReviewRequest)
+        #expect(session.lastError?.localizedDescription == "write rejected")
+        #expect(manager.commitEditorTab(worktreeId: worktreeId, currentSha: "committed") == nil)
+        guard case .draftCommit(let liveState) = manager.tabs(forWorktree: worktreeId).first(where: { $0.id == draft.id }) else {
+            Issue.record("Expected draft commit tab")
+            return
+        }
+        #expect(liveState.publishCheckpoint?.nextPhase == .createReviewRequest)
+
+        let persisted = store.files[Paths.tabsFile(forWorktreeId: worktreeId)]
+        guard case .draftCommit(let persistedState)? = persisted?.tabs.first(where: { $0.id == draft.id }) else {
+            Issue.record("Expected persisted draft commit tab")
+            return
+        }
+        #expect(persistedState.publishCheckpoint?.nextPhase == .createReviewRequest)
+    }
+
     @Test func tabsManagerCanAbandonPausedPublishCheckpoint() async throws {
         let manager = TabsManager()
         let draft = manager.openOrFocusDraftCommit(worktreeId: "abandon-publish")
@@ -818,6 +873,25 @@ private struct FailingTabsStore: PersistenceStoreProtocol {
     }
 
     func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
+}
+
+private final class FlakyCommitPublishTabsStore: PersistenceStoreProtocol, @unchecked Sendable {
+    var failWrites = false
+    var files: [URL: TabsFile] = [:]
+
+    func write<T: Encodable>(_ value: T, to url: URL) throws {
+        if failWrites {
+            throw NSError(domain: "CommitPublishWorkflowTests", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "write rejected"])
+        }
+        if let file = value as? TabsFile {
+            files[url] = file
+        }
+    }
+
+    func readIfExists<T: Decodable>(_: T.Type, from url: URL) throws -> T? {
+        files[url] as? T
+    }
 }
 
 @MainActor
