@@ -2090,32 +2090,30 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
         }
         do {
             if FileManager.default.fileExists(atPath: removingDirectory.appendingPathComponent("locked").path) {
-                try? FileManager.default.removeItem(at: removingDirectory.appendingPathComponent(Self.staleRegistrationTombstoneMarker))
-                try? FileManager.default.removeItem(at: removingDirectory.appendingPathComponent(Self.staleRegistrationOriginalNameMarker))
-                try FileManager.default.moveItem(at: removingDirectory, to: adminDirectory)
+                try restoreLocalStaleRegistrationTombstone(removingDirectory, to: adminDirectory)
                 throw WorkspaceCheckoutCoordinatorError.lockedStaleRegistration
             }
             guard staleRegistrationLineageID(removingDirectory) == expectedLineageID else {
-                try? FileManager.default.removeItem(at: removingDirectory.appendingPathComponent(Self.staleRegistrationTombstoneMarker))
-                try? FileManager.default.removeItem(at: removingDirectory.appendingPathComponent(Self.staleRegistrationOriginalNameMarker))
-                try FileManager.default.moveItem(at: removingDirectory, to: adminDirectory)
+                try restoreLocalStaleRegistrationTombstone(removingDirectory, to: adminDirectory)
                 throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict
             }
             if WorkspaceFrozenGitOperator.pathEntryExistsOrIsSymlink(destination.path) {
-                try? FileManager.default.removeItem(at: removingDirectory.appendingPathComponent(Self.staleRegistrationTombstoneMarker))
-                try? FileManager.default.removeItem(at: removingDirectory.appendingPathComponent(Self.staleRegistrationOriginalNameMarker))
-                try FileManager.default.moveItem(at: removingDirectory, to: adminDirectory)
+                try restoreLocalStaleRegistrationTombstone(removingDirectory, to: adminDirectory)
                 throw WorkspaceCheckoutCoordinatorError.completedWorktreeReturned
             }
         } catch {
             if FileManager.default.fileExists(atPath: removingDirectory.path),
                !FileManager.default.fileExists(atPath: adminDirectory.path) {
-                try? FileManager.default.removeItem(at: removingDirectory.appendingPathComponent(Self.staleRegistrationTombstoneMarker))
-                try? FileManager.default.removeItem(at: removingDirectory.appendingPathComponent(Self.staleRegistrationOriginalNameMarker))
-                try? FileManager.default.moveItem(at: removingDirectory, to: adminDirectory)
+                try? restoreLocalStaleRegistrationTombstone(removingDirectory, to: adminDirectory)
             }
             throw error
         }
+    }
+
+    private static func restoreLocalStaleRegistrationTombstone(_ tombstone: URL, to adminDirectory: URL) throws {
+        try FileManager.default.moveItem(at: tombstone, to: adminDirectory)
+        try? FileManager.default.removeItem(at: adminDirectory.appendingPathComponent(Self.staleRegistrationTombstoneMarker))
+        try? FileManager.default.removeItem(at: adminDirectory.appendingPathComponent(Self.staleRegistrationOriginalNameMarker))
     }
 
     private static func staleRegistrationAdminDirectory(
@@ -2227,7 +2225,7 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
         let tombstoneMarker = SSHCommand.shellQuote(Self.staleRegistrationTombstoneMarker)
         let originalNameMarker = SSHCommand.shellQuote(Self.staleRegistrationOriginalNameMarker)
         return """
-        repo=\(repo); target=\(destination); expected=\(expectedLineageID); marker_name=\(tombstoneMarker); original_name_marker=\(originalNameMarker); common=$(git -C "$repo" rev-parse --git-common-dir) || exit $?; case "$common" in /*) ;; *) common="$repo/$common" ;; esac; found=; for admin in "$common"/worktrees/*; do [ -d "$admin" ] || continue; [ -f "$admin/gitdir" ] || continue; IFS= read -r gitdir < "$admin/gitdir" || continue; [ "$gitdir" = "$target/.git" ] || continue; [ -z "$found" ] || exit 11; found="$admin"; done; [ -n "$found" ] || exit 12; [ -e "$found/locked" ] && exit 9; f="$found/alas-worktree-lineage"; [ -s "$f" ] || exit 13; IFS= read -r lineage < "$f" || exit 13; [ "$lineage" = "$expected" ] || exit 13; if [ -e "$target" ] || [ -L "$target" ]; then exit 10; fi; marker="$found/$marker_name"; original_marker="$found/$original_name_marker"; printf '%s\\n' "$expected" > "$marker" || exit $?; printf '%s\\n' "${found##*/}" > "$original_marker" || { rm -f -- "$marker"; exit 1; }; tomb_root="$common/alas-stale-worktree-tombstones"; mkdir -p "$tomb_root" || { rm -f -- "$marker" "$original_marker"; exit 1; }; tomb="$tomb_root/${found##*/}.alas-removing.$$"; if ! mv "$found" "$tomb"; then rm -f -- "$marker" "$original_marker"; exit 1; fi; if [ -e "$tomb/locked" ]; then rm -f -- "$tomb/$marker_name" "$tomb/$original_name_marker"; mv "$tomb" "$found"; exit 9; fi; f="$tomb/alas-worktree-lineage"; [ -s "$f" ] || { rm -f -- "$tomb/$marker_name" "$tomb/$original_name_marker"; mv "$tomb" "$found"; exit 13; }; IFS= read -r lineage < "$f" || { rm -f -- "$tomb/$marker_name" "$tomb/$original_name_marker"; mv "$tomb" "$found"; exit 13; }; [ "$lineage" = "$expected" ] || { rm -f -- "$tomb/$marker_name" "$tomb/$original_name_marker"; mv "$tomb" "$found"; exit 13; }; if [ -e "$target" ] || [ -L "$target" ]; then rm -f -- "$tomb/$marker_name" "$tomb/$original_name_marker"; mv "$tomb" "$found"; exit 10; fi
+        repo=\(repo); target=\(destination); expected=\(expectedLineageID); marker_name=\(tombstoneMarker); original_name_marker=\(originalNameMarker); common=$(git -C "$repo" rev-parse --git-common-dir) || exit $?; case "$common" in /*) ;; *) common="$repo/$common" ;; esac; found=; for admin in "$common"/worktrees/*; do [ -d "$admin" ] || continue; [ -f "$admin/gitdir" ] || continue; IFS= read -r gitdir < "$admin/gitdir" || continue; [ "$gitdir" = "$target/.git" ] || continue; [ -z "$found" ] || exit 11; found="$admin"; done; [ -n "$found" ] || exit 12; [ -e "$found/locked" ] && exit 9; f="$found/alas-worktree-lineage"; [ -s "$f" ] || exit 13; IFS= read -r lineage < "$f" || exit 13; [ "$lineage" = "$expected" ] || exit 13; if [ -e "$target" ] || [ -L "$target" ]; then exit 10; fi; marker="$found/$marker_name"; original_marker="$found/$original_name_marker"; printf '%s\\n' "$expected" > "$marker" || exit $?; printf '%s\\n' "${found##*/}" > "$original_marker" || { rm -f -- "$marker"; exit 1; }; tomb_root="$common/alas-stale-worktree-tombstones"; mkdir -p "$tomb_root" || { rm -f -- "$marker" "$original_marker"; exit 1; }; tomb="$tomb_root/${found##*/}.alas-removing.$$"; if ! mv "$found" "$tomb"; then rm -f -- "$marker" "$original_marker"; exit 1; fi; restore() { mv "$tomb" "$found" || exit $?; rm -f -- "$found/$marker_name" "$found/$original_name_marker"; }; if [ -e "$tomb/locked" ]; then restore; exit 9; fi; f="$tomb/alas-worktree-lineage"; [ -s "$f" ] || { restore; exit 13; }; IFS= read -r lineage < "$f" || { restore; exit 13; }; [ "$lineage" = "$expected" ] || { restore; exit 13; }; if [ -e "$target" ] || [ -L "$target" ]; then restore; exit 10; fi
         """
     }
 

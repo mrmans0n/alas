@@ -899,6 +899,7 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(commands.contains("rev-parse --git-common-dir"))
         #expect(commands.contains(".alas-removing"))
         #expect(commands.contains("alas-stale-registration-tombstone"))
+        #expect(commands.contains("rm -f -- \"$tomb/$marker_name\" \"$tomb/$original_name_marker\"; mv") == false)
         #expect(commands.contains("worktree remove -f -f --") == false)
         #expect(commands.contains("/checkout/a"))
         #expect(commands.contains("worktree prune") == false)
