@@ -913,6 +913,28 @@ actor WorkspaceCheckoutCoordinator {
                 )
                 continue
             }
+            if member.recreationSourceCheckpoint == .setupComplete,
+               member.checkpoint == .worktreeCreating {
+                let operation = frozenWorktreeOperation(checkout: checkout, member: frozenMember)
+                if let lineageID = try? await git.existingCreatedWorktreeLineage(operation) {
+                    try await updateMember(checkoutID: checkoutID, memberID: member.id) { current in
+                        current.checkpoint = .setupComplete
+                        current.availability = .available
+                        current.gitLineageID = lineageID
+                        current.recreationSourceCheckpoint = nil
+                    }
+                    continue
+                }
+                guard let cleanupPlan = makeCleanupPlan(checkout: checkout, member: member) else { continue }
+                claimedAnyMember = true
+                await execute(
+                    member: frozenMember,
+                    checkout: checkout,
+                    staleRegistrationCleanup: cleanupPlan,
+                    preservesCompletedMemberOnLockedRegistration: true
+                )
+                continue
+            }
             let claimedCheckpoint = try? await store.mutate { state -> WorkspaceCheckoutCheckpoint? in
                 guard let checkoutIndex = state.checkouts.firstIndex(where: { $0.id == checkoutID }),
                       let memberIndex = state.checkouts[checkoutIndex].members.firstIndex(where: { $0.id == member.id })
@@ -1142,6 +1164,7 @@ actor WorkspaceCheckoutCoordinator {
             else { return false }
             state.checkouts[checkoutIndex].members[memberIndex].checkpoint = .worktreeCreating
             state.checkouts[checkoutIndex].members[memberIndex].availability = .pending
+            state.checkouts[checkoutIndex].members[memberIndex].recreationSourceCheckpoint = .setupComplete
             state.checkouts[checkoutIndex].members[memberIndex].cleanup = nil
             let branchOwnership = current.cleanupOwnership.branchOwnership
             state.checkouts[checkoutIndex].members[memberIndex].cleanupOwnership = .init(
@@ -1322,6 +1345,7 @@ actor WorkspaceCheckoutCoordinator {
                 }
                 try await self.updateMember(checkoutID: checkout.id, memberID: plan.checkoutMemberID) { member in
                     member.checkpoint = .worktreeCreated
+                    member.recreationSourceCheckpoint = nil
                     member.gitLineageID = lineageID
                     member.cleanup = nil
                     let branchOwnership = member.cleanupOwnership.branchOwnership
@@ -1342,6 +1366,7 @@ actor WorkspaceCheckoutCoordinator {
                    recoveryError == .lockedStaleRegistration || recoveryError == .completedWorktreeReturned {
                     state.checkouts[checkoutIndex].members[memberIndex].checkpoint = .setupComplete
                     state.checkouts[checkoutIndex].members[memberIndex].availability = .missing
+                    state.checkouts[checkoutIndex].members[memberIndex].recreationSourceCheckpoint = nil
                     return
                 }
                 state.checkouts[checkoutIndex].members[memberIndex].checkpoint = .failed
