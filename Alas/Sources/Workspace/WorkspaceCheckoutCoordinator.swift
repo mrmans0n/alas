@@ -1956,6 +1956,14 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
             let destination = URL(fileURLWithPath: plan.worktreePath)
             var registrations = try await Process.git(["worktree", "list", "--porcelain"], cwd: repo, usesRemoteHostRegistry: false)
             guard registrations.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(registrations.stderr) }
+            if unlockLocked,
+               let tombstone = try await Self.staleRegistrationTombstoneIfPresent(repo: repo, destination: destination) {
+                guard Self.staleRegistrationTombstoneLineageID(tombstone) == plan.expectedLineageID,
+                      Self.staleRegistrationLineageID(tombstone) == plan.expectedLineageID
+                else { throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict }
+                try FileManager.default.removeItem(at: tombstone)
+                try? FileManager.default.removeItem(at: tombstone.deletingLastPathComponent())
+            }
             if !unlockLocked {
                 try await Self.recoverLocalInterruptedStaleRegistrationTombstone(
                     repo: repo,
@@ -1973,6 +1981,13 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
                 throw WorkspaceCheckoutCoordinatorError.completedWorktreeReturned
             }
             if unlockLocked {
+                let adminDirectory = try await Self.staleRegistrationAdminDirectory(
+                    repo: repo,
+                    destination: destination
+                )
+                guard Self.staleRegistrationLineageID(adminDirectory) == plan.expectedLineageID else {
+                    throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict
+                }
                 guard WorkspaceFrozenGitOperator.pathEntryExistsOrIsSymlink(destination.path) == false else {
                     throw WorkspaceCheckoutCoordinatorError.completedWorktreeReturned
                 }
@@ -1997,6 +2012,22 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
             let repo = SSHCommand.shellQuote(plan.sourceRepositoryPath)
             var registrations = try await remote.run(host: host, command: "git -C \(repo) worktree list --porcelain")
             guard registrations.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(registrations.stderr) }
+            if unlockLocked {
+                let cleanup = try await remote.run(
+                    host: host,
+                    command: Self.remoteFinalizeStaleRegistrationCleanupCommand(plan)
+                )
+                switch cleanup.exitCode {
+                case 0:
+                    break
+                case 13:
+                    throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict
+                default:
+                    throw WorktreeService.WorktreeError.gitFailed(cleanup.stderr)
+                }
+                registrations = try await remote.run(host: host, command: "git -C \(repo) worktree list --porcelain")
+                guard registrations.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(registrations.stderr) }
+            }
             if !unlockLocked {
                 let recovery = try await remote.run(
                     host: host,
@@ -2024,6 +2055,18 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
             }
             guard exists.exitCode == 1 else { throw WorktreeService.WorktreeError.gitFailed(exists.stderr) }
             if unlockLocked {
+                let lineage = try await remote.run(
+                    host: host,
+                    command: Self.remoteStaleRegistrationLineageValidationCommand(plan)
+                )
+                switch lineage.exitCode {
+                case 0:
+                    break
+                case 13:
+                    throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict
+                default:
+                    throw WorktreeService.WorktreeError.gitFailed(lineage.stderr)
+                }
                 let recheck = try await remote.run(host: host, command: "p=\(destination); test -e \"$p\" || test -L \"$p\"")
                 if recheck.exitCode == 0 {
                     throw WorkspaceCheckoutCoordinatorError.completedWorktreeReturned
@@ -2262,6 +2305,15 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
         let originalNameMarker = SSHCommand.shellQuote(Self.staleRegistrationOriginalNameMarker)
         return """
         repo=\(repo); target=\(destination); expected=\(expectedLineageID); marker_name=\(tombstoneMarker); original_name_marker=\(originalNameMarker); common=$(git -C "$repo" rev-parse --git-common-dir) || exit $?; case "$common" in /*) ;; *) common="$repo/$common" ;; esac; found=; for admin in "$common"/worktrees/*; do [ -d "$admin" ] || continue; [ -f "$admin/gitdir" ] || continue; IFS= read -r gitdir < "$admin/gitdir" || continue; [ "$gitdir" = "$target/.git" ] || continue; [ -z "$found" ] || exit 11; found="$admin"; done; [ -n "$found" ] || exit 12; [ -e "$found/locked" ] && exit 9; f="$found/alas-worktree-lineage"; [ -s "$f" ] || exit 13; IFS= read -r lineage < "$f" || exit 13; [ "$lineage" = "$expected" ] || exit 13; if [ -e "$target" ] || [ -L "$target" ]; then exit 10; fi; marker="$found/$marker_name"; original_marker="$found/$original_name_marker"; printf '%s\\n' "$expected" > "$marker" || exit $?; printf '%s\\n' "${found##*/}" > "$original_marker" || { rm -f -- "$marker"; exit 1; }; tomb_root="$common/alas-stale-worktree-tombstones"; mkdir -p "$tomb_root" || { rm -f -- "$marker" "$original_marker"; exit 1; }; tomb="$tomb_root/${found##*/}.alas-removing.$$"; if ! mv "$found" "$tomb"; then rm -f -- "$marker" "$original_marker"; exit 1; fi; restore() { mv "$tomb" "$found" || exit $?; rm -f -- "$found/$marker_name" "$found/$original_name_marker"; }; if [ -e "$tomb/locked" ]; then restore; exit 9; fi; f="$tomb/alas-worktree-lineage"; [ -s "$f" ] || { restore; exit 13; }; IFS= read -r lineage < "$f" || { restore; exit 13; }; [ "$lineage" = "$expected" ] || { restore; exit 13; }; if [ -e "$target" ] || [ -L "$target" ]; then restore; exit 10; fi
+        """
+    }
+
+    private static func remoteStaleRegistrationLineageValidationCommand(_ plan: WorkspaceCheckoutCleanupPlan) -> String {
+        let repo = SSHCommand.shellQuote(plan.sourceRepositoryPath)
+        let destination = SSHCommand.shellQuote(plan.worktreePath)
+        let expectedLineageID = SSHCommand.shellQuote(plan.expectedLineageID)
+        return """
+        repo=\(repo); target=\(destination); expected=\(expectedLineageID); common=$(git -C "$repo" rev-parse --git-common-dir) || exit $?; case "$common" in /*) ;; *) common="$repo/$common" ;; esac; found=; for admin in "$common"/worktrees/*; do [ -d "$admin" ] || continue; [ -f "$admin/gitdir" ] || continue; IFS= read -r gitdir < "$admin/gitdir" || continue; [ "$gitdir" = "$target/.git" ] || continue; [ -z "$found" ] || exit 13; found="$admin"; done; [ -n "$found" ] || exit 12; f="$found/alas-worktree-lineage"; [ -s "$f" ] || exit 13; IFS= read -r lineage < "$f" || exit 13; [ "$lineage" = "$expected" ] || exit 13
         """
     }
 
