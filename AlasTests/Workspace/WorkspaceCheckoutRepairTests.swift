@@ -531,7 +531,13 @@ struct WorkspaceCheckoutRepairTests {
         )
         let git = MissingFailedCreateGit()
         let scripts = RepairScriptRunner()
-        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: git, scripts: scripts, projectMutationGate: ProjectMutationGate())
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: fixture.store,
+            git: git,
+            scripts: scripts,
+            projectMutationGate: ProjectMutationGate(),
+            lifecycle: RepairLifecycle(result: .missing)
+        )
 
         let checkout = try await coordinator.resumeCreation(checkoutID: fixture.checkout.id)
 
@@ -576,7 +582,13 @@ struct WorkspaceCheckoutRepairTests {
         )
         let git = CountingResumeGit(existingLineage: nil)
         let scripts = RepairScriptRunner()
-        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: git, scripts: scripts, projectMutationGate: ProjectMutationGate())
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: fixture.store,
+            git: git,
+            scripts: scripts,
+            projectMutationGate: ProjectMutationGate(),
+            lifecycle: RepairLifecycle(result: .missing)
+        )
 
         let checkout = try await coordinator.resumeCreation(checkoutID: fixture.checkout.id)
 

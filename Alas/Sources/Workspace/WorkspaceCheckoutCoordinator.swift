@@ -896,10 +896,15 @@ actor WorkspaceCheckoutCoordinator {
             }
             if member.checkpoint == .setupComplete {
                 guard await completedMemberNeedsRecreation(checkout: checkout, member: frozenMember),
+                      let cleanupPlan = makeCleanupPlan(checkout: checkout, member: member),
                       try await claimCompletedMemberForRecreation(checkoutID: checkoutID, memberID: member.id, plan: plan)
                 else { continue }
                 claimedAnyMember = true
-                await execute(member: frozenMember, checkout: checkout)
+                await execute(
+                    member: frozenMember,
+                    checkout: checkout,
+                    staleRegistrationCleanup: cleanupPlan
+                )
                 continue
             }
             let claimedCheckpoint = try? await store.mutate { state -> WorkspaceCheckoutCheckpoint? in
