@@ -48,6 +48,8 @@ protocol WorkspaceCheckoutLifecycleOperating: Sendable {
     func verifyCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutMemberObservation
     /// Clears stale Git worktree metadata for a missing frozen destination.
     func clearStaleRegistration(_ plan: WorkspaceCheckoutCleanupPlan) async throws
+    /// Explicit user deletion may intentionally unlock and prune a missing worktree.
+    func clearStaleRegistrationForExplicitDeletion(_ plan: WorkspaceCheckoutCleanupPlan) async throws
     /// Removes only the worktree. Branch deletion is intentionally disabled.
     func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan, force: Bool, forceTwice: Bool) async throws
     /// Removes checkout-owned root artifacts after all member worktrees are gone.
@@ -59,6 +61,9 @@ protocol WorkspaceCheckoutLifecycleOperating: Sendable {
 
 extension WorkspaceCheckoutLifecycleOperating {
     func clearStaleRegistration(_ plan: WorkspaceCheckoutCleanupPlan) async throws {}
+    func clearStaleRegistrationForExplicitDeletion(_ plan: WorkspaceCheckoutCleanupPlan) async throws {
+        try await clearStaleRegistration(plan)
+    }
 }
 
 struct NoopWorkspaceCheckoutSessionStopper: WorkspaceCheckoutSessionStopping {
@@ -325,7 +330,7 @@ actor WorkspaceCheckoutCoordinator {
                 break
             case .missing:
                 try await projectMutationGate.withMutation(projectID: member.projectID) {
-                    try await lifecycle.clearStaleRegistration(plan)
+                    try await lifecycle.clearStaleRegistrationForExplicitDeletion(plan)
                 }
                 worktreeAlreadyRemoved = true
                 try await mutateMember(checkoutID: checkoutID, memberID: memberID) {
@@ -1783,6 +1788,14 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
     }
 
     func clearStaleRegistration(_ plan: WorkspaceCheckoutCleanupPlan) async throws {
+        try await clearStaleRegistration(plan, unlockLocked: false)
+    }
+
+    func clearStaleRegistrationForExplicitDeletion(_ plan: WorkspaceCheckoutCleanupPlan) async throws {
+        try await clearStaleRegistration(plan, unlockLocked: true)
+    }
+
+    private func clearStaleRegistration(_ plan: WorkspaceCheckoutCleanupPlan, unlockLocked: Bool) async throws {
         switch plan.executionLocation.normalized {
         case .local:
             let repo = URL(fileURLWithPath: plan.sourceRepositoryPath)
@@ -1791,7 +1804,9 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
             guard registrations.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(registrations.stderr) }
             guard Self.porcelainContainsWorktree(registrations.stdout, path: plan.worktreePath) else { return }
             if Self.porcelainWorktreeIsLocked(registrations.stdout, path: plan.worktreePath) {
-                throw WorkspaceCheckoutCoordinatorError.lockedStaleRegistration
+                guard unlockLocked else { throw WorkspaceCheckoutCoordinatorError.lockedStaleRegistration }
+                let unlock = try await Process.git(["worktree", "unlock", destination.path], cwd: repo, usesRemoteHostRegistry: false)
+                guard unlock.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(unlock.stderr) }
             }
             try await WorktreeService().prune(repoPath: repo)
             let refreshed = try await Process.git(["worktree", "list", "--porcelain"], cwd: repo, usesRemoteHostRegistry: false)
@@ -1804,7 +1819,9 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
             guard registrations.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(registrations.stderr) }
             guard Self.porcelainContainsWorktree(registrations.stdout, path: plan.worktreePath) else { return }
             if Self.porcelainWorktreeIsLocked(registrations.stdout, path: plan.worktreePath) {
-                throw WorkspaceCheckoutCoordinatorError.lockedStaleRegistration
+                guard unlockLocked else { throw WorkspaceCheckoutCoordinatorError.lockedStaleRegistration }
+                let unlock = try await remote.run(host: host, command: "git -C \(repo) worktree unlock -- \(SSHCommand.shellQuote(plan.worktreePath))")
+                guard unlock.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(unlock.stderr) }
             }
             let prune = try await remote.run(host: host, command: "git -C \(repo) worktree prune")
             guard prune.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(prune.stderr) }
@@ -1820,7 +1837,7 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
     }
 
     private static func porcelainWorktreeIsLocked(_ porcelain: String, path: String) -> Bool {
-        porcelainWorktreeEntry(porcelain, path: path)?.contains("locked") == true
+        porcelainWorktreeEntry(porcelain, path: path)?.contains(where: { $0 == "locked" || $0.hasPrefix("locked ") }) == true
     }
 
     private static func porcelainWorktreeEntry(_ porcelain: String, path: String) -> [Substring]? {
