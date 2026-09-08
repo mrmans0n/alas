@@ -531,7 +531,13 @@ struct WorkspaceCheckoutRepairTests {
         )
         let git = MissingFailedCreateGit()
         let scripts = RepairScriptRunner()
-        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: git, scripts: scripts, projectMutationGate: ProjectMutationGate())
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: fixture.store,
+            git: git,
+            scripts: scripts,
+            projectMutationGate: ProjectMutationGate(),
+            lifecycle: RepairLifecycle(result: .missing)
+        )
 
         let checkout = try await coordinator.resumeCreation(checkoutID: fixture.checkout.id)
 
@@ -539,7 +545,7 @@ struct WorkspaceCheckoutRepairTests {
         #expect(checkout.members[0].checkpoint == .setupComplete)
         #expect(checkout.members[0].availability == .available)
         #expect(checkout.members[0].gitLineageID == "lineage-a")
-        #expect(await git.calls == ["existing", "missing", "existing", "create"])
+        #expect(await git.calls == ["existing", "missing", "missing", "existing", "create"])
         #expect(await scripts.paths == ["/checkouts/a"])
     }
 
@@ -576,7 +582,13 @@ struct WorkspaceCheckoutRepairTests {
         )
         let git = CountingResumeGit(existingLineage: nil)
         let scripts = RepairScriptRunner()
-        let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: git, scripts: scripts, projectMutationGate: ProjectMutationGate())
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: fixture.store,
+            git: git,
+            scripts: scripts,
+            projectMutationGate: ProjectMutationGate(),
+            lifecycle: RepairLifecycle(result: .missing)
+        )
 
         let checkout = try await coordinator.resumeCreation(checkoutID: fixture.checkout.id)
 
@@ -586,8 +598,62 @@ struct WorkspaceCheckoutRepairTests {
         #expect(checkout.members[0].gitLineageID == "lineage-a")
         #expect(await git.prepareCount == 0)
         #expect(await git.createCount == 1)
-        #expect(await git.existingLineageChecks == 2)
+        #expect(await git.existingLineageChecks == 3)
         #expect(await scripts.paths == ["/checkouts/a"])
+    }
+
+    @Test func resumeCreationRetainsAnAdvancedBranchBeforeClearingAMissingWorktreeRegistration() async throws {
+        let fixture = try await persistedFixture(
+            checkpoint: .setupComplete,
+            worktreeCreated: true,
+            lineageID: "lineage-a",
+            branchOwnership: .created,
+            operation: .creating
+        )
+        let git = CountingResumeGit(existingLineage: nil, branchMatchesFrozenBase: false)
+        let lifecycle = RepairLifecycle(result: .missing)
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: fixture.store,
+            git: git,
+            scripts: RepairScriptRunner(),
+            projectMutationGate: ProjectMutationGate(),
+            lifecycle: lifecycle
+        )
+
+        let checkout = try await coordinator.resumeCreation(checkoutID: fixture.checkout.id)
+
+        #expect(checkout.members[0].checkpoint == .failed)
+        #expect(await lifecycle.clearedRegistrationCount == 0)
+        #expect(await git.createCount == 0)
+    }
+
+    @Test func resumeCreationRestoresACompletedAdvancedWorktreeAfterItsStorageReturns() async throws {
+        let fixture = try await persistedFixture(
+            checkpoint: .failed,
+            worktreeCreated: true,
+            lineageID: "lineage-a",
+            branchOwnership: .created,
+            operation: .creating
+        )
+        try await fixture.store.mutate { state in
+            state.checkouts[0].members[0].recreationSourceCheckpoint = .setupComplete
+            state.checkouts[0].members[0].recreationWorktreeCreationBegan = false
+        }
+        let git = CountingResumeGit(existingLineage: nil, branchMatchesFrozenBase: false)
+        let lifecycle = RepairLifecycle(result: .exactLineage("lineage-a"))
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: fixture.store,
+            git: git,
+            scripts: RepairScriptRunner(),
+            projectMutationGate: ProjectMutationGate(),
+            lifecycle: lifecycle
+        )
+
+        let checkout = try await coordinator.resumeCreation(checkoutID: fixture.checkout.id)
+
+        #expect(checkout.members[0].checkpoint == .setupComplete)
+        #expect(checkout.members[0].availability == .available)
+        #expect(await git.createCount == 0)
     }
 
     @Test func recreateMemberOnlyUsesTheSelectedFrozenMemberPlan() async throws {
@@ -848,6 +914,7 @@ private actor RepairObserver: WorkspaceCheckoutObserving {
 private actor RepairLifecycle: WorkspaceCheckoutLifecycleOperating {
     let result: WorkspaceCheckoutMemberObservation
     private(set) var observationCount = 0
+    private(set) var clearedRegistrationCount = 0
 
     init(result: WorkspaceCheckoutMemberObservation) { self.result = result }
 
@@ -862,6 +929,10 @@ private actor RepairLifecycle: WorkspaceCheckoutLifecycleOperating {
     func verifyCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutMemberObservation {
         observationCount += 1
         return result
+    }
+
+    func clearStaleRegistration(_ plan: WorkspaceCheckoutCleanupPlan) async throws {
+        clearedRegistrationCount += 1
     }
 
     func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan, force: Bool, forceTwice: Bool) async throws {}
@@ -1007,12 +1078,14 @@ private actor BlockingResumeGit: WorkspaceGitOperating {
 
 private actor CountingResumeGit: WorkspaceGitOperating {
     let existingLineage: String?
+    let branchMatchesFrozenBase: Bool
     private(set) var calls: [String] = []
     var prepareCount: Int { calls.filter { $0 == "prepare" }.count }
     var createCount: Int { calls.filter { $0 == "create" }.count }
 
-    init(existingLineage: String? = nil) {
+    init(existingLineage: String? = nil, branchMatchesFrozenBase: Bool = true) {
         self.existingLineage = existingLineage
+        self.branchMatchesFrozenBase = branchMatchesFrozenBase
     }
 
     func prepareBranch(_ operation: WorkspaceFrozenWorktreeOperation) async throws {
@@ -1022,6 +1095,10 @@ private actor CountingResumeGit: WorkspaceGitOperating {
     func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? {
         calls.append("create")
         return "lineage-a"
+    }
+
+    func preparedBranchMatchesFrozenBase(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> Bool {
+        branchMatchesFrozenBase
     }
 
     private(set) var existingLineageChecks = 0
@@ -1037,6 +1114,10 @@ private actor MissingFailedCreateGit: WorkspaceGitOperating {
 
     func prepareBranch(_ operation: WorkspaceFrozenWorktreeOperation) async throws {
         calls.append("prepare")
+    }
+
+    func preparedBranchMatchesFrozenBase(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> Bool {
+        true
     }
 
     func existingCreatedWorktreeLineage(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? {

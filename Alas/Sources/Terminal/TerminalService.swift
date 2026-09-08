@@ -679,7 +679,7 @@ final class TerminalService {
         }
         let remoteNamesToKill = remoteNamesByHost
         for (host, names) in remoteNamesToKill {
-            let existingNames = Set((await Self.remoteSessionInfos(host: host)).map(\.name))
+            let existingNames = try await Self.remoteSessionNames(host: host, timeout: timeout)
             for name in names {
                 guard existingNames.contains(name) else { continue }
                 try await Self.killRemoteSessionChecked(host: host, name: name, timeout: timeout)
@@ -778,6 +778,17 @@ final class TerminalService {
             return []
         }
         return ZmxClient.parseSessionInfos(result.stdout)
+    }
+
+    nonisolated static func remoteSessionNames(host: String, timeout: TimeInterval) async throws -> Set<String> {
+        let result = try await RemoteExec.run(
+            host: host,
+            cwd: nil,
+            command: RemoteTerminalScript.zmxBatchCommand(["ls"]),
+            timeout: timeout
+        )
+        guard result.exitCode == 0 else { throw SessionTerminationError.failed(host) }
+        return Set(ZmxClient.parseSessionInfos(result.stdout).map(\.name))
     }
 
     nonisolated static func remoteHostForCleanup(worktreeId: String, projectPath: String?) -> String? {

@@ -111,6 +111,10 @@ struct WorkspaceCheckoutLifecycleTests {
 
     @Test func deletingAMemberPersistsTheFrozenCleanupPlanBeforeRemovingTheWorktree() async throws {
         let fixture = try await Fixture.make()
+        try await fixture.store.mutate { state in
+            state.checkouts[0].members[0].recreationSourceCheckpoint = .setupComplete
+            state.checkouts[0].members[0].recreationWorktreeCreationBegan = true
+        }
         let lifecycle = PersistedCleanupLifecycle(store: fixture.store, checkoutID: fixture.checkout.id)
         let coordinator = WorkspaceCheckoutCoordinator(store: fixture.store, git: FixtureGit(), scripts: FixtureScripts(), sessions: LifecycleSessions(), lifecycle: lifecycle)
 
@@ -122,6 +126,221 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(checkout.members[0].gitLineageID == nil)
         #expect(checkout.members[0].cleanupOwnership.worktreeCreated == false)
         #expect(checkout.members[0].cleanup?.worktreeRemoved == true)
+        #expect(checkout.members[0].recreationSourceCheckpoint == nil)
+        #expect(checkout.members[0].recreationWorktreeCreationBegan == false)
+    }
+
+    @Test func resumingCreatedReplacementFinalizesPendingStaleRegistrationTombstone() async throws {
+        let fixture = try await Fixture.make(operation: .creating)
+        try await fixture.store.mutate { state in
+            state.checkouts[0].members[0].checkpoint = .failed
+            state.checkouts[0].members[0].availability = .unavailable
+            state.checkouts[0].members[0].recreationSourceCheckpoint = .setupComplete
+            state.checkouts[0].members[0].recreationWorktreeCreationBegan = true
+        }
+        let lifecycle = FixtureLifecycle()
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: fixture.store,
+            git: FixtureGit(existingCreatedLineageID: "lineage-a"),
+            scripts: FixtureScripts(),
+            sessions: LifecycleSessions(),
+            lifecycle: lifecycle
+        )
+
+        _ = try await coordinator.resumeCreation(checkoutID: fixture.checkout.id)
+
+        #expect(await lifecycle.finalizedRegistrations == [fixture.member.id])
+    }
+
+    @Test func resumingMarkerlessCreatedReplacementRecordsLineageAndFinalizesTombstone() async throws {
+        let fixture = try await Fixture.make(operation: .creating)
+        try await fixture.store.mutate { state in
+            state.checkouts[0].members[0].checkpoint = .failed
+            state.checkouts[0].members[0].availability = .unavailable
+            state.checkouts[0].members[0].recreationSourceCheckpoint = .setupComplete
+            state.checkouts[0].members[0].recreationWorktreeCreationBegan = true
+        }
+        let lifecycle = FixtureLifecycle(hasPendingStaleRegistrationCleanup: true)
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: fixture.store,
+            git: FixtureGit(recoveredCreatedLineageID: "lineage-a"),
+            scripts: FixtureScripts(),
+            sessions: LifecycleSessions(),
+            lifecycle: lifecycle
+        )
+
+        let checkout = try await coordinator.resumeCreation(checkoutID: fixture.checkout.id)
+
+        #expect(await lifecycle.finalizedRegistrations == [fixture.member.id])
+        #expect(await lifecycle.clearedRegistrations.isEmpty)
+        #expect(checkout.members[0].checkpoint == .setupComplete)
+        #expect(checkout.members[0].gitLineageID == "lineage-a")
+        #expect(checkout.members[0].recreationSourceCheckpoint == nil)
+        #expect(checkout.members[0].recreationWorktreeCreationBegan == false)
+    }
+
+    @Test func resumingMarkedCreatedReplacementWithAdvancedHeadFinalizesTombstone() async throws {
+        let fixture = try await Fixture.make(operation: .creating)
+        try await fixture.store.mutate { state in
+            state.checkouts[0].members[0].checkpoint = .failed
+            state.checkouts[0].members[0].availability = .unavailable
+            state.checkouts[0].members[0].recreationSourceCheckpoint = .setupComplete
+            state.checkouts[0].members[0].recreationWorktreeCreationBegan = true
+        }
+        let lifecycle = FixtureLifecycle(hasPendingStaleRegistrationCleanup: true)
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: fixture.store,
+            git: FixtureGit(existingCreatedIgnoringHeadLineageID: "lineage-a"),
+            scripts: FixtureScripts(),
+            sessions: LifecycleSessions(),
+            lifecycle: lifecycle
+        )
+
+        let checkout = try await coordinator.resumeCreation(checkoutID: fixture.checkout.id)
+
+        #expect(await lifecycle.finalizedRegistrations == [fixture.member.id])
+        #expect(await lifecycle.clearedRegistrations.isEmpty)
+        #expect(checkout.members[0].checkpoint == .setupComplete)
+        #expect(checkout.members[0].gitLineageID == "lineage-a")
+    }
+
+    @Test func resumingMarkerlessCreatedReplacementRequiresPendingTombstone() async throws {
+        let fixture = try await Fixture.make(operation: .creating)
+        try await fixture.store.mutate { state in
+            state.checkouts[0].members[0].checkpoint = .failed
+            state.checkouts[0].members[0].availability = .unavailable
+            state.checkouts[0].members[0].recreationSourceCheckpoint = .setupComplete
+            state.checkouts[0].members[0].recreationWorktreeCreationBegan = true
+        }
+        let lifecycle = FixtureLifecycle(hasPendingStaleRegistrationCleanup: false)
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: fixture.store,
+            git: FixtureGit(recoveredCreatedLineageID: "lineage-a"),
+            scripts: FixtureScripts(),
+            sessions: LifecycleSessions(),
+            lifecycle: lifecycle
+        )
+
+        let checkout = try await coordinator.resumeCreation(checkoutID: fixture.checkout.id)
+
+        #expect(await lifecycle.finalizedRegistrations.isEmpty)
+        #expect(checkout.members[0].checkpoint == .failed)
+    }
+
+    @Test func recreatingRecoverableReturnedTombstoneRunsStaleCleanupBeforeLineageCheck() async throws {
+        let fixture = try await Fixture.make(operation: .creating)
+        let lifecycle = FixtureLifecycle(clearError: WorkspaceCheckoutCoordinatorError.completedWorktreeReturned)
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: fixture.store,
+            git: FixtureGit(
+                preparedBranchMatches: true,
+                frozenWorktreeMissingResults: [true, false]
+            ),
+            scripts: FixtureScripts(),
+            sessions: LifecycleSessions(),
+            lifecycle: lifecycle
+        )
+
+        _ = try await coordinator.resumeCreation(checkoutID: fixture.checkout.id)
+
+        #expect(await lifecycle.recoveredRegistrations == [fixture.member.id])
+        #expect(await lifecycle.clearedRegistrations.isEmpty)
+    }
+
+    @Test func recreatingPendingTombstoneRunsRecoveryBeforeBranchValidation() async throws {
+        let fixture = try await Fixture.make(operation: .creating)
+        let lifecycle = FixtureLifecycle()
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: fixture.store,
+            git: FixtureGit(preparedBranchMatches: false),
+            scripts: FixtureScripts(),
+            sessions: LifecycleSessions(),
+            lifecycle: lifecycle
+        )
+
+        _ = try await coordinator.resumeCreation(checkoutID: fixture.checkout.id)
+
+        #expect(await lifecycle.recoveredRegistrations == [fixture.member.id])
+        #expect(await lifecycle.clearedRegistrations.isEmpty)
+    }
+
+    @Test func recreatingReturnedCompletedTombstoneRestoresCompletionBeforeBranchValidation() async throws {
+        let fixture = try await Fixture.make(operation: .creating)
+        try await fixture.store.mutate { state in
+            state.checkouts[0].members[0].checkpoint = .failed
+            state.checkouts[0].members[0].availability = .unavailable
+            state.checkouts[0].members[0].recreationSourceCheckpoint = .setupComplete
+            state.checkouts[0].members[0].recreationWorktreeCreationBegan = true
+        }
+        let lifecycle = FixtureLifecycle()
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: fixture.store,
+            git: FixtureGit(
+                preparedBranchMatches: false,
+                frozenWorktreeMissingResults: [false]
+            ),
+            scripts: FixtureScripts(),
+            sessions: LifecycleSessions(),
+            lifecycle: lifecycle
+        )
+
+        let checkout = try await coordinator.resumeCreation(checkoutID: fixture.checkout.id)
+
+        #expect(await lifecycle.recoveredRegistrations == [fixture.member.id])
+        #expect(await lifecycle.clearedRegistrations.isEmpty)
+        #expect(checkout.members[0].checkpoint == .setupComplete)
+        #expect(checkout.members[0].availability == .available)
+        #expect(checkout.members[0].recreationSourceCheckpoint == nil)
+        #expect(checkout.members[0].recreationWorktreeCreationBegan == false)
+    }
+
+    @Test func explicitDeletionRechecksRisksWhenMissingWorktreeReturnsDuringStaleCleanup() async throws {
+        let fixture = try await Fixture.make()
+        try await fixture.store.mutate { state in
+            state.checkouts[0].members[0].availability = .missing
+        }
+        let lifecycle = FixtureLifecycle(
+            preflight: .init(reasons: [.dirty], submoduleLocalState: .none),
+            clearError: WorkspaceCheckoutCoordinatorError.completedWorktreeReturned
+        )
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: fixture.store,
+            git: FixtureGit(),
+            scripts: FixtureScripts(),
+            sessions: LifecycleSessions(),
+            lifecycle: lifecycle
+        )
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.cleanupConfirmationRequired) {
+            try await coordinator.deleteMember(checkoutID: fixture.checkout.id, memberID: fixture.member.id)
+        }
+
+        #expect(await lifecycle.removedMembers.isEmpty)
+    }
+
+    @Test func explicitDeletionRejectsReturnedWorktreeWithUnexpectedLineage() async throws {
+        let fixture = try await Fixture.make()
+        try await fixture.store.mutate { state in
+            state.checkouts[0].members[0].availability = .missing
+        }
+        let lifecycle = FixtureLifecycle(
+            verification: .missing,
+            preflight: .init(reasons: [], submoduleLocalState: .none),
+            clearError: WorkspaceCheckoutCoordinatorError.completedWorktreeReturned
+        )
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: fixture.store,
+            git: FixtureGit(),
+            scripts: FixtureScripts(),
+            sessions: LifecycleSessions(),
+            lifecycle: lifecycle
+        )
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict) {
+            try await coordinator.deleteMember(checkoutID: fixture.checkout.id, memberID: fixture.member.id)
+        }
+
+        #expect(await lifecycle.removedMembers.isEmpty)
     }
 
     @Test func deletionPreviewAllowsMissingAttemptOwnedMembers() async throws {
@@ -699,9 +918,287 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(preflight.submoduleLocalState == .unknown)
     }
 
-    @Test func concreteRemoteCleanupPrunesStaleRegistrationBeforeMarkingMissingWorktreeRemoved() async throws {
+    @Test func concreteLocalCleanupRemovesOnlyTheTargetStaleRegistrationMetadata() async throws {
+        let temp = FileManager.default.temporaryDirectory
+        let canonicalTemp = temp.path.hasPrefix("/var/")
+            ? URL(fileURLWithPath: "/private\(temp.path)", isDirectory: true)
+            : temp.resolvingSymlinksInPath()
+        let root = canonicalTemp
+            .appendingPathComponent("alas-lifecycle-\(UUID().uuidString)", isDirectory: true)
+        let repo = root.appendingPathComponent("repo", isDirectory: true)
+        let target = root.appendingPathComponent("foo.alas-removing-bar", isDirectory: true)
+        let unrelated = root.appendingPathComponent("unrelated", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try await Self.runGit(["init", repo.path], cwd: root)
+        try await Self.runGit(["config", "user.email", "test@example.com"], cwd: repo)
+        try await Self.runGit(["config", "user.name", "Test"], cwd: repo)
+        try "a\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        try await Self.runGit(["add", "a.txt"], cwd: repo)
+        try await Self.runGit(["commit", "-m", "init"], cwd: repo)
+        try await Self.runGit(["worktree", "add", target.path], cwd: repo)
+        try await Self.runGit(["worktree", "add", unrelated.path], cwd: repo)
+        _ = WorktreeService.localLineageID(forWorktreeAt: target, candidateID: "lineage")
+        _ = WorktreeService.localLineageID(forWorktreeAt: unrelated, candidateID: "other-lineage")
+        try FileManager.default.removeItem(at: target)
+        let lifecycle = WorkspaceCheckoutLifecycleOperator()
+        var plan = Self.localCleanupPlan(repo: repo.path, worktree: target.path)
+
+        try await lifecycle.clearStaleRegistration(plan)
+
+        let registrations = try await Process.git(["worktree", "list", "--porcelain"], cwd: repo, usesRemoteHostRegistry: false)
+        #expect(Self.porcelainOutput(registrations.stdout, containsWorktree: target.path) == false)
+        #expect(Self.porcelainOutput(registrations.stdout, containsWorktree: unrelated.path))
+        #expect(FileManager.default.fileExists(atPath: unrelated.path))
+        #expect(try Self.tombstoneAdminDirectories(repo: repo).count == 1)
+        try await lifecycle.finalizeStaleRegistrationCleanup(plan)
+        #expect(try Self.tombstoneAdminDirectories(repo: repo).isEmpty)
+        plan.worktreePath = unrelated.path
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.completedWorktreeReturned) {
+            try await lifecycle.clearStaleRegistration(plan)
+        }
+    }
+
+    @Test func concreteLocalCleanupMatchesResolvedPorcelainWorktreePath() async throws {
+        let temp = FileManager.default.temporaryDirectory
+        let canonicalTemp = temp.path.hasPrefix("/var/")
+            ? URL(fileURLWithPath: "/private\(temp.path)", isDirectory: true)
+            : temp.resolvingSymlinksInPath()
+        let root = canonicalTemp
+            .appendingPathComponent("alas-lifecycle-\(UUID().uuidString)", isDirectory: true)
+        let physicalRoot = root.appendingPathComponent("physical", isDirectory: true)
+        let linkedRoot = root.appendingPathComponent("linked", isDirectory: true)
+        let repo = physicalRoot.appendingPathComponent("repo", isDirectory: true)
+        let physicalTarget = physicalRoot.appendingPathComponent("target", isDirectory: true)
+        let linkedTarget = linkedRoot.appendingPathComponent("target", isDirectory: true)
+        try FileManager.default.createDirectory(at: physicalRoot, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: linkedRoot, withDestinationURL: physicalRoot)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try await Self.runGit(["init", repo.path], cwd: physicalRoot)
+        try await Self.runGit(["config", "user.email", "test@example.com"], cwd: repo)
+        try await Self.runGit(["config", "user.name", "Test"], cwd: repo)
+        try "a\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        try await Self.runGit(["add", "a.txt"], cwd: repo)
+        try await Self.runGit(["commit", "-m", "init"], cwd: repo)
+        try await Self.runGit(["worktree", "add", physicalTarget.path], cwd: repo)
+        _ = WorktreeService.localLineageID(forWorktreeAt: physicalTarget, candidateID: "lineage")
+        try FileManager.default.removeItem(at: physicalTarget)
+        let lifecycle = WorkspaceCheckoutLifecycleOperator()
+
+        try await lifecycle.clearStaleRegistration(Self.localCleanupPlan(repo: repo.path, worktree: linkedTarget.path))
+
+        let registrations = try await Process.git(["worktree", "list", "--porcelain"], cwd: repo, usesRemoteHostRegistry: false)
+        #expect(Self.porcelainOutput(registrations.stdout, containsWorktree: physicalTarget.path) == false)
+    }
+
+    @Test func concreteLocalCleanupRejectsStaleRegistrationWithDifferentLineage() async throws {
+        let temp = FileManager.default.temporaryDirectory
+        let canonicalTemp = temp.path.hasPrefix("/var/")
+            ? URL(fileURLWithPath: "/private\(temp.path)", isDirectory: true)
+            : temp.resolvingSymlinksInPath()
+        let root = canonicalTemp
+            .appendingPathComponent("alas-lifecycle-\(UUID().uuidString)", isDirectory: true)
+        let repo = root.appendingPathComponent("repo", isDirectory: true)
+        let target = root.appendingPathComponent("target", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try await Self.runGit(["init", repo.path], cwd: root)
+        try await Self.runGit(["config", "user.email", "test@example.com"], cwd: repo)
+        try await Self.runGit(["config", "user.name", "Test"], cwd: repo)
+        try "a\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        try await Self.runGit(["add", "a.txt"], cwd: repo)
+        try await Self.runGit(["commit", "-m", "init"], cwd: repo)
+        try await Self.runGit(["worktree", "add", target.path], cwd: repo)
+        _ = WorktreeService.localLineageID(forWorktreeAt: target, candidateID: "other-lineage")
+        try FileManager.default.removeItem(at: target)
+        let lifecycle = WorkspaceCheckoutLifecycleOperator()
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict) {
+            try await lifecycle.clearStaleRegistration(Self.localCleanupPlan(repo: repo.path, worktree: target.path))
+        }
+
+        let registrations = try await Process.git(["worktree", "list", "--porcelain"], cwd: repo, usesRemoteHostRegistry: false)
+        #expect(Self.porcelainOutput(registrations.stdout, containsWorktree: target.path))
+    }
+
+    @Test func concreteLocalExplicitCleanupRejectsStaleRegistrationWithDifferentLineage() async throws {
+        let temp = FileManager.default.temporaryDirectory
+        let canonicalTemp = temp.path.hasPrefix("/var/")
+            ? URL(fileURLWithPath: "/private\(temp.path)", isDirectory: true)
+            : temp.resolvingSymlinksInPath()
+        let root = canonicalTemp
+            .appendingPathComponent("alas-lifecycle-\(UUID().uuidString)", isDirectory: true)
+        let repo = root.appendingPathComponent("repo", isDirectory: true)
+        let target = root.appendingPathComponent("target", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try await Self.runGit(["init", repo.path], cwd: root)
+        try await Self.runGit(["config", "user.email", "test@example.com"], cwd: repo)
+        try await Self.runGit(["config", "user.name", "Test"], cwd: repo)
+        try "a\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        try await Self.runGit(["add", "a.txt"], cwd: repo)
+        try await Self.runGit(["commit", "-m", "init"], cwd: repo)
+        try await Self.runGit(["worktree", "add", target.path], cwd: repo)
+        _ = WorktreeService.localLineageID(forWorktreeAt: target, candidateID: "other-lineage")
+        try FileManager.default.removeItem(at: target)
+        let lifecycle = WorkspaceCheckoutLifecycleOperator()
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict) {
+            try await lifecycle.clearStaleRegistrationForExplicitDeletion(Self.localCleanupPlan(repo: repo.path, worktree: target.path))
+        }
+
+        let registrations = try await Process.git(["worktree", "list", "--porcelain"], cwd: repo, usesRemoteHostRegistry: false)
+        #expect(Self.porcelainOutput(registrations.stdout, containsWorktree: target.path))
+    }
+
+    @Test func concreteLocalExplicitCleanupRemovesRecoveredPendingTombstoneRegistration() async throws {
+        let temp = FileManager.default.temporaryDirectory
+        let canonicalTemp = temp.path.hasPrefix("/var/")
+            ? URL(fileURLWithPath: "/private\(temp.path)", isDirectory: true)
+            : temp.resolvingSymlinksInPath()
+        let root = canonicalTemp
+            .appendingPathComponent("alas-lifecycle-\(UUID().uuidString)", isDirectory: true)
+        let repo = root.appendingPathComponent("repo", isDirectory: true)
+        let target = root.appendingPathComponent("target", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try await Self.runGit(["init", repo.path], cwd: root)
+        try await Self.runGit(["config", "user.email", "test@example.com"], cwd: repo)
+        try await Self.runGit(["config", "user.name", "Test"], cwd: repo)
+        try "a\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        try await Self.runGit(["add", "a.txt"], cwd: repo)
+        try await Self.runGit(["commit", "-m", "init"], cwd: repo)
+        try await Self.runGit(["worktree", "add", target.path], cwd: repo)
+        _ = WorktreeService.localLineageID(forWorktreeAt: target, candidateID: "lineage")
+        let lifecycle = WorkspaceCheckoutLifecycleOperator()
+        try FileManager.default.removeItem(at: target)
+        try await lifecycle.clearStaleRegistration(Self.localCleanupPlan(repo: repo.path, worktree: target.path))
+        #expect(try Self.tombstoneAdminDirectories(repo: repo).count == 1)
+
+        try await lifecycle.clearStaleRegistrationForExplicitDeletion(Self.localCleanupPlan(repo: repo.path, worktree: target.path))
+
+        #expect(try Self.tombstoneAdminDirectories(repo: repo).isEmpty)
+        let registrations = try await Process.git(["worktree", "list", "--porcelain"], cwd: repo, usesRemoteHostRegistry: false)
+        #expect(Self.porcelainOutput(registrations.stdout, containsWorktree: target.path) == false)
+    }
+
+    @Test func concreteLocalExplicitCleanupRestoresReturnedPendingTombstoneBeforePreflight() async throws {
+        let temp = FileManager.default.temporaryDirectory
+        let canonicalTemp = temp.path.hasPrefix("/var/")
+            ? URL(fileURLWithPath: "/private\(temp.path)", isDirectory: true)
+            : temp.resolvingSymlinksInPath()
+        let root = canonicalTemp
+            .appendingPathComponent("alas-lifecycle-\(UUID().uuidString)", isDirectory: true)
+        let repo = root.appendingPathComponent("repo", isDirectory: true)
+        let target = root.appendingPathComponent("target", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try await Self.runGit(["init", repo.path], cwd: root)
+        try await Self.runGit(["config", "user.email", "test@example.com"], cwd: repo)
+        try await Self.runGit(["config", "user.name", "Test"], cwd: repo)
+        try "a\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        try await Self.runGit(["add", "a.txt"], cwd: repo)
+        try await Self.runGit(["commit", "-m", "init"], cwd: repo)
+        try await Self.runGit(["worktree", "add", target.path], cwd: repo)
+        _ = WorktreeService.localLineageID(forWorktreeAt: target, candidateID: "lineage")
+        let lifecycle = WorkspaceCheckoutLifecycleOperator()
+        try FileManager.default.removeItem(at: target)
+        try await lifecycle.clearStaleRegistration(Self.localCleanupPlan(repo: repo.path, worktree: target.path))
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.completedWorktreeReturned) {
+            try await lifecycle.clearStaleRegistrationForExplicitDeletion(Self.localCleanupPlan(repo: repo.path, worktree: target.path))
+        }
+
+        #expect(try Self.tombstoneAdminDirectories(repo: repo).isEmpty)
+        let registrations = try await Process.git(["worktree", "list", "--porcelain"], cwd: repo, usesRemoteHostRegistry: false)
+        #expect(Self.porcelainOutput(registrations.stdout, containsWorktree: target.path))
+    }
+
+    @Test func concreteLocalCleanupRecoversInterruptedTombstoneBeforeReturnedWorktreeCheck() async throws {
+        let temp = FileManager.default.temporaryDirectory
+        let canonicalTemp = temp.path.hasPrefix("/var/")
+            ? URL(fileURLWithPath: "/private\(temp.path)", isDirectory: true)
+            : temp.resolvingSymlinksInPath()
+        let root = canonicalTemp
+            .appendingPathComponent("alas-lifecycle-\(UUID().uuidString)", isDirectory: true)
+        let repo = root.appendingPathComponent("repo", isDirectory: true)
+        let target = root.appendingPathComponent("target", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try await Self.runGit(["init", repo.path], cwd: root)
+        try await Self.runGit(["config", "user.email", "test@example.com"], cwd: repo)
+        try await Self.runGit(["config", "user.name", "Test"], cwd: repo)
+        try "a\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        try await Self.runGit(["add", "a.txt"], cwd: repo)
+        try await Self.runGit(["commit", "-m", "init"], cwd: repo)
+        try await Self.runGit(["worktree", "add", target.path], cwd: repo)
+        _ = WorktreeService.localLineageID(forWorktreeAt: target, candidateID: "lineage")
+        let admin = try await Self.registeredAdminDirectory(repo: repo, worktree: target)
+        let tombstoneRoot = repo.appendingPathComponent(".git/alas-stale-worktree-tombstones", isDirectory: true)
+        try FileManager.default.createDirectory(at: tombstoneRoot, withIntermediateDirectories: true)
+        let tombstone = tombstoneRoot.appendingPathComponent("\(admin.lastPathComponent).alas-removing-test")
+        try FileManager.default.moveItem(at: admin, to: tombstone)
+        try "lineage\n".write(
+            to: tombstone.appendingPathComponent("alas-stale-registration-tombstone"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try "\(admin.lastPathComponent)\n".write(
+            to: tombstone.appendingPathComponent("alas-stale-registration-original-name"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let incorrectlyRestored = admin.deletingLastPathComponent().appendingPathComponent("foo")
+        let lifecycle = WorkspaceCheckoutLifecycleOperator()
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.completedWorktreeReturned) {
+            try await lifecycle.clearStaleRegistration(Self.localCleanupPlan(repo: repo.path, worktree: target.path))
+        }
+
+        #expect(FileManager.default.fileExists(atPath: admin.path))
+        #expect(FileManager.default.fileExists(atPath: incorrectlyRestored.path) == false)
+        #expect(FileManager.default.fileExists(atPath: tombstone.path) == false)
+    }
+
+    @Test func concreteLocalCleanupIgnoresUnmarkedAdminNamesContainingTombstoneText() async throws {
+        let temp = FileManager.default.temporaryDirectory
+        let canonicalTemp = temp.path.hasPrefix("/var/")
+            ? URL(fileURLWithPath: "/private\(temp.path)", isDirectory: true)
+            : temp.resolvingSymlinksInPath()
+        let root = canonicalTemp
+            .appendingPathComponent("alas-lifecycle-\(UUID().uuidString)", isDirectory: true)
+        let repo = root.appendingPathComponent("repo", isDirectory: true)
+        let target = root.appendingPathComponent("foo.alas-removing-bar", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try await Self.runGit(["init", repo.path], cwd: root)
+        try await Self.runGit(["config", "user.email", "test@example.com"], cwd: repo)
+        try await Self.runGit(["config", "user.name", "Test"], cwd: repo)
+        try "a\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        try await Self.runGit(["add", "a.txt"], cwd: repo)
+        try await Self.runGit(["commit", "-m", "init"], cwd: repo)
+        try await Self.runGit(["worktree", "add", target.path], cwd: repo)
+        _ = WorktreeService.localLineageID(forWorktreeAt: target, candidateID: "lineage")
+        let admin = try await Self.registeredAdminDirectory(repo: repo, worktree: target)
+        let incorrectlyRestored = admin.deletingLastPathComponent().appendingPathComponent("foo")
+        let lifecycle = WorkspaceCheckoutLifecycleOperator()
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.completedWorktreeReturned) {
+            try await lifecycle.clearStaleRegistration(Self.localCleanupPlan(repo: repo.path, worktree: target.path))
+        }
+
+        #expect(FileManager.default.fileExists(atPath: admin.path))
+        #expect(FileManager.default.fileExists(atPath: incorrectlyRestored.path) == false)
+    }
+
+    @Test func concreteRemoteCleanupRemovesOnlyTheTargetStaleRegistration() async throws {
         let runner = RemoteLifecycleRunner(results: [
-            .init(exitCode: 0, stdout: "worktree /checkout/a\nlocked\nprunable gitdir file points to non-existent location\n", stderr: ""),
+            .init(exitCode: 0, stdout: "/checkout/a\n", stderr: ""),
+            .init(exitCode: 0, stdout: "worktree /checkout/a\nprunable gitdir file points to non-existent location\n", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "worktree /checkout/a\nprunable gitdir file points to non-existent location\n", stderr: ""),
+            .init(exitCode: 1, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
@@ -710,18 +1207,236 @@ struct WorkspaceCheckoutLifecycleTests {
             try await runner.run(executable: executable, args: args, timeout: timeout)
         })
 
-        try await lifecycle.clearStaleRegistration(Self.sshCleanupPlan())
+        let plan = Self.sshCleanupPlan()
+        try await lifecycle.clearStaleRegistration(plan)
+        try await lifecycle.finalizeStaleRegistrationCleanup(plan)
 
         let commands = await runner.commands.joined(separator: "\n")
         #expect(commands.contains("worktree list --porcelain"))
-        #expect(commands.contains("worktree unlock --"))
         #expect(commands.contains("/checkout/a"))
-        #expect(commands.contains("worktree prune"))
+        #expect(commands.contains("rev-parse --git-common-dir"))
+        #expect(commands.contains("target_real"))
+        #expect(commands.contains(".alas-removing"))
+        #expect(commands.contains("alas-stale-registration-tombstone"))
+        #expect(commands.contains("rm -f -- \"$tomb/$marker_name\" \"$tomb/$original_name_marker\"; mv") == false)
+        #expect(commands.contains("worktree remove -f -f --") == false)
+        #expect(commands.contains("/checkout/a"))
+        #expect(commands.contains("worktree prune") == false)
     }
 
-    @Test func remoteMergedBranchDeletionUsesAtomicExpectedOldValue() async throws {
+    @Test func concreteRemoteCleanupRetainsAWorktreeThatReturnsBeforeTargetedRemoval() async throws {
+        let runner = RemoteLifecycleRunner(results: [
+            .init(exitCode: 0, stdout: "/checkout/a\n", stderr: ""),
+            .init(exitCode: 0, stdout: "worktree /checkout/a\nprunable gitdir file points to non-existent location\n", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "worktree /checkout/a\nprunable gitdir file points to non-existent location\n", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+        ])
+        let lifecycle = WorkspaceCheckoutLifecycleOperator(remote: .init { executable, args, timeout in
+            try await runner.run(executable: executable, args: args, timeout: timeout)
+        })
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.completedWorktreeReturned) {
+            try await lifecycle.clearStaleRegistration(Self.sshCleanupPlan())
+        }
+
+        let commands = await runner.commands.joined(separator: "\n")
+        #expect(commands.contains("worktree remove -f -f --") == false)
+    }
+
+    @Test func concreteRemoteCleanupRetainsLockedMissingWorktreeRegistration() async throws {
+        let runner = RemoteLifecycleRunner(results: [
+            .init(exitCode: 0, stdout: "/checkout/a\n", stderr: ""),
+            .init(exitCode: 0, stdout: "worktree /checkout/a\nlocked\nprunable gitdir file points to non-existent location\n", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "worktree /checkout/a\nlocked\nprunable gitdir file points to non-existent location\n", stderr: ""),
+        ])
+        let lifecycle = WorkspaceCheckoutLifecycleOperator(remote: .init { executable, args, timeout in
+            try await runner.run(executable: executable, args: args, timeout: timeout)
+        })
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.lockedStaleRegistration) {
+            try await lifecycle.clearStaleRegistration(Self.sshCleanupPlan())
+        }
+
+        let commands = await runner.commands.joined(separator: "\n")
+        #expect(commands.contains("worktree unlock --") == false)
+        #expect(commands.contains("worktree remove -f -f") == false)
+    }
+
+    @Test func concreteRemoteCleanupRetainsRegistrationLockedAfterInspection() async throws {
+        let runner = RemoteLifecycleRunner(results: [
+            .init(exitCode: 0, stdout: "/checkout/a\n", stderr: ""),
+            .init(exitCode: 0, stdout: "worktree /checkout/a\nprunable gitdir file points to non-existent location\n", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "worktree /checkout/a\nprunable gitdir file points to non-existent location\n", stderr: ""),
+            .init(exitCode: 1, stdout: "", stderr: ""),
+            .init(exitCode: 9, stdout: "", stderr: "locked"),
+        ])
+        let lifecycle = WorkspaceCheckoutLifecycleOperator(remote: .init { executable, args, timeout in
+            try await runner.run(executable: executable, args: args, timeout: timeout)
+        })
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.lockedStaleRegistration) {
+            try await lifecycle.clearStaleRegistration(Self.sshCleanupPlan())
+        }
+
+        let commands = await runner.commands.joined(separator: "\n")
+        #expect(commands.contains("worktree remove -f -f") == false)
+        #expect(commands.contains("worktree prune") == false)
+    }
+
+    @Test func concreteRemoteCleanupRejectsStaleRegistrationWithDifferentLineage() async throws {
+        let runner = RemoteLifecycleRunner(results: [
+            .init(exitCode: 0, stdout: "/checkout/a\n", stderr: ""),
+            .init(exitCode: 0, stdout: "worktree /checkout/a\nprunable gitdir file points to non-existent location\n", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "worktree /checkout/a\nprunable gitdir file points to non-existent location\n", stderr: ""),
+            .init(exitCode: 1, stdout: "", stderr: ""),
+            .init(exitCode: 13, stdout: "", stderr: "lineage mismatch"),
+        ])
+        let lifecycle = WorkspaceCheckoutLifecycleOperator(remote: .init { executable, args, timeout in
+            try await runner.run(executable: executable, args: args, timeout: timeout)
+        })
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict) {
+            try await lifecycle.clearStaleRegistration(Self.sshCleanupPlan())
+        }
+
+        let commands = await runner.commands.joined(separator: "\n")
+        #expect(commands.contains("alas-worktree-lineage"))
+        #expect(commands.contains("lineage"))
+        #expect(commands.contains("worktree remove -f -f") == false)
+        #expect(commands.contains("worktree prune") == false)
+    }
+
+    @Test func concreteRemoteCleanupRecoversInterruptedTombstoneBeforeReturnedWorktreeCheck() async throws {
+        let runner = RemoteLifecycleRunner(results: [
+            .init(exitCode: 0, stdout: "/checkout/a\n", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "worktree /checkout/a\nprunable gitdir file points to non-existent location\n", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+        ])
+        let lifecycle = WorkspaceCheckoutLifecycleOperator(remote: .init { executable, args, timeout in
+            try await runner.run(executable: executable, args: args, timeout: timeout)
+        })
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.completedWorktreeReturned) {
+            try await lifecycle.clearStaleRegistration(Self.sshCleanupPlan())
+        }
+
+        let commands = await runner.commands.joined(separator: "\n")
+        #expect(commands.contains(".alas-removing-"))
+        #expect(commands.contains("base=${found##*/}"))
+        #expect(commands.contains("alas-stale-registration-original-name"))
+        #expect(commands.contains("restored_base=${base%%.alas-removing-*}") == false)
+        #expect(commands.contains("restored=\"$parent/$restored_base\""))
+        #expect(commands.contains("restored=${found%%.alas-removing-*}") == false)
+        #expect(commands.contains("alas-stale-registration-tombstone"))
+        #expect(commands.contains("[ -s \"$marker\" ] || exit 0"))
+        #expect(commands.contains("rm -f -- \"$marker\"; mv") == false)
+        #expect(commands.contains("worktree remove -f -f") == false)
+    }
+
+    @Test func concreteRemoteExplicitCleanupUnlocksLockedMissingWorktreeRegistration() async throws {
+        let runner = RemoteLifecycleRunner(results: [
+            .init(exitCode: 0, stdout: "/checkout/a\n", stderr: ""),
+            .init(exitCode: 0, stdout: "worktree /checkout/a\nlocked portable volume\nprunable gitdir file points to non-existent location\n", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "worktree /checkout/a\nlocked portable volume\nprunable gitdir file points to non-existent location\n", stderr: ""),
+            .init(exitCode: 1, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 1, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+        ])
+        let lifecycle = WorkspaceCheckoutLifecycleOperator(remote: .init { executable, args, timeout in
+            try await runner.run(executable: executable, args: args, timeout: timeout)
+        })
+
+        try await lifecycle.clearStaleRegistrationForExplicitDeletion(Self.sshCleanupPlan())
+
+        let commands = await runner.commands.joined(separator: "\n")
+        #expect(commands.contains("worktree unlock --") == false)
+        #expect(commands.contains("worktree remove -f -f --"))
+        #expect(commands.contains("/checkout/a"))
+    }
+
+    @Test func concreteRemoteExplicitCleanupValidatesLineageBeforeForcedRemoval() async throws {
+        let runner = RemoteLifecycleRunner(results: [
+            .init(exitCode: 0, stdout: "/checkout/a\n", stderr: ""),
+            .init(exitCode: 0, stdout: "worktree /checkout/a\nprunable gitdir file points to non-existent location\n", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "worktree /checkout/a\nprunable gitdir file points to non-existent location\n", stderr: ""),
+            .init(exitCode: 1, stdout: "", stderr: ""),
+            .init(exitCode: 13, stdout: "", stderr: "lineage mismatch"),
+        ])
+        let lifecycle = WorkspaceCheckoutLifecycleOperator(remote: .init { executable, args, timeout in
+            try await runner.run(executable: executable, args: args, timeout: timeout)
+        })
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict) {
+            try await lifecycle.clearStaleRegistrationForExplicitDeletion(Self.sshCleanupPlan())
+        }
+
+        let commands = await runner.commands.joined(separator: "\n")
+        #expect(commands.contains("alas-worktree-lineage"))
+        #expect(commands.contains("worktree remove -f -f") == false)
+    }
+
+    @Test func concreteRemoteExplicitCleanupRemovesRecoveredPendingTombstoneRegistration() async throws {
+        let runner = RemoteLifecycleRunner(results: [
+            .init(exitCode: 0, stdout: "/checkout/a\n", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "worktree /checkout/a\nprunable gitdir file points to non-existent location\n", stderr: ""),
+            .init(exitCode: 1, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 1, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+        ])
+        let lifecycle = WorkspaceCheckoutLifecycleOperator(remote: .init { executable, args, timeout in
+            try await runner.run(executable: executable, args: args, timeout: timeout)
+        })
+
+        try await lifecycle.clearStaleRegistrationForExplicitDeletion(Self.sshCleanupPlan())
+
+        let commands = await runner.commands.joined(separator: "\n")
+        #expect(commands.contains("alas-stale-worktree-tombstones"))
+        #expect(commands.contains("mv \"$found\" \"$restored\""))
+        #expect(commands.contains("alas-worktree-lineage"))
+        #expect(commands.contains("worktree remove -f -f --"))
+    }
+
+    @Test func concreteRemoteExplicitCleanupRestoresReturnedPendingTombstoneBeforePreflight() async throws {
+        let runner = RemoteLifecycleRunner(results: [
+            .init(exitCode: 0, stdout: "/checkout/a\n", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "worktree /checkout/a\nprunable gitdir file points to non-existent location\n", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+        ])
+        let lifecycle = WorkspaceCheckoutLifecycleOperator(remote: .init { executable, args, timeout in
+            try await runner.run(executable: executable, args: args, timeout: timeout)
+        })
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.completedWorktreeReturned) {
+            try await lifecycle.clearStaleRegistrationForExplicitDeletion(Self.sshCleanupPlan())
+        }
+
+        let commands = await runner.commands.joined(separator: "\n")
+        #expect(commands.contains("alas-stale-worktree-tombstones"))
+        #expect(commands.contains("mv \"$found\" \"$restored\""))
+        #expect(commands.contains("worktree remove -f -f") == false)
+    }
+
+    @Test func remoteMergedBranchDeletionRechecksWorktreeUsageAfterExpectedTipDeletion() async throws {
         let runner = RemoteLifecycleRunner(results: [
             .init(exitCode: 0, stdout: "abc\n", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
         ])
@@ -734,10 +1449,53 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(removed)
         let commands = await runner.commands.joined(separator: "\n")
         #expect(commands.contains("merge-base --is-ancestor"))
+        #expect(commands.contains("worktree list --porcelain"))
         #expect(commands.contains("update-ref -d"))
-        #expect(commands.contains("refs/heads/feature"))
+        #expect(commands.contains("branch -d --") == false)
         #expect(commands.contains("abc"))
-        #expect(commands.contains("branch -d") == false)
+    }
+
+    @Test func remoteMergedBranchDeletionRestoresExpectedTipWhenCheckoutAppearsDuringDeletion() async throws {
+        let runner = RemoteLifecycleRunner(results: [
+            .init(exitCode: 0, stdout: "abc\n", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "worktree /other\nbranch refs/heads/feature\n", stderr: ""),
+            .init(exitCode: 0, stdout: "sha256\n", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+        ])
+        let lifecycle = WorkspaceCheckoutLifecycleOperator(remote: .init { executable, args, timeout in
+            try await runner.run(executable: executable, args: args, timeout: timeout)
+        })
+
+        let removed = try await lifecycle.deleteMergedBranch(Self.sshCleanupPlan())
+
+        #expect(removed == false)
+        let commands = await runner.commands.joined(separator: "\n")
+        #expect(commands.contains("update-ref -d"))
+        #expect(commands.contains("rev-parse --show-object-format"))
+        #expect(commands.contains("update-ref refs/heads/feature abc 0000000000000000000000000000000000000000000000000000000000000000"))
+    }
+
+    @Test func remoteMergedBranchDeletionFailsWhenConcurrentCheckoutCannotBeRestored() async throws {
+        let runner = RemoteLifecycleRunner(results: [
+            .init(exitCode: 0, stdout: "abc\n", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "worktree /other\nbranch refs/heads/feature\n", stderr: ""),
+            .init(exitCode: 0, stdout: "sha1\n", stderr: ""),
+            .init(exitCode: 1, stdout: "", stderr: "ref locked"),
+            .init(exitCode: 1, stdout: "", stderr: "missing"),
+        ])
+        let lifecycle = WorkspaceCheckoutLifecycleOperator(remote: .init { executable, args, timeout in
+            try await runner.run(executable: executable, args: args, timeout: timeout)
+        })
+
+        await #expect(throws: WorktreeService.WorktreeError.self) {
+            try await lifecycle.deleteMergedBranch(Self.sshCleanupPlan())
+        }
     }
 
     private static func sshCleanupPlan() -> WorkspaceCheckoutCleanupPlan {
@@ -757,6 +1515,53 @@ struct WorkspaceCheckoutLifecycleTests {
             expectedLineageID: "lineage",
             branchOwnership: .created
         )
+    }
+
+    private static func localCleanupPlan(repo: String, worktree: String) -> WorkspaceCheckoutCleanupPlan {
+        WorkspaceCheckoutCleanupPlan(
+            checkoutID: UUID(),
+            memberID: UUID(),
+            executionLocation: .local,
+            projectID: "project",
+            sourceRepositoryPath: repo,
+            baseReference: "main",
+            baseCommit: "abc",
+            branchCommit: "abc",
+            rootPath: URL(fileURLWithPath: worktree).deletingLastPathComponent().path,
+            managedMemberPaths: [worktree],
+            worktreePath: worktree,
+            branch: URL(fileURLWithPath: worktree).lastPathComponent,
+            expectedLineageID: "lineage",
+            branchOwnership: .created
+        )
+    }
+
+    private static func runGit(_ args: [String], cwd: URL) async throws {
+        let result = try await Process.git(args, cwd: cwd, usesRemoteHostRegistry: false)
+        guard result.exitCode == 0 else {
+            throw WorktreeService.WorktreeError.gitFailed(result.stderr)
+        }
+    }
+
+    private static func registeredAdminDirectory(repo: URL, worktree: URL) async throws -> URL {
+        let result = try await Process.git(["rev-parse", "--absolute-git-dir"], cwd: worktree, usesRemoteHostRegistry: false)
+        guard result.exitCode == 0 else {
+            throw WorktreeService.WorktreeError.gitFailed(result.stderr)
+        }
+        return URL(fileURLWithPath: result.stdout.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    private static func tombstoneAdminDirectories(repo: URL) throws -> [URL] {
+        let tombstonesDir = repo.appendingPathComponent(".git/alas-stale-worktree-tombstones")
+        let entries = (try? FileManager.default.contentsOfDirectory(at: tombstonesDir, includingPropertiesForKeys: nil)) ?? []
+        return entries.filter {
+            $0.lastPathComponent.contains(".alas-removing-")
+                && FileManager.default.fileExists(atPath: $0.appendingPathComponent("alas-stale-registration-tombstone").path)
+        }
+    }
+
+    private static func porcelainOutput(_ output: String, containsWorktree path: String) -> Bool {
+        output.split(separator: "\n").contains("worktree \(path)")
     }
 
     @Test func concreteLifecycleRefusesToDeleteAReplacedOwnedBranch() async throws {
@@ -795,6 +1600,35 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(removed == false)
         let current = try await Process.git(["rev-parse", "feature/workspace"], cwd: repo)
         #expect(current.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == replacementCommit)
+    }
+
+    @Test func concreteLifecycleRetainsAMergedBranchCheckedOutByAnotherWorktree() async throws {
+        let repo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("workspace-cleanup-checked-out-\(UUID().uuidString)")
+        let independent = repo.deletingLastPathComponent().appendingPathComponent("workspace-independent-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: repo)
+            try? FileManager.default.removeItem(at: independent)
+        }
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "base"], cwd: repo)
+        let base = try await Process.git(["rev-parse", "HEAD"], cwd: repo)
+        let commit = base.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        _ = try await Process.git(["branch", "feature/workspace", commit], cwd: repo)
+        _ = try await Process.git(["worktree", "add", "-q", independent.path, "feature/workspace"], cwd: repo)
+        let plan = WorkspaceCheckoutCleanupPlan(
+            checkoutID: UUID(), memberID: UUID(), executionLocation: .local, projectID: "project",
+            sourceRepositoryPath: repo.path, baseReference: "main", baseCommit: commit, branchCommit: commit,
+            rootPath: repo.deletingLastPathComponent().path, managedMemberPaths: [], worktreePath: repo.path,
+            branch: "feature/workspace", expectedLineageID: "lineage", branchOwnership: .created
+        )
+
+        let removed = try await WorkspaceCheckoutLifecycleOperator().deleteMergedBranch(plan)
+
+        #expect(removed == false)
+        let head = try await Process.git(["rev-parse", "--verify", "HEAD"], cwd: independent)
+        #expect(head.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == commit)
     }
 
     @Test func localRootInspectionIgnoresTheManagedCheckoutManifest() async throws {
@@ -923,9 +1757,47 @@ struct WorkspaceCheckoutLifecycleTests {
     }
 }
 
-private struct FixtureGit: WorkspaceGitOperating {
+private actor FixtureGit: WorkspaceGitOperating {
+    var existingCreatedLineageID: String? = nil
+    var existingCreatedIgnoringHeadLineageID: String? = nil
+    var recoveredCreatedLineageID: String? = nil
+    var preparedBranchMatches = false
+    var frozenWorktreeMissingResults: [Bool] = []
+
+    init(
+        existingCreatedLineageID: String? = nil,
+        existingCreatedIgnoringHeadLineageID: String? = nil,
+        recoveredCreatedLineageID: String? = nil,
+        preparedBranchMatches: Bool = false,
+        frozenWorktreeMissingResults: [Bool] = []
+    ) {
+        self.existingCreatedLineageID = existingCreatedLineageID
+        self.existingCreatedIgnoringHeadLineageID = existingCreatedIgnoringHeadLineageID
+        self.recoveredCreatedLineageID = recoveredCreatedLineageID
+        self.preparedBranchMatches = preparedBranchMatches
+        self.frozenWorktreeMissingResults = frozenWorktreeMissingResults
+    }
+
     func prepareBranch(_ operation: WorkspaceFrozenWorktreeOperation) async throws {}
+    func preparedBranchMatchesFrozenBase(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> Bool {
+        preparedBranchMatches
+    }
     func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? { nil }
+    func existingCreatedWorktreeLineage(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? {
+        existingCreatedLineageID
+    }
+    func existingCreatedWorktreeLineageIgnoringHead(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? {
+        existingCreatedIgnoringHeadLineageID
+    }
+    func recoverCreatedWorktreeLineage(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? {
+        recoveredCreatedLineageID
+    }
+    func frozenWorktreeIsMissing(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> Bool {
+        if frozenWorktreeMissingResults.isEmpty {
+            return existingCreatedLineageID == nil
+        }
+        return frozenWorktreeMissingResults.removeFirst()
+    }
 }
 private struct FixtureScripts: WorkspaceScriptRunning { func runSetup(for operation: WorkspaceCheckoutSetupOperation) async throws {} }
 private actor LifecycleSessions: WorkspaceCheckoutSessionStopping {
@@ -939,26 +1811,42 @@ private actor FixtureLifecycle: WorkspaceCheckoutLifecycleOperating {
     let verification: WorkspaceCheckoutMemberObservation
     private(set) var removedMembers: [UUID] = []
     private(set) var deletedBranches: [UUID] = []
+    private(set) var recoveredRegistrations: [UUID] = []
     private(set) var clearedRegistrations: [UUID] = []
+    private(set) var finalizedRegistrations: [UUID] = []
     private(set) var removeForces: [(force: Bool, forceTwice: Bool)] = []
     private(set) var removedRootArtifacts: [UUID] = []
     let preflight: WorktreeDeletePreflight
     let leftovers: [String]
     let failingMember: UUID?
     let branchRemoved: Bool
-    init(verification: WorkspaceCheckoutMemberObservation = .exactLineage("lineage-a"), preflight: WorktreeDeletePreflight = .init(reasons: [], submoduleLocalState: .none), leftovers: [String] = [], failingMember: UUID? = nil, branchRemoved: Bool = true) { self.verification = verification
+    let clearError: (any Error)?
+    let pendingStaleRegistrationCleanup: Bool
+    init(verification: WorkspaceCheckoutMemberObservation = .exactLineage("lineage-a"), preflight: WorktreeDeletePreflight = .init(reasons: [], submoduleLocalState: .none), leftovers: [String] = [], failingMember: UUID? = nil, branchRemoved: Bool = true, clearError: (any Error)? = nil, hasPendingStaleRegistrationCleanup: Bool = true) { self.verification = verification
     self.preflight = preflight
     self.leftovers = leftovers
     self.failingMember = failingMember
-    self.branchRemoved = branchRemoved }
+    self.branchRemoved = branchRemoved
+    self.clearError = clearError
+    self.pendingStaleRegistrationCleanup = hasPendingStaleRegistrationCleanup }
     func deletePreflight(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> WorktreeDeletePreflight { preflight }
     func inspectRoot(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutCleanupRootObservation { .init(isContained: true, leftovers: leftovers) }
     func verifyCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutMemberObservation {
         if verification == .exactLineage("lineage-a") { return .exactLineage(plan.expectedLineageID) }
         return verification
     }
+    func recoverStaleRegistrationCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async throws {
+        recoveredRegistrations.append(plan.memberID)
+    }
+    func hasPendingStaleRegistrationCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool {
+        pendingStaleRegistrationCleanup
+    }
     func clearStaleRegistration(_ plan: WorkspaceCheckoutCleanupPlan) async throws {
         clearedRegistrations.append(plan.memberID)
+        if let clearError { throw clearError }
+    }
+    func finalizeStaleRegistrationCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async throws {
+        finalizedRegistrations.append(plan.memberID)
     }
     func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan, force: Bool, forceTwice: Bool) async throws { if failingMember == plan.memberID { throw TestLifecycleError.failed }
     removeForces.append((force, forceTwice))

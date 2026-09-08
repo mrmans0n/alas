@@ -234,6 +234,9 @@ struct WorkspaceCheckoutMember: Codable, Equatable, Identifiable, Sendable {
     var gitLineageID: String?
     var availability: WorkspaceCheckoutMemberAvailability
     var checkpoint: WorkspaceCheckoutCheckpoint
+    /// The terminal checkpoint that an interrupted recreation must restore.
+    var recreationSourceCheckpoint: WorkspaceCheckoutCheckpoint?
+    var recreationWorktreeCreationBegan: Bool
     var cleanupOwnership: WorkspaceCleanupOwnership
     var plan: WorkspaceCheckoutMemberPlan?
     var cleanup: WorkspaceCheckoutMemberCleanup?
@@ -248,6 +251,8 @@ struct WorkspaceCheckoutMember: Codable, Equatable, Identifiable, Sendable {
         gitLineageID: String? = nil,
         availability: WorkspaceCheckoutMemberAvailability = .pending,
         checkpoint: WorkspaceCheckoutCheckpoint = .notStarted,
+        recreationSourceCheckpoint: WorkspaceCheckoutCheckpoint? = nil,
+        recreationWorktreeCreationBegan: Bool = false,
         cleanupOwnership: WorkspaceCleanupOwnership = .init(),
         plan: WorkspaceCheckoutMemberPlan? = nil,
         cleanup: WorkspaceCheckoutMemberCleanup? = nil
@@ -261,6 +266,8 @@ struct WorkspaceCheckoutMember: Codable, Equatable, Identifiable, Sendable {
         self.gitLineageID = gitLineageID
         self.availability = availability
         self.checkpoint = checkpoint
+        self.recreationSourceCheckpoint = recreationSourceCheckpoint
+        self.recreationWorktreeCreationBegan = recreationWorktreeCreationBegan
         self.cleanupOwnership = cleanupOwnership
         self.plan = plan
         self.cleanup = cleanup
@@ -268,7 +275,7 @@ struct WorkspaceCheckoutMember: Codable, Equatable, Identifiable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case id, workspaceMemberID, projectID, fallbackProjectName, fallbackRepositoryRoot
-        case worktreePath, gitLineageID, availability, checkpoint, cleanupOwnership, plan, cleanup
+        case worktreePath, gitLineageID, availability, checkpoint, recreationSourceCheckpoint, recreationWorktreeCreationBegan, cleanupOwnership, plan, cleanup
     }
 
     init(from decoder: Decoder) throws {
@@ -282,6 +289,8 @@ struct WorkspaceCheckoutMember: Codable, Equatable, Identifiable, Sendable {
         gitLineageID = try container.decodeIfPresent(String.self, forKey: .gitLineageID)
         availability = try container.decodeIfPresent(WorkspaceCheckoutMemberAvailability.self, forKey: .availability) ?? .pending
         checkpoint = try container.decodeIfPresent(WorkspaceCheckoutCheckpoint.self, forKey: .checkpoint) ?? .notStarted
+        recreationSourceCheckpoint = try container.decodeIfPresent(WorkspaceCheckoutCheckpoint.self, forKey: .recreationSourceCheckpoint)
+        recreationWorktreeCreationBegan = try container.decodeIfPresent(Bool.self, forKey: .recreationWorktreeCreationBegan) ?? false
         cleanupOwnership = try container.decodeIfPresent(WorkspaceCleanupOwnership.self, forKey: .cleanupOwnership) ?? .init()
         plan = try container.decodeIfPresent(WorkspaceCheckoutMemberPlan.self, forKey: .plan)
         cleanup = try container.decodeIfPresent(WorkspaceCheckoutMemberCleanup.self, forKey: .cleanup)
