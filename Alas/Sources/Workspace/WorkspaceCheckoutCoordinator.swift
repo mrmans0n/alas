@@ -1872,7 +1872,12 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
                 let unlock = try await Process.git(["worktree", "unlock", destination.path], cwd: repo, usesRemoteHostRegistry: false)
                 guard unlock.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(unlock.stderr) }
             }
-            try await WorktreeService().prune(repoPath: repo)
+            let remove = try await Process.git(
+                ["worktree", "remove", "-f", "-f", "--", destination.path],
+                cwd: repo,
+                usesRemoteHostRegistry: false
+            )
+            guard remove.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(remove.stderr) }
             let refreshed = try await Process.git(["worktree", "list", "--porcelain"], cwd: repo, usesRemoteHostRegistry: false)
             guard refreshed.exitCode == 0,
                   !Self.porcelainContainsWorktree(refreshed.stdout, path: destination.path)
@@ -1887,8 +1892,11 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
                 let unlock = try await remote.run(host: host, command: "git -C \(repo) worktree unlock -- \(SSHCommand.shellQuote(plan.worktreePath))")
                 guard unlock.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(unlock.stderr) }
             }
-            let prune = try await remote.run(host: host, command: "git -C \(repo) worktree prune")
-            guard prune.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(prune.stderr) }
+            let remove = try await remote.run(
+                host: host,
+                command: "git -C \(repo) worktree remove -f -f -- \(SSHCommand.shellQuote(plan.worktreePath))"
+            )
+            guard remove.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(remove.stderr) }
             let refreshed = try await remote.run(host: host, command: "git -C \(repo) worktree list --porcelain")
             guard refreshed.exitCode == 0,
                   !Self.porcelainContainsWorktree(refreshed.stdout, path: plan.worktreePath)

@@ -699,7 +699,7 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(preflight.submoduleLocalState == .unknown)
     }
 
-    @Test func concreteRemoteCleanupPrunesStaleRegistrationBeforeMarkingMissingWorktreeRemoved() async throws {
+    @Test func concreteRemoteCleanupRemovesOnlyTheTargetStaleRegistration() async throws {
         let runner = RemoteLifecycleRunner(results: [
             .init(exitCode: 0, stdout: "worktree /checkout/a\nprunable gitdir file points to non-existent location\n", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
@@ -714,7 +714,9 @@ struct WorkspaceCheckoutLifecycleTests {
         let commands = await runner.commands.joined(separator: "\n")
         #expect(commands.contains("worktree list --porcelain"))
         #expect(commands.contains("/checkout/a"))
-        #expect(commands.contains("worktree prune"))
+        #expect(commands.contains("worktree remove -f -f --"))
+        #expect(commands.contains("/checkout/a"))
+        #expect(commands.contains("worktree prune") == false)
     }
 
     @Test func concreteRemoteCleanupRetainsLockedMissingWorktreeRegistration() async throws {
@@ -731,7 +733,7 @@ struct WorkspaceCheckoutLifecycleTests {
 
         let commands = await runner.commands.joined(separator: "\n")
         #expect(commands.contains("worktree unlock --") == false)
-        #expect(commands.contains("worktree prune") == false)
+        #expect(commands.contains("worktree remove -f -f") == false)
     }
 
     @Test func concreteRemoteExplicitCleanupUnlocksLockedMissingWorktreeRegistration() async throws {
@@ -749,7 +751,8 @@ struct WorkspaceCheckoutLifecycleTests {
 
         let commands = await runner.commands.joined(separator: "\n")
         #expect(commands.contains("worktree unlock --"))
-        #expect(commands.contains("worktree prune"))
+        #expect(commands.contains("worktree remove -f -f --"))
+        #expect(commands.contains("/checkout/a"))
     }
 
     @Test func remoteMergedBranchDeletionRechecksWorktreeUsageAfterExpectedTipDeletion() async throws {
