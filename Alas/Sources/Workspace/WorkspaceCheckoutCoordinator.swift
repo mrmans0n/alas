@@ -914,7 +914,7 @@ actor WorkspaceCheckoutCoordinator {
                 continue
             }
             if member.recreationSourceCheckpoint == .setupComplete,
-               member.checkpoint == .worktreeCreating {
+               (member.checkpoint == .worktreeCreating || member.checkpoint == .failed) {
                 let operation = frozenWorktreeOperation(checkout: checkout, member: frozenMember)
                 if let lineageID = try? await git.existingCreatedWorktreeLineage(operation) {
                     try await updateMember(checkoutID: checkoutID, memberID: member.id) { current in
