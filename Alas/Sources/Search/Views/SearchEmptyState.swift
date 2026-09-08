@@ -38,6 +38,7 @@ struct SearchEmptyState: View {
             let where_: String
             switch model.scope {
             case .thisWorktree: where_ = "this worktree"
+            case .workspaceCheckout: where_ = "this Workspace Checkout"
             case .allRepos:     where_ = "any repo"
             }
             return "Nothing in \(where_) matches \u{201C}\(model.trimmedQuery)\u{201D}."

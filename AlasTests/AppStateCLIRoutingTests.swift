@@ -5,6 +5,17 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct AppStateCLIRoutingTests {
+    private struct MemoryStore: PersistenceStoreProtocol {
+        var projectsFile: ProjectsFile = .init(projects: [])
+
+        func write<T: Encodable>(_: T, to _: URL) throws {}
+        func readIfExists<T: Decodable>(_ type: T.Type, from _: URL) throws -> T? {
+            if type == ProjectsFile.self { return projectsFile as? T }
+            if type == AppConfig.self { return AppConfig.defaults as? T }
+            return nil
+        }
+    }
+
     private func makeRepo(name: String, initialBranch: String = "main") async throws -> URL {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-cli-appstate-\(name)-\(UUID().uuidString)")
@@ -71,6 +82,200 @@ struct AppStateCLIRoutingTests {
         }.first)
         #expect(editor.revealLine == 1)
         #expect(editor.revealEndLine == 2)
+    }
+
+    @Test func checkoutOwnedCLIUsesOwnerQualifiedCwdResolution() async throws {
+        let sharedPath = URL(fileURLWithPath: "/srv/shared/member")
+        let local = Worktree(
+            id: "local-id",
+            projectId: "local-project",
+            name: "local",
+            branch: "main",
+            path: sharedPath,
+            status: .clean,
+            lastActivity: Date()
+        )
+        let remote = Worktree(
+            id: "remote-id",
+            projectId: "remote-project",
+            name: "remote",
+            branch: "main",
+            path: sharedPath,
+            status: .clean,
+            lastActivity: Date()
+        )
+        let owner = SessionOwnerID.workspaceCheckout(
+            UUID(uuidString: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")!,
+            .ssh("devbox")
+        )
+        let router = AlasCLICommandRouter(
+            sessionWorktreeId: { _ in nil },
+            sessionCwdWorktree: { sessionId, cwd in
+                sessionId == "checkout-leaf" && cwd == sharedPath.appendingPathComponent("subdir").path ? remote : nil
+            },
+            originatingWorktree: { id in [local, remote].first(where: { $0.id == id }) },
+            visibleWorktrees: { [local, remote] },
+            openRelativeFile: { _, _ in },
+            openExternalFile: { _, _ in },
+            activateApp: {}
+        )
+
+        let response = await router.handle(.init(
+            version: 1,
+            sessionId: "checkout-leaf",
+            cwd: sharedPath.appendingPathComponent("subdir").path,
+            command: .worktree(.list)
+        ))
+
+        guard case .text(let rows) = response else {
+            Issue.record("Expected worktree list response")
+            return
+        }
+        #expect(owner.storageKey.hasPrefix("workspace-checkout--"))
+        #expect(rows == AlasCLIWorktreeResolver.rows(worktrees: [remote], currentWorktreeId: remote.id))
+    }
+
+    @Test func checkoutOwnedLocalCwdResolvesSymlinksBeforeSelectingMember() async throws {
+        let repo = try await makeRepo(name: "checkout-cwd-symlink")
+        let workspaceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("workspace-cwd-symlink-\(UUID().uuidString).json")
+        let outside = FileManager.default.temporaryDirectory
+            .appendingPathComponent("workspace-cwd-outside-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: repo)
+            try? FileManager.default.removeItem(at: workspaceURL)
+            try? FileManager.default.removeItem(at: outside)
+        }
+        let workspaceStore = WorkspaceStore(url: workspaceURL)
+        let manager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
+        _ = await manager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "space", spaces: [
+            SpaceConfig(id: "space", name: "Default", emoji: "folder", projectIds: [], lastSelectedWorktreeId: nil, createdAt: .distantPast)
+        ]))
+        let routedState = AppState(
+            store: MemoryStore(),
+            workspacesManager: manager,
+            workspaceStore: workspaceStore
+        )
+        let project = try await routedState.projectsManager.addProject(path: repo, displayName: "test", color: "#000000")
+        try await routedState.projectsManager.refreshWorktrees(projectId: project.id)
+        let worktree = try #require(routedState.projectsManager.worktrees(projectId: project.id).first)
+        try FileManager.default.createDirectory(at: outside.appendingPathComponent("subdir"), withIntermediateDirectories: true)
+        let link = worktree.path.appendingPathComponent("escape")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
+        let memberID = UUID()
+        let checkout = WorkspaceCheckout(
+            workspaceID: UUID(),
+            fallbackWorkspaceName: "Shared",
+            executionLocation: .local,
+            branch: "feature/shared",
+            rootPath: worktree.path.deletingLastPathComponent().path,
+            operation: .idle,
+            members: [
+                WorkspaceCheckoutMember(
+                    id: memberID,
+                    workspaceMemberID: UUID(),
+                    projectID: worktree.projectId,
+                    fallbackProjectName: "Project",
+                    fallbackRepositoryRoot: worktree.path.path,
+                    worktreePath: worktree.path.path,
+                    availability: .available
+                )
+            ]
+        )
+        try await workspaceStore.checkpoint(.init(checkouts: [checkout]))
+        await manager.refreshCheckoutSnapshots()
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+        let router = routedState.makeCLICommandRouter(
+            sessionWorktreeLookup: { _ -> String? in nil },
+            sessionOwnerLookup: { $0 == "checkout-leaf" ? owner : nil }
+        )
+
+        let response = await router.handle(.init(
+            version: 1,
+            sessionId: "checkout-leaf",
+            cwd: link.appendingPathComponent("subdir").path,
+            command: AlasCLIRequest.Command.resolve
+        ))
+
+        #expect(response == .error("Unknown Alas terminal session."))
+    }
+
+    @Test func checkoutOwnedRemoteCwdUsesHostPhysicalPathBeforeSelectingMember() async throws {
+        let workspaceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("workspace-remote-cwd-symlink-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: workspaceURL) }
+        let project = ProjectConfig(
+            id: "remote-project",
+            name: "Remote",
+            path: "/repo",
+            color: "#000000",
+            addedAt: .distantPast,
+            host: "devbox"
+        )
+        let workspaceStore = WorkspaceStore(url: workspaceURL)
+        let manager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
+        let checkout = WorkspaceCheckout(
+            workspaceID: UUID(),
+            fallbackWorkspaceName: "Shared",
+            executionLocation: .ssh("devbox"),
+            branch: "feature/shared",
+            rootPath: "/checkout",
+            operation: .idle,
+            members: [
+                WorkspaceCheckoutMember(
+                    id: UUID(),
+                    workspaceMemberID: UUID(),
+                    projectID: project.id,
+                    fallbackProjectName: "Remote",
+                    fallbackRepositoryRoot: project.path,
+                    worktreePath: "/checkout/member",
+                    availability: .available
+                )
+            ]
+        )
+        try await workspaceStore.checkpoint(.init(checkouts: [checkout]))
+        _ = await manager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "space", spaces: [
+            SpaceConfig(id: "space", name: "Default", emoji: "folder", projectIds: [project.id], lastSelectedWorktreeId: nil, createdAt: .distantPast)
+        ]))
+        let remote = WorkspaceRemoteTransport { _, args, _ in
+            let command = args.joined(separator: " ")
+            if command.contains("/checkout/member/link/subdir") {
+                return .init(exitCode: 0, stdout: "/outside/subdir\n", stderr: "")
+            }
+            if command.contains("/checkout/member") {
+                return .init(exitCode: 0, stdout: "/checkout/member\n", stderr: "")
+            }
+            return .init(exitCode: 1, stdout: "", stderr: "missing")
+        }
+        let state = AppState(
+            store: MemoryStore(projectsFile: .init(projects: [project])),
+            workspacesManager: manager,
+            workspaceStore: workspaceStore,
+            workspaceRemoteTransport: remote
+        )
+        state.projectsManager.insertOptimisticWorktree(Worktree(
+            id: "remote-worktree",
+            projectId: project.id,
+            name: "member",
+            branch: "main",
+            path: URL(fileURLWithPath: "/checkout/member"),
+            status: .clean,
+            lastActivity: .distantPast
+        ))
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+        let router = state.makeCLICommandRouter(
+            sessionWorktreeLookup: { _ -> String? in nil },
+            sessionOwnerLookup: { $0 == "checkout-leaf" ? owner : nil }
+        )
+
+        let response = await router.handle(.init(
+            version: 1,
+            sessionId: "checkout-leaf",
+            cwd: "/checkout/member/link/subdir",
+            command: AlasCLIRequest.Command.resolve
+        ))
+
+        #expect(response == .error("Unknown Alas terminal session."))
     }
 
     @Test func startHarnessCLIRequestUsesRealTerminalRegistry() async throws {

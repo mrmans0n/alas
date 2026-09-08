@@ -52,6 +52,28 @@ struct SearchModelTests {
         #expect(hit.revealCharacter == 0)
     }
 
+    @Test func searchWorktreeCacheKeyIncludesPinnedSSHHost() {
+        let path = URL(fileURLWithPath: "/repos/shared")
+        let first = SearchWorktree(
+            id: "a",
+            projectId: "project-a",
+            displayName: "A",
+            absolutePath: path,
+            executionLocation: .ssh("build-a")
+        )
+        let second = SearchWorktree(
+            id: "b",
+            projectId: "project-b",
+            displayName: "B",
+            absolutePath: path,
+            executionLocation: .ssh("build-b")
+        )
+
+        #expect(first.remoteHost == "build-a")
+        #expect(second.remoteHost == "build-b")
+        #expect(first.cacheKey != second.cacheKey)
+    }
+
     /// Returns a finished AsyncThrowingStream with no elements.
     private func emptyContentStream() -> AsyncThrowingStream<ContentSearchHit, Error> {
         AsyncThrowingStream { $0.finish() }
@@ -64,7 +86,8 @@ struct SearchModelTests {
         entries: (@Sendable (SearchWorktree) async throws -> [FileIndex.Entry])? = nil,
         fileSearch: (@Sendable (String, SearchWorktree) async throws -> [FileSearchBackendResult]?)? = nil,
         rankFiles: (@Sendable (String, [FileSearchRankingSource]) async throws -> [FileSearchResult])? = nil,
-        contentSearch: (@Sendable (String, SearchContentOptions, [SearchWorktree]) -> AsyncThrowingStream<ContentSearchHit, Error>)? = nil
+        contentSearch: (@Sendable (String, SearchContentOptions, [SearchWorktree]) -> AsyncThrowingStream<ContentSearchHit, Error>)? = nil,
+        workspaceCheckoutWorktrees: (@Sendable () -> [SearchWorktree])? = nil
     ) -> SearchEnvironment {
         let ranker = FileSearchRanker()
         return SearchEnvironment(
@@ -72,6 +95,7 @@ struct SearchModelTests {
             allWorktrees: { worktrees },
             entries: entries ?? { wt in files[wt.id] ?? [] },
             statuses: { wt in statuses[wt.id] ?? [:] },
+            workspaceCheckoutWorktrees: workspaceCheckoutWorktrees ?? { [] },
             fileSearch: fileSearch ?? { _, _ in nil },
             rankFiles: rankFiles ?? { query, sources in
                 try await ranker.rank(query: query, sources: sources)
@@ -102,6 +126,7 @@ struct SearchModelTests {
             allWorktrees: { [] },
             entries: { _ in [] },
             statuses: { _ in [:] },
+            workspaceCheckoutWorktrees: { [] },
             fileSearch: { _, _ in nil },
             rankFiles: { [ranker = FileSearchRanker()] query, sources in
                 try await ranker.rank(query: query, sources: sources)
@@ -111,6 +136,115 @@ struct SearchModelTests {
         let model2 = SearchModel(environment: env)
         model2.open()
         #expect(model2.scope == .allRepos)
+    }
+
+    @Test func openPrefersWorkspaceCheckoutScopeWhenCheckoutMembersAreAvailable() async {
+        let member = wt("member", projectId: "p1")
+        let env = makeEnv(
+            worktrees: [wt("focused", projectId: "p2")],
+            workspaceCheckoutWorktrees: { [member] }
+        )
+        let model = SearchModel(environment: env)
+
+        model.open()
+
+        #expect(model.scope == .workspaceCheckout)
+    }
+
+    @Test func workspaceCheckoutScopeSearchesOnlyExplicitCheckoutMembersAndReportsPartialFailures() async {
+        let member = wt("member", projectId: "p1")
+        let outside = wt("outside", projectId: "p2")
+        let env = makeEnv(
+            worktrees: [member, outside],
+            entries: { wt in
+                if wt.id == "member" { throw CocoaError(.fileReadUnknown) }
+                return [.init(relativePath: "outside.swift", ext: "swift")]
+            },
+            rankFiles: { _, sources in
+                sources.flatMap { source in
+                    source.entries.map {
+                        FileSearchResult(
+                            worktreeId: source.worktreeId,
+                            projectId: source.projectId,
+                            relativePath: $0.relativePath,
+                            ext: $0.ext,
+                            statusBadge: nil,
+                            matchIndices: [],
+                            score: 1
+                        )
+                    }
+                }
+            },
+            workspaceCheckoutWorktrees: { [member] }
+        )
+        let model = SearchModel(environment: env)
+        model.open()
+        model.scope = SearchScope.workspaceCheckout
+        model.query = "swift"
+        await model.waitForIdle()
+
+        #expect(model.results.fileResults.isEmpty)
+        #expect(model.results.partialFailureMessage == "Couldn't read files for wt-member")
+    }
+
+    @Test func workspaceCheckoutFileResultsCarryMemberIdentity() async {
+        let checkoutID = UUID()
+        let memberID = UUID()
+        var member = wt("member", projectId: "p1")
+        member.workspaceCheckoutID = checkoutID
+        member.workspaceCheckoutMemberID = memberID
+        let env = makeEnv(
+            files: ["member": [.init(relativePath: "Sources/App.swift", ext: "swift")]],
+            workspaceCheckoutWorktrees: { [member] }
+        )
+        let model = SearchModel(environment: env)
+        model.open()
+        model.scope = .workspaceCheckout
+        model.query = "App"
+        await model.waitForIdle()
+
+        #expect(model.results.fileResults.first?.workspaceCheckoutID == checkoutID)
+        #expect(model.results.fileResults.first?.workspaceCheckoutMemberID == memberID)
+    }
+
+    @Test func workspaceCheckoutContentResultsCarryCheckoutAndMemberIdentity() async {
+        let checkoutID = UUID()
+        let memberID = UUID()
+        var member = wt("member", projectId: "p1")
+        member.workspaceCheckoutID = checkoutID
+        member.workspaceCheckoutMemberID = memberID
+        let env = makeEnv(
+            contentSearch: { _, _, targets in
+                let target = targets[0]
+                return AsyncThrowingStream { continuation in
+                    continuation.yield(ContentSearchHit(
+                        worktreeId: target.id,
+                        projectId: target.projectId,
+                        workspaceCheckoutID: target.workspaceCheckoutID,
+                        workspaceCheckoutMemberID: target.workspaceCheckoutMemberID,
+                        relativePath: "Sources/App.swift",
+                        line: 1,
+                        column: 1,
+                        revealColumn: nil,
+                        snippet: "match",
+                        matchCharRange: nil
+                    ))
+                    continuation.finish()
+                }
+            },
+            workspaceCheckoutWorktrees: { [member] }
+        )
+        let model = SearchModel(environment: env)
+        model.open()
+        model.scope = SearchScope.workspaceCheckout
+        model.kind = SearchKind.content
+        model.query = "match"
+        await model.waitForIdle()
+
+        #expect(model.results.contentGroups.first?.workspaceCheckoutID == checkoutID)
+        #expect(model.results.contentGroups.first?.workspaceCheckoutMemberID == memberID)
+        #expect(model.results.contentGroups.first?.hits.first?.workspaceCheckoutID == checkoutID)
+        #expect(model.results.contentGroups.first?.hits.first?.workspaceCheckoutMemberID == memberID)
     }
 
     @Test func emptyQueryInFilesModeShowsAllInThisWorktree() async {

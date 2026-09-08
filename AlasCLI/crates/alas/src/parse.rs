@@ -17,6 +17,10 @@ usage: alas wt list
 usage: alas wt switch <name-or-branch>
 usage: alas wt new <branch> [--base <ref>]
 usage: alas wt delete <name-or-branch> [--force] [--keep-branch]
+usage: alas workspace list
+usage: alas workspace show <checkout-uuid>
+usage: alas workspace switch <checkout-uuid>
+usage: alas workspace focus <checkout-uuid> --member <member-uuid>
 usage: alas session list
 usage: alas session new --prompt <text> [--agent <id>] [--worktree <name-or-branch> | --new-worktree <branch> [--base <ref>]]
 usage: alas session send <session-id> <prompt>
@@ -39,12 +43,48 @@ pub fn parse(args: &[String], base: &std::path::Path) -> Result<Command, String>
         }
         Some("notify") => parse_notify(&it.map(|s| s.as_str()).collect::<Vec<_>>()),
         Some("wt") => parse_wt(&it.map(|s| s.as_str()).collect::<Vec<_>>()),
+        Some("workspace") => parse_workspace(&it.map(|s| s.as_str()).collect::<Vec<_>>()),
         Some("session") => parse_session(&it.map(|s| s.as_str()).collect::<Vec<_>>()),
         Some("review") => {
             let rest: Vec<&str> = it.map(String::as_str).collect();
             parse_review(&rest, base)
         }
         _ => Err(USAGE_ALL.into()),
+    }
+}
+
+fn parse_workspace(args: &[&str]) -> Result<Command, String> {
+    match args.first().copied() {
+        Some("list") if args.len() == 1 => Ok(Command::WorkspaceList),
+        Some("show") if args.len() == 2 => Ok(Command::WorkspaceShow {
+            checkout_id: validated_uuid(args[1])?,
+        }),
+        Some("switch") if args.len() == 2 => Ok(Command::WorkspaceSwitch {
+            checkout_id: validated_uuid(args[1])?,
+        }),
+        Some("focus") if args.len() == 4 && args[2] == "--member" => Ok(Command::WorkspaceFocus {
+            checkout_id: validated_uuid(args[1])?,
+            member_id: validated_uuid(args[3])?,
+        }),
+        _ => Err(USAGE_ALL.into()),
+    }
+}
+
+fn validated_uuid(value: &str) -> Result<String, String> {
+    let bytes = value.as_bytes();
+    let hyphens = [8, 13, 18, 23];
+    let valid = bytes.len() == 36
+        && bytes.iter().enumerate().all(|(index, byte)| {
+            if hyphens.contains(&index) {
+                *byte == b'-'
+            } else {
+                byte.is_ascii_hexdigit()
+            }
+        });
+    if valid {
+        Ok(value.to_string())
+    } else {
+        Err("workspace commands require UUID targets".into())
     }
 }
 
@@ -1255,6 +1295,31 @@ mod tests {
                 worktree: Some("feature".into())
             }
         );
+    }
+
+    #[test]
+    fn workspace_commands_parse_uuid_targets_and_require_member_for_focus() {
+        let checkout = "7D064822-8491-4E33-BD74-355FD2AB3330";
+        let member = "C2476427-94B2-423F-A490-568775E8B309";
+
+        assert_eq!(
+            parse(&s(&["workspace", "list"]), Path::new("/b")).unwrap(),
+            Command::WorkspaceList
+        );
+        assert_eq!(
+            parse(&s(&["workspace", "show", checkout]), Path::new("/b")).unwrap(),
+            Command::WorkspaceShow { checkout_id: checkout.into() }
+        );
+        assert_eq!(
+            parse(&s(&["workspace", "switch", checkout]), Path::new("/b")).unwrap(),
+            Command::WorkspaceSwitch { checkout_id: checkout.into() }
+        );
+        assert_eq!(
+            parse(&s(&["workspace", "focus", checkout, "--member", member]), Path::new("/b")).unwrap(),
+            Command::WorkspaceFocus { checkout_id: checkout.into(), member_id: member.into() }
+        );
+        assert!(parse(&s(&["workspace", "focus", checkout]), Path::new("/b")).is_err());
+        assert!(parse(&s(&["workspace", "delete", checkout]), Path::new("/b")).is_err());
     }
 
     #[test]

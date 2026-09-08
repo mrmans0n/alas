@@ -19,7 +19,8 @@ struct FileSearchDialog: View {
                     SearchInputRow(model: appState.search, inputFocused: $inputFocused)
                     ScopeRow(
                         model: appState.search,
-                        isThisWorktreeAvailable: appState.selectedWorktreeId != nil
+                        isThisWorktreeAvailable: appState.selectedWorktreeId != nil,
+                        isWorkspaceCheckoutAvailable: appState.selectedWorkspaceCheckout != nil
                     )
                     if let banner = appState.search.results.partialFailureMessage {
                         BannerRow(text: banner)
@@ -126,6 +127,19 @@ struct FileSearchDialog: View {
     }
 
     private func openContent(_ hit: ContentSearchHit) {
+        if let checkoutID = hit.workspaceCheckoutID,
+           let memberID = hit.workspaceCheckoutMemberID {
+            guard appState.openWorkspaceCheckoutSearchResult(
+                relativePath: hit.relativePath,
+                worktreeId: hit.worktreeId,
+                checkoutID: checkoutID,
+                memberID: memberID,
+                revealLine: hit.revealLine,
+                revealCharacter: hit.revealCharacter
+            ) else { return }
+            close()
+            return
+        }
         appState.openFile(
             relativePath: hit.relativePath,
             worktreeId: hit.worktreeId,
@@ -187,6 +201,17 @@ struct FileSearchDialog: View {
     }
 
     private func open(_ r: FileSearchResult) {
+        if let checkoutID = r.workspaceCheckoutID,
+           let memberID = r.workspaceCheckoutMemberID {
+            guard appState.openWorkspaceCheckoutSearchResult(
+                relativePath: r.relativePath,
+                worktreeId: r.worktreeId,
+                checkoutID: checkoutID,
+                memberID: memberID
+            ) else { return }
+            close()
+            return
+        }
         appState.openFile(relativePath: r.relativePath, worktreeId: r.worktreeId)
         close()
     }

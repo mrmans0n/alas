@@ -6,6 +6,7 @@ struct ACPToolbar: View {
     let agentLookup: (String) -> AgentDefinition?
     let state: AppState
     let worktree: Worktree
+    var owner: SessionOwnerID? = nil
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -15,13 +16,14 @@ struct ACPToolbar: View {
                 manager: manager,
                 state: state,
                 worktree: worktree,
+                owner: owner,
                 agentLookup: agentLookup
             )
             ACPMCPStatusControl(
                 session: session,
-                currentServers: state.projects.first(where: { $0.id == worktree.projectId })?.mcpServers ?? [],
+                currentServers: state.mcpServersForACPToolbar(worktree: worktree, owner: owner),
                 onInstallPiMCPAdapter: { await state.installPiMCPAdapter() },
-                onSwitchToHTTP: {
+                onSwitchToHTTP: isWorkspaceCheckoutOwner ? nil : {
                     state.config.harness.alasMCPTransport = .http
                     _ = state.saveConfig()
                     // A live session is `.ready`, for which `reattach` is a
@@ -53,6 +55,11 @@ struct ACPToolbar: View {
         .overlay(alignment: .bottom) {
             Rectangle().fill(theme.color("line")).frame(height: 0.5)
         }
+    }
+
+    private var isWorkspaceCheckoutOwner: Bool {
+        if case .workspaceCheckout = owner { return true }
+        return false
     }
 }
 

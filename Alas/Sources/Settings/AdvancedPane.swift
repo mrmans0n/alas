@@ -15,6 +15,34 @@ struct AdvancedPane: View {
                     .font(.system(size: 12.5)).foregroundColor(theme.color("fg-dim"))
                     .padding(.bottom, 12)
 
+                SettingsGroup(title: "Experimental") {
+                    SettingsRow(
+                        name: "Workspaces preview",
+                        desc: "Enables persistent multi-repository Workspaces for preview testing."
+                    ) {
+                        AlasToggle(on: Binding(
+                            get: { state.config.workspacesEnabled },
+                            set: { enabled in
+                                Task { @MainActor in
+                                    await state.setWorkspacesEnabled(enabled)
+                                }
+                            }
+                        ))
+                    }
+                    if let recovery = state.workspaceRecoveryError {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Workspace recovery required: \(recovery.message)")
+                                .font(.system(size: 11.5))
+                                .foregroundStyle(theme.color("warn"))
+                            AlasButton(title: "Discard Quarantined Workspace State", icon: "trash", style: .normal) {
+                                Task { @MainActor in
+                                    await state.discardWorkspaceRecoveryState()
+                                }
+                            }
+                        }
+                        .padding(.top, 8)
+                    }
+                }
                 SettingsGroup(title: "Cleanup") {
                     SettingsRow(
                         name: "Clear all projects",

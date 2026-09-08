@@ -8,6 +8,31 @@ struct SearchWorktree: Equatable, Sendable, Identifiable {
     let projectId: String
     let displayName: String
     let absolutePath: URL
+    var executionLocation: ExecutionLocation? = nil
+    var workspaceCheckoutID: UUID? = nil
+    var workspaceCheckoutMemberID: UUID? = nil
+
+    var remoteHost: String? {
+        switch executionLocation?.normalized {
+        case .some(.local):
+            return nil
+        case .some(.ssh(let host)):
+            return host
+        case nil:
+            return RemoteHostRegistry.shared.host(forPath: absolutePath.path)
+        }
+    }
+
+    var usesRemoteHostRegistry: Bool {
+        executionLocation == nil
+    }
+
+    var cacheKey: String {
+        if let remoteHost {
+            return "ssh:\(remoteHost):\(absolutePath.path)"
+        }
+        return "local:\(absolutePath.path)"
+    }
 }
 
 /// All inputs SearchModel needs from the rest of the app, isolated for
@@ -17,6 +42,7 @@ struct SearchEnvironment: Sendable {
     var allWorktrees: @Sendable () -> [SearchWorktree]
     var entries: @Sendable (SearchWorktree) async throws -> [FileIndex.Entry]
     var statuses: @Sendable (SearchWorktree) async throws -> [String: GitStatusBadge]
+    var workspaceCheckoutWorktrees: @Sendable () -> [SearchWorktree] = { [] }
     var fileSearch: @Sendable (String, SearchWorktree) async throws -> [FileSearchBackendResult]?
     var rankFiles: @Sendable (
         String, [FileSearchRankingSource]
@@ -110,7 +136,11 @@ final class SearchModel {
         query = ""
         kind = .files
         selectedIndex = 0
-        scope = (env.currentWorktreeId() != nil) ? .thisWorktree : .allRepos
+        if !env.workspaceCheckoutWorktrees().isEmpty {
+            scope = .workspaceCheckout
+        } else {
+            scope = (env.currentWorktreeId() != nil) ? .thisWorktree : .allRepos
+        }
         results = SearchResults()
         reschedule()
     }
@@ -192,6 +222,8 @@ final class SearchModel {
             } else {
                 targets = []
             }
+        case .workspaceCheckout:
+            targets = env.workspaceCheckoutWorktrees()
         case .allRepos:
             targets = env.allWorktrees()
         }
@@ -244,6 +276,8 @@ final class SearchModel {
             sources.append(FileSearchRankingSource(
                 worktreeId: wt.id,
                 projectId: wt.projectId,
+                workspaceCheckoutID: wt.workspaceCheckoutID,
+                workspaceCheckoutMemberID: wt.workspaceCheckoutMemberID,
                 entries: entries,
                 backendResults: backendResults,
                 statuses: statuses
@@ -323,6 +357,8 @@ final class SearchModel {
                     let newGroup = ContentSearchGroup(
                         worktreeId: hit.worktreeId,
                         projectId: hit.projectId,
+                        workspaceCheckoutID: hit.workspaceCheckoutID,
+                        workspaceCheckoutMemberID: hit.workspaceCheckoutMemberID,
                         relativePath: hit.relativePath,
                         hits: [hit]
                     )

@@ -24,6 +24,29 @@ struct CenterTabComposition {
         }
     }
 
+    /// Shared checkout Terminal/ACP tabs are rendered ahead of repository
+    /// tabs for the currently focused member. An active shared tab wins over
+    /// a member tab so changing repository focus never retargets a session.
+    init(
+        sharedTabs: [Tab],
+        focusedMemberTabs: [Tab],
+        activeSharedTabId: TabID?,
+        activeFocusedMemberTabId: TabID?
+    ) {
+        let shared = sharedTabs.filter(\.isSharedSessionTab)
+        let member = focusedMemberTabs.filter { !$0.isSharedSessionTab }
+        tabs = shared + member
+        if shared.contains(where: { $0.id == activeSharedTabId }) {
+            activeId = activeSharedTabId
+        } else if member.contains(where: { $0.id == activeFocusedMemberTabId }) {
+            activeId = activeFocusedMemberTabId
+        } else if activeSharedTabId != nil || activeFocusedMemberTabId != nil {
+            activeId = tabs.first?.id
+        } else {
+            activeId = nil
+        }
+    }
+
     var activeTab: Tab? {
         guard let activeId else { return nil }
         return tabs.first { $0.id == activeId }
@@ -40,6 +63,17 @@ struct CenterTabComposition {
         }
         let targetIndex = (activeIndex + offset + tabs.count) % tabs.count
         return tabs[targetIndex].id
+    }
+}
+
+private extension Tab {
+    var isSharedSessionTab: Bool {
+        switch self {
+        case .terminal, .acpSession:
+            true
+        default:
+            false
+        }
     }
 }
 
@@ -82,6 +116,10 @@ enum StartupRecoveryPaneCompletionPolicy {
 struct CenterPaneView: View {
     @Bindable var state: AppState
     let worktree: Worktree
+    /// Set by Workspace navigation for a focused checkout member. It remains
+    /// optional until the mixed-peer tree is introduced, preserving normal
+    /// Project and Worktree center behavior.
+    var sharedSessionOwner: SessionOwnerID? = nil
     var allowsPaneFocus: Bool = true
     var effectiveRightPaneVisible: Bool = true
     @Environment(\.theme) var theme
@@ -89,13 +127,17 @@ struct CenterPaneView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            let worktreeTabs = state.tabs.tabs(forWorktree: worktree.id)
-            let composition = CenterTabComposition(
-                worktreeTabs: worktreeTabs,
-                activeWorktreeTabId: state.tabs.activeTabId(forWorktree: worktree.id)
+            let composition = state.centerTabComposition(
+                focusedWorktreeID: worktree.id,
+                sharedSessionOwner: sharedSessionOwner
             )
             let tabs = composition.tabs
             let closurePlan = CenterTabClosurePlan(orderedTabIDs: tabs.map(\.id))
+            let sharedOwnerForTab: (TabID) -> SessionOwnerID? = { id in
+                sharedSessionOwner.flatMap { owner in
+                    state.tabs.tabs(for: owner).contains(where: { $0.id == id }) ? owner : nil
+                }
+            }
             TabBarView(
                 tabs: tabs,
                 activeId: composition.activeId,
@@ -119,19 +161,31 @@ struct CenterPaneView: View {
                     _ = buffer?.editGeneration
                     return buffer?.dirty ?? false
                 },
-                onActivate: { state.activateWorktreeCenterTab(worktreeId: worktree.id, tabId: $0) },
-                onClose: { state.requestCloseTab(worktreeId: worktree.id, tabId: $0) },
+                onActivate: {
+                    state.activateComposedCenterTab(
+                        worktreeID: worktree.id,
+                        sharedSessionOwner: sharedSessionOwner,
+                        tabID: $0
+                    )
+                },
+                onClose: {
+                    state.requestCloseComposedCenterTab(
+                        worktreeID: worktree.id,
+                        sharedSessionOwner: sharedSessionOwner,
+                        tabID: $0
+                    )
+                },
                 onCloseOthers: { id in
-                    state.closeCenterTabs(worktreeId: worktree.id, tabIds: closurePlan.others(keeping: id))
+                    state.closeComposedCenterTabs(worktreeID: worktree.id, sharedSessionOwner: sharedSessionOwner, tabIDs: closurePlan.others(keeping: id))
                 },
                 onCloseAll: {
-                    state.closeCenterTabs(worktreeId: worktree.id, tabIds: closurePlan.all())
+                    state.closeComposedCenterTabs(worktreeID: worktree.id, sharedSessionOwner: sharedSessionOwner, tabIDs: closurePlan.all())
                 },
                 onCloseToLeft: { id in
-                    state.closeCenterTabs(worktreeId: worktree.id, tabIds: closurePlan.left(of: id))
+                    state.closeComposedCenterTabs(worktreeID: worktree.id, sharedSessionOwner: sharedSessionOwner, tabIDs: closurePlan.left(of: id))
                 },
                 onCloseToRight: { id in
-                    state.closeCenterTabs(worktreeId: worktree.id, tabIds: closurePlan.right(of: id))
+                    state.closeComposedCenterTabs(worktreeID: worktree.id, sharedSessionOwner: sharedSessionOwner, tabIDs: closurePlan.right(of: id))
                 },
                 onCopyPath: { id in
                     guard let tab = tabs.first(where: { $0.id == id }),
@@ -231,26 +285,52 @@ struct CenterPaneView: View {
                 },
                 systemActionsEnabled: !worktree.path.isRemoteAlasPath,
                 onRenameTerminal: { id in
-                    state.renameTerminalTab(worktreeId: worktree.id, tabId: id)
+                    if let owner = sharedOwnerForTab(id) {
+                        state.renameTerminalTab(owner: owner, tabId: id)
+                    } else {
+                        state.renameTerminalTab(worktreeId: worktree.id, tabId: id)
+                    }
                 },
                 onRenameACPSession: { id in
-                    state.renameACPSessionTab(worktreeId: worktree.id, tabId: id)
+                    if let owner = sharedOwnerForTab(id) {
+                        state.renameACPSessionTab(owner: owner, tabId: id)
+                    } else {
+                        state.renameACPSessionTab(worktreeId: worktree.id, tabId: id)
+                    }
                 },
                 onCopyACPSession: { id in
-                    state.copyACPSessionMarkdown(worktreeId: worktree.id, tabId: id)
+                    if let owner = sharedOwnerForTab(id) {
+                        state.copyACPSessionMarkdown(owner: owner, tabId: id)
+                    } else {
+                        state.copyACPSessionMarkdown(worktreeId: worktree.id, tabId: id)
+                    }
                 },
                 onExportACPSession: { id in
-                    state.exportACPSessionMarkdown(worktreeId: worktree.id, tabId: id)
+                    if let owner = sharedOwnerForTab(id) {
+                        state.exportACPSessionMarkdown(owner: owner, tabId: id)
+                    } else {
+                        state.exportACPSessionMarkdown(worktreeId: worktree.id, tabId: id)
+                    }
                 },
                 onNewTerminal: openTerminal,
                 enabledAgents: state.agentRegistry.enabled(),
                 onLaunchAgent: { agentId in
                     Task { @MainActor in
-                        _ = try? await state.openAgentTerminalTabPreparingRemoteZmxIfNeeded(for: worktree, agentId: agentId)
+                        if let checkout = selectedCheckoutForSharedOwner {
+                            _ = try? await state.openWorkspaceCheckoutAgentTerminalTab(checkout, focusedMemberWorktree: worktree, agentId: agentId)
+                        } else {
+                            _ = try? await state.openAgentTerminalTabPreparingRemoteZmxIfNeeded(for: worktree, agentId: agentId)
+                        }
                     }
                 },
                 onLaunchACPSession: { agentId in
-                    state.openNewACPSession(agentID: agentId)
+                    if let checkout = selectedCheckoutForSharedOwner {
+                        Task { @MainActor in
+                            _ = await state.openWorkspaceCheckoutACPSession(checkout: checkout, agentID: agentId)
+                        }
+                    } else {
+                        state.openNewACPSession(agentID: agentId)
+                    }
                 },
                 acpAgents: {
                     // Only enabled builtins with a wired ACP launch spec.
@@ -277,12 +357,17 @@ struct CenterPaneView: View {
                 },
                 sidebarHidden: !state.config.sidebarVisible,
                 onMove: { draggedId, destinationId in
-                    state.tabs.moveTab(worktreeId: worktree.id, fromId: draggedId, toId: destinationId)
+                    if let owner = sharedOwnerForTab(draggedId), sharedOwnerForTab(destinationId) == owner {
+                        state.tabs.moveTab(owner: owner, fromId: draggedId, toId: destinationId)
+                    } else {
+                        state.tabs.moveTab(worktreeId: worktree.id, fromId: draggedId, toId: destinationId)
+                    }
                 },
                 titleLookup: { id in
                     guard let tab = tabs.first(where: { $0.id == id }) else { return nil }
                     if case .acpSession(let s) = tab,
-                       let mgr = state.acpManager(forWorktreeId: worktree.id),
+                       let mgr = sharedOwnerForTab(id).flatMap({ state.acpManager(for: $0) })
+                           ?? state.acpManager(forWorktreeId: worktree.id),
                        let session = mgr.sessions[s.sessionId] {
                         let t = session.title.trimmingCharacters(in: .whitespacesAndNewlines)
                         return t.isEmpty ? nil : t
@@ -292,14 +377,16 @@ struct CenterPaneView: View {
                 transcriptLookup: { id in
                     guard let tab = tabs.first(where: { $0.id == id }),
                           case .acpSession(let s) = tab,
-                          let mgr = state.acpManager(for: worktree),
+                          let mgr = sharedOwnerForTab(id).flatMap({ state.acpManager(for: $0) })
+                              ?? state.acpManager(for: worktree),
                           let session = mgr.placeholderSession(id: s.sessionId) else { return nil }
                     return session.transcript
                 },
                 acpAgentLookup: { id in
                     guard let tab = tabs.first(where: { $0.id == id }),
                           case .acpSession(let s) = tab,
-                          let mgr = state.acpManager(forWorktreeId: worktree.id),
+                          let mgr = sharedOwnerForTab(id).flatMap({ state.acpManager(for: $0) })
+                              ?? state.acpManager(forWorktreeId: worktree.id),
                           let session = mgr.sessions[s.sessionId] else { return nil }
                     return state.agent(id: session.agentId)
                         ?? AgentBuiltins.entry(id: session.agentId)
@@ -333,11 +420,13 @@ struct CenterPaneView: View {
                     )
                 } else if let activeId = composition.activeId,
                           let tab = tabs.first(where: { $0.id == activeId }) {
+                    let activeSharedOwner = sharedOwnerForTab(activeId)
                     switch tab {
                     case .terminal:
                         TerminalTabView(state: state,
                                         worktreeId: worktree.id,
                                         tabId: tab.id,
+                                        owner: activeSharedOwner,
                                         allowsPaneFocus: allowsPaneFocus,
                                         onStartupRecoveryReady: { completeStartupRecoveryIfActive(tab.id) })
                     case .editor(let s):
@@ -519,6 +608,7 @@ struct CenterPaneView: View {
                             sessionId: s.sessionId,
                             state: state,
                             worktree: worktree,
+                            owner: activeSharedOwner,
                             onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) }
                         )
                             .id(s.id)
@@ -625,6 +715,10 @@ struct CenterPaneView: View {
             startupRecoveryReadyKey = nil
             completeStartupRecoveryIfPaneIsStable()
         }
+        .onChange(of: sharedSessionOwner.flatMap { state.tabs.activeTabId(for: $0) }) { _, _ in
+            startupRecoveryReadyKey = nil
+            completeStartupRecoveryIfPaneIsStable()
+        }
         .onChange(of: startupRecoveryActiveKey) { _, _ in
             startupRecoveryReadyKey = nil
             completeStartupRecoveryIfPaneIsStable()
@@ -640,9 +734,9 @@ struct CenterPaneView: View {
 
     private func completeStartupRecoveryIfPaneIsStable() {
         guard state.tabs.hasLoaded else { return }
-        let composition = CenterTabComposition(
-            worktreeTabs: state.tabs.tabs(forWorktree: worktree.id),
-            activeWorktreeTabId: state.tabs.activeTabId(forWorktree: worktree.id)
+        let composition = state.centerTabComposition(
+            focusedWorktreeID: worktree.id,
+            sharedSessionOwner: sharedSessionOwner
         )
         guard Self.shouldCompleteStartupRecoveryForCenterPane(
             activeTab: composition.activeTab,
@@ -692,9 +786,9 @@ struct CenterPaneView: View {
 
     private func completeStartupRecoveryIfActive(_ tabID: TabID) {
         guard state.selectedWorktreeId == worktree.id else { return }
-        let composition = CenterTabComposition(
-            worktreeTabs: state.tabs.tabs(forWorktree: worktree.id),
-            activeWorktreeTabId: state.tabs.activeTabId(forWorktree: worktree.id)
+        let composition = state.centerTabComposition(
+            focusedWorktreeID: worktree.id,
+            sharedSessionOwner: sharedSessionOwner
         )
         guard composition.activeId == tabID else { return }
         startupRecoveryReadyKey = startupRecoveryActiveKey
@@ -703,9 +797,9 @@ struct CenterPaneView: View {
     }
 
     private var startupRecoveryActiveKey: String? {
-        let composition = CenterTabComposition(
-            worktreeTabs: state.tabs.tabs(forWorktree: worktree.id),
-            activeWorktreeTabId: state.tabs.activeTabId(forWorktree: worktree.id)
+        let composition = state.centerTabComposition(
+            focusedWorktreeID: worktree.id,
+            sharedSessionOwner: sharedSessionOwner
         )
         return Self.startupRecoveryActiveKey(
             activeTab: composition.activeTab,
@@ -740,7 +834,20 @@ struct CenterPaneView: View {
 
     private func openTerminal() {
         Task { @MainActor in
-            _ = try? await state.openTerminalTabPreparingRemoteZmxIfNeeded(for: worktree)
+            if let checkout = selectedCheckoutForSharedOwner {
+                _ = try? await state.openWorkspaceCheckoutTerminalTab(checkout)
+            } else {
+                _ = try? await state.openTerminalTabPreparingRemoteZmxIfNeeded(for: worktree)
+            }
         }
+    }
+
+    private var selectedCheckoutForSharedOwner: WorkspaceCheckout? {
+        guard let sharedSessionOwner,
+              case .workspaceCheckout(let checkoutID, _) = sharedSessionOwner,
+              let checkout = state.selectedWorkspaceCheckout,
+              checkout.id == checkoutID
+        else { return nil }
+        return checkout
     }
 }

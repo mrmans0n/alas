@@ -14,28 +14,37 @@ struct ACPFileWriter {
     }
 
     func write(path: String, content: String) throws -> Result {
-        let target = try resolveInsideWorktree(path: path)
+        let logicalTarget = try resolveInsideWorktree(path: path)
+        let diskTarget = try managedDiskURLInsideWorktree(path: path)
 
-        let pre = try? String(contentsOf: target, encoding: .utf8)
-        try FileManager.default.createDirectory(at: target.deletingLastPathComponent(),
+        let pre = try? String(contentsOf: diskTarget, encoding: .utf8)
+        try FileManager.default.createDirectory(at: diskTarget.deletingLastPathComponent(),
                                                 withIntermediateDirectories: true)
-        try content.write(to: target, atomically: true, encoding: .utf8)
-        return Self.makeResult(oldText: pre, newText: content, path: target.path)
+        try content.write(to: diskTarget, atomically: true, encoding: .utf8)
+        return Self.makeResult(oldText: pre, newText: content, path: logicalTarget.path)
     }
 
     /// Throws `outsideWorktree` if `path` resolves outside the
-    /// worktree root after symlink expansion. Returned URL is the
-    /// resolved absolute target — safe to read or write. Used by both
-    /// the write path AND the read path so the worktree boundary is
-    /// enforced symmetrically.
+    /// worktree root after symlink expansion. The returned URL preserves
+    /// the requested standardized path so editor live-buffer lookups keep
+    /// using the same worktree spelling as the UI.
     func resolveInsideWorktree(path: String) throws -> URL {
         let target = URL(fileURLWithPath: path).standardizedFileURL
-        let root = worktreeRoot.standardizedFileURL
-        let resolvedTarget = target.resolvingSymlinksInPath().path
-        let resolvedRoot = root.resolvingSymlinksInPath().path
-        guard resolvedTarget.hasPrefix(resolvedRoot + "/") || resolvedTarget == resolvedRoot
-        else { throw Error.outsideWorktree(path: target.path) }
+        let boundary = WorkspaceCheckoutBoundary(rootPath: worktreeRoot.path)
+        guard (try? boundary.managedURL(for: target.path)) != nil else {
+            throw Error.outsideWorktree(path: target.path)
+        }
         return target
+    }
+
+    func managedDiskURLInsideWorktree(path: String) throws -> URL {
+        let target = URL(fileURLWithPath: path).standardizedFileURL
+        let boundary = WorkspaceCheckoutBoundary(rootPath: worktreeRoot.path)
+        do {
+            return try boundary.managedURL(for: target.path)
+        } catch {
+            throw Error.outsideWorktree(path: target.path)
+        }
     }
 
     /// Cheap +N/-M counts via line-set symmetric difference. Good enough for the

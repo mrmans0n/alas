@@ -33,6 +33,12 @@ final class NotificationService {
         center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
+    func setup(onContextClick: @escaping (NotificationClickContext) -> Void) {
+        center.delegate = delegate
+        delegate.onContextClick = onContextClick
+        center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    }
+
     func setEnabled(_ on: Bool) { enabled = on }
 
     func playAwaitingPing() {
@@ -40,29 +46,35 @@ final class NotificationService {
     }
 
     func notifyHarnessAwaiting(agent: AgentKind, body: String?,
-                               projectId: String, worktreeId: String, sessionId: String) {
+                               projectId: String, worktreeId: String, sessionId: String,
+                               owner: SessionOwnerID? = nil) {
         let content = buildContent(agent: agent, body: body ?? "Session is waiting for you.",
                                    title: "\(agent.displayName) needs input",
-                                   projectId: projectId, worktreeId: worktreeId, sessionId: sessionId)
+                                   projectId: projectId, worktreeId: worktreeId, sessionId: sessionId,
+                                   owner: owner)
         let req = UNNotificationRequest(identifier: "\(sessionId)-awaiting", content: content, trigger: nil)
         notificationAdder(req)
     }
 
     func notifyHarnessPermission(agent: AgentKind, body: String?,
-                                 projectId: String, worktreeId: String, sessionId: String) {
+                                 projectId: String, worktreeId: String, sessionId: String,
+                                 owner: SessionOwnerID? = nil) {
         let content = buildContent(agent: agent, body: body ?? "Session is waiting for you.",
                                    title: "\(agent.displayName) needs permission",
-                                   projectId: projectId, worktreeId: worktreeId, sessionId: sessionId)
+                                   projectId: projectId, worktreeId: worktreeId, sessionId: sessionId,
+                                   owner: owner)
         let req = UNNotificationRequest(identifier: "\(sessionId)-permission", content: content, trigger: nil)
         notificationAdder(req)
     }
 
     func notifyACPQuestion(agent: AgentKind, body: String?,
                            projectId: String, worktreeId: String, sessionId: String,
-                           requestId: String) {
+                           requestId: String,
+                           owner: SessionOwnerID? = nil) {
         let content = buildContent(agent: agent, body: questionBody(body),
                                    title: "\(agent.displayName) has a question",
-                                   projectId: projectId, worktreeId: worktreeId, sessionId: sessionId)
+                                   projectId: projectId, worktreeId: worktreeId, sessionId: sessionId,
+                                   owner: owner)
         let req = UNNotificationRequest(
             identifier: "\(sessionId)-question-\(requestId)",
             content: content,
@@ -72,24 +84,47 @@ final class NotificationService {
     }
 
     func notifyHarnessFinished(agent: AgentKind, body: String?,
-                               projectId: String, worktreeId: String, sessionId: String) {
+                               projectId: String, worktreeId: String, sessionId: String,
+                               owner: SessionOwnerID? = nil) {
         guard enabled else { return }
         let content = buildContent(agent: agent, body: body ?? "Session is done.",
                                    title: "\(agent.displayName) finished",
-                                   projectId: projectId, worktreeId: worktreeId, sessionId: sessionId)
+                                   projectId: projectId, worktreeId: worktreeId, sessionId: sessionId,
+                                   owner: owner)
         let req = UNNotificationRequest(identifier: sessionId, content: content, trigger: nil)
         notificationAdder(req)
     }
 
     func notifyAlas(body: String, title: String?, agent: AgentKind,
-                    projectId: String, worktreeId: String, sessionId: String) {
+                    projectId: String, worktreeId: String, sessionId: String,
+                    owner: SessionOwnerID? = nil) {
         let content = buildContent(
             agent: agent,
             body: body,
             title: title ?? "Alas",
             projectId: projectId,
             worktreeId: worktreeId,
-            sessionId: sessionId
+            sessionId: sessionId,
+            owner: owner
+        )
+        let req = UNNotificationRequest(
+            identifier: "\(sessionId)-notify-\(UUID().uuidString)",
+            content: content,
+            trigger: nil
+        )
+        notificationAdder(req)
+    }
+
+    func notifyAlas(body: String, title: String?, agent: AgentKind,
+                    sessionId: String, owner: SessionOwnerID) {
+        let content = buildContent(
+            agent: agent,
+            body: body,
+            title: title ?? "Alas",
+            projectId: nil,
+            worktreeId: nil,
+            sessionId: sessionId,
+            owner: owner
         )
         let req = UNNotificationRequest(
             identifier: "\(sessionId)-notify-\(UUID().uuidString)",
@@ -107,16 +142,39 @@ final class NotificationService {
     }
 
     private func buildContent(agent: AgentKind, body: String, title: String,
-                              projectId: String, worktreeId: String, sessionId: String) -> UNMutableNotificationContent {
+                              projectId: String?, worktreeId: String?, sessionId: String,
+                              owner: SessionOwnerID? = nil) -> UNMutableNotificationContent {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
         content.sound = .default
-        content.userInfo = [
-            "projectId": projectId,
-            "worktreeId": worktreeId,
+        var userInfo: [String: Any] = [
             "sessionId": sessionId
         ]
+        if let projectId {
+            userInfo["projectId"] = projectId
+        }
+        if let worktreeId {
+            userInfo["worktreeId"] = worktreeId
+        }
+        if let owner {
+            switch owner {
+            case .worktree(let id):
+                userInfo["sessionOwnerKind"] = "worktree"
+                userInfo["sessionOwnerWorktreeId"] = id
+            case .workspaceCheckout(let id, let location):
+                userInfo["sessionOwnerKind"] = "workspaceCheckout"
+                userInfo["sessionOwnerCheckoutId"] = id.uuidString
+                switch location.normalized {
+                case .local:
+                    userInfo["sessionOwnerLocationKind"] = "local"
+                case .ssh(let destination):
+                    userInfo["sessionOwnerLocationKind"] = "ssh"
+                    userInfo["sessionOwnerLocationDestination"] = destination
+                }
+            }
+        }
+        content.userInfo = userInfo
         if let attachment = makeLogoAttachment(for: agent) {
             content.attachments = [attachment]
         }

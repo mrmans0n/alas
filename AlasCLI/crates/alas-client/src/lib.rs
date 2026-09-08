@@ -115,6 +115,8 @@ pub struct Response {
     pub lines: Option<Vec<String>>,
     #[serde(default)]
     pub error: Option<String>,
+    #[serde(default)]
+    pub exit_code: Option<u8>,
 }
 
 /// The parsed CLI intent, independent of transport. `Open` paths are already
@@ -187,6 +189,17 @@ pub enum Command {
         session_id: String,
         prompt: String,
     },
+    WorkspaceList,
+    WorkspaceShow {
+        checkout_id: String,
+    },
+    WorkspaceSwitch {
+        checkout_id: String,
+    },
+    WorkspaceFocus {
+        checkout_id: String,
+        member_id: String,
+    },
     Resolve,
 }
 
@@ -200,6 +213,16 @@ pub enum SessionWorktreeTarget {
         branch: String,
         base: Option<String>,
     },
+}
+
+fn is_workspace_command(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::WorkspaceList
+            | Command::WorkspaceShow { .. }
+            | Command::WorkspaceSwitch { .. }
+            | Command::WorkspaceFocus { .. }
+    )
 }
 
 /// Build the wire request for a command, attaching whichever addressing the
@@ -412,11 +435,43 @@ pub fn build_request(
             r.params = Some(serde_json::json!({ "session_id": session_id, "prompt": prompt }));
             r
         }
+        Command::WorkspaceList => {
+            let mut r = Request::new("workspace");
+            r.subcommand = Some("list".into());
+            r.params = Some(serde_json::json!({}));
+            r
+        }
+        Command::WorkspaceShow { checkout_id } => {
+            let mut r = Request::new("workspace");
+            r.subcommand = Some("show".into());
+            r.params = Some(serde_json::json!({ "checkout_id": checkout_id }));
+            r
+        }
+        Command::WorkspaceSwitch { checkout_id } => {
+            let mut r = Request::new("workspace");
+            r.subcommand = Some("switch".into());
+            r.params = Some(serde_json::json!({ "checkout_id": checkout_id }));
+            r
+        }
+        Command::WorkspaceFocus {
+            checkout_id,
+            member_id,
+        } => {
+            let mut r = Request::new("workspace");
+            r.subcommand = Some("focus".into());
+            r.params =
+                Some(serde_json::json!({ "checkout_id": checkout_id, "member_id": member_id }));
+            r
+        }
         Command::Resolve => Request::new("resolve"),
     };
     req.session_id = session_id;
     req.cwd = cwd;
     req
+}
+
+pub fn build_session_request(command: &Command, session_id: String, cwd: String) -> Request {
+    build_request(command, Some(session_id), Some(cwd))
 }
 
 /// The per-user socket directory Alas binds its `pid-<pid>` sockets under.
@@ -601,7 +656,8 @@ pub enum DispatchError {
 pub fn dispatch(command: &Command, target: &Target) -> Result<Response, DispatchError> {
     match target {
         Target::Session { socket, session_id } => {
-            let req = build_request(command, Some(session_id.clone()), None);
+            let cwd = absolutize(&logical_base(), ".");
+            let req = build_session_request(command, session_id.clone(), cwd);
             send(Path::new(socket), &req).map_err(DispatchError::Transport)
         }
         Target::Directory { .. } => {
@@ -623,6 +679,15 @@ pub fn dispatch_to_sockets(
     };
     if sockets.is_empty() {
         return Err(DispatchError::NoAlas);
+    }
+    if is_workspace_command(command) {
+        return match sockets {
+            [socket] => {
+                let req = build_request(command, None, Some(cwd.clone()));
+                send(socket, &req).map_err(DispatchError::Transport)
+            }
+            _ => Err(DispatchError::Ambiguous),
+        };
     }
 
     // Probe every live socket with a non-mutating resolve first, then send
@@ -801,9 +866,15 @@ mod tests {
     #[test]
     fn response_parses_lines_and_error_defaults() {
         let ok: Response = serde_json::from_str(r#"{"ok":true}"#).unwrap();
-        assert!(ok.ok && ok.lines.is_none() && ok.error.is_none());
+        assert!(ok.ok && ok.lines.is_none() && ok.error.is_none() && ok.exit_code.is_none());
         let err: Response = serde_json::from_str(r#"{"ok":false,"error":"nope"}"#).unwrap();
         assert_eq!(err.error.as_deref(), Some("nope"));
+        assert_eq!(err.exit_code, None);
+        let coded: Response = serde_json::from_str(
+            r#"{"ok":false,"error":"workspace_recovery_required: recover","exit_code":3}"#,
+        )
+        .unwrap();
+        assert_eq!(coded.exit_code, Some(3));
     }
 
     #[test]
@@ -837,7 +908,14 @@ mod tests {
 
     #[test]
     fn builds_review_local_and_provider() {
-        let local = build_request(&Command::Review { target: None, worktree: None }, Some("s1".into()), None);
+        let local = build_request(
+            &Command::Review {
+                target: None,
+                worktree: None,
+            },
+            Some("s1".into()),
+            None,
+        );
         assert_eq!(local.command, "review");
         assert!(local.target.is_none());
         let provider = build_request(
@@ -1016,6 +1094,49 @@ mod tests {
         assert_eq!(req.command, "resolve");
         assert_eq!(req.cwd.as_deref(), Some("/repo"));
         assert!(req.session_id.is_none());
+    }
+
+    #[test]
+    fn session_target_request_includes_logical_cwd() {
+        let req = build_session_request(&Command::Resolve, "s1".into(), "/repo/member".into());
+        assert_eq!(req.command, "resolve");
+        assert_eq!(req.session_id.as_deref(), Some("s1"));
+        assert_eq!(req.cwd.as_deref(), Some("/repo/member"));
+    }
+
+    #[test]
+    fn workspace_commands_build_versioned_requests() {
+        let checkout = "7D064822-8491-4E33-BD74-355FD2AB3330".to_string();
+        let member = "C2476427-94B2-423F-A490-568775E8B309".to_string();
+
+        let list = build_request(&Command::WorkspaceList, None, Some("/repo".into()));
+        assert_eq!(list.command, "workspace");
+        assert_eq!(list.subcommand.as_deref(), Some("list"));
+        assert_eq!(list.cwd.as_deref(), Some("/repo"));
+
+        let show = build_request(
+            &Command::WorkspaceShow {
+                checkout_id: checkout.clone(),
+            },
+            Some("s1".into()),
+            None,
+        );
+        assert_eq!(show.command, "workspace");
+        assert_eq!(show.subcommand.as_deref(), Some("show"));
+        assert_eq!(show.params.as_ref().unwrap()["checkout_id"], checkout);
+
+        let focus = build_request(
+            &Command::WorkspaceFocus {
+                checkout_id: checkout.clone(),
+                member_id: member.clone(),
+            },
+            Some("s1".into()),
+            None,
+        );
+        assert_eq!(focus.command, "workspace");
+        assert_eq!(focus.subcommand.as_deref(), Some("focus"));
+        assert_eq!(focus.params.as_ref().unwrap()["checkout_id"], checkout);
+        assert_eq!(focus.params.as_ref().unwrap()["member_id"], member);
     }
 
     #[test]

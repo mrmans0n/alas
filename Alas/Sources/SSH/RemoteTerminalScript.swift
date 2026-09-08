@@ -29,7 +29,8 @@ enum RemoteTerminalScript {
         worktreePath: String,
         sessionName: String,
         useZmx: Bool,
-        startupSuffix: String?
+        startupSuffix: String?,
+        environment: [String: String] = [:]
     ) -> String {
         let shell = shellCommand(startupSuffix: startupSuffix)
         let body: String
@@ -40,7 +41,13 @@ enum RemoteTerminalScript {
         } else {
             body = "exec \(shell)"
         }
-        return "cd \(SSHCommand.shellQuote(worktreePath)) || exit; \(body)"
+        let exports = environment
+            .filter { $0.key.hasPrefix("ALAS_WORKSPACE_") }
+            .sorted { $0.key < $1.key }
+            .map { "export \($0.key)=\(SSHCommand.shellQuote($0.value))" }
+            .joined(separator: "; ")
+        let prefix = exports.isEmpty ? "" : "\(exports); "
+        return "\(prefix)cd \(SSHCommand.shellQuote(worktreePath)) || exit; \(body)"
     }
 
     /// `-tt` forces remote pty allocation. Interactive SSH permits first-use

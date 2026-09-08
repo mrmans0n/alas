@@ -1,0 +1,315 @@
+import Foundation
+import Testing
+@testable import Alas
+
+@Suite("Workspace store")
+struct WorkspaceStoreTests {
+    @Test func missingStorageIsDistinctFromUnreadableStorage() async throws {
+        let url = temporaryURL()
+        defer { removeWorkspaceFiles(near: url) }
+        let store = WorkspaceStore(url: url)
+
+        #expect(await store.load() == .missing)
+
+        try Data("not JSON".utf8).write(to: url)
+        let unreadable = await store.load()
+        guard case .unreadable(let recovery) = unreadable else {
+            Issue.record("Expected an unreadable recovery result")
+            return
+        }
+        #expect(FileManager.default.fileExists(atPath: try #require(recovery.quarantinedFileURL).path))
+    }
+
+    @Test func checkpointWritesRoundTripAtomically() async throws {
+        let url = temporaryURL()
+        defer { removeWorkspaceFiles(near: url) }
+        let store = WorkspaceStore(url: url)
+        let state = WorkspaceStateFile(workspaces: [
+            Workspace(
+                name: "Release train",
+                executionLocation: .local,
+                createdAt: Date(timeIntervalSince1970: 1_700_000_000),
+                updatedAt: Date(timeIntervalSince1970: 1_700_000_000),
+                members: []
+            )
+        ])
+
+        try await store.checkpoint(state)
+
+        #expect(await store.load() == .loaded(state))
+        #expect(!FileManager.default.fileExists(atPath: url.appendingPathExtension("tmp").path))
+    }
+
+    @Test func concurrentStoreInstancesDoNotLoseMutations() async throws {
+        let url = temporaryURL()
+        defer { removeWorkspaceFiles(near: url) }
+        let first = WorkspaceStore(url: url)
+        let second = WorkspaceStore(url: url)
+        let count = 40
+
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for index in 0 ..< count {
+                let store = index.isMultiple(of: 2) ? first : second
+                group.addTask {
+                    try await store.mutate { state in
+                        state.workspaces.append(Workspace(
+                            name: "Workspace \(index)",
+                            executionLocation: .local,
+                            createdAt: Date(timeIntervalSince1970: TimeInterval(1_700_000_000 + index)),
+                            updatedAt: Date(timeIntervalSince1970: TimeInterval(1_700_000_000 + index)),
+                            members: []
+                        ))
+                    }
+                }
+            }
+            try await group.waitForAll()
+        }
+
+        guard case .loaded(let state) = await WorkspaceStore(url: url).load() else {
+            Issue.record("Expected loaded Workspace state")
+            return
+        }
+        #expect(state.workspaces.count == count)
+        #expect(Set(state.workspaces.map(\.name)).count == count)
+    }
+
+    @Test func ordinaryCheckpointIsBlockedAfterUnreadableStorage() async throws {
+        let url = temporaryURL()
+        defer { removeWorkspaceFiles(near: url) }
+        try Data("not JSON".utf8).write(to: url)
+        let store = WorkspaceStore(url: url)
+
+        guard case .unreadable = await store.load() else {
+            Issue.record("Expected unreadable storage")
+            return
+        }
+
+        await #expect(throws: WorkspaceStoreError.recoveryRequired) {
+            try await store.checkpoint(WorkspaceStateFile())
+        }
+    }
+
+    @Test func recoveryMarkerBlocksCheckpointAfterQuarantineAndStoreRestart() async throws {
+        let url = temporaryURL()
+        defer { removeWorkspaceFiles(near: url) }
+        try Data("not JSON".utf8).write(to: url)
+        let initialStore = WorkspaceStore(url: url)
+
+        guard case .unreadable = await initialStore.load() else {
+            Issue.record("Expected unreadable storage")
+            return
+        }
+
+        let restartedStore = WorkspaceStore(url: url)
+        await #expect(throws: WorkspaceStoreError.recoveryRequired) {
+            try await restartedStore.checkpoint(WorkspaceStateFile())
+        }
+    }
+
+    @Test func failedQuarantineReportsOriginalFileAsRetained() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-workspaces-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent("workspaces.json")
+        try Data("not JSON".utf8).write(to: url)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: directory.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: directory.path) }
+
+        let store = WorkspaceStore(url: url)
+        let result = await store.load()
+
+        guard case .unreadable(let recovery) = result else {
+            Issue.record("Expected unreadable storage")
+            return
+        }
+        #expect(recovery.quarantinedFileURL == nil)
+        #expect(recovery.originalFileURL == url)
+        #expect(FileManager.default.fileExists(atPath: url.path))
+        await #expect(throws: WorkspaceStoreError.recoveryRequired) {
+            try await store.checkpoint(WorkspaceStateFile())
+        }
+    }
+
+    @Test func discardUnreadableStateRemovesRetainedOriginalWhenQuarantineDidNotMoveIt() async throws {
+        let url = temporaryURL()
+        defer { removeWorkspaceFiles(near: url) }
+        try Data("not JSON".utf8).write(to: url)
+        let recovery = WorkspaceRecoveryState(
+            originalFilePath: url.path,
+            quarantinedFilePath: nil,
+            message: "retained original"
+        )
+        try JSONEncoder.workspace.encode(recovery).write(to: url.appendingPathExtension("recovery"))
+        let store = WorkspaceStore(url: url)
+
+        guard case .unreadable = await store.load() else {
+            Issue.record("Expected recovery marker to block loading")
+            return
+        }
+        try await store.discardUnreadableState()
+
+        #expect(await store.load() == .missing)
+        #expect(!FileManager.default.fileExists(atPath: url.path))
+        #expect(!FileManager.default.fileExists(atPath: url.appendingPathExtension("recovery").path))
+    }
+
+    @Test func unsupportedVersionIsQuarantinedAndBlocksCheckpoint() async throws {
+        let url = temporaryURL()
+        defer { removeWorkspaceFiles(near: url) }
+        try Data("""
+        {"version": 99, "workspaces": [], "checkouts": []}
+        """.utf8).write(to: url)
+        let store = WorkspaceStore(url: url)
+
+        guard case .unreadable(let recovery) = await store.load() else {
+            Issue.record("Expected unreadable storage")
+            return
+        }
+        #expect(recovery.quarantinedFileURL != nil)
+        await #expect(throws: WorkspaceStoreError.recoveryRequired) {
+            try await store.checkpoint(WorkspaceStateFile())
+        }
+    }
+
+    @Test func missingRecoverySidecarStillBlocksCheckpointFromQuarantineArtifact() async throws {
+        let url = temporaryURL()
+        defer { removeWorkspaceFiles(near: url) }
+        try Data("not JSON".utf8).write(to: url)
+        let store = WorkspaceStore(url: url)
+        guard case .unreadable(let recovery) = await store.load() else {
+            Issue.record("Expected unreadable storage")
+            return
+        }
+        try FileManager.default.removeItem(at: url.appendingPathExtension("recovery"))
+        #expect(FileManager.default.fileExists(atPath: try #require(recovery.quarantinedFileURL).path))
+
+        let restartedStore = WorkspaceStore(url: url)
+        guard case .unreadable = await restartedStore.load() else {
+            Issue.record("Expected retained quarantine to remain blocking")
+            return
+        }
+        await #expect(throws: WorkspaceStoreError.recoveryRequired) {
+            try await restartedStore.checkpoint(WorkspaceStateFile())
+        }
+    }
+
+    @Test func corruptRecoverySidecarRemainsBlocking() async throws {
+        let url = temporaryURL()
+        defer { removeWorkspaceFiles(near: url) }
+        try Data("not JSON".utf8).write(to: url)
+        let store = WorkspaceStore(url: url)
+        guard case .unreadable = await store.load() else {
+            Issue.record("Expected unreadable storage")
+            return
+        }
+        try Data("not JSON".utf8).write(to: url.appendingPathExtension("recovery"))
+
+        let restartedStore = WorkspaceStore(url: url)
+        guard case .unreadable = await restartedStore.load() else {
+            Issue.record("Expected corrupt marker to remain blocking")
+            return
+        }
+        await #expect(throws: WorkspaceStoreError.recoveryRequired) {
+            try await restartedStore.checkpoint(WorkspaceStateFile())
+        }
+    }
+
+    @Test func unversionedStateIsQuarantinedAndBlocksCheckpoint() async throws {
+        let url = temporaryURL()
+        defer { removeWorkspaceFiles(near: url) }
+        try Data("{}".utf8).write(to: url)
+        let store = WorkspaceStore(url: url)
+
+        guard case .unreadable = await store.load() else {
+            Issue.record("Expected an unversioned state to be unreadable")
+            return
+        }
+        await #expect(throws: WorkspaceStoreError.recoveryRequired) {
+            try await store.checkpoint(WorkspaceStateFile())
+        }
+    }
+
+    @Test func duplicatePersistedIdentitiesAreQuarantinedAndBlockCheckpoint() async throws {
+        let url = temporaryURL()
+        defer { removeWorkspaceFiles(near: url) }
+        let workspaceID = UUID()
+        let memberID = UUID()
+        let checkoutID = UUID()
+        let checkoutMemberID = UUID()
+        let state = WorkspaceStateFile(
+            workspaces: [
+                Workspace(
+                    id: workspaceID,
+                    name: "One",
+                    executionLocation: .local,
+                    members: [WorkspaceMember(id: memberID, projectID: "one", fallbackProjectName: "One", fallbackRepositoryRoot: "/repos/one")]
+                ),
+                Workspace(
+                    id: workspaceID,
+                    name: "Two",
+                    executionLocation: .local,
+                    members: [WorkspaceMember(projectID: "two", fallbackProjectName: "Two", fallbackRepositoryRoot: "/repos/two")]
+                ),
+            ],
+            checkouts: [
+                WorkspaceCheckout(
+                    id: checkoutID,
+                    workspaceID: workspaceID,
+                    fallbackWorkspaceName: "One",
+                    executionLocation: .local,
+                    branch: "feature/one",
+                    rootPath: "/tmp/one",
+                    members: [checkoutMember(id: checkoutMemberID, projectID: "one")]
+                ),
+                WorkspaceCheckout(
+                    id: checkoutID,
+                    workspaceID: workspaceID,
+                    fallbackWorkspaceName: "Two",
+                    executionLocation: .local,
+                    branch: "feature/two",
+                    rootPath: "/tmp/two",
+                    members: [checkoutMember(projectID: "two")]
+                ),
+            ]
+        )
+        try JSONEncoder.workspace.encode(state).write(to: url)
+        let store = WorkspaceStore(url: url)
+
+        guard case .unreadable(let recovery) = await store.load() else {
+            Issue.record("Expected duplicate identities to quarantine Workspace state")
+            return
+        }
+        #expect(recovery.message.contains("duplicateIdentity"))
+        await #expect(throws: WorkspaceStoreError.recoveryRequired) {
+            try await store.checkpoint(WorkspaceStateFile())
+        }
+    }
+
+    private func temporaryURL() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-workspaces-\(UUID().uuidString).json")
+    }
+
+    private func checkoutMember(id: UUID = UUID(), projectID: String) -> WorkspaceCheckoutMember {
+        WorkspaceCheckoutMember(
+            id: id,
+            workspaceMemberID: UUID(),
+            projectID: projectID,
+            fallbackProjectName: projectID,
+            fallbackRepositoryRoot: "/repos/\(projectID)",
+            worktreePath: "/tmp/\(projectID)",
+            availability: .available,
+            checkpoint: .setupComplete
+        )
+    }
+
+    private func removeWorkspaceFiles(near url: URL) {
+        let directory = url.deletingLastPathComponent()
+        let prefix = url.lastPathComponent
+        for entry in (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
+            where entry.lastPathComponent.hasPrefix(prefix) {
+            try? FileManager.default.removeItem(at: entry)
+        }
+    }
+}

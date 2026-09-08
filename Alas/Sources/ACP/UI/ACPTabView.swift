@@ -11,20 +11,29 @@ struct ACPTabView: View {
     let sessionId: ACPSession.ID
     let state: AppState
     let worktree: Worktree
+    var owner: SessionOwnerID? = nil
     var onStartupRecoveryReady: () -> Void = {}
 
     var body: some View {
-        if let manager = state.acpManager(for: worktree) {
+        if let manager = managerForOwnerBoundary {
             ACPManagedTabView(
                 sessionId: sessionId,
                 state: state,
                 worktree: worktree,
+                owner: owner,
                 onStartupRecoveryReady: onStartupRecoveryReady,
                 manager: manager
             )
         } else {
             unavailable
         }
+    }
+
+    private var managerForOwnerBoundary: ACPSessionManager? {
+        if let owner {
+            return state.acpManager(for: owner)
+        }
+        return state.acpManager(for: worktree)
     }
 
     private var unavailable: some View {
@@ -41,6 +50,7 @@ private struct ACPManagedTabView: View {
     let sessionId: ACPSession.ID
     let state: AppState
     let worktree: Worktree
+    let owner: SessionOwnerID?
     let onStartupRecoveryReady: () -> Void
     @ObservedObject var manager: ACPSessionManager
 
@@ -50,6 +60,7 @@ private struct ACPManagedTabView: View {
                 sessionId: sessionId,
                 state: state,
                 worktree: worktree,
+                owner: owner,
                 manager: manager,
                 session: session,
                 onStartupRecoveryReady: onStartupRecoveryReady,
@@ -98,6 +109,7 @@ private struct ACPSessionView: View {
     let sessionId: ACPSession.ID
     let state: AppState
     let worktree: Worktree
+    let owner: SessionOwnerID?
     let manager: ACPSessionManager
     @ObservedObject var session: ACPSession
     let onStartupRecoveryReady: () -> Void
@@ -138,7 +150,8 @@ private struct ACPSessionView: View {
                     manager: manager,
                     agentLookup: { state.agent(id: $0) },
                     state: state,
-                    worktree: worktree
+                    worktree: worktree,
+                    owner: owner
                 )
                 adapterBanner()
                 contextRestoreBanner()
@@ -455,16 +468,29 @@ private struct ACPSessionView: View {
                 composerActions.quote(message)
             },
             onFork: { boundary, targetAgentID in
-                state.forkACPSession(
-                    worktree: worktree,
-                    sourceSessionID: sessionId,
-                    boundary: boundary,
-                    targetAgentID: targetAgentID
-                )
+                if let owner {
+                    state.forkACPSession(
+                        owner: owner,
+                        sourceSessionID: sessionId,
+                        boundary: boundary,
+                        targetAgentID: targetAgentID
+                    )
+                } else {
+                    state.forkACPSession(
+                        worktree: worktree,
+                        sourceSessionID: sessionId,
+                        boundary: boundary,
+                        targetAgentID: targetAgentID
+                    )
+                }
             },
             onOpenForkSource: { sourceSessionID in
                 Task {
-                    await state.openExistingACPSession(sessionId: sourceSessionID)
+                    if let owner {
+                        await state.openExistingACPSession(sessionId: sourceSessionID, owner: owner)
+                    } else {
+                        await state.openExistingACPSession(sessionId: sourceSessionID)
+                    }
                 }
             },
             agentDisplayName: { agentID in

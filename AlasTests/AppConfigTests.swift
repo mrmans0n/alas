@@ -29,6 +29,18 @@ struct AppConfigTests {
         #expect(cfg.harness.notifyOnAwaiting == true)
         #expect(cfg.worktrees.rootPath == "~/.alas/worktrees")
         #expect(cfg.worktrees.branchPrefix == "feature/")
+        #expect(cfg.workspacesEnabled == false)
+    }
+
+    @Test func decodeOldConfigDefaultsWorkspacesDisabled() throws {
+        let data = try JSONEncoder().encode(AppConfig.defaults)
+        var object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        object.removeValue(forKey: "workspacesEnabled")
+
+        let oldConfig = try JSONSerialization.data(withJSONObject: object)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: oldConfig)
+
+        #expect(decoded.workspacesEnabled == false)
     }
 
     @Test func decodeOldHarnessConfigDefaultsAwaitingPingOn() throws {

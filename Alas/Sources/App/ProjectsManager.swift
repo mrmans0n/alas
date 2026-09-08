@@ -379,8 +379,10 @@ final class ProjectsManager {
 
     func setWorktreeLaunchDefaults(projectId: String, openAfterCreate: Bool, launcherMode: AppConfig.LauncherMode) {
         guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
-        projects[idx].worktreeOpenAfterCreate = openAfterCreate
-        projects[idx].worktreeDefaultLauncherMode = launcherMode
+        projects[idx].setWorktreeLaunchPreference(.init(
+            openAfterCreate: openAfterCreate,
+            launcherMode: launcherMode
+        ))
     }
 
     func setWorktreeHidden(projectId: String, path: URL, hidden: Bool) {
