@@ -264,8 +264,14 @@ struct WorktreeRowView: View {
                                             .font(.system(size: 10, weight: .medium, design: .monospaced))
                                             .foregroundColor(theme.color("fg-dim"))
                                             .frame(minWidth: 21, minHeight: 21)
-                                            .background(theme.color(isSelected ? "bg-3" : "bg-4"))
-                                            .clipShape(RoundedRectangle(cornerRadius: 5))
+                                            .background(
+                                                RoundedRectangle(cornerRadius: 6)
+                                                    .fill(theme.color(isSelected ? "bg-3" : "bg-4").opacity(0.7))
+                                            )
+                                            .overlay(
+                                                RoundedRectangle(cornerRadius: 6)
+                                                    .strokeBorder(theme.color("line"), lineWidth: 0.75)
+                                            )
                                     }
                                     .menuStyle(.borderlessButton)
                                     .help("\(summary.sessions.count - 2) more active session\(summary.sessions.count == 3 ? "" : "s")")

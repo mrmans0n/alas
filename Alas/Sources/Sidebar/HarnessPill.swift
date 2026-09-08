@@ -67,25 +67,26 @@ struct HarnessSessionBadge: View {
                 .resizable()
                 .renderingMode(.original)
                 .scaledToFit()
-                .frame(width: 15, height: 15)
+                .frame(width: 14, height: 14)
                 .frame(width: 21, height: 21)
-                .background(theme.color(isSelected ? "bg-3" : "bg-4"))
-                .clipShape(RoundedRectangle(cornerRadius: 5))
-                .overlay(alignment: .bottomTrailing) {
-                    Circle()
-                        .fill(statusColor)
-                        .frame(width: 7, height: 7)
-                        .overlay(Circle().stroke(theme.color(isSelected ? "bg-3" : "bg-4"), lineWidth: 2))
-                        .offset(x: 2, y: 2)
-                }
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(theme.color(isSelected ? "bg-3" : "bg-4").opacity(0.7))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .strokeBorder(borderColor, lineWidth: 0.75)
+                )
         }
         .buttonStyle(.plain)
         .help(tooltip)
         .accessibilityLabel(tooltip)
     }
 
-    private var statusColor: Color {
-        theme.color(session.state == .running ? "add" : "mod")
+    private var borderColor: Color {
+        session.state == .running
+            ? theme.color("line")
+            : theme.color("caution").opacity(0.55)
     }
 
     private var tooltip: String {
