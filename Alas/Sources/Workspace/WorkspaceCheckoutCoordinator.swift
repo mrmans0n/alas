@@ -1390,13 +1390,21 @@ actor WorkspaceCheckoutCoordinator {
             }
             try await runSetupThrowing(member: plan, checkout: checkout)
         } catch {
+            let recoveryError = error as? WorkspaceCheckoutCoordinatorError
+            let returnedWorktreeMatchesLineage = if recoveryError == .completedWorktreeReturned,
+                                                    let member = checkout.members.first(where: { $0.id == plan.checkoutMemberID }),
+                                                    let cleanupPlan = makeCleanupPlan(checkout: checkout, member: member),
+                                                    case .exactLineage(let lineageID) = await lifecycle.verifyCleanup(cleanupPlan) {
+                lineageID == cleanupPlan.expectedLineageID
+            } else {
+                false
+            }
             try? await store.mutate { state in
                 guard let checkoutIndex = state.checkouts.firstIndex(where: { $0.id == checkout.id }),
                       let memberIndex = state.checkouts[checkoutIndex].members.firstIndex(where: { $0.id == plan.checkoutMemberID })
                 else { throw WorkspaceCheckoutCoordinatorError.checkoutMissing }
                 if preservesCompletedMemberOnLockedRegistration,
-                   let recoveryError = error as? WorkspaceCheckoutCoordinatorError,
-                   recoveryError == .lockedStaleRegistration || recoveryError == .completedWorktreeReturned {
+                   recoveryError == .lockedStaleRegistration || returnedWorktreeMatchesLineage {
                     state.checkouts[checkoutIndex].members[memberIndex].checkpoint = .setupComplete
                     state.checkouts[checkoutIndex].members[memberIndex].availability = .missing
                     state.checkouts[checkoutIndex].members[memberIndex].recreationSourceCheckpoint = nil
