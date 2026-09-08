@@ -247,8 +247,10 @@ struct WorktreeRowView: View {
                                     )
                                 }
                                 if summary.sessions.count > 2 {
+                                    let hiddenSessions = Array(summary.sessions.dropFirst(2))
+                                    let overflowState: HarnessService.AggregatedState = hiddenSessions.contains { $0.state == .running } ? .running : .awaiting
                                     Menu {
-                                        ForEach(summary.sessions.dropFirst(2)) { session in
+                                        ForEach(hiddenSessions) { session in
                                             Button {
                                                 onActivateHarness(session.id)
                                             } label: {
@@ -264,14 +266,7 @@ struct WorktreeRowView: View {
                                             .font(.system(size: 10, weight: .medium, design: .monospaced))
                                             .foregroundColor(theme.color("fg-dim"))
                                             .frame(minWidth: 21, minHeight: 21)
-                                            .background(
-                                                RoundedRectangle(cornerRadius: 6)
-                                                    .fill(theme.color(isSelected ? "bg-3" : "bg-4").opacity(0.7))
-                                            )
-                                            .overlay(
-                                                RoundedRectangle(cornerRadius: 6)
-                                                    .strokeBorder(theme.color("line"), lineWidth: 0.75)
-                                            )
+                                            .modifier(HarnessSessionBadgeChrome(state: overflowState, isSelected: isSelected))
                                     }
                                     .menuStyle(.borderlessButton)
                                     .help("\(summary.sessions.count - 2) more active session\(summary.sessions.count == 3 ? "" : "s")")

@@ -69,27 +69,58 @@ struct HarnessSessionBadge: View {
                 .scaledToFit()
                 .frame(width: 14, height: 14)
                 .frame(width: 21, height: 21)
-                .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(theme.color(isSelected ? "bg-3" : "bg-4").opacity(0.7))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .strokeBorder(borderColor, lineWidth: 0.75)
-                )
+                .modifier(HarnessSessionBadgeChrome(state: session.state, isSelected: isSelected))
         }
         .buttonStyle(.plain)
         .help(tooltip)
         .accessibilityLabel(tooltip)
     }
 
-    private var borderColor: Color {
-        session.state == .running
-            ? theme.color("line")
-            : theme.color("caution").opacity(0.55)
-    }
-
     private var tooltip: String {
         "\(session.agent.displayName) · \(session.state == .running ? "running" : "waiting")"
+    }
+}
+
+struct HarnessSessionBadgeChrome: ViewModifier {
+    let state: HarnessService.AggregatedState
+    var isSelected = false
+
+    @Environment(\.theme) private var theme
+
+    func body(content: Content) -> some View {
+        content
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(fillColor)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(borderColor, lineWidth: 0.75)
+            )
+            .overlay {
+                if state == .running {
+                    RoundedRectangle(cornerRadius: 6)
+                        .strokeBorder(theme.color("add").opacity(0.20), lineWidth: 2)
+                        .blur(radius: 2)
+                }
+            }
+    }
+
+    private var fillColor: Color {
+        switch state {
+        case .running:
+            return theme.color("add").opacity(isSelected ? 0.12 : 0.08)
+        case .awaiting:
+            return theme.color("caution").opacity(isSelected ? 0.14 : 0.10)
+        }
+    }
+
+    private var borderColor: Color {
+        switch state {
+        case .running:
+            return theme.color("add").opacity(0.55)
+        case .awaiting:
+            return theme.color("caution").opacity(0.60)
+        }
     }
 }
