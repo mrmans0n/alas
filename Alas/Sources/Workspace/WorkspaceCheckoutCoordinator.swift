@@ -1776,7 +1776,7 @@ struct WorkspaceFrozenGitOperator: WorkspaceGitOperating {
         }
     }
 
-    private static func pathEntryExistsOrIsSymlink(_ path: String) -> Bool {
+    static func pathEntryExistsOrIsSymlink(_ path: String) -> Bool {
         if FileManager.default.fileExists(atPath: path) { return true }
         return (try? FileManager.default.destinationOfSymbolicLink(atPath: path)) != nil
     }
@@ -1872,6 +1872,9 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
                 let unlock = try await Process.git(["worktree", "unlock", destination.path], cwd: repo, usesRemoteHostRegistry: false)
                 guard unlock.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(unlock.stderr) }
             }
+            guard WorkspaceFrozenGitOperator.pathEntryExistsOrIsSymlink(destination.path) == false else {
+                throw WorkspaceCheckoutCoordinatorError.completedWorktreeReturned
+            }
             let remove = try await Process.git(
                 ["worktree", "remove", "-f", "-f", "--", destination.path],
                 cwd: repo,
@@ -1892,6 +1895,12 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
                 let unlock = try await remote.run(host: host, command: "git -C \(repo) worktree unlock -- \(SSHCommand.shellQuote(plan.worktreePath))")
                 guard unlock.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(unlock.stderr) }
             }
+            let destination = SSHCommand.shellQuote(plan.worktreePath)
+            let exists = try await remote.run(host: host, command: "p=\(destination); test -e \"$p\" || test -L \"$p\"")
+            if exists.exitCode == 0 {
+                throw WorkspaceCheckoutCoordinatorError.completedWorktreeReturned
+            }
+            guard exists.exitCode == 1 else { throw WorktreeService.WorktreeError.gitFailed(exists.stderr) }
             let remove = try await remote.run(
                 host: host,
                 command: "git -C \(repo) worktree remove -f -f -- \(SSHCommand.shellQuote(plan.worktreePath))"

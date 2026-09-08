@@ -702,6 +702,7 @@ struct WorkspaceCheckoutLifecycleTests {
     @Test func concreteRemoteCleanupRemovesOnlyTheTargetStaleRegistration() async throws {
         let runner = RemoteLifecycleRunner(results: [
             .init(exitCode: 0, stdout: "worktree /checkout/a\nprunable gitdir file points to non-existent location\n", stderr: ""),
+            .init(exitCode: 1, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
         ])
@@ -717,6 +718,23 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(commands.contains("worktree remove -f -f --"))
         #expect(commands.contains("/checkout/a"))
         #expect(commands.contains("worktree prune") == false)
+    }
+
+    @Test func concreteRemoteCleanupRetainsAWorktreeThatReturnsBeforeTargetedRemoval() async throws {
+        let runner = RemoteLifecycleRunner(results: [
+            .init(exitCode: 0, stdout: "worktree /checkout/a\nprunable gitdir file points to non-existent location\n", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+        ])
+        let lifecycle = WorkspaceCheckoutLifecycleOperator(remote: .init { executable, args, timeout in
+            try await runner.run(executable: executable, args: args, timeout: timeout)
+        })
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.completedWorktreeReturned) {
+            try await lifecycle.clearStaleRegistration(Self.sshCleanupPlan())
+        }
+
+        let commands = await runner.commands.joined(separator: "\n")
+        #expect(commands.contains("worktree remove -f -f --") == false)
     }
 
     @Test func concreteRemoteCleanupRetainsLockedMissingWorktreeRegistration() async throws {
@@ -740,6 +758,7 @@ struct WorkspaceCheckoutLifecycleTests {
         let runner = RemoteLifecycleRunner(results: [
             .init(exitCode: 0, stdout: "worktree /checkout/a\nlocked portable volume\nprunable gitdir file points to non-existent location\n", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 1, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
         ])
