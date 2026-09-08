@@ -53,3 +53,42 @@ struct HarnessPill: View {
         }
     }
 }
+
+struct HarnessSessionBadge: View {
+    let session: HarnessService.WorktreeHarnessSession
+    let onActivate: () -> Void
+    var isSelected = false
+
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        Button(action: onActivate) {
+            Image(session.agent.logoAssetName)
+                .resizable()
+                .renderingMode(.original)
+                .scaledToFit()
+                .frame(width: 15, height: 15)
+                .frame(width: 21, height: 21)
+                .background(theme.color(isSelected ? "bg-3" : "bg-4"))
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+                .overlay(alignment: .bottomTrailing) {
+                    Circle()
+                        .fill(statusColor)
+                        .frame(width: 7, height: 7)
+                        .overlay(Circle().stroke(theme.color(isSelected ? "bg-3" : "bg-4"), lineWidth: 2))
+                        .offset(x: 2, y: 2)
+                }
+        }
+        .buttonStyle(.plain)
+        .help(tooltip)
+        .accessibilityLabel(tooltip)
+    }
+
+    private var statusColor: Color {
+        theme.color(session.state == .running ? "add" : "mod")
+    }
+
+    private var tooltip: String {
+        "\(session.agent.displayName) · \(session.state == .running ? "running" : "waiting")"
+    }
+}

@@ -79,7 +79,7 @@ struct RepoGroupViewLayoutTests {
             onDelete: { _ in },
             onDeleteKeepBranch: { _ in },
             showKeepBranchOption: false,
-            onActivateHarness: { _ in },
+            onActivateHarness: { _, _ in },
             onCopyError: { _ in },
             onRetryCreate: { _ in },
             onRetryDelete: { _ in },

@@ -48,6 +48,7 @@ struct WorktreeRowHeightTests {
     @Test func rowHeightIsStableWithAndWithoutBadge() throws {
         let withoutBadge = try renderHeight(harnessSummary: nil)
         let withBadge = try renderHeight(harnessSummary: .init(
+            sessions: [.init(id: "s1", state: .running, agent: .claude)],
             state: .running,
             agent: .claude,
             primarySessionId: "s1",
@@ -60,6 +61,7 @@ struct WorktreeRowHeightTests {
 
     @Test func rowHeightIsStableAcrossBadgeStates() throws {
         let running = try renderHeight(harnessSummary: .init(
+            sessions: [.init(id: "s1", state: .running, agent: .claude)],
             state: .running,
             agent: .claude,
             primarySessionId: "s1",
@@ -67,6 +69,7 @@ struct WorktreeRowHeightTests {
             awaitingSessionCount: 0
         ))
         let awaiting = try renderHeight(harnessSummary: .init(
+            sessions: [.init(id: "s1", state: .awaiting, agent: .claude)],
             state: .awaiting,
             agent: .claude,
             primarySessionId: "s1",
@@ -141,7 +144,7 @@ struct WorktreeRowHeightTests {
             onDelete: {},
             onDeleteKeepBranch: {},
             showKeepBranchOption: false,
-            onActivateHarness: {},
+            onActivateHarness: { _ in },
             onCopyError: { _ in },
             onRemoveFailed: {},
             onRetryCreate: {},

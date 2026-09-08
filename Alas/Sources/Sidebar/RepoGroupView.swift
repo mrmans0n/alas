@@ -37,7 +37,7 @@ struct RepoGroupView: View {
     let onDelete: (Worktree) -> Void
     let onDeleteKeepBranch: (Worktree) -> Void
     let showKeepBranchOption: Bool
-    let onActivateHarness: (Worktree) -> Void
+    let onActivateHarness: (Worktree, String) -> Void
     let onCopyError: (String) -> Void
     let onRetryCreate: (Worktree) -> Void
     let onRetryDelete: (Worktree) -> Void
@@ -177,7 +177,7 @@ struct RepoGroupView: View {
                             onDelete: { onDelete(wt) },
                             onDeleteKeepBranch: { onDeleteKeepBranch(wt) },
                             showKeepBranchOption: showKeepBranchOption,
-                            onActivateHarness: { onActivateHarness(wt) },
+                            onActivateHarness: { sessionId in onActivateHarness(wt, sessionId) },
                             onCopyError: onCopyError,
                             onRemoveFailed: { onRemoveFailed(wt) },
                             onRetryCreate: { onRetryCreate(wt) },

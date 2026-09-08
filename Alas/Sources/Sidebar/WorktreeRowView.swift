@@ -111,7 +111,7 @@ struct WorktreeRowView: View {
     let onDelete: () -> Void
     let onDeleteKeepBranch: () -> Void
     let showKeepBranchOption: Bool
-    let onActivateHarness: () -> Void
+    let onActivateHarness: (String) -> Void
     let onCopyError: (String) -> Void
     let onRemoveFailed: () -> Void
     let onRetryCreate: () -> Void
@@ -238,15 +238,42 @@ struct WorktreeRowView: View {
                         }
                         if let summary = harnessSummary {
                             Spacer()
-                            Button(action: onActivateHarness) {
-                                HarnessPill(
-                                    summary: summary,
-                                    variant: .full,
-                                    tooltip: pillTooltip(for: summary),
-                                    isSelected: isSelected
-                                )
+                            HStack(spacing: 4) {
+                                ForEach(summary.sessions.prefix(2)) { session in
+                                    HarnessSessionBadge(
+                                        session: session,
+                                        onActivate: { onActivateHarness(session.id) },
+                                        isSelected: isSelected
+                                    )
+                                }
+                                if summary.sessions.count > 2 {
+                                    Menu {
+                                        ForEach(summary.sessions.dropFirst(2)) { session in
+                                            Button {
+                                                onActivateHarness(session.id)
+                                            } label: {
+                                                Label {
+                                                    Text("\(session.agent.displayName) · \(session.state == .running ? "running" : "waiting")")
+                                                } icon: {
+                                                    Image(nsImage: AgentLogoView.menuImage(for: session.agent, size: 14))
+                                                }
+                                            }
+                                        }
+                                    } label: {
+                                        Text("+\(summary.sessions.count - 2)")
+                                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                            .foregroundColor(theme.color("fg-dim"))
+                                            .frame(minWidth: 21, minHeight: 21)
+                                            .background(theme.color(isSelected ? "bg-3" : "bg-4"))
+                                            .clipShape(RoundedRectangle(cornerRadius: 5))
+                                    }
+                                    .menuStyle(.borderlessButton)
+                                    .help("\(summary.sessions.count - 2) more active session\(summary.sessions.count == 3 ? "" : "s")")
+                                    .accessibilityLabel("\(summary.sessions.count - 2) more active sessions")
+                                }
                             }
-                            .buttonStyle(.plain)
+                            .accessibilityElement(children: .contain)
+                            .accessibilityLabel("Active agent sessions")
                         }
                     }
                     .frame(minHeight: 18)
@@ -337,15 +364,6 @@ struct WorktreeRowView: View {
 
     private func relative(_ date: Date) -> String {
         Self.relativeDateFormatter.localizedString(for: date, relativeTo: Date())
-    }
-
-    private func pillTooltip(for summary: HarnessService.WorktreeHarnessSummary) -> String {
-        let stateText: String
-        switch summary.state {
-        case .running:  stateText = "running"
-        case .awaiting: stateText = "awaiting"
-        }
-        return "\(summary.agent.displayName) · \(stateText)"
     }
 
     private static let relativeDateFormatter: RelativeDateTimeFormatter = {
