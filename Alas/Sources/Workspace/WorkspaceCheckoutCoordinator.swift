@@ -1956,23 +1956,13 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
             let destination = URL(fileURLWithPath: plan.worktreePath)
             var registrations = try await Process.git(["worktree", "list", "--porcelain"], cwd: repo, usesRemoteHostRegistry: false)
             guard registrations.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(registrations.stderr) }
-            if unlockLocked,
-               let tombstone = try await Self.staleRegistrationTombstoneIfPresent(repo: repo, destination: destination) {
-                guard Self.staleRegistrationTombstoneLineageID(tombstone) == plan.expectedLineageID,
-                      Self.staleRegistrationLineageID(tombstone) == plan.expectedLineageID
-                else { throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict }
-                try FileManager.default.removeItem(at: tombstone)
-                try? FileManager.default.removeItem(at: tombstone.deletingLastPathComponent())
-            }
-            if !unlockLocked {
-                try await Self.recoverLocalInterruptedStaleRegistrationTombstone(
-                    repo: repo,
-                    destination: destination,
-                    expectedLineageID: plan.expectedLineageID
-                )
-                registrations = try await Process.git(["worktree", "list", "--porcelain"], cwd: repo, usesRemoteHostRegistry: false)
-                guard registrations.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(registrations.stderr) }
-            }
+            try await Self.recoverLocalInterruptedStaleRegistrationTombstone(
+                repo: repo,
+                destination: destination,
+                expectedLineageID: plan.expectedLineageID
+            )
+            registrations = try await Process.git(["worktree", "list", "--porcelain"], cwd: repo, usesRemoteHostRegistry: false)
+            guard registrations.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(registrations.stderr) }
             guard Self.porcelainContainsWorktree(registrations.stdout, path: plan.worktreePath) else { return }
             if Self.porcelainWorktreeIsLocked(registrations.stdout, path: plan.worktreePath) {
                 guard unlockLocked else { throw WorkspaceCheckoutCoordinatorError.lockedStaleRegistration }
@@ -2012,38 +2002,20 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
             let repo = SSHCommand.shellQuote(plan.sourceRepositoryPath)
             var registrations = try await remote.run(host: host, command: "git -C \(repo) worktree list --porcelain")
             guard registrations.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(registrations.stderr) }
-            if unlockLocked {
-                let cleanup = try await remote.run(
-                    host: host,
-                    command: Self.remoteFinalizeStaleRegistrationCleanupCommand(plan)
-                )
-                switch cleanup.exitCode {
-                case 0:
-                    break
-                case 13:
-                    throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict
-                default:
-                    throw WorktreeService.WorktreeError.gitFailed(cleanup.stderr)
-                }
-                registrations = try await remote.run(host: host, command: "git -C \(repo) worktree list --porcelain")
-                guard registrations.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(registrations.stderr) }
+            let recovery = try await remote.run(
+                host: host,
+                command: Self.remoteInterruptedStaleRegistrationTombstoneRecoveryCommand(plan)
+            )
+            switch recovery.exitCode {
+            case 0:
+                break
+            case 13:
+                throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict
+            default:
+                throw WorktreeService.WorktreeError.gitFailed(recovery.stderr)
             }
-            if !unlockLocked {
-                let recovery = try await remote.run(
-                    host: host,
-                    command: Self.remoteInterruptedStaleRegistrationTombstoneRecoveryCommand(plan)
-                )
-                switch recovery.exitCode {
-                case 0:
-                    break
-                case 13:
-                    throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict
-                default:
-                    throw WorktreeService.WorktreeError.gitFailed(recovery.stderr)
-                }
-                registrations = try await remote.run(host: host, command: "git -C \(repo) worktree list --porcelain")
-                guard registrations.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(registrations.stderr) }
-            }
+            registrations = try await remote.run(host: host, command: "git -C \(repo) worktree list --porcelain")
+            guard registrations.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(registrations.stderr) }
             guard Self.porcelainContainsWorktree(registrations.stdout, path: plan.worktreePath) else { return }
             if Self.porcelainWorktreeIsLocked(registrations.stdout, path: plan.worktreePath) {
                 guard unlockLocked else { throw WorkspaceCheckoutCoordinatorError.lockedStaleRegistration }
