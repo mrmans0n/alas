@@ -737,6 +737,9 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(Self.porcelainOutput(registrations.stdout, containsWorktree: target.path) == false)
         #expect(Self.porcelainOutput(registrations.stdout, containsWorktree: unrelated.path))
         #expect(FileManager.default.fileExists(atPath: unrelated.path))
+        #expect(try Self.tombstoneAdminDirectories(repo: repo).count == 1)
+        try await lifecycle.finalizeStaleRegistrationCleanup(plan)
+        #expect(try Self.tombstoneAdminDirectories(repo: repo).isEmpty)
         plan.worktreePath = unrelated.path
         await #expect(throws: WorkspaceCheckoutCoordinatorError.completedWorktreeReturned) {
             try await lifecycle.clearStaleRegistration(plan)
@@ -793,8 +796,15 @@ struct WorkspaceCheckoutLifecycleTests {
         try await Self.runGit(["worktree", "add", target.path], cwd: repo)
         _ = WorktreeService.localLineageID(forWorktreeAt: target, candidateID: "lineage")
         let admin = try await Self.registeredAdminDirectory(repo: repo, worktree: target)
-        let tombstone = admin.deletingLastPathComponent().appendingPathComponent("\(admin.lastPathComponent).alas-removing-test")
+        let tombstoneRoot = repo.appendingPathComponent(".git/alas-stale-worktree-tombstones", isDirectory: true)
+        try FileManager.default.createDirectory(at: tombstoneRoot, withIntermediateDirectories: true)
+        let tombstone = tombstoneRoot.appendingPathComponent("\(admin.lastPathComponent).alas-removing-test")
         try FileManager.default.moveItem(at: admin, to: tombstone)
+        try "lineage\n".write(
+            to: tombstone.appendingPathComponent("alas-stale-registration-tombstone"),
+            atomically: true,
+            encoding: .utf8
+        )
         let lifecycle = WorkspaceCheckoutLifecycleOperator()
 
         await #expect(throws: WorkspaceCheckoutCoordinatorError.completedWorktreeReturned) {
@@ -805,6 +815,37 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(FileManager.default.fileExists(atPath: tombstone.path) == false)
     }
 
+    @Test func concreteLocalCleanupIgnoresUnmarkedAdminNamesContainingTombstoneText() async throws {
+        let temp = FileManager.default.temporaryDirectory
+        let canonicalTemp = temp.path.hasPrefix("/var/")
+            ? URL(fileURLWithPath: "/private\(temp.path)", isDirectory: true)
+            : temp.resolvingSymlinksInPath()
+        let root = canonicalTemp
+            .appendingPathComponent("alas-lifecycle-\(UUID().uuidString)", isDirectory: true)
+        let repo = root.appendingPathComponent("repo", isDirectory: true)
+        let target = root.appendingPathComponent("foo.alas-removing-bar", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try await Self.runGit(["init", repo.path], cwd: root)
+        try await Self.runGit(["config", "user.email", "test@example.com"], cwd: repo)
+        try await Self.runGit(["config", "user.name", "Test"], cwd: repo)
+        try "a\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        try await Self.runGit(["add", "a.txt"], cwd: repo)
+        try await Self.runGit(["commit", "-m", "init"], cwd: repo)
+        try await Self.runGit(["worktree", "add", target.path], cwd: repo)
+        _ = WorktreeService.localLineageID(forWorktreeAt: target, candidateID: "lineage")
+        let admin = try await Self.registeredAdminDirectory(repo: repo, worktree: target)
+        let incorrectlyRestored = admin.deletingLastPathComponent().appendingPathComponent("foo")
+        let lifecycle = WorkspaceCheckoutLifecycleOperator()
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.completedWorktreeReturned) {
+            try await lifecycle.clearStaleRegistration(Self.localCleanupPlan(repo: repo.path, worktree: target.path))
+        }
+
+        #expect(FileManager.default.fileExists(atPath: admin.path))
+        #expect(FileManager.default.fileExists(atPath: incorrectlyRestored.path) == false)
+    }
+
     @Test func concreteRemoteCleanupRemovesOnlyTheTargetStaleRegistration() async throws {
         let runner = RemoteLifecycleRunner(results: [
             .init(exitCode: 0, stdout: "worktree /checkout/a\nprunable gitdir file points to non-existent location\n", stderr: ""),
@@ -813,18 +854,22 @@ struct WorkspaceCheckoutLifecycleTests {
             .init(exitCode: 1, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
         ])
         let lifecycle = WorkspaceCheckoutLifecycleOperator(remote: .init { executable, args, timeout in
             try await runner.run(executable: executable, args: args, timeout: timeout)
         })
 
-        try await lifecycle.clearStaleRegistration(Self.sshCleanupPlan())
+        let plan = Self.sshCleanupPlan()
+        try await lifecycle.clearStaleRegistration(plan)
+        try await lifecycle.finalizeStaleRegistrationCleanup(plan)
 
         let commands = await runner.commands.joined(separator: "\n")
         #expect(commands.contains("worktree list --porcelain"))
         #expect(commands.contains("/checkout/a"))
         #expect(commands.contains("rev-parse --git-common-dir"))
         #expect(commands.contains(".alas-removing"))
+        #expect(commands.contains("alas-stale-registration-tombstone"))
         #expect(commands.contains("worktree remove -f -f --") == false)
         #expect(commands.contains("/checkout/a"))
         #expect(commands.contains("worktree prune") == false)
@@ -933,6 +978,8 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(commands.contains("restored_base=${base%%.alas-removing-*}"))
         #expect(commands.contains("restored=\"$parent/$restored_base\""))
         #expect(commands.contains("restored=${found%%.alas-removing-*}") == false)
+        #expect(commands.contains("alas-stale-registration-tombstone"))
+        #expect(commands.contains("[ -s \"$marker\" ] || exit 0"))
         #expect(commands.contains("worktree remove -f -f") == false)
     }
 
@@ -1073,6 +1120,15 @@ struct WorkspaceCheckoutLifecycleTests {
             throw WorktreeService.WorktreeError.gitFailed(result.stderr)
         }
         return URL(fileURLWithPath: result.stdout.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    private static func tombstoneAdminDirectories(repo: URL) throws -> [URL] {
+        let tombstonesDir = repo.appendingPathComponent(".git/alas-stale-worktree-tombstones")
+        let entries = (try? FileManager.default.contentsOfDirectory(at: tombstonesDir, includingPropertiesForKeys: nil)) ?? []
+        return entries.filter {
+            $0.lastPathComponent.contains(".alas-removing-")
+                && FileManager.default.fileExists(atPath: $0.appendingPathComponent("alas-stale-registration-tombstone").path)
+        }
     }
 
     private static func porcelainOutput(_ output: String, containsWorktree path: String) -> Bool {
