@@ -1877,11 +1877,11 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
             guard result.exitCode == 0 else { return false }
             let recheckedOut = try await Process.git(["worktree", "list", "--porcelain"], cwd: repo, usesRemoteHostRegistry: false)
             guard recheckedOut.exitCode == 0 else {
-                _ = try await Process.git(["update-ref", branchRef, branchCommit, Self.nullObjectID], cwd: repo, usesRemoteHostRegistry: false)
+                try await Self.restoreBranch(branchRef, at: branchCommit, repo: repo)
                 return false
             }
             guard !recheckedOut.stdout.split(separator: "\n").contains(where: { $0 == "branch \(branchRef)" }) else {
-                _ = try await Process.git(["update-ref", branchRef, branchCommit, Self.nullObjectID], cwd: repo, usesRemoteHostRegistry: false)
+                try await Self.restoreBranch(branchRef, at: branchCommit, repo: repo)
                 return false
             }
             return true
@@ -1905,14 +1905,34 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
             guard recheckedUsage.exitCode == 0,
                   !recheckedUsage.stdout.split(separator: "\n").contains(where: { $0 == "branch \(branchRef)" })
             else {
-                _ = try await remote.run(host: host, command: "git -C \(repo) update-ref \(branch) \(expected) \(Self.nullObjectID)")
+                let objectFormat = try? await remote.run(host: host, command: "git -C \(repo) rev-parse --show-object-format")
+                let nullObjectID = Self.nullObjectID(
+                    objectFormat: objectFormat?.exitCode == 0 ? objectFormat?.stdout : nil,
+                    fallbackCommit: branchCommit
+                )
+                _ = try await remote.run(host: host, command: "git -C \(repo) update-ref \(branch) \(expected) \(nullObjectID)")
                 return false
             }
             return true
         }
     }
 
-    private static let nullObjectID = "0000000000000000000000000000000000000000"
+    private static func restoreBranch(_ branchRef: String, at commit: String, repo: URL) async throws {
+        let objectFormat = try? await Process.git(["rev-parse", "--show-object-format"], cwd: repo, usesRemoteHostRegistry: false)
+        let nullObjectID = nullObjectID(
+            objectFormat: objectFormat?.exitCode == 0 ? objectFormat?.stdout : nil,
+            fallbackCommit: commit
+        )
+        _ = try await Process.git(["update-ref", branchRef, commit, nullObjectID], cwd: repo, usesRemoteHostRegistry: false)
+    }
+
+    private static func nullObjectID(objectFormat: String?, fallbackCommit: String) -> String {
+        switch objectFormat?.trimmingCharacters(in: .whitespacesAndNewlines) {
+        case "sha256": return String(repeating: "0", count: 64)
+        case "sha1": return String(repeating: "0", count: 40)
+        default: return String(repeating: "0", count: fallbackCommit.count)
+        }
+    }
 
     func removeCheckoutRootArtifacts(for checkout: WorkspaceCheckout) async throws {
         switch checkout.executionLocation.normalized {

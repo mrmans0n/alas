@@ -764,6 +764,7 @@ struct WorkspaceCheckoutLifecycleTests {
             .init(exitCode: 0, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "worktree /other\nbranch refs/heads/feature\n", stderr: ""),
+            .init(exitCode: 0, stdout: "sha256\n", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
         ])
         let lifecycle = WorkspaceCheckoutLifecycleOperator(remote: .init { executable, args, timeout in
@@ -775,7 +776,8 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(removed == false)
         let commands = await runner.commands.joined(separator: "\n")
         #expect(commands.contains("update-ref -d"))
-        #expect(commands.contains("update-ref refs/heads/feature abc 0000000000000000000000000000000000000000"))
+        #expect(commands.contains("rev-parse --show-object-format"))
+        #expect(commands.contains("update-ref refs/heads/feature abc 0000000000000000000000000000000000000000000000000000000000000000"))
     }
 
     private static func sshCleanupPlan() -> WorkspaceCheckoutCleanupPlan {
