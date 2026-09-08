@@ -929,6 +929,10 @@ struct WorkspaceCheckoutLifecycleTests {
 
         let commands = await runner.commands.joined(separator: "\n")
         #expect(commands.contains(".alas-removing-"))
+        #expect(commands.contains("base=${found##*/}"))
+        #expect(commands.contains("restored_base=${base%%.alas-removing-*}"))
+        #expect(commands.contains("restored=\"$parent/$restored_base\""))
+        #expect(commands.contains("restored=${found%%.alas-removing-*}") == false)
         #expect(commands.contains("worktree remove -f -f") == false)
     }
 
