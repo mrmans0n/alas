@@ -1345,10 +1345,25 @@ actor WorkspaceCheckoutCoordinator {
             branchIntent: .init(plan.branchIntent, baseCommit: plan.baseCommit),
             expectedLineageID: expectedLineageID(checkoutID: checkout.id, memberID: plan.checkoutMemberID)
         )
+        var restoredCompletedMember = false
         do {
             try await projectMutationGate.withMutation(projectID: plan.projectID) {
                 if let staleRegistrationCleanup {
                     try await self.lifecycle.recoverStaleRegistrationCleanup(staleRegistrationCleanup)
+                    if preservesCompletedMemberOnLockedRegistration,
+                       try await self.git.frozenWorktreeIsMissing(operation) == false,
+                       case .exactLineage(let lineageID) = await self.lifecycle.verifyCleanup(staleRegistrationCleanup),
+                       lineageID == staleRegistrationCleanup.expectedLineageID {
+                        try await self.updateMember(checkoutID: checkout.id, memberID: plan.checkoutMemberID) { member in
+                            member.checkpoint = .setupComplete
+                            member.availability = .available
+                            member.gitLineageID = lineageID
+                            member.recreationSourceCheckpoint = nil
+                            member.recreationWorktreeCreationBegan = false
+                        }
+                        restoredCompletedMember = true
+                        return
+                    }
                     guard try await self.git.preparedBranchMatchesFrozenBase(operation) else {
                         throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict
                     }
@@ -1413,6 +1428,7 @@ actor WorkspaceCheckoutCoordinator {
                     )
                 }
             }
+            guard restoredCompletedMember == false else { return }
             try await runSetupThrowing(member: plan, checkout: checkout)
         } catch {
             let recoveryError = error as? WorkspaceCheckoutCoordinatorError
@@ -2255,10 +2271,9 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
     }
 
     private static func gitdirPathAliases(for destination: URL) -> Set<String> {
-        var aliases = Set([
-            destination.appendingPathComponent(".git").standardizedFileURL.path,
-            destination.resolvingSymlinksInPath().appendingPathComponent(".git").standardizedFileURL.path,
-        ])
+        var aliases = Set(pathAliases(for: destination).map {
+            URL(fileURLWithPath: $0).appendingPathComponent(".git").standardizedFileURL.path
+        })
         for path in Array(aliases) {
             if path.hasPrefix("/private/var/") {
                 aliases.insert(String(path.dropFirst("/private".count)))
@@ -2320,16 +2335,49 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
     }
 
     private static func porcelainWorktreeEntry(_ porcelain: String, path: String) -> [Substring]? {
+        let expectedPaths = porcelainWorktreePathAliases(for: path)
         var current: [Substring] = []
         for line in porcelain.split(separator: "\n", omittingEmptySubsequences: false) {
             if line.hasPrefix("worktree ") {
-                if current.first == "worktree \(path)" { return current }
+                if let worktreePath = current.first?.dropFirst("worktree ".count),
+                   expectedPaths.contains(String(worktreePath)) {
+                    return current
+                }
                 current = [line]
             } else if !current.isEmpty {
                 current.append(line)
             }
         }
-        return current.first == "worktree \(path)" ? current : nil
+        guard let worktreePath = current.first?.dropFirst("worktree ".count),
+              expectedPaths.contains(String(worktreePath))
+        else { return nil }
+        return current
+    }
+
+    private static func porcelainWorktreePathAliases(for path: String) -> Set<String> {
+        var aliases = pathAliases(for: URL(fileURLWithPath: path))
+        for alias in Array(aliases) {
+            if alias.hasPrefix("/private/var/") {
+                aliases.insert(String(alias.dropFirst("/private".count)))
+            } else if alias.hasPrefix("/var/") {
+                aliases.insert("/private\(alias)")
+            }
+        }
+        return aliases
+    }
+
+    private static func pathAliases(for url: URL) -> Set<String> {
+        let standardized = url.standardizedFileURL
+        let resolvedParent = standardized
+            .deletingLastPathComponent()
+            .resolvingSymlinksInPath()
+            .appendingPathComponent(standardized.lastPathComponent)
+            .standardizedFileURL
+        return Set([
+            standardized.path,
+            standardized.resolvingSymlinksInPath().path,
+            resolvedParent.path,
+        ])
     }
 
     func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan, force: Bool, forceTwice: Bool) async throws {
