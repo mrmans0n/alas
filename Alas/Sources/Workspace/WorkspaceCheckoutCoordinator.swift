@@ -345,6 +345,9 @@ actor WorkspaceCheckoutCoordinator {
                         $0.cleanup?.checkpoint = .worktreeRemoved
                     }
                 } catch WorkspaceCheckoutCoordinatorError.completedWorktreeReturned {
+                    guard case .exactLineage(let lineage) = await lifecycle.verifyCleanup(plan),
+                          lineage == plan.expectedLineageID
+                    else { throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict }
                     worktreeAlreadyRemoved = false
                 }
             default:

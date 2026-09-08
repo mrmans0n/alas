@@ -225,7 +225,6 @@ struct WorkspaceCheckoutLifecycleTests {
             state.checkouts[0].members[0].availability = .missing
         }
         let lifecycle = FixtureLifecycle(
-            verification: .missing,
             preflight: .init(reasons: [.dirty], submoduleLocalState: .none),
             clearError: WorkspaceCheckoutCoordinatorError.completedWorktreeReturned
         )
@@ -238,6 +237,31 @@ struct WorkspaceCheckoutLifecycleTests {
         )
 
         await #expect(throws: WorkspaceCheckoutCoordinatorError.cleanupConfirmationRequired) {
+            try await coordinator.deleteMember(checkoutID: fixture.checkout.id, memberID: fixture.member.id)
+        }
+
+        #expect(await lifecycle.removedMembers.isEmpty)
+    }
+
+    @Test func explicitDeletionRejectsReturnedWorktreeWithUnexpectedLineage() async throws {
+        let fixture = try await Fixture.make()
+        try await fixture.store.mutate { state in
+            state.checkouts[0].members[0].availability = .missing
+        }
+        let lifecycle = FixtureLifecycle(
+            verification: .missing,
+            preflight: .init(reasons: [], submoduleLocalState: .none),
+            clearError: WorkspaceCheckoutCoordinatorError.completedWorktreeReturned
+        )
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: fixture.store,
+            git: FixtureGit(),
+            scripts: FixtureScripts(),
+            sessions: LifecycleSessions(),
+            lifecycle: lifecycle
+        )
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict) {
             try await coordinator.deleteMember(checkoutID: fixture.checkout.id, memberID: fixture.member.id)
         }
 
