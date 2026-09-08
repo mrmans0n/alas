@@ -918,11 +918,12 @@ actor WorkspaceCheckoutCoordinator {
                 let operation = frozenWorktreeOperation(checkout: checkout, member: frozenMember)
                 if let lineageID = try? await git.existingCreatedWorktreeLineage(operation) {
                     try await updateMember(checkoutID: checkoutID, memberID: member.id) { current in
-                        current.checkpoint = .setupComplete
+                        current.checkpoint = .worktreeCreated
                         current.availability = .available
                         current.gitLineageID = lineageID
                         current.recreationSourceCheckpoint = nil
                     }
+                    await runSetup(member: frozenMember, checkout: checkout)
                     continue
                 }
                 guard let cleanupPlan = makeCleanupPlan(checkout: checkout, member: member) else { continue }
