@@ -6,6 +6,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.15.3] - 2026-09-08
+
+### ✨ Features
+
+- Add multi-repository workspaces with coordinated checkouts, sessions, terminals, reviews, and automation (#1095).
+- Add read-only Changes and Files tabs to the remote web interface (#1124).
+- Show worktree session state in sidebar badges (#1130).
+- Notify when run scripts finish (#1131).
+
+### 🐛 Fixes
+
+- Prevent duplicate project identifiers from crashing app state restoration (#1129).
+- Harden workspace checkout creation, repair, and cleanup (#1128).
+
+### 🏗️ Internal
+
+- Refine worktree session badge layout and styling (#1132).
+
 ## [0.15.2] - 2026-09-07
 
 ### ✨ Features
