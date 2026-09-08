@@ -6,9 +6,13 @@ import SwiftUI
 struct WorkspaceSidebarTree<ProjectRow: View>: View {
     @Bindable var state: AppState
     let projectRow: (ProjectConfig) -> ProjectRow
-    @State private var showingNewWorkspace = false
     @State private var editingWorkspace: Workspace?
     @State private var creatingCheckout: Workspace?
+    @State private var inspectedCheckout: WorkspaceCheckout?
+    @State private var inspectorGeneration = UUID()
+    @State private var collapsedWorkspaces: Set<UUID> = []
+    @State private var expandedCheckouts: Set<UUID> = []
+    @Environment(\.theme) private var theme
     @State private var lifecycleError: String?
     @State private var deletionConfirmation: PendingDeletionConfirmation?
     @State private var workspaceDeletionConfirmation: PendingWorkspaceDefinitionDeletion?
@@ -27,92 +31,66 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
         let checkouts = Dictionary(uniqueKeysWithValues: state.workspacesManager.checkouts.map { ($0.id, $0) })
         let projects = Dictionary(uniqueKeysWithValues: state.projects.map { ($0.id, $0) })
 
-        if state.config.workspacesEnabled {
-            Button("New Workspace", systemImage: "plus") { showingNewWorkspace = true }
-                .buttonStyle(.plain).padding(.horizontal, 12)
-        }
-        ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-            switch row {
-            case .project(let id):
-                if let project = projects[id] {
-                    projectRow(project)
-                }
-            case .workspace(let id):
-                if let workspace = workspaces[id] {
-                    HStack {
-                        Button { state.selectWorkspace(id: id) } label: { Label(workspace.name, systemImage: "square.stack.3d.up") }
-                            .buttonStyle(.plain)
-                        Spacer()
-                        Button("Create Checkout") { creatingCheckout = workspace }.buttonStyle(.plain)
-                        Button("Edit") { editingWorkspace = workspace }.buttonStyle(.plain)
-                        Button("Delete", role: .destructive) {
-                            workspaceDeletionConfirmation = .init(id: id, name: workspace.name)
-                        }.buttonStyle(.plain)
-                    }.padding(.horizontal, 12)
-                }
-            case .formerWorkspace:
-                Label("Former Workspace", systemImage: "archivebox")
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 12)
-            case .checkout(let id):
-                if let checkout = checkouts[id] {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Button {
-                            state.selectWorkspaceCheckout(id: id)
-                        } label: {
-                            Label(checkout.branch, systemImage: "arrow.triangle.branch")
-                        }
-                        .buttonStyle(.plain)
-                        .padding(.leading, 28)
-                        ForEach(checkout.members) { member in
-                            Button {
-                                state.selectWorkspaceCheckout(id: id)
-                                state.focusWorkspaceCheckoutMember(id: member.id)
-                            } label: {
-                                Text(member.fallbackProjectName)
-                                    .foregroundStyle(member.availability == .available ? .primary : .secondary)
-                            }
-                            .buttonStyle(.plain)
-                            .padding(.leading, 48)
-                        }
-                        if state.workspaceNavigationState.selectedCheckoutID == id {
-                            WorkspaceCheckoutDetailView(
-                                model: Self.detailModel(
-                                    for: checkout,
-                                    rollupBuilder: state.workspaceMemberReviewRollupBuilder(for: checkout)
-                                ),
-                                perform: { action, memberID in
-                                    perform(action, checkoutID: id, memberID: memberID)
-                                },
-                                openReview: { action in
-                                    state.openWorkspaceReview(action)
-                                }
-                            )
-                            .padding(.leading, 28)
-                        }
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                switch row {
+                case .project(let id):
+                    if let project = projects[id] {
+                        projectRow(project).padding(.vertical, 3)
                     }
+                case .workspace(let id):
+                    if let workspace = workspaces[id] {
+                        workspaceHeader(workspace)
+                    }
+                case .formerWorkspace:
+                    Label("Former Workspace", systemImage: "archivebox")
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundColor(theme.color("fg-muted"))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 5)
+                case .checkout(let id):
+                    if let checkout = checkouts[id], checkout.workspaceID.map({ !collapsedWorkspaces.contains($0) }) ?? true {
+                        checkoutRows(checkout, projects: projects)
+                    }
+                case .member:
+                    EmptyView()
                 }
-            case .member:
-                EmptyView()
             }
         }
-        .sheet(isPresented: $showingNewWorkspace) { NewWorkspaceDialog(state: state, presented: $showingNewWorkspace) }
         .sheet(item: $editingWorkspace) { workspace in EditWorkspaceDialog(state: state, workspace: workspace, presented: Binding(get: { editingWorkspace != nil }, set: { if !$0 { editingWorkspace = nil } })) }
         .sheet(item: $creatingCheckout) { workspace in CreateWorkspaceCheckoutDialog(state: state, workspace: workspace, presented: Binding(get: { creatingCheckout != nil }, set: { if !$0 { creatingCheckout = nil } })) }
-        .alert("Workspace Checkout", isPresented: Binding(get: { lifecycleError != nil }, set: { if !$0 { lifecycleError = nil } })) {
-            Button("OK", role: .cancel) { lifecycleError = nil }
-        } message: {
-            Text(lifecycleError ?? "")
-        }
-        .sheet(item: $deletionConfirmation) { pending in
-            WorkspaceDeletionConfirmationSheet(model: pending.model) { action in
-                confirmDeletion(action, checkoutID: pending.checkoutID, memberID: pending.memberID)
+        .sheet(item: $inspectedCheckout) { snapshot in
+            let checkout = state.workspacesManager.checkout(id: snapshot.id) ?? snapshot
+            WorkspaceCheckoutDetailView(
+                model: Self.detailModel(for: checkout, rollupBuilder: state.workspaceMemberReviewRollupBuilder(for: checkout)),
+                perform: { action, memberID in perform(action, checkoutID: checkout.id, memberID: memberID) },
+                openReview: { action in
+                    inspectedCheckout = nil
+                    state.openWorkspaceReview(action)
+                }
+            )
+            .sheet(item: $deletionConfirmation) { pending in
+                WorkspaceDeletionConfirmationSheet(model: pending.model) { action in
+                    confirmDeletion(action, checkoutID: pending.checkoutID, memberID: pending.memberID)
+                }
+                .modifier(WorkspaceLifecycleErrorAlert(error: $lifecycleError))
             }
-        }
-        .sheet(item: $repairPlan) { pending in
-            WorkspaceRepairPlanSheet(model: pending.model) { candidate in
-                useRepairCandidate(candidate, checkoutID: pending.checkoutID, memberID: pending.memberID)
+            .sheet(item: $repairPlan) { pending in
+                WorkspaceRepairPlanSheet(model: pending.model) { candidate in
+                    useRepairCandidate(candidate, checkoutID: pending.checkoutID, memberID: pending.memberID)
+                }
+                .modifier(WorkspaceLifecycleErrorAlert(error: $lifecycleError))
             }
+            .modifier(WorkspaceLifecycleErrorAlert(
+                error: $lifecycleError, enabled: deletionConfirmation == nil && repairPlan == nil
+            ))
+        }
+        .modifier(WorkspaceLifecycleErrorAlert(error: $lifecycleError, enabled: inspectedCheckout == nil))
+        .onChange(of: inspectedCheckout?.id) { _, _ in
+            inspectorGeneration = UUID()
+            deletionConfirmation = nil
+            repairPlan = nil
+            lifecycleError = nil
         }
         .confirmationDialog(
             "Delete Workspace?",
@@ -132,10 +110,153 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
             let name = workspaceDeletionConfirmation?.name ?? "this Workspace"
             Text("Delete \(name)? Existing checkouts are retained as Former Workspace checkouts.")
         }
+        .onChange(of: state.workspaceNavigationState.selectedCheckoutID, initial: true) { _, id in
+            guard let id, let checkout = state.workspacesManager.checkout(id: id) else { return }
+            expandedCheckouts.insert(id)
+            if let workspaceID = checkout.workspaceID { collapsedWorkspaces.remove(workspaceID) }
+        }
+    }
+
+    private func workspaceHeader(_ workspace: Workspace) -> some View {
+        let collapsed = collapsedWorkspaces.contains(workspace.id)
+        let selected = state.workspaceNavigationState.selectedWorkspaceID == workspace.id
+            && state.workspaceNavigationState.selectedCheckoutID == nil
+        return HStack(spacing: 7) {
+            Button {
+                if collapsed { collapsedWorkspaces.remove(workspace.id) }
+                else { collapsedWorkspaces.insert(workspace.id) }
+            } label: {
+                Icon(name: collapsed ? "chev-right" : "chev-down", size: 10, color: theme.color("fg-faint"))
+                    .frame(width: 14, height: 22)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(collapsed ? "Expand workspace" : "Collapse workspace")
+            .accessibilityLabel(collapsed ? "Expand workspace" : "Collapse workspace")
+            Button { state.selectWorkspace(id: workspace.id) } label: {
+                HStack(spacing: 7) {
+                    Icon(name: "square.stack.3d.up", size: 13, color: theme.color(selected ? "accent" : "fg-muted"))
+                    Text(workspace.name)
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundColor(theme.color(selected ? "fg" : "fg-muted"))
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(workspace.name)
+            ToolbarBtn(icon: "plus", tooltip: "New checkout in \(workspace.name)") {
+                creatingCheckout = workspace
+            }
+        }
+        .padding(.leading, 12)
+        .padding(.trailing, 8)
+        .padding(.vertical, 3)
+        .background(selected ? theme.color("bg-3") : .clear)
+        .contextMenu {
+            Button("New checkout...", systemImage: "plus") { creatingCheckout = workspace }
+            Button("Edit workspace...", systemImage: "pencil") { editingWorkspace = workspace }
+            Divider()
+            Button("Delete workspace...", role: .destructive) {
+                workspaceDeletionConfirmation = .init(id: workspace.id, name: workspace.name)
+            }
+        }
+    }
+
+    private func checkoutRows(_ checkout: WorkspaceCheckout, projects: [String: ProjectConfig]) -> some View {
+        let selected = state.workspaceNavigationState.selectedCheckoutID == checkout.id
+        let expanded = expandedCheckouts.contains(checkout.id)
+        return VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 6) {
+                Button {
+                    if expanded { expandedCheckouts.remove(checkout.id) }
+                    else { expandedCheckouts.insert(checkout.id) }
+                } label: {
+                    Icon(name: expanded ? "chev-down" : "chev-right", size: 9, color: theme.color("fg-faint"))
+                        .frame(width: 14, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(expanded ? "Hide repositories" : "Show repositories")
+                .accessibilityLabel(expanded ? "Hide repositories" : "Show repositories")
+                Button {
+                    state.selectWorkspaceCheckout(id: checkout.id)
+                } label: {
+                    HStack(spacing: 7) {
+                        Icon(name: checkout.archivedAt == nil ? "branch" : "archivebox", size: 12)
+                        Text(checkout.branch)
+                            .font(.system(size: 12, weight: .medium, design: .monospaced))
+                            .foregroundColor(theme.color(checkout.archivedAt == nil ? "fg" : "fg-dim"))
+                            .lineLimit(1).truncationMode(.middle)
+                        Spacer(minLength: 0)
+                        if checkout.operation != .idle {
+                            ProgressView().controlSize(.mini)
+                        } else if checkout.archivedAt == nil && checkout.health != .ready {
+                            Icon(name: "alert", size: 11, color: theme.color("del"))
+                                .help("Checkout needs attention")
+                        }
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                ToolbarBtn(icon: "info.circle", tooltip: "Checkout details") { inspectedCheckout = checkout }
+            }
+            .padding(.leading, 20)
+            .padding(.trailing, 4)
+            .background(selected ? theme.color("bg-4") : .clear, in: RoundedRectangle(cornerRadius: 6))
+            .overlay(alignment: .leading) {
+                if selected {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(theme.color("accent"))
+                        .frame(width: 3, height: 14)
+                        .padding(.leading, 2)
+                }
+            }
+            .contextMenu {
+                Button("Checkout details...", systemImage: "info.circle") { inspectedCheckout = checkout }
+            }
+            .help(checkout.branch)
+            if expanded {
+                ForEach(checkout.members) { member in
+                    let focused = selected && state.workspaceNavigationState.focusedCheckoutMemberID == member.id
+                    Button {
+                        state.selectWorkspaceCheckout(id: checkout.id)
+                        state.focusWorkspaceCheckoutMember(id: member.id)
+                    } label: {
+                        HStack(spacing: 7) {
+                            if let project = projects[member.projectID] {
+                                ProjectIconView(icon: project.icon, fallbackName: project.name, size: .sidebar)
+                            } else {
+                                Icon(name: "folder", size: 12)
+                            }
+                            Text(member.fallbackProjectName)
+                                .font(.system(size: 11.5, weight: focused ? .medium : .regular))
+                                .foregroundColor(theme.color(member.availability == .available ? "fg-muted" : "fg-dim"))
+                                .lineLimit(1)
+                            Spacer(minLength: 0)
+                            if member.checkpoint == .failed || member.availability == .missing || member.availability == .identityConflict {
+                                Icon(name: "alert", size: 10, color: theme.color("del"))
+                            }
+                        }
+                        .padding(.leading, 48).padding(.trailing, 12)
+                        .frame(height: 27)
+                        .contentShape(Rectangle())
+                        .background(focused ? theme.color("bg-3") : .clear, in: RoundedRectangle(cornerRadius: 5))
+                    }
+                    .buttonStyle(.plain)
+                    .help(member.worktreePath)
+                }
+            }
+        }
+        .padding(.horizontal, 6)
     }
 
     private func perform(_ action: WorkspaceCheckoutActionKind, checkoutID: UUID, memberID: UUID?) {
+        let generation = inspectorGeneration
         Task { @MainActor in
+            guard isCurrentInspector(checkoutID, generation: generation) else { return }
             do {
                 switch action {
                 case .archive:
@@ -144,6 +265,7 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                     _ = try await state.unarchiveWorkspaceCheckout(id: checkoutID)
                 case .deleteCheckout:
                     let confirmation = try await state.workspaceCheckoutDeletionConfirmation(checkoutID: checkoutID)
+                    guard isCurrentInspector(checkoutID, generation: generation) else { return }
                     if confirmation.requiresConfirmation {
                         deletionConfirmation = PendingDeletionConfirmation(checkoutID: checkoutID, memberID: nil, model: confirmation)
                     } else {
@@ -155,6 +277,7 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                         deletionConfirmation = PendingDeletionConfirmation(checkoutID: checkoutID, memberID: nil, model: confirmation)
                     } else {
                         try await state.forgetWorkspaceCheckout(id: checkoutID)
+                        if isCurrentInspector(checkoutID, generation: generation) { inspectedCheckout = nil }
                     }
                 case .stopAfterCurrentOperations:
                     try await state.stopWorkspaceCheckoutAfterCurrentOperations(id: checkoutID)
@@ -179,6 +302,7 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                             _ = try await state.deleteWorkspaceCheckoutMemberSnapshot(checkoutID: checkoutID, memberID: memberID)
                         } else {
                             let confirmation = try await state.workspaceMemberDeletionConfirmation(checkoutID: checkoutID, memberID: memberID)
+                            guard isCurrentInspector(checkoutID, generation: generation) else { return }
                             if confirmation.requiresConfirmation {
                                 deletionConfirmation = PendingDeletionConfirmation(checkoutID: checkoutID, memberID: memberID, model: confirmation)
                             } else {
@@ -188,9 +312,13 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                     }
                 }
             } catch {
-                lifecycleError = error.localizedDescription
+                if isCurrentInspector(checkoutID, generation: generation) { lifecycleError = error.localizedDescription }
             }
         }
+    }
+
+    private func isCurrentInspector(_ checkoutID: UUID, generation: UUID) -> Bool {
+        inspectedCheckout?.id == checkoutID && inspectorGeneration == generation
     }
 
     static func detailModel(for checkout: WorkspaceCheckout, rollupBuilder: MemberReviewRollupBuilder = .init()) -> WorkspaceCheckoutDetailModel {
@@ -201,34 +329,39 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
     }
 
     private func confirmDeletion(_ action: WorkspaceLifecycleAction, checkoutID: UUID, memberID: UUID?) {
+        let generation = inspectorGeneration
+        let confirmationID = deletionConfirmation?.id
         Task { @MainActor in
+            guard isCurrentInspector(checkoutID, generation: generation) else { return }
             do {
                 switch action {
                 case .deleteCheckout(let confirmingRisks):
                     _ = try await state.deleteWorkspaceCheckout(id: checkoutID, confirmingRisks: confirmingRisks)
-                    deletionConfirmation = nil
                 case .deleteMember(let confirmingRisks):
                     if let memberID {
                         _ = try await state.deleteWorkspaceCheckoutMember(checkoutID: checkoutID, memberID: memberID, confirmingRisks: confirmingRisks)
                     }
-                    deletionConfirmation = nil
                 case .forgetCheckout(let confirmedPreserveArtifacts):
                     try await state.forgetWorkspaceCheckout(id: checkoutID, confirmedPreserveArtifacts: confirmedPreserveArtifacts)
-                    deletionConfirmation = nil
+                    if isCurrentInspector(checkoutID, generation: generation) { inspectedCheckout = nil }
                 }
+                if deletionConfirmation?.id == confirmationID { deletionConfirmation = nil }
             } catch {
-                lifecycleError = error.localizedDescription
+                if isCurrentInspector(checkoutID, generation: generation) { lifecycleError = error.localizedDescription }
             }
         }
     }
 
     private func useRepairCandidate(_ candidate: WorkspaceRepairCandidate, checkoutID: UUID, memberID: UUID) {
+        let generation = inspectorGeneration
+        let repairID = repairPlan?.id
         Task { @MainActor in
+            guard isCurrentInspector(checkoutID, generation: generation) else { return }
             do {
                 _ = try await state.useWorkspaceRepairCandidate(checkoutID: checkoutID, memberID: memberID, candidate: candidate)
-                repairPlan = nil
+                if repairPlan?.id == repairID { repairPlan = nil }
             } catch {
-                lifecycleError = error.localizedDescription
+                if isCurrentInspector(checkoutID, generation: generation) { lifecycleError = error.localizedDescription }
             }
         }
     }
@@ -241,6 +374,22 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
             } catch {
                 lifecycleError = error.localizedDescription
             }
+        }
+    }
+}
+
+private struct WorkspaceLifecycleErrorAlert: ViewModifier {
+    @Binding var error: String?
+    var enabled = true
+
+    func body(content: Content) -> some View {
+        content.alert("Workspace checkout", isPresented: Binding(
+            get: { enabled && error != nil },
+            set: { if !$0 && enabled { error = nil } }
+        )) {
+            Button("OK", role: .cancel) { error = nil }
+        } message: {
+            Text(error ?? "")
         }
     }
 }

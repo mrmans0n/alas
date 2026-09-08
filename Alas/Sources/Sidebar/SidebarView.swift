@@ -13,6 +13,7 @@ struct SidebarView: View {
     @Environment(\.theme) var theme
     @State private var spaceTitleVisible = false
     @State private var hideTitleTask: Task<Void, Never>?
+    @State private var showingNewWorkspace = false
 
     var body: some View {
         let override = state.config.sidebarChromeOverride(forThemeId: state.themeStore.current.id)
@@ -30,7 +31,8 @@ struct SidebarView: View {
                     onSearch: {
                         NotificationCenter.default.post(name: .alasOpenSearch, object: nil)
                     },
-                    onHideSidebar: onHideSidebar
+                    onHideSidebar: onHideSidebar,
+                    onNewWorkspace: state.config.workspacesEnabled ? { showingNewWorkspace = true } : nil
                 )
                 ScrollView(.vertical, showsIndicators: true) {
                     VStack(alignment: .leading, spacing: 8) {
@@ -223,6 +225,9 @@ struct SidebarView: View {
         .onDisappear {
             hideTitleTask?.cancel()
             hideTitleTask = nil
+        }
+        .sheet(isPresented: $showingNewWorkspace) {
+            NewWorkspaceDialog(state: state, presented: $showingNewWorkspace)
         }
     }
 
