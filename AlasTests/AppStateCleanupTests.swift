@@ -144,6 +144,32 @@ struct AppStateCleanupTests {
         #expect(ids.isEmpty)
     }
 
+    @Test func topologyRefreshHandlesDuplicatePersistedProjectIDs() async throws {
+        let repo = try await makeRepo(name: "duplicate-project-id")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let project = ProjectConfig(
+            id: "duplicate",
+            name: "first",
+            path: repo.path,
+            color: "#5fb7c4",
+            addedAt: .now
+        )
+        let duplicate = ProjectConfig(
+            id: "duplicate",
+            name: "second",
+            path: repo.path,
+            color: "#5fb7c4",
+            addedAt: .now
+        )
+        let state = AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [project, duplicate])))
+
+        #expect(state.projects.count == 1)
+        await state.refreshProjectTopology(projectId: project.id)
+
+        #expect(state.projectsManager.worktrees(projectId: project.id).count == 1)
+    }
+
     @Test func cleanupMissingWorktreesClosesTabsForDisappearedWorktree() async throws {
         let repo = try await makeRepo(name: "cleanup-tabs")
         defer { try? FileManager.default.removeItem(at: repo) }

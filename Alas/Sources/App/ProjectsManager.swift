@@ -72,9 +72,10 @@ final class ProjectsManager {
         persistedProjects: [ProjectConfig],
         defaultOrdering: @escaping () -> AppConfig.WorktreeSortMode = { .manual }
     ) {
-        self.projects = persistedProjects
+        var projectIDs = Set<String>()
+        self.projects = persistedProjects.filter { projectIDs.insert($0.id).inserted }
         self.defaultOrderingSource = defaultOrdering
-        for project in persistedProjects {
+        for project in projects {
             if let host = project.host {
                 RemoteHostRegistry.shared.register(root: project.path, host: host)
             }
