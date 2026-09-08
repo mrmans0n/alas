@@ -1314,6 +1314,9 @@ actor WorkspaceCheckoutCoordinator {
         do {
             try await projectMutationGate.withMutation(projectID: plan.projectID) {
                 if let staleRegistrationCleanup {
+                    guard try await self.git.preparedBranchMatchesFrozenBase(operation) else {
+                        throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict
+                    }
                     if try await self.git.frozenWorktreeIsMissing(operation) == false {
                         guard try await self.git.existingCreatedWorktreeLineage(operation) == operation.expectedLineageID else {
                             throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict
