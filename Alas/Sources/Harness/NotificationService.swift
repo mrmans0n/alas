@@ -95,6 +95,21 @@ final class NotificationService {
         notificationAdder(req)
     }
 
+    func notifyRunScriptFinished(scriptName: String, exitCode: Int32,
+                                 projectId: String, worktreeId: String, sessionId: String,
+                                 runID: String) {
+        let content = UNMutableNotificationContent()
+        content.title = "\(scriptName) finished"
+        content.body = exitCode == 0 ? "Succeeded" : "Failed with exit code \(exitCode)"
+        content.sound = .default
+        content.userInfo = [
+            "projectId": projectId,
+            "worktreeId": worktreeId,
+            "sessionId": sessionId,
+        ]
+        notificationAdder(UNNotificationRequest(identifier: "run-script-\(runID)", content: content, trigger: nil))
+    }
+
     func notifyAlas(body: String, title: String?, agent: AgentKind,
                     projectId: String, worktreeId: String, sessionId: String,
                     owner: SessionOwnerID? = nil) {

@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import UserNotifications
 @testable import Alas
 
 struct RunScriptLaunchTests {
@@ -386,6 +387,8 @@ struct RunScriptLaunchTests {
                 truncated: false
             )
         })
+        var notifications: [UNNotificationRequest] = []
+        fixture.state.harness.notifications.notificationAdder = { notifications.append($0) }
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
         try await Task.sleep(for: .milliseconds(50))
@@ -397,6 +400,8 @@ struct RunScriptLaunchTests {
         #expect(failures[0].exitCode == 42)
         #expect(failures[0].branch == "main")
         #expect(failures[0].capturedOutput == .available(text: "bad output\n", truncated: false))
+        #expect(notifications.count == 1)
+        #expect(notifications[0].content.body == "Failed with exit code 42")
     }
 
     @MainActor
@@ -404,12 +409,16 @@ struct RunScriptLaunchTests {
         let fixture = try makeAppStateFixture(waiter: { _ in
             RunScriptCompletion(exitCode: 0, transcript: Data("ok\n".utf8), truncated: false)
         })
+        var notifications: [UNNotificationRequest] = []
+        fixture.state.harness.notifications.notificationAdder = { notifications.append($0) }
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
         try await Task.sleep(for: .milliseconds(50))
         await fixture.state.waitForRunScriptCompletionTasksForTesting()
 
         #expect(fixture.state.runScriptFailures(in: fixture.worktree.id).isEmpty)
+        #expect(notifications.count == 1)
+        #expect(notifications[0].content.body == "Succeeded")
     }
 
     @MainActor
@@ -585,9 +594,13 @@ struct RunScriptLaunchTests {
     @MainActor
     @Test func processExitAllowsCompletedMonitorToReportFailure() async throws {
         let fixture = try makeAppStateFixture(waiter: { _ in
-            try await Task.sleep(for: .milliseconds(20))
+            try await Task.sleep(for: .milliseconds(2_200))
             return RunScriptCompletion(exitCode: 42, transcript: Data("bad\n".utf8), truncated: false)
+        }, terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
+            .init(id: "session", foregroundPid: { 1 })
         })
+        var notifications: [UNNotificationRequest] = []
+        fixture.state.harness.notifications.notificationAdder = { notifications.append($0) }
 
         fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
         try await Task.sleep(for: .milliseconds(50))
@@ -601,6 +614,7 @@ struct RunScriptLaunchTests {
         await fixture.state.waitForRunScriptCompletionTasksForTesting()
 
         #expect(fixture.state.runScriptFailures(in: fixture.worktree.id).count == 1)
+        #expect(notifications.count == 1)
     }
 
     @MainActor

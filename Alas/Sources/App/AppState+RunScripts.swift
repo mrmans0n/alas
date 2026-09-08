@@ -392,6 +392,14 @@ extension AppState {
                 defer { runScriptCompletionTasks.removeValue(forKey: runID) }
                 do {
                     let completion = try await runScriptCompletionWaiter(location)
+                    harness.notifications.notifyRunScriptFinished(
+                        scriptName: script.displayName,
+                        exitCode: completion.exitCode,
+                        projectId: worktree.projectId,
+                        worktreeId: worktree.id,
+                        sessionId: sessionID,
+                        runID: runID
+                    )
                     guard completion.exitCode != 0 else { return }
                     let capturedOutput: RunScriptCapturedOutput
                     if let transcript = completion.transcript {
