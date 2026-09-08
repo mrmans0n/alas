@@ -1590,6 +1590,7 @@ enum WorkspaceCheckoutCoordinatorError: Error, Equatable, Sendable {
     case cleanupIdentityConflict
     case cleanupIncomplete
     case cleanupConfirmationRequired
+    case lockedStaleRegistration
 }
 
 extension String {
@@ -1782,8 +1783,7 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
             guard registrations.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(registrations.stderr) }
             guard Self.porcelainContainsWorktree(registrations.stdout, path: plan.worktreePath) else { return }
             if Self.porcelainWorktreeIsLocked(registrations.stdout, path: plan.worktreePath) {
-                let unlock = try await Process.git(["worktree", "unlock", destination.path], cwd: repo, usesRemoteHostRegistry: false)
-                guard unlock.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(unlock.stderr) }
+                throw WorkspaceCheckoutCoordinatorError.lockedStaleRegistration
             }
             try await WorktreeService().prune(repoPath: repo)
             let refreshed = try await Process.git(["worktree", "list", "--porcelain"], cwd: repo, usesRemoteHostRegistry: false)
@@ -1796,8 +1796,7 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
             guard registrations.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(registrations.stderr) }
             guard Self.porcelainContainsWorktree(registrations.stdout, path: plan.worktreePath) else { return }
             if Self.porcelainWorktreeIsLocked(registrations.stdout, path: plan.worktreePath) {
-                let unlock = try await remote.run(host: host, command: "git -C \(repo) worktree unlock -- \(SSHCommand.shellQuote(plan.worktreePath))")
-                guard unlock.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(unlock.stderr) }
+                throw WorkspaceCheckoutCoordinatorError.lockedStaleRegistration
             }
             let prune = try await remote.run(host: host, command: "git -C \(repo) worktree prune")
             guard prune.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(prune.stderr) }

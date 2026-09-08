@@ -701,8 +701,7 @@ struct WorkspaceCheckoutLifecycleTests {
 
     @Test func concreteRemoteCleanupPrunesStaleRegistrationBeforeMarkingMissingWorktreeRemoved() async throws {
         let runner = RemoteLifecycleRunner(results: [
-            .init(exitCode: 0, stdout: "worktree /checkout/a\nlocked\nprunable gitdir file points to non-existent location\n", stderr: ""),
-            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "worktree /checkout/a\nprunable gitdir file points to non-existent location\n", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
         ])
@@ -714,9 +713,25 @@ struct WorkspaceCheckoutLifecycleTests {
 
         let commands = await runner.commands.joined(separator: "\n")
         #expect(commands.contains("worktree list --porcelain"))
-        #expect(commands.contains("worktree unlock --"))
         #expect(commands.contains("/checkout/a"))
         #expect(commands.contains("worktree prune"))
+    }
+
+    @Test func concreteRemoteCleanupRetainsLockedMissingWorktreeRegistration() async throws {
+        let runner = RemoteLifecycleRunner(results: [
+            .init(exitCode: 0, stdout: "worktree /checkout/a\nlocked\nprunable gitdir file points to non-existent location\n", stderr: ""),
+        ])
+        let lifecycle = WorkspaceCheckoutLifecycleOperator(remote: .init { executable, args, timeout in
+            try await runner.run(executable: executable, args: args, timeout: timeout)
+        })
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.lockedStaleRegistration) {
+            try await lifecycle.clearStaleRegistration(Self.sshCleanupPlan())
+        }
+
+        let commands = await runner.commands.joined(separator: "\n")
+        #expect(commands.contains("worktree unlock --") == false)
+        #expect(commands.contains("worktree prune") == false)
     }
 
     @Test func remoteMergedBranchDeletionChecksWorktreeUsageAndExpectedBranchTip() async throws {
