@@ -171,6 +171,23 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(await lifecycle.clearedRegistrations == [fixture.member.id])
     }
 
+    @Test func recreatingPendingTombstoneRunsRecoveryBeforeBranchValidation() async throws {
+        let fixture = try await Fixture.make(operation: .creating)
+        let lifecycle = FixtureLifecycle()
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: fixture.store,
+            git: FixtureGit(preparedBranchMatches: false),
+            scripts: FixtureScripts(),
+            sessions: LifecycleSessions(),
+            lifecycle: lifecycle
+        )
+
+        _ = try await coordinator.resumeCreation(checkoutID: fixture.checkout.id)
+
+        #expect(await lifecycle.recoveredRegistrations == [fixture.member.id])
+        #expect(await lifecycle.clearedRegistrations.isEmpty)
+    }
+
     @Test func explicitDeletionRechecksRisksWhenMissingWorktreeReturnsDuringStaleCleanup() async throws {
         let fixture = try await Fixture.make()
         try await fixture.store.mutate { state in
@@ -1062,7 +1079,6 @@ struct WorkspaceCheckoutLifecycleTests {
     @Test func concreteRemoteExplicitCleanupUnlocksLockedMissingWorktreeRegistration() async throws {
         let runner = RemoteLifecycleRunner(results: [
             .init(exitCode: 0, stdout: "worktree /checkout/a\nlocked portable volume\nprunable gitdir file points to non-existent location\n", stderr: ""),
-            .init(exitCode: 0, stdout: "", stderr: ""),
             .init(exitCode: 1, stdout: "", stderr: ""),
             .init(exitCode: 1, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
@@ -1075,7 +1091,7 @@ struct WorkspaceCheckoutLifecycleTests {
         try await lifecycle.clearStaleRegistrationForExplicitDeletion(Self.sshCleanupPlan())
 
         let commands = await runner.commands.joined(separator: "\n")
-        #expect(commands.contains("worktree unlock --"))
+        #expect(commands.contains("worktree unlock --") == false)
         #expect(commands.contains("worktree remove -f -f --"))
         #expect(commands.contains("/checkout/a"))
     }
@@ -1447,6 +1463,7 @@ private actor FixtureLifecycle: WorkspaceCheckoutLifecycleOperating {
     let verification: WorkspaceCheckoutMemberObservation
     private(set) var removedMembers: [UUID] = []
     private(set) var deletedBranches: [UUID] = []
+    private(set) var recoveredRegistrations: [UUID] = []
     private(set) var clearedRegistrations: [UUID] = []
     private(set) var finalizedRegistrations: [UUID] = []
     private(set) var removeForces: [(force: Bool, forceTwice: Bool)] = []
@@ -1467,6 +1484,9 @@ private actor FixtureLifecycle: WorkspaceCheckoutLifecycleOperating {
     func verifyCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutMemberObservation {
         if verification == .exactLineage("lineage-a") { return .exactLineage(plan.expectedLineageID) }
         return verification
+    }
+    func recoverStaleRegistrationCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async throws {
+        recoveredRegistrations.append(plan.memberID)
     }
     func clearStaleRegistration(_ plan: WorkspaceCheckoutCleanupPlan) async throws {
         clearedRegistrations.append(plan.memberID)

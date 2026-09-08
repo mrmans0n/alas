@@ -48,6 +48,8 @@ protocol WorkspaceCheckoutLifecycleOperating: Sendable {
     func verifyCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutMemberObservation
     /// Clears stale Git worktree metadata for a missing frozen destination.
     func clearStaleRegistration(_ plan: WorkspaceCheckoutCleanupPlan) async throws
+    /// Restores any interrupted stale metadata tombstone without clearing a registration.
+    func recoverStaleRegistrationCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async throws
     /// Removes tombstoned stale metadata after replacement worktree creation succeeds.
     func finalizeStaleRegistrationCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async throws
     /// Explicit user deletion may intentionally unlock and prune a missing worktree.
@@ -63,6 +65,7 @@ protocol WorkspaceCheckoutLifecycleOperating: Sendable {
 
 extension WorkspaceCheckoutLifecycleOperating {
     func clearStaleRegistration(_ plan: WorkspaceCheckoutCleanupPlan) async throws {}
+    func recoverStaleRegistrationCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async throws {}
     func finalizeStaleRegistrationCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async throws {}
     func clearStaleRegistrationForExplicitDeletion(_ plan: WorkspaceCheckoutCleanupPlan) async throws {
         try await clearStaleRegistration(plan)
@@ -1345,6 +1348,7 @@ actor WorkspaceCheckoutCoordinator {
         do {
             try await projectMutationGate.withMutation(projectID: plan.projectID) {
                 if let staleRegistrationCleanup {
+                    try await self.lifecycle.recoverStaleRegistrationCleanup(staleRegistrationCleanup)
                     guard try await self.git.preparedBranchMatchesFrozenBase(operation) else {
                         throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict
                     }
@@ -1890,6 +1894,30 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
         try await clearStaleRegistration(plan, unlockLocked: true)
     }
 
+    func recoverStaleRegistrationCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async throws {
+        switch plan.executionLocation.normalized {
+        case .local:
+            try await Self.recoverLocalInterruptedStaleRegistrationTombstone(
+                repo: URL(fileURLWithPath: plan.sourceRepositoryPath),
+                destination: URL(fileURLWithPath: plan.worktreePath),
+                expectedLineageID: plan.expectedLineageID
+            )
+        case .ssh(let host):
+            let recovery = try await remote.run(
+                host: host,
+                command: Self.remoteInterruptedStaleRegistrationTombstoneRecoveryCommand(plan)
+            )
+            switch recovery.exitCode {
+            case 0:
+                break
+            case 13:
+                throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict
+            default:
+                throw WorktreeService.WorktreeError.gitFailed(recovery.stderr)
+            }
+        }
+    }
+
     func finalizeStaleRegistrationCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async throws {
         switch plan.executionLocation.normalized {
         case .local:
@@ -1940,8 +1968,6 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
             guard Self.porcelainContainsWorktree(registrations.stdout, path: plan.worktreePath) else { return }
             if Self.porcelainWorktreeIsLocked(registrations.stdout, path: plan.worktreePath) {
                 guard unlockLocked else { throw WorkspaceCheckoutCoordinatorError.lockedStaleRegistration }
-                let unlock = try await Process.git(["worktree", "unlock", destination.path], cwd: repo, usesRemoteHostRegistry: false)
-                guard unlock.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(unlock.stderr) }
             }
             guard WorkspaceFrozenGitOperator.pathEntryExistsOrIsSymlink(destination.path) == false else {
                 throw WorkspaceCheckoutCoordinatorError.completedWorktreeReturned
@@ -1990,8 +2016,6 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
             guard Self.porcelainContainsWorktree(registrations.stdout, path: plan.worktreePath) else { return }
             if Self.porcelainWorktreeIsLocked(registrations.stdout, path: plan.worktreePath) {
                 guard unlockLocked else { throw WorkspaceCheckoutCoordinatorError.lockedStaleRegistration }
-                let unlock = try await remote.run(host: host, command: "git -C \(repo) worktree unlock -- \(SSHCommand.shellQuote(plan.worktreePath))")
-                guard unlock.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(unlock.stderr) }
             }
             let destination = SSHCommand.shellQuote(plan.worktreePath)
             let exists = try await remote.run(host: host, command: "p=\(destination); test -e \"$p\" || test -L \"$p\"")
