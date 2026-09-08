@@ -160,7 +160,7 @@ struct WorkspaceCheckoutLifecycleTests {
             state.checkouts[0].members[0].recreationSourceCheckpoint = .setupComplete
             state.checkouts[0].members[0].recreationWorktreeCreationBegan = true
         }
-        let lifecycle = FixtureLifecycle()
+        let lifecycle = FixtureLifecycle(hasPendingStaleRegistrationCleanup: true)
         let coordinator = WorkspaceCheckoutCoordinator(
             store: fixture.store,
             git: FixtureGit(recoveredCreatedLineageID: "lineage-a"),
@@ -177,6 +177,54 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(checkout.members[0].gitLineageID == "lineage-a")
         #expect(checkout.members[0].recreationSourceCheckpoint == nil)
         #expect(checkout.members[0].recreationWorktreeCreationBegan == false)
+    }
+
+    @Test func resumingMarkedCreatedReplacementWithAdvancedHeadFinalizesTombstone() async throws {
+        let fixture = try await Fixture.make(operation: .creating)
+        try await fixture.store.mutate { state in
+            state.checkouts[0].members[0].checkpoint = .failed
+            state.checkouts[0].members[0].availability = .unavailable
+            state.checkouts[0].members[0].recreationSourceCheckpoint = .setupComplete
+            state.checkouts[0].members[0].recreationWorktreeCreationBegan = true
+        }
+        let lifecycle = FixtureLifecycle(hasPendingStaleRegistrationCleanup: true)
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: fixture.store,
+            git: FixtureGit(existingCreatedIgnoringHeadLineageID: "lineage-a"),
+            scripts: FixtureScripts(),
+            sessions: LifecycleSessions(),
+            lifecycle: lifecycle
+        )
+
+        let checkout = try await coordinator.resumeCreation(checkoutID: fixture.checkout.id)
+
+        #expect(await lifecycle.finalizedRegistrations == [fixture.member.id])
+        #expect(await lifecycle.clearedRegistrations.isEmpty)
+        #expect(checkout.members[0].checkpoint == .setupComplete)
+        #expect(checkout.members[0].gitLineageID == "lineage-a")
+    }
+
+    @Test func resumingMarkerlessCreatedReplacementRequiresPendingTombstone() async throws {
+        let fixture = try await Fixture.make(operation: .creating)
+        try await fixture.store.mutate { state in
+            state.checkouts[0].members[0].checkpoint = .failed
+            state.checkouts[0].members[0].availability = .unavailable
+            state.checkouts[0].members[0].recreationSourceCheckpoint = .setupComplete
+            state.checkouts[0].members[0].recreationWorktreeCreationBegan = true
+        }
+        let lifecycle = FixtureLifecycle(hasPendingStaleRegistrationCleanup: false)
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: fixture.store,
+            git: FixtureGit(recoveredCreatedLineageID: "lineage-a"),
+            scripts: FixtureScripts(),
+            sessions: LifecycleSessions(),
+            lifecycle: lifecycle
+        )
+
+        let checkout = try await coordinator.resumeCreation(checkoutID: fixture.checkout.id)
+
+        #expect(await lifecycle.finalizedRegistrations.isEmpty)
+        #expect(checkout.members[0].checkpoint == .failed)
     }
 
     @Test func recreatingRecoverableReturnedTombstoneRunsStaleCleanupBeforeLineageCheck() async throws {
@@ -1711,17 +1759,20 @@ struct WorkspaceCheckoutLifecycleTests {
 
 private actor FixtureGit: WorkspaceGitOperating {
     var existingCreatedLineageID: String? = nil
+    var existingCreatedIgnoringHeadLineageID: String? = nil
     var recoveredCreatedLineageID: String? = nil
     var preparedBranchMatches = false
     var frozenWorktreeMissingResults: [Bool] = []
 
     init(
         existingCreatedLineageID: String? = nil,
+        existingCreatedIgnoringHeadLineageID: String? = nil,
         recoveredCreatedLineageID: String? = nil,
         preparedBranchMatches: Bool = false,
         frozenWorktreeMissingResults: [Bool] = []
     ) {
         self.existingCreatedLineageID = existingCreatedLineageID
+        self.existingCreatedIgnoringHeadLineageID = existingCreatedIgnoringHeadLineageID
         self.recoveredCreatedLineageID = recoveredCreatedLineageID
         self.preparedBranchMatches = preparedBranchMatches
         self.frozenWorktreeMissingResults = frozenWorktreeMissingResults
@@ -1734,6 +1785,9 @@ private actor FixtureGit: WorkspaceGitOperating {
     func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? { nil }
     func existingCreatedWorktreeLineage(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? {
         existingCreatedLineageID
+    }
+    func existingCreatedWorktreeLineageIgnoringHead(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? {
+        existingCreatedIgnoringHeadLineageID
     }
     func recoverCreatedWorktreeLineage(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? {
         recoveredCreatedLineageID
@@ -1767,12 +1821,14 @@ private actor FixtureLifecycle: WorkspaceCheckoutLifecycleOperating {
     let failingMember: UUID?
     let branchRemoved: Bool
     let clearError: (any Error)?
-    init(verification: WorkspaceCheckoutMemberObservation = .exactLineage("lineage-a"), preflight: WorktreeDeletePreflight = .init(reasons: [], submoduleLocalState: .none), leftovers: [String] = [], failingMember: UUID? = nil, branchRemoved: Bool = true, clearError: (any Error)? = nil) { self.verification = verification
+    let pendingStaleRegistrationCleanup: Bool
+    init(verification: WorkspaceCheckoutMemberObservation = .exactLineage("lineage-a"), preflight: WorktreeDeletePreflight = .init(reasons: [], submoduleLocalState: .none), leftovers: [String] = [], failingMember: UUID? = nil, branchRemoved: Bool = true, clearError: (any Error)? = nil, hasPendingStaleRegistrationCleanup: Bool = true) { self.verification = verification
     self.preflight = preflight
     self.leftovers = leftovers
     self.failingMember = failingMember
     self.branchRemoved = branchRemoved
-    self.clearError = clearError }
+    self.clearError = clearError
+    self.pendingStaleRegistrationCleanup = hasPendingStaleRegistrationCleanup }
     func deletePreflight(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> WorktreeDeletePreflight { preflight }
     func inspectRoot(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutCleanupRootObservation { .init(isContained: true, leftovers: leftovers) }
     func verifyCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutMemberObservation {
@@ -1781,6 +1837,9 @@ private actor FixtureLifecycle: WorkspaceCheckoutLifecycleOperating {
     }
     func recoverStaleRegistrationCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async throws {
         recoveredRegistrations.append(plan.memberID)
+    }
+    func hasPendingStaleRegistrationCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool {
+        pendingStaleRegistrationCleanup
     }
     func clearStaleRegistration(_ plan: WorkspaceCheckoutCleanupPlan) async throws {
         clearedRegistrations.append(plan.memberID)

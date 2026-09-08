@@ -7,6 +7,7 @@ protocol WorkspaceGitOperating: Sendable {
     func preparedBranchMatchesFrozenBase(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> Bool
     func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String?
     func existingCreatedWorktreeLineage(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String?
+    func existingCreatedWorktreeLineageIgnoringHead(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String?
     func recoverCreatedWorktreeLineage(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String?
     func frozenWorktreeIsMissing(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> Bool
 }
@@ -14,6 +15,7 @@ protocol WorkspaceGitOperating: Sendable {
 extension WorkspaceGitOperating {
     func preparedBranchMatchesFrozenBase(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> Bool { false }
     func existingCreatedWorktreeLineage(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? { nil }
+    func existingCreatedWorktreeLineageIgnoringHead(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? { nil }
     func recoverCreatedWorktreeLineage(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? { nil }
     func frozenWorktreeIsMissing(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> Bool {
         try await existingCreatedWorktreeLineage(operation) == nil
@@ -52,6 +54,8 @@ protocol WorkspaceCheckoutLifecycleOperating: Sendable {
     func clearStaleRegistration(_ plan: WorkspaceCheckoutCleanupPlan) async throws
     /// Restores any interrupted stale metadata tombstone without clearing a registration.
     func recoverStaleRegistrationCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async throws
+    /// Confirms a matching pending stale metadata tombstone exists.
+    func hasPendingStaleRegistrationCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool
     /// Removes tombstoned stale metadata after replacement worktree creation succeeds.
     func finalizeStaleRegistrationCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async throws
     /// Explicit user deletion may intentionally unlock and prune a missing worktree.
@@ -68,6 +72,7 @@ protocol WorkspaceCheckoutLifecycleOperating: Sendable {
 extension WorkspaceCheckoutLifecycleOperating {
     func clearStaleRegistration(_ plan: WorkspaceCheckoutCleanupPlan) async throws {}
     func recoverStaleRegistrationCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async throws {}
+    func hasPendingStaleRegistrationCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool { false }
     func finalizeStaleRegistrationCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async throws {}
     func clearStaleRegistrationForExplicitDeletion(_ plan: WorkspaceCheckoutCleanupPlan) async throws {
         try await clearStaleRegistration(plan)
@@ -971,6 +976,22 @@ actor WorkspaceCheckoutCoordinator {
                 }
                 if member.recreationWorktreeCreationBegan,
                    let cleanupPlan = makeCleanupPlan(checkout: checkout, member: member),
+                   try await lifecycle.hasPendingStaleRegistrationCleanup(cleanupPlan),
+                   let lineageID = try? await git.existingCreatedWorktreeLineageIgnoringHead(operation) {
+                    try await lifecycle.finalizeStaleRegistrationCleanup(cleanupPlan)
+                    try await updateMember(checkoutID: checkoutID, memberID: member.id) { current in
+                        current.checkpoint = .worktreeCreated
+                        current.availability = .available
+                        current.gitLineageID = lineageID
+                        current.recreationSourceCheckpoint = nil
+                        current.recreationWorktreeCreationBegan = false
+                    }
+                    await runSetup(member: frozenMember, checkout: checkout)
+                    continue
+                }
+                if member.recreationWorktreeCreationBegan,
+                   let cleanupPlan = makeCleanupPlan(checkout: checkout, member: member),
+                   try await lifecycle.hasPendingStaleRegistrationCleanup(cleanupPlan),
                    let lineageID = try? await git.recoverCreatedWorktreeLineage(operation) {
                     try await lifecycle.finalizeStaleRegistrationCleanup(cleanupPlan)
                     try await updateMember(checkoutID: checkoutID, memberID: member.id) { current in
@@ -1833,6 +1854,29 @@ struct WorkspaceFrozenGitOperator: WorkspaceGitOperating {
         }
     }
 
+    func existingCreatedWorktreeLineageIgnoringHead(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? {
+        switch operation.executionLocation.normalized {
+        case .local:
+            let destination = URL(fileURLWithPath: operation.destinationPath)
+            guard Self.pathEntryExistsOrIsSymlink(destination.path) else { return nil }
+            let branch = try await Process.git(["rev-parse", "--abbrev-ref", "HEAD"], cwd: destination, usesRemoteHostRegistry: false)
+            guard branch.exitCode == 0,
+                  branch.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == operation.branch,
+                  let lineage = WorktreeService.existingLocalLineageID(forWorktreeAt: destination)
+            else { return nil }
+            return operation.expectedLineageID.map { $0 == lineage ? lineage : nil } ?? lineage
+        case .ssh(let host):
+            let path = SSHCommand.shellQuote(operation.destinationPath)
+            let branch = SSHCommand.shellQuote(operation.branch)
+            let markerCommand = "d=$(git -C \"$p\" rev-parse --absolute-git-dir) || exit 5; f=\"$d/alas-worktree-lineage\"; test -s \"$f\" || exit 6; head -n 1 \"$f\""
+            let command = "p=\(path); b=\(branch); test -d \"$p\" || exit 2; [ \"$(git -C \"$p\" rev-parse --abbrev-ref HEAD)\" = \"$b\" ] || exit 4; \(markerCommand)"
+            let result = try await WorkspaceRemoteTransport().run(host: host, command: command)
+            guard result.exitCode == 0 else { return nil }
+            guard let lineage = WorktreeService.normalizedLineageID(result.stdout) else { return nil }
+            return operation.expectedLineageID.map { $0 == lineage ? lineage : nil } ?? lineage
+        }
+    }
+
     func recoverCreatedWorktreeLineage(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? {
         guard let expectedLineageID = operation.expectedLineageID else { return nil }
         switch operation.executionLocation.normalized {
@@ -2006,6 +2050,35 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
             switch cleanup.exitCode {
             case 0:
                 break
+            case 13:
+                throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict
+            default:
+                throw WorktreeService.WorktreeError.gitFailed(cleanup.stderr)
+            }
+        }
+    }
+
+    func hasPendingStaleRegistrationCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> Bool {
+        switch plan.executionLocation.normalized {
+        case .local:
+            let repo = URL(fileURLWithPath: plan.sourceRepositoryPath)
+            let destination = URL(fileURLWithPath: plan.worktreePath)
+            guard let tombstone = try await Self.staleRegistrationTombstoneIfPresent(
+                repo: repo,
+                destination: destination
+            ) else { return false }
+            guard Self.staleRegistrationTombstoneLineageID(tombstone) == plan.expectedLineageID,
+                  Self.staleRegistrationLineageID(tombstone) == plan.expectedLineageID
+            else { throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict }
+            return true
+        case .ssh(let host):
+            let cleanup = try await remote.run(
+                host: host,
+                command: Self.remotePendingStaleRegistrationCleanupValidationCommand(plan)
+            )
+            switch cleanup.exitCode {
+            case 0:
+                return cleanup.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "1"
             case 13:
                 throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict
             default:
@@ -2366,6 +2439,16 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
         let expectedLineageID = SSHCommand.shellQuote(plan.expectedLineageID)
         return """
         repo=\(repo); target=\(destination); expected=\(expectedLineageID); common=$(git -C "$repo" rev-parse --git-common-dir) || exit $?; case "$common" in /*) ;; *) common="$repo/$common" ;; esac; parent=${target%/*}; base=${target##*/}; if resolved_parent=$(cd "$parent" 2>/dev/null && pwd -P); then target_real="$resolved_parent/$base"; else target_real="$target"; fi; found=; for admin in "$common"/worktrees/*; do [ -d "$admin" ] || continue; [ -f "$admin/gitdir" ] || continue; IFS= read -r gitdir < "$admin/gitdir" || continue; { [ "$gitdir" = "$target/.git" ] || [ "$gitdir" = "$target_real/.git" ]; } || continue; [ -z "$found" ] || exit 13; found="$admin"; done; [ -n "$found" ] || exit 12; f="$found/alas-worktree-lineage"; [ -s "$f" ] || exit 13; IFS= read -r lineage < "$f" || exit 13; [ "$lineage" = "$expected" ] || exit 13
+        """
+    }
+
+    private static func remotePendingStaleRegistrationCleanupValidationCommand(_ plan: WorkspaceCheckoutCleanupPlan) -> String {
+        let repo = SSHCommand.shellQuote(plan.sourceRepositoryPath)
+        let destination = SSHCommand.shellQuote(plan.worktreePath)
+        let expectedLineageID = SSHCommand.shellQuote(plan.expectedLineageID)
+        let tombstoneMarker = SSHCommand.shellQuote(Self.staleRegistrationTombstoneMarker)
+        return """
+        repo=\(repo); target=\(destination); expected=\(expectedLineageID); marker_name=\(tombstoneMarker); common=$(git -C "$repo" rev-parse --git-common-dir) || exit $?; case "$common" in /*) ;; *) common="$repo/$common" ;; esac; parent=${target%/*}; base=${target##*/}; if resolved_parent=$(cd "$parent" 2>/dev/null && pwd -P); then target_real="$resolved_parent/$base"; else target_real="$target"; fi; found=; for admin in "$common"/alas-stale-worktree-tombstones/*; do [ -d "$admin" ] || continue; [ -f "$admin/gitdir" ] || continue; IFS= read -r gitdir < "$admin/gitdir" || continue; { [ "$gitdir" = "$target/.git" ] || [ "$gitdir" = "$target_real/.git" ]; } || continue; marker="$admin/$marker_name"; [ -s "$marker" ] || continue; [ -z "$found" ] || exit 13; found="$admin"; done; [ -n "$found" ] || { printf '0\\n'; exit 0; }; marker="$found/$marker_name"; IFS= read -r tombstone_lineage < "$marker" || exit 13; [ "$tombstone_lineage" = "$expected" ] || exit 13; f="$found/alas-worktree-lineage"; [ -s "$f" ] || exit 13; IFS= read -r lineage < "$f" || exit 13; [ "$lineage" = "$expected" ] || exit 13; printf '1\\n'
         """
     }
 
