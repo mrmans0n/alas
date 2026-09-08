@@ -1881,7 +1881,11 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
             guard verified.exitCode == 0 else { return false }
             let merged = try await remote.run(host: host, command: "git -C \(repo) merge-base --is-ancestor \(expected) HEAD")
             guard merged.exitCode == 0 else { return false }
-            let command = "git -C \(repo) worktree list --porcelain | grep -Fx \(SSHCommand.shellQuote("branch \(branchRef)")) >/dev/null && exit 1; git -C \(repo) update-ref -d \(branch) \(expected)"
+            let command = """
+            worktrees=$(git -C \(repo) worktree list --porcelain) || exit 1
+            printf '%s\\n' "$worktrees" | grep -Fx \(SSHCommand.shellQuote("branch \(branchRef)")) >/dev/null && exit 1
+            git -C \(repo) update-ref -d \(branch) \(expected)
+            """
             let result = try await remote.run(host: host, command: command)
             return result.exitCode == 0
         }

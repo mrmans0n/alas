@@ -719,7 +719,7 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(commands.contains("worktree prune"))
     }
 
-    @Test func remoteMergedBranchDeletionUsesGitBranchProtection() async throws {
+    @Test func remoteMergedBranchDeletionChecksWorktreeUsageAndExpectedBranchTip() async throws {
         let runner = RemoteLifecycleRunner(results: [
             .init(exitCode: 0, stdout: "abc\n", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
@@ -734,8 +734,9 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(removed)
         let commands = await runner.commands.joined(separator: "\n")
         #expect(commands.contains("merge-base --is-ancestor"))
-        #expect(commands.contains("branch -d --"))
-        #expect(commands.contains("feature"))
+        #expect(commands.contains("worktree list --porcelain"))
+        #expect(commands.contains("update-ref -d"))
+        #expect(commands.contains("refs/heads/feature"))
         #expect(commands.contains("abc"))
     }
 
