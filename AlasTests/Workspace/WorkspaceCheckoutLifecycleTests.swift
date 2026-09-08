@@ -719,7 +719,7 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(commands.contains("worktree prune"))
     }
 
-    @Test func remoteMergedBranchDeletionUsesAtomicExpectedOldValue() async throws {
+    @Test func remoteMergedBranchDeletionUsesGitBranchProtection() async throws {
         let runner = RemoteLifecycleRunner(results: [
             .init(exitCode: 0, stdout: "abc\n", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
@@ -734,10 +734,9 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(removed)
         let commands = await runner.commands.joined(separator: "\n")
         #expect(commands.contains("merge-base --is-ancestor"))
-        #expect(commands.contains("update-ref -d"))
-        #expect(commands.contains("refs/heads/feature"))
+        #expect(commands.contains("branch -d --"))
+        #expect(commands.contains("feature"))
         #expect(commands.contains("abc"))
-        #expect(commands.contains("branch -d") == false)
     }
 
     private static func sshCleanupPlan() -> WorkspaceCheckoutCleanupPlan {
@@ -795,6 +794,35 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(removed == false)
         let current = try await Process.git(["rev-parse", "feature/workspace"], cwd: repo)
         #expect(current.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == replacementCommit)
+    }
+
+    @Test func concreteLifecycleRetainsAMergedBranchCheckedOutByAnotherWorktree() async throws {
+        let repo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("workspace-cleanup-checked-out-\(UUID().uuidString)")
+        let independent = repo.deletingLastPathComponent().appendingPathComponent("workspace-independent-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: repo)
+            try? FileManager.default.removeItem(at: independent)
+        }
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "base"], cwd: repo)
+        let base = try await Process.git(["rev-parse", "HEAD"], cwd: repo)
+        let commit = base.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        _ = try await Process.git(["branch", "feature/workspace", commit], cwd: repo)
+        _ = try await Process.git(["worktree", "add", "-q", independent.path, "feature/workspace"], cwd: repo)
+        let plan = WorkspaceCheckoutCleanupPlan(
+            checkoutID: UUID(), memberID: UUID(), executionLocation: .local, projectID: "project",
+            sourceRepositoryPath: repo.path, baseReference: "main", baseCommit: commit, branchCommit: commit,
+            rootPath: repo.deletingLastPathComponent().path, managedMemberPaths: [], worktreePath: repo.path,
+            branch: "feature/workspace", expectedLineageID: "lineage", branchOwnership: .created
+        )
+
+        let removed = try await WorkspaceCheckoutLifecycleOperator().deleteMergedBranch(plan)
+
+        #expect(removed == false)
+        let head = try await Process.git(["rev-parse", "--verify", "HEAD"], cwd: independent)
+        #expect(head.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == commit)
     }
 
     @Test func localRootInspectionIgnoresTheManagedCheckoutManifest() async throws {

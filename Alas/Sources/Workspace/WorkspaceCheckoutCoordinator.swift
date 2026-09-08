@@ -978,7 +978,10 @@ actor WorkspaceCheckoutCoordinator {
                         await runSetup(member: frozenMember, checkout: checkout)
                     } else {
                         if member.gitLineageID != nil {
-                            guard try await git.frozenWorktreeIsMissing(operation) else { continue }
+                            guard try await git.frozenWorktreeIsMissing(operation),
+                                  let cleanupPlan = makeCleanupPlan(checkout: checkout, member: member)
+                            else { continue }
+                            try await lifecycle.clearStaleRegistration(cleanupPlan)
                         }
                         await execute(member: frozenMember, checkout: checkout)
                     }
@@ -1123,7 +1126,6 @@ actor WorkspaceCheckoutCoordinator {
             else { return false }
             state.checkouts[checkoutIndex].members[memberIndex].checkpoint = .worktreeCreating
             state.checkouts[checkoutIndex].members[memberIndex].availability = .pending
-            state.checkouts[checkoutIndex].members[memberIndex].gitLineageID = nil
             state.checkouts[checkoutIndex].members[memberIndex].cleanup = nil
             let branchOwnership = current.cleanupOwnership.branchOwnership
             state.checkouts[checkoutIndex].members[memberIndex].cleanupOwnership = .init(
@@ -1851,7 +1853,7 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
             else { return false }
             let merged = try await Process.git(["merge-base", "--is-ancestor", branchCommit, "HEAD"], cwd: repo, usesRemoteHostRegistry: false)
             guard merged.exitCode == 0 else { return false }
-            let result = try await Process.git(["update-ref", "-d", branchRef, branchCommit], cwd: repo, usesRemoteHostRegistry: false)
+            let result = try await Process.git(["branch", "-d", "--", plan.branch], cwd: repo, usesRemoteHostRegistry: false)
             return result.exitCode == 0
         case .ssh(let host):
             let repo = SSHCommand.shellQuote(plan.sourceRepositoryPath)
@@ -1863,7 +1865,7 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
             guard verified.exitCode == 0 else { return false }
             let merged = try await remote.run(host: host, command: "git -C \(repo) merge-base --is-ancestor \(expected) HEAD")
             guard merged.exitCode == 0 else { return false }
-            let command = "git -C \(repo) update-ref -d \(branch) \(expected)"
+            let command = "git -C \(repo) branch -d -- \(SSHCommand.shellQuote(plan.branch))"
             let result = try await remote.run(host: host, command: command)
             return result.exitCode == 0
         }
