@@ -381,6 +381,8 @@ actor WorkspaceCheckoutCoordinator {
                 current.members[index].checkpoint = .planPersisted
                 current.members[index].gitLineageID = nil
                 current.members[index].cleanupOwnership = .init()
+                current.members[index].recreationSourceCheckpoint = nil
+                current.members[index].recreationWorktreeCreationBegan = false
                 if !checkoutOperationAlreadyClaimed {
                     current.operation = .idle
                     current.stopAfterCurrentOperations = false
@@ -443,6 +445,8 @@ actor WorkspaceCheckoutCoordinator {
                 state.checkouts[checkoutIndex].members[memberIndex].checkpoint = .planPersisted
                 state.checkouts[checkoutIndex].members[memberIndex].gitLineageID = nil
                 state.checkouts[checkoutIndex].members[memberIndex].cleanupOwnership = .init()
+                state.checkouts[checkoutIndex].members[memberIndex].recreationSourceCheckpoint = nil
+                state.checkouts[checkoutIndex].members[memberIndex].recreationWorktreeCreationBegan = false
                 if let cleanupPlan {
                     state.checkouts[checkoutIndex].members[memberIndex].cleanup = .init(
                         plan: cleanupPlan,
@@ -586,6 +590,8 @@ actor WorkspaceCheckoutCoordinator {
                 guard let index = current.members.firstIndex(where: { $0.id == member.id }) else { return }
                 current.members[index].availability = .explicitlyDeleted
                 current.members[index].checkpoint = .planPersisted
+                current.members[index].recreationSourceCheckpoint = nil
+                current.members[index].recreationWorktreeCreationBegan = false
                 current.members[index].cleanup = .init(
                     plan: plan,
                     checkpoint: branchRemoved ? .complete : .branchDeleteAttempted,
@@ -599,6 +605,8 @@ actor WorkspaceCheckoutCoordinator {
                 guard let index = current.members.firstIndex(where: { $0.id == member.id }) else { return }
                 current.members[index].availability = .explicitlyDeleted
                 current.members[index].checkpoint = .planPersisted
+                current.members[index].recreationSourceCheckpoint = nil
+                current.members[index].recreationWorktreeCreationBegan = false
                 current.members[index].cleanup = nil
             }
         }
@@ -1891,7 +1899,11 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
                 )
                 guard remove.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(remove.stderr) }
             } else {
-                try await Self.removeLocalStaleRegistrationMetadata(repo: repo, destination: destination)
+                try await Self.removeLocalStaleRegistrationMetadata(
+                    repo: repo,
+                    destination: destination,
+                    expectedLineageID: plan.expectedLineageID
+                )
             }
             let refreshed = try await Process.git(["worktree", "list", "--porcelain"], cwd: repo, usesRemoteHostRegistry: false)
             guard refreshed.exitCode == 0,
@@ -1931,6 +1943,8 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
                     throw WorkspaceCheckoutCoordinatorError.lockedStaleRegistration
                 case 10:
                     throw WorkspaceCheckoutCoordinatorError.completedWorktreeReturned
+                case 13:
+                    throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict
                 default:
                     throw WorktreeService.WorktreeError.gitFailed(cleanup.stderr)
                 }
@@ -1944,7 +1958,8 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
 
     private static func removeLocalStaleRegistrationMetadata(
         repo: URL,
-        destination: URL
+        destination: URL,
+        expectedLineageID: String
     ) async throws {
         let adminDirectory = try await staleRegistrationAdminDirectory(
             repo: repo,
@@ -1958,6 +1973,10 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
             if FileManager.default.fileExists(atPath: removingDirectory.appendingPathComponent("locked").path) {
                 try FileManager.default.moveItem(at: removingDirectory, to: adminDirectory)
                 throw WorkspaceCheckoutCoordinatorError.lockedStaleRegistration
+            }
+            guard staleRegistrationLineageID(removingDirectory) == expectedLineageID else {
+                try FileManager.default.moveItem(at: removingDirectory, to: adminDirectory)
+                throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict
             }
             if WorkspaceFrozenGitOperator.pathEntryExistsOrIsSymlink(destination.path) {
                 try FileManager.default.moveItem(at: removingDirectory, to: adminDirectory)
@@ -2011,11 +2030,18 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
         return matches[0]
     }
 
+    private static func staleRegistrationLineageID(_ adminDirectory: URL) -> String? {
+        let marker = adminDirectory.appendingPathComponent("alas-worktree-lineage")
+        guard let text = try? String(contentsOf: marker, encoding: .utf8) else { return nil }
+        return WorktreeService.normalizedLineageID(text)
+    }
+
     private static func remoteStaleRegistrationMetadataCleanupCommand(_ plan: WorkspaceCheckoutCleanupPlan) -> String {
         let repo = SSHCommand.shellQuote(plan.sourceRepositoryPath)
         let destination = SSHCommand.shellQuote(plan.worktreePath)
+        let expectedLineageID = SSHCommand.shellQuote(plan.expectedLineageID)
         return """
-        repo=\(repo); target=\(destination); common=$(git -C "$repo" rev-parse --git-common-dir) || exit $?; case "$common" in /*) ;; *) common="$repo/$common" ;; esac; found=; for admin in "$common"/worktrees/*; do [ -d "$admin" ] || continue; [ -f "$admin/gitdir" ] || continue; IFS= read -r gitdir < "$admin/gitdir" || continue; [ "$gitdir" = "$target/.git" ] || continue; [ -z "$found" ] || exit 11; found="$admin"; done; [ -n "$found" ] || exit 12; [ -e "$found/locked" ] && exit 9; if [ -e "$target" ] || [ -L "$target" ]; then exit 10; fi; tomb="$found.alas-removing.$$"; mv "$found" "$tomb" || exit $?; if [ -e "$tomb/locked" ]; then mv "$tomb" "$found"; exit 9; fi; if [ -e "$target" ] || [ -L "$target" ]; then mv "$tomb" "$found"; exit 10; fi; rm -rf -- "$tomb"
+        repo=\(repo); target=\(destination); expected=\(expectedLineageID); common=$(git -C "$repo" rev-parse --git-common-dir) || exit $?; case "$common" in /*) ;; *) common="$repo/$common" ;; esac; found=; for admin in "$common"/worktrees/*; do [ -d "$admin" ] || continue; [ -f "$admin/gitdir" ] || continue; IFS= read -r gitdir < "$admin/gitdir" || continue; [ "$gitdir" = "$target/.git" ] || continue; [ -z "$found" ] || exit 11; found="$admin"; done; [ -n "$found" ] || exit 12; [ -e "$found/locked" ] && exit 9; f="$found/alas-worktree-lineage"; [ -s "$f" ] || exit 13; IFS= read -r lineage < "$f" || exit 13; [ "$lineage" = "$expected" ] || exit 13; if [ -e "$target" ] || [ -L "$target" ]; then exit 10; fi; tomb="$found.alas-removing.$$"; mv "$found" "$tomb" || exit $?; if [ -e "$tomb/locked" ]; then mv "$tomb" "$found"; exit 9; fi; f="$tomb/alas-worktree-lineage"; [ -s "$f" ] || { mv "$tomb" "$found"; exit 13; }; IFS= read -r lineage < "$f" || { mv "$tomb" "$found"; exit 13; }; [ "$lineage" = "$expected" ] || { mv "$tomb" "$found"; exit 13; }; if [ -e "$target" ] || [ -L "$target" ]; then mv "$tomb" "$found"; exit 10; fi; rm -rf -- "$tomb"
         """
     }
 
