@@ -7,12 +7,14 @@ protocol WorkspaceGitOperating: Sendable {
     func preparedBranchMatchesFrozenBase(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> Bool
     func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String?
     func existingCreatedWorktreeLineage(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String?
+    func recoverCreatedWorktreeLineage(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String?
     func frozenWorktreeIsMissing(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> Bool
 }
 
 extension WorkspaceGitOperating {
     func preparedBranchMatchesFrozenBase(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> Bool { false }
     func existingCreatedWorktreeLineage(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? { nil }
+    func recoverCreatedWorktreeLineage(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? { nil }
     func frozenWorktreeIsMissing(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> Bool {
         try await existingCreatedWorktreeLineage(operation) == nil
     }
@@ -967,6 +969,20 @@ actor WorkspaceCheckoutCoordinator {
                     }
                     continue
                 }
+                if member.recreationWorktreeCreationBegan,
+                   let cleanupPlan = makeCleanupPlan(checkout: checkout, member: member),
+                   let lineageID = try? await git.recoverCreatedWorktreeLineage(operation) {
+                    try await lifecycle.finalizeStaleRegistrationCleanup(cleanupPlan)
+                    try await updateMember(checkoutID: checkoutID, memberID: member.id) { current in
+                        current.checkpoint = .worktreeCreated
+                        current.availability = .available
+                        current.gitLineageID = lineageID
+                        current.recreationSourceCheckpoint = nil
+                        current.recreationWorktreeCreationBegan = false
+                    }
+                    await runSetup(member: frozenMember, checkout: checkout)
+                    continue
+                }
                 guard let cleanupPlan = makeCleanupPlan(checkout: checkout, member: member) else { continue }
                 claimedAnyMember = true
                 await execute(
@@ -1817,6 +1833,36 @@ struct WorkspaceFrozenGitOperator: WorkspaceGitOperating {
         }
     }
 
+    func recoverCreatedWorktreeLineage(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? {
+        guard let expectedLineageID = operation.expectedLineageID else { return nil }
+        switch operation.executionLocation.normalized {
+        case .local:
+            let destination = URL(fileURLWithPath: operation.destinationPath)
+            guard Self.pathEntryExistsOrIsSymlink(destination.path),
+                  WorktreeService.existingLocalLineageID(forWorktreeAt: destination) == nil
+            else { return nil }
+            let head = try await Process.git(["rev-parse", "--verify", "HEAD^{commit}"], cwd: destination, usesRemoteHostRegistry: false)
+            guard head.exitCode == 0,
+                  head.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == operation.baseCommit
+            else { return nil }
+            let branch = try await Process.git(["rev-parse", "--abbrev-ref", "HEAD"], cwd: destination, usesRemoteHostRegistry: false)
+            guard branch.exitCode == 0,
+                  branch.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == operation.branch
+            else { return nil }
+            return WorktreeService.localLineageID(forWorktreeAt: destination, candidateID: expectedLineageID)
+        case .ssh(let host):
+            let path = SSHCommand.shellQuote(operation.destinationPath)
+            let branch = SSHCommand.shellQuote(operation.branch)
+            let commit = SSHCommand.shellQuote(operation.baseCommit)
+            let expected = SSHCommand.shellQuote(expectedLineageID)
+            let command = "p=\(path); b=\(branch); c=\(commit); e=\(expected); test -d \"$p\" || exit 2; [ \"$(git -C \"$p\" rev-parse --verify HEAD^{commit})\" = \"$c\" ] || exit 3; [ \"$(git -C \"$p\" rev-parse --abbrev-ref HEAD)\" = \"$b\" ] || exit 4; d=$(git -C \"$p\" rev-parse --absolute-git-dir) || exit 5; f=\"$d/alas-worktree-lineage\"; [ ! -s \"$f\" ] || exit 6; (umask 077; set -C; printf '%s\\n' \"$e\" > \"$f\") 2>/dev/null || true; head -n 1 \"$f\""
+            let result = try await WorkspaceRemoteTransport().run(host: host, command: command)
+            guard result.exitCode == 0 else { return nil }
+            guard let lineage = WorktreeService.normalizedLineageID(result.stdout) else { return nil }
+            return lineage == expectedLineageID ? lineage : nil
+        }
+    }
+
     func frozenWorktreeIsMissing(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> Bool {
         switch operation.executionLocation.normalized {
         case .local:
@@ -2019,6 +2065,7 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
             else { throw WorktreeService.WorktreeError.gitFailed(refreshed.stderr) }
         case .ssh(let host):
             let repo = SSHCommand.shellQuote(plan.sourceRepositoryPath)
+            let matchedWorktreePaths = try await remoteMatchedWorktreePaths(plan: plan, host: host)
             var registrations = try await remote.run(host: host, command: "git -C \(repo) worktree list --porcelain")
             guard registrations.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(registrations.stderr) }
             let recovery = try await remote.run(
@@ -2035,8 +2082,8 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
             }
             registrations = try await remote.run(host: host, command: "git -C \(repo) worktree list --porcelain")
             guard registrations.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(registrations.stderr) }
-            guard Self.porcelainContainsWorktree(registrations.stdout, path: plan.worktreePath) else { return }
-            if Self.porcelainWorktreeIsLocked(registrations.stdout, path: plan.worktreePath) {
+            guard matchedWorktreePaths.contains(where: { Self.porcelainContainsWorktree(registrations.stdout, path: $0) }) else { return }
+            if matchedWorktreePaths.contains(where: { Self.porcelainWorktreeIsLocked(registrations.stdout, path: $0) }) {
                 guard unlockLocked else { throw WorkspaceCheckoutCoordinatorError.lockedStaleRegistration }
             }
             let destination = SSHCommand.shellQuote(plan.worktreePath)
@@ -2088,9 +2135,24 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
             }
             let refreshed = try await remote.run(host: host, command: "git -C \(repo) worktree list --porcelain")
             guard refreshed.exitCode == 0,
-                  !Self.porcelainContainsWorktree(refreshed.stdout, path: plan.worktreePath)
+                  !matchedWorktreePaths.contains(where: { Self.porcelainContainsWorktree(refreshed.stdout, path: $0) })
             else { throw WorktreeService.WorktreeError.gitFailed(refreshed.stderr) }
         }
+    }
+
+    private func remoteMatchedWorktreePaths(plan: WorkspaceCheckoutCleanupPlan, host: String) async throws -> Set<String> {
+        let destination = SSHCommand.shellQuote(plan.worktreePath)
+        let resolved = try await remote.run(
+            host: host,
+            command: "target=\(destination); parent=${target%/*}; base=${target##*/}; if resolved_parent=$(cd \"$parent\" 2>/dev/null && pwd -P); then printf '%s/%s\\n' \"$resolved_parent\" \"$base\"; else printf '%s\\n' \"$target\"; fi"
+        )
+        guard resolved.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(resolved.stderr) }
+        var paths: Set<String> = [plan.worktreePath]
+        let resolvedPath = resolved.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !resolvedPath.isEmpty {
+            paths.insert(resolvedPath)
+        }
+        return paths
     }
 
     private static func recoverLocalInterruptedStaleRegistrationTombstone(
@@ -2294,7 +2356,7 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
         let tombstoneMarker = SSHCommand.shellQuote(Self.staleRegistrationTombstoneMarker)
         let originalNameMarker = SSHCommand.shellQuote(Self.staleRegistrationOriginalNameMarker)
         return """
-        repo=\(repo); target=\(destination); expected=\(expectedLineageID); marker_name=\(tombstoneMarker); original_name_marker=\(originalNameMarker); common=$(git -C "$repo" rev-parse --git-common-dir) || exit $?; case "$common" in /*) ;; *) common="$repo/$common" ;; esac; found=; for admin in "$common"/worktrees/*; do [ -d "$admin" ] || continue; [ -f "$admin/gitdir" ] || continue; IFS= read -r gitdir < "$admin/gitdir" || continue; [ "$gitdir" = "$target/.git" ] || continue; [ -z "$found" ] || exit 11; found="$admin"; done; [ -n "$found" ] || exit 12; [ -e "$found/locked" ] && exit 9; f="$found/alas-worktree-lineage"; [ -s "$f" ] || exit 13; IFS= read -r lineage < "$f" || exit 13; [ "$lineage" = "$expected" ] || exit 13; if [ -e "$target" ] || [ -L "$target" ]; then exit 10; fi; marker="$found/$marker_name"; original_marker="$found/$original_name_marker"; printf '%s\\n' "$expected" > "$marker" || exit $?; printf '%s\\n' "${found##*/}" > "$original_marker" || { rm -f -- "$marker"; exit 1; }; tomb_root="$common/alas-stale-worktree-tombstones"; mkdir -p "$tomb_root" || { rm -f -- "$marker" "$original_marker"; exit 1; }; tomb="$tomb_root/${found##*/}.alas-removing.$$"; if ! mv "$found" "$tomb"; then rm -f -- "$marker" "$original_marker"; exit 1; fi; restore() { mv "$tomb" "$found" || exit $?; rm -f -- "$found/$marker_name" "$found/$original_name_marker"; }; if [ -e "$tomb/locked" ]; then restore; exit 9; fi; f="$tomb/alas-worktree-lineage"; [ -s "$f" ] || { restore; exit 13; }; IFS= read -r lineage < "$f" || { restore; exit 13; }; [ "$lineage" = "$expected" ] || { restore; exit 13; }; if [ -e "$target" ] || [ -L "$target" ]; then restore; exit 10; fi
+        repo=\(repo); target=\(destination); expected=\(expectedLineageID); marker_name=\(tombstoneMarker); original_name_marker=\(originalNameMarker); common=$(git -C "$repo" rev-parse --git-common-dir) || exit $?; case "$common" in /*) ;; *) common="$repo/$common" ;; esac; parent=${target%/*}; base=${target##*/}; if resolved_parent=$(cd "$parent" 2>/dev/null && pwd -P); then target_real="$resolved_parent/$base"; else target_real="$target"; fi; found=; for admin in "$common"/worktrees/*; do [ -d "$admin" ] || continue; [ -f "$admin/gitdir" ] || continue; IFS= read -r gitdir < "$admin/gitdir" || continue; { [ "$gitdir" = "$target/.git" ] || [ "$gitdir" = "$target_real/.git" ]; } || continue; [ -z "$found" ] || exit 11; found="$admin"; done; [ -n "$found" ] || exit 12; [ -e "$found/locked" ] && exit 9; f="$found/alas-worktree-lineage"; [ -s "$f" ] || exit 13; IFS= read -r lineage < "$f" || exit 13; [ "$lineage" = "$expected" ] || exit 13; if [ -e "$target" ] || [ -L "$target" ]; then exit 10; fi; marker="$found/$marker_name"; original_marker="$found/$original_name_marker"; printf '%s\\n' "$expected" > "$marker" || exit $?; printf '%s\\n' "${found##*/}" > "$original_marker" || { rm -f -- "$marker"; exit 1; }; tomb_root="$common/alas-stale-worktree-tombstones"; mkdir -p "$tomb_root" || { rm -f -- "$marker" "$original_marker"; exit 1; }; tomb="$tomb_root/${found##*/}.alas-removing.$$"; if ! mv "$found" "$tomb"; then rm -f -- "$marker" "$original_marker"; exit 1; fi; restore() { mv "$tomb" "$found" || exit $?; rm -f -- "$found/$marker_name" "$found/$original_name_marker"; }; if [ -e "$tomb/locked" ]; then restore; exit 9; fi; f="$tomb/alas-worktree-lineage"; [ -s "$f" ] || { restore; exit 13; }; IFS= read -r lineage < "$f" || { restore; exit 13; }; [ "$lineage" = "$expected" ] || { restore; exit 13; }; if [ -e "$target" ] || [ -L "$target" ]; then restore; exit 10; fi
         """
     }
 
@@ -2303,7 +2365,7 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
         let destination = SSHCommand.shellQuote(plan.worktreePath)
         let expectedLineageID = SSHCommand.shellQuote(plan.expectedLineageID)
         return """
-        repo=\(repo); target=\(destination); expected=\(expectedLineageID); common=$(git -C "$repo" rev-parse --git-common-dir) || exit $?; case "$common" in /*) ;; *) common="$repo/$common" ;; esac; found=; for admin in "$common"/worktrees/*; do [ -d "$admin" ] || continue; [ -f "$admin/gitdir" ] || continue; IFS= read -r gitdir < "$admin/gitdir" || continue; [ "$gitdir" = "$target/.git" ] || continue; [ -z "$found" ] || exit 13; found="$admin"; done; [ -n "$found" ] || exit 12; f="$found/alas-worktree-lineage"; [ -s "$f" ] || exit 13; IFS= read -r lineage < "$f" || exit 13; [ "$lineage" = "$expected" ] || exit 13
+        repo=\(repo); target=\(destination); expected=\(expectedLineageID); common=$(git -C "$repo" rev-parse --git-common-dir) || exit $?; case "$common" in /*) ;; *) common="$repo/$common" ;; esac; parent=${target%/*}; base=${target##*/}; if resolved_parent=$(cd "$parent" 2>/dev/null && pwd -P); then target_real="$resolved_parent/$base"; else target_real="$target"; fi; found=; for admin in "$common"/worktrees/*; do [ -d "$admin" ] || continue; [ -f "$admin/gitdir" ] || continue; IFS= read -r gitdir < "$admin/gitdir" || continue; { [ "$gitdir" = "$target/.git" ] || [ "$gitdir" = "$target_real/.git" ]; } || continue; [ -z "$found" ] || exit 13; found="$admin"; done; [ -n "$found" ] || exit 12; f="$found/alas-worktree-lineage"; [ -s "$f" ] || exit 13; IFS= read -r lineage < "$f" || exit 13; [ "$lineage" = "$expected" ] || exit 13
         """
     }
 
@@ -2314,7 +2376,7 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
         let tombstoneMarker = SSHCommand.shellQuote(Self.staleRegistrationTombstoneMarker)
         let originalNameMarker = SSHCommand.shellQuote(Self.staleRegistrationOriginalNameMarker)
         return """
-        repo=\(repo); target=\(destination); expected=\(expectedLineageID); marker_name=\(tombstoneMarker); original_name_marker=\(originalNameMarker); common=$(git -C "$repo" rev-parse --git-common-dir) || exit $?; case "$common" in /*) ;; *) common="$repo/$common" ;; esac; found=; for admin in "$common"/alas-stale-worktree-tombstones/*; do [ -d "$admin" ] || continue; [ -f "$admin/gitdir" ] || continue; IFS= read -r gitdir < "$admin/gitdir" || continue; [ "$gitdir" = "$target/.git" ] || continue; marker="$admin/$marker_name"; [ -s "$marker" ] || continue; [ -z "$found" ] || exit 13; found="$admin"; done; [ -n "$found" ] || exit 0; marker="$found/$marker_name"; IFS= read -r tombstone_lineage < "$marker" || exit 13; [ "$tombstone_lineage" = "$expected" ] || exit 13; f="$found/alas-worktree-lineage"; [ -s "$f" ] || exit 13; IFS= read -r lineage < "$f" || exit 13; [ "$lineage" = "$expected" ] || exit 13; rm -rf -- "$found"; rmdir "$common/alas-stale-worktree-tombstones" 2>/dev/null || true
+        repo=\(repo); target=\(destination); expected=\(expectedLineageID); marker_name=\(tombstoneMarker); original_name_marker=\(originalNameMarker); common=$(git -C "$repo" rev-parse --git-common-dir) || exit $?; case "$common" in /*) ;; *) common="$repo/$common" ;; esac; parent=${target%/*}; base=${target##*/}; if resolved_parent=$(cd "$parent" 2>/dev/null && pwd -P); then target_real="$resolved_parent/$base"; else target_real="$target"; fi; found=; for admin in "$common"/alas-stale-worktree-tombstones/*; do [ -d "$admin" ] || continue; [ -f "$admin/gitdir" ] || continue; IFS= read -r gitdir < "$admin/gitdir" || continue; { [ "$gitdir" = "$target/.git" ] || [ "$gitdir" = "$target_real/.git" ]; } || continue; marker="$admin/$marker_name"; [ -s "$marker" ] || continue; [ -z "$found" ] || exit 13; found="$admin"; done; [ -n "$found" ] || exit 0; marker="$found/$marker_name"; IFS= read -r tombstone_lineage < "$marker" || exit 13; [ "$tombstone_lineage" = "$expected" ] || exit 13; f="$found/alas-worktree-lineage"; [ -s "$f" ] || exit 13; IFS= read -r lineage < "$f" || exit 13; [ "$lineage" = "$expected" ] || exit 13; rm -rf -- "$found"; rmdir "$common/alas-stale-worktree-tombstones" 2>/dev/null || true
         """
     }
 
@@ -2325,7 +2387,7 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
         let tombstoneMarker = SSHCommand.shellQuote(Self.staleRegistrationTombstoneMarker)
         let originalNameMarker = SSHCommand.shellQuote(Self.staleRegistrationOriginalNameMarker)
         return """
-        repo=\(repo); target=\(destination); expected=\(expectedLineageID); marker_name=\(tombstoneMarker); original_name_marker=\(originalNameMarker); common=$(git -C "$repo" rev-parse --git-common-dir) || exit $?; case "$common" in /*) ;; *) common="$repo/$common" ;; esac; found=; for admin in "$common"/alas-stale-worktree-tombstones/*; do [ -d "$admin" ] || continue; [ -f "$admin/gitdir" ] || continue; IFS= read -r gitdir < "$admin/gitdir" || continue; [ "$gitdir" = "$target/.git" ] || continue; [ -z "$found" ] || exit 11; found="$admin"; done; [ -n "$found" ] || exit 0; base=${found##*/}; case "$base" in *.alas-removing-*) ;; *) exit 0 ;; esac; marker="$found/$marker_name"; [ -s "$marker" ] || exit 0; IFS= read -r tombstone_lineage < "$marker" || exit 13; [ "$tombstone_lineage" = "$expected" ] || exit 13; f="$found/alas-worktree-lineage"; [ -s "$f" ] || exit 13; IFS= read -r lineage < "$f" || exit 13; [ "$lineage" = "$expected" ] || exit 13; original_marker="$found/$original_name_marker"; [ -s "$original_marker" ] || exit 13; IFS= read -r restored_base < "$original_marker" || exit 13; case "$restored_base" in ""|*/*) exit 13 ;; esac; parent="$common/worktrees"; restored="$parent/$restored_base"; [ ! -e "$restored" ] || exit 13; mv "$found" "$restored" || exit $?; rm -f -- "$restored/$marker_name" "$restored/$original_name_marker"; rmdir "$common/alas-stale-worktree-tombstones" 2>/dev/null || true
+        repo=\(repo); target=\(destination); expected=\(expectedLineageID); marker_name=\(tombstoneMarker); original_name_marker=\(originalNameMarker); common=$(git -C "$repo" rev-parse --git-common-dir) || exit $?; case "$common" in /*) ;; *) common="$repo/$common" ;; esac; parent=${target%/*}; base=${target##*/}; if resolved_parent=$(cd "$parent" 2>/dev/null && pwd -P); then target_real="$resolved_parent/$base"; else target_real="$target"; fi; found=; for admin in "$common"/alas-stale-worktree-tombstones/*; do [ -d "$admin" ] || continue; [ -f "$admin/gitdir" ] || continue; IFS= read -r gitdir < "$admin/gitdir" || continue; { [ "$gitdir" = "$target/.git" ] || [ "$gitdir" = "$target_real/.git" ]; } || continue; [ -z "$found" ] || exit 11; found="$admin"; done; [ -n "$found" ] || exit 0; base=${found##*/}; case "$base" in *.alas-removing-*) ;; *) exit 0 ;; esac; marker="$found/$marker_name"; [ -s "$marker" ] || exit 0; IFS= read -r tombstone_lineage < "$marker" || exit 13; [ "$tombstone_lineage" = "$expected" ] || exit 13; f="$found/alas-worktree-lineage"; [ -s "$f" ] || exit 13; IFS= read -r lineage < "$f" || exit 13; [ "$lineage" = "$expected" ] || exit 13; original_marker="$found/$original_name_marker"; [ -s "$original_marker" ] || exit 13; IFS= read -r restored_base < "$original_marker" || exit 13; case "$restored_base" in ""|*/*) exit 13 ;; esac; parent="$common/worktrees"; restored="$parent/$restored_base"; [ ! -e "$restored" ] || exit 13; mv "$found" "$restored" || exit $?; rm -f -- "$restored/$marker_name" "$restored/$original_name_marker"; rmdir "$common/alas-stale-worktree-tombstones" 2>/dev/null || true
         """
     }
 

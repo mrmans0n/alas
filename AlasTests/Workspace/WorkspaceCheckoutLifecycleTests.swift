@@ -152,6 +152,33 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(await lifecycle.finalizedRegistrations == [fixture.member.id])
     }
 
+    @Test func resumingMarkerlessCreatedReplacementRecordsLineageAndFinalizesTombstone() async throws {
+        let fixture = try await Fixture.make(operation: .creating)
+        try await fixture.store.mutate { state in
+            state.checkouts[0].members[0].checkpoint = .failed
+            state.checkouts[0].members[0].availability = .unavailable
+            state.checkouts[0].members[0].recreationSourceCheckpoint = .setupComplete
+            state.checkouts[0].members[0].recreationWorktreeCreationBegan = true
+        }
+        let lifecycle = FixtureLifecycle()
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: fixture.store,
+            git: FixtureGit(recoveredCreatedLineageID: "lineage-a"),
+            scripts: FixtureScripts(),
+            sessions: LifecycleSessions(),
+            lifecycle: lifecycle
+        )
+
+        let checkout = try await coordinator.resumeCreation(checkoutID: fixture.checkout.id)
+
+        #expect(await lifecycle.finalizedRegistrations == [fixture.member.id])
+        #expect(await lifecycle.clearedRegistrations.isEmpty)
+        #expect(checkout.members[0].checkpoint == .setupComplete)
+        #expect(checkout.members[0].gitLineageID == "lineage-a")
+        #expect(checkout.members[0].recreationSourceCheckpoint == nil)
+        #expect(checkout.members[0].recreationWorktreeCreationBegan == false)
+    }
+
     @Test func recreatingRecoverableReturnedTombstoneRunsStaleCleanupBeforeLineageCheck() async throws {
         let fixture = try await Fixture.make(operation: .creating)
         let lifecycle = FixtureLifecycle(clearError: WorkspaceCheckoutCoordinatorError.completedWorktreeReturned)
@@ -1119,6 +1146,7 @@ struct WorkspaceCheckoutLifecycleTests {
 
     @Test func concreteRemoteCleanupRemovesOnlyTheTargetStaleRegistration() async throws {
         let runner = RemoteLifecycleRunner(results: [
+            .init(exitCode: 0, stdout: "/checkout/a\n", stderr: ""),
             .init(exitCode: 0, stdout: "worktree /checkout/a\nprunable gitdir file points to non-existent location\n", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "worktree /checkout/a\nprunable gitdir file points to non-existent location\n", stderr: ""),
@@ -1139,6 +1167,7 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(commands.contains("worktree list --porcelain"))
         #expect(commands.contains("/checkout/a"))
         #expect(commands.contains("rev-parse --git-common-dir"))
+        #expect(commands.contains("target_real"))
         #expect(commands.contains(".alas-removing"))
         #expect(commands.contains("alas-stale-registration-tombstone"))
         #expect(commands.contains("rm -f -- \"$tomb/$marker_name\" \"$tomb/$original_name_marker\"; mv") == false)
@@ -1149,6 +1178,7 @@ struct WorkspaceCheckoutLifecycleTests {
 
     @Test func concreteRemoteCleanupRetainsAWorktreeThatReturnsBeforeTargetedRemoval() async throws {
         let runner = RemoteLifecycleRunner(results: [
+            .init(exitCode: 0, stdout: "/checkout/a\n", stderr: ""),
             .init(exitCode: 0, stdout: "worktree /checkout/a\nprunable gitdir file points to non-existent location\n", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "worktree /checkout/a\nprunable gitdir file points to non-existent location\n", stderr: ""),
@@ -1168,6 +1198,7 @@ struct WorkspaceCheckoutLifecycleTests {
 
     @Test func concreteRemoteCleanupRetainsLockedMissingWorktreeRegistration() async throws {
         let runner = RemoteLifecycleRunner(results: [
+            .init(exitCode: 0, stdout: "/checkout/a\n", stderr: ""),
             .init(exitCode: 0, stdout: "worktree /checkout/a\nlocked\nprunable gitdir file points to non-existent location\n", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "worktree /checkout/a\nlocked\nprunable gitdir file points to non-existent location\n", stderr: ""),
@@ -1187,6 +1218,7 @@ struct WorkspaceCheckoutLifecycleTests {
 
     @Test func concreteRemoteCleanupRetainsRegistrationLockedAfterInspection() async throws {
         let runner = RemoteLifecycleRunner(results: [
+            .init(exitCode: 0, stdout: "/checkout/a\n", stderr: ""),
             .init(exitCode: 0, stdout: "worktree /checkout/a\nprunable gitdir file points to non-existent location\n", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "worktree /checkout/a\nprunable gitdir file points to non-existent location\n", stderr: ""),
@@ -1208,6 +1240,7 @@ struct WorkspaceCheckoutLifecycleTests {
 
     @Test func concreteRemoteCleanupRejectsStaleRegistrationWithDifferentLineage() async throws {
         let runner = RemoteLifecycleRunner(results: [
+            .init(exitCode: 0, stdout: "/checkout/a\n", stderr: ""),
             .init(exitCode: 0, stdout: "worktree /checkout/a\nprunable gitdir file points to non-existent location\n", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "worktree /checkout/a\nprunable gitdir file points to non-existent location\n", stderr: ""),
@@ -1231,6 +1264,7 @@ struct WorkspaceCheckoutLifecycleTests {
 
     @Test func concreteRemoteCleanupRecoversInterruptedTombstoneBeforeReturnedWorktreeCheck() async throws {
         let runner = RemoteLifecycleRunner(results: [
+            .init(exitCode: 0, stdout: "/checkout/a\n", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "worktree /checkout/a\nprunable gitdir file points to non-existent location\n", stderr: ""),
@@ -1259,6 +1293,7 @@ struct WorkspaceCheckoutLifecycleTests {
 
     @Test func concreteRemoteExplicitCleanupUnlocksLockedMissingWorktreeRegistration() async throws {
         let runner = RemoteLifecycleRunner(results: [
+            .init(exitCode: 0, stdout: "/checkout/a\n", stderr: ""),
             .init(exitCode: 0, stdout: "worktree /checkout/a\nlocked portable volume\nprunable gitdir file points to non-existent location\n", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "worktree /checkout/a\nlocked portable volume\nprunable gitdir file points to non-existent location\n", stderr: ""),
@@ -1282,6 +1317,7 @@ struct WorkspaceCheckoutLifecycleTests {
 
     @Test func concreteRemoteExplicitCleanupValidatesLineageBeforeForcedRemoval() async throws {
         let runner = RemoteLifecycleRunner(results: [
+            .init(exitCode: 0, stdout: "/checkout/a\n", stderr: ""),
             .init(exitCode: 0, stdout: "worktree /checkout/a\nprunable gitdir file points to non-existent location\n", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "worktree /checkout/a\nprunable gitdir file points to non-existent location\n", stderr: ""),
@@ -1303,6 +1339,7 @@ struct WorkspaceCheckoutLifecycleTests {
 
     @Test func concreteRemoteExplicitCleanupRemovesRecoveredPendingTombstoneRegistration() async throws {
         let runner = RemoteLifecycleRunner(results: [
+            .init(exitCode: 0, stdout: "/checkout/a\n", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "worktree /checkout/a\nprunable gitdir file points to non-existent location\n", stderr: ""),
@@ -1327,6 +1364,7 @@ struct WorkspaceCheckoutLifecycleTests {
 
     @Test func concreteRemoteExplicitCleanupRestoresReturnedPendingTombstoneBeforePreflight() async throws {
         let runner = RemoteLifecycleRunner(results: [
+            .init(exitCode: 0, stdout: "/checkout/a\n", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "worktree /checkout/a\nprunable gitdir file points to non-existent location\n", stderr: ""),
@@ -1673,15 +1711,18 @@ struct WorkspaceCheckoutLifecycleTests {
 
 private actor FixtureGit: WorkspaceGitOperating {
     var existingCreatedLineageID: String? = nil
+    var recoveredCreatedLineageID: String? = nil
     var preparedBranchMatches = false
     var frozenWorktreeMissingResults: [Bool] = []
 
     init(
         existingCreatedLineageID: String? = nil,
+        recoveredCreatedLineageID: String? = nil,
         preparedBranchMatches: Bool = false,
         frozenWorktreeMissingResults: [Bool] = []
     ) {
         self.existingCreatedLineageID = existingCreatedLineageID
+        self.recoveredCreatedLineageID = recoveredCreatedLineageID
         self.preparedBranchMatches = preparedBranchMatches
         self.frozenWorktreeMissingResults = frozenWorktreeMissingResults
     }
@@ -1693,6 +1734,9 @@ private actor FixtureGit: WorkspaceGitOperating {
     func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? { nil }
     func existingCreatedWorktreeLineage(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? {
         existingCreatedLineageID
+    }
+    func recoverCreatedWorktreeLineage(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? {
+        recoveredCreatedLineageID
     }
     func frozenWorktreeIsMissing(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> Bool {
         if frozenWorktreeMissingResults.isEmpty {
