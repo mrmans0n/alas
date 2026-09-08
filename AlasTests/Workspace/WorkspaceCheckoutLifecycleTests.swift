@@ -130,6 +130,28 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(checkout.members[0].recreationWorktreeCreationBegan == false)
     }
 
+    @Test func resumingCreatedReplacementFinalizesPendingStaleRegistrationTombstone() async throws {
+        let fixture = try await Fixture.make(operation: .creating)
+        try await fixture.store.mutate { state in
+            state.checkouts[0].members[0].checkpoint = .failed
+            state.checkouts[0].members[0].availability = .unavailable
+            state.checkouts[0].members[0].recreationSourceCheckpoint = .setupComplete
+            state.checkouts[0].members[0].recreationWorktreeCreationBegan = true
+        }
+        let lifecycle = FixtureLifecycle()
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: fixture.store,
+            git: FixtureGit(existingCreatedLineageID: "lineage-a"),
+            scripts: FixtureScripts(),
+            sessions: LifecycleSessions(),
+            lifecycle: lifecycle
+        )
+
+        _ = try await coordinator.resumeCreation(checkoutID: fixture.checkout.id)
+
+        #expect(await lifecycle.finalizedRegistrations == [fixture.member.id])
+    }
+
     @Test func deletionPreviewAllowsMissingAttemptOwnedMembers() async throws {
         let fixture = try await Fixture.make()
         try await fixture.store.mutate { state in
@@ -713,7 +735,7 @@ struct WorkspaceCheckoutLifecycleTests {
         let root = canonicalTemp
             .appendingPathComponent("alas-lifecycle-\(UUID().uuidString)", isDirectory: true)
         let repo = root.appendingPathComponent("repo", isDirectory: true)
-        let target = root.appendingPathComponent("target", isDirectory: true)
+        let target = root.appendingPathComponent("foo.alas-removing-bar", isDirectory: true)
         let unrelated = root.appendingPathComponent("unrelated", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -805,6 +827,12 @@ struct WorkspaceCheckoutLifecycleTests {
             atomically: true,
             encoding: .utf8
         )
+        try "\(admin.lastPathComponent)\n".write(
+            to: tombstone.appendingPathComponent("alas-stale-registration-original-name"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let incorrectlyRestored = admin.deletingLastPathComponent().appendingPathComponent("foo")
         let lifecycle = WorkspaceCheckoutLifecycleOperator()
 
         await #expect(throws: WorkspaceCheckoutCoordinatorError.completedWorktreeReturned) {
@@ -812,6 +840,7 @@ struct WorkspaceCheckoutLifecycleTests {
         }
 
         #expect(FileManager.default.fileExists(atPath: admin.path))
+        #expect(FileManager.default.fileExists(atPath: incorrectlyRestored.path) == false)
         #expect(FileManager.default.fileExists(atPath: tombstone.path) == false)
     }
 
@@ -975,11 +1004,13 @@ struct WorkspaceCheckoutLifecycleTests {
         let commands = await runner.commands.joined(separator: "\n")
         #expect(commands.contains(".alas-removing-"))
         #expect(commands.contains("base=${found##*/}"))
-        #expect(commands.contains("restored_base=${base%%.alas-removing-*}"))
+        #expect(commands.contains("alas-stale-registration-original-name"))
+        #expect(commands.contains("restored_base=${base%%.alas-removing-*}") == false)
         #expect(commands.contains("restored=\"$parent/$restored_base\""))
         #expect(commands.contains("restored=${found%%.alas-removing-*}") == false)
         #expect(commands.contains("alas-stale-registration-tombstone"))
         #expect(commands.contains("[ -s \"$marker\" ] || exit 0"))
+        #expect(commands.contains("rm -f -- \"$marker\"; mv") == false)
         #expect(commands.contains("worktree remove -f -f") == false)
     }
 
@@ -1329,8 +1360,13 @@ struct WorkspaceCheckoutLifecycleTests {
 }
 
 private struct FixtureGit: WorkspaceGitOperating {
+    var existingCreatedLineageID: String? = nil
+
     func prepareBranch(_ operation: WorkspaceFrozenWorktreeOperation) async throws {}
     func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? { nil }
+    func existingCreatedWorktreeLineage(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? {
+        existingCreatedLineageID
+    }
 }
 private struct FixtureScripts: WorkspaceScriptRunning { func runSetup(for operation: WorkspaceCheckoutSetupOperation) async throws {} }
 private actor LifecycleSessions: WorkspaceCheckoutSessionStopping {
@@ -1345,6 +1381,7 @@ private actor FixtureLifecycle: WorkspaceCheckoutLifecycleOperating {
     private(set) var removedMembers: [UUID] = []
     private(set) var deletedBranches: [UUID] = []
     private(set) var clearedRegistrations: [UUID] = []
+    private(set) var finalizedRegistrations: [UUID] = []
     private(set) var removeForces: [(force: Bool, forceTwice: Bool)] = []
     private(set) var removedRootArtifacts: [UUID] = []
     let preflight: WorktreeDeletePreflight
@@ -1364,6 +1401,9 @@ private actor FixtureLifecycle: WorkspaceCheckoutLifecycleOperating {
     }
     func clearStaleRegistration(_ plan: WorkspaceCheckoutCleanupPlan) async throws {
         clearedRegistrations.append(plan.memberID)
+    }
+    func finalizeStaleRegistrationCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async throws {
+        finalizedRegistrations.append(plan.memberID)
     }
     func removeWorktree(_ plan: WorkspaceCheckoutCleanupPlan, force: Bool, forceTwice: Bool) async throws { if failingMember == plan.memberID { throw TestLifecycleError.failed }
     removeForces.append((force, forceTwice))
