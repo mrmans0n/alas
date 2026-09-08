@@ -734,9 +734,11 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(commands.contains("worktree prune") == false)
     }
 
-    @Test func remoteMergedBranchDeletionUsesGitBranchDeletionGuards() async throws {
+    @Test func remoteMergedBranchDeletionRechecksWorktreeUsageAfterExpectedTipDeletion() async throws {
         let runner = RemoteLifecycleRunner(results: [
             .init(exitCode: 0, stdout: "abc\n", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
         ])
@@ -749,11 +751,31 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(removed)
         let commands = await runner.commands.joined(separator: "\n")
         #expect(commands.contains("merge-base --is-ancestor"))
-        #expect(commands.contains("worktree list --porcelain") == false)
-        #expect(commands.contains("update-ref -d") == false)
-        #expect(commands.contains("branch -d --"))
-        #expect(commands.contains("feature"))
+        #expect(commands.contains("worktree list --porcelain"))
+        #expect(commands.contains("update-ref -d"))
+        #expect(commands.contains("branch -d --") == false)
         #expect(commands.contains("abc"))
+    }
+
+    @Test func remoteMergedBranchDeletionRestoresExpectedTipWhenCheckoutAppearsDuringDeletion() async throws {
+        let runner = RemoteLifecycleRunner(results: [
+            .init(exitCode: 0, stdout: "abc\n", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "worktree /other\nbranch refs/heads/feature\n", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+        ])
+        let lifecycle = WorkspaceCheckoutLifecycleOperator(remote: .init { executable, args, timeout in
+            try await runner.run(executable: executable, args: args, timeout: timeout)
+        })
+
+        let removed = try await lifecycle.deleteMergedBranch(Self.sshCleanupPlan())
+
+        #expect(removed == false)
+        let commands = await runner.commands.joined(separator: "\n")
+        #expect(commands.contains("update-ref -d"))
+        #expect(commands.contains("update-ref refs/heads/feature abc 0000000000000000000000000000000000000000"))
     }
 
     private static func sshCleanupPlan() -> WorkspaceCheckoutCleanupPlan {

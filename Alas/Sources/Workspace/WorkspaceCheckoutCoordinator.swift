@@ -1869,24 +1869,50 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
             else { return false }
             let merged = try await Process.git(["merge-base", "--is-ancestor", branchCommit, "HEAD"], cwd: repo, usesRemoteHostRegistry: false)
             guard merged.exitCode == 0 else { return false }
-            let result = try await Process.git(["branch", "-d", "--", plan.branch], cwd: repo, usesRemoteHostRegistry: false)
-            return result.exitCode == 0
+            let checkedOut = try await Process.git(["worktree", "list", "--porcelain"], cwd: repo, usesRemoteHostRegistry: false)
+            guard checkedOut.exitCode == 0,
+                  !checkedOut.stdout.split(separator: "\n").contains(where: { $0 == "branch \(branchRef)" })
+            else { return false }
+            let result = try await Process.git(["update-ref", "-d", branchRef, branchCommit], cwd: repo, usesRemoteHostRegistry: false)
+            guard result.exitCode == 0 else { return false }
+            let recheckedOut = try await Process.git(["worktree", "list", "--porcelain"], cwd: repo, usesRemoteHostRegistry: false)
+            guard recheckedOut.exitCode == 0 else {
+                _ = try await Process.git(["update-ref", branchRef, branchCommit, Self.nullObjectID], cwd: repo, usesRemoteHostRegistry: false)
+                return false
+            }
+            guard !recheckedOut.stdout.split(separator: "\n").contains(where: { $0 == "branch \(branchRef)" }) else {
+                _ = try await Process.git(["update-ref", branchRef, branchCommit, Self.nullObjectID], cwd: repo, usesRemoteHostRegistry: false)
+                return false
+            }
+            return true
         case .ssh(let host):
             let repo = SSHCommand.shellQuote(plan.sourceRepositoryPath)
             let branchRef = "refs/heads/\(plan.branch)"
             let branch = SSHCommand.shellQuote(branchRef)
-            let branchName = SSHCommand.shellQuote(plan.branch)
             let expected = SSHCommand.shellQuote(branchCommit)
             let verify = "test \"$(git -C \(repo) rev-parse --verify \(branch)^{commit})\" = \(expected)"
             let verified = try await remote.run(host: host, command: verify)
             guard verified.exitCode == 0 else { return false }
             let merged = try await remote.run(host: host, command: "git -C \(repo) merge-base --is-ancestor \(expected) HEAD")
             guard merged.exitCode == 0 else { return false }
-            let command = "git -C \(repo) branch -d -- \(branchName)"
-            let result = try await remote.run(host: host, command: command)
-            return result.exitCode == 0
+            let initialUsage = try await remote.run(host: host, command: "git -C \(repo) worktree list --porcelain")
+            guard initialUsage.exitCode == 0,
+                  !initialUsage.stdout.split(separator: "\n").contains(where: { $0 == "branch \(branchRef)" })
+            else { return false }
+            let deleted = try await remote.run(host: host, command: "git -C \(repo) update-ref -d \(branch) \(expected)")
+            guard deleted.exitCode == 0 else { return false }
+            let recheckedUsage = try await remote.run(host: host, command: "git -C \(repo) worktree list --porcelain")
+            guard recheckedUsage.exitCode == 0,
+                  !recheckedUsage.stdout.split(separator: "\n").contains(where: { $0 == "branch \(branchRef)" })
+            else {
+                _ = try await remote.run(host: host, command: "git -C \(repo) update-ref \(branch) \(expected) \(Self.nullObjectID)")
+                return false
+            }
+            return true
         }
     }
+
+    private static let nullObjectID = "0000000000000000000000000000000000000000"
 
     func removeCheckoutRootArtifacts(for checkout: WorkspaceCheckout) async throws {
         switch checkout.executionLocation.normalized {
