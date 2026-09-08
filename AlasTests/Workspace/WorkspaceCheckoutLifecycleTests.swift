@@ -152,6 +152,50 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(await lifecycle.finalizedRegistrations == [fixture.member.id])
     }
 
+    @Test func recreatingRecoverableReturnedTombstoneRunsStaleCleanupBeforeLineageCheck() async throws {
+        let fixture = try await Fixture.make(operation: .creating)
+        let lifecycle = FixtureLifecycle(clearError: WorkspaceCheckoutCoordinatorError.completedWorktreeReturned)
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: fixture.store,
+            git: FixtureGit(
+                preparedBranchMatches: true,
+                frozenWorktreeMissingResults: [true, false]
+            ),
+            scripts: FixtureScripts(),
+            sessions: LifecycleSessions(),
+            lifecycle: lifecycle
+        )
+
+        _ = try await coordinator.resumeCreation(checkoutID: fixture.checkout.id)
+
+        #expect(await lifecycle.clearedRegistrations == [fixture.member.id])
+    }
+
+    @Test func explicitDeletionRechecksRisksWhenMissingWorktreeReturnsDuringStaleCleanup() async throws {
+        let fixture = try await Fixture.make()
+        try await fixture.store.mutate { state in
+            state.checkouts[0].members[0].availability = .missing
+        }
+        let lifecycle = FixtureLifecycle(
+            verification: .missing,
+            preflight: .init(reasons: [.dirty], submoduleLocalState: .none),
+            clearError: WorkspaceCheckoutCoordinatorError.completedWorktreeReturned
+        )
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: fixture.store,
+            git: FixtureGit(),
+            scripts: FixtureScripts(),
+            sessions: LifecycleSessions(),
+            lifecycle: lifecycle
+        )
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.cleanupConfirmationRequired) {
+            try await coordinator.deleteMember(checkoutID: fixture.checkout.id, memberID: fixture.member.id)
+        }
+
+        #expect(await lifecycle.removedMembers.isEmpty)
+    }
+
     @Test func deletionPreviewAllowsMissingAttemptOwnedMembers() async throws {
         let fixture = try await Fixture.make()
         try await fixture.store.mutate { state in
@@ -1020,6 +1064,7 @@ struct WorkspaceCheckoutLifecycleTests {
             .init(exitCode: 0, stdout: "worktree /checkout/a\nlocked portable volume\nprunable gitdir file points to non-existent location\n", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
             .init(exitCode: 1, stdout: "", stderr: ""),
+            .init(exitCode: 1, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
             .init(exitCode: 0, stdout: "", stderr: ""),
         ])
@@ -1360,13 +1405,34 @@ struct WorkspaceCheckoutLifecycleTests {
     }
 }
 
-private struct FixtureGit: WorkspaceGitOperating {
+private actor FixtureGit: WorkspaceGitOperating {
     var existingCreatedLineageID: String? = nil
+    var preparedBranchMatches = false
+    var frozenWorktreeMissingResults: [Bool] = []
+
+    init(
+        existingCreatedLineageID: String? = nil,
+        preparedBranchMatches: Bool = false,
+        frozenWorktreeMissingResults: [Bool] = []
+    ) {
+        self.existingCreatedLineageID = existingCreatedLineageID
+        self.preparedBranchMatches = preparedBranchMatches
+        self.frozenWorktreeMissingResults = frozenWorktreeMissingResults
+    }
 
     func prepareBranch(_ operation: WorkspaceFrozenWorktreeOperation) async throws {}
+    func preparedBranchMatchesFrozenBase(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> Bool {
+        preparedBranchMatches
+    }
     func createWorktree(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? { nil }
     func existingCreatedWorktreeLineage(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> String? {
         existingCreatedLineageID
+    }
+    func frozenWorktreeIsMissing(_ operation: WorkspaceFrozenWorktreeOperation) async throws -> Bool {
+        if frozenWorktreeMissingResults.isEmpty {
+            return existingCreatedLineageID == nil
+        }
+        return frozenWorktreeMissingResults.removeFirst()
     }
 }
 private struct FixtureScripts: WorkspaceScriptRunning { func runSetup(for operation: WorkspaceCheckoutSetupOperation) async throws {} }
@@ -1389,11 +1455,13 @@ private actor FixtureLifecycle: WorkspaceCheckoutLifecycleOperating {
     let leftovers: [String]
     let failingMember: UUID?
     let branchRemoved: Bool
-    init(verification: WorkspaceCheckoutMemberObservation = .exactLineage("lineage-a"), preflight: WorktreeDeletePreflight = .init(reasons: [], submoduleLocalState: .none), leftovers: [String] = [], failingMember: UUID? = nil, branchRemoved: Bool = true) { self.verification = verification
+    let clearError: (any Error)?
+    init(verification: WorkspaceCheckoutMemberObservation = .exactLineage("lineage-a"), preflight: WorktreeDeletePreflight = .init(reasons: [], submoduleLocalState: .none), leftovers: [String] = [], failingMember: UUID? = nil, branchRemoved: Bool = true, clearError: (any Error)? = nil) { self.verification = verification
     self.preflight = preflight
     self.leftovers = leftovers
     self.failingMember = failingMember
-    self.branchRemoved = branchRemoved }
+    self.branchRemoved = branchRemoved
+    self.clearError = clearError }
     func deletePreflight(_ plan: WorkspaceCheckoutCleanupPlan) async throws -> WorktreeDeletePreflight { preflight }
     func inspectRoot(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutCleanupRootObservation { .init(isContained: true, leftovers: leftovers) }
     func verifyCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async -> WorkspaceCheckoutMemberObservation {
@@ -1402,6 +1470,7 @@ private actor FixtureLifecycle: WorkspaceCheckoutLifecycleOperating {
     }
     func clearStaleRegistration(_ plan: WorkspaceCheckoutCleanupPlan) async throws {
         clearedRegistrations.append(plan.memberID)
+        if let clearError { throw clearError }
     }
     func finalizeStaleRegistrationCleanup(_ plan: WorkspaceCheckoutCleanupPlan) async throws {
         finalizedRegistrations.append(plan.memberID)

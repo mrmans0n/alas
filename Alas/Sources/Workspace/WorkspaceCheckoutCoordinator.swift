@@ -332,13 +332,17 @@ actor WorkspaceCheckoutCoordinator {
             case .exactLineage(let lineage) where lineage == plan.expectedLineageID:
                 break
             case .missing:
-                try await projectMutationGate.withMutation(projectID: member.projectID) {
-                    try await lifecycle.clearStaleRegistrationForExplicitDeletion(plan)
-                }
-                worktreeAlreadyRemoved = true
-                try await mutateMember(checkoutID: checkoutID, memberID: memberID) {
-                    $0.cleanup?.worktreeRemoved = true
-                    $0.cleanup?.checkpoint = .worktreeRemoved
+                do {
+                    try await projectMutationGate.withMutation(projectID: member.projectID) {
+                        try await lifecycle.clearStaleRegistrationForExplicitDeletion(plan)
+                    }
+                    worktreeAlreadyRemoved = true
+                    try await mutateMember(checkoutID: checkoutID, memberID: memberID) {
+                        $0.cleanup?.worktreeRemoved = true
+                        $0.cleanup?.checkpoint = .worktreeRemoved
+                    }
+                } catch WorkspaceCheckoutCoordinatorError.completedWorktreeReturned {
+                    worktreeAlreadyRemoved = false
                 }
             default:
                 throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict
@@ -1344,13 +1348,13 @@ actor WorkspaceCheckoutCoordinator {
                     guard try await self.git.preparedBranchMatchesFrozenBase(operation) else {
                         throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict
                     }
+                    try await self.lifecycle.clearStaleRegistration(staleRegistrationCleanup)
                     if try await self.git.frozenWorktreeIsMissing(operation) == false {
                         guard try await self.git.existingCreatedWorktreeLineage(operation) == operation.expectedLineageID else {
                             throw WorkspaceCheckoutCoordinatorError.cleanupIdentityConflict
                         }
                         throw WorkspaceCheckoutCoordinatorError.completedWorktreeReturned
                     }
-                    try await self.lifecycle.clearStaleRegistration(staleRegistrationCleanup)
                 }
                 if await self.shouldPrepareBranch(checkoutID: checkout.id, memberID: plan.checkoutMemberID) {
                     try await self.updateMember(checkoutID: checkout.id, memberID: plan.checkoutMemberID) { member in
@@ -1943,6 +1947,9 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
                 throw WorkspaceCheckoutCoordinatorError.completedWorktreeReturned
             }
             if unlockLocked {
+                guard WorkspaceFrozenGitOperator.pathEntryExistsOrIsSymlink(destination.path) == false else {
+                    throw WorkspaceCheckoutCoordinatorError.completedWorktreeReturned
+                }
                 let remove = try await Process.git(
                     ["worktree", "remove", "-f", "-f", "--", destination.path],
                     cwd: repo,
@@ -1993,6 +2000,11 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
             }
             guard exists.exitCode == 1 else { throw WorktreeService.WorktreeError.gitFailed(exists.stderr) }
             if unlockLocked {
+                let recheck = try await remote.run(host: host, command: "p=\(destination); test -e \"$p\" || test -L \"$p\"")
+                if recheck.exitCode == 0 {
+                    throw WorkspaceCheckoutCoordinatorError.completedWorktreeReturned
+                }
+                guard recheck.exitCode == 1 else { throw WorktreeService.WorktreeError.gitFailed(recheck.stderr) }
                 let remove = try await remote.run(
                     host: host,
                     command: "git -C \(repo) worktree remove -f -f -- \(SSHCommand.shellQuote(plan.worktreePath))"
