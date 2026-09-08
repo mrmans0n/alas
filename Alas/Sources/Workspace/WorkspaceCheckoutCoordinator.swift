@@ -1285,6 +1285,9 @@ actor WorkspaceCheckoutCoordinator {
         do {
             try await projectMutationGate.withMutation(projectID: plan.projectID) {
                 if let staleRegistrationCleanup {
+                    guard try await self.git.frozenWorktreeIsMissing(operation) else {
+                        throw WorkspaceCheckoutCoordinatorError.completedWorktreeReturned
+                    }
                     try await self.lifecycle.clearStaleRegistration(staleRegistrationCleanup)
                 }
                 if await self.shouldPrepareBranch(checkoutID: checkout.id, memberID: plan.checkoutMemberID) {
@@ -1335,7 +1338,8 @@ actor WorkspaceCheckoutCoordinator {
                       let memberIndex = state.checkouts[checkoutIndex].members.firstIndex(where: { $0.id == plan.checkoutMemberID })
                 else { throw WorkspaceCheckoutCoordinatorError.checkoutMissing }
                 if preservesCompletedMemberOnLockedRegistration,
-                   error as? WorkspaceCheckoutCoordinatorError == .lockedStaleRegistration {
+                   let recoveryError = error as? WorkspaceCheckoutCoordinatorError,
+                   recoveryError == .lockedStaleRegistration || recoveryError == .completedWorktreeReturned {
                     state.checkouts[checkoutIndex].members[memberIndex].checkpoint = .setupComplete
                     state.checkouts[checkoutIndex].members[memberIndex].availability = .missing
                     return
@@ -1604,6 +1608,7 @@ enum WorkspaceCheckoutCoordinatorError: Error, Equatable, Sendable {
     case cleanupIncomplete
     case cleanupConfirmationRequired
     case lockedStaleRegistration
+    case completedWorktreeReturned
 }
 
 extension String {
