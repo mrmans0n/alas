@@ -1883,12 +1883,16 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
             guard WorkspaceFrozenGitOperator.pathEntryExistsOrIsSymlink(destination.path) == false else {
                 throw WorkspaceCheckoutCoordinatorError.completedWorktreeReturned
             }
-            let remove = try await Process.git(
-                ["worktree", "remove", "-f", "-f", "--", destination.path],
-                cwd: repo,
-                usesRemoteHostRegistry: false
-            )
-            guard remove.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(remove.stderr) }
+            if unlockLocked {
+                let remove = try await Process.git(
+                    ["worktree", "remove", "-f", "-f", "--", destination.path],
+                    cwd: repo,
+                    usesRemoteHostRegistry: false
+                )
+                guard remove.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(remove.stderr) }
+            } else {
+                try await Self.removeLocalStaleRegistrationMetadata(repo: repo, destination: destination)
+            }
             let refreshed = try await Process.git(["worktree", "list", "--porcelain"], cwd: repo, usesRemoteHostRegistry: false)
             guard refreshed.exitCode == 0,
                   !Self.porcelainContainsWorktree(refreshed.stdout, path: destination.path)
@@ -1909,16 +1913,110 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
                 throw WorkspaceCheckoutCoordinatorError.completedWorktreeReturned
             }
             guard exists.exitCode == 1 else { throw WorktreeService.WorktreeError.gitFailed(exists.stderr) }
-            let remove = try await remote.run(
-                host: host,
-                command: "git -C \(repo) worktree remove -f -f -- \(SSHCommand.shellQuote(plan.worktreePath))"
-            )
-            guard remove.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(remove.stderr) }
+            if unlockLocked {
+                let remove = try await remote.run(
+                    host: host,
+                    command: "git -C \(repo) worktree remove -f -f -- \(SSHCommand.shellQuote(plan.worktreePath))"
+                )
+                guard remove.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(remove.stderr) }
+            } else {
+                let cleanup = try await remote.run(
+                    host: host,
+                    command: Self.remoteStaleRegistrationMetadataCleanupCommand(plan)
+                )
+                switch cleanup.exitCode {
+                case 0:
+                    break
+                case 9:
+                    throw WorkspaceCheckoutCoordinatorError.lockedStaleRegistration
+                case 10:
+                    throw WorkspaceCheckoutCoordinatorError.completedWorktreeReturned
+                default:
+                    throw WorktreeService.WorktreeError.gitFailed(cleanup.stderr)
+                }
+            }
             let refreshed = try await remote.run(host: host, command: "git -C \(repo) worktree list --porcelain")
             guard refreshed.exitCode == 0,
                   !Self.porcelainContainsWorktree(refreshed.stdout, path: plan.worktreePath)
             else { throw WorktreeService.WorktreeError.gitFailed(refreshed.stderr) }
         }
+    }
+
+    private static func removeLocalStaleRegistrationMetadata(
+        repo: URL,
+        destination: URL
+    ) async throws {
+        let adminDirectory = try await staleRegistrationAdminDirectory(
+            repo: repo,
+            destination: destination
+        )
+        let removingDirectory = adminDirectory
+            .deletingLastPathComponent()
+            .appendingPathComponent("\(adminDirectory.lastPathComponent).alas-removing-\(UUID().uuidString)")
+        try FileManager.default.moveItem(at: adminDirectory, to: removingDirectory)
+        do {
+            if FileManager.default.fileExists(atPath: removingDirectory.appendingPathComponent("locked").path) {
+                try FileManager.default.moveItem(at: removingDirectory, to: adminDirectory)
+                throw WorkspaceCheckoutCoordinatorError.lockedStaleRegistration
+            }
+            if WorkspaceFrozenGitOperator.pathEntryExistsOrIsSymlink(destination.path) {
+                try FileManager.default.moveItem(at: removingDirectory, to: adminDirectory)
+                throw WorkspaceCheckoutCoordinatorError.completedWorktreeReturned
+            }
+            try FileManager.default.removeItem(at: removingDirectory)
+        } catch {
+            if FileManager.default.fileExists(atPath: removingDirectory.path),
+               !FileManager.default.fileExists(atPath: adminDirectory.path) {
+                try? FileManager.default.moveItem(at: removingDirectory, to: adminDirectory)
+            }
+            throw error
+        }
+    }
+
+    private static func staleRegistrationAdminDirectory(
+        repo: URL,
+        destination: URL
+    ) async throws -> URL {
+        let commonDirResult = try await Process.git(
+            ["rev-parse", "--git-common-dir"],
+            cwd: repo,
+            usesRemoteHostRegistry: false
+        )
+        guard commonDirResult.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(commonDirResult.stderr) }
+        let commonDirText = commonDirResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let commonDir = URL(fileURLWithPath: commonDirText, relativeTo: commonDirText.hasPrefix("/") ? nil : repo)
+            .standardizedFileURL
+        let worktreesDir = commonDir.appendingPathComponent("worktrees")
+        let entries = (try? FileManager.default.contentsOfDirectory(
+            at: worktreesDir,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []
+        let expectedGitdirs = Set([
+            destination.appendingPathComponent(".git").standardizedFileURL.path,
+            destination.resolvingSymlinksInPath().appendingPathComponent(".git").standardizedFileURL.path,
+        ])
+        var matches: [URL] = []
+        for entry in entries {
+            guard (try? entry.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { continue }
+            let gitdir = entry.appendingPathComponent("gitdir")
+            guard let content = try? String(contentsOf: gitdir, encoding: .utf8) else { continue }
+            if expectedGitdirs.contains(content.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                matches.append(entry)
+            }
+        }
+        guard matches.count == 1 else {
+            throw WorktreeService.WorktreeError.gitFailed("Expected one stale worktree registration for \(destination.path), found \(matches.count).")
+        }
+        return matches[0]
+    }
+
+    private static func remoteStaleRegistrationMetadataCleanupCommand(_ plan: WorkspaceCheckoutCleanupPlan) -> String {
+        let repo = SSHCommand.shellQuote(plan.sourceRepositoryPath)
+        let destination = SSHCommand.shellQuote(plan.worktreePath)
+        return """
+        repo=\(repo); target=\(destination); common=$(git -C "$repo" rev-parse --git-common-dir) || exit $?; case "$common" in /*) ;; *) common="$repo/$common" ;; esac; found=; for admin in "$common"/worktrees/*; do [ -d "$admin" ] || continue; [ -f "$admin/gitdir" ] || continue; IFS= read -r gitdir < "$admin/gitdir" || continue; [ "$gitdir" = "$target/.git" ] || continue; [ -z "$found" ] || exit 11; found="$admin"; done; [ -n "$found" ] || exit 12; [ -e "$found/locked" ] && exit 9; if [ -e "$target" ] || [ -L "$target" ]; then exit 10; fi; tomb="$found.alas-removing.$$"; mv "$found" "$tomb" || exit $?; if [ -e "$tomb/locked" ]; then mv "$tomb" "$found"; exit 9; fi; if [ -e "$target" ] || [ -L "$target" ]; then mv "$tomb" "$found"; exit 10; fi; rm -rf -- "$tomb"
+        """
     }
 
     private static func porcelainContainsWorktree(_ porcelain: String, path: String) -> Bool {

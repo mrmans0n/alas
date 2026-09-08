@@ -699,6 +699,42 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(preflight.submoduleLocalState == .unknown)
     }
 
+    @Test func concreteLocalCleanupRemovesOnlyTheTargetStaleRegistrationMetadata() async throws {
+        let temp = FileManager.default.temporaryDirectory
+        let canonicalTemp = temp.path.hasPrefix("/var/")
+            ? URL(fileURLWithPath: "/private\(temp.path)", isDirectory: true)
+            : temp.resolvingSymlinksInPath()
+        let root = canonicalTemp
+            .appendingPathComponent("alas-lifecycle-\(UUID().uuidString)", isDirectory: true)
+        let repo = root.appendingPathComponent("repo", isDirectory: true)
+        let target = root.appendingPathComponent("target", isDirectory: true)
+        let unrelated = root.appendingPathComponent("unrelated", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try await Self.runGit(["init", repo.path], cwd: root)
+        try await Self.runGit(["config", "user.email", "test@example.com"], cwd: repo)
+        try await Self.runGit(["config", "user.name", "Test"], cwd: repo)
+        try "a\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        try await Self.runGit(["add", "a.txt"], cwd: repo)
+        try await Self.runGit(["commit", "-m", "init"], cwd: repo)
+        try await Self.runGit(["worktree", "add", target.path], cwd: repo)
+        try await Self.runGit(["worktree", "add", unrelated.path], cwd: repo)
+        try FileManager.default.removeItem(at: target)
+        let lifecycle = WorkspaceCheckoutLifecycleOperator()
+        var plan = Self.localCleanupPlan(repo: repo.path, worktree: target.path)
+
+        try await lifecycle.clearStaleRegistration(plan)
+
+        let registrations = try await Process.git(["worktree", "list", "--porcelain"], cwd: repo, usesRemoteHostRegistry: false)
+        #expect(Self.porcelainOutput(registrations.stdout, containsWorktree: target.path) == false)
+        #expect(Self.porcelainOutput(registrations.stdout, containsWorktree: unrelated.path))
+        #expect(FileManager.default.fileExists(atPath: unrelated.path))
+        plan.worktreePath = unrelated.path
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.completedWorktreeReturned) {
+            try await lifecycle.clearStaleRegistration(plan)
+        }
+    }
+
     @Test func concreteRemoteCleanupRemovesOnlyTheTargetStaleRegistration() async throws {
         let runner = RemoteLifecycleRunner(results: [
             .init(exitCode: 0, stdout: "worktree /checkout/a\nprunable gitdir file points to non-existent location\n", stderr: ""),
@@ -715,7 +751,9 @@ struct WorkspaceCheckoutLifecycleTests {
         let commands = await runner.commands.joined(separator: "\n")
         #expect(commands.contains("worktree list --porcelain"))
         #expect(commands.contains("/checkout/a"))
-        #expect(commands.contains("worktree remove -f -f --"))
+        #expect(commands.contains("rev-parse --git-common-dir"))
+        #expect(commands.contains(".alas-removing"))
+        #expect(commands.contains("worktree remove -f -f --") == false)
         #expect(commands.contains("/checkout/a"))
         #expect(commands.contains("worktree prune") == false)
     }
@@ -752,6 +790,25 @@ struct WorkspaceCheckoutLifecycleTests {
         let commands = await runner.commands.joined(separator: "\n")
         #expect(commands.contains("worktree unlock --") == false)
         #expect(commands.contains("worktree remove -f -f") == false)
+    }
+
+    @Test func concreteRemoteCleanupRetainsRegistrationLockedAfterInspection() async throws {
+        let runner = RemoteLifecycleRunner(results: [
+            .init(exitCode: 0, stdout: "worktree /checkout/a\nprunable gitdir file points to non-existent location\n", stderr: ""),
+            .init(exitCode: 1, stdout: "", stderr: ""),
+            .init(exitCode: 9, stdout: "", stderr: "locked"),
+        ])
+        let lifecycle = WorkspaceCheckoutLifecycleOperator(remote: .init { executable, args, timeout in
+            try await runner.run(executable: executable, args: args, timeout: timeout)
+        })
+
+        await #expect(throws: WorkspaceCheckoutCoordinatorError.lockedStaleRegistration) {
+            try await lifecycle.clearStaleRegistration(Self.sshCleanupPlan())
+        }
+
+        let commands = await runner.commands.joined(separator: "\n")
+        #expect(commands.contains("worktree remove -f -f") == false)
+        #expect(commands.contains("worktree prune") == false)
     }
 
     @Test func concreteRemoteExplicitCleanupUnlocksLockedMissingWorktreeRegistration() async throws {
@@ -857,6 +914,36 @@ struct WorkspaceCheckoutLifecycleTests {
             expectedLineageID: "lineage",
             branchOwnership: .created
         )
+    }
+
+    private static func localCleanupPlan(repo: String, worktree: String) -> WorkspaceCheckoutCleanupPlan {
+        WorkspaceCheckoutCleanupPlan(
+            checkoutID: UUID(),
+            memberID: UUID(),
+            executionLocation: .local,
+            projectID: "project",
+            sourceRepositoryPath: repo,
+            baseReference: "main",
+            baseCommit: "abc",
+            branchCommit: "abc",
+            rootPath: URL(fileURLWithPath: worktree).deletingLastPathComponent().path,
+            managedMemberPaths: [worktree],
+            worktreePath: worktree,
+            branch: URL(fileURLWithPath: worktree).lastPathComponent,
+            expectedLineageID: "lineage",
+            branchOwnership: .created
+        )
+    }
+
+    private static func runGit(_ args: [String], cwd: URL) async throws {
+        let result = try await Process.git(args, cwd: cwd, usesRemoteHostRegistry: false)
+        guard result.exitCode == 0 else {
+            throw WorktreeService.WorktreeError.gitFailed(result.stderr)
+        }
+    }
+
+    private static func porcelainOutput(_ output: String, containsWorktree path: String) -> Bool {
+        output.split(separator: "\n").contains("worktree \(path)")
     }
 
     @Test func concreteLifecycleRefusesToDeleteAReplacedOwnedBranch() async throws {
