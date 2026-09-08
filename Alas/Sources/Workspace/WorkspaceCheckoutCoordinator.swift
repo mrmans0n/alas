@@ -981,7 +981,12 @@ actor WorkspaceCheckoutCoordinator {
                             guard try await git.frozenWorktreeIsMissing(operation),
                                   let cleanupPlan = makeCleanupPlan(checkout: checkout, member: member)
                             else { continue }
-                            try await lifecycle.clearStaleRegistration(cleanupPlan)
+                            await execute(
+                                member: frozenMember,
+                                checkout: checkout,
+                                staleRegistrationCleanup: cleanupPlan
+                            )
+                            continue
                         }
                         await execute(member: frozenMember, checkout: checkout)
                     }
@@ -1248,7 +1253,11 @@ actor WorkspaceCheckoutCoordinator {
         await finishIfAllMembersTerminal(checkoutID: checkout.id, owning: .creating)
     }
 
-    private func execute(member plan: FrozenWorkspaceCheckoutPlan.Member, checkout: WorkspaceCheckout) async {
+    private func execute(
+        member plan: FrozenWorkspaceCheckoutPlan.Member,
+        checkout: WorkspaceCheckout,
+        staleRegistrationCleanup: WorkspaceCheckoutCleanupPlan? = nil
+    ) async {
         let operation = WorkspaceFrozenWorktreeOperation(
             checkoutID: checkout.id,
             checkoutMemberID: plan.checkoutMemberID,
@@ -1263,6 +1272,9 @@ actor WorkspaceCheckoutCoordinator {
         )
         do {
             try await projectMutationGate.withMutation(projectID: plan.projectID) {
+                if let staleRegistrationCleanup {
+                    try await self.lifecycle.clearStaleRegistration(staleRegistrationCleanup)
+                }
                 if await self.shouldPrepareBranch(checkoutID: checkout.id, memberID: plan.checkoutMemberID) {
                     try await self.updateMember(checkoutID: checkout.id, memberID: plan.checkoutMemberID) { member in
                         member.checkpoint = .branchPreparing
@@ -1853,7 +1865,11 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
             else { return false }
             let merged = try await Process.git(["merge-base", "--is-ancestor", branchCommit, "HEAD"], cwd: repo, usesRemoteHostRegistry: false)
             guard merged.exitCode == 0 else { return false }
-            let result = try await Process.git(["branch", "-d", "--", plan.branch], cwd: repo, usesRemoteHostRegistry: false)
+            let checkedOut = try await Process.git(["worktree", "list", "--porcelain"], cwd: repo, usesRemoteHostRegistry: false)
+            guard checkedOut.exitCode == 0,
+                  !checkedOut.stdout.split(separator: "\n").contains(where: { $0 == "branch \(branchRef)" })
+            else { return false }
+            let result = try await Process.git(["update-ref", "-d", branchRef, branchCommit], cwd: repo, usesRemoteHostRegistry: false)
             return result.exitCode == 0
         case .ssh(let host):
             let repo = SSHCommand.shellQuote(plan.sourceRepositoryPath)
@@ -1865,7 +1881,7 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
             guard verified.exitCode == 0 else { return false }
             let merged = try await remote.run(host: host, command: "git -C \(repo) merge-base --is-ancestor \(expected) HEAD")
             guard merged.exitCode == 0 else { return false }
-            let command = "git -C \(repo) branch -d -- \(SSHCommand.shellQuote(plan.branch))"
+            let command = "git -C \(repo) worktree list --porcelain | grep -Fx \(SSHCommand.shellQuote("branch \(branchRef)")) >/dev/null && exit 1; git -C \(repo) update-ref -d \(branch) \(expected)"
             let result = try await remote.run(host: host, command: command)
             return result.exitCode == 0
         }
