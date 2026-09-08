@@ -627,6 +627,35 @@ struct WorkspaceCheckoutRepairTests {
         #expect(await git.createCount == 0)
     }
 
+    @Test func resumeCreationRestoresACompletedAdvancedWorktreeAfterItsStorageReturns() async throws {
+        let fixture = try await persistedFixture(
+            checkpoint: .failed,
+            worktreeCreated: true,
+            lineageID: "lineage-a",
+            branchOwnership: .created,
+            operation: .creating
+        )
+        try await fixture.store.mutate { state in
+            state.checkouts[0].members[0].recreationSourceCheckpoint = .setupComplete
+            state.checkouts[0].members[0].recreationWorktreeCreationBegan = false
+        }
+        let git = CountingResumeGit(existingLineage: nil, branchMatchesFrozenBase: false)
+        let lifecycle = RepairLifecycle(result: .exactLineage("lineage-a"))
+        let coordinator = WorkspaceCheckoutCoordinator(
+            store: fixture.store,
+            git: git,
+            scripts: RepairScriptRunner(),
+            projectMutationGate: ProjectMutationGate(),
+            lifecycle: lifecycle
+        )
+
+        let checkout = try await coordinator.resumeCreation(checkoutID: fixture.checkout.id)
+
+        #expect(checkout.members[0].checkpoint == .setupComplete)
+        #expect(checkout.members[0].availability == .available)
+        #expect(await git.createCount == 0)
+    }
+
     @Test func recreateMemberOnlyUsesTheSelectedFrozenMemberPlan() async throws {
         let fixture = try await persistedFixture(checkpoint: .planPersisted, operation: .idle)
         let second = checkoutMember(

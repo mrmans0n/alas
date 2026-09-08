@@ -916,6 +916,19 @@ actor WorkspaceCheckoutCoordinator {
             if member.recreationSourceCheckpoint == .setupComplete,
                (member.checkpoint == .worktreeCreating || member.checkpoint == .failed) {
                 let operation = frozenWorktreeOperation(checkout: checkout, member: frozenMember)
+                if member.recreationWorktreeCreationBegan == false,
+                   let cleanupPlan = makeCleanupPlan(checkout: checkout, member: member),
+                   case .exactLineage(let lineageID) = await lifecycle.verifyCleanup(cleanupPlan),
+                   lineageID == cleanupPlan.expectedLineageID {
+                    try await updateMember(checkoutID: checkoutID, memberID: member.id) { current in
+                        current.checkpoint = .setupComplete
+                        current.availability = .available
+                        current.gitLineageID = lineageID
+                        current.recreationSourceCheckpoint = nil
+                        current.recreationWorktreeCreationBegan = false
+                    }
+                    continue
+                }
                 if let lineageID = try? await git.existingCreatedWorktreeLineage(operation) {
                     let shouldResumeSetup = member.recreationWorktreeCreationBegan
                     try await updateMember(checkoutID: checkoutID, memberID: member.id) { current in
