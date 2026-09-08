@@ -248,7 +248,14 @@ final class HarnessService {
         case running, awaiting
     }
 
+    struct WorktreeHarnessSession: Equatable, Identifiable {
+        let id: String
+        let state: AggregatedState
+        let agent: AgentKind
+    }
+
     struct WorktreeHarnessSummary: Equatable {
+        let sessions: [WorktreeHarnessSession]
         let state: AggregatedState
         let agent: AgentKind
         let primarySessionId: String
@@ -257,34 +264,31 @@ final class HarnessService {
     }
 
     func summary(forSessionIds ids: [String]) -> WorktreeHarnessSummary? {
-        var awaitingIds: [String] = []
-        var runningIds: [String] = []
-        for id in ids {
-            guard let activity = activityBySession[id] else { continue }
+        let sessions = ids.enumerated().compactMap { offset, id -> (session: WorktreeHarnessSession, updatedAt: Date, offset: Int)? in
+            guard let activity = activityBySession[id] else { return nil }
             switch activity.state {
-            case .awaitingInput, .permissionRequest: awaitingIds.append(id)
-            case .busy:          runningIds.append(id)
-            case .idle:          break
+            case .awaitingInput, .permissionRequest:
+                return (WorktreeHarnessSession(id: id, state: .awaiting, agent: activity.agent), activity.updatedAt, offset)
+            case .busy:
+                return (WorktreeHarnessSession(id: id, state: .running, agent: activity.agent), activity.updatedAt, offset)
+            case .idle:
+                return nil
             }
         }
-        if let s = pickSummary(state: .awaiting, ids: awaitingIds,
-                               runningCount: runningIds.count, awaitingCount: awaitingIds.count) { return s }
-        if let s = pickSummary(state: .running, ids: runningIds,
-                               runningCount: runningIds.count, awaitingCount: awaitingIds.count) { return s }
-        return nil
-    }
+        .sorted { lhs, rhs in
+            if lhs.session.state != rhs.session.state { return lhs.session.state == .awaiting }
+            if lhs.updatedAt != rhs.updatedAt { return lhs.updatedAt > rhs.updatedAt }
+            return lhs.offset < rhs.offset
+        }
 
-    private func pickSummary(
-        state: AggregatedState, ids: [String],
-        runningCount: Int, awaitingCount: Int
-    ) -> WorktreeHarnessSummary? {
-        guard let primary = ids.first,
-              let activity = activityBySession[primary] else { return nil }
+        guard let primary = sessions.first else { return nil }
         return WorktreeHarnessSummary(
-            state: state, agent: activity.agent,
-            primarySessionId: primary,
-            runningSessionCount: runningCount,
-            awaitingSessionCount: awaitingCount
+            sessions: sessions.map(\.session),
+            state: primary.session.state,
+            agent: primary.session.agent,
+            primarySessionId: primary.session.id,
+            runningSessionCount: sessions.count { $0.session.state == .running },
+            awaitingSessionCount: sessions.count { $0.session.state == .awaiting }
         )
     }
 

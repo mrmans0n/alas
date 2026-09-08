@@ -115,19 +115,11 @@ struct SidebarView: View {
                                 onDelete: { wt in state.deleteWorktree(wt) },
                                 onDeleteKeepBranch: { wt in state.deleteWorktree(wt, keepBranch: true) },
                                 showKeepBranchOption: state.config.worktrees.deleteBranchOnRemove,
-                                onActivateHarness: { wt in
-                                    let ids = state.tabs.tabs(forWorktree: wt.id).flatMap { tab -> [String] in
-                                        switch tab {
-                                        case .terminal(let s):   return s.root.leaves().map(\.sessionId)
-                                        case .acpSession(let s): return [s.sessionId]
-                                        default:                 return []
-                                        }
-                                    }
-                                    guard let summary = state.harness.summary(forSessionIds: ids) else { return }
+                                onActivateHarness: { wt, sessionId in
                                     state.activateHarnessSession(
                                         projectId: project.id,
                                         worktreeId: wt.id,
-                                        sessionId: summary.primarySessionId
+                                        sessionId: sessionId
                                     )
                                 },
                                 onCopyError: { message in

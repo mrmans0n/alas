@@ -226,6 +226,7 @@ struct HarnessServiceTests {
         #expect(summary?.primarySessionId == "s2")
         #expect(summary?.runningSessionCount == 1)
         #expect(summary?.awaitingSessionCount == 1)
+        #expect(summary?.sessions.map(\.id) == ["s2", "s1"])
     }
 
     @Test func cursorPermissionRequestIsTreatedAsBusyWithoutNotification() {
@@ -301,6 +302,18 @@ struct HarnessServiceTests {
         let summary = service.summary(forSessionIds: ["s1"])
         #expect(summary?.state == .running)
         #expect(summary?.agent == .claude)
+    }
+
+    @Test func summary_prefersMostRecentlyUpdatedSessionWithinTheSameState() {
+        let (service, _) = makeService()
+        service.setStateForTesting(sessionId: "older", agent: .claude, state: .busy)
+        Thread.sleep(forTimeInterval: 0.01)
+        service.setStateForTesting(sessionId: "newer", agent: .codex, state: .busy)
+
+        let summary = service.summary(forSessionIds: ["older", "newer"])
+
+        #expect(summary?.primarySessionId == "newer")
+        #expect(summary?.agent == .codex)
     }
 
     @Test func summary_ignoresIdleSessions() {
