@@ -5279,7 +5279,7 @@ final class AppState {
             return state.root.find(leafId: leafId) != nil
         }?.id
         guard let tabId = owningTabId else { return }
-        scheduleRunScriptCompletionCancellation(sessionID: leafId)
+        cancelRunScriptCompletionTasks(sessionID: leafId, after: .seconds(30))
         guard let outcome = tabs.removeLeaf(
             worktreeId: worktreeId, tabId: tabId, leafId: leafId
         ) else { return }

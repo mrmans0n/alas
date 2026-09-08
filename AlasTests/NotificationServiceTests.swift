@@ -4,6 +4,49 @@ import UserNotifications
 @testable import Alas
 
 struct NotificationServiceTests {
+    @Test func successfulRunScriptNotificationIsClickable() {
+        var requests: [UNNotificationRequest] = []
+        let service = NotificationService(notificationAdder: { requests.append($0) })
+
+        service.notifyRunScriptFinished(
+            scriptName: "Dev",
+            exitCode: 0,
+            projectId: "project-1",
+            worktreeId: "worktree-1",
+            sessionId: "session-1",
+            runID: "run-1"
+        )
+
+        #expect(requests.count == 1)
+        #expect(requests[0].identifier == "run-script-run-1")
+        #expect(requests[0].content.title == "Dev finished")
+        #expect(requests[0].content.body == "Succeeded")
+        #expect(requests[0].content.sound != nil)
+        let click = NotificationClickContext(userInfo: requests[0].content.userInfo)
+        #expect(click?.projectId == "project-1")
+        #expect(click?.worktreeId == "worktree-1")
+        #expect(click?.sessionId == "session-1")
+        #expect(click?.owner == .worktree("worktree-1"))
+    }
+
+    @Test func failedRunScriptNotificationIncludesExitCode() {
+        var requests: [UNNotificationRequest] = []
+        let service = NotificationService(notificationAdder: { requests.append($0) })
+
+        service.notifyRunScriptFinished(
+            scriptName: "Test",
+            exitCode: 42,
+            projectId: "project-1",
+            worktreeId: "worktree-1",
+            sessionId: "session-1",
+            runID: "run-1"
+        )
+
+        #expect(requests.count == 1)
+        #expect(requests[0].content.title == "Test finished")
+        #expect(requests[0].content.body == "Failed with exit code 42")
+    }
+
     @Test func awaitingUsesClickableNotificationRequest() {
         var requests: [UNNotificationRequest] = []
         let service = NotificationService(notificationAdder: { request in
