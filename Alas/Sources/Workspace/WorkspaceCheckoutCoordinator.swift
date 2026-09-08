@@ -903,7 +903,8 @@ actor WorkspaceCheckoutCoordinator {
                 await execute(
                     member: frozenMember,
                     checkout: checkout,
-                    staleRegistrationCleanup: cleanupPlan
+                    staleRegistrationCleanup: cleanupPlan,
+                    preservesCompletedMemberOnLockedRegistration: true
                 )
                 continue
             }
@@ -1261,7 +1262,8 @@ actor WorkspaceCheckoutCoordinator {
     private func execute(
         member plan: FrozenWorkspaceCheckoutPlan.Member,
         checkout: WorkspaceCheckout,
-        staleRegistrationCleanup: WorkspaceCheckoutCleanupPlan? = nil
+        staleRegistrationCleanup: WorkspaceCheckoutCleanupPlan? = nil,
+        preservesCompletedMemberOnLockedRegistration: Bool = false
     ) async {
         let operation = WorkspaceFrozenWorktreeOperation(
             checkoutID: checkout.id,
@@ -1327,6 +1329,12 @@ actor WorkspaceCheckoutCoordinator {
                 guard let checkoutIndex = state.checkouts.firstIndex(where: { $0.id == checkout.id }),
                       let memberIndex = state.checkouts[checkoutIndex].members.firstIndex(where: { $0.id == plan.checkoutMemberID })
                 else { throw WorkspaceCheckoutCoordinatorError.checkoutMissing }
+                if preservesCompletedMemberOnLockedRegistration,
+                   error as? WorkspaceCheckoutCoordinatorError == .lockedStaleRegistration {
+                    state.checkouts[checkoutIndex].members[memberIndex].checkpoint = .setupComplete
+                    state.checkouts[checkoutIndex].members[memberIndex].availability = .missing
+                    return
+                }
                 state.checkouts[checkoutIndex].members[memberIndex].checkpoint = .failed
                 state.checkouts[checkoutIndex].members[memberIndex].availability = .unavailable
                 state.checkouts[checkoutIndex].diagnostics.append(.init(severity: .error, message: "Workspace creation failed for \(state.checkouts[checkoutIndex].members[memberIndex].fallbackProjectName)."))
@@ -1905,12 +1913,7 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
             guard recheckedUsage.exitCode == 0,
                   !recheckedUsage.stdout.split(separator: "\n").contains(where: { $0 == "branch \(branchRef)" })
             else {
-                let objectFormat = try? await remote.run(host: host, command: "git -C \(repo) rev-parse --show-object-format")
-                let nullObjectID = Self.nullObjectID(
-                    objectFormat: objectFormat?.exitCode == 0 ? objectFormat?.stdout : nil,
-                    fallbackCommit: branchCommit
-                )
-                _ = try await remote.run(host: host, command: "git -C \(repo) update-ref \(branch) \(expected) \(nullObjectID)")
+                try await restoreRemoteBranch(branchRef, at: branchCommit, repo: repo, host: host)
                 return false
             }
             return true
@@ -1923,7 +1926,28 @@ struct WorkspaceCheckoutLifecycleOperator: WorkspaceCheckoutLifecycleOperating {
             objectFormat: objectFormat?.exitCode == 0 ? objectFormat?.stdout : nil,
             fallbackCommit: commit
         )
-        _ = try await Process.git(["update-ref", branchRef, commit, nullObjectID], cwd: repo, usesRemoteHostRegistry: false)
+        let restored = try await Process.git(["update-ref", branchRef, commit, nullObjectID], cwd: repo, usesRemoteHostRegistry: false)
+        guard restored.exitCode == 0 else {
+            let existing = try await Process.git(["rev-parse", "--verify", "\(branchRef)^{commit}"], cwd: repo, usesRemoteHostRegistry: false)
+            guard existing.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(restored.stderr) }
+            return
+        }
+    }
+
+    private func restoreRemoteBranch(_ branchRef: String, at commit: String, repo: String, host: String) async throws {
+        let branch = SSHCommand.shellQuote(branchRef)
+        let expected = SSHCommand.shellQuote(commit)
+        let objectFormat = try? await remote.run(host: host, command: "git -C \(repo) rev-parse --show-object-format")
+        let nullObjectID = Self.nullObjectID(
+            objectFormat: objectFormat?.exitCode == 0 ? objectFormat?.stdout : nil,
+            fallbackCommit: commit
+        )
+        let restored = try await remote.run(host: host, command: "git -C \(repo) update-ref \(branch) \(expected) \(nullObjectID)")
+        guard restored.exitCode == 0 else {
+            let existing = try await remote.run(host: host, command: "git -C \(repo) rev-parse --verify \(branch)^{commit}")
+            guard existing.exitCode == 0 else { throw WorktreeService.WorktreeError.gitFailed(restored.stderr) }
+            return
+        }
     }
 
     private static func nullObjectID(objectFormat: String?, fallbackCommit: String) -> String {

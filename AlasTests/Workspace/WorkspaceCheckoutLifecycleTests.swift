@@ -780,6 +780,26 @@ struct WorkspaceCheckoutLifecycleTests {
         #expect(commands.contains("update-ref refs/heads/feature abc 0000000000000000000000000000000000000000000000000000000000000000"))
     }
 
+    @Test func remoteMergedBranchDeletionFailsWhenConcurrentCheckoutCannotBeRestored() async throws {
+        let runner = RemoteLifecycleRunner(results: [
+            .init(exitCode: 0, stdout: "abc\n", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "", stderr: ""),
+            .init(exitCode: 0, stdout: "worktree /other\nbranch refs/heads/feature\n", stderr: ""),
+            .init(exitCode: 0, stdout: "sha1\n", stderr: ""),
+            .init(exitCode: 1, stdout: "", stderr: "ref locked"),
+            .init(exitCode: 1, stdout: "", stderr: "missing"),
+        ])
+        let lifecycle = WorkspaceCheckoutLifecycleOperator(remote: .init { executable, args, timeout in
+            try await runner.run(executable: executable, args: args, timeout: timeout)
+        })
+
+        await #expect(throws: WorktreeService.WorktreeError.self) {
+            try await lifecycle.deleteMergedBranch(Self.sshCleanupPlan())
+        }
+    }
+
     private static func sshCleanupPlan() -> WorkspaceCheckoutCleanupPlan {
         WorkspaceCheckoutCleanupPlan(
             checkoutID: UUID(),
