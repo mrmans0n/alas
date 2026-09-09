@@ -623,7 +623,7 @@ function renderChanges() {
       const row = document.createElement("button");
       row.type = "button";
       row.className = "change-row";
-      row.onclick = () => openDiff(file.path);
+      row.onclick = () => openDiff(file.path, section.stage || null);
       row.append(el("span", "change-dir", parts.dir), el("span", "change-name", parts.name));
       if (file.conflict) row.append(el("span", "change-conflict", "conflict"));
       row.append(el("span", "change-status", file.status));
@@ -647,14 +647,14 @@ function renderChanges() {
   if (notice) list.append(el("p", "placeholder-card", notice));
 }
 
-function openDiff(path) {
-  detailStack.push({ tab: "changes", path });
+function openDiff(path, stage = null) {
+  detailStack.push({ tab: "changes", path, stage });
   $("changes-list").classList.add("hidden");
   $("changes-header").classList.add("hidden");
   $("diff-view").classList.remove("hidden");
   $("diff-path").textContent = path;
   $("diff-rows").innerHTML = "";
-  send({ type: "fileDiff", sessionId: currentSession, path });
+  send({ type: "fileDiff", sessionId: currentSession, path, stage });
 }
 
 function closeDetailLevel() {
@@ -683,7 +683,7 @@ function replayActiveDetailRequest() {
   if (top.tab === "files") {
     send({ type: "readFile", sessionId: currentSession, path: top.path });
   } else if (top.tab === "changes") {
-    send({ type: "fileDiff", sessionId: currentSession, path: top.path });
+    send({ type: "fileDiff", sessionId: currentSession, path: top.path, stage: top.stage || null });
   }
 }
 

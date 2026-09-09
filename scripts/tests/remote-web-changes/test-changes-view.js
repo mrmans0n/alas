@@ -41,13 +41,16 @@ const view = globalThis.RemoteChangesView;
 
 {
   const sections = view.changeSections({
+    files: [{ path: "committed.swift", add: 8, del: 2 }],
     staged: [{ path: "staged.swift", add: 3, del: 1 }],
     unstaged: [{ path: "unstaged.swift", add: 2, del: 0 }],
     commits: [{ shortSha: "abc1234", subject: "Add remote changes", author: "Nacho", add: 8, del: 2 }]
   });
-  assert.deepEqual(sections.map((section) => section.title), ["Working Tree", "Staged", "Unstaged", "Commits"]);
-  assert.equal(sections[1].files[0].path, "staged.swift");
-  assert.equal(sections[3].commits[0].shortSha, "abc1234");
+  assert.deepEqual(sections.map((section) => section.title), ["Branch Changes", "Working Tree", "Staged", "Unstaged", "Commits"]);
+  assert.equal(sections[0].files[0].path, "committed.swift");
+  assert.equal(sections[2].stage, "staged");
+  assert.equal(sections[2].files[0].path, "staged.swift");
+  assert.equal(sections[4].commits[0].shortSha, "abc1234");
 }
 
 {

@@ -659,7 +659,7 @@ struct RemoteProtocolTests {
 
     @Test func fileRequestDedupKeyCoversOnlyTheFourFileVerbs() {
         #expect(RemoteClientMessage.listChanges(sessionId: "s1").fileRequestDedupKey == "listChanges\u{0}s1")
-        #expect(RemoteClientMessage.fileDiff(sessionId: "s1", path: "a.txt").fileRequestDedupKey == "fileDiff\u{0}s1\u{0}a.txt")
+        #expect(RemoteClientMessage.fileDiff(sessionId: "s1", path: "a.txt", stage: nil).fileRequestDedupKey == "fileDiff\u{0}s1\u{0}a.txt\u{0}")
         #expect(RemoteClientMessage.listFiles(sessionId: "s1", path: "src").fileRequestDedupKey == "listFiles\u{0}s1\u{0}src")
         #expect(RemoteClientMessage.listFiles(sessionId: "s1", path: nil).fileRequestDedupKey == "listFiles\u{0}s1\u{0}")
         #expect(RemoteClientMessage.readFile(sessionId: "s1", path: "a.txt").fileRequestDedupKey == "readFile\u{0}s1\u{0}a.txt")
@@ -673,8 +673,8 @@ struct RemoteProtocolTests {
     /// is what makes "s1" + path "2/x" distinguishable from "s12" + path "x".
     @Test func fileRequestDedupKeyDoesNotCollideAcrossSessionsOrPaths() {
         #expect(
-            RemoteClientMessage.fileDiff(sessionId: "s1", path: "a.txt").fileRequestDedupKey
-                != RemoteClientMessage.fileDiff(sessionId: "s2", path: "a.txt").fileRequestDedupKey
+            RemoteClientMessage.fileDiff(sessionId: "s1", path: "a.txt", stage: nil).fileRequestDedupKey
+                != RemoteClientMessage.fileDiff(sessionId: "s2", path: "a.txt", stage: nil).fileRequestDedupKey
         )
         #expect(
             RemoteClientMessage.listFiles(sessionId: "s1", path: "a").fileRequestDedupKey
@@ -686,7 +686,7 @@ struct RemoteProtocolTests {
         let listChanges = RemoteClientMessage.listChanges(sessionId: "s1")
         #expect(try roundTrip(listChanges) == listChanges)
 
-        let fileDiff = RemoteClientMessage.fileDiff(sessionId: "s1", path: "src/main.swift")
+        let fileDiff = RemoteClientMessage.fileDiff(sessionId: "s1", path: "src/main.swift", stage: nil)
         #expect(try roundTrip(fileDiff) == fileDiff)
 
         let listRoot = RemoteClientMessage.listFiles(sessionId: "s1", path: nil)

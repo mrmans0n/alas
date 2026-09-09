@@ -55,13 +55,13 @@ enum RemoteClientMessage: Equatable, Sendable {
     case queueClear(sessionId: String)
     case queueSteerUndo(sessionId: String)
     case listChanges(sessionId: String)
-    case fileDiff(sessionId: String, path: String)
+    case fileDiff(sessionId: String, path: String, stage: String?)
     case listFiles(sessionId: String, path: String?)
     case readFile(sessionId: String, path: String)
 }
 
 extension RemoteClientMessage: Codable {
-    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, content, text, attachments, modelId, modeId, enabled, title, worktreeId, agentId, beforeIndex, limit, itemId, intent, projectId, base, branch, path }
+    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, content, text, attachments, modelId, modeId, enabled, title, worktreeId, agentId, beforeIndex, limit, itemId, intent, projectId, base, branch, path, stage }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -156,7 +156,8 @@ extension RemoteClientMessage: Codable {
             self = .listChanges(sessionId: try c.decode(String.self, forKey: .sessionId))
         case "fileDiff":
             self = .fileDiff(sessionId: try c.decode(String.self, forKey: .sessionId),
-                             path: try c.decode(String.self, forKey: .path))
+                             path: try c.decode(String.self, forKey: .path),
+                             stage: try c.decodeIfPresent(String.self, forKey: .stage))
         case "listFiles":
             self = .listFiles(sessionId: try c.decode(String.self, forKey: .sessionId),
                               path: try c.decodeIfPresent(String.self, forKey: .path))
@@ -270,10 +271,11 @@ extension RemoteClientMessage: Codable {
         case .listChanges(let s):
             try c.encode("listChanges", forKey: .type)
             try c.encode(s, forKey: .sessionId)
-        case .fileDiff(let s, let path):
+        case .fileDiff(let s, let path, let stage):
             try c.encode("fileDiff", forKey: .type)
             try c.encode(s, forKey: .sessionId)
             try c.encode(path, forKey: .path)
+            try c.encodeIfPresent(stage, forKey: .stage)
         case .listFiles(let s, let path):
             try c.encode("listFiles", forKey: .type)
             try c.encode(s, forKey: .sessionId)
@@ -316,8 +318,8 @@ extension RemoteClientMessage {
         switch self {
         case .listChanges(let sessionId):
             return "listChanges\u{0}\(sessionId)"
-        case .fileDiff(let sessionId, let path):
-            return "fileDiff\u{0}\(sessionId)\u{0}\(path)"
+        case .fileDiff(let sessionId, let path, let stage):
+            return "fileDiff\u{0}\(sessionId)\u{0}\(path)\u{0}\(stage ?? "")"
         case .listFiles(let sessionId, let path):
             return "listFiles\u{0}\(sessionId)\u{0}\(path ?? "")"
         case .readFile(let sessionId, let path):

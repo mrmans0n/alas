@@ -21,12 +21,14 @@ function formatFileCounts(file) {
 
 function changeSections(state) {
   const sections = [];
+  const files = sortFiles(state && state.files);
   const staged = sortFiles(state && state.staged);
   const unstaged = sortFiles(state && state.unstaged);
   const commits = (state && state.commits) || [];
+  if (files.length && commits.length) sections.push({ title: "Branch Changes", files });
   if (staged.length || unstaged.length) sections.push({ title: "Working Tree" });
-  if (staged.length) sections.push({ title: "Staged", files: staged });
-  if (unstaged.length) sections.push({ title: "Unstaged", files: unstaged });
+  if (staged.length) sections.push({ title: "Staged", files: staged, stage: "staged" });
+  if (unstaged.length) sections.push({ title: "Unstaged", files: unstaged, stage: "unstaged" });
   if (commits.length) sections.push({ title: "Commits", commits });
   return sections;
 }
@@ -34,7 +36,9 @@ function changeSections(state) {
 function formatSummary(state) {
   const staged = (state && state.staged) || [];
   const unstaged = (state && state.unstaged) || [];
-  const files = staged.length || unstaged.length ? staged.concat(unstaged) : (state && state.files) || [];
+  const files = staged.length || unstaged.length
+    ? Array.from(new Map(staged.concat(unstaged).map((file) => [file.path, file])).values())
+    : (state && state.files) || [];
   let add = 0;
   let del = 0;
   for (const file of files) {

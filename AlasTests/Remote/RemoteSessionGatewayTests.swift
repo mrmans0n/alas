@@ -291,7 +291,7 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
         return changeListResult
     }
 
-    func remoteFileDiff(sessionId: String, path: String) async -> RemoteFileDiffResult {
+    func remoteFileDiff(sessionId: String, path: String, stage: String?) async -> RemoteFileDiffResult {
         fileDiffRequests.append((sessionId, path))
         resumeWaiters(&fileDiffCallWaiters, through: fileDiffRequests.count)
         if pauseFileDiff {
@@ -2721,14 +2721,14 @@ struct RemoteSessionGatewayTests {
         var sent: [RemoteServerMessage] = []
         let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
 
-        await gateway.handle(.fileDiff(sessionId: "s1", path: "a.txt"))
+        await gateway.handle(.fileDiff(sessionId: "s1", path: "a.txt", stage: nil))
         #expect(provider.fileDiffRequests.map(\.path) == ["a.txt"])
         #expect(sent == [.fileDiffResult(
             sessionId: "s1", path: "a.txt", hunks: [hunk], truncated: true)])
 
         provider.fileDiffResult = .failure(reason: .pathRejected, message: nil)
         sent.removeAll()
-        await gateway.handle(.fileDiff(sessionId: "s1", path: "../etc/passwd"))
+        await gateway.handle(.fileDiff(sessionId: "s1", path: "../etc/passwd", stage: nil))
         #expect(sent == [.fileDiffFailed(
             sessionId: "s1", path: "../etc/passwd", reason: .pathRejected, message: nil)])
     }
@@ -2771,10 +2771,10 @@ struct RemoteSessionGatewayTests {
         var sent: [RemoteServerMessage] = []
         let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
 
-        async let first: Void = gateway.handle(.fileDiff(sessionId: "s1", path: "a.txt"))
+        async let first: Void = gateway.handle(.fileDiff(sessionId: "s1", path: "a.txt", stage: nil))
         await provider.waitForFileDiffCall(1)   // first call has entered the provider and is now suspended — the gateway's dedup key is held
 
-        await gateway.handle(.fileDiff(sessionId: "s1", path: "a.txt"))   // must be dropped: the key is still held by the suspended first call
+        await gateway.handle(.fileDiff(sessionId: "s1", path: "a.txt", stage: nil))   // must be dropped: the key is still held by the suspended first call
         #expect(provider.fileDiffRequests.count == 1)   // second call never reached the provider
         #expect(sent.isEmpty)   // dropped call sends nothing
 
