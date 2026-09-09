@@ -79,7 +79,7 @@ enum StatusParser {
                 stage: .staged,
                 add: 0,
                 del: 0,
-                renameFrom: indexStatus == "R" ? renameFrom : nil
+                renameFrom: indexStatus == "R" || indexStatus == "C" ? renameFrom : nil
             ))
         }
 
@@ -104,6 +104,7 @@ enum StatusParser {
         switch status {
         case "A": return "A"
         case "D": return "D"
+        case "C": return "C"
         case "R": return "R"
         case "M": return "M"
         default: return fallback
