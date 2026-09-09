@@ -873,7 +873,7 @@ final class ACPSessionRunner {
                 fence: fence
             )
         }, completion: { row in
-            completion?(row != nil)
+            completion?(row.flatMap { $0 } != nil)
         })
     }
 

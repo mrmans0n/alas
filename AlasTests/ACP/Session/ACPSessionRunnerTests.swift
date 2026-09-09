@@ -3189,6 +3189,47 @@ struct ACPSessionRunnerTests {
         #expect(row?.title == seedTitle)
     }
 
+    @Test("persistSessionRow reports failure when fence rejects queued write")
+    func persistSessionRowReportsFenceRejection() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-session-row-fence-rejected-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let sid = "s"
+        try store.upsertSession(.init(id: sid, agentId: "claude", title: "original",
+            currentModel: "old", currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        try store.seizeLease(
+            sessionId: sid,
+            instanceId: "ME",
+            pid: Int64(getpid()),
+            now: Int64(Date().timeIntervalSince1970),
+            leaseToken: "new"
+        )
+
+        let mock = ACPMockClient()
+        let session = ACPSession(id: sid, agentId: "claude", worktreeId: "wt", title: "original")
+        session.currentModel = "new"
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: sid,
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            ownerInstanceId: "ME",
+            canWrite: { true },
+            leaseFenceProvider: {
+                ACPSessionLeaseFence(sessionId: sid, ownerInstance: "ME", token: "old")
+            }
+        )
+
+        var persisted = true
+        runner.persistSessionRow { persisted = $0 }
+        await runner.flushPersistence()
+
+        #expect(persisted == false)
+        #expect(try store.loadSession(id: sid)?.currentModel == "old")
+    }
+
     @Test("generated prompt title does not overwrite stored manual title")
     func generatedPromptTitleDoesNotOverwriteStoredManualTitle() async throws {
         let url = FileManager.default.temporaryDirectory
