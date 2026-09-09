@@ -669,6 +669,29 @@ struct GitServiceRemoteChangesTests {
         #expect(added.map(\.text) == ["literal"])
     }
 
+    @Test func remoteDiff_slicesStagedRenameWithNonASCIIDestinationName() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try "one\ntwo\nthree\n".write(to: repo.appendingPathComponent("café.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "café.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "base"], cwd: repo)
+        _ = try await Process.git(["mv", "café.txt", "crème.txt"], cwd: repo)
+        try "one\nTWO\nthree\n".write(to: repo.appendingPathComponent("crème.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "-A"], cwd: repo)
+
+        let diff = try await GitService().remoteDiff(
+            worktreePath: repo,
+            file: "crème.txt",
+            staged: true,
+            originalPath: "café.txt",
+            maxOutputBytes: nil
+        )
+        let added = diff.hunks.flatMap(\.lines).filter { $0.kind == .add }.map(\.text)
+        let deleted = diff.hunks.flatMap(\.lines).filter { $0.kind == .delete }.map(\.text)
+        #expect(added == ["TWO"])
+        #expect(deleted == ["two"])
+    }
+
     @Test func remoteDiff_throwsWhenAStagedCopySourceSectionAloneExceedsTheOutputCap() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }

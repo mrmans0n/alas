@@ -357,6 +357,6 @@ button.create-row.is-selected { border-color: var(--accent); background: color-m
   border-radius: 10px; color: var(--fg-muted);
 }
 @media (max-width: 520px) {
-  #detail-title, #detail-rename { display: none; }
+  #detail-title { display: none; }
   #detail-tabs { margin-right: auto; }
 }

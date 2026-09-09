@@ -237,7 +237,7 @@ extension GitService {
         //     vs empty tree) so initial-commit workflows still render the
         //     staged side.
         let head = try await hasHead(worktreePath: worktreePath)
-        var args = ["--literal-pathspecs", "diff", "--no-color", "-M", "-C"]
+        var args = ["--literal-pathspecs", "-c", "core.quotePath=false", "diff", "--no-color", "-M", "-C"]
         if staged {
             args.append("--cached")
             if head { args.append("HEAD") }
