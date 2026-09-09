@@ -1283,7 +1283,7 @@ struct ACPSessionRunnerTests {
         #expect(try store.loadMessages(sessionId: "s").contains { $0.kind == "agent" })
     }
 
-    @Test("config update is acknowledged only after model persistence")
+    @Test("config update is acknowledged only after repairing stale stored model")
     func configUpdateAcknowledgesAfterModelPersistence() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
@@ -1291,7 +1291,7 @@ struct ACPSessionRunnerTests {
             currentModel: "opus", currentMode: nil, autoRun: false,
             createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
-        session.currentModel = "opus"
+        session.currentModel = "sonnet"
         let runner = ACPSessionRunner(
             session: session,
             connection: ACPConnection(client: ACPMockClient()),

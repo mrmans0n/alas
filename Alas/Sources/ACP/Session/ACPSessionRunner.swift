@@ -625,11 +625,10 @@ final class ACPSessionRunner {
                     )
                 }
             } else {
-                let modelBeforeUpdate = session.currentModel
                 let dirty = session.apply(params.update)
                 flushStreamingPersist()
                 if case .sessionConfigOptionsUpdate = params.update,
-                   session.currentModel != modelBeforeUpdate {
+                   case .configOption = session.chipState.models?.source {
                     persistIndices(dirty)
                     persistSessionRow { persisted in
                         if persisted {
