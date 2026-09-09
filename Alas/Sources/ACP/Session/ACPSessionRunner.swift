@@ -616,12 +616,7 @@ final class ACPSessionRunner {
                     freezeStreamingPersistSnapshots()
                     streamingLeaseLost = true
                 }
-                let modelBeforeUpdate = session.currentModel
                 let dirty = session.apply(params.update)
-                if case .sessionConfigOptionsUpdate = params.update,
-                   session.currentModel != modelBeforeUpdate {
-                    persistSessionRow()
-                }
                 if !streamingLeaseLost {
                     scheduleStreamingPersist(
                         dirty,
@@ -633,13 +628,19 @@ final class ACPSessionRunner {
                 let modelBeforeUpdate = session.currentModel
                 let dirty = session.apply(params.update)
                 flushStreamingPersist()
-                persistIndices(
-                    dirty,
-                    completion: persistenceCompletion(acknowledging: durableConsumptionAcknowledgement)
-                )
                 if case .sessionConfigOptionsUpdate = params.update,
                    session.currentModel != modelBeforeUpdate {
-                    persistSessionRow()
+                    persistIndices(dirty)
+                    persistSessionRow { persisted in
+                        if persisted {
+                            durableConsumptionAcknowledgement?()
+                        }
+                    }
+                } else {
+                    persistIndices(
+                        dirty,
+                        completion: persistenceCompletion(acknowledging: durableConsumptionAcknowledgement)
+                    )
                 }
             }
         }
@@ -849,8 +850,11 @@ final class ACPSessionRunner {
     /// `ACPSessionManager.persist` does the same thing plus a recent-
     /// list refresh; the runner skips that because it has no manager
     /// handle, and the next open via the manager picks up the new row.
-    func persistSessionRow(preserveTitle: Bool = true) {
-        guard holdsLeaseForWrite() else { return }
+    func persistSessionRow(preserveTitle: Bool = true, completion: ((Bool) -> Void)? = nil) {
+        guard holdsLeaseForWrite() else {
+            completion?(false)
+            return
+        }
         let title = session.title
         let titleSource = session.titleSource
         let currentModel = session.currentModel
@@ -858,8 +862,8 @@ final class ACPSessionRunner {
         let autoRun = session.autoRunEnabled
         let fence = leaseFenceProvider()
         let sessionId = sessionId
-        enqueuePersistence { persistence in
-            _ = try await persistence.updateSessionFromRuntime(
+        enqueuePersistence({ persistence in
+            try await persistence.updateSessionFromRuntime(
                 id: sessionId,
                 title: title,
                 titleSource: titleSource,
@@ -869,7 +873,9 @@ final class ACPSessionRunner {
                 preserveTitle: preserveTitle,
                 fence: fence
             )
-        }
+        }, completion: { row in
+            completion?(row != nil)
+        })
     }
 
     func persistGeneratedTitleIfStoredPlaceholder() {

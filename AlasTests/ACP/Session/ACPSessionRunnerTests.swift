@@ -1283,6 +1283,45 @@ struct ACPSessionRunnerTests {
         #expect(try store.loadMessages(sessionId: "s").contains { $0.kind == "agent" })
     }
 
+    @Test("config update is acknowledged only after model persistence")
+    func configUpdateAcknowledgesAfterModelPersistence() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "codex", title: "t",
+            currentModel: "opus", currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
+        session.currentModel = "opus"
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: ACPMockClient()),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path
+        )
+        let acknowledgement = DurableAcknowledgementRecorder()
+
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "s",
+            update: .sessionConfigOptionsUpdate([ACPConfigOption(
+                id: "model",
+                name: "Model",
+                category: "model",
+                currentValue: "sonnet",
+                options: [
+                    ACPConfigOptionItem(id: "sonnet", name: "Sonnet"),
+                    ACPConfigOptionItem(id: "opus", name: "Opus"),
+                ]
+            )]),
+            durableConsumptionAcknowledgement: { acknowledgement.record() }
+        ))
+
+        #expect(!acknowledgement.wasRecorded)
+        await runner.flushPersistence()
+        #expect(acknowledgement.wasRecorded)
+        #expect(try store.loadSession(id: "s")?.currentModel == "sonnet")
+    }
+
     @Test("incoming streaming chunks are coalesced before applying")
     func incomingStreamingChunksCoalesceBeforeApplying() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")

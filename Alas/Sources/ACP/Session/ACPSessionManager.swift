@@ -3877,9 +3877,9 @@ extension ACPSessionManager {
                 let remoteId = session.remoteSessionId ?? sessionId
                 switch session.chipState.models?.source {
                 case .configOption(let id):
-                    guard let index = session.availableConfigOptions.firstIndex(where: { $0.id == id }) else { break }
-                    let loadedOption = session.availableConfigOptions[index]
-                    let loadedValue = result.configOptions.first(where: { $0.id == id })?.currentStringValue
+                    guard let index = session.availableConfigOptions.firstIndex(where: { $0.id == id }),
+                          let loadedOption = result.configOptions.first(where: { $0.id == id }) else { break }
+                    let loadedValue = loadedOption.currentStringValue
                     guard m != loadedValue else { break }
                     let loadedModel = session.currentModel
                     session.availableConfigOptions[index] = ACPConfigOption(
