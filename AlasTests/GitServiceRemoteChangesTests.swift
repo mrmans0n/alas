@@ -921,6 +921,23 @@ struct GitServiceRemoteChangesTests {
         #expect(unstaged.add == 1)
     }
 
+    @Test func statusForRemoteChangeListCountsUntrackedRecreationContent() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try "old\nold\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "a.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "base"], cwd: repo)
+        _ = try await Process.git(["rm", "a.txt"], cwd: repo)
+        try "new\nnew\nnew\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+
+        let files = try await GitService().statusForRemoteChangeList(worktreePath: repo)
+
+        let unstaged = try #require(files.first { $0.path == "a.txt" && $0.stage == .unstaged })
+        #expect(unstaged.status == "A")
+        #expect(unstaged.add == 3)
+        #expect(unstaged.del == 0)
+    }
+
     /// `diffAgainstHEAD`'s unborn-HEAD existence check used to be
     /// `FileManager.default.fileExists`, a purely LOCAL filesystem check
     /// that is meaningless for an SSH-backed worktree — nothing exists

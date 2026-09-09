@@ -235,10 +235,31 @@ extension GitService {
             throw ProcessError.nonZeroExit(numstat.exitCode, numstat.stderr)
         }
         let counts = Self.parseNumstatZOutput(numstat.stdout)
+        let untrackedWithoutNumstat = entries
+            .filter { $0.stage == .unstaged && $0.status == "A" && counts.add[$0.path] == nil }
+            .map(\.path)
+        let remoteUntrackedCounts: [String: Int]
+        if worktreePath.isRemoteAlasPath, let host = RemoteHostRegistry.shared.host(forPath: worktreePath.path) {
+            remoteUntrackedCounts = try await RemoteFileStats.lineCounts(
+                host: host, cwd: worktreePath.path, paths: untrackedWithoutNumstat)
+        } else {
+            remoteUntrackedCounts = [:]
+        }
         for i in entries.indices where entries[i].stage == .unstaged {
-            guard let add = counts.add[entries[i].path],
-                  let del = counts.del[entries[i].path]
-            else { continue }
+            let add: Int
+            let del: Int
+            if let countedAdd = counts.add[entries[i].path],
+               let countedDel = counts.del[entries[i].path] {
+                add = countedAdd
+                del = countedDel
+            } else if entries[i].status == "A" {
+                add = worktreePath.isRemoteAlasPath
+                    ? (remoteUntrackedCounts[entries[i].path] ?? 0)
+                    : Self.addedLineCount(worktreePath: worktreePath, path: entries[i].path)
+                del = 0
+            } else {
+                continue
+            }
             entries[i] = ChangedFile(
                 path: entries[i].path,
                 status: entries[i].status,
