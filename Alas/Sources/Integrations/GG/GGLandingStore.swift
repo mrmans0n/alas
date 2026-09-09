@@ -41,6 +41,7 @@ struct GGLandingSession: Equatable, Identifiable, Sendable {
     var warning: String?
     var result: GGLandResult?
     var error: String?
+    var completedIDs: Set<String>
     var endedAt: Date? = nil
 }
 
@@ -62,7 +63,11 @@ final class GGLandingStore {
     @ObservationIgnored private var isCancellingAll = false
 
     @discardableResult
-    func begin(_ seed: GGLandingSession.Seed, now: Date = Date()) -> Bool {
+    func begin(
+        _ seed: GGLandingSession.Seed,
+        completedIDs: Set<String> = [],
+        now: Date = Date()
+    ) -> Bool {
         guard !isCancellingAll, operations[seed.projectId] == nil else { return false }
         if let session = sessions[seed.projectId],
            session.phase == .running || session.phase == .cancelling
@@ -83,7 +88,8 @@ final class GGLandingStore {
             activeWait: nil,
             warning: nil,
             result: nil,
-            error: nil
+            error: nil,
+            completedIDs: completedIDs
         )
         return true
     }
@@ -131,6 +137,9 @@ final class GGLandingStore {
             if let index = session.rows.firstIndex(where: { $0.position == entry.position }) {
                 session.rows[index].wait = nil
                 session.rows[index].outcome = entry
+                if entry.error == nil, let id = Self.completedID(for: session.rows[index]) {
+                    session.completedIDs.insert(id)
+                }
             }
             if session.activeWait?.position == entry.position {
                 session.activeWait = nil
@@ -145,6 +154,9 @@ final class GGLandingStore {
                 if let index = session.rows.firstIndex(where: { $0.position == entry.position }) {
                     session.rows[index].wait = nil
                     session.rows[index].outcome = entry
+                    if entry.error == nil, let id = Self.completedID(for: session.rows[index]) {
+                        session.completedIDs.insert(id)
+                    }
                 }
             }
             if session.phase == .running {
@@ -166,6 +178,10 @@ final class GGLandingStore {
         }
         sessions[projectId] = session
         return true
+    }
+
+    private static func completedID(for row: GGLandingRow) -> String? {
+        row.stableID ?? row.ggId
     }
 
     func attach(

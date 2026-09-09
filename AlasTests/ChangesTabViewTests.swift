@@ -520,7 +520,8 @@ struct ChangesTabViewTests {
             activeWait: nil,
             warning: nil,
             result: nil,
-            error: nil
+            error: nil,
+            completedIDs: []
         )
     }
 }

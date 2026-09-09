@@ -1883,7 +1883,11 @@ final class RightPaneState: GGSplitCommitServicing {
             await ggLandingStore.waitForOperation(projectId: projectId)
             guard !Task.isCancelled else { return }
             guard ggLandingStore.sessions[projectId]?.id == session.id else { return }
-            guard ggLandingStore.begin(session.confirmedScope) else { return }
+            let completedIDs = session.completedIDs.union(session.rows.compactMap { row -> String? in
+                guard row.outcome?.error == nil, row.outcome != nil else { return nil }
+                return row.stableID ?? row.ggId
+            })
+            guard ggLandingStore.begin(session.confirmedScope, completedIDs: completedIDs) else { return }
             let sessionId = ggLandingStore.sessions[projectId]?.id
             do {
                 guard ggCapabilities().landJSONL else {
@@ -1891,16 +1895,12 @@ final class RightPaneState: GGSplitCommitServicing {
                 }
                 let prepared = try await ggMutationCoordinator.prepare(.land(target: target))
                 try Task.checkCancellation()
-                let landedIDs = Set(session.rows.compactMap { row -> String? in
-                    guard row.outcome?.error == nil, row.outcome != nil else { return nil }
-                    return row.stableID ?? row.ggId
-                })
                 guard let stack = prepared.stack,
                       Self.ggLandingScopeMatches(
                         session.confirmedScope,
                         target: target,
                         stack: stack,
-                        landedIDs: landedIDs
+                        landedIDs: completedIDs
                       ),
                       let seed = ggLandingSeed(target: target, stack: stack)
                 else { throw GGMutationError.staleConfirmation }
