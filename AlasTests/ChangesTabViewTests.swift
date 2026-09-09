@@ -433,6 +433,17 @@ struct ChangesTabViewTests {
         #expect(ChangesTabView.landingStatus(from: session) == nil)
     }
 
+    @Test func activeLandingUsesGGPreparationWhenContextIsInactive() throws {
+        let status = try #require(
+            ChangesTabView.landingStatus(from: landingSession(phase: .running))
+        )
+
+        #expect(ChangesTabView.shouldUseGGPreparation(
+            drawerIsActive: false,
+            landingStatus: status
+        ))
+    }
+
     private func stack(
         currentPosition: Int?,
         entries: [GGStackEntry] = [
