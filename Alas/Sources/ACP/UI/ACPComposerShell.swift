@@ -841,7 +841,7 @@ struct ACPComposer: View {
                 switch spec.source {
                 case .mode: manager.pendingMode[sid] = selectedId
                 case .model: manager.pendingModel[sid] = selectedId
-                case .configOption: break
+                case .configOption: manager.pendingModel[sid] = selectedId
                 }
                 return
             }
