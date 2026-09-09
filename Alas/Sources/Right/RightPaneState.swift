@@ -1891,8 +1891,17 @@ final class RightPaneState: GGSplitCommitServicing {
                 }
                 let prepared = try await ggMutationCoordinator.prepare(.land(target: target))
                 try Task.checkCancellation()
+                let landedIDs = Set(session.rows.compactMap { row -> String? in
+                    guard row.outcome?.error == nil, row.outcome != nil else { return nil }
+                    return row.stableID ?? row.ggId
+                })
                 guard let stack = prepared.stack,
-                      Self.ggLandingScopeMatches(session.confirmedScope, target: target, stack: stack),
+                      Self.ggLandingScopeMatches(
+                        session.confirmedScope,
+                        target: target,
+                        stack: stack,
+                        landedIDs: landedIDs
+                      ),
                       let seed = ggLandingSeed(target: target, stack: stack)
                 else { throw GGMutationError.staleConfirmation }
                 guard ggLandingStore.sessions[projectId]?.id == sessionId else { return }
@@ -1929,7 +1938,8 @@ final class RightPaneState: GGSplitCommitServicing {
     private static func ggLandingScopeMatches(
         _ session: GGLandingSession.Seed,
         target: String,
-        stack: GGStack
+        stack: GGStack,
+        landedIDs: Set<String>
     ) -> Bool {
         guard target == session.target,
               stack.name == session.stack,
@@ -1943,6 +1953,8 @@ final class RightPaneState: GGSplitCommitServicing {
         let currentIDs = stack.entries.sorted { $0.position < $1.position }
             .filter { $0.position <= targetEntry.position }.map(\.id)
         let remainingIDs = Set(stack.entries.map(\.id))
+        let missingIDs = originalIDs.filter { !remainingIDs.contains($0) }
+        guard missingIDs.allSatisfy({ landedIDs.contains($0) }) else { return false }
         return currentIDs == originalIDs.filter { remainingIDs.contains($0) }
     }
 

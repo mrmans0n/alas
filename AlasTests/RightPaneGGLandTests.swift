@@ -361,6 +361,7 @@ struct RightPaneGGLandTests {
             try await waitForLand { runner.calls.filter { $0.first == "land" }.count == attempt }
             #expect(store.sessions["live-project"]?.rows.count == 1)
             #expect(store.sessions["live-project"]?.rows.first?.position == 1)
+            #expect(store.sessions["live-project"]?.phase == .running)
             #expect(store.sessions["live-project"]?.confirmedScope.rows.map(\.ggId) == ["lower", "change-1"])
             await store.cancelAllAndWait()
             #expect(store.sessions["live-project"]?.phase == .cancelled)
@@ -368,7 +369,7 @@ struct RightPaneGGLandTests {
         }
     }
 
-    @Test(arguments: ["base", "lower", "above-target"])
+    @Test(arguments: ["base", "lower", "above-target", "removed-lower"])
     func repeatedRestartRejectsChangedScopeWithStableTarget(change: String) async throws {
         let store = GGLandingStore()
         let runner = LiveLandGGRunner()
@@ -384,7 +385,11 @@ struct RightPaneGGLandTests {
         let base = change == "base" ? "release" : "main"
         let lowerID = change == "lower" ? "replacement" : "lower"
         let lowerPosition = change == "above-target" ? 3 : 1
-        let output = #"{"version":1,"stack":{"name":"feat","base":"\#(base)","total_commits":2,"synced_commits":2,"entries":[{"position":\#(lowerPosition),"sha":"l","title":"Lower","gg_id":"\#(lowerID)","pr_number":4,"pr_state":"open","approved":true},{"position":2,"sha":"s","title":"Target","gg_id":"change-1","pr_number":5,"pr_state":"open","approved":true}]}}"#
+        let totalCommits = change == "removed-lower" ? 1 : 2
+        let lowerEntry = change == "removed-lower"
+            ? ""
+            : #"{"position":\#(lowerPosition),"sha":"l","title":"Lower","gg_id":"\#(lowerID)","pr_number":4,"pr_state":"open","approved":true},"#
+        let output = #"{"version":1,"stack":{"name":"feat","base":"\#(base)","total_commits":\#(totalCommits),"synced_commits":\#(totalCommits),"entries":[\#(lowerEntry){"position":2,"sha":"s","title":"Target","gg_id":"change-1","pr_number":5,"pr_state":"open","approved":true}]}}"#
         runner.replaceStack(with: output)
         state.ggStack = try GGStackSnapshot.decode(fromJSON: Data(output.utf8)).stack
 

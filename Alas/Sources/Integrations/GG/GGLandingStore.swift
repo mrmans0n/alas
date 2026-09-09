@@ -109,7 +109,7 @@ final class GGLandingStore {
         case .start(let stack, let base, let totalEntries):
             guard stack == session.confirmedScope.stack,
                   base == session.confirmedScope.base,
-                  totalEntries == session.confirmedScope.rows.count
+                  totalEntries == session.rows.count
             else {
                 session.phase = .failed
                 session.activeWait = nil
