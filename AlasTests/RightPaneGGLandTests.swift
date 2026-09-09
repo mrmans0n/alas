@@ -368,7 +368,7 @@ struct RightPaneGGLandTests {
             #expect(store.sessions["live-project"]?.confirmedScope.rows.map(\.ggId) == ["lower", "change-1"])
             await store.cancelAllAndWait()
             #expect(store.sessions["live-project"]?.phase == .cancelled)
-            #expect(store.sessions["live-project"]?.completedIDs == Set(["lower"]))
+            #expect(store.sessions["live-project"]?.completedIDs == Set(["lower", "change-1"]))
             #expect(store.sessions["live-project"]?.rows.first?.outcome?.action == "merged")
         }
     }

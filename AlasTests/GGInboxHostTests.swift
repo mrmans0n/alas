@@ -15,4 +15,20 @@ struct GGInboxHostTests {
     @Test func nilWhenProjectHasNoWorktrees() {
         #expect(AppState.inboxHostWorktreeId(selectedWorktreeId: "w1", projectWorktreeIds: []) == nil)
     }
+
+    @Test func landingPrefersLiveSessionHost() {
+        #expect(AppState.landingHostWorktreeId(
+            sessionWorktreeId: "w1",
+            selectedWorktreeId: "w2",
+            projectWorktreeIds: ["w1", "w2"]
+        ) == "w1")
+    }
+
+    @Test func landingFallsBackWhenSessionHostDisappears() {
+        #expect(AppState.landingHostWorktreeId(
+            sessionWorktreeId: "deleted",
+            selectedWorktreeId: "w2",
+            projectWorktreeIds: ["w1", "w2"]
+        ) == "w2")
+    }
 }

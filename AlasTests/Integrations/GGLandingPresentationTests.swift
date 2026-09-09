@@ -71,8 +71,10 @@ struct GGLandingPresentationTests {
 
     private func session() -> GGLandingSession {
         .init(id: UUID(), projectId: "p", worktreeId: "w", stack: "feature", base: "main",
-              target: "c3", startedAt: Date(), rows: (1...3).map {
+              target: "c3", confirmedScope: .init(
+                  projectId: "p", worktreeId: "w", stack: "feature", base: "main", target: "c3", rows: []
+              ), startedAt: Date(), rows: (1...3).map {
                   .init(position: $0, title: "Change \($0)", ggId: "c\($0)", prNumber: 40 + $0)
-              }, phase: .running, activeWait: nil, warning: nil, result: nil, error: nil)
+              }, phase: .running, activeWait: nil, warning: nil, result: nil, error: nil, completedIDs: [])
     }
 }

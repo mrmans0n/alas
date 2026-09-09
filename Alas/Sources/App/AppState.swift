@@ -9547,6 +9547,20 @@ final class AppState {
         return projectWorktreeIds.first
     }
 
+    nonisolated static func landingHostWorktreeId(
+        sessionWorktreeId: String,
+        selectedWorktreeId: String?,
+        projectWorktreeIds: [String]
+    ) -> String? {
+        if projectWorktreeIds.contains(sessionWorktreeId) {
+            return sessionWorktreeId
+        }
+        return inboxHostWorktreeId(
+            selectedWorktreeId: selectedWorktreeId,
+            projectWorktreeIds: projectWorktreeIds
+        )
+    }
+
     /// Opens (or focuses) the gg inbox tab for `projectId` in the currently
     /// selected worktree's tab strip, falling back to the project's first
     /// worktree when the current selection belongs to a different project.
@@ -9563,10 +9577,19 @@ final class AppState {
 
     func openGGLanding(projectId: String) {
         guard let session = GGLandingStore.shared.sessions[projectId] else { return }
+        let projectWorktreeIds = projectsManager.visibleWorktrees(projectId: projectId).map(\.id)
+        guard let worktreeId = Self.landingHostWorktreeId(
+            sessionWorktreeId: session.worktreeId,
+            selectedWorktreeId: selectedWorktreeId,
+            projectWorktreeIds: projectWorktreeIds
+        ) else {
+            GGLandingStore.shared.cancel(projectId: projectId)
+            return
+        }
         tabs.openOrFocusGGLanding(
-            worktreeId: session.worktreeId, projectId: projectId, stackName: session.stack
+            worktreeId: worktreeId, projectId: projectId, stackName: session.stack
         )
-        selectWorktree(id: session.worktreeId)
+        selectWorktree(id: worktreeId)
     }
 
     func cancelGGLanding(projectId: String) {
@@ -9574,8 +9597,14 @@ final class AppState {
     }
 
     func restartGGLanding(projectId: String) {
-        guard let session = GGLandingStore.shared.sessions[projectId],
-              let state = rightPaneStore.activeState(worktreeId: session.worktreeId)
+        guard let session = GGLandingStore.shared.sessions[projectId] else { return }
+        let projectWorktreeIds = projectsManager.visibleWorktrees(projectId: projectId).map(\.id)
+        guard let worktreeId = Self.landingHostWorktreeId(
+            sessionWorktreeId: session.worktreeId,
+            selectedWorktreeId: selectedWorktreeId,
+            projectWorktreeIds: projectWorktreeIds
+        ),
+            let state = rightPaneStore.activeState(worktreeId: worktreeId)
         else { return }
         state.restartGGLand(target: session.target)
     }
