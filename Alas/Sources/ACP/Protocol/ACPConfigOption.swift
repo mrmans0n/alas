@@ -97,21 +97,30 @@ struct ACPConfigOption: Codable, Equatable, Identifiable, Hashable {
         _ configOptions: [ACPConfigOption],
         configId: String,
         selectedValue: ACPConfigValue,
-        currentConfigOptions: [ACPConfigOption]
+        currentConfigOptions: [ACPConfigOption],
+        baselineConfigOptions: [ACPConfigOption]? = nil
     ) -> [ACPConfigOption]? {
         guard currentConfigOptions.first(where: { $0.id == configId })?.currentValue == selectedValue else {
             return nil
         }
 
         return configOptions.map { option in
-            guard option.id == configId else { return option }
-            return ACPConfigOption(
-                id: option.id,
-                name: option.name,
-                type: option.type,
-                category: option.category,
-                currentValue: selectedValue,
-                options: option.options)
+            if option.id == configId {
+                return ACPConfigOption(
+                    id: option.id,
+                    name: option.name,
+                    type: option.type,
+                    category: option.category,
+                    currentValue: selectedValue,
+                    options: option.options)
+            }
+            if let baselineConfigOptions,
+               let baseline = baselineConfigOptions.first(where: { $0.id == option.id }),
+               let current = currentConfigOptions.first(where: { $0.id == option.id }),
+               current.currentValue != baseline.currentValue {
+                return current
+            }
+            return option
         }
     }
 }

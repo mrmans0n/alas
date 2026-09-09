@@ -819,6 +819,93 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(session.availableConfigOptions.first?.currentStringValue == "sonnet")
     }
 
+    @Test("reopened config-option session preserves option changed during restoration")
+    func reopenedConfigOptionSessionPreservesOptionChangedDuringRestoration() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            agentId: "codex",
+            currentModel: "sonnet"
+        ))
+        let client = ACPMockClient()
+        let modelGate = PromptGate()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [],
+                availableModes: [],
+                currentModel: nil,
+                currentMode: nil,
+                promptSuggestions: [],
+                configOptions: [
+                    ACPConfigOption(
+                        id: "model",
+                        name: "Model",
+                        category: "model",
+                        currentValue: "opus",
+                        options: [
+                            .init(id: "sonnet", name: "Sonnet"),
+                            .init(id: "opus", name: "Opus"),
+                        ]),
+                    ACPConfigOption(
+                        id: "effort",
+                        name: "Effort",
+                        currentValue: "low",
+                        options: [
+                            .init(id: "low", name: "Low"),
+                            .init(id: "high", name: "High"),
+                        ]),
+                ]
+            ))
+        }
+        client.scriptAsync(method: "session/set_config_option") { _ in
+            await modelGate.waitInPrompt()
+            return try JSONEncoder().encode(ACPSessionSetConfigOptionResult(configOptions: [
+                ACPConfigOption(
+                    id: "model",
+                    name: "Model",
+                    category: "model",
+                    currentValue: "sonnet",
+                    options: [
+                        .init(id: "sonnet", name: "Sonnet"),
+                        .init(id: "opus", name: "Opus"),
+                    ]),
+                ACPConfigOption(
+                    id: "effort",
+                    name: "Effort",
+                    currentValue: "low",
+                    options: [
+                        .init(id: "low", name: "Low"),
+                        .init(id: "high", name: "High"),
+                    ]),
+            ]))
+        }
+        let manager = manager(store: store, client: client)
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        let attachTask = Task {
+            await manager.attach(to: session.id, freshlyCreated: false)
+        }
+
+        try await waitUntilAsync { await modelGate.hasEntered }
+        session.availableConfigOptions[1] = ACPConfigOption(
+            id: "effort",
+            name: "Effort",
+            currentValue: "high",
+            options: [
+                .init(id: "low", name: "Low"),
+                .init(id: "high", name: "High"),
+            ])
+        await modelGate.release()
+        await attachTask.value
+
+        #expect(session.currentModel == "sonnet")
+        #expect(session.availableConfigOptions.first(where: { $0.id == "model" })?.currentStringValue == "sonnet")
+        #expect(session.availableConfigOptions.first(where: { $0.id == "effort" })?.currentStringValue == "high")
+    }
+
     @Test("reopened session keeps the loaded model when restoration fails")
     func reopenedSessionKeepsLoadedModelWhenRestorationFails() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())

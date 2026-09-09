@@ -156,6 +156,37 @@ struct ACPConfigOptionTests {
         #expect(merged == nil)
     }
 
+    @Test("successful set response preserves concurrently changed dependent value")
+    func mergeSuccessfulSetResponsePreservesConcurrentlyChangedDependentValue() throws {
+        let baselineFast = ACPConfigOption(
+            id: "fast", name: "Fast", type: "select", currentValue: "true",
+            options: [
+                ACPConfigOptionItem(id: "false", name: "Off"),
+                ACPConfigOptionItem(id: "true", name: "On"),
+            ])
+        let baselineEffort = ACPConfigOption(
+            id: "effort", name: "Effort", type: "select", currentValue: "low",
+            options: [
+                ACPConfigOptionItem(id: "low", name: "Low"),
+                ACPConfigOptionItem(id: "high", name: "High"),
+            ])
+        let staleEffort = ACPConfigOption(
+            id: "effort", name: "Effort", type: "select", currentValue: "low",
+            options: baselineEffort.options)
+        let currentEffort = ACPConfigOption(
+            id: "effort", name: "Effort", type: "select", currentValue: "high",
+            options: baselineEffort.options)
+
+        let merged = try #require(ACPConfigOption.mergingSuccessfulSetResponse(
+            [baselineFast, staleEffort],
+            configId: "fast",
+            selectedValue: .string("true"),
+            currentConfigOptions: [baselineFast, currentEffort],
+            baselineConfigOptions: [baselineFast, baselineEffort]))
+
+        #expect(merged.first(where: { $0.id == "effort" })?.currentValue == .string("high"))
+    }
+
     @Test("successful boolean set response preserves the selected config value")
     func mergeSuccessfulBooleanSetResponsePreservesSelectedValue() throws {
         let staleFast = ACPConfigOption(

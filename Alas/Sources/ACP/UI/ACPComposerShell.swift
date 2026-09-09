@@ -858,6 +858,7 @@ struct ACPComposer: View {
                 // (including dependent updates), but some agents echo a stale
                 // value for the option just set. Keep the successful selection
                 // for that option while still accepting dependent updates.
+                let baselineConfigOptions = session.availableConfigOptions
                 if let updated = try? await runner.connection.setConfigOption(
                     sessionId: remoteId,
                     configId: id,
@@ -867,10 +868,15 @@ struct ACPComposer: View {
                         updated,
                         configId: id,
                         selectedValue: .string(selectedId),
-                        currentConfigOptions: session.availableConfigOptions) else {
+                        currentConfigOptions: session.availableConfigOptions,
+                        baselineConfigOptions: baselineConfigOptions) else {
                         return
                     }
                     session.availableConfigOptions = merged
+                    if case .configOption(let modelId) = session.chipState.models?.source {
+                        session.currentModel = session.availableConfigOptions
+                            .first { $0.id == modelId }?.currentStringValue
+                    }
                     manager.persist(session)
                 }
             }
@@ -891,6 +897,7 @@ struct ACPComposer: View {
 
         Task { @MainActor in
             guard let runner = manager.runners[sid] else { return }
+            let baselineConfigOptions = session.availableConfigOptions
             if let updated = try? await runner.connection.setConfigOption(
                 sessionId: remoteId,
                 configId: id,
@@ -900,10 +907,15 @@ struct ACPComposer: View {
                     updated,
                     configId: id,
                     selectedValue: value,
-                    currentConfigOptions: session.availableConfigOptions) else {
+                    currentConfigOptions: session.availableConfigOptions,
+                    baselineConfigOptions: baselineConfigOptions) else {
                     return
                 }
                 session.availableConfigOptions = merged
+                if case .configOption(let modelId) = session.chipState.models?.source {
+                    session.currentModel = session.availableConfigOptions
+                        .first { $0.id == modelId }?.currentStringValue
+                }
                 manager.persist(session)
             }
         }
