@@ -2,6 +2,46 @@ import Foundation
 import Testing
 @testable import Alas
 
+private actor LandingTestSuspension {
+    private var isSuspended = false
+    private var suspensionWaiters: [CheckedContinuation<Void, Never>] = []
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func suspend() async {
+        isSuspended = true
+        let waiters = suspensionWaiters
+        suspensionWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    func waitUntilSuspended() async {
+        if isSuspended { return }
+        await withCheckedContinuation { suspensionWaiters.append($0) }
+    }
+
+    func release() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
+private enum GGLandingStoreTestTimeout: Error {
+    case timedOut
+}
+
+@MainActor
+private func waitUntil(
+    timeout: TimeInterval = 2,
+    _ condition: () -> Bool
+) async throws {
+    let deadline = Date().addingTimeInterval(timeout)
+    while !condition() {
+        guard Date() < deadline else { throw GGLandingStoreTestTimeout.timedOut }
+        try await Task.sleep(for: .milliseconds(1))
+    }
+}
+
 @MainActor
 struct GGLandingStoreTests {
     private enum TestError: Error {
@@ -48,6 +88,28 @@ struct GGLandingStoreTests {
         #expect(replacement.id != first.id)
         #expect(replacement.phase == .running)
         #expect(replacement.error == nil)
+    }
+
+    @Test func terminalSessionCannotRestartUntilAttachedOperationFinishes() async {
+        let store = GGLandingStore()
+        let operation = AsyncStream<Void>.makeStream()
+        let task = Task<Void, Error> {
+            for await _ in operation.stream {}
+        }
+        #expect(store.begin(seed()))
+        store.attach(projectId: "p", task: task) {
+            operation.continuation.finish()
+        }
+        store.receive(
+            .summary(.init(landed: [], error: "partial failure")),
+            projectId: "p"
+        )
+
+        #expect(!store.begin(seed()))
+
+        operation.continuation.finish()
+        await store.cancelAllAndWait()
+        #expect(store.begin(seed()))
     }
 
     @Test func heartbeatUpdatesActiveRowAndClearsRecoveredWarning() {
@@ -140,25 +202,20 @@ struct GGLandingStoreTests {
         }
         store.cancel(projectId: "p")
         store.cancel(projectId: "p")
-        _ = await task.result
-        for _ in 0..<20 where store.sessions["p"]?.phase != .cancelled {
-            await Task.yield()
-        }
+        await store.cancelAllAndWait()
         #expect(cancelCount == 1)
         #expect(store.sessions["p"]?.phase == .cancelled)
         #expect(store.sessions["p"]?.error == nil)
     }
 
-    @Test func unexpectedExitWithoutSummaryFailsSession() async {
+    @Test func unexpectedExitWithoutSummaryFailsSession() async throws {
         let store = GGLandingStore()
         store.begin(seed())
         let task = Task<Void, Error> {}
         store.attach(projectId: "p", task: task) {}
 
         _ = await task.result
-        for _ in 0..<20 where store.sessions["p"]?.phase == .running {
-            await Task.yield()
-        }
+        try await waitUntil { store.sessions["p"]?.phase == .failed }
 
         #expect(store.sessions["p"]?.phase == .failed)
         #expect(store.sessions["p"]?.error != nil)
@@ -199,11 +256,44 @@ struct GGLandingStoreTests {
         }
 
         store.prune(keepingProjectIds: ["other"])
-        _ = await task.result
+        await store.cancelAllAndWait()
 
         #expect(cancelCount == 1)
         #expect(store.sessions["p"] == nil)
         #expect(store.sessions["other"]?.phase == .running)
+    }
+
+    @Test func terminationWaitsForPrunedOperationCleanup() async {
+        let store = GGLandingStore()
+        let cancellation = AsyncStream<Void>.makeStream()
+        let cleanup = LandingTestSuspension()
+        let task = Task<Void, Error> {
+            for await _ in cancellation.stream {}
+            await cleanup.suspend()
+        }
+        #expect(store.begin(seed()))
+        store.attach(projectId: "p", task: task) {
+            cancellation.continuation.finish()
+        }
+
+        store.prune(keepingProjectIds: [])
+        await cleanup.waitUntilSuspended()
+
+        let started = AsyncStream<Void>.makeStream()
+        var didFinish = false
+        let termination = Task { @MainActor in
+            started.continuation.yield()
+            started.continuation.finish()
+            await store.cancelAllAndWait()
+            didFinish = true
+        }
+        for await _ in started.stream { break }
+        #expect(!didFinish)
+
+        await cleanup.release()
+        await termination.value
+        #expect(didFinish)
+        #expect(store.begin(seed()))
     }
 
     @Test func cancellationIgnoresLateFailureAndAppliesTerminalEntry() async {
@@ -216,10 +306,7 @@ struct GGLandingStoreTests {
         store.receive(.entry(outcome), projectId: "p")
         store.fail(projectId: "p", message: "interrupted")
 
-        _ = await task.result
-        for _ in 0..<20 where store.sessions["p"]?.phase != .cancelled {
-            await Task.yield()
-        }
+        await store.cancelAllAndWait()
 
         #expect(store.sessions["p"]?.phase == .cancelled)
         #expect(store.sessions["p"]?.rows[0].outcome == outcome)

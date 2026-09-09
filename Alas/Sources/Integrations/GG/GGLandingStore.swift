@@ -45,8 +45,10 @@ struct GGLandingSession: Equatable, Identifiable, Sendable {
 @Observable
 final class GGLandingStore {
     private struct Operation {
+        let id: UUID
         let monitor: Task<Void, Never>
         let cancel: @MainActor () -> Void
+        var cancellationRequested = false
     }
 
     static let shared = GGLandingStore()
@@ -56,14 +58,11 @@ final class GGLandingStore {
 
     @discardableResult
     func begin(_ seed: GGLandingSession.Seed, now: Date = Date()) -> Bool {
+        guard operations[seed.projectId] == nil else { return false }
         if let session = sessions[seed.projectId],
            session.phase == .running || session.phase == .cancelling
         {
             return false
-        }
-        if let previous = operations.removeValue(forKey: seed.projectId) {
-            previous.cancel()
-            previous.monitor.cancel()
         }
         sessions[seed.projectId] = GGLandingSession(
             id: UUID(),
@@ -149,10 +148,12 @@ final class GGLandingStore {
         }
 
         let sessionId = session.id
+        let operationId = UUID()
         let monitor = Task { @MainActor [weak self] in
             let result = await task.result
-            guard let self, self.sessions[projectId]?.id == sessionId else { return }
+            guard let self, self.operations[projectId]?.id == operationId else { return }
             self.operations[projectId] = nil
+            guard self.sessions[projectId]?.id == sessionId else { return }
 
             guard let phase = self.sessions[projectId]?.phase else { return }
             if phase == .cancelling {
@@ -169,27 +170,25 @@ final class GGLandingStore {
                 }
             }
         }
-        operations[projectId] = Operation(monitor: monitor, cancel: cancel)
+        operations[projectId] = Operation(id: operationId, monitor: monitor, cancel: cancel)
     }
 
     func cancel(projectId: String) {
         guard var session = sessions[projectId], session.phase == .running,
-              let operation = operations[projectId]
+              operations[projectId] != nil
         else { return }
         session.phase = .cancelling
         sessions[projectId] = session
-        operation.cancel()
+        requestCancellation(projectId: projectId)
     }
 
     func cancelAllAndWait() async {
         let activeOperations = operations
-        for (projectId, operation) in activeOperations {
+        for projectId in activeOperations.keys {
             if sessions[projectId]?.phase == .running {
                 sessions[projectId]?.phase = .cancelling
-                operation.cancel()
-            } else if sessions[projectId]?.phase != .cancelling {
-                operation.cancel()
             }
+            requestCancellation(projectId: projectId)
         }
         for operation in activeOperations.values {
             await operation.monitor.value
@@ -208,13 +207,15 @@ final class GGLandingStore {
     func prune(keepingProjectIds: Set<String>) {
         let removedProjectIds = sessions.keys.filter { !keepingProjectIds.contains($0) }
         for projectId in removedProjectIds {
-            if let operation = operations.removeValue(forKey: projectId) {
-                if sessions[projectId]?.phase != .cancelling {
-                    operation.cancel()
-                }
-                operation.monitor.cancel()
-            }
+            requestCancellation(projectId: projectId)
             sessions[projectId] = nil
         }
+    }
+
+    private func requestCancellation(projectId: String) {
+        guard var operation = operations[projectId], !operation.cancellationRequested else { return }
+        operation.cancellationRequested = true
+        operations[projectId] = operation
+        operation.cancel()
     }
 }
