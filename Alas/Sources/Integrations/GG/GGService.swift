@@ -1006,6 +1006,7 @@ struct GGLandStream {
 private struct GGLandStreamValidator {
     private var start: (stack: String, base: String, totalEntries: Int)?
     private var terminalPositions = Set<Int>()
+    private var successfulTerminalPositions = Set<Int>()
     private var sawTerminalEvent = false
 
     mutating func accept(_ event: GGLandEvent) throws {
@@ -1031,6 +1032,9 @@ private struct GGLandStreamValidator {
             guard terminalPositions.insert(entry.position).inserted else {
                 throw GGServiceError.malformedOutput("gg land emitted duplicate terminal entry positions.")
             }
+            if entry.error == nil {
+                successfulTerminalPositions.insert(entry.position)
+            }
 
         case .summary(let summary):
             guard let start else {
@@ -1047,6 +1051,9 @@ private struct GGLandStreamValidator {
                 guard summaryPositions.insert(entry.position).inserted else {
                     throw GGServiceError.malformedOutput("gg land summary reported duplicate entry positions.")
                 }
+            }
+            guard successfulTerminalPositions.isSubset(of: summaryPositions) else {
+                throw GGServiceError.malformedOutput("gg land summary omitted a completed entry.")
             }
             sawTerminalEvent = true
 

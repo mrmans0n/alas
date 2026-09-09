@@ -159,6 +159,19 @@ struct GGServiceActionsTests {
         }
     }
 
+    @Test func landJSONLRejectsSummaryOmittingCompletedEntry() async {
+        let runner = RecordingGGRunner()
+        runner.streamingLines = [
+            #"{"version":1,"command":"land","status":"ok","event":"start","stack":"s","base":"main","total_entries":1}"#,
+            #"{"version":1,"command":"land","status":"ok","event":"entry","position":1,"sha":"a","title":"A","gg_id":"c-a","pr_number":9,"action":"merged","error":null}"#,
+            #"{"version":1,"command":"land","status":"ok","event":"summary","stack":"s","base":"main","landed":[],"remaining":1,"cleaned":false,"warnings":[],"error":null}"#,
+        ]
+
+        await #expect(throws: GGServiceError.malformedOutput("gg land summary omitted a completed entry.")) {
+            for try await _ in GGService(runner: runner).landStream(worktreePath: "/tmp/wt", until: "c-abc").events {}
+        }
+    }
+
     @Test(arguments: [
         [
             #"{"version":1,"command":"land","status":"ok","event":"start","stack":"s","base":"main","total_entries":1}"#,

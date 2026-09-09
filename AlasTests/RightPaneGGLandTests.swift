@@ -273,6 +273,31 @@ struct RightPaneGGLandTests {
         try await waitForLand { state.ggActionState.inFlightAction == nil }
     }
 
+    @Test func confirmedLandingWaitsForPreviousTerminalCleanup() async throws {
+        let store = GGLandingStore()
+        let runner = LiveLandGGRunner()
+        let state = landingState(store: store, runner: runner, supported: true)
+        let cleanup = AsyncStream<Void>.makeStream()
+        let cleanupTask = Task<Void, Error> {
+            for await _ in cleanup.stream {}
+        }
+        store.begin(.init(
+            projectId: "live-project", worktreeId: "live-wt", stack: "feat", base: "main",
+            target: "old", rows: [.init(position: 1, title: "old", ggId: "old", prNumber: 4)]
+        ))
+        store.attach(projectId: "live-project", task: cleanupTask, cancel: { cleanup.continuation.finish() })
+        store.receive(.summary(.init(landed: [])), projectId: "live-project")
+
+        state.requestGGLand(.ready)
+        try await waitForLand { state.pendingGGLand != nil }
+        state.performGGLand(appState: AppState(store: MemoryStore()))
+        #expect(!runner.calls.contains { $0.first == "land" })
+
+        cleanup.continuation.finish()
+        try await waitForLand { runner.calls.contains { $0.first == "land" } }
+        await store.cancelAllAndWait()
+    }
+
     @Test func duplicateProjectLandingDoesNotLaunchAnotherMutation() async throws {
         let store = GGLandingStore()
         let firstRunner = LiveLandGGRunner()
