@@ -217,8 +217,16 @@ extension GitService {
         return try StatusParser.parse(s.stdout)
     }
 
-    func statusForRemoteChangeList(worktreePath: URL) async throws -> [ChangedFile] {
-        var entries = try await status(worktreePath: worktreePath)
+    func statusForRemoteChangeList(
+        worktreePath: URL,
+        knownStatusEntries: [ChangedFile]? = nil
+    ) async throws -> [ChangedFile] {
+        var entries: [ChangedFile]
+        if let knownStatusEntries {
+            entries = knownStatusEntries
+        } else {
+            entries = try await status(worktreePath: worktreePath)
+        }
         let numstat = try await Process.git(
             ["-c", "core.quotePath=false", "diff", "--numstat", "-z", "-M", "-C"],
             cwd: worktreePath
