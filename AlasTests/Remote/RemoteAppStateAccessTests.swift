@@ -1055,6 +1055,39 @@ struct RemoteAppStateAccessTests {
         #expect(result == .failure(reason: .worktreeUnavailable, message: nil))
     }
 
+    @Test func remoteChangeListReportsUnstagedCountsAgainstTheIndex() async throws {
+        let repository = try await makeRemoteBranchesRepository()
+        defer { try? FileManager.default.removeItem(at: repository) }
+        try "A\n".write(to: repository.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "a.txt"], cwd: repository)
+        _ = try await Process.git(["commit", "-q", "-m", "base"], cwd: repository)
+        try "X\n".write(to: repository.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "a.txt"], cwd: repository)
+        try "A\n".write(to: repository.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+        let state = makeRemoteGitBackedState(repositoryPath: repository)
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let tab = try #require(acpTabs(in: state).first)
+
+        let result = await state.remoteChangeList(sessionId: tab.sessionId)
+        guard case let .success(_, _, _, staged, unstaged, _, _, _) = result else {
+            Issue.record("expected a successful change list, got \(result)")
+            return
+        }
+        #expect(staged.first { $0.path == "a.txt" }?.add == 1)
+        #expect(staged.first { $0.path == "a.txt" }?.del == 1)
+        #expect(unstaged.first { $0.path == "a.txt" }?.add == 1)
+        #expect(unstaged.first { $0.path == "a.txt" }?.del == 1)
+    }
+
     @Test func remoteFileContentsAndDiffRejectAGitignoredFile() async throws {
         let repository = try await makeRemoteBranchesRepository()
         defer { try? FileManager.default.removeItem(at: repository) }

@@ -200,6 +200,27 @@ extension GitService {
         return entries
     }
 
+    func statusForRemoteChangeList(worktreePath: URL) async throws -> [ChangedFile] {
+        var entries = try await status(worktreePath: worktreePath)
+        let numstat = try await Process.git(
+            ["-c", "core.quotePath=false", "diff", "--numstat", "-M", "-C"],
+            cwd: worktreePath
+        )
+        let counts = NumstatParser.parse(numstat.stdout)
+        for i in entries.indices where entries[i].stage == .unstaged {
+            guard let count = counts[entries[i].path] else { continue }
+            entries[i] = ChangedFile(
+                path: entries[i].path,
+                status: entries[i].status,
+                stage: entries[i].stage,
+                add: count.add,
+                del: count.del,
+                renameFrom: entries[i].renameFrom,
+                conflict: entries[i].conflict)
+        }
+        return entries
+    }
+
     func diff(worktreePath: URL, file: String, staged: Bool = false, originalPath: String? = nil) async throws -> ParsedDiff {
         try await remoteDiff(worktreePath: worktreePath, file: file, staged: staged, originalPath: originalPath, maxOutputBytes: nil)
     }

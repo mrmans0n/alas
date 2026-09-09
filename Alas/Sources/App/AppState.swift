@@ -10498,7 +10498,7 @@ extension AppState: RemoteSessionsProvider {
             let changed = try await git.changedFilesAgainstRef(
                 worktreePath: worktree.path, ref: commits.comparisonRef)
             let capped = RemoteWorktreeFileAccess.truncateFiles(changed)
-            let workingTree = try await git.status(worktreePath: worktree.path)
+            let workingTree = try await git.statusForRemoteChangeList(worktreePath: worktree.path)
             let cappedWorkingTree = RemoteWorktreeFileAccess.truncateFiles(workingTree)
             return .success(
                 comparisonRef: commits.comparisonRef,
