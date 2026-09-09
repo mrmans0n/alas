@@ -66,14 +66,16 @@ private final class RecordingGGMutationExecutor: GGMutationExecuting {
         supportsSyncJSONL: Bool,
         supportsLandJSONL: Bool,
         onSyncEvent: (GGSyncEvent) -> Void,
-        onLandEvent: (GGLandEvent) -> Void
+        onLandEvent: (GGLandEvent) -> Bool
     ) async throws -> GGMutationExecutionResult {
         requests.append(request)
         clientOperationIDs.append(clientOperationID)
         syncJSONLCapabilities.append(supportsSyncJSONL)
         landJSONLCapabilities.append(supportsLandJSONL)
         if case .land = request, supportsLandJSONL {
-            for event in landEvents { onLandEvent(event) }
+            for event in landEvents {
+                guard onLandEvent(event) else { break }
+            }
         }
         if request == .sync {
             for event in syncEvents { onSyncEvent(event) }
@@ -295,7 +297,10 @@ private final class GGMutationHarness {
                 invalidateInbox: { [unowned self] in refreshes.append(.inbox) },
                 selectWorktreeAtPath: { [unowned self] path in selectedPaths.append(path) },
                 currentBranch: { [unowned self] in currentBranch },
-                publishLandEvent: { [unowned self] in publishedLandEvents.append($0) }
+                publishLandEvent: { [unowned self] event in
+                    publishedLandEvents.append(event)
+                    return true
+                }
             )
         )
     }

@@ -93,8 +93,9 @@ final class GGLandingStore {
         sessions[projectId]?.rows = rows
     }
 
-    func receive(_ event: GGLandEvent, projectId: String) {
-        guard var session = sessions[projectId] else { return }
+    @discardableResult
+    func receive(_ event: GGLandEvent, projectId: String) -> Bool {
+        guard var session = sessions[projectId] else { return true }
         let streamFailedAfterSummary: Bool
         if case .error = event {
             streamFailedAfterSummary = session.phase == .succeeded && operations[projectId] != nil
@@ -102,11 +103,22 @@ final class GGLandingStore {
             streamFailedAfterSummary = false
         }
         guard session.phase == .running || session.phase == .cancelling || streamFailedAfterSummary
-        else { return }
+        else { return true }
 
         switch event {
-        case .start:
-            break
+        case .start(let stack, let base, let totalEntries):
+            guard stack == session.confirmedScope.stack,
+                  base == session.confirmedScope.base,
+                  totalEntries == session.confirmedScope.rows.count
+            else {
+                session.phase = .failed
+                session.activeWait = nil
+                session.warning = nil
+                session.error = "gg land started for a different stack. Refresh and try again."
+                session.endedAt = Date()
+                sessions[projectId] = session
+                return false
+            }
 
         case .wait(let wait):
             session.activeWait = wait
@@ -153,6 +165,7 @@ final class GGLandingStore {
             session.endedAt = Date()
         }
         sessions[projectId] = session
+        return true
     }
 
     func attach(

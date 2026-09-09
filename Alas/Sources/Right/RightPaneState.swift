@@ -1865,7 +1865,7 @@ final class RightPaneState: GGSplitCommitServicing {
             return
         }
         guard case .land(let target) = prepared.request,
-              let seed = ggLandingSeed(target: target) else { return }
+              let seed = ggLandingSeed(target: target, stack: prepared.stack) else { return }
         guard ggLandingStore.begin(seed) else {
             appState.openGGLanding(projectId: worktree.projectId)
             return

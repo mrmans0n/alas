@@ -16,7 +16,7 @@ struct GGMutationContext {
     var selectWorktreeAtPath: (String) async -> Void
     /// The worktree's current branch, used to scope final-drop undo recovery.
     var currentBranch: () -> String?
-    var publishLandEvent: (GGLandEvent) -> Void
+    var publishLandEvent: (GGLandEvent) -> Bool
 }
 
 enum GGMutationExecutionResult {
@@ -36,7 +36,7 @@ protocol GGMutationExecuting {
         supportsSyncJSONL: Bool,
         supportsLandJSONL: Bool,
         onSyncEvent: (GGSyncEvent) -> Void,
-        onLandEvent: @escaping (GGLandEvent) -> Void
+        onLandEvent: @escaping (GGLandEvent) -> Bool
     ) async throws -> GGMutationExecutionResult
     func listUndoOperations(worktreePath: String, limit: Int) async throws -> [GGOperationSummary]
     func previewRestack(worktreePath: String) async throws -> GGRestackResult
@@ -819,7 +819,7 @@ extension GGService: GGMutationExecuting {
         supportsSyncJSONL: Bool,
         supportsLandJSONL: Bool,
         onSyncEvent: (GGSyncEvent) -> Void,
-        onLandEvent: @escaping (GGLandEvent) -> Void
+        onLandEvent: @escaping (GGLandEvent) -> Bool
     ) async throws -> GGMutationExecutionResult {
         let service = clientOperationID.map {
             GGService(runner: GGClientOperationRunner(base: runner, clientOperationID: $0))
@@ -860,7 +860,9 @@ extension GGService: GGMutationExecuting {
                     let consume = Task {
                         var summary: GGLandResult?
                         for try await event in stream.events {
-                            onLandEvent(event)
+                            guard onLandEvent(event) else {
+                                throw GGServiceError.malformedOutput("gg land stream did not match confirmed scope.")
+                            }
                             if case .summary(let result) = event { summary = result }
                         }
                         return summary
@@ -876,7 +878,7 @@ extension GGService: GGMutationExecuting {
                     return .land(summary)
                 } catch {
                     if Task.isCancelled || error is CancellationError { throw CancellationError() }
-                    onLandEvent(.error(message: GGErrorPresentation.message(for: error)))
+                    _ = onLandEvent(.error(message: GGErrorPresentation.message(for: error)))
                     throw error
                 }
             }

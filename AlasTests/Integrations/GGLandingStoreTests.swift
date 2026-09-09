@@ -176,6 +176,16 @@ struct GGLandingStoreTests {
         #expect(store.sessions["p"]?.error == nil)
     }
 
+    @Test func startEventMustMatchConfirmedScope() throws {
+        let store = GGLandingStore()
+        #expect(store.begin(seed()))
+
+        #expect(!store.receive(.start(stack: "other", base: "main", totalEntries: 2), projectId: "p"))
+        let failed = try #require(store.sessions["p"])
+        #expect(failed.phase == .failed)
+        #expect(failed.error == "gg land started for a different stack. Refresh and try again.")
+    }
+
     @Test func beginSeedsSessionAndReplacesTerminalAttempt() throws {
         let store = GGLandingStore()
         let startedAt = Date(timeIntervalSince1970: 1_000)

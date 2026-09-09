@@ -212,6 +212,21 @@ struct RightPaneGGLandTests {
         #expect(state.ggActionState.lastError == nil)
     }
 
+    @Test func liveLandingSeedsRowsFromFreshPreparedStack() async throws {
+        let store = GGLandingStore()
+        let runner = LiveLandGGRunner()
+        runner.replaceStack(with: #"{"version":1,"stack":{"name":"feat","base":"main","total_commits":2,"synced_commits":2,"entries":[{"position":1,"sha":"s1","title":"Lower","gg_id":"change-1","pr_number":5,"pr_state":"open","approved":true,"ci_status":"success"},{"position":2,"sha":"s2","title":"Target","gg_id":"change-2","pr_number":6,"pr_state":"open","approved":true,"ci_status":"success"}]}}"#)
+        let state = landingState(store: store, runner: runner, supported: true)
+        state.ggStack = stack([entry(id: "change-2", position: 2, prState: .open, approved: true, ci: .success)])
+
+        state.requestGGLand(.until(entryId: "change-2", title: "Target"))
+        try await waitForLand { state.pendingGGLand != nil }
+        state.performGGLand(appState: AppState(store: MemoryStore()))
+
+        #expect(store.sessions["live-project"]?.rows.map(\.ggId) == ["change-1", "change-2"])
+        await store.cancelAllAndWait()
+    }
+
     @Test func shutdownDuringRestartPreflightNeverLaunchesLand() async throws {
         let store = GGLandingStore()
         let runner = LiveLandGGRunner()

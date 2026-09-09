@@ -140,6 +140,25 @@ struct GGServiceActionsTests {
         #expect(runner.lastTimeout == nil)
     }
 
+    @Test func landJSONLStopsWhenConsumerRejectsEvent() async {
+        let runner = RecordingGGRunner()
+        runner.streamingLines = [
+            #"{"version":1,"command":"land","status":"ok","event":"start","stack":"s","base":"main","total_entries":1}"#,
+        ]
+
+        await #expect(throws: GGServiceError.malformedOutput("gg land stream did not match confirmed scope.")) {
+            _ = try await GGService(runner: runner).execute(
+                .land(target: "c-abc"),
+                worktreePath: "/tmp/wt",
+                clientOperationID: nil,
+                supportsSyncJSONL: false,
+                supportsLandJSONL: true,
+                onSyncEvent: { _ in },
+                onLandEvent: { _ in false }
+            )
+        }
+    }
+
     @Test(arguments: [
         [
             #"{"version":1,"command":"land","status":"ok","event":"start","stack":"s","base":"main","total_entries":1}"#,
@@ -483,7 +502,7 @@ struct GGServiceActionsTests {
             supportsSyncJSONL: false,
             supportsLandJSONL: false,
             onSyncEvent: { _ in },
-            onLandEvent: { _ in }
+            onLandEvent: { _ in true }
         )
 
         #expect(runner.calls == [["--client-operation-id", "alas:1234", "sc", "--staged-only"]])
@@ -501,7 +520,7 @@ struct GGServiceActionsTests {
             supportsSyncJSONL: false,
             supportsLandJSONL: false,
             onSyncEvent: { _ in },
-            onLandEvent: { _ in }
+            onLandEvent: { _ in true }
         )
 
         #expect(runner.calls == [["sc", "--staged-only"]])
