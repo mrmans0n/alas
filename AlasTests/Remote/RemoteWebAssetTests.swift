@@ -52,7 +52,7 @@ struct RemoteWebAssetTests {
         #expect(html.range(of: #"/session-ordering.js?v=1"#)!.lowerBound < html.range(of: #"/app.js?v=74"#)!.lowerBound)
         #expect(html.contains(#"/app.js?v=74"#))
         #expect(html.contains(#"/style.css?v=43"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v53";"#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v54";"#))
         #expect(sw.contains(#""/session-ordering.js?v=1""#))
         #expect(sw.contains(#""/app.js?v=74""#))
         #expect(sw.contains(#""/style.css?v=43""#))
@@ -70,7 +70,7 @@ struct RemoteWebAssetTests {
         #expect(!app.contains(#"const button = el("button", "tool-toggle")"#))
         #expect(html.contains(#"/app.js?v=74"#))
         #expect(html.contains(#"/style.css?v=43"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v53";"#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v54";"#))
         #expect(sw.contains(#""/app.js?v=74""#))
         #expect(sw.contains(#""/style.css?v=43""#))
     }
@@ -334,7 +334,7 @@ struct RemoteWebAssetTests {
     @Test func incrementalTranscriptBustsServiceWorkerAssetCache() throws {
         let sw = try asset("sw.js")
         let html = try asset("index.html")
-        #expect(sw.contains("alas-remote-shell-v53"))
+        #expect(sw.contains("alas-remote-shell-v54"))
         #expect(sw.contains("/app.js?v=74"))
         #expect(html.contains("app.js?v=74"))
     }
@@ -501,7 +501,7 @@ struct RemoteWebAssetTests {
 
         #expect(html.contains(#"/app.js?v=74"#))
         #expect(html.contains(#"/style.css?v=43"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v53";"#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v54";"#))
         #expect(sw.contains(#""/app.js?v=74""#))
         #expect(sw.contains(#""/style.css?v=43""#))
     }

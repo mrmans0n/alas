@@ -728,10 +728,13 @@ struct RemoteProtocolTests {
                 RemoteDiffLine(kind: "delete", text: "old", oldNumber: 3, newNumber: nil, noTrailingNewline: true)
             ])
         let diff = RemoteServerMessage.fileDiffResult(
-            sessionId: "s1", path: "src/main.swift", hunks: [hunk], truncated: true)
+            sessionId: "s1", path: "src/main.swift", stage: "staged", hunks: [hunk], truncated: true)
         #expect(try roundTrip(diff) == diff)
         #expect(try roundTrip(hunk) == hunk)
         #expect(try roundTrip(hunk).lines.last?.noTrailingNewline == true)
+        let diffObject = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(diff)) as? [String: Any])
+        #expect(diffObject["stage"] as? String == "staged")
 
         // Decoded leniently when the field is absent entirely (an older
         // host that hasn't been rebuilt yet), defaulting to `false` rather

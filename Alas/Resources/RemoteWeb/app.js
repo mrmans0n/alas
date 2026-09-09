@@ -337,11 +337,11 @@ function handle(msg) {
       break;
     case "fileDiffResult":
       if (msg.sessionId !== currentSession) break;
-      renderDiff(msg.path, msg.hunks || [], !!msg.truncated, msg.metadataNote || null);
+      renderDiff(msg.path, msg.stage || null, msg.hunks || [], !!msg.truncated, msg.metadataNote || null);
       break;
     case "fileDiffFailed":
       if (msg.sessionId !== currentSession) break;
-      if ($("diff-path").textContent === msg.path) {
+      if (isActiveDiff(msg.path, msg.stage || null)) {
         $("diff-rows").innerHTML = "";
         $("diff-rows").append(el("p", "placeholder-card", fileAccessMessage(msg.reason, null)));
       }
@@ -713,8 +713,13 @@ function replayActiveListRequest() {
   }
 }
 
-function renderDiff(path, hunks, truncated, metadataNote) {
-  if ($("diff-path").textContent !== path) return;   // a newer file is open
+function isActiveDiff(path, stage) {
+  const top = detailStack[detailStack.length - 1];
+  return top && top.tab === "changes" && top.path === path && top.stage === stage;
+}
+
+function renderDiff(path, stage, hunks, truncated, metadataNote) {
+  if (!isActiveDiff(path, stage)) return;
   const container = $("diff-rows");
   container.innerHTML = "";
   const metadataNotice = RemoteChangesView.metadataOnlyNotice(hunks, metadataNote);

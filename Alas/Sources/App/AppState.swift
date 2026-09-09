@@ -10507,7 +10507,7 @@ extension AppState: RemoteSessionsProvider {
                 staged: cappedWorkingTree.files.filter { $0.stage == .staged }.map(Self.remoteChangedFile),
                 unstaged: cappedWorkingTree.files.filter { $0.stage == .unstaged }.map(Self.remoteChangedFile),
                 commits: commits.commits.prefix(100).map(Self.remoteCommit),
-                truncated: capped.truncated || cappedWorkingTree.truncated)
+                truncated: capped.truncated || cappedWorkingTree.truncated || commits.commits.count > 100)
         } catch {
             return .failure(reason: .gitFailed, message: error.localizedDescription)
         }
@@ -10558,17 +10558,23 @@ extension AppState: RemoteSessionsProvider {
             if ignored {
                 return .failure(reason: .pathRejected, message: nil)
             }
-            if await isDiffTargetBinary(
+            let changeStage: ChangeStage?
+            if let stage {
+                guard let parsedStage = ChangeStage(rawValue: stage) else {
+                    return .failure(reason: .pathRejected, message: nil)
+                }
+                changeStage = parsedStage
+            } else {
+                changeStage = nil
+            }
+            if changeStage != .staged, await isDiffTargetBinary(
                 worktree: worktree, normalizedPath: normalizedPath, url: url,
                 comparisonRef: commits.comparisonRef, git: git
             ) {
                 return .failure(reason: .binary, message: nil)
             }
             let parsed: ParsedDiff
-            if let stage {
-                guard let changeStage = ChangeStage(rawValue: stage) else {
-                    return .failure(reason: .pathRejected, message: nil)
-                }
+            if let changeStage {
                 parsed = try await git.diff(
                     worktreePath: worktree.path, file: normalizedPath,
                     staged: changeStage == .staged)

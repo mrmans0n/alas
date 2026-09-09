@@ -36,7 +36,7 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     var fileTreeResult: RemoteFileTreeResult = .failure(reason: .sessionUnknown, message: nil)
     var fileContentsResult: RemoteFileContentsResult = .failure(reason: .sessionUnknown, byteSize: nil, message: nil)
     var changeListRequests: [String] = []
-    var fileDiffRequests: [(sessionId: String, path: String)] = []
+    var fileDiffRequests: [(sessionId: String, path: String, stage: String?)] = []
     var fileTreeRequests: [(sessionId: String, path: String?)] = []
     var fileContentsRequests: [(sessionId: String, path: String)] = []
     var queueForceSends: [(id: String, itemId: UUID)] = []
@@ -292,7 +292,7 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     }
 
     func remoteFileDiff(sessionId: String, path: String, stage: String?) async -> RemoteFileDiffResult {
-        fileDiffRequests.append((sessionId, path))
+        fileDiffRequests.append((sessionId, path, stage))
         resumeWaiters(&fileDiffCallWaiters, through: fileDiffRequests.count)
         if pauseFileDiff {
             return await withCheckedContinuation { continuation in
@@ -2721,16 +2721,17 @@ struct RemoteSessionGatewayTests {
         var sent: [RemoteServerMessage] = []
         let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
 
-        await gateway.handle(.fileDiff(sessionId: "s1", path: "a.txt", stage: nil))
+        await gateway.handle(.fileDiff(sessionId: "s1", path: "a.txt", stage: "staged"))
         #expect(provider.fileDiffRequests.map(\.path) == ["a.txt"])
+        #expect(provider.fileDiffRequests.map(\.stage) == ["staged"])
         #expect(sent == [.fileDiffResult(
-            sessionId: "s1", path: "a.txt", hunks: [hunk], truncated: true)])
+            sessionId: "s1", path: "a.txt", stage: "staged", hunks: [hunk], truncated: true)])
 
         provider.fileDiffResult = .failure(reason: .pathRejected, message: nil)
         sent.removeAll()
-        await gateway.handle(.fileDiff(sessionId: "s1", path: "../etc/passwd", stage: nil))
+        await gateway.handle(.fileDiff(sessionId: "s1", path: "../etc/passwd", stage: "unstaged"))
         #expect(sent == [.fileDiffFailed(
-            sessionId: "s1", path: "../etc/passwd", reason: .pathRejected, message: nil)])
+            sessionId: "s1", path: "../etc/passwd", stage: "unstaged", reason: .pathRejected, message: nil)])
     }
 
     @Test func listFilesAndReadFileSendTreeAndContents() async {

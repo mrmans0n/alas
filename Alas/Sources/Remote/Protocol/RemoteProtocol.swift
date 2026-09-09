@@ -389,9 +389,9 @@ enum RemoteServerMessage: Equatable, Sendable {
         commits: [RemoteCommit], truncated: Bool)
     case changeListFailed(sessionId: String, reason: RemoteFileAccessReason, message: String?)
     case fileDiffResult(
-        sessionId: String, path: String, hunks: [RemoteDiffHunk], truncated: Bool,
+        sessionId: String, path: String, stage: String? = nil, hunks: [RemoteDiffHunk], truncated: Bool,
         metadataNote: String? = nil)
-    case fileDiffFailed(sessionId: String, path: String, reason: RemoteFileAccessReason, message: String?)
+    case fileDiffFailed(sessionId: String, path: String, stage: String? = nil, reason: RemoteFileAccessReason, message: String?)
     case fileTree(sessionId: String, path: String?, nodes: [RemoteFileNode], truncated: Bool)
     case fileTreeFailed(sessionId: String, path: String?, reason: RemoteFileAccessReason, message: String?)
     case fileContents(sessionId: String, path: String, text: String, truncated: Bool)
@@ -538,6 +538,7 @@ extension RemoteServerMessage: Codable {
             self = .fileDiffResult(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
                 path: try c.decode(String.self, forKey: .path),
+                stage: try c.decodeIfPresent(String.self, forKey: .stage),
                 hunks: try c.decode([RemoteDiffHunk].self, forKey: .hunks),
                 truncated: try c.decodeIfPresent(Bool.self, forKey: .truncated) ?? false,
                 metadataNote: try c.decodeIfPresent(String.self, forKey: .metadataNote))
@@ -545,6 +546,7 @@ extension RemoteServerMessage: Codable {
             self = .fileDiffFailed(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
                 path: try c.decode(String.self, forKey: .path),
+                stage: try c.decodeIfPresent(String.self, forKey: .stage),
                 reason: try c.decode(RemoteFileAccessReason.self, forKey: .reason),
                 message: try c.decodeIfPresent(String.self, forKey: .message))
         case "fileTree":
@@ -709,17 +711,19 @@ extension RemoteServerMessage: Codable {
             try c.encode(s, forKey: .sessionId)
             try c.encode(reason.rawValue, forKey: .reason)
             try c.encodeIfPresent(message, forKey: .message)
-        case .fileDiffResult(let s, let path, let hunks, let truncated, let metadataNote):
+        case .fileDiffResult(let s, let path, let stage, let hunks, let truncated, let metadataNote):
             try c.encode("fileDiffResult", forKey: .type)
             try c.encode(s, forKey: .sessionId)
             try c.encode(path, forKey: .path)
+            try c.encodeIfPresent(stage, forKey: .stage)
             try c.encode(hunks, forKey: .hunks)
             try c.encode(truncated, forKey: .truncated)
             try c.encodeIfPresent(metadataNote, forKey: .metadataNote)
-        case .fileDiffFailed(let s, let path, let reason, let message):
+        case .fileDiffFailed(let s, let path, let stage, let reason, let message):
             try c.encode("fileDiffFailed", forKey: .type)
             try c.encode(s, forKey: .sessionId)
             try c.encode(path, forKey: .path)
+            try c.encodeIfPresent(stage, forKey: .stage)
             try c.encode(reason.rawValue, forKey: .reason)
             try c.encodeIfPresent(message, forKey: .message)
         case .fileTree(let s, let path, let nodes, let truncated):

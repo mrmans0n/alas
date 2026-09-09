@@ -1527,6 +1527,32 @@ struct RemoteAppStateAccessTests {
         #expect(diffResult == .failure(reason: .binary, message: nil))
     }
 
+    @Test func remoteFileDiffUsesTheIndexForAStagedDiffBinaryCheck() async throws {
+        let repository = try await makeRemoteBranchesRepository()
+        defer { try? FileManager.default.removeItem(at: repository) }
+        _ = try await Process.git(["checkout", "-q", "feature/remote"], cwd: repository)
+        let file = repository.appendingPathComponent("mixed.dat")
+        try "staged text\n".write(to: file, atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "mixed.dat"], cwd: repository)
+        try Data([0x00, 0x01, 0x02]).write(to: file)
+
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId { cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId) }
+        }
+        let state = makeRemoteGitBackedState(repositoryPath: repository)
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let tab = try #require(acpTabs(in: state).first)
+
+        let diffResult = await state.remoteFileDiff(sessionId: tab.sessionId, path: "mixed.dat", stage: "staged")
+        guard case .success = diffResult else {
+            Issue.record("expected staged text diff, got \(diffResult)")
+            return
+        }
+    }
+
     private func statusCode(port: UInt16, host: String, path: String) async throws -> Int? {
         var req = URLRequest(url: URL(string: "http://127.0.0.1:\(port)\(path)")!)
         req.setValue(host, forHTTPHeaderField: "Host")

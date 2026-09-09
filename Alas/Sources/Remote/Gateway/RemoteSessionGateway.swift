@@ -304,10 +304,10 @@ final class RemoteSessionGateway {
             switch await provider.remoteFileDiff(sessionId: id, path: path, stage: stage) {
             case .success(let hunks, let truncated, let metadataNote):
                 send(.fileDiffResult(
-                    sessionId: id, path: path, hunks: hunks, truncated: truncated,
+                    sessionId: id, path: path, stage: stage, hunks: hunks, truncated: truncated,
                     metadataNote: metadataNote))
             case .failure(let reason, let message):
-                send(.fileDiffFailed(sessionId: id, path: path, reason: reason, message: message))
+                send(.fileDiffFailed(sessionId: id, path: path, stage: stage, reason: reason, message: message))
             }
         case .listFiles(let id, let path):
             let key = "listFiles\u{0}\(id)\u{0}\(path ?? "")"
