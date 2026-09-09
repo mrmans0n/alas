@@ -713,6 +713,7 @@ final class AppState {
         // refreshAll() returns.
         rightPaneStore.appState = self
         AlasTerminationCoordinator.shared.flush = { [weak self] in
+            await GGLandingStore.shared.cancelAllAndWait()
             await self?.cancelAllRunScriptCompletionTasks()
             await self?.flushAllACPComposerDrafts()
         }
@@ -970,6 +971,7 @@ final class AppState {
         })
         GGStackSummaryStore.shared.prune(keepingPaths: livePaths)
         GGInboxStore.shared.prune(keepingProjectIds: Set(projects.map(\.id)))
+        GGLandingStore.shared.prune(keepingProjectIds: Set(projects.map(\.id)))
         if reconcileMissingSpaceProjects() {
             saveSpaces()
         }
@@ -9557,6 +9559,17 @@ final class AppState {
         ) else { return }
         tabs.openOrFocusGGInbox(worktreeId: worktreeId, projectId: projectId, projectName: project.name)
         selectWorktree(id: worktreeId)
+    }
+
+    func cancelGGLanding(projectId: String) {
+        GGLandingStore.shared.cancel(projectId: projectId)
+    }
+
+    func restartGGLanding(projectId: String) {
+        guard let session = GGLandingStore.shared.sessions[projectId],
+              let state = rightPaneStore.activeState(worktreeId: session.worktreeId)
+        else { return }
+        state.restartGGLand(target: session.target)
     }
 }
 

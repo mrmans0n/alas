@@ -161,6 +161,7 @@ final class RightPaneState: GGSplitCommitServicing {
     }
     @ObservationIgnored
     private var ggMutationCoordinatorStorage: GGMutationCoordinator? = nil
+    @ObservationIgnored private let ggLandingStore: GGLandingStore
     @ObservationIgnored private var didAttemptGGUndoRestore = false
     /// Backing store for the stack drawer's mutation UI (in-flight action,
     /// sync progress, paused/error state). Not snapshot-derived, so
@@ -436,8 +437,9 @@ final class RightPaneState: GGSplitCommitServicing {
         return true
     }
 
-    init(worktree: Worktree, baseBranch: String) {
+    init(worktree: Worktree, baseBranch: String, ggLandingStore: GGLandingStore = .shared) {
         self.worktree = worktree
+        self.ggLandingStore = ggLandingStore
         self.baseBranch = baseBranch
         self.currentBranch = worktree.branch
         self.reviewLoop = ReviewLoopState(worktreePath: worktree.path, baseBranch: baseBranch)
@@ -458,6 +460,7 @@ final class RightPaneState: GGSplitCommitServicing {
             worktreePath: worktree.path.path,
             service: ggService,
             actionState: ggActionState,
+            landJSONLCapability: { [weak self] in self?.ggCapabilities().landJSONL ?? false },
             context: GGMutationContext(
                 loadFreshStack: { [weak self] in
                     guard let self else { throw GGServiceError.commandFailed(stderr: "Worktree is no longer available.") }
@@ -493,7 +496,10 @@ final class RightPaneState: GGSplitCommitServicing {
                     GGInboxStore.shared.invalidate(projectId: self.worktree.projectId)
                 },
                 selectWorktreeAtPath: { [weak self] path in await self?.selectWorktreeAtPathAfterGGMutation?(path) },
-                currentBranch: { [weak self] in self?.currentBranch }
+                currentBranch: { [weak self] in self?.currentBranch },
+                publishLandEvent: { [ggLandingStore, projectId = worktree.projectId] event in
+                    ggLandingStore.receive(event, projectId: projectId)
+                }
             )
         )
         ggMutationCoordinatorStorage = coordinator
@@ -1845,11 +1851,78 @@ final class RightPaneState: GGSplitCommitServicing {
     }
 
     @MainActor
-    func performGGLand() {
+    func performGGLand(appState: AppState) {
         guard pendingGGLand != nil, let prepared = pendingGGLandPrepared else { return }
         pendingGGLand = nil
         pendingGGLandPrepared = nil
-        runGGMutation(prepared.request, confirmedAgainst: prepared.snapshot)
+        guard ggCapabilities().landJSONL else {
+            runGGMutation(prepared.request, confirmedAgainst: prepared.snapshot)
+            return
+        }
+        guard case .land(let target) = prepared.request,
+              let seed = ggLandingSeed(target: target),
+              ggLandingStore.begin(seed)
+        else { return }
+        startGGLanding(prepared)
+    }
+
+    func restartGGLand(target: String) {
+        let projectId = worktree.projectId
+        guard let session = ggLandingStore.sessions[projectId],
+              session.phase == .cancelled || session.phase == .failed || session.phase == .succeeded
+        else { return }
+        Task { @MainActor in
+            await ggLandingStore.waitForOperation(projectId: projectId)
+            guard ggLandingStore.sessions[projectId]?.id == session.id else { return }
+            let seed = ggLandingSeed(target: target) ?? GGLandingSession.Seed(
+                projectId: projectId, worktreeId: worktree.id,
+                stack: session.stack, base: session.base, target: target,
+                rows: session.rows.map {
+                    GGLandingRow(position: $0.position, title: $0.title, ggId: $0.ggId, prNumber: $0.prNumber)
+                }
+            )
+            guard ggLandingStore.begin(seed) else { return }
+            let sessionId = ggLandingStore.sessions[projectId]?.id
+            do {
+                guard ggCapabilities().landJSONL else {
+                    throw GGServiceError.commandFailed(stderr: "Live landing is no longer supported by gg.")
+                }
+                let prepared = try await ggMutationCoordinator.prepare(.land(target: target))
+                guard ggLandingStore.sessions[projectId]?.id == sessionId else { return }
+                startGGLanding(prepared)
+            } catch {
+                guard ggLandingStore.sessions[projectId]?.id == sessionId else { return }
+                ggLandingStore.fail(projectId: projectId, message: GGErrorPresentation.message(for: error))
+            }
+        }
+    }
+
+    private func ggLandingSeed(target: String) -> GGLandingSession.Seed? {
+        guard let stack = ggStack,
+              let entry = stack.entries.first(where: { $0.id == target || $0.sha == target })
+        else { return nil }
+        return GGLandingSession.Seed(
+            projectId: worktree.projectId, worktreeId: worktree.id,
+            stack: stack.name, base: stack.base, target: target,
+            rows: stack.entries.filter { $0.position <= entry.position }
+                .sorted { $0.position < $1.position }
+                .map { GGLandingRow(position: $0.position, title: $0.title, ggId: $0.ggId, prNumber: $0.prNumber) }
+        )
+    }
+
+    private func startGGLanding(_ prepared: GGPreparedMutation) {
+        guard let operation = ggMutationCoordinator.startApplying(prepared) else {
+            ggLandingStore.fail(
+                projectId: worktree.projectId,
+                message: GGErrorPresentation.message(for: GGMutationError.operationInFlight)
+            )
+            return
+        }
+        ggLandingStore.attach(
+            projectId: worktree.projectId,
+            task: completeGGMutation(operation, request: prepared.request),
+            cancel: { operation.cancel() }
+        )
     }
 
     @discardableResult

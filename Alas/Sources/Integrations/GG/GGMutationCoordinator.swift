@@ -16,6 +16,7 @@ struct GGMutationContext {
     var selectWorktreeAtPath: (String) async -> Void
     /// The worktree's current branch, used to scope final-drop undo recovery.
     var currentBranch: () -> String?
+    var publishLandEvent: (GGLandEvent) -> Void
 }
 
 enum GGMutationExecutionResult {
@@ -33,7 +34,9 @@ protocol GGMutationExecuting {
         worktreePath: String,
         clientOperationID: String?,
         supportsSyncJSONL: Bool,
-        onSyncEvent: (GGSyncEvent) -> Void
+        supportsLandJSONL: Bool,
+        onSyncEvent: (GGSyncEvent) -> Void,
+        onLandEvent: (GGLandEvent) -> Void
     ) async throws -> GGMutationExecutionResult
     func listUndoOperations(worktreePath: String, limit: Int) async throws -> [GGOperationSummary]
     func previewRestack(worktreePath: String) async throws -> GGRestackResult
@@ -49,6 +52,7 @@ final class GGMutationCoordinator {
     private let undoMarkerStore: any GGUndoMarkerStoring
     private let clientOperationIDCapability: () -> Bool
     private let syncJSONLCapability: () -> Bool
+    private let landJSONLCapability: () -> Bool
     private let clientOperationIDGenerator: () -> String
     private let context: GGMutationContext
 
@@ -71,6 +75,9 @@ final class GGMutationCoordinator {
         syncJSONLCapability: @escaping () -> Bool = {
             GGAvailability.shared.capabilities.syncJSONL
         },
+        landJSONLCapability: @escaping () -> Bool = {
+            GGAvailability.shared.capabilities.landJSONL
+        },
         clientOperationIDGenerator: @escaping () -> String = {
             "alas:\(UUID().uuidString)"
         },
@@ -83,6 +90,7 @@ final class GGMutationCoordinator {
         self.undoMarkerStore = undoMarkerStore
         self.clientOperationIDCapability = clientOperationIDCapability
         self.syncJSONLCapability = syncJSONLCapability
+        self.landJSONLCapability = landJSONLCapability
         self.clientOperationIDGenerator = clientOperationIDGenerator
         self.context = context
     }
@@ -314,21 +322,27 @@ final class GGMutationCoordinator {
         let clientOperationID = request.generatesClientOperationID && clientOperationIDCapability()
             ? clientOperationIDGenerator()
             : nil
+        let supportsLandJSONL = landJSONLCapability()
+        let isLiveLand: Bool
+        if case .land = request { isLiveLand = supportsLandJSONL } else { isLiveLand = false }
         GGStackGate.markAlasGGOperationInProgress(repoPath: worktreePath)
 
         do {
+            try Task.checkCancellation()
             onExecutionStarted()
             let result = try await service.execute(
                 request,
                 worktreePath: worktreePath,
                 clientOperationID: clientOperationID,
                 supportsSyncJSONL: syncJSONLCapability(),
+                supportsLandJSONL: supportsLandJSONL,
                 onSyncEvent: { [actionState] event in
                     actionState.appendSyncEvent(event)
                     if case .error(_, _, let message) = event {
                         actionState.setError(message, for: request.actionKind)
                     }
-                }
+                },
+                onLandEvent: context.publishLandEvent
             )
             if request == .sync, actionState.syncProgress.contains(where: {
                 if case .error = $0 { return true }
@@ -361,7 +375,7 @@ final class GGMutationCoordinator {
         } catch let error as GGServiceError {
             reconcilePausedState(after: request, error: error)
             let toleratesMalformedRemoteOutput: Bool
-            if request != .sync, request.touchesRemote, case .malformedOutput = error {
+            if request != .sync, !isLiveLand, request.touchesRemote, case .malformedOutput = error {
                 toleratesMalformedRemoteOutput = true
             } else {
                 toleratesMalformedRemoteOutput = false
@@ -792,7 +806,9 @@ extension GGService: GGMutationExecuting {
         worktreePath: String,
         clientOperationID: String?,
         supportsSyncJSONL: Bool,
-        onSyncEvent: (GGSyncEvent) -> Void
+        supportsLandJSONL: Bool,
+        onSyncEvent: (GGSyncEvent) -> Void,
+        onLandEvent: (GGLandEvent) -> Void
     ) async throws -> GGMutationExecutionResult {
         let service = clientOperationID.map {
             GGService(runner: GGClientOperationRunner(base: runner, clientOperationID: $0))
@@ -827,6 +843,17 @@ extension GGService: GGMutationExecuting {
                 onSyncEvent(event)
             }
         case .land(let target):
+            if supportsLandJSONL {
+                var summary: GGLandResult?
+                for try await event in service.landStream(worktreePath: worktreePath, until: target) {
+                    onLandEvent(event)
+                    if case .summary(let result) = event { summary = result }
+                }
+                guard let summary else {
+                    throw GGServiceError.malformedOutput("gg land ended without a summary.")
+                }
+                return .land(summary)
+            }
             return .land(try await service.land(worktreePath: worktreePath, until: target))
         case .clean:
             try await service.clean(worktreePath: worktreePath)

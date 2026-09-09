@@ -195,6 +195,10 @@ final class GGLandingStore {
         }
     }
 
+    func waitForOperation(projectId: String) async {
+        await operations[projectId]?.monitor.value
+    }
+
     func fail(projectId: String, message: String) {
         guard var session = sessions[projectId], session.phase == .running else { return }
         session.phase = .failed

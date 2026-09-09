@@ -2,6 +2,49 @@ import Foundation
 import Testing
 @testable import Alas
 
+private final class LiveLandGGRunner: GGCommandRunning, @unchecked Sendable {
+    private let lock = NSLock()
+    private var recordedCalls: [[String]] = []
+    private var cancellations = 0
+    private var targetExists = true
+    private var continuations: [AsyncThrowingStream<String, Error>.Continuation] = []
+    var calls: [[String]] { lock.withLock { recordedCalls } }
+    var cancellationCount: Int { lock.withLock { cancellations } }
+
+    func removeTarget() { lock.withLock { targetExists = false } }
+
+    func run(args: [String], cwd: URL?) async throws -> ProcessResult {
+        let hasTarget = lock.withLock {
+            recordedCalls.append(args)
+            return targetExists
+        }
+        let stdout: String
+        if args.first == "land" {
+            stdout = Self.summaryJSON
+        } else if args.first == "undo" {
+            stdout = #"{"version":1,"operations":[]}"#
+        } else {
+            stdout = hasTarget ? Self.stackJSON : Self.stackJSON.replacingOccurrences(of: "change-1", with: "replacement")
+        }
+        return ProcessResult(exitCode: 0, stdout: stdout, stderr: "")
+    }
+
+    func runStreaming(args: [String], cwd: URL?, timeout: TimeInterval?) -> AsyncThrowingStream<String, Error> {
+        lock.withLock { recordedCalls.append(args) }
+        return AsyncThrowingStream { continuation in
+            lock.withLock { continuations.append(continuation) }
+            continuation.onTermination = { [weak self] _ in
+                guard let self else { return }
+                self.lock.withLock { self.cancellations += 1 }
+            }
+            continuation.yield(#"{"version":1,"command":"land","status":"ok","event":"start","stack":"feat","base":"main","total_entries":1}"#)
+        }
+    }
+
+    static let stackJSON = #"{"version":1,"stack":{"name":"feat","base":"main","total_commits":1,"synced_commits":1,"current_position":1,"entries":[{"position":1,"sha":"s","title":"t","gg_id":"change-1","pr_number":5,"pr_state":"open","approved":true,"ci_status":"success"}]}}"#
+    static let summaryJSON = #"{"version":1,"command":"land","status":"ok","event":"summary","stack":"feat","base":"main","landed":[],"remaining":1,"cleaned":false,"warnings":[],"error":null}"#
+}
+
 private final class FreshUnstackGGRunner: GGCommandRunning, @unchecked Sendable {
     private(set) var calls: [[String]] = []
     private let stackResponses: [String]
@@ -75,6 +118,106 @@ private final class FreshUnstackGGRunner: GGCommandRunning, @unchecked Sendable 
 
 @MainActor
 struct RightPaneGGLandTests {
+    private func landingState(
+        store: GGLandingStore,
+        runner: LiveLandGGRunner,
+        supported: Bool,
+        worktreeId: String = "live-wt",
+        projectId: String = "live-project"
+    ) -> RightPaneState {
+        let worktree = Worktree(
+            id: worktreeId, projectId: projectId, name: "feat", branch: "feat",
+            path: URL(fileURLWithPath: "/tmp/alas-land-tests-\(UUID().uuidString)"),
+            status: .clean, lastActivity: Date()
+        )
+        let state = RightPaneState(worktree: worktree, baseBranch: "main", ggLandingStore: store)
+        state.ggCapabilities = { GGCapabilities(structuredSplit: false, keepCurrentUnstack: false, landJSONL: supported) }
+        state.ggService = GGService(runner: runner)
+        state.ggStack = stack([entry(id: "change-1", prState: .open, approved: true, ci: .success)])
+        return state
+    }
+
+    private func waitForLand(_ condition: () -> Bool) async throws {
+        for _ in 0..<200 {
+            if condition() { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        throw GGServiceError.commandFailed(stderr: "Timed out waiting for landing")
+    }
+
+    @Test func liveLandingBeginsBeforeExecutionAndCancelsRawOperation() async throws {
+        let store = GGLandingStore()
+        let runner = LiveLandGGRunner()
+        let state = landingState(store: store, runner: runner, supported: true)
+        state.requestGGLand(.ready)
+        try await waitForLand { state.pendingGGLand != nil }
+        #expect(store.sessions.isEmpty)
+        state.performGGLand(appState: AppState(store: MemoryStore()))
+        #expect(store.sessions["live-project"]?.phase == .running)
+        #expect(store.sessions["live-project"]?.target == "change-1")
+        #expect(!runner.calls.contains { $0.first == "land" })
+        try await waitForLand { runner.calls.contains { $0.first == "land" } }
+        #expect(runner.calls.contains(["land", "--until", "change-1", "--wait", "--jsonl", "--no-clean"]))
+        store.cancel(projectId: "live-project")
+        await store.waitForOperation(projectId: "live-project")
+        #expect(runner.cancellationCount == 1)
+        #expect(store.sessions["live-project"]?.phase == .cancelled)
+    }
+
+    @Test func oldGGLandingUsesAtomicCommandWithoutSession() async throws {
+        let store = GGLandingStore()
+        let runner = LiveLandGGRunner()
+        let state = landingState(store: store, runner: runner, supported: false)
+        state.requestGGLand(.ready)
+        try await waitForLand { state.pendingGGLand != nil }
+        state.performGGLand(appState: AppState(store: MemoryStore()))
+        try await waitForLand { runner.calls.contains { $0.first == "land" } }
+        #expect(runner.calls.contains(["land", "--until", "change-1", "--json", "--no-clean"]))
+        #expect(store.sessions.isEmpty)
+        try await waitForLand { state.ggActionState.inFlightAction == nil }
+    }
+
+    @Test func duplicateProjectLandingDoesNotLaunchAnotherMutation() async throws {
+        let store = GGLandingStore()
+        let firstRunner = LiveLandGGRunner()
+        let secondRunner = LiveLandGGRunner()
+        let first = landingState(store: store, runner: firstRunner, supported: true)
+        let second = landingState(store: store, runner: secondRunner, supported: true, worktreeId: "other-wt")
+        first.requestGGLand(.ready)
+        second.requestGGLand(.ready)
+        try await waitForLand { first.pendingGGLand != nil && second.pendingGGLand != nil }
+        let app = AppState(store: MemoryStore())
+        first.performGGLand(appState: app)
+        let sessionId = store.sessions["live-project"]?.id
+        second.performGGLand(appState: app)
+        #expect(store.sessions["live-project"]?.id == sessionId)
+        #expect(!secondRunner.calls.contains { $0.first == "land" })
+        await store.cancelAllAndWait()
+    }
+
+    @Test func restartRepreflightsStableTargetWithoutAnotherConfirmation() async throws {
+        let store = GGLandingStore()
+        let runner = LiveLandGGRunner()
+        let state = landingState(store: store, runner: runner, supported: true)
+        state.requestGGLand(.ready)
+        try await waitForLand { state.pendingGGLand != nil }
+        state.performGGLand(appState: AppState(store: MemoryStore()))
+        try await waitForLand { runner.calls.contains { $0.first == "land" } }
+        await store.cancelAllAndWait()
+        let oldSessionId = store.sessions["live-project"]?.id
+        state.restartGGLand(target: "change-1")
+        try await waitForLand { runner.calls.filter { $0.first == "land" }.count == 2 }
+        #expect(store.sessions["live-project"]?.id != oldSessionId)
+        #expect(state.pendingGGLand == nil)
+        #expect(runner.calls.filter { $0.first == "land" }.allSatisfy { $0.contains("change-1") })
+        await store.cancelAllAndWait()
+        runner.removeTarget()
+        state.restartGGLand(target: "change-1")
+        try await waitForLand { store.sessions["live-project"]?.phase == .failed }
+        #expect(runner.calls.filter { $0.first == "land" }.count == 2)
+        #expect(store.sessions["live-project"]?.error != nil)
+    }
+
     private func entry(id: String, prState: GGPRState, approved: Bool, ci: GGCIStatus?) -> GGStackEntry {
         GGStackEntry(position: 1, sha: "s", title: "t", ggId: id, prNumber: 5,
                      prState: prState, approved: approved, ciStatus: ci)
