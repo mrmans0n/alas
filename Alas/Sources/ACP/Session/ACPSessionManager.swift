@@ -3870,8 +3870,14 @@ extension ACPSessionManager {
                 let remoteId = session.remoteSessionId ?? sessionId
                 switch session.chipState.models?.source {
                 case .configOption(let id):
-                    let loadedValue = session.availableConfigOptions.first { $0.id == id }?.currentStringValue
-                    guard m != loadedValue else { break }
+                    guard let index = session.availableConfigOptions.firstIndex(where: { $0.id == id }),
+                          let loadedValue = session.availableConfigOptions[index].currentStringValue,
+                          m != loadedValue
+                    else { break }
+                    let loadedOption = session.availableConfigOptions[index]
+                    session.availableConfigOptions[index] = ACPConfigOption(
+                        id: loadedOption.id, name: loadedOption.name, type: loadedOption.type,
+                        category: loadedOption.category, currentValue: .string(m), options: loadedOption.options)
                     do {
                         let updated = try await runner.connection.setConfigOption(
                             sessionId: remoteId, configId: id, value: .string(m))
@@ -3887,6 +3893,8 @@ extension ACPSessionManager {
                         }
                     } catch {
                         if session.currentModel == loadedModel {
+                            session.currentModel = loadedValue
+                            session.availableConfigOptions[index] = loadedOption
                             persist(session)
                         }
                     }
@@ -3903,6 +3911,8 @@ extension ACPSessionManager {
                             persist(session)
                         }
                     }
+                case .mode:
+                    break
                 }
             }
             if let m = pendingMode.removeValue(forKey: sessionId),
