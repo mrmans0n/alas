@@ -4,6 +4,52 @@ import Testing
 
 @Suite("Workspace checkout creation model")
 struct WorkspaceCheckoutCreationModelTests {
+    @Test func initializesBranchWithConfiguredPrefix() {
+        let model = WorkspaceCheckoutCreationModel(workspace: fixtureWorkspace(), branchPrefix: "feature/")
+
+        #expect(model.request().branch == "feature/")
+    }
+
+    @Test func checkoutFolderForSelectedParentIncludesBranch() {
+        #expect(
+            WorkspaceCheckoutCreationModel.checkoutRoot(
+                parentPath: "/checkouts",
+                branch: "feature/my-change"
+            ) == "/checkouts/feature-my-change"
+        )
+    }
+
+    @Test func checkoutFolderUsesTrimmedBranch() {
+        #expect(
+            WorkspaceCheckoutCreationModel.checkoutRoot(
+                parentPath: "/checkouts",
+                branch: " feature/my-change "
+            ) == "/checkouts/feature-my-change"
+        )
+    }
+
+    @Test func selectedCheckoutParentDerivesRootWhenBranchIsEnteredLater() {
+        var model = WorkspaceCheckoutCreationModel(workspace: fixtureWorkspace())
+
+        model.selectCheckoutParent("/checkouts")
+        #expect(model.rootPath.isEmpty)
+
+        model.setBranch("feature/my-change")
+        #expect(model.rootPath == "/checkouts/feature-my-change")
+    }
+
+    @Test func returningToDetailsPreservesSelectedCheckoutParent() {
+        var model = WorkspaceCheckoutCreationModel(workspace: fixtureWorkspace())
+        model.selectCheckoutParent("/checkouts")
+        model.setBranch("feature/first")
+        #expect(model.advance() == .success)
+
+        model.returnToDetails()
+        model.setBranch("feature/second")
+
+        #expect(model.rootPath == "/checkouts/feature-second")
+    }
+
     @Test func advancesThroughThreeStepsOnlyWithSharedBranchAndRoot() {
         let workspace = fixtureWorkspace()
         var model = WorkspaceCheckoutCreationModel(workspace: workspace, rootPath: "")

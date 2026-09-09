@@ -12,6 +12,7 @@ struct WorkspaceCheckoutCreationModel: Equatable {
     var branch: String
     var rootPath: String
     var baseReference: String
+    private(set) var checkoutParentPath: String?
     var memberBaseReferences: [UUID: String] = [:]
     private(set) var step: WorkspaceCheckoutCreationStep = .details
     private(set) var preflightResult: WorkspaceCheckoutPreflightResult?
@@ -22,6 +23,35 @@ struct WorkspaceCheckoutCreationModel: Equatable {
         self.branch = branch
         self.rootPath = rootPath
         self.baseReference = baseReference
+    }
+
+    init(workspace: Workspace, branchPrefix: String, rootPath: String = "", baseReference: String = "main") {
+        self.init(workspace: workspace, branch: branchPrefix, rootPath: rootPath, baseReference: baseReference)
+    }
+
+    static func checkoutRoot(parentPath: String, branch: String) -> String {
+        let branch = branch.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !branch.isEmpty else { return "" }
+        return URL(fileURLWithPath: parentPath)
+            .appendingPathComponent(branch.replacingOccurrences(of: "/", with: "-"))
+            .path
+    }
+
+    mutating func selectCheckoutParent(_ parentPath: String) {
+        checkoutParentPath = parentPath
+        rootPath = Self.checkoutRoot(parentPath: parentPath, branch: branch)
+    }
+
+    mutating func setBranch(_ branch: String) {
+        self.branch = branch
+        if let checkoutParentPath {
+            rootPath = Self.checkoutRoot(parentPath: checkoutParentPath, branch: branch)
+        }
+    }
+
+    mutating func setRootPath(_ rootPath: String) {
+        checkoutParentPath = nil
+        self.rootPath = rootPath
     }
 
     var preflightMessages: [String] {
@@ -43,6 +73,11 @@ struct WorkspaceCheckoutCreationModel: Equatable {
     mutating func receivePreflight(_ result: WorkspaceCheckoutPreflightResult) { preflightResult = result
     step = .preflight
     selectedCheckoutID = nil }
+    mutating func returnToDetails() {
+        step = .details
+        preflightResult = nil
+        selectedCheckoutID = nil
+    }
     mutating func beginCreation() -> Bool { guard case .success = preflightResult else { return false }
     step = .creating
     return true }

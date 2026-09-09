@@ -26,7 +26,7 @@ struct SidebarHeaderView: View {
                 if let onNewWorkspace {
                     Menu {
                         Button("Add repository...", systemImage: "folder.badge.plus", action: onAddProject)
-                        Button("New workspace...", systemImage: "square.stack.3d.up", action: onNewWorkspace)
+                        Button("New workspace...", systemImage: "square.grid.2x2", action: onNewWorkspace)
                     } label: {
                         Icon(name: "folder-plus", size: 13, color: theme.color(addMenuHovered ? "fg" : "fg-muted"))
                             .frame(width: 26, height: 22)

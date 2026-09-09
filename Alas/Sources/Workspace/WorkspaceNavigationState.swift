@@ -33,6 +33,11 @@ struct WorkspaceNavigationState: Equatable {
         repositoryFocusWorktreeID = nil
     }
 
+    func selectedWorkspace(in workspaces: [Workspace]) -> Workspace? {
+        guard selectedCheckoutID == nil, let selectedWorkspaceID else { return nil }
+        return workspaces.first { $0.id == selectedWorkspaceID }
+    }
+
     mutating func selectCheckout(
         _ checkout: WorkspaceCheckout,
         resolvedWorktreeIDs: [UUID: String]
