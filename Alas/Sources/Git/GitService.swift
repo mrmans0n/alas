@@ -204,7 +204,7 @@ extension GitService {
         try await remoteDiff(worktreePath: worktreePath, file: file, staged: staged, originalPath: originalPath, maxOutputBytes: nil)
     }
 
-    func remoteDiff(worktreePath: URL, file: String, staged: Bool, originalPath: String?, maxOutputBytes: Int?) async throws -> ParsedDiff {
+    func remoteDiff(worktreePath: URL, file: String, staged: Bool, originalPath: String?, maxOutputBytes: Int?, conflicted: Bool = false) async throws -> ParsedDiff {
         // Untracked files have no HEAD entry, so `git diff HEAD -- <path>`
         // returns nothing. Detect via `git ls-files --error-unmatch` (exit 0
         // iff tracked) and fall back to comparing against /dev/null so the
@@ -215,12 +215,14 @@ extension GitService {
         )
         if tracked.exitCode != 0 && !staged {
             let result = try await Process.gitCapped(
-                ["diff", "--no-color", "--no-index", "--", "/dev/null", file], cwd: worktreePath,
+                ["--literal-pathspecs", "diff", "--no-color", "--no-index", "--", "/dev/null", file], cwd: worktreePath,
                 maxOutputBytes: maxOutputBytes ?? .max)
             // `git diff --no-index` exits non-zero (1) when there ARE differences
             // — that's the normal case for an untracked file. Only treat exit
             // codes >= 2 as real failures.
-            guard result.exitCode <= 1 else { return ParsedDiff(hunks: []) }
+            guard result.stdoutTruncated || result.exitCode <= 1 else {
+                throw ProcessError.nonZeroExit(result.exitCode, result.stderr)
+            }
             return await Self.parseOffMain(result.stdout)
         }
 
@@ -235,17 +237,21 @@ extension GitService {
         //     vs empty tree) so initial-commit workflows still render the
         //     staged side.
         let head = try await hasHead(worktreePath: worktreePath)
-        var args = ["diff", "--no-color", "-M", "-C"]
+        var args = ["--literal-pathspecs", "diff", "--no-color", "-M", "-C"]
         if staged {
             args.append("--cached")
             if head { args.append("HEAD") }
         }
+        if conflicted { args.append("--ours") }
         args.append("--")
         args.append(file)
         if let originalPath, !originalPath.isEmpty {
             args.append(originalPath)
         }
         let result = try await Process.gitCapped(args, cwd: worktreePath, maxOutputBytes: maxOutputBytes ?? .max)
+        guard result.stdoutTruncated || result.exitCode <= 1 else {
+            throw ProcessError.nonZeroExit(result.exitCode, result.stderr)
+        }
         let stdout = originalPath?.isEmpty == false
             ? Self.sliceDiffForFile(result.stdout, file: file)
             : result.stdout

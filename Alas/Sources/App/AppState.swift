@@ -10576,13 +10576,13 @@ extension AppState: RemoteSessionsProvider {
             }
             let parsed: ParsedDiff
             if let changeStage {
-                let originalPath = changeStage == .staged
-                    ? try await git.status(worktreePath: worktree.path).first { $0.path == normalizedPath }?.renameFrom
-                    : nil
+                let statusEntry = try await git.status(worktreePath: worktree.path).first { $0.path == normalizedPath }
+                let originalPath = changeStage == .staged ? statusEntry?.renameFrom : nil
                 parsed = try await git.remoteDiff(
                     worktreePath: worktree.path, file: normalizedPath,
                     staged: changeStage == .staged, originalPath: originalPath,
-                    maxOutputBytes: RemoteWorktreeFileAccess.maxDiffSubprocessBytes)
+                    maxOutputBytes: RemoteWorktreeFileAccess.maxDiffSubprocessBytes,
+                    conflicted: statusEntry?.conflict != nil)
             } else {
                 parsed = try await git.diff(
                     worktreePath: worktree.path,
