@@ -186,6 +186,34 @@ struct GGLandingStoreTests {
         #expect(failed.error == "gg land started for a different stack. Refresh and try again.")
     }
 
+    @Test func progressEventsMustMatchConfirmedRows() throws {
+        let store = GGLandingStore()
+        #expect(store.begin(seed()))
+
+        #expect(!store.receive(
+            .wait(.init(
+                position: 1, prNumber: 99, phase: .readiness, poll: 1, elapsedSeconds: 0,
+                ciStatus: nil, approved: nil, mergeTrainStatus: nil, mergeTrainPosition: nil,
+                pipelineRunning: nil, error: nil
+            )),
+            projectId: "p"
+        ))
+        #expect(store.sessions["p"]?.phase == .failed)
+        #expect(store.sessions["p"]?.error == "gg land reported progress for a different stack. Refresh and try again.")
+    }
+
+    @Test func entryEventsMustMatchConfirmedRows() throws {
+        let store = GGLandingStore()
+        #expect(store.begin(seed()))
+
+        #expect(!store.receive(
+            .entry(.init(position: 1, ggId: "other", prNumber: 41, action: "merged")),
+            projectId: "p"
+        ))
+        #expect(store.sessions["p"]?.phase == .failed)
+        #expect(store.sessions["p"]?.completedIDs.isEmpty == true)
+    }
+
     @Test func beginSeedsSessionAndReplacesTerminalAttempt() throws {
         let store = GGLandingStore()
         let startedAt = Date(timeIntervalSince1970: 1_000)

@@ -127,19 +127,29 @@ final class GGLandingStore {
             }
 
         case .wait(let wait):
+            guard let index = session.rows.firstIndex(where: { $0.position == wait.position }),
+                  Self.row(session.rows[index], matches: wait)
+            else {
+                Self.rejectStreamMismatch(&session)
+                sessions[projectId] = session
+                return false
+            }
             session.activeWait = wait
             session.warning = wait.error
-            if let index = session.rows.firstIndex(where: { $0.position == wait.position }) {
-                session.rows[index].wait = wait
-            }
+            session.rows[index].wait = wait
 
         case .entry(let entry):
-            if let index = session.rows.firstIndex(where: { $0.position == entry.position }) {
-                session.rows[index].wait = nil
-                session.rows[index].outcome = entry
-                if entry.error == nil, let id = Self.completedID(for: session.rows[index]) {
-                    session.completedIDs.insert(id)
-                }
+            guard let index = session.rows.firstIndex(where: { $0.position == entry.position }),
+                  Self.row(session.rows[index], matches: entry)
+            else {
+                Self.rejectStreamMismatch(&session)
+                sessions[projectId] = session
+                return false
+            }
+            session.rows[index].wait = nil
+            session.rows[index].outcome = entry
+            if entry.error == nil, let id = Self.completedID(for: session.rows[index]) {
+                session.completedIDs.insert(id)
             }
             if session.activeWait?.position == entry.position {
                 session.activeWait = nil
@@ -147,6 +157,15 @@ final class GGLandingStore {
             }
 
         case .summary(let result):
+            for entry in result.landed {
+                guard let index = session.rows.firstIndex(where: { $0.position == entry.position }),
+                      Self.row(session.rows[index], matches: entry)
+                else {
+                    Self.rejectStreamMismatch(&session)
+                    sessions[projectId] = session
+                    return false
+                }
+            }
             session.result = result
             session.activeWait = nil
             session.warning = nil
@@ -182,6 +201,24 @@ final class GGLandingStore {
 
     private static func completedID(for row: GGLandingRow) -> String? {
         row.stableID ?? row.ggId
+    }
+
+    private static func rejectStreamMismatch(_ session: inout GGLandingSession) {
+        session.phase = .failed
+        session.activeWait = nil
+        session.warning = nil
+        session.error = "gg land reported progress for a different stack. Refresh and try again."
+        session.endedAt = Date()
+    }
+
+    private static func row(_ row: GGLandingRow, matches wait: GGLandWait) -> Bool {
+        row.prNumber == nil || row.prNumber == wait.prNumber
+    }
+
+    private static func row(_ row: GGLandingRow, matches entry: GGLandedEntry) -> Bool {
+        if let prNumber = row.prNumber, prNumber != entry.prNumber { return false }
+        if let ggId = entry.ggId, ggId != row.stableID, ggId != row.ggId { return false }
+        return true
     }
 
     func attach(
