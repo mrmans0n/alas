@@ -3884,7 +3884,9 @@ extension ACPSessionManager {
                     do {
                         let updated = try await runner.connection.setConfigOption(
                             sessionId: remoteId, configId: id, value: .string(m))
-                        if session.currentModel == loadedModel {
+                        let stillRestoringModel = session.availableConfigOptions
+                            .first { $0.id == id }?.currentValue == .string(m)
+                        if session.currentModel == loadedModel, stillRestoringModel {
                             session.currentModel = m
                             if !updated.isEmpty,
                                let merged = ACPConfigOption.mergingSuccessfulSetResponse(

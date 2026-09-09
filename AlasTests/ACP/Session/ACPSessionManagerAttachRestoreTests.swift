@@ -649,6 +649,66 @@ struct ACPSessionManagerAttachRestoreTests {
         }
     }
 
+    @Test("reopened config-option session preserves model reselected during restoration")
+    func reopenedConfigOptionSessionPreservesModelReselectedDuringRestoration() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            agentId: "codex",
+            currentModel: "sonnet"
+        ))
+        let client = ACPMockClient()
+        let modelGate = PromptGate()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [],
+                availableModes: [],
+                currentModel: nil,
+                currentMode: nil,
+                promptSuggestions: [],
+                configOptions: [ACPConfigOption(
+                    id: "model",
+                    name: "Model",
+                    category: "model",
+                    currentValue: "opus",
+                    options: [
+                        .init(id: "sonnet", name: "Sonnet"),
+                        .init(id: "opus", name: "Opus"),
+                    ])]
+            ))
+        }
+        client.scriptAsync(method: "session/set_config_option") { _ in
+            await modelGate.waitInPrompt()
+            return Data("{}".utf8)
+        }
+        let manager = manager(store: store, client: client)
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        let attachTask = Task {
+            await manager.attach(to: session.id, freshlyCreated: false)
+        }
+
+        try await waitUntilAsync { await modelGate.hasEntered }
+        session.currentModel = "opus"
+        session.availableConfigOptions[0] = ACPConfigOption(
+            id: "model",
+            name: "Model",
+            category: "model",
+            currentValue: "opus",
+            options: [
+                .init(id: "sonnet", name: "Sonnet"),
+                .init(id: "opus", name: "Opus"),
+            ])
+        await modelGate.release()
+        await attachTask.value
+
+        #expect(session.currentModel == "opus")
+        #expect(session.availableConfigOptions.first?.currentStringValue == "opus")
+    }
+
     @Test("reopened session keeps the loaded model when restoration fails")
     func reopenedSessionKeepsLoadedModelWhenRestorationFails() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
