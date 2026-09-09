@@ -709,6 +709,71 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(session.availableConfigOptions.first?.currentStringValue == "opus")
     }
 
+    @Test("config-option selection after load is restored against the loaded value")
+    func configOptionSelectionAfterLoadIsRestoredAgainstLoadedValue() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            agentId: "codex",
+            currentModel: "opus"
+        ))
+        let client = ACPMockClient()
+        let lockStore = try ACPSessionStore(path: store.path)
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            let data = try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [],
+                availableModes: [],
+                currentModel: nil,
+                currentMode: nil,
+                promptSuggestions: [],
+                configOptions: [ACPConfigOption(
+                    id: "model",
+                    name: "Model",
+                    category: "model",
+                    currentValue: "opus",
+                    options: [
+                        .init(id: "sonnet", name: "Sonnet"),
+                        .init(id: "opus", name: "Opus"),
+                    ])]
+            ))
+            try lockStore.db.exec("BEGIN IMMEDIATE")
+            return data
+        }
+        client.script(method: "session/set_config_option") { _ in Data("{}".utf8) }
+        let manager = manager(store: store, client: client)
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        defer { try? lockStore.db.exec("ROLLBACK") }
+        let attachTask = Task {
+            await manager.attach(to: session.id, freshlyCreated: false)
+        }
+
+        try await waitUntil {
+            session.availableConfigOptions.first?.currentStringValue == "opus"
+        }
+        session.currentModel = "sonnet"
+        session.availableConfigOptions[0] = ACPConfigOption(
+            id: "model",
+            name: "Model",
+            category: "model",
+            currentValue: "sonnet",
+            options: [
+                .init(id: "sonnet", name: "Sonnet"),
+                .init(id: "opus", name: "Opus"),
+            ])
+        manager.pendingModel[session.id] = "sonnet"
+        try lockStore.db.exec("COMMIT")
+        await attachTask.value
+
+        let params = client.sent.compactMap { $0.params as? ACPSessionSetConfigOptionParams }
+        #expect(params.map(\.value) == [.string("sonnet")])
+        #expect(session.currentModel == "sonnet")
+        #expect(session.availableConfigOptions.first?.currentStringValue == "sonnet")
+    }
+
     @Test("reopened session keeps the loaded model when restoration fails")
     func reopenedSessionKeepsLoadedModelWhenRestorationFails() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())

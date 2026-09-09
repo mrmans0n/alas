@@ -3866,7 +3866,7 @@ extension ACPSessionManager {
             let modelToRestore = pendingModel.removeValue(forKey: sessionId)
                 ?? (localModelAfterRemoteIdPersist != result.currentModel ? localModelAfterRemoteIdPersist : persistedModel)
             if case .configOption(let id) = session.chipState.models?.source,
-               let loadedValue = session.availableConfigOptions.first(where: { $0.id == id })?.currentStringValue {
+               let loadedValue = result.configOptions.first(where: { $0.id == id })?.currentStringValue {
                 session.currentModel = loadedValue
             }
             if let m = modelToRestore {
@@ -3875,7 +3875,7 @@ extension ACPSessionManager {
                 case .configOption(let id):
                     guard let index = session.availableConfigOptions.firstIndex(where: { $0.id == id }) else { break }
                     let loadedOption = session.availableConfigOptions[index]
-                    let loadedValue = loadedOption.currentStringValue
+                    let loadedValue = result.configOptions.first(where: { $0.id == id })?.currentStringValue
                     guard m != loadedValue else { break }
                     let loadedModel = session.currentModel
                     session.availableConfigOptions[index] = ACPConfigOption(
