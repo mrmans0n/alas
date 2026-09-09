@@ -233,6 +233,20 @@ struct GGLandingStoreTests {
         #expect(store.sessions["p"]?.completedIDs.isEmpty == true)
     }
 
+    @Test func summaryErrorRemovesPreviouslyCompletedID() {
+        let store = GGLandingStore()
+        #expect(store.begin(seed()))
+        store.receive(.entry(.init(position: 1, ggId: "c-1", prNumber: 41, action: "merged")), projectId: "p")
+        #expect(store.sessions["p"]?.completedIDs == Set(["c-1"]))
+
+        store.receive(.summary(.init(
+            landed: [.init(position: 1, ggId: "c-1", prNumber: 41, error: "failed")],
+            error: "failed"
+        )), projectId: "p")
+
+        #expect(store.sessions["p"]?.completedIDs.isEmpty == true)
+    }
+
     @Test func beginSeedsSessionAndReplacesTerminalAttempt() throws {
         let store = GGLandingStore()
         let startedAt = Date(timeIntervalSince1970: 1_000)

@@ -960,6 +960,14 @@ final class AppState {
 
     private func cleanupMissingWorktreeState(beforeIds: Set<String>, afterIds: Set<String>) {
         let disappeared = beforeIds.subtracting(afterIds)
+        let landingProjectsToMigrate = Set(disappeared.flatMap { id in
+            tabs.tabs(forWorktree: id).compactMap { tab -> String? in
+                guard case .ggLanding(let state) = tab,
+                      GGLandingStore.shared.sessions[state.projectId] != nil
+                else { return nil }
+                return state.projectId
+            }
+        })
         for id in disappeared {
             cleanupWorktreeState(worktreeId: id)
         }
@@ -975,8 +983,12 @@ final class AppState {
         if reconcileMissingSpaceProjects() {
             saveSpaces()
         }
+        let selectedWasRemoved = selectedWorktreeId.map(disappeared.contains) ?? false
         if let current = selectedWorktreeId, !afterIds.contains(current) {
             selectWorktree(id: resolvedSelectionForActiveSpace())
+        }
+        for projectId in landingProjectsToMigrate {
+            migrateGGLanding(projectId: projectId, selectHost: selectedWasRemoved)
         }
     }
 
@@ -9576,6 +9588,10 @@ final class AppState {
     }
 
     func openGGLanding(projectId: String) {
+        migrateGGLanding(projectId: projectId, selectHost: true)
+    }
+
+    private func migrateGGLanding(projectId: String, selectHost: Bool) {
         guard let session = GGLandingStore.shared.sessions[projectId] else { return }
         let projectWorktreeIds = projectsManager.visibleWorktrees(projectId: projectId).map(\.id)
         guard let worktreeId = Self.landingHostWorktreeId(
@@ -9589,7 +9605,9 @@ final class AppState {
         tabs.openOrFocusGGLanding(
             worktreeId: worktreeId, projectId: projectId, stackName: session.stack
         )
-        selectWorktree(id: worktreeId)
+        if selectHost {
+            selectWorktree(id: worktreeId)
+        }
     }
 
     func cancelGGLanding(projectId: String) {

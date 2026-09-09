@@ -173,8 +173,12 @@ final class GGLandingStore {
                 if let index = session.rows.firstIndex(where: { $0.position == entry.position }) {
                     session.rows[index].wait = nil
                     session.rows[index].outcome = entry
-                    if entry.error == nil, let id = Self.completedID(for: session.rows[index]) {
-                        session.completedIDs.insert(id)
+                    if let id = Self.completedID(for: session.rows[index]) {
+                        if entry.error == nil {
+                            session.completedIDs.insert(id)
+                        } else {
+                            session.completedIDs.remove(id)
+                        }
                     }
                 }
             }
