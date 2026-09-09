@@ -210,7 +210,7 @@ extension GitService {
         // iff tracked) and fall back to comparing against /dev/null so the
         // user sees the file's contents as a single all-add hunk.
         let tracked = try await Process.git(
-            ["ls-files", "--error-unmatch", "--", file],
+            ["--literal-pathspecs", "ls-files", "--error-unmatch", "--", file],
             cwd: worktreePath
         )
         if tracked.exitCode != 0 && !staged {

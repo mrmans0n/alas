@@ -650,6 +650,25 @@ struct GitServiceRemoteChangesTests {
         #expect(added.map(\.text) == ["fresh"])
     }
 
+    @Test func remoteDiff_treatsUntrackedProbePathAsLiteral() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try "tracked\n".write(to: repo.appendingPathComponent("other.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "other.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "base"], cwd: repo)
+        try "literal\n".write(to: repo.appendingPathComponent("*.txt"), atomically: true, encoding: .utf8)
+
+        let diff = try await GitService().remoteDiff(
+            worktreePath: repo,
+            file: "*.txt",
+            staged: false,
+            originalPath: nil,
+            maxOutputBytes: nil
+        )
+        let added = diff.hunks.flatMap(\.lines).filter { $0.kind == .add }
+        #expect(added.map(\.text) == ["literal"])
+    }
+
     /// A file declared binary purely via `.gitattributes` (content that
     /// still looks like valid UTF-8 at the byte level) produces a
     /// hunk-less diff with `Binary files ... differ` instead of `@@` hunks
