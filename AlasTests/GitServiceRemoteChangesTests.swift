@@ -71,6 +71,23 @@ struct GitServiceRemoteChangesTests {
         #expect(files.map(\.path) == ["a.txt"])
     }
 
+    @Test func statusCountsStagedFilesWithTabsInTheirPath() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let path = "staged\tname.txt"
+        try "one\n".write(to: repo.appendingPathComponent(path), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", path], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "base"], cwd: repo)
+        try "one\ntwo\n".write(to: repo.appendingPathComponent(path), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", path], cwd: repo)
+
+        let files = try await GitService().status(worktreePath: repo)
+
+        let staged = try #require(files.first { $0.path == path && $0.stage == .staged })
+        #expect(staged.add == 1)
+        #expect(staged.del == 0)
+    }
+
     /// Unlike the nil-ref case above, a NON-nil ref that fails its numstat
     /// diff (an invalid ref, here) is not "no base to compare against" —
     /// falling back to `status()` would silently report only current

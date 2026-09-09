@@ -122,13 +122,13 @@ extension GitService {
         // content of a path regardless of what's staged, matching
         // `diffAgainstHEAD`'s own all-add diff (see the comment there).
         let workingTreeNumstatArgs: [String] = head
-            ? ["diff", "--numstat", "HEAD"]
-            : ["diff", "--numstat", "4b825dc642cb6eb9a060e54bf8d69288fbee4904"]   // canonical empty tree
+            ? ["-c", "core.quotePath=false", "diff", "--numstat", "-z", "HEAD"]
+            : ["-c", "core.quotePath=false", "diff", "--numstat", "-z", "4b825dc642cb6eb9a060e54bf8d69288fbee4904"]   // canonical empty tree
         let workingTreeNumstat = try await Process.git(workingTreeNumstatArgs, cwd: worktreePath)
         guard workingTreeNumstat.exitCode == 0 else {
             throw ProcessError.nonZeroExit(workingTreeNumstat.exitCode, workingTreeNumstat.stderr)
         }
-        let workingTreeCounts = NumstatParser.parse(workingTreeNumstat.stdout)
+        let workingTreeCounts = Self.parseNumstatZOutput(workingTreeNumstat.stdout)
         // Index-only metric — correct for `.staged` entries. Without this,
         // an "AM" path (staged, then further modified in the working tree)
         // got the SAME whole-working-tree count applied to BOTH its staged
@@ -136,13 +136,20 @@ extension GitService {
         // draft-commit summary) reported the unstaged edit's line count as
         // if it were already staged.
         let stagedNumstatArgs: [String] = head
-            ? ["diff", "--cached", "--numstat", "HEAD"]
-            : ["diff", "--cached", "--numstat", "4b825dc642cb6eb9a060e54bf8d69288fbee4904"]
+            ? ["-c", "core.quotePath=false", "diff", "--cached", "--numstat", "-z", "HEAD"]
+            : ["-c", "core.quotePath=false", "diff", "--cached", "--numstat", "-z", "4b825dc642cb6eb9a060e54bf8d69288fbee4904"]
         let stagedNumstat = try await Process.git(stagedNumstatArgs, cwd: worktreePath)
         guard stagedNumstat.exitCode == 0 else {
             throw ProcessError.nonZeroExit(stagedNumstat.exitCode, stagedNumstat.stderr)
         }
-        let stagedCounts = NumstatParser.parse(stagedNumstat.stdout)
+        let stagedCounts = Self.parseNumstatZOutput(stagedNumstat.stdout)
+        func count(
+            in counts: (add: [String: Int], del: [String: Int]),
+            for path: String
+        ) -> (add: Int, del: Int)? {
+            guard let add = counts.add[path], let del = counts.del[path] else { return nil }
+            return (add, del)
+        }
         let untrackedPaths = entries.filter { $0.add == 0 && $0.del == 0 }.map(\.path)
         let remoteCounts: [String: Int]
         if worktreePath.isRemoteAlasPath, let host = RemoteHostRegistry.shared.host(forPath: worktreePath.path) {
@@ -153,7 +160,7 @@ extension GitService {
 
         for i in entries.indices {
             let counts = entries[i].stage == .staged ? stagedCounts : workingTreeCounts
-            if let c = counts[entries[i].path] {
+            if let c = count(in: counts, for: entries[i].path) {
                 entries[i] = ChangedFile(path: entries[i].path,
                                           status: entries[i].status,
                                           stage: entries[i].stage,

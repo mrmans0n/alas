@@ -10499,10 +10499,11 @@ extension AppState: RemoteSessionsProvider {
                 baseBranch: config.worktrees.baseBranch,
                 resolution: GitService.BaseResolution.forCommits(
                     mode: config.changes.comparisonMode, userOverrodeBaseBranch: false))
-            let changed = try await git.changedFilesAgainstRef(
-                worktreePath: worktree.path, ref: commits.comparisonRef)
-            let capped = RemoteWorktreeFileAccess.truncateFiles(changed)
             let workingTree = try await git.statusForRemoteChangeList(worktreePath: worktree.path)
+            let changed = try await git.changedFilesAgainstRef(
+                worktreePath: worktree.path, ref: commits.comparisonRef,
+                knownStatusEntries: workingTree)
+            let capped = RemoteWorktreeFileAccess.truncateFiles(changed)
             let cappedWorkingTree = RemoteWorktreeFileAccess.truncateFiles(workingTree)
             return .success(
                 comparisonRef: commits.comparisonRef,
