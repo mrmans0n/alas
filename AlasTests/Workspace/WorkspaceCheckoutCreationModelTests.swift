@@ -29,6 +29,18 @@ struct WorkspaceCheckoutCreationModelTests {
         #expect(model.rootPath == "/checkouts/feature-my-change")
     }
 
+    @Test func returningToDetailsPreservesSelectedCheckoutParent() {
+        var model = WorkspaceCheckoutCreationModel(workspace: fixtureWorkspace())
+        model.selectCheckoutParent("/checkouts")
+        model.setBranch("feature/first")
+        #expect(model.advance() == .success)
+
+        model.returnToDetails()
+        model.setBranch("feature/second")
+
+        #expect(model.rootPath == "/checkouts/feature-second")
+    }
+
     @Test func advancesThroughThreeStepsOnlyWithSharedBranchAndRoot() {
         let workspace = fixtureWorkspace()
         var model = WorkspaceCheckoutCreationModel(workspace: workspace, rootPath: "")

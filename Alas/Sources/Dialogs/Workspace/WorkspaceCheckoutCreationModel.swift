@@ -72,6 +72,11 @@ struct WorkspaceCheckoutCreationModel: Equatable {
     mutating func receivePreflight(_ result: WorkspaceCheckoutPreflightResult) { preflightResult = result
     step = .preflight
     selectedCheckoutID = nil }
+    mutating func returnToDetails() {
+        step = .details
+        preflightResult = nil
+        selectedCheckoutID = nil
+    }
     mutating func beginCreation() -> Bool { guard case .success = preflightResult else { return false }
     step = .creating
     return true }

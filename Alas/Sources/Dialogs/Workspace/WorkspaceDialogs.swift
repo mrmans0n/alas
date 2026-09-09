@@ -419,11 +419,7 @@ struct CreateWorkspaceCheckoutDialog: View {
 
     private func goBackOrClose() {
         if model.step == .preflight && !isChecking {
-            var details = WorkspaceCheckoutCreationModel(
-                workspace: workspace, branch: model.branch, rootPath: model.rootPath, baseReference: model.baseReference
-            )
-            details.memberBaseReferences = model.memberBaseReferences
-            model = details
+            model.returnToDetails()
             error = nil
         } else {
             presented = false
