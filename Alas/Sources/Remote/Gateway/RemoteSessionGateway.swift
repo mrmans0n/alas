@@ -289,24 +289,25 @@ final class RemoteSessionGateway {
             guard inFlightFileRequests.insert(key).inserted else { return }
             defer { inFlightFileRequests.remove(key) }
             switch await provider.remoteChangeList(sessionId: id) {
-            case .success(let ref, let available, let files, let truncated):
+            case .success(let ref, let available, let files, let staged, let unstaged, let commits, let truncated, let commitsTruncated):
                 send(.changeList(
                     sessionId: id, comparisonRef: ref, metricsAvailable: available,
-                    files: files, truncated: truncated))
+                    files: files, staged: staged, unstaged: unstaged, commits: commits,
+                    truncated: truncated, commitsTruncated: commitsTruncated))
             case .failure(let reason, let message):
                 send(.changeListFailed(sessionId: id, reason: reason, message: message))
             }
-        case .fileDiff(let id, let path):
-            let key = "fileDiff\u{0}\(id)\u{0}\(path)"
+        case .fileDiff(let id, let path, let stage):
+            let key = "fileDiff\u{0}\(id)\u{0}\(path)\u{0}\(stage ?? "")"
             guard inFlightFileRequests.insert(key).inserted else { return }
             defer { inFlightFileRequests.remove(key) }
-            switch await provider.remoteFileDiff(sessionId: id, path: path) {
+            switch await provider.remoteFileDiff(sessionId: id, path: path, stage: stage) {
             case .success(let hunks, let truncated, let metadataNote):
                 send(.fileDiffResult(
-                    sessionId: id, path: path, hunks: hunks, truncated: truncated,
+                    sessionId: id, path: path, stage: stage, hunks: hunks, truncated: truncated,
                     metadataNote: metadataNote))
             case .failure(let reason, let message):
-                send(.fileDiffFailed(sessionId: id, path: path, reason: reason, message: message))
+                send(.fileDiffFailed(sessionId: id, path: path, stage: stage, reason: reason, message: message))
             }
         case .listFiles(let id, let path):
             let key = "listFiles\u{0}\(id)\u{0}\(path ?? "")"

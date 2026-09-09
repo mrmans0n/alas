@@ -11,17 +11,17 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/icon-180.png" />
   <title>Alas Remote</title>
-  <link rel="stylesheet" href="/style.css?v=42" />
+  <link rel="stylesheet" href="/style.css?v=44" />
 </head>
 <body>
   <header id="bar">
-    <button id="back" class="hidden">‹ Sessions</button>
+    <button id="back" class="hidden" aria-label="Back to sessions">‹</button>
     <span id="detail-title" class="hidden"></span>
     <button id="detail-rename" class="rename-btn hidden" aria-label="Rename session">✎</button>
     <div id="detail-tabs" class="tabs hidden" role="tablist">
-      <button id="tab-chat" class="tab is-active" role="tab" type="button">Chat</button>
-      <button id="tab-changes" class="tab" role="tab" type="button">Changes</button>
-      <button id="tab-files" class="tab" role="tab" type="button">Files</button>
+      <button id="tab-chat" class="tab is-active" role="tab" type="button" aria-label="Chat" aria-selected="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11.5a7.5 7.5 0 0 1-8 7.5 8.8 8.8 0 0 1-3.3-.7L4 20l1.5-3.6A7 7 0 1 1 20 11.5Z"/></svg></button>
+      <button id="tab-changes" class="tab" role="tab" type="button" aria-label="Changes" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 3-4 4 4 4M3 7h12a6 6 0 0 1 6 6v1M17 21l4-4-4-4M21 17H9a6 6 0 0 1-6-6V10"/></svg></button>
+      <button id="tab-files" class="tab" role="tab" type="button" aria-label="Files" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2Z"/></svg></button>
     </div>
     <span id="nav-title">Alas Remote</span>
     <button id="new-session" aria-label="New session">+ New</button>
@@ -196,9 +196,9 @@
   <script src="/purify.min.js?v=28"></script>
   <script src="/session-ordering.js?v=1"></script>
   <script src="/worktree-creation.js?v=1"></script>
-  <script src="/changes-view.js?v=3"></script>
+  <script src="/changes-view.js?v=6"></script>
   <script src="/file-browser.js?v=3"></script>
-  <script src="/app.js?v=72"></script>
+  <script src="/app.js?v=76"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {

@@ -19,8 +19,27 @@ function formatFileCounts(file) {
   return "+" + add + " −" + del;
 }
 
+function changeSections(state) {
+  const sections = [];
+  const files = sortFiles(state && state.files);
+  const staged = sortFiles(state && state.staged);
+  const unstaged = sortFiles(state && state.unstaged);
+  const commits = (state && state.commits) || [];
+  if (files.length && (commits.length || (!staged.length && !unstaged.length))) sections.push({ title: "Branch Changes", files });
+  if (staged.length || unstaged.length) sections.push({ title: "Working Tree" });
+  if (staged.length) sections.push({ title: "Staged", files: staged, stage: "staged" });
+  if (unstaged.length) sections.push({ title: "Unstaged", files: unstaged, stage: "unstaged" });
+  if (commits.length) sections.push({ title: "Commits", commits });
+  return sections;
+}
+
 function formatSummary(state) {
-  const files = (state && state.files) || [];
+  const staged = (state && state.staged) || [];
+  const unstaged = (state && state.unstaged) || [];
+  const allFiles = (state && state.files) || [];
+  const files = allFiles.length
+    ? allFiles
+    : Array.from(new Map(staged.concat(unstaged).map((file) => [file.path, file])).values());
   let add = 0;
   let del = 0;
   for (const file of files) {
@@ -30,7 +49,9 @@ function formatSummary(state) {
   const count = files.length + (files.length === 1 ? " file" : " files");
   const totals = count + " · +" + add + " −" + del;
   const ref = state && state.comparisonRef;
-  return ref ? "vs " + ref + " · " + totals : totals;
+  const commitCount = ((state && state.commits) || []).length;
+  const commits = commitCount ? " · " + commitCount + (state && state.commitsTruncated ? "+" : "") + (commitCount === 1 ? " commit" : " commits") : "";
+  return (ref ? "vs " + ref + " · " : "") + totals + commits;
 }
 
 function diffRows(hunks) {
@@ -73,6 +94,7 @@ function metadataOnlyNotice(hunks, metadataNote) {
 globalThis.RemoteChangesView = {
   sortFiles,
   splitPath,
+  changeSections,
   formatSummary,
   formatFileCounts,
   diffRows,

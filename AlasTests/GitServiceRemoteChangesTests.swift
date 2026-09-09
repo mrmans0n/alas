@@ -71,6 +71,23 @@ struct GitServiceRemoteChangesTests {
         #expect(files.map(\.path) == ["a.txt"])
     }
 
+    @Test func statusCountsStagedFilesWithTabsInTheirPath() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let path = "staged\tname.txt"
+        try "one\n".write(to: repo.appendingPathComponent(path), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", path], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "base"], cwd: repo)
+        try "one\ntwo\n".write(to: repo.appendingPathComponent(path), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", path], cwd: repo)
+
+        let files = try await GitService().status(worktreePath: repo)
+
+        let staged = try #require(files.first { $0.path == path && $0.stage == .staged })
+        #expect(staged.add == 1)
+        #expect(staged.del == 0)
+    }
+
     /// Unlike the nil-ref case above, a NON-nil ref that fails its numstat
     /// diff (an invalid ref, here) is not "no base to compare against" —
     /// falling back to `status()` would silently report only current
@@ -650,6 +667,72 @@ struct GitServiceRemoteChangesTests {
         #expect(added.map(\.text) == ["fresh"])
     }
 
+    @Test func remoteDiff_treatsUntrackedProbePathAsLiteral() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try "tracked\n".write(to: repo.appendingPathComponent("other.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "other.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "base"], cwd: repo)
+        try "literal\n".write(to: repo.appendingPathComponent("*.txt"), atomically: true, encoding: .utf8)
+
+        let diff = try await GitService().remoteDiff(
+            worktreePath: repo,
+            file: "*.txt",
+            staged: false,
+            originalPath: nil,
+            maxOutputBytes: nil
+        )
+        let added = diff.hunks.flatMap(\.lines).filter { $0.kind == .add }
+        #expect(added.map(\.text) == ["literal"])
+    }
+
+    @Test func remoteDiff_slicesStagedRenameWithNonASCIIDestinationName() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try "one\ntwo\nthree\n".write(to: repo.appendingPathComponent("café.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "café.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "base"], cwd: repo)
+        _ = try await Process.git(["mv", "café.txt", "crème.txt"], cwd: repo)
+        try "one\nTWO\nthree\n".write(to: repo.appendingPathComponent("crème.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "-A"], cwd: repo)
+
+        let diff = try await GitService().remoteDiff(
+            worktreePath: repo,
+            file: "crème.txt",
+            staged: true,
+            originalPath: "café.txt",
+            maxOutputBytes: nil
+        )
+        let added = diff.hunks.flatMap(\.lines).filter { $0.kind == .add }.map(\.text)
+        let deleted = diff.hunks.flatMap(\.lines).filter { $0.kind == .delete }.map(\.text)
+        #expect(added == ["TWO"])
+        #expect(deleted == ["two"])
+    }
+
+    @Test func remoteDiff_throwsWhenAStagedCopySourceSectionAloneExceedsTheOutputCap() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let original = (1 ... 100).map { "line\($0)\n" }.joined()
+        try original.write(to: repo.appendingPathComponent("aaa.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "aaa.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "base"], cwd: repo)
+
+        let appended = original + (1 ... 10).map { "appended-line-\($0)-with-enough-padding-to-add-up\n" }.joined()
+        try appended.write(to: repo.appendingPathComponent("aaa.txt"), atomically: true, encoding: .utf8)
+        try (appended + "zzz-marker\n").write(to: repo.appendingPathComponent("zzz.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "-A"], cwd: repo)
+
+        await #expect(throws: (any Error).self) {
+            _ = try await GitService().remoteDiff(
+                worktreePath: repo,
+                file: "zzz.txt",
+                staged: true,
+                originalPath: "aaa.txt",
+                maxOutputBytes: 300
+            )
+        }
+    }
+
     /// A file declared binary purely via `.gitattributes` (content that
     /// still looks like valid UTF-8 at the byte level) produces a
     /// hunk-less diff with `Binary files ... differ` instead of `@@` hunks
@@ -817,6 +900,42 @@ struct GitServiceRemoteChangesTests {
         let entry = try #require(files.first { $0.path == "a.txt" })
         #expect(entry.add == 2)
         #expect(entry.status == "A")
+    }
+
+    @Test func changedFilesAgainstRefKeepsOverallCountsWhenReusingStatusForNilRef() async throws {
+        let repo = try await makeUnbornRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try "line1\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "a.txt"], cwd: repo)
+        try "line1\nline2\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+
+        let status = try await GitService().status(worktreePath: repo)
+        let workingTree = try await GitService().statusForRemoteChangeList(
+            worktreePath: repo, knownStatusEntries: status)
+        let files = try await GitService().changedFilesAgainstRef(
+            worktreePath: repo, ref: nil, knownStatusEntries: status)
+
+        let row = try #require(files.first { $0.path == "a.txt" })
+        #expect(row.add == 2)
+        let unstaged = try #require(workingTree.first { $0.path == "a.txt" && $0.stage == .unstaged })
+        #expect(unstaged.add == 1)
+    }
+
+    @Test func statusForRemoteChangeListCountsUntrackedRecreationContent() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try "old\nold\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "a.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "base"], cwd: repo)
+        _ = try await Process.git(["rm", "a.txt"], cwd: repo)
+        try "new\nnew\nnew\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+
+        let files = try await GitService().statusForRemoteChangeList(worktreePath: repo)
+
+        let unstaged = try #require(files.first { $0.path == "a.txt" && $0.stage == .unstaged })
+        #expect(unstaged.status == "A")
+        #expect(unstaged.add == 3)
+        #expect(unstaged.del == 0)
     }
 
     /// `diffAgainstHEAD`'s unborn-HEAD existence check used to be

@@ -10443,7 +10443,8 @@ extension AppState: RemoteSessionsProvider {
     /// since the file is new) collapsed to "not binary" and produced a
     /// misleading empty "successful" diff.
     private func isDiffTargetBinary(
-        worktree: Worktree, normalizedPath: String, url: URL, comparisonRef: String?, git: GitService
+        worktree: Worktree, normalizedPath: String, url: URL, comparisonRef: String?, git: GitService,
+        missingFileUsesIndex: Bool = false
     ) async -> Bool {
         let existsOnDisk: Bool
         let onDiskLooksBinary: Bool
@@ -10474,6 +10475,9 @@ extension AppState: RemoteSessionsProvider {
         }
         if onDiskLooksBinary { return true }
         if existsOnDisk { return false }
+        if missingFileUsesIndex {
+            return (try? await git.looksBinaryAtIndex(worktreePath: worktree.path, file: normalizedPath)) ?? false
+        }
         guard let comparisonRef, !comparisonRef.isEmpty else { return false }
         return (try? await git.looksBinaryAtRef(worktreePath: worktree.path, ref: comparisonRef, file: normalizedPath)) ?? false
     }
@@ -10486,6 +10490,12 @@ extension AppState: RemoteSessionsProvider {
             del: file.del,
             conflict: file.conflict?.rawValue,
             renameFrom: file.renameFrom)
+    }
+
+    private static func remoteCommit(_ commit: CommitInfo) -> RemoteCommit {
+        RemoteCommit(
+            shortSha: commit.shortSha, subject: commit.rawSubject, author: commit.author,
+            add: commit.insertions, del: commit.deletions)
     }
 
     private static func remoteDiffHunk(_ hunk: ParsedDiff.Hunk) -> RemoteDiffHunk {
@@ -10557,20 +10567,29 @@ extension AppState: RemoteSessionsProvider {
                 baseBranch: config.worktrees.baseBranch,
                 resolution: GitService.BaseResolution.forCommits(
                     mode: config.changes.comparisonMode, userOverrodeBaseBranch: false))
+            let statusEntries = try await git.status(worktreePath: worktree.path)
             let changed = try await git.changedFilesAgainstRef(
-                worktreePath: worktree.path, ref: commits.comparisonRef)
+                worktreePath: worktree.path, ref: commits.comparisonRef,
+                knownStatusEntries: statusEntries)
             let capped = RemoteWorktreeFileAccess.truncateFiles(changed)
+            let workingTree = try await git.statusForRemoteChangeList(
+                worktreePath: worktree.path, knownStatusEntries: statusEntries)
+            let cappedWorkingTree = RemoteWorktreeFileAccess.truncateFiles(workingTree)
             return .success(
                 comparisonRef: commits.comparisonRef,
                 metricsAvailable: true,
                 files: capped.files.map(Self.remoteChangedFile),
-                truncated: capped.truncated)
+                staged: cappedWorkingTree.files.filter { $0.stage == .staged }.map(Self.remoteChangedFile),
+                unstaged: cappedWorkingTree.files.filter { $0.stage == .unstaged }.map(Self.remoteChangedFile),
+                commits: commits.commits.prefix(100).map(Self.remoteCommit),
+                truncated: capped.truncated || cappedWorkingTree.truncated,
+                commitsTruncated: commits.commits.count > 100)
         } catch {
             return .failure(reason: .gitFailed, message: error.localizedDescription)
         }
     }
 
-    func remoteFileDiff(sessionId: String, path: String) async -> RemoteFileDiffResult {
+    func remoteFileDiff(sessionId: String, path: String, stage: String? = nil) async -> RemoteFileDiffResult {
         let worktree: Worktree
         switch remoteWorktreeContext(sessionId: sessionId) {
         case .sessionUnknown:
@@ -10615,16 +10634,36 @@ extension AppState: RemoteSessionsProvider {
             if ignored {
                 return .failure(reason: .pathRejected, message: nil)
             }
-            if await isDiffTargetBinary(
+            let changeStage: ChangeStage?
+            if let stage {
+                guard let parsedStage = ChangeStage(rawValue: stage) else {
+                    return .failure(reason: .pathRejected, message: nil)
+                }
+                changeStage = parsedStage
+            } else {
+                changeStage = nil
+            }
+            if changeStage != .staged, await isDiffTargetBinary(
                 worktree: worktree, normalizedPath: normalizedPath, url: url,
-                comparisonRef: commits.comparisonRef, git: git
+                comparisonRef: commits.comparisonRef, git: git,
+                missingFileUsesIndex: changeStage == .unstaged
             ) {
                 return .failure(reason: .binary, message: nil)
             }
-            let parsed = try await git.diff(
-                worktreePath: worktree.path,
-                againstRef: commits.comparisonRef,
-                file: normalizedPath)
+            let parsed: ParsedDiff
+            if let changeStage {
+                let statusEntry = try await git.statusIdentity(worktreePath: worktree.path).first { $0.path == normalizedPath }
+                parsed = try await git.remoteDiff(
+                    worktreePath: worktree.path, file: normalizedPath,
+                    staged: changeStage == .staged, originalPath: statusEntry?.renameFrom,
+                    maxOutputBytes: RemoteWorktreeFileAccess.maxDiffSubprocessBytes,
+                    conflicted: statusEntry?.conflict != nil)
+            } else {
+                parsed = try await git.diff(
+                    worktreePath: worktree.path,
+                    againstRef: commits.comparisonRef,
+                    file: normalizedPath)
+            }
             // `isDiffTargetBinary` above only sniffs byte content, which
             // misses a file declared binary purely via `.gitattributes`
             // (e.g. `*.dat binary`) whose bytes happen to still look like

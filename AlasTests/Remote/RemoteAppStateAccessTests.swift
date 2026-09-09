@@ -1055,6 +1055,71 @@ struct RemoteAppStateAccessTests {
         #expect(result == .failure(reason: .worktreeUnavailable, message: nil))
     }
 
+    @Test func remoteChangeListReportsUnstagedCountsAgainstTheIndex() async throws {
+        let repository = try await makeRemoteBranchesRepository()
+        defer { try? FileManager.default.removeItem(at: repository) }
+        try "A\n".write(to: repository.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "a.txt"], cwd: repository)
+        _ = try await Process.git(["commit", "-q", "-m", "base"], cwd: repository)
+        try "X\n".write(to: repository.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "a.txt"], cwd: repository)
+        try "A\n".write(to: repository.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+        let state = makeRemoteGitBackedState(repositoryPath: repository)
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let tab = try #require(acpTabs(in: state).first)
+
+        let result = await state.remoteChangeList(sessionId: tab.sessionId)
+        guard case let .success(_, _, _, staged, unstaged, _, _, _) = result else {
+            Issue.record("expected a successful change list, got \(result)")
+            return
+        }
+        #expect(staged.first { $0.path == "a.txt" }?.add == 1)
+        #expect(staged.first { $0.path == "a.txt" }?.del == 1)
+        #expect(unstaged.first { $0.path == "a.txt" }?.add == 1)
+        #expect(unstaged.first { $0.path == "a.txt" }?.del == 1)
+    }
+
+    @Test func remoteChangeListMatchesUnstagedTabPathCountsByRawPath() async throws {
+        let repository = try await makeRemoteBranchesRepository()
+        defer { try? FileManager.default.removeItem(at: repository) }
+        let path = "a\tb.txt"
+        let file = repository.appendingPathComponent(path)
+        try "one\n".write(to: file, atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", path], cwd: repository)
+        _ = try await Process.git(["commit", "-q", "-m", "base"], cwd: repository)
+        try "one\ntwo\n".write(to: file, atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", path], cwd: repository)
+        try "one\nTWO\n".write(to: file, atomically: true, encoding: .utf8)
+
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId { cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId) }
+        }
+        let state = makeRemoteGitBackedState(repositoryPath: repository)
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let tab = try #require(acpTabs(in: state).first)
+
+        let result = await state.remoteChangeList(sessionId: tab.sessionId)
+        guard case let .success(_, _, _, _, unstaged, _, _, _) = result else {
+            Issue.record("expected a successful change list, got \(result)")
+            return
+        }
+        let row = try #require(unstaged.first { $0.path == path })
+        #expect(row.add == 1)
+        #expect(row.del == 1)
+    }
+
     @Test func remoteFileContentsAndDiffRejectAGitignoredFile() async throws {
         let repository = try await makeRemoteBranchesRepository()
         defer { try? FileManager.default.removeItem(at: repository) }
@@ -1525,6 +1590,99 @@ struct RemoteAppStateAccessTests {
 
         let diffResult = await state.remoteFileDiff(sessionId: tab.sessionId, path: "image.bin")
         #expect(diffResult == .failure(reason: .binary, message: nil))
+    }
+
+    @Test func remoteFileDiffUsesTheIndexForAStagedDiffBinaryCheck() async throws {
+        let repository = try await makeRemoteBranchesRepository()
+        defer { try? FileManager.default.removeItem(at: repository) }
+        _ = try await Process.git(["checkout", "-q", "feature/remote"], cwd: repository)
+        let file = repository.appendingPathComponent("mixed.dat")
+        try "staged text\n".write(to: file, atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "mixed.dat"], cwd: repository)
+        try Data([0x00, 0x01, 0x02]).write(to: file)
+
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId { cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId) }
+        }
+        let state = makeRemoteGitBackedState(repositoryPath: repository)
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let tab = try #require(acpTabs(in: state).first)
+
+        let diffResult = await state.remoteFileDiff(sessionId: tab.sessionId, path: "mixed.dat", stage: "staged")
+        guard case .success = diffResult else {
+            Issue.record("expected staged text diff, got \(diffResult)")
+            return
+        }
+    }
+
+    @Test func remoteFileDiffUsesTheIndexForAMissingUnstagedDiffBinaryCheck() async throws {
+        let repository = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-remote-missing-unstaged-index-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: repository, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: repository) }
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: repository)
+        _ = try await Process.git(["config", "user.email", "test@example.com"], cwd: repository)
+        _ = try await Process.git(["config", "user.name", "Test User"], cwd: repository)
+        let file = repository.appendingPathComponent("mixed.dat")
+        try Data([0x00, 0x01, 0x02]).write(to: file)
+        _ = try await Process.git(["add", "mixed.dat"], cwd: repository)
+        _ = try await Process.git(["commit", "-q", "-m", "base"], cwd: repository)
+        _ = try await Process.git(["checkout", "-q", "-b", "feature/remote"], cwd: repository)
+        try "staged text\n".write(to: file, atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "mixed.dat"], cwd: repository)
+        try FileManager.default.removeItem(at: file)
+
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId { cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId) }
+        }
+        let state = makeRemoteGitBackedState(repositoryPath: repository)
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let tab = try #require(acpTabs(in: state).first)
+
+        let diffResult = await state.remoteFileDiff(sessionId: tab.sessionId, path: "mixed.dat", stage: "unstaged")
+        guard case let .success(hunks, _, _) = diffResult else {
+            Issue.record("expected unstaged text deletion diff, got \(diffResult)")
+            return
+        }
+        #expect(hunks.flatMap(\.lines).contains { $0.kind == "delete" && $0.text == "staged text" })
+    }
+
+    @Test func remoteFileDiffUsesOriginalPathForAnUnstagedRename() async throws {
+        let repository = try await makeRemoteBranchesRepository()
+        defer { try? FileManager.default.removeItem(at: repository) }
+        try "one\ntwo\n".write(to: repository.appendingPathComponent("old.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "old.txt"], cwd: repository)
+        _ = try await Process.git(["commit", "-q", "-m", "base"], cwd: repository)
+        try FileManager.default.moveItem(
+            at: repository.appendingPathComponent("old.txt"),
+            to: repository.appendingPathComponent("new.txt"))
+        _ = try await Process.git(["add", "-N", "new.txt"], cwd: repository)
+        try "one\nTWO\n".write(to: repository.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
+
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId { cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId) }
+        }
+        let state = makeRemoteGitBackedState(repositoryPath: repository)
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let tab = try #require(acpTabs(in: state).first)
+
+        let diffResult = await state.remoteFileDiff(sessionId: tab.sessionId, path: "new.txt", stage: "unstaged")
+        guard case let .success(hunks, _, _) = diffResult else {
+            Issue.record("expected unstaged rename diff, got \(diffResult)")
+            return
+        }
+        let lines = hunks.flatMap(\.lines)
+        #expect(lines.contains { $0.kind == "delete" && $0.text == "two" })
+        #expect(lines.contains { $0.kind == "add" && $0.text == "TWO" })
     }
 
     private func statusCode(port: UInt16, host: String, path: String) async throws -> Int? {

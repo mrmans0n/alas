@@ -7,9 +7,19 @@ import Foundation
 extension GitService {
     /// Changed files between `ref` and the working tree, plus untracked files.
     /// A nil `ref` (unborn branch, no resolvable base) falls back to `status`.
-    func changedFilesAgainstRef(worktreePath: URL, ref: String?) async throws -> [ChangedFile] {
+    func changedFilesAgainstRef(
+        worktreePath: URL,
+        ref: String?,
+        knownStatusEntries: [ChangedFile]? = nil
+    ) async throws -> [ChangedFile] {
         guard let ref, !ref.isEmpty else {
-            return Self.collapsingStagedAndUnstagedEntries(try await status(worktreePath: worktreePath))
+            let entries: [ChangedFile]
+            if let knownStatusEntries {
+                entries = knownStatusEntries
+            } else {
+                entries = try await status(worktreePath: worktreePath)
+            }
+            return Self.collapsingStagedAndUnstagedEntries(entries)
         }
 
         // `-c core.quotePath=false` plus `-z` keep non-ASCII (and
@@ -40,7 +50,12 @@ extension GitService {
         guard nameStatus.exitCode == 0 else {
             throw ProcessError.nonZeroExit(nameStatus.exitCode, nameStatus.stderr)
         }
-        let statusEntries = try await status(worktreePath: worktreePath)
+        let statusEntries: [ChangedFile]
+        if let knownStatusEntries {
+            statusEntries = knownStatusEntries
+        } else {
+            statusEntries = try await status(worktreePath: worktreePath)
+        }
         let conflicts = Dictionary(
             statusEntries.compactMap { entry in entry.conflict.map { (entry.path, $0) } },
             uniquingKeysWith: { first, _ in first })
@@ -342,6 +357,15 @@ extension GitService {
         guard existsAtRef.exitCode == 0 else { return nil }
         let prefix = try await Process.gitDataPrefix(
             ["show", "\(ref):\(file)"], cwd: worktreePath, maxBytes: 8192)
+        return Self.looksBinary(prefix)
+    }
+
+    func looksBinaryAtIndex(worktreePath: URL, file: String) async throws -> Bool? {
+        let existsAtIndex = try await Process.git(
+            ["cat-file", "-e", ":\(file)"], cwd: worktreePath)
+        guard existsAtIndex.exitCode == 0 else { return nil }
+        let prefix = try await Process.gitDataPrefix(
+            ["show", ":\(file)"], cwd: worktreePath, maxBytes: 8192)
         return Self.looksBinary(prefix)
     }
 

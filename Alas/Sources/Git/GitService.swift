@@ -105,22 +105,7 @@ extension GitService {
     }
 
     func status(worktreePath: URL) async throws -> [ChangedFile] {
-        async let statusResult = Process.git(
-            ["status", "--porcelain=v2", "-z", "--untracked-files=all"],
-            cwd: worktreePath
-        )
-        let s = try await statusResult
-        // Unlike `--no-index diff`/`check-ignore`, plain `git status` has no
-        // legitimate nonzero exit for a healthy repo — ANY failure here (a
-        // dropped SSH connection, an invalid/corrupt repository) is fatal
-        // and must propagate. This is a widely shared method (the desktop
-        // Changes panel, the remote nil-ref fallback, `alas` CLI actions);
-        // silently returning `[]` previously meant a genuine failure looked
-        // identical to "nothing has changed" everywhere it's called.
-        guard s.exitCode == 0 else {
-            throw ProcessError.nonZeroExit(s.exitCode, s.stderr)
-        }
-        var entries = try StatusParser.parse(s.stdout)
+        var entries = try await statusIdentity(worktreePath: worktreePath)
 
         // Numstat needs a base revision. Use HEAD if one exists; on unborn
         // branches diff against git's well-known empty-tree object hash
@@ -137,10 +122,13 @@ extension GitService {
         // content of a path regardless of what's staged, matching
         // `diffAgainstHEAD`'s own all-add diff (see the comment there).
         let workingTreeNumstatArgs: [String] = head
-            ? ["diff", "--numstat", "HEAD"]
-            : ["diff", "--numstat", "4b825dc642cb6eb9a060e54bf8d69288fbee4904"]   // canonical empty tree
+            ? ["-c", "core.quotePath=false", "diff", "--numstat", "-z", "HEAD"]
+            : ["-c", "core.quotePath=false", "diff", "--numstat", "-z", "4b825dc642cb6eb9a060e54bf8d69288fbee4904"]   // canonical empty tree
         let workingTreeNumstat = try await Process.git(workingTreeNumstatArgs, cwd: worktreePath)
-        let workingTreeCounts = NumstatParser.parse(workingTreeNumstat.stdout)
+        guard workingTreeNumstat.exitCode == 0 else {
+            throw ProcessError.nonZeroExit(workingTreeNumstat.exitCode, workingTreeNumstat.stderr)
+        }
+        let workingTreeCounts = Self.parseNumstatZOutput(workingTreeNumstat.stdout)
         // Index-only metric — correct for `.staged` entries. Without this,
         // an "AM" path (staged, then further modified in the working tree)
         // got the SAME whole-working-tree count applied to BOTH its staged
@@ -148,10 +136,20 @@ extension GitService {
         // draft-commit summary) reported the unstaged edit's line count as
         // if it were already staged.
         let stagedNumstatArgs: [String] = head
-            ? ["diff", "--cached", "--numstat", "HEAD"]
-            : ["diff", "--cached", "--numstat", "4b825dc642cb6eb9a060e54bf8d69288fbee4904"]
+            ? ["-c", "core.quotePath=false", "diff", "--cached", "--numstat", "-z", "HEAD"]
+            : ["-c", "core.quotePath=false", "diff", "--cached", "--numstat", "-z", "4b825dc642cb6eb9a060e54bf8d69288fbee4904"]
         let stagedNumstat = try await Process.git(stagedNumstatArgs, cwd: worktreePath)
-        let stagedCounts = NumstatParser.parse(stagedNumstat.stdout)
+        guard stagedNumstat.exitCode == 0 else {
+            throw ProcessError.nonZeroExit(stagedNumstat.exitCode, stagedNumstat.stderr)
+        }
+        let stagedCounts = Self.parseNumstatZOutput(stagedNumstat.stdout)
+        func count(
+            in counts: (add: [String: Int], del: [String: Int]),
+            for path: String
+        ) -> (add: Int, del: Int)? {
+            guard let add = counts.add[path], let del = counts.del[path] else { return nil }
+            return (add, del)
+        }
         let untrackedPaths = entries.filter { $0.add == 0 && $0.del == 0 }.map(\.path)
         let remoteCounts: [String: Int]
         if worktreePath.isRemoteAlasPath, let host = RemoteHostRegistry.shared.host(forPath: worktreePath.path) {
@@ -162,7 +160,7 @@ extension GitService {
 
         for i in entries.indices {
             let counts = entries[i].stage == .staged ? stagedCounts : workingTreeCounts
-            if let c = counts[entries[i].path] {
+            if let c = count(in: counts, for: entries[i].path) {
                 entries[i] = ChangedFile(path: entries[i].path,
                                           status: entries[i].status,
                                           stage: entries[i].stage,
@@ -200,24 +198,103 @@ extension GitService {
         return entries
     }
 
+    func statusIdentity(worktreePath: URL) async throws -> [ChangedFile] {
+        async let statusResult = Process.git(
+            ["status", "--porcelain=v2", "-z", "--untracked-files=all"],
+            cwd: worktreePath
+        )
+        let s = try await statusResult
+        // Unlike `--no-index diff`/`check-ignore`, plain `git status` has no
+        // legitimate nonzero exit for a healthy repo — ANY failure here (a
+        // dropped SSH connection, an invalid/corrupt repository) is fatal
+        // and must propagate. This is a widely shared method (the desktop
+        // Changes panel, the remote nil-ref fallback, `alas` CLI actions);
+        // silently returning `[]` previously meant a genuine failure looked
+        // identical to "nothing has changed" everywhere it's called.
+        guard s.exitCode == 0 else {
+            throw ProcessError.nonZeroExit(s.exitCode, s.stderr)
+        }
+        return try StatusParser.parse(s.stdout)
+    }
+
+    func statusForRemoteChangeList(
+        worktreePath: URL,
+        knownStatusEntries: [ChangedFile]? = nil
+    ) async throws -> [ChangedFile] {
+        var entries: [ChangedFile]
+        if let knownStatusEntries {
+            entries = knownStatusEntries
+        } else {
+            entries = try await status(worktreePath: worktreePath)
+        }
+        let numstat = try await Process.git(
+            ["-c", "core.quotePath=false", "diff", "--numstat", "-z", "-M", "-C"],
+            cwd: worktreePath
+        )
+        guard numstat.exitCode == 0 else {
+            throw ProcessError.nonZeroExit(numstat.exitCode, numstat.stderr)
+        }
+        let counts = Self.parseNumstatZOutput(numstat.stdout)
+        let untrackedWithoutNumstat = entries
+            .filter { $0.stage == .unstaged && $0.status == "A" && counts.add[$0.path] == nil }
+            .map(\.path)
+        let remoteUntrackedCounts: [String: Int]
+        if worktreePath.isRemoteAlasPath, let host = RemoteHostRegistry.shared.host(forPath: worktreePath.path) {
+            remoteUntrackedCounts = try await RemoteFileStats.lineCounts(
+                host: host, cwd: worktreePath.path, paths: untrackedWithoutNumstat)
+        } else {
+            remoteUntrackedCounts = [:]
+        }
+        for i in entries.indices where entries[i].stage == .unstaged {
+            let add: Int
+            let del: Int
+            if let countedAdd = counts.add[entries[i].path],
+               let countedDel = counts.del[entries[i].path] {
+                add = countedAdd
+                del = countedDel
+            } else if entries[i].status == "A" {
+                add = worktreePath.isRemoteAlasPath
+                    ? (remoteUntrackedCounts[entries[i].path] ?? 0)
+                    : Self.addedLineCount(worktreePath: worktreePath, path: entries[i].path)
+                del = 0
+            } else {
+                continue
+            }
+            entries[i] = ChangedFile(
+                path: entries[i].path,
+                status: entries[i].status,
+                stage: entries[i].stage,
+                add: add,
+                del: del,
+                renameFrom: entries[i].renameFrom,
+                conflict: entries[i].conflict)
+        }
+        return entries
+    }
+
     func diff(worktreePath: URL, file: String, staged: Bool = false, originalPath: String? = nil) async throws -> ParsedDiff {
+        try await remoteDiff(worktreePath: worktreePath, file: file, staged: staged, originalPath: originalPath, maxOutputBytes: nil)
+    }
+
+    func remoteDiff(worktreePath: URL, file: String, staged: Bool, originalPath: String?, maxOutputBytes: Int?, conflicted: Bool = false) async throws -> ParsedDiff {
         // Untracked files have no HEAD entry, so `git diff HEAD -- <path>`
         // returns nothing. Detect via `git ls-files --error-unmatch` (exit 0
         // iff tracked) and fall back to comparing against /dev/null so the
         // user sees the file's contents as a single all-add hunk.
         let tracked = try await Process.git(
-            ["ls-files", "--error-unmatch", "--", file],
+            ["--literal-pathspecs", "ls-files", "--error-unmatch", "--", file],
             cwd: worktreePath
         )
         if tracked.exitCode != 0 && !staged {
-            let result = try await Process.git(
-                ["diff", "--no-color", "--no-index", "--", "/dev/null", file],
-                cwd: worktreePath
-            )
+            let result = try await Process.gitCapped(
+                ["--literal-pathspecs", "diff", "--no-color", "--no-index", "--", "/dev/null", file], cwd: worktreePath,
+                maxOutputBytes: maxOutputBytes ?? .max)
             // `git diff --no-index` exits non-zero (1) when there ARE differences
             // — that's the normal case for an untracked file. Only treat exit
             // codes >= 2 as real failures.
-            guard result.exitCode <= 1 else { return ParsedDiff(hunks: []) }
+            guard result.stdoutTruncated || result.exitCode <= 1 else {
+                throw ProcessError.nonZeroExit(result.exitCode, result.stderr)
+            }
             return await Self.parseOffMain(result.stdout)
         }
 
@@ -232,20 +309,33 @@ extension GitService {
         //     vs empty tree) so initial-commit workflows still render the
         //     staged side.
         let head = try await hasHead(worktreePath: worktreePath)
-        var args = ["diff", "--no-color", "-M", "-C"]
+        var args = ["--literal-pathspecs", "-c", "core.quotePath=false", "diff", "--no-color", "-M", "-C"]
         if staged {
             args.append("--cached")
             if head { args.append("HEAD") }
         }
+        if conflicted { args.append("--ours") }
         args.append("--")
         args.append(file)
         if let originalPath, !originalPath.isEmpty {
             args.append(originalPath)
         }
-        let result = try await Process.git(args, cwd: worktreePath)
-        let stdout = originalPath?.isEmpty == false
-            ? Self.sliceDiffForFile(result.stdout, file: file)
-            : result.stdout
+        let result = try await Process.gitCapped(args, cwd: worktreePath, maxOutputBytes: maxOutputBytes ?? .max)
+        guard result.stdoutTruncated || result.exitCode <= 1 else {
+            throw ProcessError.nonZeroExit(result.exitCode, result.stderr)
+        }
+        let stdout: String
+        if originalPath?.isEmpty == false {
+            let sliced = Self.sliceDiffForFile(result.stdout, file: file)
+            guard !(result.stdoutTruncated && sliced.isEmpty) else {
+                throw ProcessError.nonZeroExit(
+                    result.exitCode,
+                    "diff for \(file) exceeded the size cap before its section was captured")
+            }
+            stdout = sliced
+        } else {
+            stdout = result.stdout
+        }
         return await Self.parseOffMain(stdout)
     }
 

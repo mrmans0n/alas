@@ -55,13 +55,13 @@ enum RemoteClientMessage: Equatable, Sendable {
     case queueClear(sessionId: String)
     case queueSteerUndo(sessionId: String)
     case listChanges(sessionId: String)
-    case fileDiff(sessionId: String, path: String)
+    case fileDiff(sessionId: String, path: String, stage: String?)
     case listFiles(sessionId: String, path: String?)
     case readFile(sessionId: String, path: String)
 }
 
 extension RemoteClientMessage: Codable {
-    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, content, text, attachments, modelId, modeId, enabled, title, worktreeId, agentId, beforeIndex, limit, itemId, intent, projectId, base, branch, path }
+    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, content, text, attachments, modelId, modeId, enabled, title, worktreeId, agentId, beforeIndex, limit, itemId, intent, projectId, base, branch, path, stage }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -156,7 +156,8 @@ extension RemoteClientMessage: Codable {
             self = .listChanges(sessionId: try c.decode(String.self, forKey: .sessionId))
         case "fileDiff":
             self = .fileDiff(sessionId: try c.decode(String.self, forKey: .sessionId),
-                             path: try c.decode(String.self, forKey: .path))
+                             path: try c.decode(String.self, forKey: .path),
+                             stage: try c.decodeIfPresent(String.self, forKey: .stage))
         case "listFiles":
             self = .listFiles(sessionId: try c.decode(String.self, forKey: .sessionId),
                               path: try c.decodeIfPresent(String.self, forKey: .path))
@@ -270,10 +271,11 @@ extension RemoteClientMessage: Codable {
         case .listChanges(let s):
             try c.encode("listChanges", forKey: .type)
             try c.encode(s, forKey: .sessionId)
-        case .fileDiff(let s, let path):
+        case .fileDiff(let s, let path, let stage):
             try c.encode("fileDiff", forKey: .type)
             try c.encode(s, forKey: .sessionId)
             try c.encode(path, forKey: .path)
+            try c.encodeIfPresent(stage, forKey: .stage)
         case .listFiles(let s, let path):
             try c.encode("listFiles", forKey: .type)
             try c.encode(s, forKey: .sessionId)
@@ -316,8 +318,8 @@ extension RemoteClientMessage {
         switch self {
         case .listChanges(let sessionId):
             return "listChanges\u{0}\(sessionId)"
-        case .fileDiff(let sessionId, let path):
-            return "fileDiff\u{0}\(sessionId)\u{0}\(path)"
+        case .fileDiff(let sessionId, let path, let stage):
+            return "fileDiff\u{0}\(sessionId)\u{0}\(path)\u{0}\(stage ?? "")"
         case .listFiles(let sessionId, let path):
             return "listFiles\u{0}\(sessionId)\u{0}\(path ?? "")"
         case .readFile(let sessionId, let path):
@@ -383,12 +385,13 @@ enum RemoteServerMessage: Equatable, Sendable {
     case error(message: String)
     case changeList(
         sessionId: String, comparisonRef: String?, metricsAvailable: Bool,
-        files: [RemoteChangedFile], truncated: Bool)
+        files: [RemoteChangedFile], staged: [RemoteChangedFile], unstaged: [RemoteChangedFile],
+        commits: [RemoteCommit], truncated: Bool, commitsTruncated: Bool = false)
     case changeListFailed(sessionId: String, reason: RemoteFileAccessReason, message: String?)
     case fileDiffResult(
-        sessionId: String, path: String, hunks: [RemoteDiffHunk], truncated: Bool,
+        sessionId: String, path: String, stage: String? = nil, hunks: [RemoteDiffHunk], truncated: Bool,
         metadataNote: String? = nil)
-    case fileDiffFailed(sessionId: String, path: String, reason: RemoteFileAccessReason, message: String?)
+    case fileDiffFailed(sessionId: String, path: String, stage: String? = nil, reason: RemoteFileAccessReason, message: String?)
     case fileTree(sessionId: String, path: String?, nodes: [RemoteFileNode], truncated: Bool)
     case fileTreeFailed(sessionId: String, path: String?, reason: RemoteFileAccessReason, message: String?)
     case fileContents(sessionId: String, path: String, text: String, truncated: Bool)
@@ -404,8 +407,8 @@ extension RemoteServerMessage: Codable {
         case models, modes, currentModel, currentMode, autoRunEnabled, acceptsImages, title
         case firstIndex, totalCount, epoch, revision
         case items, steerUndoAvailable, itemId, text
-        case path, files, comparisonRef, metricsAvailable, truncated, hunks, nodes, reason, byteSize
-        case metadataNote
+        case path, files, staged, unstaged, commits, comparisonRef, metricsAvailable, truncated, hunks, nodes, reason, byteSize
+        case metadataNote, commitsTruncated
     }
 
     init(from decoder: Decoder) throws {
@@ -522,7 +525,11 @@ extension RemoteServerMessage: Codable {
                 comparisonRef: try c.decodeIfPresent(String.self, forKey: .comparisonRef),
                 metricsAvailable: try c.decode(Bool.self, forKey: .metricsAvailable),
                 files: try c.decode([RemoteChangedFile].self, forKey: .files),
-                truncated: try c.decodeIfPresent(Bool.self, forKey: .truncated) ?? false)
+                staged: try c.decodeIfPresent([RemoteChangedFile].self, forKey: .staged) ?? [],
+                unstaged: try c.decodeIfPresent([RemoteChangedFile].self, forKey: .unstaged) ?? [],
+                commits: try c.decodeIfPresent([RemoteCommit].self, forKey: .commits) ?? [],
+                truncated: try c.decodeIfPresent(Bool.self, forKey: .truncated) ?? false,
+                commitsTruncated: try c.decodeIfPresent(Bool.self, forKey: .commitsTruncated) ?? false)
         case "changeListFailed":
             self = .changeListFailed(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
@@ -532,6 +539,7 @@ extension RemoteServerMessage: Codable {
             self = .fileDiffResult(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
                 path: try c.decode(String.self, forKey: .path),
+                stage: try c.decodeIfPresent(String.self, forKey: .stage),
                 hunks: try c.decode([RemoteDiffHunk].self, forKey: .hunks),
                 truncated: try c.decodeIfPresent(Bool.self, forKey: .truncated) ?? false,
                 metadataNote: try c.decodeIfPresent(String.self, forKey: .metadataNote))
@@ -539,6 +547,7 @@ extension RemoteServerMessage: Codable {
             self = .fileDiffFailed(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
                 path: try c.decode(String.self, forKey: .path),
+                stage: try c.decodeIfPresent(String.self, forKey: .stage),
                 reason: try c.decode(RemoteFileAccessReason.self, forKey: .reason),
                 message: try c.decodeIfPresent(String.self, forKey: .message))
         case "fileTree":
@@ -688,29 +697,35 @@ extension RemoteServerMessage: Codable {
             try c.encode(text, forKey: .text)
         case .error(let m): try c.encode("error", forKey: .type)
         try c.encode(m, forKey: .message)
-        case .changeList(let s, let ref, let available, let files, let truncated):
+        case .changeList(let s, let ref, let available, let files, let staged, let unstaged, let commits, let truncated, let commitsTruncated):
             try c.encode("changeList", forKey: .type)
             try c.encode(s, forKey: .sessionId)
             try c.encodeIfPresent(ref, forKey: .comparisonRef)
             try c.encode(available, forKey: .metricsAvailable)
             try c.encode(files, forKey: .files)
+            try c.encode(staged, forKey: .staged)
+            try c.encode(unstaged, forKey: .unstaged)
+            try c.encode(commits, forKey: .commits)
             try c.encode(truncated, forKey: .truncated)
+            try c.encode(commitsTruncated, forKey: .commitsTruncated)
         case .changeListFailed(let s, let reason, let message):
             try c.encode("changeListFailed", forKey: .type)
             try c.encode(s, forKey: .sessionId)
             try c.encode(reason.rawValue, forKey: .reason)
             try c.encodeIfPresent(message, forKey: .message)
-        case .fileDiffResult(let s, let path, let hunks, let truncated, let metadataNote):
+        case .fileDiffResult(let s, let path, let stage, let hunks, let truncated, let metadataNote):
             try c.encode("fileDiffResult", forKey: .type)
             try c.encode(s, forKey: .sessionId)
             try c.encode(path, forKey: .path)
+            try c.encodeIfPresent(stage, forKey: .stage)
             try c.encode(hunks, forKey: .hunks)
             try c.encode(truncated, forKey: .truncated)
             try c.encodeIfPresent(metadataNote, forKey: .metadataNote)
-        case .fileDiffFailed(let s, let path, let reason, let message):
+        case .fileDiffFailed(let s, let path, let stage, let reason, let message):
             try c.encode("fileDiffFailed", forKey: .type)
             try c.encode(s, forKey: .sessionId)
             try c.encode(path, forKey: .path)
+            try c.encodeIfPresent(stage, forKey: .stage)
             try c.encode(reason.rawValue, forKey: .reason)
             try c.encodeIfPresent(message, forKey: .message)
         case .fileTree(let s, let path, let nodes, let truncated):

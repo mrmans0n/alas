@@ -36,7 +36,42 @@ const view = globalThis.RemoteChangesView;
 }
 
 {
+  const summary = view.formatSummary({
+    comparisonRef: null,
+    files: [{ path: "mixed.txt", add: 2, del: 0 }],
+    staged: [{ path: "mixed.txt", add: 1, del: 0 }],
+    unstaged: [{ path: "mixed.txt", add: 1, del: 0 }]
+  });
+  assert.equal(summary, "1 file · +2 −0");
+}
+
+{
   assert.equal(view.formatFileCounts({ add: 12, del: 3 }), "+12 −3");
+}
+
+{
+  const sections = view.changeSections({
+    files: [{ path: "committed.swift", add: 8, del: 2 }],
+    staged: [{ path: "staged.swift", add: 3, del: 1 }],
+    unstaged: [{ path: "unstaged.swift", add: 2, del: 0 }],
+    commits: [{ shortSha: "abc1234", subject: "Add remote changes", author: "Nacho", add: 8, del: 2 }]
+  });
+  assert.deepEqual(sections.map((section) => section.title), ["Branch Changes", "Working Tree", "Staged", "Unstaged", "Commits"]);
+  assert.equal(sections[0].files[0].path, "committed.swift");
+  assert.equal(sections[2].stage, "staged");
+  assert.equal(sections[2].files[0].path, "staged.swift");
+  assert.equal(sections[4].commits[0].shortSha, "abc1234");
+}
+
+{
+  const sections = view.changeSections({
+    files: [{ path: "base-relative.swift", add: 1, del: 1 }],
+    staged: [],
+    unstaged: [],
+    commits: []
+  });
+  assert.deepEqual(sections.map((section) => section.title), ["Branch Changes"]);
+  assert.equal(sections[0].files[0].path, "base-relative.swift");
 }
 
 {

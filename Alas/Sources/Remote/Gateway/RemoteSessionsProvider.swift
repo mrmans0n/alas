@@ -57,7 +57,7 @@ protocol RemoteSessionsProvider: AnyObject {
     /// four resolve the session's worktree first and are ungated by the writer
     /// lease: seeing a session is enough to read its code.
     func remoteChangeList(sessionId: String) async -> RemoteChangeListResult
-    func remoteFileDiff(sessionId: String, path: String) async -> RemoteFileDiffResult
+    func remoteFileDiff(sessionId: String, path: String, stage: String?) async -> RemoteFileDiffResult
     func remoteFileTree(sessionId: String, path: String?) async -> RemoteFileTreeResult
     func remoteFileContents(sessionId: String, path: String) async -> RemoteFileContentsResult
 }

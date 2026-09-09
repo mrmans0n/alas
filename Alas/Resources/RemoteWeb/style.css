@@ -88,7 +88,7 @@ h1 { font-size: 22px; font-weight: 700; margin: 12px 4px 10px; }
 .session-row-minimal .session-head { flex: 1; }
 .session-row-active.session-row-minimal { background: color-mix(in oklab, var(--accent) 8%, transparent); }
 .session-row-minimal:has(.session-open:active) { background: var(--bg-2); }
-#back { background: none; border: none; color: var(--accent); font-size: 15px; padding: 4px 2px; margin: -4px 0; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+#back { flex: 0 0 auto; width: 28px; height: 28px; background: none; border: none; color: var(--accent); font-size: 27px; line-height: 1; padding: 0; margin: 0; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .rename-btn { flex: 0 0 auto; width: 30px; height: 30px; border: none; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: color-mix(in oklab, var(--bg-3) 64%, transparent); color: var(--fg-muted); font-size: 15px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .rename-btn:active { background: var(--bg-4); color: var(--fg); }
 #detail-rename { margin-left: -4px; }
@@ -296,12 +296,13 @@ button.create-row.is-selected { border-color: var(--accent); background: color-m
 .steer-undo { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 12px; border: 0.5px solid var(--line); border-radius: 10px; background: color-mix(in oklab, var(--bg-2) 80%, transparent); color: var(--fg-muted); font-size: 12px; }
 .steer-undo-btn { border: none; background: none; color: var(--accent); font: inherit; font-size: 12px; font-weight: 650; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 
-.tabs { display: flex; gap: 2px; }
+.tabs { display: flex; gap: 2px; padding: 3px; border: 0.5px solid var(--line); border-radius: 9px; background: color-mix(in oklab, var(--bg-2) 84%, transparent); }
 .tab {
-  background: none; border: none; padding: 6px 10px;
-  font: inherit; color: var(--fg-muted); border-radius: 6px;
+  display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 28px;
+  background: none; border: none; padding: 0; color: var(--fg-muted); border-radius: 6px;
 }
-.tab.is-active { color: var(--fg); background: color-mix(in oklab, var(--bg-3) 70%, transparent); }
+.tab svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.tab.is-active { color: var(--fg); background: var(--bg-1); box-shadow: 0 1px 2px color-mix(in oklab, black 35%, transparent); }
 
 #changes-header {
   display: flex; align-items: center; justify-content: space-between;
@@ -313,11 +314,29 @@ button.create-row.is-selected { border-color: var(--accent); background: color-m
   padding: 10px 12px; background: none; border: none;
   border-bottom: 0.5px solid var(--line-soft); text-align: left; font: inherit; color: var(--fg);
 }
+.changes-section-title { margin: 14px 12px 4px; color: var(--fg-muted); font-size: 11px; font-weight: 700; letter-spacing: 0.45px; text-transform: uppercase; }
+.changes-section-title:first-child { margin-top: 4px; }
 .change-dir { color: var(--fg-faint); }
 .change-name { font-weight: 600; }
-.change-counts { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--fg-muted); }
+.change-counts { margin-left: auto; display: inline-flex; gap: 7px; font-variant-numeric: tabular-nums; }
+.count-add { color: var(--add); }
+.count-del { color: var(--del); }
 .change-conflict { color: var(--del); }
 .change-status { color: var(--fg-faint); font-variant-numeric: tabular-nums; }
+.commit-row { display: flex; align-items: baseline; gap: 8px; padding: 10px 12px; border-bottom: 0.5px solid var(--line-soft); }
+.commit-sha { color: var(--accent); font-size: 11px; }
+.commit-subject { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; }
+.commit-author { color: var(--fg-faint); font-size: 11px; white-space: nowrap; }
+.file-row { align-items: center; }
+.file-icon { width: 16px; height: 16px; flex: 0 0 16px; color: var(--fg-dim); }
+.file-icon::before { display: block; font-size: 15px; line-height: 16px; text-align: center; }
+.file-icon.folder::before { content: "▸"; color: var(--accent); }
+.file-icon.folder.expanded::before { content: "▾"; }
+.file-icon.document::before { content: "•"; }
+.file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-badge { margin-left: auto; font-size: 11px; font-variant-numeric: tabular-nums; color: var(--fg-faint); }
+.file-badge.status-A { color: var(--add); }
+.file-badge.status-D, .file-badge.status-U { color: var(--del); }
 
 #diff-rows, #file-view-body {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -336,4 +355,8 @@ button.create-row.is-selected { border-color: var(--accent); background: color-m
 .placeholder-card {
   margin: 16px 12px; padding: 12px; border: 0.5px solid var(--line);
   border-radius: 10px; color: var(--fg-muted);
+}
+@media (max-width: 520px) {
+  #detail-title { display: none; }
+  #detail-tabs { margin-right: auto; }
 }

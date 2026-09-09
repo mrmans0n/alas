@@ -54,7 +54,7 @@ const worktreeCreation = RemoteWorktreeCreation.createFlow(send);
 worktreeCreation.subscribe(() => renderCreateSheet());
 const changesTree = RemoteFileBrowser.createTree();
 let activeTab = "chat";
-let changesState = { comparisonRef: null, metricsAvailable: true, files: [], truncated: false, loaded: false };
+let changesState = { comparisonRef: null, metricsAvailable: true, files: [], staged: [], unstaged: [], commits: [], truncated: false, loaded: false };
 // Paths (root as "") of directory listings the server reported as truncated
 // (more immediate children than RemoteWorktreeFileAccess.maxFileTreeNodes).
 // `visibleRows()` shows the whole expanded tree at once, so a single notice
@@ -322,6 +322,9 @@ function handle(msg) {
         comparisonRef: msg.comparisonRef || null,
         metricsAvailable: msg.metricsAvailable !== false,
         files: msg.files || [],
+        staged: msg.staged || [],
+        unstaged: msg.unstaged || [],
+        commits: msg.commits || [], commitsTruncated: !!msg.commitsTruncated,
         truncated: !!msg.truncated,
         loaded: true
       };
@@ -334,11 +337,11 @@ function handle(msg) {
       break;
     case "fileDiffResult":
       if (msg.sessionId !== currentSession) break;
-      renderDiff(msg.path, msg.hunks || [], !!msg.truncated, msg.metadataNote || null);
+      renderDiff(msg.path, msg.stage || null, msg.hunks || [], !!msg.truncated, msg.metadataNote || null);
       break;
     case "fileDiffFailed":
       if (msg.sessionId !== currentSession) break;
-      if ($("diff-path").textContent === msg.path) {
+      if (isActiveDiff(msg.path, msg.stage || null)) {
         $("diff-rows").innerHTML = "";
         $("diff-rows").append(el("p", "placeholder-card", fileAccessMessage(msg.reason, null)));
       }
@@ -518,7 +521,7 @@ function openSession(id) {
   queueItems = []; steerUndoAvailable = false; renderQueue();
   renderDriveBar("idle"); send({ type: "subscribe", sessionId: id });
   changesTree.reset();
-  changesState = { comparisonRef: null, metricsAvailable: true, files: [], truncated: false, loaded: false };
+  changesState = { comparisonRef: null, metricsAvailable: true, files: [], staged: [], unstaged: [], commits: [], truncated: false, loaded: false };
   fileTreeTruncatedPaths = new Set();
   detailStack = [];
   resetChangesAndFilesDOM();
@@ -547,6 +550,7 @@ function showTab(name) {
   showTabListLevel();
   for (const [id, tab] of [["tab-chat", "chat"], ["tab-changes", "changes"], ["tab-files", "files"]]) {
     $(id).classList.toggle("is-active", tab === name);
+    $(id).setAttribute("aria-selected", String(tab === name));
   }
   $("transcript").classList.toggle("hidden", name !== "chat");
   $("changes").classList.toggle("hidden", name !== "changes");
@@ -606,37 +610,52 @@ function renderChanges() {
     return;
   }
 
-  if (changesState.loaded && changesState.files.length === 0) {
+  const sections = RemoteChangesView.changeSections(changesState);
+  if (changesState.loaded && sections.length === 0) {
     list.append(el("p", "placeholder-card", "No changes yet."));
     return;
   }
 
-  for (const file of RemoteChangesView.sortFiles(changesState.files)) {
-    const parts = RemoteChangesView.splitPath(file.path);
-    const row = document.createElement("button");
-    row.type = "button";
-    row.className = "change-row";
-    row.onclick = () => openDiff(file.path);
-
-    row.append(el("span", "change-dir", parts.dir), el("span", "change-name", parts.name));
-    if (file.conflict) row.append(el("span", "change-conflict", "conflict"));
-    row.append(el("span", "change-status", file.status));
-    row.append(el("span", "change-counts", RemoteChangesView.formatFileCounts(file)));
-    list.appendChild(row);
+  for (const section of sections) {
+    list.append(el("h2", "changes-section-title", section.title));
+    for (const file of section.files || []) {
+      const parts = RemoteChangesView.splitPath(file.path);
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "change-row";
+      row.onclick = () => openDiff(file.path, section.stage || null);
+      row.append(el("span", "change-dir", parts.dir), el("span", "change-name", parts.name));
+      if (file.conflict) row.append(el("span", "change-conflict", "conflict"));
+      row.append(el("span", "change-status", file.status));
+      const counts = el("span", "change-counts");
+      counts.append(el("span", "count-add", "+" + (file.add || 0)), el("span", "count-del", "−" + (file.del || 0)));
+      row.append(counts);
+      list.appendChild(row);
+    }
+    for (const commit of section.commits || []) {
+      const row = document.createElement("div");
+      row.className = "commit-row";
+      row.append(el("code", "commit-sha", commit.shortSha), el("span", "commit-subject", commit.subject), el("span", "commit-author", commit.author));
+      const counts = el("span", "change-counts");
+      counts.append(el("span", "count-add", "+" + (commit.add || 0)), el("span", "count-del", "−" + (commit.del || 0)));
+      row.append(counts);
+      list.appendChild(row);
+    }
   }
 
   const notice = RemoteChangesView.truncationNotice(changesState.truncated, "files");
   if (notice) list.append(el("p", "placeholder-card", notice));
+  if (changesState.commitsTruncated) list.append(el("p", "placeholder-card", "Commit list truncated — showing the first 100 commits."));
 }
 
-function openDiff(path) {
-  detailStack.push({ tab: "changes", path });
+function openDiff(path, stage = null) {
+  detailStack.push({ tab: "changes", path, stage });
   $("changes-list").classList.add("hidden");
   $("changes-header").classList.add("hidden");
   $("diff-view").classList.remove("hidden");
   $("diff-path").textContent = path;
   $("diff-rows").innerHTML = "";
-  send({ type: "fileDiff", sessionId: currentSession, path });
+  send({ type: "fileDiff", sessionId: currentSession, path, stage });
 }
 
 function closeDetailLevel() {
@@ -665,7 +684,7 @@ function replayActiveDetailRequest() {
   if (top.tab === "files") {
     send({ type: "readFile", sessionId: currentSession, path: top.path });
   } else if (top.tab === "changes") {
-    send({ type: "fileDiff", sessionId: currentSession, path: top.path });
+    send({ type: "fileDiff", sessionId: currentSession, path: top.path, stage: top.stage || null });
   }
 }
 
@@ -695,8 +714,13 @@ function replayActiveListRequest() {
   }
 }
 
-function renderDiff(path, hunks, truncated, metadataNote) {
-  if ($("diff-path").textContent !== path) return;   // a newer file is open
+function isActiveDiff(path, stage) {
+  const top = detailStack[detailStack.length - 1];
+  return top && top.tab === "changes" && top.path === path && top.stage === stage;
+}
+
+function renderDiff(path, stage, hunks, truncated, metadataNote) {
+  if (!isActiveDiff(path, stage)) return;
   const container = $("diff-rows");
   container.innerHTML = "";
   const metadataNotice = RemoteChangesView.metadataOnlyNotice(hunks, metadataNote);
@@ -733,12 +757,12 @@ function renderFileTree() {
     button.style.paddingLeft = 12 + row.depth * 14 + "px";
 
     const isSubmodule = row.node.kind === "dir" && row.node.isSubmodule === true;
-    const label = row.node.kind === "dir"
-      ? (isSubmodule ? "◇ " : (row.expanded ? "▾ " : "▸ ")) + row.node.name
-      : row.node.name;
-    button.append(el("span", "", label));
-    if (isSubmodule) button.append(el("span", "change-counts", "submodule"));
-    else if (row.node.badge) button.append(el("span", "change-counts", row.node.badge));
+    const iconClass = row.node.kind === "dir"
+      ? "file-icon folder" + (row.expanded ? " expanded" : "")
+      : "file-icon document";
+    button.append(el("span", iconClass), el("span", "file-name", row.node.name));
+    if (isSubmodule) button.append(el("span", "file-badge", "submodule"));
+    else if (row.node.badge) button.append(el("span", "file-badge status-" + row.node.badge, row.node.badge));
 
     button.onclick = () => {
       if (row.node.kind === "dir") {
