@@ -507,6 +507,10 @@ struct ChangesTabViewTests {
             stack: "feat",
             base: "main",
             target: "stack",
+            confirmedScope: .init(
+                projectId: "project", worktreeId: "worktree", stack: "feat",
+                base: "main", target: "stack", rows: []
+            ),
             startedAt: Date(timeIntervalSince1970: 0),
             rows: [
                 GGLandingRow(position: 1, title: "First", ggId: nil, prNumber: 41),

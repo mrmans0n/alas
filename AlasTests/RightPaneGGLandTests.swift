@@ -27,7 +27,7 @@ private final class LiveLandGGRunner: GGCommandRunning, @unchecked Sendable {
     private var recordedCalls: [[String]] = []
     private var cancellations = 0
     private var targetExists = true
-    private var stackOutput = Self.stackJSON
+    private var stackOutput = LiveLandGGRunner.stackJSON
     private var nextPreflight: LandPreflightSuspension?
     private var continuations: [AsyncThrowingStream<String, Error>.Continuation] = []
     var calls: [[String]] { lock.withLock { recordedCalls } }
@@ -42,7 +42,7 @@ private final class LiveLandGGRunner: GGCommandRunning, @unchecked Sendable {
     func run(args: [String], cwd: URL?) async throws -> ProcessResult {
         let (hasTarget, stackOutput) = lock.withLock {
             recordedCalls.append(args)
-            return (targetExists, stackOutput)
+            return (targetExists, self.stackOutput)
         }
         if args.first == "ls" {
             let preflight = lock.withLock {
@@ -63,15 +63,7 @@ private final class LiveLandGGRunner: GGCommandRunning, @unchecked Sendable {
     }
 
     func runStreaming(args: [String], cwd: URL?, timeout: TimeInterval?) -> AsyncThrowingStream<String, Error> {
-        lock.withLock { recordedCalls.append(args) }
-        return AsyncThrowingStream { continuation in
-            lock.withLock { continuations.append(continuation) }
-            continuation.onTermination = { [weak self] _ in
-                guard let self else { return }
-                self.lock.withLock { self.cancellations += 1 }
-            }
-            continuation.yield(#"{"version":1,"command":"land","status":"ok","event":"start","stack":"feat","base":"main","total_entries":1}"#)
-        }
+        runStreaming(args: args, cwd: cwd, timeout: timeout, interruption: nil)
     }
 
     func runStreaming(
@@ -87,8 +79,11 @@ private final class LiveLandGGRunner: GGCommandRunning, @unchecked Sendable {
                 guard let self else { return }
                 self.lock.withLock { self.cancellations += 1 }
             }
-            interruption?.install { continuation.finish(throwing: CancellationError()) }
             continuation.yield(#"{"version":1,"command":"land","status":"ok","event":"start","stack":"feat","base":"main","total_entries":1}"#)
+            interruption?.install {
+                continuation.yield(#"{"version":1,"command":"land","status":"ok","event":"entry","position":1,"pr_number":5,"action":"merged"}"#)
+                continuation.finish(throwing: CancellationError())
+            }
         }
     }
 
@@ -213,6 +208,7 @@ struct RightPaneGGLandTests {
         await store.waitForOperation(projectId: "live-project")
         #expect(runner.cancellationCount == 1)
         #expect(store.sessions["live-project"]?.phase == .cancelled)
+        #expect(store.sessions["live-project"]?.rows.first?.outcome?.action == "merged")
         #expect(state.ggActionState.lastError == nil)
     }
 
@@ -331,20 +327,64 @@ struct RightPaneGGLandTests {
         #expect(store.sessions["live-project"]?.error != nil)
     }
 
-    @Test func restartRejectsChangedScopeWithStableTarget() async throws {
+    @Test func restartSkipsMissingEntriesAndKeepsOriginalScope() async throws {
         let store = GGLandingStore()
         let runner = LiveLandGGRunner()
         let state = landingState(store: store, runner: runner, supported: true)
-        state.requestGGLand(.ready)
-        try await waitForLand { state.pendingGGLand != nil }
-        state.performGGLand(appState: AppState(store: MemoryStore()))
-        try await waitForLand { runner.calls.contains { $0.first == "land" } }
-        await store.cancelAllAndWait()
+        store.begin(.init(
+            projectId: "live-project", worktreeId: "live-wt", stack: "feat", base: "main",
+            target: "change-1", rows: [
+                .init(position: 1, title: "Lower", ggId: "lower", prNumber: 4),
+                .init(position: 2, title: "Target", ggId: "change-1", prNumber: 5),
+            ]
+        ))
+        store.receive(.entry(.init(position: 1, prNumber: 4, action: "merged")), projectId: "live-project")
+        store.fail(projectId: "live-project", message: "Previous attempt failed")
 
-        runner.replaceStack(with: LiveLandGGRunner.stackJSON.replacingOccurrences(of: "\"base\":\"main\"", with: "\"base\":\"release\""))
-        state.restartGGLand(target: "change-1")
-        try await waitForLand { store.sessions["live-project"]?.phase == .failed }
-        #expect(runner.calls.filter { $0.first == "land" }.count == 1)
+        for attempt in 1...2 {
+            state.restartGGLand(target: "change-1")
+            try await waitForLand { runner.calls.filter { $0.first == "land" }.count == attempt }
+            #expect(store.sessions["live-project"]?.rows.count == 1)
+            #expect(store.sessions["live-project"]?.rows.first?.position == 1)
+            #expect(store.sessions["live-project"]?.confirmedScope.rows.map(\.ggId) == ["lower", "change-1"])
+            await store.cancelAllAndWait()
+            #expect(store.sessions["live-project"]?.phase == .cancelled)
+            #expect(store.sessions["live-project"]?.rows.first?.outcome?.action == "merged")
+        }
+    }
+
+    @Test(arguments: ["base", "lower", "above-target"])
+    func repeatedRestartRejectsChangedScopeWithStableTarget(change: String) async throws {
+        let store = GGLandingStore()
+        let runner = LiveLandGGRunner()
+        let state = landingState(store: store, runner: runner, supported: true)
+        store.begin(.init(
+            projectId: "live-project", worktreeId: "live-wt", stack: "feat", base: "main",
+            target: "change-1", rows: [
+                .init(position: 1, title: "Lower", ggId: "lower", prNumber: 4),
+                .init(position: 2, title: "Target", ggId: "change-1", prNumber: 5),
+            ]
+        ))
+        store.fail(projectId: "live-project", message: "Previous attempt failed")
+        let base = change == "base" ? "release" : "main"
+        let lowerID = change == "lower" ? "replacement" : "lower"
+        let lowerPosition = change == "above-target" ? 3 : 1
+        let output = #"{"version":1,"stack":{"name":"feat","base":"\#(base)","total_commits":2,"synced_commits":2,"entries":[{"position":\#(lowerPosition),"sha":"l","title":"Lower","gg_id":"\#(lowerID)","pr_number":4,"pr_state":"open","approved":true},{"position":2,"sha":"s","title":"Target","gg_id":"change-1","pr_number":5,"pr_state":"open","approved":true}]}}"#
+        runner.replaceStack(with: output)
+        state.ggStack = try GGStackSnapshot.decode(fromJSON: Data(output.utf8)).stack
+
+        for _ in 0..<2 {
+            let previousID = store.sessions["live-project"]?.id
+            state.restartGGLand(target: "change-1")
+            try await waitForLand { store.sessions["live-project"]?.id != previousID }
+            try await waitForLand {
+                store.sessions["live-project"]?.phase == .failed || runner.calls.contains { $0.first == "land" }
+            }
+            #expect(store.sessions["live-project"]?.phase == .failed)
+            #expect(!runner.calls.contains { $0.first == "land" })
+            #expect(store.sessions["live-project"]?.base == "main")
+            await store.cancelAllAndWait()
+        }
     }
 
     private func entry(id: String, prState: GGPRState, approved: Bool, ci: GGCIStatus?) -> GGStackEntry {

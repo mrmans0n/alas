@@ -9,7 +9,7 @@ struct GGLandingRow: Equatable, Identifiable, Sendable {
     let position: Int
     let title: String
     let ggId: String?
-    let stableID: String? = nil
+    var stableID: String? = nil
     let prNumber: Int?
     var wait: GGLandWait? = nil
     var outcome: GGLandedEntry? = nil
@@ -18,7 +18,7 @@ struct GGLandingRow: Equatable, Identifiable, Sendable {
 }
 
 struct GGLandingSession: Equatable, Identifiable, Sendable {
-    struct Seed: Sendable {
+    struct Seed: Equatable, Sendable {
         let projectId: String
         let worktreeId: String
         let stack: String
@@ -33,6 +33,7 @@ struct GGLandingSession: Equatable, Identifiable, Sendable {
     let stack: String
     let base: String
     let target: String
+    let confirmedScope: Seed
     let startedAt: Date
     var rows: [GGLandingRow]
     var phase: GGLandingPhase
@@ -75,6 +76,7 @@ final class GGLandingStore {
             stack: seed.stack,
             base: seed.base,
             target: seed.target,
+            confirmedScope: seed,
             startedAt: now,
             rows: seed.rows,
             phase: .running,
@@ -84,6 +86,11 @@ final class GGLandingStore {
             error: nil
         )
         return true
+    }
+
+    func updatePendingRows(_ rows: [GGLandingRow], projectId: String) {
+        guard sessions[projectId]?.phase == .running else { return }
+        sessions[projectId]?.rows = rows
     }
 
     func receive(_ event: GGLandEvent, projectId: String) {

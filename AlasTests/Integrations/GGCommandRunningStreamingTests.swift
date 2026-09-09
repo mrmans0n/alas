@@ -147,7 +147,7 @@ struct GGCommandRunningStreamingTests {
             range: wrapperIdentity.upperBound ..< serviceSource.endIndex
         ))
         let release = try #require(serviceSource.range(of: "launchGate.fileHandleForWriting.write", range: start.upperBound ..< serviceSource.endIndex))
-        let cleanup = try #require(serviceSource.range(of: "continuation.onTermination ="))
+        let cleanup = try #require(serviceSource.range(of: "continuation.onTermination =", range: start.upperBound ..< serviceSource.endIndex))
         #expect(run.lowerBound < identity.lowerBound)
         #expect(closeWriter.lowerBound < launchedPID.lowerBound)
         #expect(launchedPID.lowerBound < identity.lowerBound)
@@ -245,7 +245,7 @@ struct GGCommandRunningStreamingTests {
         let interruption = GGStreamingCancellation()
         let stream = ProcessGGCommandRunner.streamProcess(
             executable: "/bin/sh",
-            args: ["-c", "trap 'printf terminal\\n; exit 130' INT; printf ready > \"$1\"; printf ready\\n; while :; do sleep 1; done", "alas", ready.path],
+            args: ["-c", #"trap 'printf "%s\n" terminal; exit 130' INT; printf ready > "$1"; printf '%s\n' ready; while :; do sleep 1; done"#, "alas", ready.path],
             cwd: nil,
             env: nil,
             timeout: nil,

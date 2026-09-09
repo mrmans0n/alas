@@ -14,6 +14,12 @@ protocol GGCommandRunning: Sendable {
         cwd: URL?,
         timeout: TimeInterval?
     ) -> AsyncThrowingStream<String, Error>
+    func runStreaming(
+        args: [String],
+        cwd: URL?,
+        timeout: TimeInterval?,
+        interruption: GGStreamingCancellation?
+    ) -> AsyncThrowingStream<String, Error>
 }
 
 extension GGCommandRunning {
@@ -23,7 +29,20 @@ extension GGCommandRunning {
         timeout: TimeInterval?,
         interruption: GGStreamingCancellation?
     ) -> AsyncThrowingStream<String, Error> {
-        runStreaming(args: args, cwd: cwd, timeout: timeout)
+        AsyncThrowingStream { continuation in
+            let consumer = Task {
+                do {
+                    for try await line in runStreaming(args: args, cwd: cwd, timeout: timeout) {
+                        continuation.yield(line)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            interruption?.install { consumer.cancel() }
+            continuation.onTermination = { _ in consumer.cancel() }
+        }
     }
 
     func runStreaming(
@@ -248,7 +267,9 @@ struct ProcessGGCommandRunner: GGCommandRunning {
                     rootIdentity: rootIdentity,
                     wrapperIdentity: wrapperIdentity
                 )
-                interruption?.install { processTree.interruptAndWait() }
+                interruption?.install {
+                    Task.detached { processTree.interruptAndWait() }
+                }
                 let watchdog = timeout.map { timeout in
                     Task {
                         try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
@@ -709,7 +730,7 @@ struct GGService {
                 producer.cancel()
             }
         }
-        return GGLandStream(events: events, cancel: interruption.cancel)
+        return GGLandStream(events: events, cancel: { interruption.cancel() })
     }
 
     func clean(worktreePath: String) async throws {

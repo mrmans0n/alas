@@ -59,7 +59,8 @@ private final class CancellableLandGGRunner: GGCommandRunning, @unchecked Sendab
     func runStreaming(
         args: [String],
         cwd: URL?,
-        timeout: TimeInterval?
+        timeout: TimeInterval?,
+        interruption: GGStreamingCancellation?
     ) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             self.lock.lock()
@@ -70,6 +71,10 @@ private final class CancellableLandGGRunner: GGCommandRunning, @unchecked Sendab
                 self?.lock.lock()
                 self?.cancelled = true
                 self?.lock.unlock()
+            }
+            interruption?.install {
+                continuation.yield(#"{"version":1,"command":"land","status":"ok","event":"entry","position":1,"pr_number":5,"action":"merged"}"#)
+                continuation.finish(throwing: CancellationError())
             }
         }
     }
@@ -204,6 +209,28 @@ struct GGServiceActionsTests {
         task.cancel()
         _ = try? await task.value
         #expect(await runner.cancellationObserved())
+    }
+
+    @Test func landJSONLInterruptDrainsTerminalEntryThroughRunnerExistential() async {
+        let stream = GGService(runner: CancellableLandGGRunner())
+            .landStream(worktreePath: "/tmp/wt", until: "c-abc")
+        let consumer = Task {
+            var entries: [GGLandedEntry] = []
+            do {
+                for try await event in stream.events {
+                    if case .start = event { stream.cancel() }
+                    if case .entry(let entry) = event { entries.append(entry) }
+                }
+            } catch {}
+            return entries
+        }
+        let watchdog = Task {
+            try? await Task.sleep(for: .seconds(5))
+            if !Task.isCancelled { consumer.cancel() }
+        }
+        let entries = await consumer.value
+        watchdog.cancel()
+        #expect(entries == [.init(position: 1, prNumber: 5, action: "merged")])
     }
 
     @Test func syncStreamsParsedEventsFromDefaultRunner() async throws {
@@ -454,7 +481,9 @@ struct GGServiceActionsTests {
             worktreePath: "/repo",
             clientOperationID: "alas:1234",
             supportsSyncJSONL: false,
-            onSyncEvent: { _ in }
+            supportsLandJSONL: false,
+            onSyncEvent: { _ in },
+            onLandEvent: { _ in }
         )
 
         #expect(runner.calls == [["--client-operation-id", "alas:1234", "sc", "--staged-only"]])
@@ -470,7 +499,9 @@ struct GGServiceActionsTests {
             worktreePath: "/repo",
             clientOperationID: nil,
             supportsSyncJSONL: false,
-            onSyncEvent: { _ in }
+            supportsLandJSONL: false,
+            onSyncEvent: { _ in },
+            onLandEvent: { _ in }
         )
 
         #expect(runner.calls == [["sc", "--staged-only"]])

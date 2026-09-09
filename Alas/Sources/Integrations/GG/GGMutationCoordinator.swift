@@ -36,7 +36,7 @@ protocol GGMutationExecuting {
         supportsSyncJSONL: Bool,
         supportsLandJSONL: Bool,
         onSyncEvent: (GGSyncEvent) -> Void,
-        onLandEvent: (GGLandEvent) -> Void
+        onLandEvent: @escaping (GGLandEvent) -> Void
     ) async throws -> GGMutationExecutionResult
     func listUndoOperations(worktreePath: String, limit: Int) async throws -> [GGOperationSummary]
     func previewRestack(worktreePath: String) async throws -> GGRestackResult
@@ -819,7 +819,7 @@ extension GGService: GGMutationExecuting {
         supportsSyncJSONL: Bool,
         supportsLandJSONL: Bool,
         onSyncEvent: (GGSyncEvent) -> Void,
-        onLandEvent: (GGLandEvent) -> Void
+        onLandEvent: @escaping (GGLandEvent) -> Void
     ) async throws -> GGMutationExecutionResult {
         let service = clientOperationID.map {
             GGService(runner: GGClientOperationRunner(base: runner, clientOperationID: $0))

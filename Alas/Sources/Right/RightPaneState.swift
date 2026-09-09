@@ -1883,14 +1883,7 @@ final class RightPaneState: GGSplitCommitServicing {
             await ggLandingStore.waitForOperation(projectId: projectId)
             guard !Task.isCancelled else { return }
             guard ggLandingStore.sessions[projectId]?.id == session.id else { return }
-            let seed = ggLandingSeed(target: target) ?? GGLandingSession.Seed(
-                projectId: projectId, worktreeId: worktree.id,
-                stack: session.stack, base: session.base, target: target,
-                rows: session.rows.map {
-                    GGLandingRow(position: $0.position, title: $0.title, ggId: $0.ggId, prNumber: $0.prNumber)
-                }
-            )
-            guard ggLandingStore.begin(seed) else { return }
+            guard ggLandingStore.begin(session.confirmedScope) else { return }
             let sessionId = ggLandingStore.sessions[projectId]?.id
             do {
                 guard ggCapabilities().landJSONL else {
@@ -1899,9 +1892,11 @@ final class RightPaneState: GGSplitCommitServicing {
                 let prepared = try await ggMutationCoordinator.prepare(.land(target: target))
                 try Task.checkCancellation()
                 guard let stack = prepared.stack,
-                      Self.ggLandingScopeMatches(session, target: target, stack: stack)
+                      Self.ggLandingScopeMatches(session.confirmedScope, target: target, stack: stack),
+                      let seed = ggLandingSeed(target: target, stack: stack)
                 else { throw GGMutationError.staleConfirmation }
                 guard ggLandingStore.sessions[projectId]?.id == sessionId else { return }
+                ggLandingStore.updatePendingRows(seed.rows, projectId: projectId)
                 startGGLanding(prepared)
             } catch {
                 guard ggLandingStore.sessions[projectId]?.id == sessionId else { return }
@@ -1910,8 +1905,8 @@ final class RightPaneState: GGSplitCommitServicing {
         }
     }
 
-    private func ggLandingSeed(target: String) -> GGLandingSession.Seed? {
-        guard let stack = ggStack,
+    private func ggLandingSeed(target: String, stack: GGStack? = nil) -> GGLandingSession.Seed? {
+        guard let stack = stack ?? ggStack,
               let entry = stack.entries.first(where: { $0.id == target || $0.sha == target })
         else { return nil }
         return GGLandingSession.Seed(
@@ -1932,7 +1927,7 @@ final class RightPaneState: GGSplitCommitServicing {
     }
 
     private static func ggLandingScopeMatches(
-        _ session: GGLandingSession,
+        _ session: GGLandingSession.Seed,
         target: String,
         stack: GGStack
     ) -> Bool {
@@ -1943,17 +1938,12 @@ final class RightPaneState: GGSplitCommitServicing {
         else { return false }
         let originalIDs = session.rows.compactMap { $0.stableID ?? $0.ggId }
         guard originalIDs.count == session.rows.count,
-              originalIDs.last == target,
-              let currentTargetIndex = stack.entries.firstIndex(of: targetEntry)
+              originalIDs.last == targetEntry.id
         else { return false }
-        let currentIDs = stack.entries[..<currentTargetIndex].map(\.id) + [targetEntry.id]
-        guard currentIDs.allSatisfy(originalIDs.contains) else { return false }
-        var nextOriginalIndex = 0
-        for id in currentIDs {
-            guard let index = originalIDs[nextOriginalIndex...].firstIndex(of: id) else { return false }
-            nextOriginalIndex = index + 1
-        }
-        return true
+        let currentIDs = stack.entries.sorted { $0.position < $1.position }
+            .filter { $0.position <= targetEntry.position }.map(\.id)
+        let remainingIDs = Set(stack.entries.map(\.id))
+        return currentIDs == originalIDs.filter { remainingIDs.contains($0) }
     }
 
     private func startGGLanding(_ prepared: GGPreparedMutation) {
