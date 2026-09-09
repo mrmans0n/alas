@@ -2,6 +2,13 @@ import Foundation
 import Testing
 @testable import Alas
 
+private actor StreamLines {
+    private var values: [String] = []
+
+    func append(_ value: String) { values.append(value) }
+    func contains(_ value: String) -> Bool { values.contains(value) }
+}
+
 /// Exercises `ProcessGGCommandRunner`'s pipe-lifecycle handling (readability
 /// handlers on both stdout/stderr, closing the parent's write ends after
 /// `process.run()`) against a trivial `/bin/sh` subprocess. This does not
@@ -140,7 +147,7 @@ struct GGCommandRunningStreamingTests {
             range: wrapperIdentity.upperBound ..< serviceSource.endIndex
         ))
         let release = try #require(serviceSource.range(of: "launchGate.fileHandleForWriting.write", range: start.upperBound ..< serviceSource.endIndex))
-        let cleanup = try #require(serviceSource.range(of: "continuation.onTermination ="))
+        let cleanup = try #require(serviceSource.range(of: "continuation.onTermination =", range: start.upperBound ..< serviceSource.endIndex))
         #expect(run.lowerBound < identity.lowerBound)
         #expect(closeWriter.lowerBound < launchedPID.lowerBound)
         #expect(launchedPID.lowerBound < identity.lowerBound)
@@ -186,6 +193,74 @@ struct GGCommandRunningStreamingTests {
         )
         let lines = try await collectWithTimeout(stream)
         #expect(lines == ["é"])
+    }
+
+    @Test func explicitNilTimeoutDoesNotStartWatchdog() async throws {
+        let stream = ProcessGGCommandRunner.streamProcess(
+            executable: "/bin/sh",
+            args: ["-c", "printf 'ready\\n'"],
+            cwd: nil,
+            env: nil,
+            timeout: nil
+        )
+        var lines: [String] = []
+        for try await line in stream { lines.append(line) }
+        #expect(lines == ["ready"])
+    }
+
+    @Test func cancellingStreamSendsInterruptBeforeTermination() async throws {
+        let interrupted = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gg-stream-int-\(UUID().uuidString)")
+        let ready = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gg-stream-ready-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: interrupted)
+            try? FileManager.default.removeItem(at: ready)
+        }
+        let stream = ProcessGGCommandRunner.streamProcess(
+            executable: "/bin/sh",
+            args: ["-c", "trap 'printf interrupted > \"$1\"; exit 130' INT; printf ready > \"$2\"; while :; do sleep 1; done", "alas", interrupted.path, ready.path],
+            cwd: nil,
+            env: nil,
+            timeout: nil
+        )
+        let task = Task<Void, Error> {
+            for try await _ in stream {}
+        }
+        for _ in 0..<200 where !FileManager.default.fileExists(atPath: ready.path) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        task.cancel()
+        _ = await task.result
+        for _ in 0..<200 where !FileManager.default.fileExists(atPath: interrupted.path) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(FileManager.default.fileExists(atPath: interrupted.path))
+    }
+
+    @Test func cancellingStreamDrainsTerminalStdoutBeforeFinishing() async throws {
+        let ready = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gg-stream-ready-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: ready) }
+        let interruption = GGStreamingCancellation()
+        let stream = ProcessGGCommandRunner.streamProcess(
+            executable: "/bin/sh",
+            args: ["-c", #"trap 'printf "%s\n" terminal; exit 130' INT; printf ready > "$1"; printf '%s\n' ready; while :; do sleep 1; done"#, "alas", ready.path],
+            cwd: nil,
+            env: nil,
+            timeout: nil,
+            interruption: interruption
+        )
+        let lines = StreamLines()
+        let consumer = Task {
+            for try await line in stream { await lines.append(line) }
+        }
+        for _ in 0..<200 where !FileManager.default.fileExists(atPath: ready.path) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        interruption.cancel()
+        _ = try? await consumer.value
+        #expect(await lines.contains("terminal"))
     }
 
     @Test func streamingRunTimesOutHungProcess() async throws {

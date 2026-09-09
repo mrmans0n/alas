@@ -18,6 +18,7 @@ struct GGCapabilities: Equatable, Sendable {
     var clientOperationID: Bool = false
     var stagedOnlyAmend: Bool = false
     var syncJSONL: Bool = false
+    var landJSONL: Bool = false
     var localStackSnapshot: Bool = false
 }
 
@@ -106,6 +107,7 @@ struct GGPreparedMutation: Equatable, Sendable {
     var request: GGMutationRequest
     var snapshot: GGStackIdentity
     var confirmation: GGMutationConfirmation?
+    var stack: GGStack? = nil
 }
 
 struct GGPreparedRestack: Equatable, Sendable {

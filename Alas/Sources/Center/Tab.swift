@@ -23,6 +23,7 @@ enum Tab: Codable, Equatable, Identifiable {
     case fileHistory(FileHistoryTabState)
     case ggInbox(GGInboxTabState)
     case ggSplitCommit(GGSplitCommitTabState)
+    case ggLanding(GGLandingTabState)
 
     var id: TabID {
         switch self {
@@ -45,6 +46,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .fileHistory(let s):  return s.id
         case .ggInbox(let s):      return s.id
         case .ggSplitCommit(let s): return s.id
+        case .ggLanding(let s):    return s.id
         }
     }
 
@@ -69,6 +71,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .fileHistory(let s):  return s.title
         case .ggInbox(let s):      return s.title
         case .ggSplitCommit:       return "Split Commit"
+        case .ggLanding(let s):    return s.title
         }
     }
 
@@ -93,7 +96,13 @@ enum Tab: Codable, Equatable, Identifiable {
         case .fileHistory:  return "clock.arrow.circlepath"
         case .ggInbox:      return "branch"
         case .ggSplitCommit: return "arrow.trianglehead.branch"
+        case .ggLanding:    return "arrow.down.to.line"
         }
+    }
+
+    var isRestorable: Bool {
+        if case .ggLanding = self { return false }
+        return true
     }
 
     var supportsRevisionFollowActions: Bool {

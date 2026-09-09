@@ -717,7 +717,7 @@ private struct RootGGConfirmationHandlers: ViewModifier {
                 presenting: state.rightPaneStore.stateWithPendingGGLand()?.pendingGGLand
             ) { _ in
                 Button("Land", role: .destructive) {
-                    state.rightPaneStore.stateWithPendingGGLand()?.performGGLand()
+                    state.rightPaneStore.stateWithPendingGGLand()?.performGGLand(appState: state)
                 }
                 Button("Cancel", role: .cancel) {
                     state.rightPaneStore.stateWithPendingGGLand()?.cancelGGLand()

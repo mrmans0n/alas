@@ -6,6 +6,21 @@ private enum GGMutationTestTimeout: Error {
     case timedOut
 }
 
+private struct InvalidTrailingLandRunner: GGCommandRunning {
+    func run(args: [String], cwd: URL?) async throws -> ProcessResult {
+        throw GGServiceError.commandFailed(stderr: "Unexpected buffered command")
+    }
+
+    func runStreaming(args: [String], cwd: URL?, timeout: TimeInterval?) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.yield(#"{"version":1,"command":"land","status":"ok","event":"start","stack":"feature","base":"main","total_entries":1}"#)
+            continuation.yield(#"{"version":1,"command":"land","status":"ok","event":"summary","stack":"feature","base":"main","landed":[{"position":1,"pr_number":41,"action":"merged"}],"remaining":0,"cleaned":false}"#)
+            continuation.yield(#"{"version":1,"command":"land","status":"ok","event":"start","stack":"feature","base":"main","total_entries":1}"#)
+            continuation.finish()
+        }
+    }
+}
+
 @MainActor
 private func waitUntil(
     timeout: TimeInterval = 2,
@@ -23,6 +38,8 @@ private final class RecordingGGMutationExecutor: GGMutationExecuting {
     var requests: [GGMutationRequest] = []
     var clientOperationIDs: [String?] = []
     var syncJSONLCapabilities: [Bool] = []
+    var landJSONLCapabilities: [Bool] = []
+    var landEvents: [GGLandEvent] = []
     var result: GGMutationExecutionResult = .none
     var error: Error?
     var newestOperation: GGOperationSummary?
@@ -47,11 +64,19 @@ private final class RecordingGGMutationExecutor: GGMutationExecuting {
         worktreePath: String,
         clientOperationID: String?,
         supportsSyncJSONL: Bool,
-        onSyncEvent: (GGSyncEvent) -> Void
+        supportsLandJSONL: Bool,
+        onSyncEvent: (GGSyncEvent) -> Void,
+        onLandEvent: (GGLandEvent) -> Bool
     ) async throws -> GGMutationExecutionResult {
         requests.append(request)
         clientOperationIDs.append(clientOperationID)
         syncJSONLCapabilities.append(supportsSyncJSONL)
+        landJSONLCapabilities.append(supportsLandJSONL)
+        if case .land = request, supportsLandJSONL {
+            for event in landEvents {
+                guard onLandEvent(event) else { break }
+            }
+        }
         if request == .sync {
             for event in syncEvents { onSyncEvent(event) }
         }
@@ -94,6 +119,12 @@ private final class GGClientOperationCapabilityBox {
 
 @MainActor
 private final class GGSyncJSONLCapabilityBox {
+    var isSupported: Bool
+    init(_ isSupported: Bool) { self.isSupported = isSupported }
+}
+
+@MainActor
+private final class GGLandJSONLCapabilityBox {
     var isSupported: Bool
     init(_ isSupported: Bool) { self.isSupported = isSupported }
 }
@@ -203,6 +234,8 @@ private final class GGMutationHarness {
     let actionState = GGStackActionState()
     let clientOperationCapability: GGClientOperationCapabilityBox
     let syncJSONLCapability: GGSyncJSONLCapabilityBox
+    let landJSONLCapability: GGLandJSONLCapabilityBox
+    var publishedLandEvents: [GGLandEvent] = []
     let tokenGenerator: GGClientOperationTokenGenerator
     var stacks: [GGStackSnapshot]
     var loadError: Error?
@@ -219,13 +252,16 @@ private final class GGMutationHarness {
     init(
         stacks: [GGStackSnapshot],
         supportsClientOperationID: Bool = false,
-        supportsSyncJSONL: Bool = false
+        supportsSyncJSONL: Bool = false,
+        landJSONL: Bool = false
     ) {
         self.stacks = stacks
         let capability = GGClientOperationCapabilityBox(supportsClientOperationID)
         clientOperationCapability = capability
         let syncCapability = GGSyncJSONLCapabilityBox(supportsSyncJSONL)
         syncJSONLCapability = syncCapability
+        let landCapability = GGLandJSONLCapabilityBox(landJSONL)
+        landJSONLCapability = landCapability
         let generator = GGClientOperationTokenGenerator()
         tokenGenerator = generator
         coordinator = GGMutationCoordinator(
@@ -236,6 +272,7 @@ private final class GGMutationHarness {
             undoMarkerStore: markers,
             clientOperationIDCapability: { capability.isSupported },
             syncJSONLCapability: { syncCapability.isSupported },
+            landJSONLCapability: { landCapability.isSupported },
             clientOperationIDGenerator: { generator.next() },
             context: GGMutationContext(
                 loadFreshStack: { [unowned self] in
@@ -259,7 +296,11 @@ private final class GGMutationHarness {
                 },
                 invalidateInbox: { [unowned self] in refreshes.append(.inbox) },
                 selectWorktreeAtPath: { [unowned self] path in selectedPaths.append(path) },
-                currentBranch: { [unowned self] in currentBranch }
+                currentBranch: { [unowned self] in currentBranch },
+                publishLandEvent: { [unowned self] event in
+                    publishedLandEvents.append(event)
+                    return true
+                }
             )
         )
     }
@@ -293,6 +334,98 @@ private func stack(
 
 @MainActor
 struct GGMutationCoordinatorTests {
+    @Test func protocolFailureAfterSummaryFailsSessionAndKeepsOutcomes() async {
+        let store = GGLandingStore()
+        store.begin(.init(
+            projectId: "p", worktreeId: "w", stack: "feature", base: "main", target: "change-1",
+            rows: [.init(position: 1, title: "One", ggId: "change-1", prNumber: 41)]
+        ))
+        let task = Task<Void, Error> {
+            _ = try await GGService(runner: InvalidTrailingLandRunner()).execute(
+                .land(target: "change-1"), worktreePath: "/repo/wt", clientOperationID: nil,
+                supportsSyncJSONL: false, supportsLandJSONL: true,
+                onSyncEvent: { _ in }, onLandEvent: { store.receive($0, projectId: "p") }
+            )
+        }
+        store.attach(projectId: "p", task: task, cancel: { task.cancel() })
+        await store.waitForOperation(projectId: "p")
+        #expect(store.sessions["p"]?.phase == .failed)
+        #expect(store.sessions["p"]?.error == "gg land emitted data after a terminal event.")
+        #expect(store.sessions["p"]?.rows.first?.outcome?.action == "merged")
+        #expect(store.sessions["p"]?.result?.landed.count == 1)
+    }
+
+    @Test func cancelledStreamMissingSummaryDoesNotPublishAnError() async throws {
+        let harness = GGMutationHarness(stacks: [stack(head: "a", entries: [
+            GGStackEntry(position: 1, sha: "a", title: "One", ggId: "change-1",
+                         prState: .open, approved: true, ciStatus: .success)
+        ])], landJSONL: true)
+        harness.service.blockExecution = true
+        harness.service.error = GGServiceError.malformedOutput("Missing summary")
+        let task = try #require(harness.coordinator.startApplying(.land(target: "change-1"), confirmedAgainst: nil))
+        try await waitUntil { !harness.service.requests.isEmpty }
+        task.cancel()
+        harness.service.resumeExecution()
+        await #expect(throws: CancellationError.self) { try await task.value }
+        #expect(harness.actionState.lastError == nil)
+        #expect(harness.refreshes == [.gitChanges, .stack, .providerReviews, .inbox])
+    }
+
+    @Test(arguments: [true, false])
+    func malformedLandOutputFailsOnlyForLiveExecution(live: Bool) async throws {
+        let harness = GGMutationHarness(stacks: [stack(head: "a", entries: [
+            GGStackEntry(position: 1, sha: "a", title: "One", ggId: "change-1",
+                         prState: .open, approved: true, ciStatus: .success)
+        ])], landJSONL: live)
+        harness.service.error = GGServiceError.malformedOutput("Missing summary")
+        if live {
+            await #expect(throws: GGServiceError.self) {
+                try await harness.coordinator.apply(.land(target: "change-1"), confirmedAgainst: nil)
+            }
+            #expect(harness.actionState.lastError == "Missing summary")
+        } else {
+            try await harness.coordinator.apply(.land(target: "change-1"), confirmedAgainst: nil)
+            #expect(harness.actionState.lastError == nil)
+        }
+    }
+
+    @Test func cancelledLandDoesNotLaunchAfterPreflight() async throws {
+        let harness = GGMutationHarness(stacks: [stack(head: "a", entries: [
+            GGStackEntry(position: 1, sha: "a", title: "One", ggId: "change-1",
+                         prState: .open, approved: true, ciStatus: .success)
+        ])], landJSONL: true)
+        let task = try #require(harness.coordinator.startApplying(.land(target: "change-1"), confirmedAgainst: nil))
+        task.cancel()
+        await #expect(throws: CancellationError.self) { try await task.value }
+        #expect(harness.service.requests.isEmpty)
+        #expect(harness.actionState.inFlightAction == nil)
+        #expect(harness.actionState.lastError == nil)
+    }
+
+    @Test func currentLandCapabilityPublishesEvents() async throws {
+        let harness = GGMutationHarness(stacks: [stack(head: "a", entries: [
+            GGStackEntry(position: 1, sha: "a", title: "One", ggId: "change-1",
+                         prState: .open, approved: true, ciStatus: .success)
+        ])], landJSONL: true)
+        harness.service.landEvents = [
+            .start(stack: "feature", base: "main", totalEntries: 1),
+            .summary(GGLandResult(stack: "feature", base: "main", landed: [], remaining: 1, cleaned: false))
+        ]
+        try await harness.coordinator.apply(.land(target: "change-1"), confirmedAgainst: nil)
+        #expect(harness.service.landJSONLCapabilities == [true])
+        #expect(harness.publishedLandEvents == harness.service.landEvents)
+    }
+
+    @Test func oldLandCapabilityUsesAtomicExecution() async throws {
+        let harness = GGMutationHarness(stacks: [stack(head: "a", entries: [
+            GGStackEntry(position: 1, sha: "a", title: "One", ggId: "change-1",
+                         prState: .open, approved: true, ciStatus: .success)
+        ])], landJSONL: false)
+        try await harness.coordinator.apply(.land(target: "change-1"), confirmedAgainst: nil)
+        #expect(harness.service.landJSONLCapabilities == [false])
+        #expect(harness.publishedLandEvents.isEmpty)
+    }
+
     @Test func onlyStagedChangeMutationsWaitForStaging() {
         #expect(GGMutationRequest.amendCurrent.requiresStagedChanges)
         #expect(GGMutationRequest.absorbStaged.requiresStagedChanges)

@@ -60,6 +60,14 @@ final class GGStreamingProcessTree: @unchecked Sendable {
     }
 
     func terminateAndWait(graceNanoseconds: UInt64 = 2_000_000_000) {
+        stopAndWait(initialSignal: SIGTERM, graceNanoseconds: graceNanoseconds)
+    }
+
+    func interruptAndWait(graceNanoseconds: UInt64 = 2_000_000_000) {
+        stopAndWait(initialSignal: SIGINT, graceNanoseconds: graceNanoseconds)
+    }
+
+    private func stopAndWait(initialSignal: Int32, graceNanoseconds: UInt64) {
         condition.lock()
         while terminationInProgress {
             condition.wait()
@@ -77,8 +85,8 @@ final class GGStreamingProcessTree: @unchecked Sendable {
             return
         }
         var descendants = terminationTargets(rootPID: pid).union(environmentTargets(rootPID: pid))
-        signalRootAndGroup(pid, signal: SIGTERM)
-        signal(descendants, with: SIGTERM)
+        signalRootAndGroup(pid, signal: initialSignal)
+        signal(descendants, with: initialSignal)
 
         let deadline = DispatchTime.now().uptimeNanoseconds + graceNanoseconds
         var rootExitObservedAt: UInt64?
@@ -101,7 +109,7 @@ final class GGStreamingProcessTree: @unchecked Sendable {
                     scannedAfterRootExit = true
                 }
             }
-            signal(refreshed.subtracting(descendants), with: SIGTERM)
+            signal(refreshed.subtracting(descendants), with: initialSignal)
             descendants.formUnion(refreshed)
             if rootHasExited,
                scannedAfterRootExit,

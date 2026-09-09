@@ -6,12 +6,53 @@ import Observation
 /// tests can fake CLI output. Local-only in phase 1 (no SSH rewrite).
 protocol GGCommandRunning: Sendable {
     func run(args: [String], cwd: URL?) async throws -> ProcessResult
-/// Streams stdout lines as they arrive (for `gg sync --jsonl`). Finishes
+    /// Streams stdout lines as they arrive (for `gg sync --jsonl`). Finishes
     /// with `.commandFailed`/`.cliMissing` on a non-zero exit.
     func runStreaming(args: [String], cwd: URL?) -> AsyncThrowingStream<String, Error>
+    func runStreaming(
+        args: [String],
+        cwd: URL?,
+        timeout: TimeInterval?
+    ) -> AsyncThrowingStream<String, Error>
+    func runStreaming(
+        args: [String],
+        cwd: URL?,
+        timeout: TimeInterval?,
+        interruption: GGStreamingCancellation?
+    ) -> AsyncThrowingStream<String, Error>
 }
 
 extension GGCommandRunning {
+    func runStreaming(
+        args: [String],
+        cwd: URL?,
+        timeout: TimeInterval?,
+        interruption: GGStreamingCancellation?
+    ) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            let consumer = Task {
+                do {
+                    for try await line in runStreaming(args: args, cwd: cwd, timeout: timeout) {
+                        continuation.yield(line)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            interruption?.install { consumer.cancel() }
+            continuation.onTermination = { _ in consumer.cancel() }
+        }
+    }
+
+    func runStreaming(
+        args: [String],
+        cwd: URL?,
+        timeout: TimeInterval?
+    ) -> AsyncThrowingStream<String, Error> {
+        runStreaming(args: args, cwd: cwd)
+    }
+
     /// Default: buffer the whole command then split into lines. Good enough
     /// for tests and any non-streaming conformer; `ProcessGGCommandRunner`
     /// overrides this with a truly incremental implementation.
@@ -74,7 +115,31 @@ struct ProcessGGCommandRunner: GGCommandRunning {
     }
 
     func runStreaming(args: [String], cwd: URL?) -> AsyncThrowingStream<String, Error> {
-        Self.streamProcess(executable: "/usr/bin/env", args: ["gg"] + args, cwd: cwd, env: Process.gitEnv(), timeout: Self.commandTimeout)
+        runStreaming(args: args, cwd: cwd, timeout: Self.commandTimeout)
+    }
+
+    func runStreaming(
+        args: [String],
+        cwd: URL?,
+        timeout: TimeInterval?
+    ) -> AsyncThrowingStream<String, Error> {
+        Self.streamProcess(executable: "/usr/bin/env", args: ["gg"] + args, cwd: cwd, env: Process.gitEnv(), timeout: timeout)
+    }
+
+    func runStreaming(
+        args: [String],
+        cwd: URL?,
+        timeout: TimeInterval?,
+        interruption: GGStreamingCancellation?
+    ) -> AsyncThrowingStream<String, Error> {
+        Self.streamProcess(
+            executable: "/usr/bin/env",
+            args: ["gg"] + args,
+            cwd: cwd,
+            env: Process.gitEnv(),
+            timeout: timeout,
+            interruption: interruption
+        )
     }
 
     /// Pipe-lifecycle core of `runStreaming`, parameterized on the
@@ -87,7 +152,8 @@ struct ProcessGGCommandRunner: GGCommandRunning {
         args: [String],
         cwd: URL?,
         env: [String: String]?,
-        timeout: TimeInterval = Process.defaultTimeout
+        timeout: TimeInterval? = Process.defaultTimeout,
+        interruption: GGStreamingCancellation? = nil
     ) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let processTreeID = UUID().uuidString
@@ -168,7 +234,9 @@ struct ProcessGGCommandRunner: GGCommandRunning {
                     async let outClosed = stdoutEOF.waitForClose(timeoutNanoseconds: 2_000_000_000)
                     async let errClosed = stderrAccum.waitForClose(timeoutNanoseconds: 2_000_000_000)
                     _ = await (outClosed, errClosed)
-                    if timeoutState.didTimeOut {
+                    outPipe.fileHandleForReading.readabilityHandler = nil
+                    errPipe.fileHandleForReading.readabilityHandler = nil
+                    if timeoutState.didTimeOut, let timeout {
                         continuation.finish(throwing: ProcessError.timedOut(executable: executable, args: args, seconds: timeout))
                     } else if status == 0 {
                         continuation.finish()
@@ -199,23 +267,34 @@ struct ProcessGGCommandRunner: GGCommandRunning {
                     rootIdentity: rootIdentity,
                     wrapperIdentity: wrapperIdentity
                 )
-                let watchdog = Task {
-                    try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                    if Task.isCancelled { return }
-                    if process.isRunning {
-                        timeoutState.markTimedOut()
-                        fputs(
-                            "[Process watchdog] \(timeout)s timeout — terminating: \(executable) \(args.joined(separator: " "))\n",
-                            stderr
-                        )
-                        processTree.terminateAndWait()
+                interruption?.install {
+                    Task.detached { processTree.interruptAndWait() }
+                }
+                let watchdog = timeout.map { timeout in
+                    Task {
+                        try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                        if Task.isCancelled { return }
+                        if process.isRunning {
+                            timeoutState.markTimedOut()
+                            fputs(
+                                "[Process watchdog] \(timeout)s timeout — terminating: \(executable) \(args.joined(separator: " "))\n",
+                                stderr
+                            )
+                            processTree.terminateAndWait()
+                        }
                     }
                 }
-                continuation.onTermination = { _ in
-                    watchdog.cancel()
-                    processTree.terminateAndWait()
-                    outPipe.fileHandleForReading.readabilityHandler = nil
-                    errPipe.fileHandleForReading.readabilityHandler = nil
+                continuation.onTermination = { termination in
+                    watchdog?.cancel()
+                    interruption?.cancel()
+                    switch termination {
+                    case .cancelled:
+                        processTree.interruptAndWait()
+                    case .finished:
+                        processTree.terminateAndWait()
+                    @unknown default:
+                        processTree.terminateAndWait()
+                    }
                 }
                 installStdoutHandler()
                 try? launchGate.fileHandleForWriting.write(contentsOf: Data([0x0A]))
@@ -273,6 +352,28 @@ private final class GGStreamingTimeoutState: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return timedOut
+    }
+}
+
+final class GGStreamingCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var interrupt: (() -> Void)?
+    private var requested = false
+
+    func install(_ interrupt: @escaping () -> Void) {
+        lock.lock()
+        self.interrupt = interrupt
+        let requested = requested
+        lock.unlock()
+        if requested { interrupt() }
+    }
+
+    func cancel() {
+        lock.lock()
+        requested = true
+        let interrupt = interrupt
+        lock.unlock()
+        interrupt?()
     }
 }
 
@@ -376,6 +477,7 @@ struct GGService {
         let unstack = try? await runner.run(args: ["unstack", "--help"], cwd: nil)
         let sc = try? await runner.run(args: ["sc", "--help"], cwd: nil)
         let sync = try? await runner.run(args: ["sync", "--help"], cwd: nil)
+        let land = try? await runner.run(args: ["land", "--help"], cwd: nil)
         let ls = try? await runner.run(args: ["ls", "--help"], cwd: nil)
         return GGCapabilities(
             structuredSplit: split?.exitCode == 0
@@ -388,6 +490,7 @@ struct GGService {
             stagedOnlyAmend: sc?.exitCode == 0
                 && sc?.stdout.contains("--staged-only") == true,
             syncJSONL: sync?.exitCode == 0 && sync?.stdout.contains("--jsonl") == true,
+            landJSONL: land?.exitCode == 0 && land?.stdout.contains("--jsonl") == true,
             localStackSnapshot: ls?.exitCode == 0
                 && ls?.stdout.contains("--no-refresh") == true
         )
@@ -595,6 +698,39 @@ struct GGService {
         }
         // A real in-band error (GGServiceError.commandFailed thrown by
         // decode) and anything else still propagate.
+    }
+
+    func landStream(worktreePath: String, until: String) -> GGLandStream {
+        let interruption = GGStreamingCancellation()
+        let events = AsyncThrowingStream { continuation in
+            let producer = Task {
+                var validator = GGLandStreamValidator()
+                do {
+                    for try await line in runner.runStreaming(
+                        args: ["land", "--until", until, "--wait", "--jsonl", "--no-clean"],
+                        cwd: URL(fileURLWithPath: worktreePath),
+                        timeout: nil,
+                        interruption: interruption
+                    ) {
+                        let event = try GGLandEvent.decode(line: line)
+                        try validator.accept(event)
+                        continuation.yield(event)
+                        if case .error(let message) = event {
+                            throw GGServiceError.commandFailed(stderr: message)
+                        }
+                    }
+                    try validator.finish()
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in
+                interruption.cancel()
+                producer.cancel()
+            }
+        }
+        return GGLandStream(events: events, cancel: { interruption.cancel() })
     }
 
     func clean(worktreePath: String) async throws {
@@ -858,6 +994,89 @@ struct GGService {
         } catch let error as GGServiceError {
             if case .unsupportedSchema = error { throw error }
             return nil
+        }
+    }
+}
+
+struct GGLandStream {
+    let events: AsyncThrowingStream<GGLandEvent, Error>
+    let cancel: @Sendable () -> Void
+}
+
+private struct GGLandStreamValidator {
+    private var start: (stack: String, base: String, totalEntries: Int)?
+    private var terminalPositions = Set<Int>()
+    private var successfulTerminalPositions = Set<Int>()
+    private var sawTerminalEvent = false
+
+    mutating func accept(_ event: GGLandEvent) throws {
+        guard !sawTerminalEvent else {
+            throw GGServiceError.malformedOutput("gg land emitted data after a terminal event.")
+        }
+
+        switch event {
+        case .start(let stack, let base, let totalEntries):
+            guard start == nil else {
+                throw GGServiceError.malformedOutput("gg land emitted duplicate start events.")
+            }
+            guard totalEntries >= 0 else {
+                throw GGServiceError.malformedOutput("gg land start reported a negative entry count.")
+            }
+            start = (stack, base, totalEntries)
+
+        case .wait(let wait):
+            try validateActivePosition(wait.position, event: "wait")
+
+        case .entry(let entry):
+            try validateActivePosition(entry.position, event: "entry")
+            guard terminalPositions.insert(entry.position).inserted else {
+                throw GGServiceError.malformedOutput("gg land emitted duplicate terminal entry positions.")
+            }
+            if entry.error == nil {
+                successfulTerminalPositions.insert(entry.position)
+            }
+
+        case .summary(let summary):
+            guard let start else {
+                throw GGServiceError.malformedOutput("gg land emitted summary before start.")
+            }
+            guard summary.stack == start.stack, summary.base == start.base else {
+                throw GGServiceError.malformedOutput("gg land summary did not match start identity.")
+            }
+            var summaryPositions = Set<Int>()
+            for entry in summary.landed {
+                guard entry.position >= 1, entry.position <= start.totalEntries else {
+                    throw GGServiceError.malformedOutput("gg land summary reported an entry outside its start range.")
+                }
+                guard summaryPositions.insert(entry.position).inserted else {
+                    throw GGServiceError.malformedOutput("gg land summary reported duplicate entry positions.")
+                }
+            }
+            guard successfulTerminalPositions.isSubset(of: summaryPositions) else {
+                throw GGServiceError.malformedOutput("gg land summary omitted a completed entry.")
+            }
+            sawTerminalEvent = true
+
+        case .error:
+            sawTerminalEvent = true
+        }
+    }
+
+    func finish() throws {
+        guard sawTerminalEvent else {
+            throw GGServiceError.malformedOutput("gg land ended without a summary or error event.")
+        }
+    }
+
+    private func validateActivePosition(_ position: Int, event: String) throws {
+        guard let start else {
+            throw GGServiceError.malformedOutput("gg land emitted \(event) before start.")
+        }
+        guard position >= 1, position <= start.totalEntries else {
+            throw GGServiceError.malformedOutput("gg land emitted \(event) outside its start range.")
+        }
+        guard !terminalPositions.contains(position) else {
+            throw GGServiceError.malformedOutput("gg land emitted \(event) after that entry completed.")
         }
     }
 }
