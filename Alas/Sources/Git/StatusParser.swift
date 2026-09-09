@@ -90,7 +90,7 @@ enum StatusParser {
                 stage: .unstaged,
                 add: 0,
                 del: 0,
-                renameFrom: nil
+                renameFrom: worktreeStatus == "R" || worktreeStatus == "C" ? renameFrom : nil
             ))
         }
 

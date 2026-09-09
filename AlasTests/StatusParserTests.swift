@@ -68,6 +68,16 @@ struct StatusParserTests {
         #expect(entry.renameFrom == "docs/PANES.md")
     }
 
+    @Test func parsesUnstagedRename() throws {
+        let raw = "2 .R N... 100644 100644 100644 a a R050 docs/SPLIT.md\u{0}docs/PANES.md\u{0}"
+        let entries = try StatusParser.parse(raw)
+        let entry = try #require(entries.first)
+        #expect(entry.status == "R")
+        #expect(entry.stage == .unstaged)
+        #expect(entry.path == "docs/SPLIT.md")
+        #expect(entry.renameFrom == "docs/PANES.md")
+    }
+
     @Test func parsesRenameWithUnstagedModification() throws {
         let raw = "2 RM N... 100644 100644 100644 a a R100 docs/SPLIT.md\u{0}docs/PANES.md\u{0}"
         let entries = try StatusParser.parse(raw)

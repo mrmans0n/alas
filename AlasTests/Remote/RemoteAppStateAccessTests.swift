@@ -1586,6 +1586,38 @@ struct RemoteAppStateAccessTests {
         }
     }
 
+    @Test func remoteFileDiffUsesOriginalPathForAnUnstagedRename() async throws {
+        let repository = try await makeRemoteBranchesRepository()
+        defer { try? FileManager.default.removeItem(at: repository) }
+        try "one\ntwo\n".write(to: repository.appendingPathComponent("old.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "old.txt"], cwd: repository)
+        _ = try await Process.git(["commit", "-q", "-m", "base"], cwd: repository)
+        try FileManager.default.moveItem(
+            at: repository.appendingPathComponent("old.txt"),
+            to: repository.appendingPathComponent("new.txt"))
+        _ = try await Process.git(["add", "-N", "new.txt"], cwd: repository)
+        try "one\nTWO\n".write(to: repository.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
+
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId { cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId) }
+        }
+        let state = makeRemoteGitBackedState(repositoryPath: repository)
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let tab = try #require(acpTabs(in: state).first)
+
+        let diffResult = await state.remoteFileDiff(sessionId: tab.sessionId, path: "new.txt", stage: "unstaged")
+        guard case let .success(hunks, _, _) = diffResult else {
+            Issue.record("expected unstaged rename diff, got \(diffResult)")
+            return
+        }
+        let lines = hunks.flatMap(\.lines)
+        #expect(lines.contains { $0.kind == "delete" && $0.text == "two" })
+        #expect(lines.contains { $0.kind == "add" && $0.text == "TWO" })
+    }
+
     private func statusCode(port: UInt16, host: String, path: String) async throws -> Int? {
         var req = URLRequest(url: URL(string: "http://127.0.0.1:\(port)\(path)")!)
         req.setValue(host, forHTTPHeaderField: "Host")

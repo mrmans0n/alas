@@ -10577,10 +10577,9 @@ extension AppState: RemoteSessionsProvider {
             let parsed: ParsedDiff
             if let changeStage {
                 let statusEntry = try await git.status(worktreePath: worktree.path).first { $0.path == normalizedPath }
-                let originalPath = changeStage == .staged ? statusEntry?.renameFrom : nil
                 parsed = try await git.remoteDiff(
                     worktreePath: worktree.path, file: normalizedPath,
-                    staged: changeStage == .staged, originalPath: originalPath,
+                    staged: changeStage == .staged, originalPath: statusEntry?.renameFrom,
                     maxOutputBytes: RemoteWorktreeFileAccess.maxDiffSubprocessBytes,
                     conflicted: statusEntry?.conflict != nil)
             } else {

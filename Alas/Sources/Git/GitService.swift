@@ -206,6 +206,9 @@ extension GitService {
             ["-c", "core.quotePath=false", "diff", "--numstat", "-M", "-C"],
             cwd: worktreePath
         )
+        guard numstat.exitCode == 0 else {
+            throw ProcessError.nonZeroExit(numstat.exitCode, numstat.stderr)
+        }
         let counts = NumstatParser.parse(numstat.stdout)
         for i in entries.indices where entries[i].stage == .unstaged {
             guard let count = counts[entries[i].path] else { continue }
