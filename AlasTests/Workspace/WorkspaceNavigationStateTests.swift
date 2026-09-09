@@ -3,6 +3,20 @@ import Testing
 @testable import Alas
 
 struct WorkspaceNavigationStateTests {
+    @Test func selectedWorkspaceResolvesForWorkspaceTitleSelection() {
+        let workspace = Workspace(name: "Workspace", executionLocation: .local, members: [])
+        let state = WorkspaceNavigationState(selectedWorkspaceID: workspace.id)
+
+        #expect(state.selectedWorkspace(in: [workspace]) == workspace)
+    }
+
+    @Test func selectedWorkspaceDoesNotResolveWhileCheckoutIsSelected() {
+        let workspace = Workspace(name: "Workspace", executionLocation: .local, members: [])
+        let state = WorkspaceNavigationState(selectedWorkspaceID: workspace.id, selectedCheckoutID: UUID())
+
+        #expect(state.selectedWorkspace(in: [workspace]) == nil)
+    }
+
     @Test func checkoutRestoresLastAvailableFocusedMember() {
         let checkout = fixtureCheckout(members: [availableMember, unavailableMember])
         var state = WorkspaceNavigationState()

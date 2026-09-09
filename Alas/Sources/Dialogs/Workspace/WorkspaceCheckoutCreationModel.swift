@@ -24,6 +24,10 @@ struct WorkspaceCheckoutCreationModel: Equatable {
         self.baseReference = baseReference
     }
 
+    init(workspace: Workspace, branchPrefix: String, rootPath: String = "", baseReference: String = "main") {
+        self.init(workspace: workspace, branch: branchPrefix, rootPath: rootPath, baseReference: baseReference)
+    }
+
     var preflightMessages: [String] {
         guard case .failure(let diagnostics) = preflightResult else { return [] }
         return diagnostics.map(\.message)

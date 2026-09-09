@@ -40,7 +40,7 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                     }
                 case .workspace(let id):
                     if let workspace = workspaces[id] {
-                        workspaceHeader(workspace)
+                        workspaceHeader(workspace, projects: projects)
                     }
                 case .formerWorkspace:
                     Label("Former Workspace", systemImage: "archivebox")
@@ -117,7 +117,7 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
         }
     }
 
-    private func workspaceHeader(_ workspace: Workspace) -> some View {
+    private func workspaceHeader(_ workspace: Workspace, projects: [String: ProjectConfig]) -> some View {
         let collapsed = collapsedWorkspaces.contains(workspace.id)
         let selected = state.workspaceNavigationState.selectedWorkspaceID == workspace.id
             && state.workspaceNavigationState.selectedCheckoutID == nil
@@ -135,7 +135,7 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
             .accessibilityLabel(collapsed ? "Expand workspace" : "Collapse workspace")
             Button { state.selectWorkspace(id: workspace.id) } label: {
                 HStack(spacing: 7) {
-                    Icon(name: "square.stack.3d.up", size: 13, color: theme.color(selected ? "accent" : "fg-muted"))
+                    WorkspaceRepositoryPile(workspace: workspace, projects: Array(projects.values))
                     Text(workspace.name)
                         .font(.system(size: 11.5, weight: .semibold))
                         .foregroundColor(theme.color(selected ? "fg" : "fg-muted"))
@@ -150,10 +150,19 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                 creatingCheckout = workspace
             }
         }
-        .padding(.leading, 12)
+        .padding(.leading, 6)
         .padding(.trailing, 8)
         .padding(.vertical, 3)
-        .background(selected ? theme.color("bg-3") : .clear)
+        .background(selected ? theme.color("bg-4") : .clear, in: RoundedRectangle(cornerRadius: 6))
+        .overlay(alignment: .leading) {
+            if selected {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(theme.color("accent"))
+                    .frame(width: 3, height: 14)
+                    .padding(.leading, 2)
+            }
+        }
+        .padding(.horizontal, 6)
         .contextMenu {
             Button("New checkout...", systemImage: "plus") { creatingCheckout = workspace }
             Button("Edit workspace...", systemImage: "pencil") { editingWorkspace = workspace }
@@ -375,6 +384,30 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                 lifecycleError = error.localizedDescription
             }
         }
+    }
+}
+
+struct WorkspaceRepositoryPile: View {
+    let workspace: Workspace
+    let projects: [ProjectConfig]
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        let projectsByID = Dictionary(uniqueKeysWithValues: projects.map { ($0.id, $0) })
+        let repositories = workspace.members.compactMap { projectsByID[$0.projectID] }
+        Group {
+            if repositories.isEmpty {
+                Icon(name: "folder", size: 13, color: theme.color("fg-muted"))
+            } else {
+                HStack(spacing: -5) {
+                    ForEach(repositories.prefix(3)) { project in
+                        ProjectIconView(icon: project.icon, fallbackName: project.name, size: .sidebar)
+                    }
+                }
+                .fixedSize()
+            }
+        }
+        .accessibilityHidden(true)
     }
 }
 

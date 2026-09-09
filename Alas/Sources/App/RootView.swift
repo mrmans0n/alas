@@ -27,6 +27,8 @@ struct RootView: View {
     @State private var editingProject: ProjectConfig?
     @State private var removingProject: ProjectConfig?
     @State private var newWorktreePresentation: NewWorktreePresentation?
+    @State private var creatingWorkspaceCheckout: Workspace?
+    @State private var editingWorkspace: Workspace?
     @State private var commitReviewSessionLaunchError: CommitReviewSessionLaunchError?
     @Environment(\.openWindow) private var openWindow
 
@@ -61,6 +63,26 @@ struct RootView: View {
                 removingProject: $removingProject,
                 newWorktreePresentation: $newWorktreePresentation
             ))
+            .sheet(item: $creatingWorkspaceCheckout) { workspace in
+                CreateWorkspaceCheckoutDialog(
+                    state: state,
+                    workspace: workspace,
+                    presented: Binding(
+                        get: { creatingWorkspaceCheckout != nil },
+                        set: { if !$0 { creatingWorkspaceCheckout = nil } }
+                    )
+                )
+            }
+            .sheet(item: $editingWorkspace) { workspace in
+                EditWorkspaceDialog(
+                    state: state,
+                    workspace: workspace,
+                    presented: Binding(
+                        get: { editingWorkspace != nil },
+                        set: { if !$0 { editingWorkspace = nil } }
+                    )
+                )
+            }
             .alert(
                 "Could not open review session",
                 isPresented: Binding(
@@ -280,7 +302,16 @@ struct RootView: View {
         case .loadingProject:
             LoadingProjectView()
         case .empty:
-            if let checkout = state.selectedWorkspaceCheckout,
+            if let workspace = state.workspaceNavigationState.selectedWorkspace(
+                in: state.workspacesManager.workspaces
+            ) {
+                WorkspaceOverviewView(
+                    workspace: workspace,
+                    projects: state.projects,
+                    onNewCheckout: { creatingWorkspaceCheckout = workspace },
+                    onEdit: { editingWorkspace = workspace }
+                )
+            } else if let checkout = state.selectedWorkspaceCheckout,
                let fallback = state.sharedSessionFallbackWorktreeForSelectedWorkspaceCheckout() {
                 CenterPaneView(
                     state: state,
@@ -396,6 +427,54 @@ struct RootView: View {
                 )
             }
         )
+    }
+}
+
+private struct WorkspaceOverviewView: View {
+    let workspace: Workspace
+    let projects: [ProjectConfig]
+    let onNewCheckout: () -> Void
+    let onEdit: () -> Void
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        VStack(spacing: 18) {
+            VStack(spacing: 8) {
+                WorkspaceRepositoryPile(workspace: workspace, projects: projects)
+                Text(workspace.name)
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundColor(theme.color("fg"))
+                Text("\(workspace.members.count) \(workspace.members.count == 1 ? "repository" : "repositories") on \(workspace.executionLocation.sshHost ?? "This Mac")")
+                    .font(.system(size: 12))
+                    .foregroundColor(theme.color("fg-dim"))
+            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(workspace.members) { member in
+                        HStack(spacing: 8) {
+                            if let project = projects.first(where: { $0.id == member.projectID }) {
+                                ProjectIconView(icon: project.icon, fallbackName: project.name, size: .sidebar)
+                            } else {
+                                Icon(name: "folder", size: 14)
+                            }
+                            Text(member.fallbackProjectName)
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(theme.color("fg-muted"))
+                                .lineLimit(1)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: 180)
+            .frame(width: 280)
+            HStack(spacing: 8) {
+                AlasButton(title: "New checkout", icon: "plus", style: .primary, action: onNewCheckout)
+                AlasButton(title: "Edit workspace", icon: "gear", action: onEdit)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(theme.color("bg-1"))
     }
 }
 

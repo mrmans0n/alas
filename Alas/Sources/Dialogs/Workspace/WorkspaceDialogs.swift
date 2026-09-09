@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct NewWorkspaceDialog: View {
@@ -254,7 +255,7 @@ struct CreateWorkspaceCheckoutDialog: View {
         self.state = state
         self.workspace = workspace
         self._presented = presented
-        self._model = State(initialValue: .init(workspace: workspace))
+        self._model = State(initialValue: .init(workspace: workspace, branchPrefix: state.config.worktrees.branchPrefix))
     }
 
     var body: some View {
@@ -309,7 +310,12 @@ struct CreateWorkspaceCheckoutDialog: View {
                 AlasField(text: $model.branch, placeholder: "feature/my-change", monospaced: true, focusOnAppear: true)
             }
             DialogField(label: "Checkout folder") {
-                AlasField(text: $model.rootPath, placeholder: "/path/to/checkouts/my-change", monospaced: true)
+                HStack(spacing: 8) {
+                    AlasField(text: $model.rootPath, placeholder: "/path/to/checkouts/my-change", monospaced: true)
+                    if workspace.executionLocation == .local {
+                        ToolbarBtn(icon: "folder", tooltip: "Choose checkout folder", action: chooseCheckoutFolder)
+                    }
+                }
             }
             DialogField(label: "Base reference") {
                 AlasField(text: $model.baseReference, placeholder: "main", monospaced: true)
@@ -421,6 +427,16 @@ struct CreateWorkspaceCheckoutDialog: View {
             error = nil
         } else {
             presented = false
+        }
+    }
+
+    private func chooseCheckoutFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let url = panel.url {
+            model.rootPath = url.path
         }
     }
 

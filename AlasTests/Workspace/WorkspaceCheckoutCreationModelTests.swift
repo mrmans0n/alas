@@ -4,6 +4,12 @@ import Testing
 
 @Suite("Workspace checkout creation model")
 struct WorkspaceCheckoutCreationModelTests {
+    @Test func initializesBranchWithConfiguredPrefix() {
+        let model = WorkspaceCheckoutCreationModel(workspace: fixtureWorkspace(), branchPrefix: "feature/")
+
+        #expect(model.request().branch == "feature/")
+    }
+
     @Test func advancesThroughThreeStepsOnlyWithSharedBranchAndRoot() {
         let workspace = fixtureWorkspace()
         var model = WorkspaceCheckoutCreationModel(workspace: workspace, rootPath: "")
