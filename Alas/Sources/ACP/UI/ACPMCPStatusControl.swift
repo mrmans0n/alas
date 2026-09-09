@@ -8,6 +8,7 @@ struct ACPMCPStatusControl: View {
     let currentServers: [ProjectMCPServer]
     var onInstallPiMCPAdapter: (() async -> Bool)? = nil
     var onSwitchToHTTP: (() -> Void)? = nil
+    var onReconnect: (() -> Void)? = nil
     @Environment(\.theme) private var theme
     @State private var popoverOpen = false
 
@@ -59,7 +60,8 @@ struct ACPMCPStatusControl: View {
                 ACPMCPStatusPopover(
                     status: status,
                     onInstallPiMCPAdapter: onInstallPiMCPAdapter,
-                    onSwitchToHTTP: onSwitchToHTTP
+                    onSwitchToHTTP: onSwitchToHTTP,
+                    onReconnect: onReconnect
                 )
             }
         }
@@ -83,6 +85,7 @@ private struct ACPMCPStatusPopover: View {
     let status: ACPMCPStatusState
     var onInstallPiMCPAdapter: (() async -> Bool)? = nil
     var onSwitchToHTTP: (() -> Void)? = nil
+    var onReconnect: (() -> Void)? = nil
     @Environment(\.theme) private var theme
     @State private var installState: InstallState = .idle
 
@@ -178,6 +181,14 @@ private struct ACPMCPStatusPopover: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
                 .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            if status.hasBuiltInWarning, let onReconnect {
+                AlasButton(title: "Reconnect session", style: .subtle) {
+                    onReconnect()
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
             }
 
             if let detail = status.preambleDetail {

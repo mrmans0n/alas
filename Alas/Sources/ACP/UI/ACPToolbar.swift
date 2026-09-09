@@ -26,15 +26,9 @@ struct ACPToolbar: View {
                 onSwitchToHTTP: isWorkspaceCheckoutOwner ? nil : {
                     state.config.harness.alasMCPTransport = .http
                     _ = state.saveConfig()
-                    // A live session is `.ready`, for which `reattach` is a
-                    // no-op — so detach then attach (the same flow as the
-                    // explicit Reconnect action) to actually apply the new
-                    // transport now instead of on some later disconnect.
-                    Task {
-                        await manager.detach(sessionId: session.id)
-                        await manager.attach(to: session.id, freshlyCreated: false)
-                    }
-                }
+                    reconnectSession()
+                },
+                onReconnect: reconnectSession
             )
             ACPRecoveryPill(session: session)
             if let currentGoal = session.currentGoal {
@@ -60,6 +54,13 @@ struct ACPToolbar: View {
     private var isWorkspaceCheckoutOwner: Bool {
         if case .workspaceCheckout = owner { return true }
         return false
+    }
+
+    private func reconnectSession() {
+        Task {
+            await manager.detach(sessionId: session.id)
+            await manager.attach(to: session.id, freshlyCreated: false)
+        }
     }
 }
 
