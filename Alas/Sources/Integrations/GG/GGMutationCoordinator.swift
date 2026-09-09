@@ -446,7 +446,8 @@ final class GGMutationCoordinator {
         return GGPreparedMutation(
             request: request,
             snapshot: identity,
-            confirmation: confirmation(for: request, stack: stack)
+            confirmation: confirmation(for: request, stack: stack),
+            stack: stack
         )
     }
 
@@ -855,11 +856,19 @@ extension GGService: GGMutationExecuting {
         case .land(let target):
             if supportsLandJSONL {
                 do {
-                    var summary: GGLandResult?
-                    for try await event in service.landStream(worktreePath: worktreePath, until: target) {
-                        onLandEvent(event)
-                        if case .summary(let result) = event { summary = result }
+                    let stream = service.landStream(worktreePath: worktreePath, until: target)
+                    let consume = Task {
+                        var summary: GGLandResult?
+                        for try await event in stream.events {
+                            onLandEvent(event)
+                            if case .summary(let result) = event { summary = result }
+                        }
+                        return summary
                     }
+                    let summary = try await withTaskCancellationHandler(
+                        operation: { try await consume.value },
+                        onCancel: stream.cancel
+                    )
                     try Task.checkCancellation()
                     guard let summary else {
                         throw GGServiceError.malformedOutput("gg land ended without a summary.")

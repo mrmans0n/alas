@@ -20,6 +20,15 @@ extension GGCommandRunning {
     func runStreaming(
         args: [String],
         cwd: URL?,
+        timeout: TimeInterval?,
+        interruption: GGStreamingCancellation?
+    ) -> AsyncThrowingStream<String, Error> {
+        runStreaming(args: args, cwd: cwd, timeout: timeout)
+    }
+
+    func runStreaming(
+        args: [String],
+        cwd: URL?,
         timeout: TimeInterval?
     ) -> AsyncThrowingStream<String, Error> {
         runStreaming(args: args, cwd: cwd)
@@ -98,6 +107,22 @@ struct ProcessGGCommandRunner: GGCommandRunning {
         Self.streamProcess(executable: "/usr/bin/env", args: ["gg"] + args, cwd: cwd, env: Process.gitEnv(), timeout: timeout)
     }
 
+    func runStreaming(
+        args: [String],
+        cwd: URL?,
+        timeout: TimeInterval?,
+        interruption: GGStreamingCancellation?
+    ) -> AsyncThrowingStream<String, Error> {
+        Self.streamProcess(
+            executable: "/usr/bin/env",
+            args: ["gg"] + args,
+            cwd: cwd,
+            env: Process.gitEnv(),
+            timeout: timeout,
+            interruption: interruption
+        )
+    }
+
     /// Pipe-lifecycle core of `runStreaming`, parameterized on the
     /// executable/args so tests can exercise the readability-handler /
     /// write-end-close pattern against a trivial subprocess (e.g.
@@ -108,7 +133,8 @@ struct ProcessGGCommandRunner: GGCommandRunning {
         args: [String],
         cwd: URL?,
         env: [String: String]?,
-        timeout: TimeInterval? = Process.defaultTimeout
+        timeout: TimeInterval? = Process.defaultTimeout,
+        interruption: GGStreamingCancellation? = nil
     ) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let processTreeID = UUID().uuidString
@@ -189,6 +215,8 @@ struct ProcessGGCommandRunner: GGCommandRunning {
                     async let outClosed = stdoutEOF.waitForClose(timeoutNanoseconds: 2_000_000_000)
                     async let errClosed = stderrAccum.waitForClose(timeoutNanoseconds: 2_000_000_000)
                     _ = await (outClosed, errClosed)
+                    outPipe.fileHandleForReading.readabilityHandler = nil
+                    errPipe.fileHandleForReading.readabilityHandler = nil
                     if timeoutState.didTimeOut, let timeout {
                         continuation.finish(throwing: ProcessError.timedOut(executable: executable, args: args, seconds: timeout))
                     } else if status == 0 {
@@ -220,6 +248,7 @@ struct ProcessGGCommandRunner: GGCommandRunning {
                     rootIdentity: rootIdentity,
                     wrapperIdentity: wrapperIdentity
                 )
+                interruption?.install { processTree.interruptAndWait() }
                 let watchdog = timeout.map { timeout in
                     Task {
                         try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
@@ -236,6 +265,7 @@ struct ProcessGGCommandRunner: GGCommandRunning {
                 }
                 continuation.onTermination = { termination in
                     watchdog?.cancel()
+                    interruption?.cancel()
                     switch termination {
                     case .cancelled:
                         processTree.interruptAndWait()
@@ -244,8 +274,6 @@ struct ProcessGGCommandRunner: GGCommandRunning {
                     @unknown default:
                         processTree.terminateAndWait()
                     }
-                    outPipe.fileHandleForReading.readabilityHandler = nil
-                    errPipe.fileHandleForReading.readabilityHandler = nil
                 }
                 installStdoutHandler()
                 try? launchGate.fileHandleForWriting.write(contentsOf: Data([0x0A]))
@@ -303,6 +331,28 @@ private final class GGStreamingTimeoutState: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return timedOut
+    }
+}
+
+final class GGStreamingCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var interrupt: (() -> Void)?
+    private var requested = false
+
+    func install(_ interrupt: @escaping () -> Void) {
+        lock.lock()
+        self.interrupt = interrupt
+        let requested = requested
+        lock.unlock()
+        if requested { interrupt() }
+    }
+
+    func cancel() {
+        lock.lock()
+        requested = true
+        let interrupt = interrupt
+        lock.unlock()
+        interrupt?()
     }
 }
 
@@ -629,15 +679,17 @@ struct GGService {
         // decode) and anything else still propagate.
     }
 
-    func landStream(worktreePath: String, until: String) -> AsyncThrowingStream<GGLandEvent, Error> {
-        AsyncThrowingStream { continuation in
+    func landStream(worktreePath: String, until: String) -> GGLandStream {
+        let interruption = GGStreamingCancellation()
+        let events = AsyncThrowingStream { continuation in
             let producer = Task {
                 var validator = GGLandStreamValidator()
                 do {
                     for try await line in runner.runStreaming(
                         args: ["land", "--until", until, "--wait", "--jsonl", "--no-clean"],
                         cwd: URL(fileURLWithPath: worktreePath),
-                        timeout: nil
+                        timeout: nil,
+                        interruption: interruption
                     ) {
                         let event = try GGLandEvent.decode(line: line)
                         try validator.accept(event)
@@ -652,8 +704,12 @@ struct GGService {
                     continuation.finish(throwing: error)
                 }
             }
-            continuation.onTermination = { _ in producer.cancel() }
+            continuation.onTermination = { _ in
+                interruption.cancel()
+                producer.cancel()
+            }
         }
+        return GGLandStream(events: events, cancel: interruption.cancel)
     }
 
     func clean(worktreePath: String) async throws {
@@ -919,6 +975,11 @@ struct GGService {
             return nil
         }
     }
+}
+
+struct GGLandStream {
+    let events: AsyncThrowingStream<GGLandEvent, Error>
+    let cancel: @Sendable () -> Void
 }
 
 private struct GGLandStreamValidator {

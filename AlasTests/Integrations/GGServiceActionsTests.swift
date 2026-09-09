@@ -126,7 +126,7 @@ struct GGServiceActionsTests {
             #"{"version":1,"command":"land","status":"ok","event":"summary","stack":"s","base":"main","landed":[],"remaining":1,"cleaned":false,"warnings":[],"error":null}"#,
         ]
         var events: [GGLandEvent] = []
-        for try await event in GGService(runner: runner).landStream(worktreePath: "/tmp/wt", until: "c-abc") {
+        for try await event in GGService(runner: runner).landStream(worktreePath: "/tmp/wt", until: "c-abc").events {
             events.append(event)
         }
         #expect(events.count == 3)
@@ -164,7 +164,7 @@ struct GGServiceActionsTests {
         let runner = RecordingGGRunner()
         runner.streamingLines = lines
         await #expect(throws: GGServiceError.self) {
-            for try await _ in GGService(runner: runner).landStream(worktreePath: "/tmp/wt", until: "c-abc") {}
+            for try await _ in GGService(runner: runner).landStream(worktreePath: "/tmp/wt", until: "c-abc").events {}
         }
     }
 
@@ -175,7 +175,7 @@ struct GGServiceActionsTests {
             #"{"version":1,"command":"land","status":"ok","event":"summary","stack":"other","base":"main","landed":[],"remaining":1,"cleaned":false,"warnings":[],"error":null}"#,
         ]
         await #expect(throws: GGServiceError.malformedOutput("gg land summary did not match start identity.")) {
-            for try await _ in GGService(runner: runner).landStream(worktreePath: "/tmp/wt", until: "c-abc") {}
+            for try await _ in GGService(runner: runner).landStream(worktreePath: "/tmp/wt", until: "c-abc").events {}
         }
     }
 
@@ -186,7 +186,7 @@ struct GGServiceActionsTests {
         ]
         var events: [GGLandEvent] = []
         await #expect(throws: GGServiceError.commandFailed(stderr: "setup failed")) {
-            for try await event in GGService(runner: runner).landStream(worktreePath: "/tmp/wt", until: "c-abc") {
+            for try await event in GGService(runner: runner).landStream(worktreePath: "/tmp/wt", until: "c-abc").events {
                 events.append(event)
             }
         }
@@ -196,7 +196,7 @@ struct GGServiceActionsTests {
     @Test func landJSONLPropagatesConsumerCancellation() async throws {
         let runner = CancellableLandGGRunner()
         let task = Task {
-            for try await _ in GGService(runner: runner).landStream(worktreePath: "/tmp/wt", until: "c-abc") {
+            for try await _ in GGService(runner: runner).landStream(worktreePath: "/tmp/wt", until: "c-abc").events {
                 try Task.checkCancellation()
             }
         }

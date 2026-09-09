@@ -2,6 +2,13 @@ import Foundation
 import Testing
 @testable import Alas
 
+private actor StreamLines {
+    private var values: [String] = []
+
+    func append(_ value: String) { values.append(value) }
+    func contains(_ value: String) -> Bool { values.contains(value) }
+}
+
 /// Exercises `ProcessGGCommandRunner`'s pipe-lifecycle handling (readability
 /// handlers on both stdout/stderr, closing the parent's write ends after
 /// `process.run()`) against a trivial `/bin/sh` subprocess. This does not
@@ -229,6 +236,31 @@ struct GGCommandRunningStreamingTests {
             try await Task.sleep(for: .milliseconds(10))
         }
         #expect(FileManager.default.fileExists(atPath: interrupted.path))
+    }
+
+    @Test func cancellingStreamDrainsTerminalStdoutBeforeFinishing() async throws {
+        let ready = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gg-stream-ready-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: ready) }
+        let interruption = GGStreamingCancellation()
+        let stream = ProcessGGCommandRunner.streamProcess(
+            executable: "/bin/sh",
+            args: ["-c", "trap 'printf terminal\\n; exit 130' INT; printf ready > \"$1\"; printf ready\\n; while :; do sleep 1; done", "alas", ready.path],
+            cwd: nil,
+            env: nil,
+            timeout: nil,
+            interruption: interruption
+        )
+        let lines = StreamLines()
+        let consumer = Task {
+            for try await line in stream { await lines.append(line) }
+        }
+        for _ in 0..<200 where !FileManager.default.fileExists(atPath: ready.path) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        interruption.cancel()
+        _ = try? await consumer.value
+        #expect(await lines.contains("terminal"))
     }
 
     @Test func streamingRunTimesOutHungProcess() async throws {

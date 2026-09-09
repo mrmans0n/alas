@@ -1898,6 +1898,9 @@ final class RightPaneState: GGSplitCommitServicing {
                 }
                 let prepared = try await ggMutationCoordinator.prepare(.land(target: target))
                 try Task.checkCancellation()
+                guard let stack = prepared.stack,
+                      Self.ggLandingScopeMatches(session, target: target, stack: stack)
+                else { throw GGMutationError.staleConfirmation }
                 guard ggLandingStore.sessions[projectId]?.id == sessionId else { return }
                 startGGLanding(prepared)
             } catch {
@@ -1916,8 +1919,41 @@ final class RightPaneState: GGSplitCommitServicing {
             stack: stack.name, base: stack.base, target: target,
             rows: stack.entries.filter { $0.position <= entry.position }
                 .sorted { $0.position < $1.position }
-                .map { GGLandingRow(position: $0.position, title: $0.title, ggId: $0.ggId, prNumber: $0.prNumber) }
+                .map {
+                    GGLandingRow(
+                        position: $0.position,
+                        title: $0.title,
+                        ggId: $0.ggId,
+                        stableID: $0.id,
+                        prNumber: $0.prNumber
+                    )
+                }
         )
+    }
+
+    private static func ggLandingScopeMatches(
+        _ session: GGLandingSession,
+        target: String,
+        stack: GGStack
+    ) -> Bool {
+        guard target == session.target,
+              stack.name == session.stack,
+              stack.base == session.base,
+              let targetEntry = stack.entries.first(where: { $0.id == target || $0.sha == target })
+        else { return false }
+        let originalIDs = session.rows.compactMap { $0.stableID ?? $0.ggId }
+        guard originalIDs.count == session.rows.count,
+              originalIDs.last == target,
+              let currentTargetIndex = stack.entries.firstIndex(of: targetEntry)
+        else { return false }
+        let currentIDs = stack.entries[..<currentTargetIndex].map(\.id) + [targetEntry.id]
+        guard currentIDs.allSatisfy(originalIDs.contains) else { return false }
+        var nextOriginalIndex = 0
+        for id in currentIDs {
+            guard let index = originalIDs[nextOriginalIndex...].firstIndex(of: id) else { return false }
+            nextOriginalIndex = index + 1
+        }
+        return true
     }
 
     private func startGGLanding(_ prepared: GGPreparedMutation) {

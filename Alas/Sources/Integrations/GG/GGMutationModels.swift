@@ -107,6 +107,7 @@ struct GGPreparedMutation: Equatable, Sendable {
     var request: GGMutationRequest
     var snapshot: GGStackIdentity
     var confirmation: GGMutationConfirmation?
+    var stack: GGStack? = nil
 }
 
 struct GGPreparedRestack: Equatable, Sendable {

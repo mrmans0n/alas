@@ -9,6 +9,7 @@ struct GGLandingRow: Equatable, Identifiable, Sendable {
     let position: Int
     let title: String
     let ggId: String?
+    let stableID: String? = nil
     let prNumber: Int?
     var wait: GGLandWait? = nil
     var outcome: GGLandedEntry? = nil

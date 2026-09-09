@@ -27,20 +27,22 @@ private final class LiveLandGGRunner: GGCommandRunning, @unchecked Sendable {
     private var recordedCalls: [[String]] = []
     private var cancellations = 0
     private var targetExists = true
+    private var stackOutput = Self.stackJSON
     private var nextPreflight: LandPreflightSuspension?
     private var continuations: [AsyncThrowingStream<String, Error>.Continuation] = []
     var calls: [[String]] { lock.withLock { recordedCalls } }
     var cancellationCount: Int { lock.withLock { cancellations } }
 
     func removeTarget() { lock.withLock { targetExists = false } }
+    func replaceStack(with output: String) { lock.withLock { stackOutput = output } }
     func suspendNextPreflight(_ preflight: LandPreflightSuspension) {
         lock.withLock { nextPreflight = preflight }
     }
 
     func run(args: [String], cwd: URL?) async throws -> ProcessResult {
-        let hasTarget = lock.withLock {
+        let (hasTarget, stackOutput) = lock.withLock {
             recordedCalls.append(args)
-            return targetExists
+            return (targetExists, stackOutput)
         }
         if args.first == "ls" {
             let preflight = lock.withLock {
@@ -55,7 +57,7 @@ private final class LiveLandGGRunner: GGCommandRunning, @unchecked Sendable {
         } else if args.first == "undo" {
             stdout = #"{"version":1,"operations":[]}"#
         } else {
-            stdout = hasTarget ? Self.stackJSON : Self.stackJSON.replacingOccurrences(of: "change-1", with: "replacement")
+            stdout = hasTarget ? stackOutput : stackOutput.replacingOccurrences(of: "change-1", with: "replacement")
         }
         return ProcessResult(exitCode: 0, stdout: stdout, stderr: "")
     }
@@ -68,6 +70,24 @@ private final class LiveLandGGRunner: GGCommandRunning, @unchecked Sendable {
                 guard let self else { return }
                 self.lock.withLock { self.cancellations += 1 }
             }
+            continuation.yield(#"{"version":1,"command":"land","status":"ok","event":"start","stack":"feat","base":"main","total_entries":1}"#)
+        }
+    }
+
+    func runStreaming(
+        args: [String],
+        cwd: URL?,
+        timeout: TimeInterval?,
+        interruption: GGStreamingCancellation?
+    ) -> AsyncThrowingStream<String, Error> {
+        lock.withLock { recordedCalls.append(args) }
+        return AsyncThrowingStream { continuation in
+            lock.withLock { continuations.append(continuation) }
+            continuation.onTermination = { [weak self] _ in
+                guard let self else { return }
+                self.lock.withLock { self.cancellations += 1 }
+            }
+            interruption?.install { continuation.finish(throwing: CancellationError()) }
             continuation.yield(#"{"version":1,"command":"land","status":"ok","event":"start","stack":"feat","base":"main","total_entries":1}"#)
         }
     }
@@ -309,6 +329,22 @@ struct RightPaneGGLandTests {
         try await waitForLand { store.sessions["live-project"]?.phase == .failed }
         #expect(runner.calls.filter { $0.first == "land" }.count == 2)
         #expect(store.sessions["live-project"]?.error != nil)
+    }
+
+    @Test func restartRejectsChangedScopeWithStableTarget() async throws {
+        let store = GGLandingStore()
+        let runner = LiveLandGGRunner()
+        let state = landingState(store: store, runner: runner, supported: true)
+        state.requestGGLand(.ready)
+        try await waitForLand { state.pendingGGLand != nil }
+        state.performGGLand(appState: AppState(store: MemoryStore()))
+        try await waitForLand { runner.calls.contains { $0.first == "land" } }
+        await store.cancelAllAndWait()
+
+        runner.replaceStack(with: LiveLandGGRunner.stackJSON.replacingOccurrences(of: "\"base\":\"main\"", with: "\"base\":\"release\""))
+        state.restartGGLand(target: "change-1")
+        try await waitForLand { store.sessions["live-project"]?.phase == .failed }
+        #expect(runner.calls.filter { $0.first == "land" }.count == 1)
     }
 
     private func entry(id: String, prState: GGPRState, approved: Bool, ci: GGCIStatus?) -> GGStackEntry {
