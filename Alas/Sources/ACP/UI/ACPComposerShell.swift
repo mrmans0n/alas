@@ -818,6 +818,7 @@ struct ACPComposer: View {
         let sid = session.id
         let remoteId = session.remoteSessionId ?? sid
         var rollbackConfigOption: ACPConfigOption?
+        var optimisticConfigOption: ACPConfigOption?
         let rollbackModel = session.currentModel
         var configOptionUpdatesModel = false
         switch spec.source {
@@ -829,10 +830,12 @@ struct ACPComposer: View {
             if let idx = session.availableConfigOptions.firstIndex(where: { $0.id == id }) {
                 let old = session.availableConfigOptions[idx]
                 rollbackConfigOption = old
-                session.availableConfigOptions[idx] = ACPConfigOption(
+                let optimistic = ACPConfigOption(
                     id: old.id, name: old.name, type: old.type,
                     category: old.category, currentValue: .string(selectedId),
                     options: old.options)
+                optimisticConfigOption = optimistic
+                session.availableConfigOptions[idx] = optimistic
                 if old.category == "model" || old.category == "Model" {
                     configOptionUpdatesModel = true
                     session.currentModel = selectedId
@@ -881,17 +884,21 @@ struct ACPComposer: View {
                         currentConfigOptionsRevision: session.availableConfigOptionsRevision) else {
                         return
                     }
+                    let previousModelSource = session.chipState.models?.source
                     session.availableConfigOptions = merged
                     if case .configOption(let modelId) = session.chipState.models?.source {
                         session.currentModel = session.availableConfigOptions
                             .first { $0.id == modelId }?.currentStringValue
+                    } else if case .configOption = previousModelSource,
+                              session.chipState.models == nil {
+                        session.currentModel = nil
                     }
                     manager.persist(session)
                 } catch {
-                    guard session.availableConfigOptionsRevision == baselineConfigOptionsRevision,
-                          let rollbackConfigOption,
+                    guard let rollbackConfigOption,
+                          let optimisticConfigOption,
                           let idx = session.availableConfigOptions.firstIndex(where: { $0.id == id }),
-                          session.availableConfigOptions[idx].currentValue == .string(selectedId) else {
+                          session.availableConfigOptions[idx] == optimisticConfigOption else {
                         return
                     }
                     session.availableConfigOptions[idx] = rollbackConfigOption
