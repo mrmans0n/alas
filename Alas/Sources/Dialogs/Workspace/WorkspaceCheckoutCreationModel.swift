@@ -28,6 +28,12 @@ struct WorkspaceCheckoutCreationModel: Equatable {
         self.init(workspace: workspace, branch: branchPrefix, rootPath: rootPath, baseReference: baseReference)
     }
 
+    static func checkoutRoot(parentPath: String, branch: String) -> String {
+        URL(fileURLWithPath: parentPath)
+            .appendingPathComponent(branch.replacingOccurrences(of: "/", with: "-"))
+            .path
+    }
+
     var preflightMessages: [String] {
         guard case .failure(let diagnostics) = preflightResult else { return [] }
         return diagnostics.map(\.message)

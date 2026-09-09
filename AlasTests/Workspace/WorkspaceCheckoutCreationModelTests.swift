@@ -10,6 +10,15 @@ struct WorkspaceCheckoutCreationModelTests {
         #expect(model.request().branch == "feature/")
     }
 
+    @Test func checkoutFolderForSelectedParentIncludesBranch() {
+        #expect(
+            WorkspaceCheckoutCreationModel.checkoutRoot(
+                parentPath: "/checkouts",
+                branch: "feature/my-change"
+            ) == "/checkouts/feature-my-change"
+        )
+    }
+
     @Test func advancesThroughThreeStepsOnlyWithSharedBranchAndRoot() {
         let workspace = fixtureWorkspace()
         var model = WorkspaceCheckoutCreationModel(workspace: workspace, rootPath: "")

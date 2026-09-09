@@ -313,7 +313,7 @@ struct CreateWorkspaceCheckoutDialog: View {
                 HStack(spacing: 8) {
                     AlasField(text: $model.rootPath, placeholder: "/path/to/checkouts/my-change", monospaced: true)
                     if workspace.executionLocation == .local {
-                        ToolbarBtn(icon: "folder", tooltip: "Choose checkout folder", action: chooseCheckoutFolder)
+                        ToolbarBtn(icon: "folder", tooltip: "Choose checkout parent folder", action: chooseCheckoutFolder)
                     }
                 }
             }
@@ -436,7 +436,10 @@ struct CreateWorkspaceCheckoutDialog: View {
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         if panel.runModal() == .OK, let url = panel.url {
-            model.rootPath = url.path
+            model.rootPath = WorkspaceCheckoutCreationModel.checkoutRoot(
+                parentPath: url.path,
+                branch: model.branch
+            )
         }
     }
 
