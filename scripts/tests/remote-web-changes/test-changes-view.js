@@ -36,6 +36,16 @@ const view = globalThis.RemoteChangesView;
 }
 
 {
+  const summary = view.formatSummary({
+    comparisonRef: null,
+    files: [{ path: "mixed.txt", add: 2, del: 0 }],
+    staged: [{ path: "mixed.txt", add: 1, del: 0 }],
+    unstaged: [{ path: "mixed.txt", add: 1, del: 0 }]
+  });
+  assert.equal(summary, "1 file · +2 −0");
+}
+
+{
   assert.equal(view.formatFileCounts({ add: 12, del: 3 }), "+12 −3");
 }
 

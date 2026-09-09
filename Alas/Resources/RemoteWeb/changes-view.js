@@ -36,9 +36,10 @@ function changeSections(state) {
 function formatSummary(state) {
   const staged = (state && state.staged) || [];
   const unstaged = (state && state.unstaged) || [];
-  const files = staged.length || unstaged.length
-    ? Array.from(new Map(staged.concat(unstaged).map((file) => [file.path, file])).values())
-    : (state && state.files) || [];
+  const allFiles = (state && state.files) || [];
+  const files = allFiles.length
+    ? allFiles
+    : Array.from(new Map(staged.concat(unstaged).map((file) => [file.path, file])).values());
   let add = 0;
   let del = 0;
   for (const file of files) {
