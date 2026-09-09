@@ -6,6 +6,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.15.5] - 2026-09-09
+
+### ✨ Features
+
+- Show live GitGud landing progress in a dedicated tab (#1152).
+- Improve remote worktree Changes and Files tabs (#1134).
+- Polish the workspace sidebar and overview (#1136).
+
+### 🐛 Fixes
+
+- Retry MCP registration when the first attempt does not complete (#1135).
+- Restore ACP models supplied through configuration options (#1137).
+
 ## [0.15.4] - 2026-09-09
 
 ### ✨ Features
