@@ -345,6 +345,15 @@ extension GitService {
         return Self.looksBinary(prefix)
     }
 
+    func looksBinaryAtIndex(worktreePath: URL, file: String) async throws -> Bool? {
+        let existsAtIndex = try await Process.git(
+            ["cat-file", "-e", ":\(file)"], cwd: worktreePath)
+        guard existsAtIndex.exitCode == 0 else { return nil }
+        let prefix = try await Process.gitDataPrefix(
+            ["show", ":\(file)"], cwd: worktreePath, maxBytes: 8192)
+        return Self.looksBinary(prefix)
+    }
+
     /// `git cat-file -e <ref>:<file>` exits with the SAME code (128,
     /// empirically, on git 2.50) both when the object genuinely doesn't
     /// exist at `ref` AND for unrelated fatal errors (an invalid ref name,

@@ -140,6 +140,9 @@ extension GitService {
             ? ["diff", "--numstat", "HEAD"]
             : ["diff", "--numstat", "4b825dc642cb6eb9a060e54bf8d69288fbee4904"]   // canonical empty tree
         let workingTreeNumstat = try await Process.git(workingTreeNumstatArgs, cwd: worktreePath)
+        guard workingTreeNumstat.exitCode == 0 else {
+            throw ProcessError.nonZeroExit(workingTreeNumstat.exitCode, workingTreeNumstat.stderr)
+        }
         let workingTreeCounts = NumstatParser.parse(workingTreeNumstat.stdout)
         // Index-only metric — correct for `.staged` entries. Without this,
         // an "AM" path (staged, then further modified in the working tree)
@@ -151,6 +154,9 @@ extension GitService {
             ? ["diff", "--cached", "--numstat", "HEAD"]
             : ["diff", "--cached", "--numstat", "4b825dc642cb6eb9a060e54bf8d69288fbee4904"]
         let stagedNumstat = try await Process.git(stagedNumstatArgs, cwd: worktreePath)
+        guard stagedNumstat.exitCode == 0 else {
+            throw ProcessError.nonZeroExit(stagedNumstat.exitCode, stagedNumstat.stderr)
+        }
         let stagedCounts = NumstatParser.parse(stagedNumstat.stdout)
         let untrackedPaths = entries.filter { $0.add == 0 && $0.del == 0 }.map(\.path)
         let remoteCounts: [String: Int]

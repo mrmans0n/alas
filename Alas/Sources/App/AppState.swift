@@ -10375,7 +10375,8 @@ extension AppState: RemoteSessionsProvider {
     /// since the file is new) collapsed to "not binary" and produced a
     /// misleading empty "successful" diff.
     private func isDiffTargetBinary(
-        worktree: Worktree, normalizedPath: String, url: URL, comparisonRef: String?, git: GitService
+        worktree: Worktree, normalizedPath: String, url: URL, comparisonRef: String?, git: GitService,
+        missingFileUsesIndex: Bool = false
     ) async -> Bool {
         let existsOnDisk: Bool
         let onDiskLooksBinary: Bool
@@ -10406,6 +10407,9 @@ extension AppState: RemoteSessionsProvider {
         }
         if onDiskLooksBinary { return true }
         if existsOnDisk { return false }
+        if missingFileUsesIndex {
+            return (try? await git.looksBinaryAtIndex(worktreePath: worktree.path, file: normalizedPath)) ?? false
+        }
         guard let comparisonRef, !comparisonRef.isEmpty else { return false }
         return (try? await git.looksBinaryAtRef(worktreePath: worktree.path, ref: comparisonRef, file: normalizedPath)) ?? false
     }
@@ -10570,7 +10574,8 @@ extension AppState: RemoteSessionsProvider {
             }
             if changeStage != .staged, await isDiffTargetBinary(
                 worktree: worktree, normalizedPath: normalizedPath, url: url,
-                comparisonRef: commits.comparisonRef, git: git
+                comparisonRef: commits.comparisonRef, git: git,
+                missingFileUsesIndex: changeStage == .unstaged
             ) {
                 return .failure(reason: .binary, message: nil)
             }

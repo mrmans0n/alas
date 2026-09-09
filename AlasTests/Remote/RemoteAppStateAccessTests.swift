@@ -1618,6 +1618,41 @@ struct RemoteAppStateAccessTests {
         }
     }
 
+    @Test func remoteFileDiffUsesTheIndexForAMissingUnstagedDiffBinaryCheck() async throws {
+        let repository = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-remote-missing-unstaged-index-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: repository, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: repository) }
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: repository)
+        _ = try await Process.git(["config", "user.email", "test@example.com"], cwd: repository)
+        _ = try await Process.git(["config", "user.name", "Test User"], cwd: repository)
+        let file = repository.appendingPathComponent("mixed.dat")
+        try Data([0x00, 0x01, 0x02]).write(to: file)
+        _ = try await Process.git(["add", "mixed.dat"], cwd: repository)
+        _ = try await Process.git(["commit", "-q", "-m", "base"], cwd: repository)
+        _ = try await Process.git(["checkout", "-q", "-b", "feature/remote"], cwd: repository)
+        try "staged text\n".write(to: file, atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "mixed.dat"], cwd: repository)
+        try FileManager.default.removeItem(at: file)
+
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId { cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId) }
+        }
+        let state = makeRemoteGitBackedState(repositoryPath: repository)
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let tab = try #require(acpTabs(in: state).first)
+
+        let diffResult = await state.remoteFileDiff(sessionId: tab.sessionId, path: "mixed.dat", stage: "unstaged")
+        guard case let .success(hunks, _, _) = diffResult else {
+            Issue.record("expected unstaged text deletion diff, got \(diffResult)")
+            return
+        }
+        #expect(hunks.flatMap(\.lines).contains { $0.kind == "delete" && $0.text == "staged text" })
+    }
+
     @Test func remoteFileDiffUsesOriginalPathForAnUnstagedRename() async throws {
         let repository = try await makeRemoteBranchesRepository()
         defer { try? FileManager.default.removeItem(at: repository) }
