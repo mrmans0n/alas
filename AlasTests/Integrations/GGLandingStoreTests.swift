@@ -70,6 +70,49 @@ struct GGLandingStoreTests {
         #expect(store.begin(seed(projectId: "other")))
     }
 
+    @Test func cancellationBeforeAttachCancelsRawOperationAndWaitsForCleanup() async {
+        let store = GGLandingStore()
+        let cleanup = LandingTestSuspension()
+        let rawOperation = Task<Void, Error> {
+            await cleanup.suspend()
+            try Task.checkCancellation()
+        }
+        let completion = Task<Void, Error> { try await rawOperation.value }
+        await cleanup.waitUntilSuspended()
+        store.begin(seed())
+        store.cancel(projectId: "p")
+        #expect(store.sessions["p"]?.phase == .cancelling)
+
+        var cancellationCount = 0
+        store.attach(projectId: "p", task: completion) {
+            cancellationCount += 1
+            rawOperation.cancel()
+        }
+        #expect(rawOperation.isCancelled)
+        #expect(!completion.isCancelled)
+        #expect(cancellationCount == 1)
+        store.cancel(projectId: "p")
+        #expect(cancellationCount == 1)
+        #expect(store.sessions["p"]?.phase == .cancelling)
+        #expect(!store.begin(seed()))
+
+        await cleanup.release()
+        await store.waitForOperation(projectId: "p")
+        #expect(store.sessions["p"]?.phase == .cancelled)
+        #expect(store.sessions["p"]?.error == nil)
+        #expect(store.begin(seed()))
+    }
+
+    @Test func preflightFailureAfterCancellationFinishesAsCancelled() {
+        let store = GGLandingStore()
+        store.begin(seed())
+        store.cancel(projectId: "p")
+        store.fail(projectId: "p", message: "Target no longer exists")
+        #expect(store.sessions["p"]?.phase == .cancelled)
+        #expect(store.sessions["p"]?.error == nil)
+        #expect(store.begin(seed()))
+    }
+
     @Test func beginSeedsSessionAndReplacesTerminalAttempt() throws {
         let store = GGLandingStore()
         let startedAt = Date(timeIntervalSince1970: 1_000)

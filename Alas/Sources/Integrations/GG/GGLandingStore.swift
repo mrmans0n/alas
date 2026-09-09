@@ -140,7 +140,8 @@ final class GGLandingStore {
         task: Task<Void, Error>,
         cancel: @escaping @MainActor () -> Void
     ) {
-        guard let session = sessions[projectId], session.phase == .running,
+        guard let session = sessions[projectId],
+              session.phase == .running || session.phase == .cancelling,
               operations[projectId] == nil
         else {
             cancel()
@@ -171,12 +172,13 @@ final class GGLandingStore {
             }
         }
         operations[projectId] = Operation(id: operationId, monitor: monitor, cancel: cancel)
+        if session.phase == .cancelling {
+            requestCancellation(projectId: projectId)
+        }
     }
 
     func cancel(projectId: String) {
-        guard var session = sessions[projectId], session.phase == .running,
-              operations[projectId] != nil
-        else { return }
+        guard var session = sessions[projectId], session.phase == .running else { return }
         session.phase = .cancelling
         sessions[projectId] = session
         requestCancellation(projectId: projectId)
@@ -200,11 +202,13 @@ final class GGLandingStore {
     }
 
     func fail(projectId: String, message: String) {
-        guard var session = sessions[projectId], session.phase == .running else { return }
-        session.phase = .failed
+        guard var session = sessions[projectId],
+              session.phase == .running || (session.phase == .cancelling && operations[projectId] == nil)
+        else { return }
+        session.phase = session.phase == .cancelling ? .cancelled : .failed
         session.activeWait = nil
         session.warning = nil
-        session.error = message
+        session.error = session.phase == .cancelled ? nil : message
         sessions[projectId] = session
     }
 
