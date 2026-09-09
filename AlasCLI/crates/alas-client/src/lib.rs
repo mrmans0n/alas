@@ -602,20 +602,33 @@ pub fn hello_payload(session_id: &str, transport: &str) -> serde_json::Value {
     })
 }
 
-/// Best-effort: send the hello and ignore the ack/errors — a failed hello
-/// must never stop the MCP server from serving.
+/// Best-effort: retry the hello without delaying MCP initialization.
 pub fn send_hello(socket: &Path, session_id: &str, transport: &str) {
     let payload = match serde_json::to_vec(&hello_payload(session_id, transport)) {
         Ok(p) => p,
         Err(_) => return,
     };
-    if let Ok(mut stream) = UnixStream::connect(socket) {
-        let _ = stream.set_read_timeout(Some(PROBE_TIMEOUT));
-        let _ = stream.write_all(&payload);
-        let _ = stream.flush();
-        let mut buf = Vec::new();
-        let _ = stream.read_to_end(&mut buf);
-    }
+    let socket = socket.to_path_buf();
+    let _ = std::thread::Builder::new()
+        .name("alas-mcp-hello".into())
+        .spawn(move || {
+            for attempt in 0..3 {
+                let sent = UnixStream::connect(&socket).and_then(|mut stream| {
+                    stream.set_read_timeout(Some(PROBE_TIMEOUT))?;
+                    stream.write_all(&payload)?;
+                    stream.flush()?;
+                    let mut buf = Vec::new();
+                    stream.read_to_end(&mut buf)?;
+                    Ok(())
+                });
+                if sent.is_ok() {
+                    return;
+                }
+                if attempt < 2 {
+                    std::thread::sleep(Duration::from_secs(1));
+                }
+            }
+        });
 }
 
 /// How the CLI addresses the app: an exact pane (inside Alas) or a directory
@@ -735,8 +748,13 @@ pub fn dispatch_to_sockets(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
     use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::net::UnixListener;
     use std::path::Path;
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     #[test]
     fn absolutize_joins_relative_against_base_without_resolving_symlinks() {
@@ -767,6 +785,76 @@ mod tests {
         assert_eq!(v["kind"], "mcp_hello");
         assert_eq!(v["session_id"], "SID-1");
         assert_eq!(v["transport"], "stdio");
+    }
+
+    #[test]
+    fn send_hello_retries_until_socket_is_available() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let socket = std::env::temp_dir().join(format!(
+            "alas-hello-{}-{unique}.sock",
+            std::process::id()
+        ));
+        let server_socket = socket.clone();
+        let server = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(100));
+            let listener = UnixListener::bind(&server_socket).unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let deadline = Instant::now() + Duration::from_millis(2_500);
+            loop {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let mut payload = [0; 512];
+                        let count = stream.read(&mut payload).unwrap();
+                        stream.write_all(b"{}").unwrap();
+                        return Some(payload[..count].to_vec());
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        if Instant::now() >= deadline {
+                            return None;
+                        }
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("accept failed: {error}"),
+                }
+            }
+        });
+
+        send_hello(&socket, "SID-retry", "stdio");
+
+        let payload = server.join().unwrap().expect("hello was not retried");
+        let hello: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+        assert_eq!(hello["session_id"], "SID-retry");
+        let _ = std::fs::remove_file(socket);
+    }
+
+    #[test]
+    fn send_hello_does_not_block_when_ack_is_delayed() {
+        let socket = std::env::temp_dir().join(format!(
+            "alas-hello-{}-delayed.sock",
+            std::process::id()
+        ));
+        let listener = UnixListener::bind(&socket).unwrap();
+        let (accepted_tx, accepted_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut payload = [0; 512];
+            stream.read(&mut payload).unwrap();
+            accepted_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+
+        let started = Instant::now();
+        send_hello(&socket, "SID-delayed", "stdio");
+        assert!(started.elapsed() < Duration::from_millis(100));
+        accepted_rx.recv_timeout(Duration::from_millis(300)).unwrap();
+
+        release_tx.send(()).unwrap();
+        server.join().unwrap();
+        let _ = std::fs::remove_file(socket);
     }
 
     #[test]
