@@ -201,6 +201,10 @@ extension GitService {
     }
 
     func diff(worktreePath: URL, file: String, staged: Bool = false, originalPath: String? = nil) async throws -> ParsedDiff {
+        try await remoteDiff(worktreePath: worktreePath, file: file, staged: staged, originalPath: originalPath, maxOutputBytes: nil)
+    }
+
+    func remoteDiff(worktreePath: URL, file: String, staged: Bool, originalPath: String?, maxOutputBytes: Int?) async throws -> ParsedDiff {
         // Untracked files have no HEAD entry, so `git diff HEAD -- <path>`
         // returns nothing. Detect via `git ls-files --error-unmatch` (exit 0
         // iff tracked) and fall back to comparing against /dev/null so the
@@ -210,10 +214,9 @@ extension GitService {
             cwd: worktreePath
         )
         if tracked.exitCode != 0 && !staged {
-            let result = try await Process.git(
-                ["diff", "--no-color", "--no-index", "--", "/dev/null", file],
-                cwd: worktreePath
-            )
+            let result = try await Process.gitCapped(
+                ["diff", "--no-color", "--no-index", "--", "/dev/null", file], cwd: worktreePath,
+                maxOutputBytes: maxOutputBytes ?? .max)
             // `git diff --no-index` exits non-zero (1) when there ARE differences
             // — that's the normal case for an untracked file. Only treat exit
             // codes >= 2 as real failures.
@@ -242,7 +245,7 @@ extension GitService {
         if let originalPath, !originalPath.isEmpty {
             args.append(originalPath)
         }
-        let result = try await Process.git(args, cwd: worktreePath)
+        let result = try await Process.gitCapped(args, cwd: worktreePath, maxOutputBytes: maxOutputBytes ?? .max)
         let stdout = originalPath?.isEmpty == false
             ? Self.sliceDiffForFile(result.stdout, file: file)
             : result.stdout

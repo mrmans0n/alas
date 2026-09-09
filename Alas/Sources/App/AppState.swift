@@ -10507,7 +10507,8 @@ extension AppState: RemoteSessionsProvider {
                 staged: cappedWorkingTree.files.filter { $0.stage == .staged }.map(Self.remoteChangedFile),
                 unstaged: cappedWorkingTree.files.filter { $0.stage == .unstaged }.map(Self.remoteChangedFile),
                 commits: commits.commits.prefix(100).map(Self.remoteCommit),
-                truncated: capped.truncated || cappedWorkingTree.truncated || commits.commits.count > 100)
+                truncated: capped.truncated || cappedWorkingTree.truncated,
+                commitsTruncated: commits.commits.count > 100)
         } catch {
             return .failure(reason: .gitFailed, message: error.localizedDescription)
         }
@@ -10578,9 +10579,10 @@ extension AppState: RemoteSessionsProvider {
                 let originalPath = changeStage == .staged
                     ? try await git.status(worktreePath: worktree.path).first { $0.path == normalizedPath }?.renameFrom
                     : nil
-                parsed = try await git.diff(
+                parsed = try await git.remoteDiff(
                     worktreePath: worktree.path, file: normalizedPath,
-                    staged: changeStage == .staged, originalPath: originalPath)
+                    staged: changeStage == .staged, originalPath: originalPath,
+                    maxOutputBytes: RemoteWorktreeFileAccess.maxDiffSubprocessBytes)
             } else {
                 parsed = try await git.diff(
                     worktreePath: worktree.path,

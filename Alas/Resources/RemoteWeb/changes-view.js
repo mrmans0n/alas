@@ -49,7 +49,7 @@ function formatSummary(state) {
   const totals = count + " · +" + add + " −" + del;
   const ref = state && state.comparisonRef;
   const commitCount = ((state && state.commits) || []).length;
-  const commits = commitCount ? " · " + commitCount + (commitCount === 1 ? " commit" : " commits") : "";
+  const commits = commitCount ? " · " + commitCount + (state && state.commitsTruncated ? "+" : "") + (commitCount === 1 ? " commit" : " commits") : "";
   return (ref ? "vs " + ref + " · " : "") + totals + commits;
 }
 

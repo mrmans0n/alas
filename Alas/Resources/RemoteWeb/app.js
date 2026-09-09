@@ -324,7 +324,7 @@ function handle(msg) {
         files: msg.files || [],
         staged: msg.staged || [],
         unstaged: msg.unstaged || [],
-        commits: msg.commits || [],
+        commits: msg.commits || [], commitsTruncated: !!msg.commitsTruncated,
         truncated: !!msg.truncated,
         loaded: true
       };
@@ -645,6 +645,7 @@ function renderChanges() {
 
   const notice = RemoteChangesView.truncationNotice(changesState.truncated, "files");
   if (notice) list.append(el("p", "placeholder-card", notice));
+  if (changesState.commitsTruncated) list.append(el("p", "placeholder-card", "Commit list truncated — showing the first 100 commits."));
 }
 
 function openDiff(path, stage = null) {
