@@ -104,24 +104,42 @@ struct ACPConfigOption: Codable, Equatable, Identifiable, Hashable {
             return nil
         }
 
-        return configOptions.map { option in
+        var merged: [ACPConfigOption] = []
+        for option in configOptions {
             if option.id == configId {
-                return ACPConfigOption(
+                merged.append(ACPConfigOption(
                     id: option.id,
                     name: option.name,
                     type: option.type,
                     category: option.category,
                     currentValue: selectedValue,
-                    options: option.options)
+                    options: option.options))
+                continue
             }
             if let baselineConfigOptions,
-               let baseline = baselineConfigOptions.first(where: { $0.id == option.id }),
-               let current = currentConfigOptions.first(where: { $0.id == option.id }),
-               current != baseline {
-                return current
+               let baseline = baselineConfigOptions.first(where: { $0.id == option.id }) {
+                guard let current = currentConfigOptions.first(where: { $0.id == option.id }) else {
+                    continue
+                }
+                merged.append(current == baseline ? option : current)
+                continue
             }
-            return option
+            if let baselineConfigOptions,
+               baselineConfigOptions.contains(where: { $0.id == option.id }) == false,
+               let current = currentConfigOptions.first(where: { $0.id == option.id }) {
+                merged.append(current)
+                continue
+            }
+            merged.append(option)
         }
+        if let baselineConfigOptions {
+            let mergedIds = Set(merged.map(\.id))
+            merged.append(contentsOf: currentConfigOptions.filter { current in
+                !mergedIds.contains(current.id)
+                    && !baselineConfigOptions.contains(where: { $0.id == current.id })
+            })
+        }
+        return merged
     }
 }
 
