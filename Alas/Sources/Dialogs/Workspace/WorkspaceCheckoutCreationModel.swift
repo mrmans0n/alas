@@ -30,7 +30,8 @@ struct WorkspaceCheckoutCreationModel: Equatable {
     }
 
     static func checkoutRoot(parentPath: String, branch: String) -> String {
-        guard !branch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "" }
+        let branch = branch.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !branch.isEmpty else { return "" }
         URL(fileURLWithPath: parentPath)
             .appendingPathComponent(branch.replacingOccurrences(of: "/", with: "-"))
             .path

@@ -19,6 +19,15 @@ struct WorkspaceCheckoutCreationModelTests {
         )
     }
 
+    @Test func checkoutFolderUsesTrimmedBranch() {
+        #expect(
+            WorkspaceCheckoutCreationModel.checkoutRoot(
+                parentPath: "/checkouts",
+                branch: " feature/my-change "
+            ) == "/checkouts/feature-my-change"
+        )
+    }
+
     @Test func selectedCheckoutParentDerivesRootWhenBranchIsEnteredLater() {
         var model = WorkspaceCheckoutCreationModel(workspace: fixtureWorkspace())
 
