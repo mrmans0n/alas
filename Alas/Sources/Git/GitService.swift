@@ -203,21 +203,23 @@ extension GitService {
     func statusForRemoteChangeList(worktreePath: URL) async throws -> [ChangedFile] {
         var entries = try await status(worktreePath: worktreePath)
         let numstat = try await Process.git(
-            ["-c", "core.quotePath=false", "diff", "--numstat", "-M", "-C"],
+            ["-c", "core.quotePath=false", "diff", "--numstat", "-z", "-M", "-C"],
             cwd: worktreePath
         )
         guard numstat.exitCode == 0 else {
             throw ProcessError.nonZeroExit(numstat.exitCode, numstat.stderr)
         }
-        let counts = NumstatParser.parse(numstat.stdout)
+        let counts = Self.parseNumstatZOutput(numstat.stdout)
         for i in entries.indices where entries[i].stage == .unstaged {
-            guard let count = counts[entries[i].path] else { continue }
+            guard let add = counts.add[entries[i].path],
+                  let del = counts.del[entries[i].path]
+            else { continue }
             entries[i] = ChangedFile(
                 path: entries[i].path,
                 status: entries[i].status,
                 stage: entries[i].stage,
-                add: count.add,
-                del: count.del,
+                add: add,
+                del: del,
                 renameFrom: entries[i].renameFrom,
                 conflict: entries[i].conflict)
         }

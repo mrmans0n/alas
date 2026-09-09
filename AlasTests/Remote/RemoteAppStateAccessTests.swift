@@ -1088,6 +1088,38 @@ struct RemoteAppStateAccessTests {
         #expect(unstaged.first { $0.path == "a.txt" }?.del == 1)
     }
 
+    @Test func remoteChangeListMatchesUnstagedTabPathCountsByRawPath() async throws {
+        let repository = try await makeRemoteBranchesRepository()
+        defer { try? FileManager.default.removeItem(at: repository) }
+        let path = "a\tb.txt"
+        let file = repository.appendingPathComponent(path)
+        try "one\n".write(to: file, atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", path], cwd: repository)
+        _ = try await Process.git(["commit", "-q", "-m", "base"], cwd: repository)
+        try "one\ntwo\n".write(to: file, atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", path], cwd: repository)
+        try "one\nTWO\n".write(to: file, atomically: true, encoding: .utf8)
+
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId { cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId) }
+        }
+        let state = makeRemoteGitBackedState(repositoryPath: repository)
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let tab = try #require(acpTabs(in: state).first)
+
+        let result = await state.remoteChangeList(sessionId: tab.sessionId)
+        guard case let .success(_, _, _, _, unstaged, _, _, _) = result else {
+            Issue.record("expected a successful change list, got \(result)")
+            return
+        }
+        let row = try #require(unstaged.first { $0.path == path })
+        #expect(row.add == 1)
+        #expect(row.del == 1)
+    }
+
     @Test func remoteFileContentsAndDiffRejectAGitignoredFile() async throws {
         let repository = try await makeRemoteBranchesRepository()
         defer { try? FileManager.default.removeItem(at: repository) }
