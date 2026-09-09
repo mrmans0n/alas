@@ -525,6 +525,49 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(session.currentModel == "sonnet")
     }
 
+    @Test("reopened session reapplies a persisted config-option model after load")
+    func reopenedSessionReappliesPersistedConfigOptionModel() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            agentId: "codex",
+            currentModel: "sonnet"
+        ))
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [],
+                availableModes: [],
+                currentModel: "opus",
+                currentMode: nil,
+                promptSuggestions: [],
+                configOptions: [ACPConfigOption(
+                    id: "model",
+                    name: "Model",
+                    category: "model",
+                    currentValue: "opus",
+                    options: [
+                        .init(id: "sonnet", name: "Sonnet"),
+                        .init(id: "opus", name: "Opus"),
+                    ])]
+            ))
+        }
+        client.script(method: "session/set_config_option") { _ in Data("{}".utf8) }
+        let manager = manager(store: store, client: client)
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        await manager.attach(to: session.id, freshlyCreated: false)
+
+        #expect(client.sent.map(\.method) == ["initialize", "session/load", "session/set_config_option"])
+        let params = try #require(client.sent.last?.params as? ACPSessionSetConfigOptionParams)
+        #expect(params.sessionId == "remote-old")
+        #expect(params.configId == "model")
+        #expect(params.value == .string("sonnet"))
+    }
+
     @Test("reopened session keeps the loaded model when restoration fails")
     func reopenedSessionKeepsLoadedModelWhenRestorationFails() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())

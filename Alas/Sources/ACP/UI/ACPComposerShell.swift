@@ -829,6 +829,9 @@ struct ACPComposer: View {
                     id: old.id, name: old.name, type: old.type,
                     category: old.category, currentValue: .string(selectedId),
                     options: old.options)
+                if old.category == "model" || old.category == "Model" {
+                    session.currentModel = selectedId
+                }
             }
         }
         manager.persist(session)
