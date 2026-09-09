@@ -398,6 +398,41 @@ struct ChangesTabViewTests {
         #expect(ChangesTabView.reconciliationAction(from: readiness) == nil)
     }
 
+    @Test func landingStatusUsesOnlyActiveSessions() {
+        var session = landingSession(phase: .running)
+        session.activeWait = GGLandWait(
+            position: 2,
+            prNumber: 42,
+            phase: .readiness,
+            poll: 1,
+            elapsedSeconds: 12,
+            ciStatus: "running",
+            approved: true,
+            mergeTrainStatus: nil,
+            mergeTrainPosition: nil,
+            pipelineRunning: nil,
+            error: nil
+        )
+        session.rows[0].outcome = GGLandedEntry(
+            position: 1,
+            title: "First",
+            ggId: nil,
+            prNumber: 41,
+            action: "merged",
+            error: nil
+        )
+        session.rows[1].wait = session.activeWait
+
+        #expect(ChangesTabView.landingStatus(from: session) == .init(
+            completed: 1,
+            total: 2,
+            reviewNumber: 42,
+            detail: "CI running · Approved · Waiting 12s"
+        ))
+        session.phase = .succeeded
+        #expect(ChangesTabView.landingStatus(from: session) == nil)
+    }
+
     private func stack(
         currentPosition: Int?,
         entries: [GGStackEntry] = [
@@ -450,6 +485,27 @@ struct ChangesTabViewTests {
             currentPosition: 1,
             behindBase: behindBase,
             entries: [entry]
+        )
+    }
+
+    private func landingSession(phase: GGLandingPhase) -> GGLandingSession {
+        GGLandingSession(
+            id: UUID(),
+            projectId: "project",
+            worktreeId: "worktree",
+            stack: "feat",
+            base: "main",
+            target: "stack",
+            startedAt: Date(timeIntervalSince1970: 0),
+            rows: [
+                GGLandingRow(position: 1, title: "First", ggId: nil, prNumber: 41),
+                GGLandingRow(position: 2, title: "Second", ggId: nil, prNumber: 42),
+            ],
+            phase: phase,
+            activeWait: nil,
+            warning: nil,
+            result: nil,
+            error: nil
         )
     }
 }

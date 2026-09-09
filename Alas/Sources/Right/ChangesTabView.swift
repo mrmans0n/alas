@@ -38,6 +38,9 @@ struct ChangesTabView: View {
                 ),
                 mutationError: rps.ggActionState.lastError,
                 reconciliationAction: Self.reconciliationAction(from: ggReadinessModel),
+                landingStatus: Self.landingStatus(
+                    from: GGLandingStore.shared.sessions[rps.worktree.projectId]
+                ),
                 syncProgress: GGStackReadinessModel.syncProgress(
                     action: rps.ggActionState,
                     base: rps.ggStack?.base ?? rps.baseBranch,
@@ -237,6 +240,23 @@ struct ChangesTabView: View {
         }
     }
 
+    static func landingStatus(
+        from session: GGLandingSession?
+    ) -> ChangesPreparationModel.GGLandingStatus? {
+        guard let session,
+              session.phase == .running || session.phase == .cancelling
+        else { return nil }
+        let row = session.rows.first { GGLandingPresentation.isActive($0, in: session) }
+            ?? session.rows.first { $0.outcome == nil }
+        return ChangesPreparationModel.GGLandingStatus(
+            completed: session.rows.filter { $0.outcome != nil && $0.outcome?.error == nil }.count,
+            total: session.rows.count,
+            reviewNumber: row?.prNumber,
+            detail: row.map { GGLandingPresentation.detail(for: $0, in: session) }
+                ?? (session.phase == .cancelling ? "Cancelling..." : "Landing...")
+        )
+    }
+
     private var appKitScrollPlan: AppKitDiffRowPlan {
         let preparation = preparationModel
         let workingTree = workingTreeSection
@@ -321,7 +341,8 @@ struct ChangesTabView: View {
                     onGGAction: handleGGPreparationAction,
                     onGGStackAction: { rps.onGGStackAction($0, appState: appState) },
                     onReviewRequestAction: { rps.handleReviewReadinessAction($0, appState: appState) },
-                    onDismissSyncFailure: { rps.ggActionState.dismissCompletedSyncFailure() }
+                    onDismissSyncFailure: { rps.ggActionState.dismissCompletedSyncFailure() },
+                    onOpenGGLanding: { appState.openGGLanding(projectId: rps.worktree.projectId) }
                 )
             })
         }

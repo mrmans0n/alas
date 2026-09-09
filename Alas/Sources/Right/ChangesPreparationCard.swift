@@ -46,33 +46,19 @@ struct ChangesPreparationCard: View {
     let onGGStackAction: (GGStackActionKind) -> Void
     let onReviewRequestAction: (ReviewReadinessActionKind) -> Void
     let onDismissSyncFailure: () -> Void
+    let onOpenGGLanding: () -> Void
 
     @Environment(\.theme) private var theme
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
             header
-            if let syncProgress = model.syncProgress {
+            if let landing = model.landingStatus {
+                ggLandingStatusView(landing)
+            } else if let syncProgress = model.syncProgress {
                 syncProgressView(syncProgress)
             } else {
-                if let reviewAction = model.reviewAction {
-                    primaryReviewButton(reviewAction)
-                }
-                if let reconciliationAction = model.reconciliationAction {
-                    ggReconciliationButton(reconciliationAction)
-                }
-                if !model.ggActions.isEmpty {
-                    LazyVGrid(columns: [GridItem(.flexible(minimum: 0)), GridItem(.flexible(minimum: 0))], spacing: 6) {
-                        ForEach(model.ggActions, id: \.kind) { action in
-                            ggDestinationButton(action)
-                        }
-                    }
-                } else if model.draftAction != nil || model.publishAction != nil || !model.reviewRequestActions.isEmpty {
-                    ViewThatFits(in: .horizontal) {
-                        secondaryActionsHorizontal
-                        secondaryActionsVertical
-                    }
-                }
+                prepareActions
             }
             if let error = model.mutationError {
                 Text(error)
@@ -95,6 +81,71 @@ struct ChangesPreparationCard: View {
         .padding(.top, 8)
         .padding(.bottom, 6)
         .accessibilityIdentifier("changes-preparation-card")
+    }
+
+    @ViewBuilder
+    private var prepareActions: some View {
+        if let reviewAction = model.reviewAction {
+            primaryReviewButton(reviewAction)
+        }
+        if let reconciliationAction = model.reconciliationAction {
+            ggReconciliationButton(reconciliationAction)
+        }
+        if !model.ggActions.isEmpty {
+            LazyVGrid(columns: [GridItem(.flexible(minimum: 0)), GridItem(.flexible(minimum: 0))], spacing: 6) {
+                ForEach(model.ggActions, id: \.kind) { action in
+                    ggDestinationButton(action)
+                }
+            }
+        } else if model.draftAction != nil || model.publishAction != nil || !model.reviewRequestActions.isEmpty {
+            ViewThatFits(in: .horizontal) {
+                secondaryActionsHorizontal
+                secondaryActionsVertical
+            }
+        }
+    }
+
+    private func ggLandingStatusView(_ landing: ChangesPreparationModel.GGLandingStatus) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 8) {
+                Spinner(lineWidth: 1.5, duration: 0.8)
+                    .frame(width: 12, height: 12)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Landing \(landing.completed) of \(landing.total)")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(theme.color("fg"))
+                    Text(landingDetail(landing))
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(theme.color("fg-faint"))
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+            Button(action: onOpenGGLanding) {
+                Text("Open landing")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .frame(maxWidth: .infinity, minHeight: 30)
+                    .contentShape(RoundedRectangle(cornerRadius: 6))
+            }
+            .buttonStyle(.plain)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(theme.color("bg-2").opacity(0.72))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(theme.color("line").opacity(0.65), lineWidth: 0.75)
+            )
+            .accessibilityIdentifier("changes-preparation-open-gg-landing")
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("changes-preparation-gg-landing")
+    }
+
+    private func landingDetail(_ landing: ChangesPreparationModel.GGLandingStatus) -> String {
+        let review = landing.reviewNumber.map { "#\($0) · " } ?? ""
+        return review + landing.detail
     }
 
     private func syncProgressView(_ progress: GGSyncProgressPresentation) -> some View {

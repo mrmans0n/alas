@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SwiftUI
 import Testing
 @testable import Alas
 
@@ -102,6 +103,57 @@ struct ChangesPreparationModelTests {
         #expect(model.ggActions.map(\.kind) == [.newStackCommit, .commitAndSync, .amendCurrent, .absorbIntoStack])
         #expect(model.ggActions.map(\.title) == ["New stack commit", "Commit & sync", "Amend current", "Absorb into stack"])
         #expect(model.ggActions.allSatisfy { $0.isEnabled })
+    }
+
+    @Test func activeLandingReplacesPrepareActionsWithCompactStatus() {
+        let status = ChangesPreparationModel.GGLandingStatus(
+            completed: 1,
+            total: 3,
+            reviewNumber: 42,
+            detail: "CI running"
+        )
+        let model = ChangesPreparationModel.makeGG(
+            staged: .zero,
+            hasDraft: false,
+            capabilities: .init(structuredSplit: false, keepCurrentUnstack: false),
+            landingStatus: status
+        )
+
+        #expect(model.landingStatus == status)
+        #expect(model.isVisible)
+        #expect(model.reviewAction == nil)
+        #expect(model.reconciliationAction == nil)
+        #expect(model.ggActions.isEmpty)
+        #expect(model.syncProgress == nil)
+    }
+
+    @MainActor
+    @Test func landingCardRendersOpenLandingControl() {
+        let model = ChangesPreparationModel.makeGG(
+            staged: .zero,
+            hasDraft: false,
+            capabilities: stagedOnlyCapabilities,
+            landingStatus: .init(completed: 1, total: 3, reviewNumber: 42, detail: "CI running")
+        )
+        let card = ChangesPreparationCard(
+            model: model,
+            onReviewChanges: {},
+            onDraftCommit: {},
+            onPublishCommit: {},
+            onGGAction: { _ in },
+            onGGStackAction: { _ in },
+            onReviewRequestAction: { _ in },
+            onDismissSyncFailure: {},
+            onOpenGGLanding: {}
+        )
+        .environment(\.theme, try! ThemeStore().current)
+
+        let controller = NSHostingController(rootView: card)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 260, height: 160)
+        controller.view.layoutSubtreeIfNeeded()
+
+        #expect(subview(withAccessibilityIdentifier: "changes-preparation-gg-landing", in: controller.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "changes-preparation-open-gg-landing", in: controller.view) != nil)
     }
 
     @Test func ggRewriteDestinationsRequireStagedChanges() {
@@ -371,4 +423,11 @@ private func changedFile(
         renameFrom: nil,
         conflict: nil
     )
+}
+
+private func subview(withAccessibilityIdentifier identifier: String, in view: NSView) -> NSView? {
+    if view.accessibilityIdentifier() == identifier {
+        return view
+    }
+    return view.subviews.lazy.compactMap { subview(withAccessibilityIdentifier: identifier, in: $0) }.first
 }
