@@ -1359,6 +1359,45 @@ struct ACPSessionRunnerTests {
         #expect(try store.loadSession(id: "s")?.currentModel == nil)
     }
 
+    @Test("config update removing config model preserves legacy model fallback")
+    func configUpdateRemovingConfigModelPreservesLegacyModelFallback() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "codex", title: "t",
+            currentModel: "sonnet", currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
+        session.currentModel = "sonnet"
+        session.availableModels = [ACPModelInfo(id: "sonnet", name: "Sonnet", description: nil)]
+        session.availableConfigOptions = [ACPConfigOption(
+            id: "model",
+            name: "Model",
+            category: "model",
+            currentValue: "sonnet",
+            options: [ACPConfigOptionItem(id: "sonnet", name: "Sonnet")]
+        )]
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: ACPMockClient()),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path
+        )
+        let acknowledgement = DurableAcknowledgementRecorder()
+
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "s",
+            update: .sessionConfigOptionsUpdate([]),
+            durableConsumptionAcknowledgement: { acknowledgement.record() }
+        ))
+
+        #expect(!acknowledgement.wasRecorded)
+        await runner.flushPersistence()
+        #expect(acknowledgement.wasRecorded)
+        #expect(session.chipState.models?.source == .model)
+        #expect(try store.loadSession(id: "s")?.currentModel == "sonnet")
+    }
+
     @Test("incoming streaming chunks are coalesced before applying")
     func incomingStreamingChunksCoalesceBeforeApplying() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")

@@ -594,7 +594,8 @@ final class ACPSession: ObservableObject, Identifiable {
             if case .configOption(let modelId) = chipState.models?.source {
                 currentModel = availableConfigOptions
                     .first { $0.id == modelId }?.currentStringValue
-            } else if case .configOption = previousModelSource {
+            } else if case .configOption = previousModelSource,
+                      chipState.models == nil {
                 currentModel = nil
             }
             return []
