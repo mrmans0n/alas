@@ -3902,10 +3902,8 @@ extension ACPSessionManager {
                                session.availableConfigOptions[currentIndex].currentValue == .string(m) {
                                 session.availableConfigOptions[currentIndex] = loadedOption
                             }
-                            if let loadedValue {
-                                session.currentModel = loadedValue
-                                persist(session)
-                            }
+                            session.currentModel = loadedValue
+                            persist(session)
                         }
                     }
                 case .model, nil:

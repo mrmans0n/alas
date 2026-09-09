@@ -649,6 +649,51 @@ struct ACPSessionManagerAttachRestoreTests {
         }
     }
 
+    @Test("reopened config-option session clears stale model when restoration fails without loaded value")
+    func reopenedConfigOptionSessionClearsStaleModelWhenRestorationFailsWithoutLoadedValue() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(
+            remoteSessionId: "remote-old",
+            agentId: "codex",
+            currentModel: "sonnet"
+        ))
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old",
+                availableModels: [],
+                availableModes: [],
+                currentModel: nil,
+                currentMode: nil,
+                promptSuggestions: [],
+                configOptions: [ACPConfigOption(
+                    id: "model",
+                    name: "Model",
+                    category: "model",
+                    currentValue: nil as ACPConfigValue?,
+                    options: [
+                        .init(id: "sonnet", name: "Sonnet"),
+                        .init(id: "opus", name: "Opus"),
+                    ])]
+            ))
+        }
+        client.script(method: "session/set_config_option") { _ in
+            throw ACPClientError.noScript(method: "session/set_config_option")
+        }
+        let manager = manager(store: store, client: client)
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        await manager.attach(to: session.id, freshlyCreated: false)
+
+        #expect(session.currentModel == nil)
+        #expect(session.availableConfigOptions.first?.currentStringValue == nil)
+        try await waitUntil {
+            (try? store.loadSession(id: "local"))?.currentModel == nil
+        }
+    }
+
     @Test("reopened config-option session preserves model reselected during restoration")
     func reopenedConfigOptionSessionPreservesModelReselectedDuringRestoration() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
