@@ -188,6 +188,49 @@ struct GGCommandRunningStreamingTests {
         #expect(lines == ["é"])
     }
 
+    @Test func explicitNilTimeoutDoesNotStartWatchdog() async throws {
+        let stream = ProcessGGCommandRunner.streamProcess(
+            executable: "/bin/sh",
+            args: ["-c", "printf 'ready\\n'"],
+            cwd: nil,
+            env: nil,
+            timeout: nil
+        )
+        var lines: [String] = []
+        for try await line in stream { lines.append(line) }
+        #expect(lines == ["ready"])
+    }
+
+    @Test func cancellingStreamSendsInterruptBeforeTermination() async throws {
+        let interrupted = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gg-stream-int-\(UUID().uuidString)")
+        let ready = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gg-stream-ready-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: interrupted)
+            try? FileManager.default.removeItem(at: ready)
+        }
+        let stream = ProcessGGCommandRunner.streamProcess(
+            executable: "/bin/sh",
+            args: ["-c", "trap 'printf interrupted > \"$1\"; exit 130' INT; printf ready > \"$2\"; while :; do sleep 1; done", "alas", interrupted.path, ready.path],
+            cwd: nil,
+            env: nil,
+            timeout: nil
+        )
+        let task = Task<Void, Error> {
+            for try await _ in stream {}
+        }
+        for _ in 0..<200 where !FileManager.default.fileExists(atPath: ready.path) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        task.cancel()
+        _ = await task.result
+        for _ in 0..<200 where !FileManager.default.fileExists(atPath: interrupted.path) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(FileManager.default.fileExists(atPath: interrupted.path))
+    }
+
     @Test func streamingRunTimesOutHungProcess() async throws {
         let stream = ProcessGGCommandRunner.streamProcess(
             executable: "/bin/sh",

@@ -6,12 +6,25 @@ import Observation
 /// tests can fake CLI output. Local-only in phase 1 (no SSH rewrite).
 protocol GGCommandRunning: Sendable {
     func run(args: [String], cwd: URL?) async throws -> ProcessResult
-/// Streams stdout lines as they arrive (for `gg sync --jsonl`). Finishes
+    /// Streams stdout lines as they arrive (for `gg sync --jsonl`). Finishes
     /// with `.commandFailed`/`.cliMissing` on a non-zero exit.
     func runStreaming(args: [String], cwd: URL?) -> AsyncThrowingStream<String, Error>
+    func runStreaming(
+        args: [String],
+        cwd: URL?,
+        timeout: TimeInterval?
+    ) -> AsyncThrowingStream<String, Error>
 }
 
 extension GGCommandRunning {
+    func runStreaming(
+        args: [String],
+        cwd: URL?,
+        timeout: TimeInterval?
+    ) -> AsyncThrowingStream<String, Error> {
+        runStreaming(args: args, cwd: cwd)
+    }
+
     /// Default: buffer the whole command then split into lines. Good enough
     /// for tests and any non-streaming conformer; `ProcessGGCommandRunner`
     /// overrides this with a truly incremental implementation.
@@ -74,7 +87,15 @@ struct ProcessGGCommandRunner: GGCommandRunning {
     }
 
     func runStreaming(args: [String], cwd: URL?) -> AsyncThrowingStream<String, Error> {
-        Self.streamProcess(executable: "/usr/bin/env", args: ["gg"] + args, cwd: cwd, env: Process.gitEnv(), timeout: Self.commandTimeout)
+        runStreaming(args: args, cwd: cwd, timeout: Self.commandTimeout)
+    }
+
+    func runStreaming(
+        args: [String],
+        cwd: URL?,
+        timeout: TimeInterval?
+    ) -> AsyncThrowingStream<String, Error> {
+        Self.streamProcess(executable: "/usr/bin/env", args: ["gg"] + args, cwd: cwd, env: Process.gitEnv(), timeout: timeout)
     }
 
     /// Pipe-lifecycle core of `runStreaming`, parameterized on the
@@ -87,7 +108,7 @@ struct ProcessGGCommandRunner: GGCommandRunning {
         args: [String],
         cwd: URL?,
         env: [String: String]?,
-        timeout: TimeInterval = Process.defaultTimeout
+        timeout: TimeInterval? = Process.defaultTimeout
     ) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let processTreeID = UUID().uuidString
@@ -168,7 +189,7 @@ struct ProcessGGCommandRunner: GGCommandRunning {
                     async let outClosed = stdoutEOF.waitForClose(timeoutNanoseconds: 2_000_000_000)
                     async let errClosed = stderrAccum.waitForClose(timeoutNanoseconds: 2_000_000_000)
                     _ = await (outClosed, errClosed)
-                    if timeoutState.didTimeOut {
+                    if timeoutState.didTimeOut, let timeout {
                         continuation.finish(throwing: ProcessError.timedOut(executable: executable, args: args, seconds: timeout))
                     } else if status == 0 {
                         continuation.finish()
@@ -199,21 +220,30 @@ struct ProcessGGCommandRunner: GGCommandRunning {
                     rootIdentity: rootIdentity,
                     wrapperIdentity: wrapperIdentity
                 )
-                let watchdog = Task {
-                    try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                    if Task.isCancelled { return }
-                    if process.isRunning {
-                        timeoutState.markTimedOut()
-                        fputs(
-                            "[Process watchdog] \(timeout)s timeout — terminating: \(executable) \(args.joined(separator: " "))\n",
-                            stderr
-                        )
-                        processTree.terminateAndWait()
+                let watchdog = timeout.map { timeout in
+                    Task {
+                        try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                        if Task.isCancelled { return }
+                        if process.isRunning {
+                            timeoutState.markTimedOut()
+                            fputs(
+                                "[Process watchdog] \(timeout)s timeout — terminating: \(executable) \(args.joined(separator: " "))\n",
+                                stderr
+                            )
+                            processTree.terminateAndWait()
+                        }
                     }
                 }
-                continuation.onTermination = { _ in
-                    watchdog.cancel()
-                    processTree.terminateAndWait()
+                continuation.onTermination = { termination in
+                    watchdog?.cancel()
+                    switch termination {
+                    case .cancelled:
+                        processTree.interruptAndWait()
+                    case .finished:
+                        processTree.terminateAndWait()
+                    @unknown default:
+                        processTree.terminateAndWait()
+                    }
                     outPipe.fileHandleForReading.readabilityHandler = nil
                     errPipe.fileHandleForReading.readabilityHandler = nil
                 }
