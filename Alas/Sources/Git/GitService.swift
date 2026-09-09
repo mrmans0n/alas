@@ -252,9 +252,18 @@ extension GitService {
         guard result.stdoutTruncated || result.exitCode <= 1 else {
             throw ProcessError.nonZeroExit(result.exitCode, result.stderr)
         }
-        let stdout = originalPath?.isEmpty == false
-            ? Self.sliceDiffForFile(result.stdout, file: file)
-            : result.stdout
+        let stdout: String
+        if originalPath?.isEmpty == false {
+            let sliced = Self.sliceDiffForFile(result.stdout, file: file)
+            guard !(result.stdoutTruncated && sliced.isEmpty) else {
+                throw ProcessError.nonZeroExit(
+                    result.exitCode,
+                    "diff for \(file) exceeded the size cap before its section was captured")
+            }
+            stdout = sliced
+        } else {
+            stdout = result.stdout
+        }
         return await Self.parseOffMain(stdout)
     }
 

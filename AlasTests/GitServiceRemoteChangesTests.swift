@@ -669,6 +669,30 @@ struct GitServiceRemoteChangesTests {
         #expect(added.map(\.text) == ["literal"])
     }
 
+    @Test func remoteDiff_throwsWhenAStagedCopySourceSectionAloneExceedsTheOutputCap() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let original = (1 ... 100).map { "line\($0)\n" }.joined()
+        try original.write(to: repo.appendingPathComponent("aaa.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "aaa.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "base"], cwd: repo)
+
+        let appended = original + (1 ... 10).map { "appended-line-\($0)-with-enough-padding-to-add-up\n" }.joined()
+        try appended.write(to: repo.appendingPathComponent("aaa.txt"), atomically: true, encoding: .utf8)
+        try (appended + "zzz-marker\n").write(to: repo.appendingPathComponent("zzz.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "-A"], cwd: repo)
+
+        await #expect(throws: (any Error).self) {
+            _ = try await GitService().remoteDiff(
+                worktreePath: repo,
+                file: "zzz.txt",
+                staged: true,
+                originalPath: "aaa.txt",
+                maxOutputBytes: 300
+            )
+        }
+    }
+
     /// A file declared binary purely via `.gitattributes` (content that
     /// still looks like valid UTF-8 at the byte level) produces a
     /// hunk-less diff with `Binary files ... differ` instead of `@@` hunks
