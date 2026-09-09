@@ -5,12 +5,14 @@ struct ProjectIconView: View {
     enum Size {
         case sidebar
         case picker
+        case overview
         case dialog
 
         var dimension: CGFloat {
             switch self {
             case .sidebar: 16
             case .picker: 18
+            case .overview: 52
             case .dialog: 72
             }
         }
@@ -19,6 +21,7 @@ struct ProjectIconView: View {
             switch self {
             case .sidebar: 4
             case .picker: 5
+            case .overview: 13
             case .dialog: 18
             }
         }
@@ -27,6 +30,7 @@ struct ProjectIconView: View {
             switch self {
             case .sidebar: 9.5
             case .picker: 10.5
+            case .overview: 20
             case .dialog: 26
             }
         }

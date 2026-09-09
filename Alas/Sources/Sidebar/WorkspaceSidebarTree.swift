@@ -390,6 +390,7 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
 struct WorkspaceRepositoryPile: View {
     let workspace: Workspace
     let projects: [ProjectConfig]
+    var size: ProjectIconView.Size = .sidebar
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -397,17 +398,27 @@ struct WorkspaceRepositoryPile: View {
         let repositories = workspace.members.compactMap { projectsByID[$0.projectID] }
         Group {
             if repositories.isEmpty {
-                Icon(name: "folder", size: 13, color: theme.color("fg-muted"))
+                Icon(name: "folder", size: size.dimension * 0.8, color: theme.color("fg-muted"))
             } else {
-                HStack(spacing: -5) {
+                HStack(spacing: -size.dimension * 0.3125) {
                     ForEach(repositories.prefix(3)) { project in
-                        ProjectIconView(icon: project.icon, fallbackName: project.name, size: .sidebar)
+                        ProjectIconView(icon: project.icon, fallbackName: project.name, size: size)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: size.cornerRadius)
+                                    .strokeBorder(theme.color("bg-1"), lineWidth: ringWidth)
+                            )
                     }
                 }
                 .fixedSize()
             }
         }
         .accessibilityHidden(true)
+    }
+
+    /// The sidebar pile is too small for a separating ring to read as anything
+    /// but grime, so only the larger piles get one.
+    private var ringWidth: CGFloat {
+        size.dimension >= 32 ? 2 : 0
     }
 }
 
