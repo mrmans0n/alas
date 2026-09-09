@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.15.4] - 2026-09-09
+
+### ✨ Features
+
+- Polish the workspace interface with sidebar creation, compact actions, themed dialogs, scoped validation, a dedicated checkout inspector, and new layout coverage (#1133).
+
 ## [0.15.3] - 2026-09-08
 
 ### ✨ Features
