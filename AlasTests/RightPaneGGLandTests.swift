@@ -2,21 +2,52 @@ import Foundation
 import Testing
 @testable import Alas
 
+private actor LandPreflightSuspension {
+    private var suspended = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var completion: CheckedContinuation<Void, Never>?
+
+    func suspend() async {
+        suspended = true
+        for waiter in waiters { waiter.resume() }
+        waiters.removeAll()
+        await withCheckedContinuation { completion = $0 }
+    }
+
+    func waitUntilSuspended() async {
+        if suspended { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func release() { completion?.resume(); completion = nil }
+}
+
 private final class LiveLandGGRunner: GGCommandRunning, @unchecked Sendable {
     private let lock = NSLock()
     private var recordedCalls: [[String]] = []
     private var cancellations = 0
     private var targetExists = true
+    private var nextPreflight: LandPreflightSuspension?
     private var continuations: [AsyncThrowingStream<String, Error>.Continuation] = []
     var calls: [[String]] { lock.withLock { recordedCalls } }
     var cancellationCount: Int { lock.withLock { cancellations } }
 
     func removeTarget() { lock.withLock { targetExists = false } }
+    func suspendNextPreflight(_ preflight: LandPreflightSuspension) {
+        lock.withLock { nextPreflight = preflight }
+    }
 
     func run(args: [String], cwd: URL?) async throws -> ProcessResult {
         let hasTarget = lock.withLock {
             recordedCalls.append(args)
             return targetExists
+        }
+        if args.first == "ls" {
+            let preflight = lock.withLock {
+                defer { nextPreflight = nil }
+                return nextPreflight
+            }
+            await preflight?.suspend()
         }
         let stdout: String
         if args.first == "land" {
@@ -162,6 +193,37 @@ struct RightPaneGGLandTests {
         await store.waitForOperation(projectId: "live-project")
         #expect(runner.cancellationCount == 1)
         #expect(store.sessions["live-project"]?.phase == .cancelled)
+        #expect(state.ggActionState.lastError == nil)
+    }
+
+    @Test func shutdownDuringRestartPreflightNeverLaunchesLand() async throws {
+        let store = GGLandingStore()
+        let runner = LiveLandGGRunner()
+        let state = landingState(store: store, runner: runner, supported: true)
+        store.begin(.init(
+            projectId: "live-project", worktreeId: "live-wt", stack: "feat", base: "main",
+            target: "change-1", rows: [.init(position: 1, title: "t", ggId: "change-1", prNumber: 5)]
+        ))
+        store.fail(projectId: "live-project", message: "Previous attempt failed")
+        let preflight = LandPreflightSuspension()
+        runner.suspendNextPreflight(preflight)
+        state.restartGGLand(target: "change-1")
+        await preflight.waitUntilSuspended()
+        let started = AsyncStream<Void>.makeStream()
+        var shutdownFinished = false
+        let shutdown = Task {
+            started.continuation.yield(())
+            await store.cancelAllAndWait()
+            shutdownFinished = true
+        }
+        for await _ in started.stream { break }
+        #expect(!shutdownFinished)
+        #expect(store.sessions["live-project"]?.phase == .cancelling)
+        await preflight.release()
+        await shutdown.value
+        #expect(!runner.calls.contains { $0.first == "land" })
+        #expect(store.sessions["live-project"]?.phase == .cancelled)
+        #expect(state.ggActionState.lastError == nil)
     }
 
     @Test func oldGGLandingUsesAtomicCommandWithoutSession() async throws {

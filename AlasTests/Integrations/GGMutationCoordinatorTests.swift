@@ -6,6 +6,21 @@ private enum GGMutationTestTimeout: Error {
     case timedOut
 }
 
+private struct InvalidTrailingLandRunner: GGCommandRunning {
+    func run(args: [String], cwd: URL?) async throws -> ProcessResult {
+        throw GGServiceError.commandFailed(stderr: "Unexpected buffered command")
+    }
+
+    func runStreaming(args: [String], cwd: URL?, timeout: TimeInterval?) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.yield(#"{"version":1,"command":"land","status":"ok","event":"start","stack":"feature","base":"main","total_entries":1}"#)
+            continuation.yield(#"{"version":1,"command":"land","status":"ok","event":"summary","stack":"feature","base":"main","landed":[{"position":1,"pr_number":41,"action":"merged"}],"remaining":0,"cleaned":false}"#)
+            continuation.yield(#"{"version":1,"command":"land","status":"ok","event":"start","stack":"feature","base":"main","total_entries":1}"#)
+            continuation.finish()
+        }
+    }
+}
+
 @MainActor
 private func waitUntil(
     timeout: TimeInterval = 2,
@@ -314,6 +329,43 @@ private func stack(
 
 @MainActor
 struct GGMutationCoordinatorTests {
+    @Test func protocolFailureAfterSummaryFailsSessionAndKeepsOutcomes() async {
+        let store = GGLandingStore()
+        store.begin(.init(
+            projectId: "p", worktreeId: "w", stack: "feature", base: "main", target: "change-1",
+            rows: [.init(position: 1, title: "One", ggId: "change-1", prNumber: 41)]
+        ))
+        let task = Task<Void, Error> {
+            _ = try await GGService(runner: InvalidTrailingLandRunner()).execute(
+                .land(target: "change-1"), worktreePath: "/repo/wt", clientOperationID: nil,
+                supportsSyncJSONL: false, supportsLandJSONL: true,
+                onSyncEvent: { _ in }, onLandEvent: { store.receive($0, projectId: "p") }
+            )
+        }
+        store.attach(projectId: "p", task: task, cancel: { task.cancel() })
+        await store.waitForOperation(projectId: "p")
+        #expect(store.sessions["p"]?.phase == .failed)
+        #expect(store.sessions["p"]?.error == "gg land emitted data after a terminal event.")
+        #expect(store.sessions["p"]?.rows.first?.outcome?.action == "merged")
+        #expect(store.sessions["p"]?.result?.landed.count == 1)
+    }
+
+    @Test func cancelledStreamMissingSummaryDoesNotPublishAnError() async throws {
+        let harness = GGMutationHarness(stacks: [stack(head: "a", entries: [
+            GGStackEntry(position: 1, sha: "a", title: "One", ggId: "change-1",
+                         prState: .open, approved: true, ciStatus: .success)
+        ])], landJSONL: true)
+        harness.service.blockExecution = true
+        harness.service.error = GGServiceError.malformedOutput("Missing summary")
+        let task = try #require(harness.coordinator.startApplying(.land(target: "change-1"), confirmedAgainst: nil))
+        try await waitUntil { !harness.service.requests.isEmpty }
+        task.cancel()
+        harness.service.resumeExecution()
+        await #expect(throws: CancellationError.self) { try await task.value }
+        #expect(harness.actionState.lastError == nil)
+        #expect(harness.refreshes == [.gitChanges, .stack, .providerReviews, .inbox])
+    }
+
     @Test(arguments: [true, false])
     func malformedLandOutputFailsOnlyForLiveExecution(live: Bool) async throws {
         let harness = GGMutationHarness(stacks: [stack(head: "a", entries: [
@@ -342,6 +394,7 @@ struct GGMutationCoordinatorTests {
         await #expect(throws: CancellationError.self) { try await task.value }
         #expect(harness.service.requests.isEmpty)
         #expect(harness.actionState.inFlightAction == nil)
+        #expect(harness.actionState.lastError == nil)
     }
 
     @Test func currentLandCapabilityPublishesEvents() async throws {

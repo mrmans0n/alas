@@ -372,6 +372,16 @@ final class GGMutationCoordinator {
             if case .undo(let operationID) = request {
                 clearUndoCandidate(forOperationID: operationID)
             }
+        } catch where Task.isCancelled || error is CancellationError {
+            reconcilePausedState(after: request, error: nil)
+            if request == .sync {
+                await refresh(after: request, result: .none)
+                releaseAction()
+            } else {
+                releaseAction()
+                await refresh(after: request, result: .none)
+            }
+            throw CancellationError()
         } catch let error as GGServiceError {
             reconcilePausedState(after: request, error: error)
             let toleratesMalformedRemoteOutput: Bool
@@ -844,15 +854,22 @@ extension GGService: GGMutationExecuting {
             }
         case .land(let target):
             if supportsLandJSONL {
-                var summary: GGLandResult?
-                for try await event in service.landStream(worktreePath: worktreePath, until: target) {
-                    onLandEvent(event)
-                    if case .summary(let result) = event { summary = result }
+                do {
+                    var summary: GGLandResult?
+                    for try await event in service.landStream(worktreePath: worktreePath, until: target) {
+                        onLandEvent(event)
+                        if case .summary(let result) = event { summary = result }
+                    }
+                    try Task.checkCancellation()
+                    guard let summary else {
+                        throw GGServiceError.malformedOutput("gg land ended without a summary.")
+                    }
+                    return .land(summary)
+                } catch {
+                    if Task.isCancelled || error is CancellationError { throw CancellationError() }
+                    onLandEvent(.error(message: GGErrorPresentation.message(for: error)))
+                    throw error
                 }
-                guard let summary else {
-                    throw GGServiceError.malformedOutput("gg land ended without a summary.")
-                }
-                return .land(summary)
             }
             return .land(try await service.land(worktreePath: worktreePath, until: target))
         case .clean:

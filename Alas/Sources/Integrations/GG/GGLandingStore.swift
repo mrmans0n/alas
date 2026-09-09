@@ -55,10 +55,12 @@ final class GGLandingStore {
 
     private(set) var sessions: [String: GGLandingSession] = [:]
     @ObservationIgnored private var operations: [String: Operation] = [:]
+    @ObservationIgnored private var preparations: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored private var isCancellingAll = false
 
     @discardableResult
     func begin(_ seed: GGLandingSession.Seed, now: Date = Date()) -> Bool {
-        guard operations[seed.projectId] == nil else { return false }
+        guard !isCancellingAll, operations[seed.projectId] == nil else { return false }
         if let session = sessions[seed.projectId],
            session.phase == .running || session.phase == .cancelling
         {
@@ -83,8 +85,14 @@ final class GGLandingStore {
     }
 
     func receive(_ event: GGLandEvent, projectId: String) {
-        guard var session = sessions[projectId],
-              session.phase == .running || session.phase == .cancelling
+        guard var session = sessions[projectId] else { return }
+        let streamFailedAfterSummary: Bool
+        if case .error = event {
+            streamFailedAfterSummary = session.phase == .succeeded && operations[projectId] != nil
+        } else {
+            streamFailedAfterSummary = false
+        }
+        guard session.phase == .running || session.phase == .cancelling || streamFailedAfterSummary
         else { return }
 
         switch event {
@@ -124,7 +132,7 @@ final class GGLandingStore {
             }
 
         case .error(let message):
-            if session.phase == .running {
+            if session.phase != .cancelling {
                 session.phase = .failed
                 session.activeWait = nil
                 session.warning = nil
@@ -140,7 +148,7 @@ final class GGLandingStore {
         task: Task<Void, Error>,
         cancel: @escaping @MainActor () -> Void
     ) {
-        guard let session = sessions[projectId],
+        guard !isCancellingAll, let session = sessions[projectId],
               session.phase == .running || session.phase == .cancelling,
               operations[projectId] == nil
         else {
@@ -185,8 +193,11 @@ final class GGLandingStore {
     }
 
     func cancelAllAndWait() async {
+        isCancellingAll = true
+        defer { isCancellingAll = false }
         let activeOperations = operations
-        for projectId in activeOperations.keys {
+        let activePreparations = preparations
+        for projectId in Set(activeOperations.keys).union(activePreparations.keys) {
             if sessions[projectId]?.phase == .running {
                 sessions[projectId]?.phase = .cancelling
             }
@@ -194,6 +205,17 @@ final class GGLandingStore {
         }
         for operation in activeOperations.values {
             await operation.monitor.value
+        }
+        for preparation in activePreparations.values {
+            await preparation.value
+        }
+    }
+
+    func startPreparation(projectId: String, operation: @escaping @MainActor () async -> Void) {
+        guard !isCancellingAll, preparations[projectId] == nil else { return }
+        preparations[projectId] = Task { @MainActor in
+            defer { preparations[projectId] = nil }
+            await operation()
         }
     }
 
@@ -221,6 +243,7 @@ final class GGLandingStore {
     }
 
     private func requestCancellation(projectId: String) {
+        preparations[projectId]?.cancel()
         guard var operation = operations[projectId], !operation.cancellationRequested else { return }
         operation.cancellationRequested = true
         operations[projectId] = operation

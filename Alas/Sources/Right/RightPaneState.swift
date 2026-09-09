@@ -1871,8 +1871,9 @@ final class RightPaneState: GGSplitCommitServicing {
         guard let session = ggLandingStore.sessions[projectId],
               session.phase == .cancelled || session.phase == .failed || session.phase == .succeeded
         else { return }
-        Task { @MainActor in
+        ggLandingStore.startPreparation(projectId: projectId) { [self] in
             await ggLandingStore.waitForOperation(projectId: projectId)
+            guard !Task.isCancelled else { return }
             guard ggLandingStore.sessions[projectId]?.id == session.id else { return }
             let seed = ggLandingSeed(target: target) ?? GGLandingSession.Seed(
                 projectId: projectId, worktreeId: worktree.id,
@@ -1888,6 +1889,7 @@ final class RightPaneState: GGSplitCommitServicing {
                     throw GGServiceError.commandFailed(stderr: "Live landing is no longer supported by gg.")
                 }
                 let prepared = try await ggMutationCoordinator.prepare(.land(target: target))
+                try Task.checkCancellation()
                 guard ggLandingStore.sessions[projectId]?.id == sessionId else { return }
                 startGGLanding(prepared)
             } catch {
@@ -2019,6 +2021,7 @@ final class RightPaneState: GGSplitCommitServicing {
             do {
                 try await operation.value
             } catch {
+                if operation.isCancelled || error is CancellationError { throw CancellationError() }
                 publishGGMutationPresentationError(
                     error,
                     for: request.actionKind,

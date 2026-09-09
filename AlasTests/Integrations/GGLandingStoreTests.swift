@@ -113,6 +113,50 @@ struct GGLandingStoreTests {
         #expect(store.begin(seed()))
     }
 
+    @Test func shutdownWaitsForPreparationAndPreventsLaunch() async {
+        let store = GGLandingStore()
+        let preflight = LandingTestSuspension()
+        var landCommands = 0
+        store.startPreparation(projectId: "p") {
+            store.begin(seed())
+            await preflight.suspend()
+            guard !Task.isCancelled else {
+                store.fail(projectId: "p", message: "cancelled")
+                return
+            }
+            landCommands += 1
+        }
+        await preflight.waitUntilSuspended()
+        let started = AsyncStream<Void>.makeStream()
+        var shutdownFinished = false
+        let shutdown = Task {
+            started.continuation.yield(())
+            await store.cancelAllAndWait()
+            shutdownFinished = true
+        }
+        for await _ in started.stream { break }
+        #expect(!shutdownFinished)
+        #expect(store.sessions["p"]?.phase == .cancelling)
+        #expect(!store.begin(seed(projectId: "other")))
+        await preflight.release()
+        await shutdown.value
+        #expect(landCommands == 0)
+        #expect(store.sessions["p"]?.phase == .cancelled)
+    }
+
+    @Test func failureAfterValidatedOperationDoesNotOverwriteSummary() async {
+        let store = GGLandingStore()
+        store.begin(seed())
+        let task = Task<Void, Error> {
+            store.receive(.summary(.init(landed: [])), projectId: "p")
+            throw TestError.interrupted
+        }
+        store.attach(projectId: "p", task: task, cancel: { task.cancel() })
+        await store.waitForOperation(projectId: "p")
+        #expect(store.sessions["p"]?.phase == .succeeded)
+        #expect(store.sessions["p"]?.error == nil)
+    }
+
     @Test func beginSeedsSessionAndReplacesTerminalAttempt() throws {
         let store = GGLandingStore()
         let startedAt = Date(timeIntervalSince1970: 1_000)
