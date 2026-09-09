@@ -54,7 +54,10 @@ final class ACPSession: ObservableObject, Identifiable {
     private(set) var origin: ACPSessionOrigin
     @Published var availableModels: [ACPModelInfo] = []
     @Published var availableModes: [ACPModeInfo] = []
-    @Published var availableConfigOptions: [ACPConfigOption] = []
+    @Published var availableConfigOptions: [ACPConfigOption] = [] {
+        didSet { availableConfigOptionsRevision += 1 }
+    }
+    private(set) var availableConfigOptionsRevision = 0
     /// Runtime-only provider state learned from the adapter on each attach.
     @Published var providerCapabilities: EmptyObject?
     @Published var availableProviders: [ACPProviderInfo] = []
@@ -586,7 +589,15 @@ final class ACPSession: ObservableObject, Identifiable {
             currentModel = modelId
             return []
         case .sessionConfigOptionsUpdate(let opts):
+            let previousModelSource = chipState.models?.source
             availableConfigOptions = opts
+            if case .configOption(let modelId) = chipState.models?.source {
+                currentModel = availableConfigOptions
+                    .first { $0.id == modelId }?.currentStringValue
+            } else if case .configOption = previousModelSource,
+                      chipState.models == nil {
+                currentModel = nil
+            }
             return []
         case .availableCommandsUpdate(let cmds):
             promptSuggestions = cmds

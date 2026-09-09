@@ -97,22 +97,65 @@ struct ACPConfigOption: Codable, Equatable, Identifiable, Hashable {
         _ configOptions: [ACPConfigOption],
         configId: String,
         selectedValue: ACPConfigValue,
-        currentConfigOptions: [ACPConfigOption]
+        currentConfigOptions: [ACPConfigOption],
+        baselineConfigOptions: [ACPConfigOption]? = nil,
+        baselineConfigOptionsRevision: Int? = nil,
+        currentConfigOptionsRevision: Int? = nil
     ) -> [ACPConfigOption]? {
         guard currentConfigOptions.first(where: { $0.id == configId })?.currentValue == selectedValue else {
             return nil
         }
 
-        return configOptions.map { option in
-            guard option.id == configId else { return option }
-            return ACPConfigOption(
-                id: option.id,
-                name: option.name,
-                type: option.type,
-                category: option.category,
-                currentValue: selectedValue,
-                options: option.options)
+        var merged: [ACPConfigOption] = []
+        for option in configOptions {
+            if option.id == configId {
+                if let baselineConfigOptions,
+                   let baseline = baselineConfigOptions.first(where: { $0.id == option.id }),
+                   let current = currentConfigOptions.first(where: { $0.id == option.id }),
+                   current != baseline {
+                    merged.append(current)
+                    continue
+                }
+                merged.append(ACPConfigOption(
+                    id: option.id,
+                    name: option.name,
+                    type: option.type,
+                    category: option.category,
+                    currentValue: selectedValue,
+                    options: option.options))
+                continue
+            }
+            if let baselineConfigOptions,
+               let baseline = baselineConfigOptions.first(where: { $0.id == option.id }) {
+                guard let current = currentConfigOptions.first(where: { $0.id == option.id }) else {
+                    continue
+                }
+                merged.append(current == baseline ? option : current)
+                continue
+            }
+            if let baselineConfigOptions,
+               baselineConfigOptions.contains(where: { $0.id == option.id }) == false {
+                if let current = currentConfigOptions.first(where: { $0.id == option.id }) {
+                    merged.append(current)
+                } else if baselineConfigOptionsRevision == nil
+                    || baselineConfigOptionsRevision == currentConfigOptionsRevision {
+                    merged.append(option)
+                }
+                continue
+            }
+            merged.append(option)
         }
+        if let baselineConfigOptions {
+            let mergedIds = Set(merged.map(\.id))
+            merged.append(contentsOf: currentConfigOptions.filter { current in
+                guard !mergedIds.contains(current.id) else { return false }
+                guard let baseline = baselineConfigOptions.first(where: { $0.id == current.id }) else {
+                    return true
+                }
+                return current != baseline
+            })
+        }
+        return merged
     }
 }
 

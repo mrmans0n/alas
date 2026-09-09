@@ -664,6 +664,33 @@ struct ACPSessionRunnerTests {
         #expect(goal.tokenBudget == 12_000)
     }
 
+    @Test("session_config_options_update persists config-backed currentModel")
+    func sessionConfigOptionsUpdatePersistsConfigBackedCurrentModel() async throws {
+        let (runner, mock) = try makeRunner()
+        runner.start()
+        defer { runner.stop() }
+
+        mock.emit(.init(
+            sessionId: "s",
+            update: .sessionConfigOptionsUpdate([ACPConfigOption(
+                id: "model",
+                name: "Model",
+                category: "model",
+                currentValue: "sonnet",
+                options: [
+                    ACPConfigOptionItem(id: "sonnet", name: "Sonnet"),
+                    ACPConfigOptionItem(id: "opus", name: "Opus"),
+                ])])
+        ))
+
+        try await waitUntil {
+            runner.session.currentModel == "sonnet"
+        }
+        await runner.flushPersistence()
+        let row = try #require(try await runner.persistence.loadSession(id: "s"))
+        #expect(row.currentModel == "sonnet")
+    }
+
     @Test("session_info_update preserves manual title")
     func sessionInfoUpdatePreservesManualTitle() async throws {
         let url = FileManager.default.temporaryDirectory
@@ -1254,6 +1281,121 @@ struct ACPSessionRunnerTests {
         await runner.flushPersistence()
         #expect(acknowledgement.wasRecorded)
         #expect(try store.loadMessages(sessionId: "s").contains { $0.kind == "agent" })
+    }
+
+    @Test("config update is acknowledged only after repairing stale stored model")
+    func configUpdateAcknowledgesAfterModelPersistence() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "codex", title: "t",
+            currentModel: "opus", currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
+        session.currentModel = "sonnet"
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: ACPMockClient()),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path
+        )
+        let acknowledgement = DurableAcknowledgementRecorder()
+
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "s",
+            update: .sessionConfigOptionsUpdate([ACPConfigOption(
+                id: "model",
+                name: "Model",
+                category: "model",
+                currentValue: "sonnet",
+                options: [
+                    ACPConfigOptionItem(id: "sonnet", name: "Sonnet"),
+                    ACPConfigOptionItem(id: "opus", name: "Opus"),
+                ]
+            )]),
+            durableConsumptionAcknowledgement: { acknowledgement.record() }
+        ))
+
+        #expect(!acknowledgement.wasRecorded)
+        await runner.flushPersistence()
+        #expect(acknowledgement.wasRecorded)
+        #expect(try store.loadSession(id: "s")?.currentModel == "sonnet")
+    }
+
+    @Test("config update removing model is acknowledged only after clearing stored model")
+    func configUpdateRemovingModelAcknowledgesAfterClearingStoredModel() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "codex", title: "t",
+            currentModel: "sonnet", currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
+        session.currentModel = "sonnet"
+        session.availableConfigOptions = [ACPConfigOption(
+            id: "model",
+            name: "Model",
+            category: "model",
+            currentValue: "sonnet",
+            options: [ACPConfigOptionItem(id: "sonnet", name: "Sonnet")]
+        )]
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: ACPMockClient()),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path
+        )
+        let acknowledgement = DurableAcknowledgementRecorder()
+
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "s",
+            update: .sessionConfigOptionsUpdate([]),
+            durableConsumptionAcknowledgement: { acknowledgement.record() }
+        ))
+
+        #expect(!acknowledgement.wasRecorded)
+        await runner.flushPersistence()
+        #expect(acknowledgement.wasRecorded)
+        #expect(try store.loadSession(id: "s")?.currentModel == nil)
+    }
+
+    @Test("config update removing config model preserves legacy model fallback")
+    func configUpdateRemovingConfigModelPreservesLegacyModelFallback() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "codex", title: "t",
+            currentModel: "sonnet", currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
+        session.currentModel = "sonnet"
+        session.availableModels = [ACPModelInfo(id: "sonnet", name: "Sonnet", description: nil)]
+        session.availableConfigOptions = [ACPConfigOption(
+            id: "model",
+            name: "Model",
+            category: "model",
+            currentValue: "sonnet",
+            options: [ACPConfigOptionItem(id: "sonnet", name: "Sonnet")]
+        )]
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: ACPMockClient()),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path
+        )
+        let acknowledgement = DurableAcknowledgementRecorder()
+
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "s",
+            update: .sessionConfigOptionsUpdate([]),
+            durableConsumptionAcknowledgement: { acknowledgement.record() }
+        ))
+
+        #expect(!acknowledgement.wasRecorded)
+        await runner.flushPersistence()
+        #expect(acknowledgement.wasRecorded)
+        #expect(session.chipState.models?.source == .model)
+        #expect(try store.loadSession(id: "s")?.currentModel == "sonnet")
     }
 
     @Test("incoming streaming chunks are coalesced before applying")
@@ -3121,6 +3263,47 @@ struct ACPSessionRunnerTests {
         // The stored row must still have the original title.
         let row = try store.loadSession(id: sid)
         #expect(row?.title == seedTitle)
+    }
+
+    @Test("persistSessionRow reports failure when fence rejects queued write")
+    func persistSessionRowReportsFenceRejection() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-session-row-fence-rejected-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let sid = "s"
+        try store.upsertSession(.init(id: sid, agentId: "claude", title: "original",
+            currentModel: "old", currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        try store.seizeLease(
+            sessionId: sid,
+            instanceId: "ME",
+            pid: Int64(getpid()),
+            now: Int64(Date().timeIntervalSince1970),
+            leaseToken: "new"
+        )
+
+        let mock = ACPMockClient()
+        let session = ACPSession(id: sid, agentId: "claude", worktreeId: "wt", title: "original")
+        session.currentModel = "new"
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: sid,
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            ownerInstanceId: "ME",
+            canWrite: { true },
+            leaseFenceProvider: {
+                ACPSessionLeaseFence(sessionId: sid, ownerInstance: "ME", token: "old")
+            }
+        )
+
+        var persisted = true
+        runner.persistSessionRow { persisted = $0 }
+        await runner.flushPersistence()
+
+        #expect(persisted == false)
+        #expect(try store.loadSession(id: sid)?.currentModel == "old")
     }
 
     @Test("generated prompt title does not overwrite stored manual title")

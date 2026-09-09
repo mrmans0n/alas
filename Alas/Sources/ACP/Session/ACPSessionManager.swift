@@ -3865,20 +3865,72 @@ extension ACPSessionManager {
             let loadedMode = session.currentMode
             let modelToRestore = pendingModel.removeValue(forKey: sessionId)
                 ?? (localModelAfterRemoteIdPersist != result.currentModel ? localModelAfterRemoteIdPersist : persistedModel)
-            if let m = modelToRestore,
-               m != result.currentModel {
-                let loadedModel = session.currentModel
+            if case .configOption(let id) = session.chipState.models?.source,
+               let loadedValue = result.configOptions.first(where: { $0.id == id })?.currentStringValue {
+                let shouldPersistLoadedModel = modelToRestore == nil && session.currentModel != loadedValue
+                session.currentModel = loadedValue
+                if shouldPersistLoadedModel {
+                    persist(session)
+                }
+            }
+            if let m = modelToRestore {
                 let remoteId = session.remoteSessionId ?? sessionId
-                do {
-                    try await runner.connection.setModel(sessionId: remoteId, modelId: m)
-                    if session.currentModel == loadedModel {
-                        session.currentModel = m
-                        persist(session)
+                switch session.chipState.models?.source {
+                case .configOption(let id):
+                    guard let index = session.availableConfigOptions.firstIndex(where: { $0.id == id }),
+                          let loadedOption = result.configOptions.first(where: { $0.id == id }) else { break }
+                    let loadedValue = loadedOption.currentStringValue
+                    guard m != loadedValue else { break }
+                    let loadedModel = session.currentModel
+                    session.availableConfigOptions[index] = ACPConfigOption(
+                        id: loadedOption.id, name: loadedOption.name, type: loadedOption.type,
+                        category: loadedOption.category, currentValue: .string(m), options: loadedOption.options)
+                    do {
+                        let baselineConfigOptions = session.availableConfigOptions
+                        let baselineConfigOptionsRevision = session.availableConfigOptionsRevision
+                        let updated = try await runner.connection.setConfigOption(
+                            sessionId: remoteId, configId: id, value: .string(m))
+                        let stillRestoringModel = session.availableConfigOptions
+                            .first { $0.id == id }?.currentValue == .string(m)
+                        if session.currentModel == loadedModel, stillRestoringModel {
+                            session.currentModel = m
+                            if !updated.isEmpty,
+                               let merged = ACPConfigOption.mergingSuccessfulSetResponse(
+                                   updated, configId: id, selectedValue: .string(m),
+                                   currentConfigOptions: session.availableConfigOptions,
+                                   baselineConfigOptions: baselineConfigOptions,
+                                   baselineConfigOptionsRevision: baselineConfigOptionsRevision,
+                                   currentConfigOptionsRevision: session.availableConfigOptionsRevision) {
+                                session.availableConfigOptions = merged
+                            }
+                            persist(session)
+                        }
+                    } catch {
+                        if session.currentModel == loadedModel {
+                            if let currentIndex = session.availableConfigOptions.firstIndex(where: { $0.id == id }),
+                               session.availableConfigOptions[currentIndex].currentValue == .string(m) {
+                                session.availableConfigOptions[currentIndex] = loadedOption
+                            }
+                            session.currentModel = loadedValue
+                            persist(session)
+                        }
                     }
-                } catch {
-                    if session.currentModel == loadedModel {
-                        persist(session)
+                case .model, nil:
+                    let loadedModel = session.currentModel
+                    guard m != result.currentModel else { break }
+                    do {
+                        try await runner.connection.setModel(sessionId: remoteId, modelId: m)
+                        if session.currentModel == loadedModel {
+                            session.currentModel = m
+                            persist(session)
+                        }
+                    } catch {
+                        if session.currentModel == loadedModel {
+                            persist(session)
+                        }
                     }
+                case .mode:
+                    break
                 }
             }
             if let m = pendingMode.removeValue(forKey: sessionId),

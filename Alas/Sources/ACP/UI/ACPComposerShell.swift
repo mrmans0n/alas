@@ -817,6 +817,10 @@ struct ACPComposer: View {
     private func apply(spec: ChipSpec, selectedId: String) {
         let sid = session.id
         let remoteId = session.remoteSessionId ?? sid
+        var rollbackConfigOption: ACPConfigOption?
+        var optimisticConfigOption: ACPConfigOption?
+        let rollbackModel = session.currentModel
+        var configOptionUpdatesModel = false
         switch spec.source {
         case .mode:
             session.currentMode = selectedId
@@ -825,10 +829,17 @@ struct ACPComposer: View {
         case .configOption(let id):
             if let idx = session.availableConfigOptions.firstIndex(where: { $0.id == id }) {
                 let old = session.availableConfigOptions[idx]
-                session.availableConfigOptions[idx] = ACPConfigOption(
+                rollbackConfigOption = old
+                let optimistic = ACPConfigOption(
                     id: old.id, name: old.name, type: old.type,
                     category: old.category, currentValue: .string(selectedId),
                     options: old.options)
+                optimisticConfigOption = optimistic
+                session.availableConfigOptions[idx] = optimistic
+                if old.category == "model" || old.category == "Model" {
+                    configOptionUpdatesModel = true
+                    session.currentModel = selectedId
+                }
             }
         }
         manager.persist(session)
@@ -838,7 +849,10 @@ struct ACPComposer: View {
                 switch spec.source {
                 case .mode: manager.pendingMode[sid] = selectedId
                 case .model: manager.pendingModel[sid] = selectedId
-                case .configOption: break
+                case .configOption:
+                    if session.chipState.models?.source == spec.source {
+                        manager.pendingModel[sid] = selectedId
+                    }
                 }
                 return
             }
@@ -852,19 +866,45 @@ struct ACPComposer: View {
                 // (including dependent updates), but some agents echo a stale
                 // value for the option just set. Keep the successful selection
                 // for that option while still accepting dependent updates.
-                if let updated = try? await runner.connection.setConfigOption(
-                    sessionId: remoteId,
-                    configId: id,
-                    value: .string(selectedId)),
-                   !updated.isEmpty {
+                let baselineConfigOptions = session.availableConfigOptions
+                let baselineConfigOptionsRevision = session.availableConfigOptionsRevision
+                do {
+                    let updated = try await runner.connection.setConfigOption(
+                        sessionId: remoteId,
+                        configId: id,
+                        value: .string(selectedId))
+                    guard !updated.isEmpty else { return }
                     guard let merged = ACPConfigOption.mergingSuccessfulSetResponse(
                         updated,
                         configId: id,
                         selectedValue: .string(selectedId),
-                        currentConfigOptions: session.availableConfigOptions) else {
+                        currentConfigOptions: session.availableConfigOptions,
+                        baselineConfigOptions: baselineConfigOptions,
+                        baselineConfigOptionsRevision: baselineConfigOptionsRevision,
+                        currentConfigOptionsRevision: session.availableConfigOptionsRevision) else {
                         return
                     }
+                    let previousModelSource = session.chipState.models?.source
                     session.availableConfigOptions = merged
+                    if case .configOption(let modelId) = session.chipState.models?.source {
+                        session.currentModel = session.availableConfigOptions
+                            .first { $0.id == modelId }?.currentStringValue
+                    } else if case .configOption = previousModelSource,
+                              session.chipState.models == nil {
+                        session.currentModel = nil
+                    }
+                    manager.persist(session)
+                } catch {
+                    guard let rollbackConfigOption,
+                          let optimisticConfigOption,
+                          let idx = session.availableConfigOptions.firstIndex(where: { $0.id == id }),
+                          session.availableConfigOptions[idx] == optimisticConfigOption else {
+                        return
+                    }
+                    session.availableConfigOptions[idx] = rollbackConfigOption
+                    if configOptionUpdatesModel, session.currentModel == selectedId {
+                        session.currentModel = rollbackModel
+                    }
                     manager.persist(session)
                 }
             }
@@ -885,6 +925,8 @@ struct ACPComposer: View {
 
         Task { @MainActor in
             guard let runner = manager.runners[sid] else { return }
+            let baselineConfigOptions = session.availableConfigOptions
+            let baselineConfigOptionsRevision = session.availableConfigOptionsRevision
             if let updated = try? await runner.connection.setConfigOption(
                 sessionId: remoteId,
                 configId: id,
@@ -894,10 +936,17 @@ struct ACPComposer: View {
                     updated,
                     configId: id,
                     selectedValue: value,
-                    currentConfigOptions: session.availableConfigOptions) else {
+                    currentConfigOptions: session.availableConfigOptions,
+                    baselineConfigOptions: baselineConfigOptions,
+                    baselineConfigOptionsRevision: baselineConfigOptionsRevision,
+                    currentConfigOptionsRevision: session.availableConfigOptionsRevision) else {
                     return
                 }
                 session.availableConfigOptions = merged
+                if case .configOption(let modelId) = session.chipState.models?.source {
+                    session.currentModel = session.availableConfigOptions
+                        .first { $0.id == modelId }?.currentStringValue
+                }
                 manager.persist(session)
             }
         }
