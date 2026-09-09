@@ -3865,17 +3865,19 @@ extension ACPSessionManager {
             let loadedMode = session.currentMode
             let modelToRestore = pendingModel.removeValue(forKey: sessionId)
                 ?? (localModelAfterRemoteIdPersist != result.currentModel ? localModelAfterRemoteIdPersist : persistedModel)
+            if case .configOption(let id) = session.chipState.models?.source,
+               let loadedValue = session.availableConfigOptions.first(where: { $0.id == id })?.currentStringValue {
+                session.currentModel = loadedValue
+            }
             if let m = modelToRestore {
                 let remoteId = session.remoteSessionId ?? sessionId
                 switch session.chipState.models?.source {
                 case .configOption(let id):
-                    guard let index = session.availableConfigOptions.firstIndex(where: { $0.id == id }),
-                          let loadedValue = session.availableConfigOptions[index].currentStringValue
-                    else { break }
-                    session.currentModel = loadedValue
-                    guard m != loadedValue else { break }
-                    let loadedModel = loadedValue
+                    guard let index = session.availableConfigOptions.firstIndex(where: { $0.id == id }) else { break }
                     let loadedOption = session.availableConfigOptions[index]
+                    let loadedValue = loadedOption.currentStringValue
+                    guard m != loadedValue else { break }
+                    let loadedModel = session.currentModel
                     session.availableConfigOptions[index] = ACPConfigOption(
                         id: loadedOption.id, name: loadedOption.name, type: loadedOption.type,
                         category: loadedOption.category, currentValue: .string(m), options: loadedOption.options)
@@ -3894,12 +3896,14 @@ extension ACPSessionManager {
                         }
                     } catch {
                         if session.currentModel == loadedModel {
-                            session.currentModel = loadedValue
                             if let currentIndex = session.availableConfigOptions.firstIndex(where: { $0.id == id }),
                                session.availableConfigOptions[currentIndex].currentValue == .string(m) {
                                 session.availableConfigOptions[currentIndex] = loadedOption
                             }
-                            persist(session)
+                            if let loadedValue {
+                                session.currentModel = loadedValue
+                                persist(session)
+                            }
                         }
                     }
                 case .model, nil:

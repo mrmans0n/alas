@@ -841,7 +841,10 @@ struct ACPComposer: View {
                 switch spec.source {
                 case .mode: manager.pendingMode[sid] = selectedId
                 case .model: manager.pendingModel[sid] = selectedId
-                case .configOption: manager.pendingModel[sid] = selectedId
+                case .configOption:
+                    if session.chipState.models?.source == spec.source {
+                        manager.pendingModel[sid] = selectedId
+                    }
                 }
                 return
             }
