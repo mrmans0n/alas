@@ -383,7 +383,8 @@ enum RemoteServerMessage: Equatable, Sendable {
     case error(message: String)
     case changeList(
         sessionId: String, comparisonRef: String?, metricsAvailable: Bool,
-        files: [RemoteChangedFile], truncated: Bool)
+        files: [RemoteChangedFile], staged: [RemoteChangedFile], unstaged: [RemoteChangedFile],
+        commits: [RemoteCommit], truncated: Bool)
     case changeListFailed(sessionId: String, reason: RemoteFileAccessReason, message: String?)
     case fileDiffResult(
         sessionId: String, path: String, hunks: [RemoteDiffHunk], truncated: Bool,
@@ -404,7 +405,7 @@ extension RemoteServerMessage: Codable {
         case models, modes, currentModel, currentMode, autoRunEnabled, acceptsImages, title
         case firstIndex, totalCount, epoch, revision
         case items, steerUndoAvailable, itemId, text
-        case path, files, comparisonRef, metricsAvailable, truncated, hunks, nodes, reason, byteSize
+        case path, files, staged, unstaged, commits, comparisonRef, metricsAvailable, truncated, hunks, nodes, reason, byteSize
         case metadataNote
     }
 
@@ -522,6 +523,9 @@ extension RemoteServerMessage: Codable {
                 comparisonRef: try c.decodeIfPresent(String.self, forKey: .comparisonRef),
                 metricsAvailable: try c.decode(Bool.self, forKey: .metricsAvailable),
                 files: try c.decode([RemoteChangedFile].self, forKey: .files),
+                staged: try c.decodeIfPresent([RemoteChangedFile].self, forKey: .staged) ?? [],
+                unstaged: try c.decodeIfPresent([RemoteChangedFile].self, forKey: .unstaged) ?? [],
+                commits: try c.decodeIfPresent([RemoteCommit].self, forKey: .commits) ?? [],
                 truncated: try c.decodeIfPresent(Bool.self, forKey: .truncated) ?? false)
         case "changeListFailed":
             self = .changeListFailed(
@@ -688,12 +692,15 @@ extension RemoteServerMessage: Codable {
             try c.encode(text, forKey: .text)
         case .error(let m): try c.encode("error", forKey: .type)
         try c.encode(m, forKey: .message)
-        case .changeList(let s, let ref, let available, let files, let truncated):
+        case .changeList(let s, let ref, let available, let files, let staged, let unstaged, let commits, let truncated):
             try c.encode("changeList", forKey: .type)
             try c.encode(s, forKey: .sessionId)
             try c.encodeIfPresent(ref, forKey: .comparisonRef)
             try c.encode(available, forKey: .metricsAvailable)
             try c.encode(files, forKey: .files)
+            try c.encode(staged, forKey: .staged)
+            try c.encode(unstaged, forKey: .unstaged)
+            try c.encode(commits, forKey: .commits)
             try c.encode(truncated, forKey: .truncated)
         case .changeListFailed(let s, let reason, let message):
             try c.encode("changeListFailed", forKey: .type)

@@ -19,8 +19,22 @@ function formatFileCounts(file) {
   return "+" + add + " −" + del;
 }
 
+function changeSections(state) {
+  const sections = [];
+  const staged = sortFiles(state && state.staged);
+  const unstaged = sortFiles(state && state.unstaged);
+  const commits = (state && state.commits) || [];
+  if (staged.length || unstaged.length) sections.push({ title: "Working Tree" });
+  if (staged.length) sections.push({ title: "Staged", files: staged });
+  if (unstaged.length) sections.push({ title: "Unstaged", files: unstaged });
+  if (commits.length) sections.push({ title: "Commits", commits });
+  return sections;
+}
+
 function formatSummary(state) {
-  const files = (state && state.files) || [];
+  const staged = (state && state.staged) || [];
+  const unstaged = (state && state.unstaged) || [];
+  const files = staged.length || unstaged.length ? staged.concat(unstaged) : (state && state.files) || [];
   let add = 0;
   let del = 0;
   for (const file of files) {
@@ -30,7 +44,9 @@ function formatSummary(state) {
   const count = files.length + (files.length === 1 ? " file" : " files");
   const totals = count + " · +" + add + " −" + del;
   const ref = state && state.comparisonRef;
-  return ref ? "vs " + ref + " · " + totals : totals;
+  const commitCount = ((state && state.commits) || []).length;
+  const commits = commitCount ? " · " + commitCount + (commitCount === 1 ? " commit" : " commits") : "";
+  return (ref ? "vs " + ref + " · " : "") + totals + commits;
 }
 
 function diffRows(hunks) {
@@ -73,6 +89,7 @@ function metadataOnlyNotice(hunks, metadataNote) {
 globalThis.RemoteChangesView = {
   sortFiles,
   splitPath,
+  changeSections,
   formatSummary,
   formatFileCounts,
   diffRows,

@@ -711,7 +711,9 @@ struct RemoteProtocolTests {
             conflict: nil, renameFrom: nil)
         let changeList = RemoteServerMessage.changeList(
             sessionId: "s1", comparisonRef: "origin/main", metricsAvailable: true,
-            files: [file], truncated: false)
+            files: [file], staged: [file], unstaged: [],
+            commits: [RemoteCommit(shortSha: "abc1234", subject: "Add remote changes", author: "Nacho", add: 12, del: 3)],
+            truncated: false)
         #expect(try roundTrip(changeList) == changeList)
 
         let changeFailure = RemoteServerMessage.changeListFailed(

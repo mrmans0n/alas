@@ -2687,7 +2687,8 @@ struct RemoteSessionGatewayTests {
         let file = RemoteChangedFile(
             path: "a.txt", status: "M", add: 2, del: 1, conflict: nil, renameFrom: nil)
         provider.changeListResult = .success(
-            comparisonRef: "origin/main", metricsAvailable: true, files: [file], truncated: false)
+            comparisonRef: "origin/main", metricsAvailable: true, files: [file], staged: [file], unstaged: [],
+            commits: [], truncated: false)
         var sent: [RemoteServerMessage] = []
         let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
 
@@ -2696,7 +2697,7 @@ struct RemoteSessionGatewayTests {
         #expect(provider.changeListRequests == ["s1"])
         #expect(sent == [.changeList(
             sessionId: "s1", comparisonRef: "origin/main", metricsAvailable: true,
-            files: [file], truncated: false)])
+            files: [file], staged: [file], unstaged: [], commits: [], truncated: false)])
     }
 
     @Test func listChangesSendsFailureMessageOnProviderFailure() async {

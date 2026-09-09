@@ -261,6 +261,14 @@ struct RemoteChangedFile: Codable, Equatable, Sendable {
     let renameFrom: String?
 }
 
+struct RemoteCommit: Codable, Equatable, Sendable {
+    let shortSha: String
+    let subject: String
+    let author: String
+    let add: Int
+    let del: Int
+}
+
 /// Wire projection of `ParsedDiff.Hunk.Line`. `kind` is "context", "add", or
 /// "delete"; `text` has no leading +/-/space. `noTrailingNewline` mirrors
 /// the source line's `\ No newline at end of file` sentinel, so a diff that
@@ -332,7 +340,8 @@ struct RemoteFileNode: Codable, Equatable, Sendable {
 enum RemoteChangeListResult: Equatable, Sendable {
     case success(
         comparisonRef: String?, metricsAvailable: Bool,
-        files: [RemoteChangedFile], truncated: Bool)
+        files: [RemoteChangedFile], staged: [RemoteChangedFile], unstaged: [RemoteChangedFile],
+        commits: [RemoteCommit], truncated: Bool)
     case failure(reason: RemoteFileAccessReason, message: String?)
 }
 

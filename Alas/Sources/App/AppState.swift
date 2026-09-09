@@ -10420,6 +10420,12 @@ extension AppState: RemoteSessionsProvider {
             renameFrom: file.renameFrom)
     }
 
+    private static func remoteCommit(_ commit: CommitInfo) -> RemoteCommit {
+        RemoteCommit(
+            shortSha: commit.shortSha, subject: commit.rawSubject, author: commit.author,
+            add: commit.insertions, del: commit.deletions)
+    }
+
     private static func remoteDiffHunk(_ hunk: ParsedDiff.Hunk) -> RemoteDiffHunk {
         RemoteDiffHunk(
             header: hunk.header,
@@ -10492,10 +10498,14 @@ extension AppState: RemoteSessionsProvider {
             let changed = try await git.changedFilesAgainstRef(
                 worktreePath: worktree.path, ref: commits.comparisonRef)
             let capped = RemoteWorktreeFileAccess.truncateFiles(changed)
+            let workingTree = try await git.status(worktreePath: worktree.path)
             return .success(
                 comparisonRef: commits.comparisonRef,
                 metricsAvailable: true,
                 files: capped.files.map(Self.remoteChangedFile),
+                staged: workingTree.filter { $0.stage == .staged }.map(Self.remoteChangedFile),
+                unstaged: workingTree.filter { $0.stage == .unstaged }.map(Self.remoteChangedFile),
+                commits: commits.commits.prefix(100).map(Self.remoteCommit),
                 truncated: capped.truncated)
         } catch {
             return .failure(reason: .gitFailed, message: error.localizedDescription)
