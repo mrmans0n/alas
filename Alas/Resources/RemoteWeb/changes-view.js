@@ -25,7 +25,7 @@ function changeSections(state) {
   const staged = sortFiles(state && state.staged);
   const unstaged = sortFiles(state && state.unstaged);
   const commits = (state && state.commits) || [];
-  if (files.length && commits.length) sections.push({ title: "Branch Changes", files });
+  if (files.length && (commits.length || (!staged.length && !unstaged.length))) sections.push({ title: "Branch Changes", files });
   if (staged.length || unstaged.length) sections.push({ title: "Working Tree" });
   if (staged.length) sections.push({ title: "Staged", files: staged, stage: "staged" });
   if (unstaged.length) sections.push({ title: "Unstaged", files: unstaged, stage: "unstaged" });

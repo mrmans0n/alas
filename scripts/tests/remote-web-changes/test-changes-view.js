@@ -54,6 +54,17 @@ const view = globalThis.RemoteChangesView;
 }
 
 {
+  const sections = view.changeSections({
+    files: [{ path: "base-relative.swift", add: 1, del: 1 }],
+    staged: [],
+    unstaged: [],
+    commits: []
+  });
+  assert.deepEqual(sections.map((section) => section.title), ["Branch Changes"]);
+  assert.equal(sections[0].files[0].path, "base-relative.swift");
+}
+
+{
   const rows = view.diffRows([
     {
       header: "@@ -1,2 +1,3 @@",

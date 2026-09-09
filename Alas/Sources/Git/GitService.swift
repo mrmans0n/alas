@@ -105,22 +105,7 @@ extension GitService {
     }
 
     func status(worktreePath: URL) async throws -> [ChangedFile] {
-        async let statusResult = Process.git(
-            ["status", "--porcelain=v2", "-z", "--untracked-files=all"],
-            cwd: worktreePath
-        )
-        let s = try await statusResult
-        // Unlike `--no-index diff`/`check-ignore`, plain `git status` has no
-        // legitimate nonzero exit for a healthy repo — ANY failure here (a
-        // dropped SSH connection, an invalid/corrupt repository) is fatal
-        // and must propagate. This is a widely shared method (the desktop
-        // Changes panel, the remote nil-ref fallback, `alas` CLI actions);
-        // silently returning `[]` previously meant a genuine failure looked
-        // identical to "nothing has changed" everywhere it's called.
-        guard s.exitCode == 0 else {
-            throw ProcessError.nonZeroExit(s.exitCode, s.stderr)
-        }
-        var entries = try StatusParser.parse(s.stdout)
+        var entries = try await statusIdentity(worktreePath: worktreePath)
 
         // Numstat needs a base revision. Use HEAD if one exists; on unborn
         // branches diff against git's well-known empty-tree object hash
@@ -204,6 +189,25 @@ extension GitService {
             }
         }
         return entries
+    }
+
+    func statusIdentity(worktreePath: URL) async throws -> [ChangedFile] {
+        async let statusResult = Process.git(
+            ["status", "--porcelain=v2", "-z", "--untracked-files=all"],
+            cwd: worktreePath
+        )
+        let s = try await statusResult
+        // Unlike `--no-index diff`/`check-ignore`, plain `git status` has no
+        // legitimate nonzero exit for a healthy repo — ANY failure here (a
+        // dropped SSH connection, an invalid/corrupt repository) is fatal
+        // and must propagate. This is a widely shared method (the desktop
+        // Changes panel, the remote nil-ref fallback, `alas` CLI actions);
+        // silently returning `[]` previously meant a genuine failure looked
+        // identical to "nothing has changed" everywhere it's called.
+        guard s.exitCode == 0 else {
+            throw ProcessError.nonZeroExit(s.exitCode, s.stderr)
+        }
+        return try StatusParser.parse(s.stdout)
     }
 
     func statusForRemoteChangeList(worktreePath: URL) async throws -> [ChangedFile] {
