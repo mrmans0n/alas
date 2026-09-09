@@ -218,6 +218,7 @@ final class GGLandingStore {
     private static func row(_ row: GGLandingRow, matches entry: GGLandedEntry) -> Bool {
         if let prNumber = row.prNumber, prNumber != entry.prNumber { return false }
         if let ggId = entry.ggId, ggId != row.stableID, ggId != row.ggId { return false }
+        if row.ggId == nil, row.prNumber == nil, entry.sha != row.stableID { return false }
         return true
     }
 

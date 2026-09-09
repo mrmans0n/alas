@@ -214,6 +214,25 @@ struct GGLandingStoreTests {
         #expect(store.sessions["p"]?.completedIDs.isEmpty == true)
     }
 
+    @Test func shaOnlyEntryEventsMustMatchConfirmedRows() throws {
+        let store = GGLandingStore()
+        #expect(store.begin(.init(
+            projectId: "p",
+            worktreeId: "w",
+            stack: "feature",
+            base: "main",
+            target: "sha-1",
+            rows: [.init(position: 1, title: "One", ggId: nil, stableID: "sha-1", prNumber: nil)]
+        )))
+
+        #expect(!store.receive(
+            .entry(.init(position: 1, sha: "sha-2", prNumber: nil, action: "merged")),
+            projectId: "p"
+        ))
+        #expect(store.sessions["p"]?.phase == .failed)
+        #expect(store.sessions["p"]?.completedIDs.isEmpty == true)
+    }
+
     @Test func beginSeedsSessionAndReplacesTerminalAttempt() throws {
         let store = GGLandingStore()
         let startedAt = Date(timeIntervalSince1970: 1_000)
