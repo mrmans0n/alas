@@ -859,6 +859,7 @@ struct ACPComposer: View {
                 // value for the option just set. Keep the successful selection
                 // for that option while still accepting dependent updates.
                 let baselineConfigOptions = session.availableConfigOptions
+                let baselineConfigOptionsRevision = session.availableConfigOptionsRevision
                 if let updated = try? await runner.connection.setConfigOption(
                     sessionId: remoteId,
                     configId: id,
@@ -869,7 +870,9 @@ struct ACPComposer: View {
                         configId: id,
                         selectedValue: .string(selectedId),
                         currentConfigOptions: session.availableConfigOptions,
-                        baselineConfigOptions: baselineConfigOptions) else {
+                        baselineConfigOptions: baselineConfigOptions,
+                        baselineConfigOptionsRevision: baselineConfigOptionsRevision,
+                        currentConfigOptionsRevision: session.availableConfigOptionsRevision) else {
                         return
                     }
                     session.availableConfigOptions = merged
@@ -898,6 +901,7 @@ struct ACPComposer: View {
         Task { @MainActor in
             guard let runner = manager.runners[sid] else { return }
             let baselineConfigOptions = session.availableConfigOptions
+            let baselineConfigOptionsRevision = session.availableConfigOptionsRevision
             if let updated = try? await runner.connection.setConfigOption(
                 sessionId: remoteId,
                 configId: id,
@@ -908,7 +912,9 @@ struct ACPComposer: View {
                     configId: id,
                     selectedValue: value,
                     currentConfigOptions: session.availableConfigOptions,
-                    baselineConfigOptions: baselineConfigOptions) else {
+                    baselineConfigOptions: baselineConfigOptions,
+                    baselineConfigOptionsRevision: baselineConfigOptionsRevision,
+                    currentConfigOptionsRevision: session.availableConfigOptionsRevision) else {
                     return
                 }
                 session.availableConfigOptions = merged

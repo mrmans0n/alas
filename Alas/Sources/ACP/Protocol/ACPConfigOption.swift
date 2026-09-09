@@ -98,7 +98,9 @@ struct ACPConfigOption: Codable, Equatable, Identifiable, Hashable {
         configId: String,
         selectedValue: ACPConfigValue,
         currentConfigOptions: [ACPConfigOption],
-        baselineConfigOptions: [ACPConfigOption]? = nil
+        baselineConfigOptions: [ACPConfigOption]? = nil,
+        baselineConfigOptionsRevision: Int? = nil,
+        currentConfigOptionsRevision: Int? = nil
     ) -> [ACPConfigOption]? {
         guard currentConfigOptions.first(where: { $0.id == configId })?.currentValue == selectedValue else {
             return nil
@@ -132,9 +134,13 @@ struct ACPConfigOption: Codable, Equatable, Identifiable, Hashable {
                 continue
             }
             if let baselineConfigOptions,
-               baselineConfigOptions.contains(where: { $0.id == option.id }) == false,
-               let current = currentConfigOptions.first(where: { $0.id == option.id }) {
-                merged.append(current)
+               baselineConfigOptions.contains(where: { $0.id == option.id }) == false {
+                if let current = currentConfigOptions.first(where: { $0.id == option.id }) {
+                    merged.append(current)
+                } else if baselineConfigOptionsRevision == nil
+                    || baselineConfigOptionsRevision == currentConfigOptionsRevision {
+                    merged.append(option)
+                }
                 continue
             }
             merged.append(option)

@@ -3887,6 +3887,7 @@ extension ACPSessionManager {
                         category: loadedOption.category, currentValue: .string(m), options: loadedOption.options)
                     do {
                         let baselineConfigOptions = session.availableConfigOptions
+                        let baselineConfigOptionsRevision = session.availableConfigOptionsRevision
                         let updated = try await runner.connection.setConfigOption(
                             sessionId: remoteId, configId: id, value: .string(m))
                         let stillRestoringModel = session.availableConfigOptions
@@ -3897,7 +3898,9 @@ extension ACPSessionManager {
                                let merged = ACPConfigOption.mergingSuccessfulSetResponse(
                                    updated, configId: id, selectedValue: .string(m),
                                    currentConfigOptions: session.availableConfigOptions,
-                                   baselineConfigOptions: baselineConfigOptions) {
+                                   baselineConfigOptions: baselineConfigOptions,
+                                   baselineConfigOptionsRevision: baselineConfigOptionsRevision,
+                                   currentConfigOptionsRevision: session.availableConfigOptionsRevision) {
                                 session.availableConfigOptions = merged
                             }
                             persist(session)

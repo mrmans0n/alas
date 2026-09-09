@@ -246,6 +246,29 @@ struct ACPConfigOptionTests {
         #expect(merged.map(\.id) == ["fast", "added"])
     }
 
+    @Test("successful set response does not resurrect option added then removed concurrently")
+    func mergeSuccessfulSetResponseSkipsOptionAddedThenRemovedConcurrently() throws {
+        let fast = ACPConfigOption(
+            id: "fast", name: "Fast", type: "select", currentValue: "true",
+            options: [
+                ACPConfigOptionItem(id: "false", name: "Off"),
+                ACPConfigOptionItem(id: "true", name: "On"),
+            ])
+        let transient = ACPConfigOption(
+            id: "transient", name: "Transient", type: "select", currentValue: "new")
+
+        let merged = try #require(ACPConfigOption.mergingSuccessfulSetResponse(
+            [fast, transient],
+            configId: "fast",
+            selectedValue: .string("true"),
+            currentConfigOptions: [fast],
+            baselineConfigOptions: [fast],
+            baselineConfigOptionsRevision: 1,
+            currentConfigOptionsRevision: 3))
+
+        #expect(merged.map(\.id) == ["fast"])
+    }
+
     @Test("successful set response preserves selected option metadata changed concurrently")
     func mergeSuccessfulSetResponsePreservesSelectedOptionMetadataChangedConcurrently() throws {
         let baselineFast = ACPConfigOption(
