@@ -3867,7 +3867,11 @@ extension ACPSessionManager {
                 ?? (localModelAfterRemoteIdPersist != result.currentModel ? localModelAfterRemoteIdPersist : persistedModel)
             if case .configOption(let id) = session.chipState.models?.source,
                let loadedValue = result.configOptions.first(where: { $0.id == id })?.currentStringValue {
+                let shouldPersistLoadedModel = modelToRestore == nil && session.currentModel != loadedValue
                 session.currentModel = loadedValue
+                if shouldPersistLoadedModel {
+                    persist(session)
+                }
             }
             if let m = modelToRestore {
                 let remoteId = session.remoteSessionId ?? sessionId

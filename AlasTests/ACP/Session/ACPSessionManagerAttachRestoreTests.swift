@@ -604,6 +604,33 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(session.currentModel == "opus")
     }
 
+    @Test("reopened config-only session persists loaded model when row has no model")
+    func reopenedConfigOnlySessionPersistsLoadedModelWhenRowHasNoModel() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: "remote-old", agentId: "codex", currentModel: nil))
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-old", availableModels: [], availableModes: [], currentModel: nil,
+                currentMode: nil, promptSuggestions: [], configOptions: [ACPConfigOption(
+                    id: "model", name: "Model", category: "model", currentValue: "opus",
+                    options: [.init(id: "opus", name: "Opus")])]
+            ))
+        }
+        let manager = manager(store: store, client: client)
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        await manager.attach(to: session.id, freshlyCreated: false)
+
+        #expect(client.sent.map(\.method) == ["initialize", "session/load"])
+        #expect(session.currentModel == "opus")
+        try await waitUntil {
+            (try? store.loadSession(id: "local"))?.currentModel == "opus"
+        }
+    }
+
     @Test("reopened config-option session keeps the loaded model when restoration fails")
     func reopenedConfigOptionSessionKeepsLoadedModelWhenRestorationFails() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())

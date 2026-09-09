@@ -117,7 +117,7 @@ struct ACPConfigOption: Codable, Equatable, Identifiable, Hashable {
             if let baselineConfigOptions,
                let baseline = baselineConfigOptions.first(where: { $0.id == option.id }),
                let current = currentConfigOptions.first(where: { $0.id == option.id }),
-               current.currentValue != baseline.currentValue {
+               current != baseline {
                 return current
             }
             return option

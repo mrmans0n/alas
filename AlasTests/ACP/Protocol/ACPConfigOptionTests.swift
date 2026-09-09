@@ -187,6 +187,42 @@ struct ACPConfigOptionTests {
         #expect(merged.first(where: { $0.id == "effort" })?.currentValue == .string("high"))
     }
 
+    @Test("successful set response preserves concurrently changed dependent metadata")
+    func mergeSuccessfulSetResponsePreservesConcurrentlyChangedDependentMetadata() throws {
+        let baselineFast = ACPConfigOption(
+            id: "fast", name: "Fast", type: "select", currentValue: "true",
+            options: [
+                ACPConfigOptionItem(id: "false", name: "Off"),
+                ACPConfigOptionItem(id: "true", name: "On"),
+            ])
+        let baselineEffort = ACPConfigOption(
+            id: "effort", name: "Effort", type: "select", currentValue: "low",
+            options: [
+                ACPConfigOptionItem(id: "low", name: "Low"),
+                ACPConfigOptionItem(id: "high", name: "High"),
+            ])
+        let staleEffort = ACPConfigOption(
+            id: "effort", name: "Effort", type: "select", currentValue: "low",
+            options: baselineEffort.options)
+        let currentEffort = ACPConfigOption(
+            id: "effort", name: "Effort", type: "select", currentValue: "low",
+            options: [
+                ACPConfigOptionItem(id: "low", name: "Low"),
+                ACPConfigOptionItem(id: "medium", name: "Medium"),
+                ACPConfigOptionItem(id: "high", name: "High"),
+            ])
+
+        let merged = try #require(ACPConfigOption.mergingSuccessfulSetResponse(
+            [baselineFast, staleEffort],
+            configId: "fast",
+            selectedValue: .string("true"),
+            currentConfigOptions: [baselineFast, currentEffort],
+            baselineConfigOptions: [baselineFast, baselineEffort]))
+
+        let effort = try #require(merged.first(where: { $0.id == "effort" }))
+        #expect(effort.options.map(\.id) == ["low", "medium", "high"])
+    }
+
     @Test("successful boolean set response preserves the selected config value")
     func mergeSuccessfulBooleanSetResponsePreservesSelectedValue() throws {
         let staleFast = ACPConfigOption(
