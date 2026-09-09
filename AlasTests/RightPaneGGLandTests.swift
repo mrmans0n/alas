@@ -19,7 +19,10 @@ private actor LandPreflightSuspension {
         await withCheckedContinuation { waiters.append($0) }
     }
 
-    func release() { completion?.resume(); completion = nil }
+    func release() {
+        completion?.resume()
+        completion = nil
+    }
 }
 
 private final class LiveLandGGRunner: GGCommandRunning, @unchecked Sendable {
