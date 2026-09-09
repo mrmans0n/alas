@@ -18,6 +18,7 @@ struct GGCapabilities: Equatable, Sendable {
     var clientOperationID: Bool = false
     var stagedOnlyAmend: Bool = false
     var syncJSONL: Bool = false
+    var landJSONL: Bool = false
     var localStackSnapshot: Bool = false
 }
 

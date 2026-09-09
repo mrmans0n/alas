@@ -406,6 +406,7 @@ struct GGService {
         let unstack = try? await runner.run(args: ["unstack", "--help"], cwd: nil)
         let sc = try? await runner.run(args: ["sc", "--help"], cwd: nil)
         let sync = try? await runner.run(args: ["sync", "--help"], cwd: nil)
+        let land = try? await runner.run(args: ["land", "--help"], cwd: nil)
         let ls = try? await runner.run(args: ["ls", "--help"], cwd: nil)
         return GGCapabilities(
             structuredSplit: split?.exitCode == 0
@@ -418,6 +419,7 @@ struct GGService {
             stagedOnlyAmend: sc?.exitCode == 0
                 && sc?.stdout.contains("--staged-only") == true,
             syncJSONL: sync?.exitCode == 0 && sync?.stdout.contains("--jsonl") == true,
+            landJSONL: land?.exitCode == 0 && land?.stdout.contains("--jsonl") == true,
             localStackSnapshot: ls?.exitCode == 0
                 && ls?.stdout.contains("--no-refresh") == true
         )
@@ -625,6 +627,33 @@ struct GGService {
         }
         // A real in-band error (GGServiceError.commandFailed thrown by
         // decode) and anything else still propagate.
+    }
+
+    func landStream(worktreePath: String, until: String) -> AsyncThrowingStream<GGLandEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let producer = Task {
+                var validator = GGLandStreamValidator()
+                do {
+                    for try await line in runner.runStreaming(
+                        args: ["land", "--until", until, "--wait", "--jsonl", "--no-clean"],
+                        cwd: URL(fileURLWithPath: worktreePath),
+                        timeout: nil
+                    ) {
+                        let event = try GGLandEvent.decode(line: line)
+                        try validator.accept(event)
+                        continuation.yield(event)
+                        if case .error(let message) = event {
+                            throw GGServiceError.commandFailed(stderr: message)
+                        }
+                    }
+                    try validator.finish()
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in producer.cancel() }
+        }
     }
 
     func clean(worktreePath: String) async throws {
@@ -888,6 +917,77 @@ struct GGService {
         } catch let error as GGServiceError {
             if case .unsupportedSchema = error { throw error }
             return nil
+        }
+    }
+}
+
+private struct GGLandStreamValidator {
+    private var start: (stack: String, base: String, totalEntries: Int)?
+    private var terminalPositions = Set<Int>()
+    private var sawTerminalEvent = false
+
+    mutating func accept(_ event: GGLandEvent) throws {
+        guard !sawTerminalEvent else {
+            throw GGServiceError.malformedOutput("gg land emitted data after a terminal event.")
+        }
+
+        switch event {
+        case .start(let stack, let base, let totalEntries):
+            guard start == nil else {
+                throw GGServiceError.malformedOutput("gg land emitted duplicate start events.")
+            }
+            guard totalEntries >= 0 else {
+                throw GGServiceError.malformedOutput("gg land start reported a negative entry count.")
+            }
+            start = (stack, base, totalEntries)
+
+        case .wait(let wait):
+            try validateActivePosition(wait.position, event: "wait")
+
+        case .entry(let entry):
+            try validateActivePosition(entry.position, event: "entry")
+            guard terminalPositions.insert(entry.position).inserted else {
+                throw GGServiceError.malformedOutput("gg land emitted duplicate terminal entry positions.")
+            }
+
+        case .summary(let summary):
+            guard let start else {
+                throw GGServiceError.malformedOutput("gg land emitted summary before start.")
+            }
+            guard summary.stack == start.stack, summary.base == start.base else {
+                throw GGServiceError.malformedOutput("gg land summary did not match start identity.")
+            }
+            var summaryPositions = Set<Int>()
+            for entry in summary.landed {
+                guard entry.position >= 1, entry.position <= start.totalEntries else {
+                    throw GGServiceError.malformedOutput("gg land summary reported an entry outside its start range.")
+                }
+                guard summaryPositions.insert(entry.position).inserted else {
+                    throw GGServiceError.malformedOutput("gg land summary reported duplicate entry positions.")
+                }
+            }
+            sawTerminalEvent = true
+
+        case .error:
+            sawTerminalEvent = true
+        }
+    }
+
+    func finish() throws {
+        guard sawTerminalEvent else {
+            throw GGServiceError.malformedOutput("gg land ended without a summary or error event.")
+        }
+    }
+
+    private func validateActivePosition(_ position: Int, event: String) throws {
+        guard let start else {
+            throw GGServiceError.malformedOutput("gg land emitted \(event) before start.")
+        }
+        guard position >= 1, position <= start.totalEntries else {
+            throw GGServiceError.malformedOutput("gg land emitted \(event) outside its start range.")
+        }
+        guard !terminalPositions.contains(position) else {
+            throw GGServiceError.malformedOutput("gg land emitted \(event) after that entry completed.")
         }
     }
 }

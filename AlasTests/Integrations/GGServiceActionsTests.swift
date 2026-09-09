@@ -6,9 +6,12 @@ private final class RecordingGGRunner: GGCommandRunning, @unchecked Sendable {
     var stdout: String
     var exitCode: Int32
     var stderr: String
+    var streamingLines: [String]? = nil
     private(set) var lastArgs: [String] = []
     private(set) var lastCwd: URL?
     private(set) var calls: [[String]] = []
+    private(set) var requestedStreamingTimeout = false
+    private(set) var lastTimeout: TimeInterval?
 
     init(stdout: String = "", exitCode: Int32 = 0, stderr: String = "") {
         self.stdout = stdout
@@ -21,6 +24,65 @@ private final class RecordingGGRunner: GGCommandRunning, @unchecked Sendable {
         lastArgs = args
         lastCwd = cwd
         return ProcessResult(exitCode: exitCode, stdout: stdout, stderr: stderr)
+    }
+
+    func runStreaming(
+        args: [String],
+        cwd: URL?,
+        timeout: TimeInterval?
+    ) -> AsyncThrowingStream<String, Error> {
+        calls.append(args)
+        lastArgs = args
+        lastCwd = cwd
+        requestedStreamingTimeout = true
+        lastTimeout = timeout
+        return AsyncThrowingStream { continuation in
+            for line in streamingLines ?? [] { continuation.yield(line) }
+            if exitCode == 0 {
+                continuation.finish()
+            } else {
+                continuation.finish(throwing: GGServiceError.map(exitCode: exitCode, stderr: stderr))
+            }
+        }
+    }
+}
+
+private final class CancellableLandGGRunner: GGCommandRunning, @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: AsyncThrowingStream<String, Error>.Continuation?
+    private(set) var cancelled = false
+
+    func run(args: [String], cwd: URL?) async throws -> ProcessResult {
+        ProcessResult(exitCode: 1, stdout: "", stderr: "unexpected buffered run")
+    }
+
+    func runStreaming(
+        args: [String],
+        cwd: URL?,
+        timeout: TimeInterval?
+    ) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            self.lock.lock()
+            self.continuation = continuation
+            self.lock.unlock()
+            continuation.yield(#"{"version":1,"command":"land","status":"ok","event":"start","stack":"s","base":"main","total_entries":1}"#)
+            continuation.onTermination = { [weak self] _ in
+                self?.lock.lock()
+                self?.cancelled = true
+                self?.lock.unlock()
+            }
+        }
+    }
+
+    func cancellationObserved() async -> Bool {
+        for _ in 0..<1_000 {
+            lock.lock()
+            let didCancel = cancelled
+            lock.unlock()
+            if didCancel { return true }
+            await Task.yield()
+        }
+        return false
     }
 }
 
@@ -56,6 +118,94 @@ private struct SummaryThenDelayedFailureGGRunner: GGCommandRunning {
 }
 
 struct GGServiceActionsTests {
+    @Test func landJSONLStreamsValidatedEventsWithoutTimeout() async throws {
+        let runner = RecordingGGRunner()
+        runner.streamingLines = [
+            #"{"version":1,"command":"land","status":"ok","event":"start","stack":"s","base":"main","total_entries":1}"#,
+            #"{"version":1,"command":"land","status":"ok","event":"wait","position":1,"pr_number":9,"phase":"readiness","poll":1,"elapsed_seconds":0,"ci_status":"running","approved":true,"merge_train_status":null,"merge_train_position":null,"pipeline_running":null,"error":null}"#,
+            #"{"version":1,"command":"land","status":"ok","event":"summary","stack":"s","base":"main","landed":[],"remaining":1,"cleaned":false,"warnings":[],"error":null}"#,
+        ]
+        var events: [GGLandEvent] = []
+        for try await event in GGService(runner: runner).landStream(worktreePath: "/tmp/wt", until: "c-abc") {
+            events.append(event)
+        }
+        #expect(events.count == 3)
+        #expect(runner.lastArgs == ["land", "--until", "c-abc", "--wait", "--jsonl", "--no-clean"])
+        #expect(runner.requestedStreamingTimeout)
+        #expect(runner.lastTimeout == nil)
+    }
+
+    @Test(arguments: [
+        [
+            #"{"version":1,"command":"land","status":"ok","event":"start","stack":"s","base":"main","total_entries":1}"#,
+            #"{"version":1,"command":"land","status":"ok","event":"start","stack":"s","base":"main","total_entries":1}"#,
+        ],
+        [#"{"version":1,"command":"land","status":"ok","event":"wait","position":1,"pr_number":9,"phase":"readiness","poll":1,"elapsed_seconds":0,"ci_status":null,"approved":null,"merge_train_status":null,"merge_train_position":null,"pipeline_running":null,"error":null}"#],
+        [#"{"version":1,"command":"land","status":"ok","event":"entry","position":1,"sha":"a","title":"A","gg_id":"c-a","pr_number":9,"action":"merged","error":null}"#],
+        [#"{"version":1,"command":"land","status":"ok","event":"summary","stack":"s","base":"main","landed":[],"remaining":1,"cleaned":false,"warnings":[],"error":null}"#],
+        [
+            #"{"version":1,"command":"land","status":"ok","event":"start","stack":"s","base":"main","total_entries":1}"#,
+            #"{"version":1,"command":"land","status":"ok","event":"wait","position":2,"pr_number":9,"phase":"readiness","poll":1,"elapsed_seconds":0,"ci_status":null,"approved":null,"merge_train_status":null,"merge_train_position":null,"pipeline_running":null,"error":null}"#,
+        ],
+        [
+            #"{"version":1,"command":"land","status":"ok","event":"start","stack":"s","base":"main","total_entries":1}"#,
+            #"{"version":1,"command":"land","status":"ok","event":"entry","position":1,"sha":"a","title":"A","gg_id":"c-a","pr_number":9,"action":"merged","error":null}"#,
+            #"{"version":1,"command":"land","status":"ok","event":"entry","position":1,"sha":"a","title":"A","gg_id":"c-a","pr_number":9,"action":"merged","error":null}"#,
+        ],
+        [
+            #"{"version":1,"command":"land","status":"ok","event":"start","stack":"s","base":"main","total_entries":1}"#,
+            #"{"version":1,"command":"land","status":"ok","event":"summary","stack":"s","base":"main","landed":[],"remaining":1,"cleaned":false,"warnings":[],"error":null}"#,
+            #"{"version":1,"command":"land","status":"ok","event":"wait","position":1,"pr_number":9,"phase":"readiness","poll":1,"elapsed_seconds":0,"ci_status":null,"approved":null,"merge_train_status":null,"merge_train_position":null,"pipeline_running":null,"error":null}"#,
+        ],
+        [#"{"version":1,"command":"land","status":"error","event":"error","message":"setup failed"}"#],
+        [#"{"version":1,"command":"land","status":"ok","event":"start","stack":"s","base":"main","total_entries":1}"#],
+    ])
+    func landJSONLRejectsInvalidEventSequences(lines: [String]) async {
+        let runner = RecordingGGRunner()
+        runner.streamingLines = lines
+        await #expect(throws: GGServiceError.self) {
+            for try await _ in GGService(runner: runner).landStream(worktreePath: "/tmp/wt", until: "c-abc") {}
+        }
+    }
+
+    @Test func landJSONLRejectsSummaryWithDifferentStartIdentity() async {
+        let runner = RecordingGGRunner()
+        runner.streamingLines = [
+            #"{"version":1,"command":"land","status":"ok","event":"start","stack":"s","base":"main","total_entries":1}"#,
+            #"{"version":1,"command":"land","status":"ok","event":"summary","stack":"other","base":"main","landed":[],"remaining":1,"cleaned":false,"warnings":[],"error":null}"#,
+        ]
+        await #expect(throws: GGServiceError.malformedOutput("gg land summary did not match start identity.")) {
+            for try await _ in GGService(runner: runner).landStream(worktreePath: "/tmp/wt", until: "c-abc") {}
+        }
+    }
+
+    @Test func landJSONLYieldsFatalErrorBeforeFailing() async {
+        let runner = RecordingGGRunner()
+        runner.streamingLines = [
+            #"{"version":1,"command":"land","status":"error","event":"error","message":"setup failed"}"#,
+        ]
+        var events: [GGLandEvent] = []
+        await #expect(throws: GGServiceError.commandFailed(stderr: "setup failed")) {
+            for try await event in GGService(runner: runner).landStream(worktreePath: "/tmp/wt", until: "c-abc") {
+                events.append(event)
+            }
+        }
+        #expect(events == [.error(message: "setup failed")])
+    }
+
+    @Test func landJSONLPropagatesConsumerCancellation() async throws {
+        let runner = CancellableLandGGRunner()
+        let task = Task {
+            for try await _ in GGService(runner: runner).landStream(worktreePath: "/tmp/wt", until: "c-abc") {
+                try Task.checkCancellation()
+            }
+        }
+        await Task.yield()
+        task.cancel()
+        _ = try? await task.value
+        #expect(await runner.cancellationObserved())
+    }
+
     @Test func syncStreamsParsedEventsFromDefaultRunner() async throws {
         // The default runStreaming splits buffered stdout into lines, so a
         // fake that only implements run() still drives the streaming API.

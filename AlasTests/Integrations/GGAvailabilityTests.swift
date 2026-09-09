@@ -21,6 +21,7 @@ private struct HelpGGRunner: GGCommandRunning {
     let sc: String?
     let sync: String?
     let ls: String?
+    let land: String?
 
     init(
         version: String? = "1.0.0",
@@ -29,7 +30,8 @@ private struct HelpGGRunner: GGCommandRunning {
         unstack: String?,
         sc: String? = nil,
         sync: String? = nil,
-        ls: String? = nil
+        ls: String? = nil,
+        land: String? = nil
     ) {
         self.version = version
         self.root = root
@@ -38,6 +40,7 @@ private struct HelpGGRunner: GGCommandRunning {
         self.sc = sc
         self.sync = sync
         self.ls = ls
+        self.land = land
     }
 
     func run(args: [String], cwd: URL?) async throws -> ProcessResult {
@@ -63,6 +66,9 @@ private struct HelpGGRunner: GGCommandRunning {
         case ["ls", "--help"]:
             guard let ls else { break }
             return ProcessResult(exitCode: 0, stdout: ls, stderr: "")
+        case ["land", "--help"]:
+            guard let land else { break }
+            return ProcessResult(exitCode: 0, stdout: land, stderr: "")
         default:
             break
         }
@@ -144,6 +150,14 @@ struct GGAvailabilityTests {
             split: "", unstack: "", sync: "--json"
         ))
         #expect(!(await old.probeCapabilities()).syncJSONL)
+    }
+
+    @Test func landJSONLCapabilityUsesLandHelpAndDefaultsOff() async {
+        let current = GGService(runner: HelpGGRunner(
+            split: "", unstack: "", land: "--json --jsonl"
+        ))
+        #expect((await current.probeCapabilities()).landJSONL)
+        #expect(!GGCapabilities(structuredSplit: false, keepCurrentUnstack: false).landJSONL)
     }
 
     @Test func localStackSnapshotCapabilityUsesListHelpAndDefaultsOff() async {
