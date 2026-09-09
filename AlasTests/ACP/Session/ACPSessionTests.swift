@@ -1467,6 +1467,22 @@ struct ACPSessionTests {
         #expect(session.currentModel == "sonnet")
     }
 
+    @Test("sessionConfigOptionsUpdate clears removed config-backed currentModel")
+    func configOptionsUpdateClearsRemovedConfigBackedCurrentModel() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.currentModel = "sonnet"
+        session.apply(.sessionConfigOptionsUpdate([ACPConfigOption(
+            id: "model",
+            name: "Model",
+            category: "model",
+            currentValue: "sonnet",
+            options: [ACPConfigOptionItem(id: "sonnet", name: "Sonnet")]
+        )]))
+        session.apply(.sessionConfigOptionsUpdate([]))
+
+        #expect(session.currentModel == nil)
+    }
+
     @Test("session info applies title and goal")
     func sessionInfoAppliesTitleAndGoal() async throws {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "Old title")

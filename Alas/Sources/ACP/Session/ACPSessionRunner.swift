@@ -625,10 +625,22 @@ final class ACPSessionRunner {
                     )
                 }
             } else {
+                let hadConfigBackedModel: Bool
+                if case .configOption = session.chipState.models?.source {
+                    hadConfigBackedModel = true
+                } else {
+                    hadConfigBackedModel = false
+                }
                 let dirty = session.apply(params.update)
                 flushStreamingPersist()
+                let hasConfigBackedModel: Bool
+                if case .configOption = session.chipState.models?.source {
+                    hasConfigBackedModel = true
+                } else {
+                    hasConfigBackedModel = false
+                }
                 if case .sessionConfigOptionsUpdate = params.update,
-                   case .configOption = session.chipState.models?.source {
+                   hadConfigBackedModel || hasConfigBackedModel {
                     persistIndices(dirty)
                     persistSessionRow { persisted in
                         if persisted {
