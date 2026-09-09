@@ -612,6 +612,9 @@ struct CenterPaneView: View {
                             onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) }
                         )
                             .id(s.id)
+                    case .ggLanding(let s):
+                        GGLandingTabView(state: state, tabState: s)
+                            .id(s.id)
                     case .ggInbox(let s):
                         GGInboxTabView(
                             state: state,

@@ -70,6 +70,25 @@ struct GGLandingStoreTests {
         #expect(store.begin(seed(projectId: "other")))
     }
 
+    @Test func terminalRuntimeIsRecordedAndResetOnRestart() async {
+        let store = GGLandingStore()
+        store.begin(seed())
+        #expect(store.sessions["p"]?.endedAt == nil)
+        store.receive(.summary(.init(landed: [])), projectId: "p")
+        #expect(store.sessions["p"]?.endedAt != nil)
+        store.begin(seed())
+        #expect(store.sessions["p"]?.endedAt == nil)
+        store.fail(projectId: "p", message: "Failed")
+        #expect(store.sessions["p"]?.endedAt != nil)
+        store.begin(seed())
+        store.cancel(projectId: "p")
+        #expect(store.sessions["p"]?.endedAt == nil)
+        store.attach(projectId: "p", task: Task<Void, Error> {}) {}
+        await store.waitForOperation(projectId: "p")
+        #expect(store.sessions["p"]?.phase == .cancelled)
+        #expect(store.sessions["p"]?.endedAt != nil)
+    }
+
     @Test func cancellationBeforeAttachCancelsRawOperationAndWaitsForCleanup() async {
         let store = GGLandingStore()
         let cleanup = LandingTestSuspension()

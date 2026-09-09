@@ -39,6 +39,7 @@ struct GGLandingSession: Equatable, Identifiable, Sendable {
     var warning: String?
     var result: GGLandResult?
     var error: String?
+    var endedAt: Date? = nil
 }
 
 @MainActor
@@ -140,6 +141,9 @@ final class GGLandingStore {
             }
         }
 
+        if session.phase == .succeeded || session.phase == .failed {
+            session.endedAt = Date()
+        }
         sessions[projectId] = session
     }
 
@@ -167,6 +171,7 @@ final class GGLandingStore {
             guard let phase = self.sessions[projectId]?.phase else { return }
             if phase == .cancelling {
                 self.sessions[projectId]?.phase = .cancelled
+                self.sessions[projectId]?.endedAt = Date()
                 self.sessions[projectId]?.activeWait = nil
                 self.sessions[projectId]?.warning = nil
                 self.sessions[projectId]?.error = nil
@@ -231,6 +236,7 @@ final class GGLandingStore {
         session.activeWait = nil
         session.warning = nil
         session.error = session.phase == .cancelled ? nil : message
+        session.endedAt = Date()
         sessions[projectId] = session
     }
 

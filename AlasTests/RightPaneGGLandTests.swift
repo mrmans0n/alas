@@ -257,6 +257,37 @@ struct RightPaneGGLandTests {
         await store.cancelAllAndWait()
     }
 
+    @Test func liveLandingOpensInitiatingTabAndDuplicateFocusesIt() async throws {
+        let store = GGLandingStore.shared
+        let projectId = "landing-routing-\(UUID().uuidString)"
+        defer { store.prune(keepingProjectIds: Set(store.sessions.keys).subtracting([projectId])) }
+        let firstRunner = LiveLandGGRunner()
+        let secondRunner = LiveLandGGRunner()
+        let first = landingState(store: store, runner: firstRunner, supported: true, projectId: projectId)
+        let second = landingState(
+            store: store, runner: secondRunner, supported: true, worktreeId: "other-wt", projectId: projectId
+        )
+        let tabs = TabsManager(store: MemoryStore())
+        let app = AppState(store: MemoryStore(), tabsManager: tabs)
+        first.requestGGLand(.ready)
+        second.requestGGLand(.ready)
+        try await waitForLand { first.pendingGGLand != nil && second.pendingGGLand != nil }
+        first.performGGLand(appState: app)
+        let tabId = "gg-land:\(projectId)"
+        #expect(app.selectedWorktreeId == "live-wt")
+        #expect(tabs.activeTabId(forWorktree: "live-wt") == tabId)
+        tabs.close(worktreeId: "live-wt", tabId: tabId)
+        app.selectWorktree(id: "other-wt")
+        second.performGGLand(appState: app)
+        #expect(app.selectedWorktreeId == "live-wt")
+        #expect(tabs.activeTabId(forWorktree: "live-wt") == tabId)
+        #expect(tabs.tabs(forWorktree: "live-wt").count == 1)
+        #expect(tabs.tabs(forWorktree: "other-wt").isEmpty)
+        #expect(!secondRunner.calls.contains { $0.first == "land" })
+        store.cancel(projectId: projectId)
+        await store.waitForOperation(projectId: projectId)
+    }
+
     @Test func restartRepreflightsStableTargetWithoutAnotherConfirmation() async throws {
         let store = GGLandingStore()
         let runner = LiveLandGGRunner()

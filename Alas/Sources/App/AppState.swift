@@ -9561,6 +9561,14 @@ final class AppState {
         selectWorktree(id: worktreeId)
     }
 
+    func openGGLanding(projectId: String) {
+        guard let session = GGLandingStore.shared.sessions[projectId] else { return }
+        tabs.openOrFocusGGLanding(
+            worktreeId: session.worktreeId, projectId: projectId, stackName: session.stack
+        )
+        selectWorktree(id: session.worktreeId)
+    }
+
     func cancelGGLanding(projectId: String) {
         GGLandingStore.shared.cancel(projectId: projectId)
     }

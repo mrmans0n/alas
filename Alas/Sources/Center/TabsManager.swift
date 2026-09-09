@@ -969,6 +969,24 @@ final class TabsManager {
     }
 
     @discardableResult
+    func openOrFocusGGLanding(worktreeId: String, projectId: String, stackName: String) -> Tab {
+        let state = GGLandingTabState(projectId: projectId, stackName: stackName)
+        for otherWorktreeId in Array(byWorktree.keys) where otherWorktreeId != worktreeId {
+            if tabs(forWorktree: otherWorktreeId).contains(where: { $0.id == state.id }) {
+                close(worktreeId: otherWorktreeId, tabId: state.id)
+            }
+        }
+        let tab = Tab.ggLanding(state)
+        if let index = byWorktree[worktreeId]?.tabs.firstIndex(where: { $0.id == state.id }) {
+            byWorktree[worktreeId]?.tabs[index] = tab
+            activate(worktreeId: worktreeId, tabId: state.id)
+            return tab
+        }
+        append(tab, to: worktreeId)
+        return tab
+    }
+
+    @discardableResult
     func openOrFocusGGInbox(worktreeId: String, projectId: String, projectName: String) -> Tab {
         let state = GGInboxTabState(projectId: projectId, projectName: projectName)
         if tabs(forWorktree: worktreeId).contains(where: { $0.id == state.id }) {
@@ -1700,7 +1718,13 @@ final class TabsManager {
     }
 
     private func persistThrowing(_ file: TabsFile, worktreeId: String) throws {
-        try store.write(file, to: tabsFile(forWorktreeId: worktreeId))
+        var restorable = file
+        restorable.tabs = file.tabs.filter(\.isRestorable)
+        if let activeId = file.activeTabId,
+           !restorable.tabs.contains(where: { $0.id == activeId }) {
+            restorable.activeTabId = restorable.tabs.last?.id
+        }
+        try store.write(restorable, to: tabsFile(forWorktreeId: worktreeId))
     }
 
     private func tabsFile(forWorktreeId worktreeId: String) -> URL {
