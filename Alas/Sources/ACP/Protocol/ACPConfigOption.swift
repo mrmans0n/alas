@@ -107,6 +107,13 @@ struct ACPConfigOption: Codable, Equatable, Identifiable, Hashable {
         var merged: [ACPConfigOption] = []
         for option in configOptions {
             if option.id == configId {
+                if let baselineConfigOptions,
+                   let baseline = baselineConfigOptions.first(where: { $0.id == option.id }),
+                   let current = currentConfigOptions.first(where: { $0.id == option.id }),
+                   current != baseline {
+                    merged.append(current)
+                    continue
+                }
                 merged.append(ACPConfigOption(
                     id: option.id,
                     name: option.name,
@@ -135,8 +142,11 @@ struct ACPConfigOption: Codable, Equatable, Identifiable, Hashable {
         if let baselineConfigOptions {
             let mergedIds = Set(merged.map(\.id))
             merged.append(contentsOf: currentConfigOptions.filter { current in
-                !mergedIds.contains(current.id)
-                    && !baselineConfigOptions.contains(where: { $0.id == current.id })
+                guard !mergedIds.contains(current.id) else { return false }
+                guard let baseline = baselineConfigOptions.first(where: { $0.id == current.id }) else {
+                    return true
+                }
+                return current != baseline
             })
         }
         return merged

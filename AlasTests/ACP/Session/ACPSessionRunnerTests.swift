@@ -664,6 +664,33 @@ struct ACPSessionRunnerTests {
         #expect(goal.tokenBudget == 12_000)
     }
 
+    @Test("session_config_options_update persists config-backed currentModel")
+    func sessionConfigOptionsUpdatePersistsConfigBackedCurrentModel() async throws {
+        let (runner, mock) = try makeRunner()
+        runner.start()
+        defer { runner.stop() }
+
+        mock.emit(.init(
+            sessionId: "s",
+            update: .sessionConfigOptionsUpdate([ACPConfigOption(
+                id: "model",
+                name: "Model",
+                category: "model",
+                currentValue: "sonnet",
+                options: [
+                    ACPConfigOptionItem(id: "sonnet", name: "Sonnet"),
+                    ACPConfigOptionItem(id: "opus", name: "Opus"),
+                ])])
+        ))
+
+        try await waitUntil {
+            runner.session.currentModel == "sonnet"
+        }
+        await runner.flushPersistence()
+        let row = try #require(try await runner.persistence.loadSession(id: "s"))
+        #expect(row.currentModel == "sonnet")
+    }
+
     @Test("session_info_update preserves manual title")
     func sessionInfoUpdatePreservesManualTitle() async throws {
         let url = FileManager.default.temporaryDirectory

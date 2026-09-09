@@ -616,7 +616,12 @@ final class ACPSessionRunner {
                     freezeStreamingPersistSnapshots()
                     streamingLeaseLost = true
                 }
+                let modelBeforeUpdate = session.currentModel
                 let dirty = session.apply(params.update)
+                if case .sessionConfigOptionsUpdate = params.update,
+                   session.currentModel != modelBeforeUpdate {
+                    persistSessionRow()
+                }
                 if !streamingLeaseLost {
                     scheduleStreamingPersist(
                         dirty,
@@ -625,12 +630,17 @@ final class ACPSessionRunner {
                     )
                 }
             } else {
+                let modelBeforeUpdate = session.currentModel
                 let dirty = session.apply(params.update)
                 flushStreamingPersist()
                 persistIndices(
                     dirty,
                     completion: persistenceCompletion(acknowledging: durableConsumptionAcknowledgement)
                 )
+                if case .sessionConfigOptionsUpdate = params.update,
+                   session.currentModel != modelBeforeUpdate {
+                    persistSessionRow()
+                }
             }
         }
         if applyPendingCompletedOutputBoundaryIfReady(), flushQueueWhenBoundaryReady {

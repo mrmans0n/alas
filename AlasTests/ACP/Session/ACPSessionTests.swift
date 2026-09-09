@@ -1450,6 +1450,23 @@ struct ACPSessionTests {
         #expect(session.availableConfigOptions[0].currentValue == .string("high"))
     }
 
+    @Test("sessionConfigOptionsUpdate synchronizes config-backed currentModel")
+    func configOptionsUpdateSynchronizesConfigBackedCurrentModel() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.currentModel = "opus"
+        session.apply(.sessionConfigOptionsUpdate([ACPConfigOption(
+            id: "model",
+            name: "Model",
+            category: "model",
+            currentValue: "sonnet",
+            options: [
+                ACPConfigOptionItem(id: "sonnet", name: "Sonnet"),
+                ACPConfigOptionItem(id: "opus", name: "Opus"),
+            ])]))
+
+        #expect(session.currentModel == "sonnet")
+    }
+
     @Test("session info applies title and goal")
     func sessionInfoAppliesTitleAndGoal() async throws {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "Old title")

@@ -587,6 +587,10 @@ final class ACPSession: ObservableObject, Identifiable {
             return []
         case .sessionConfigOptionsUpdate(let opts):
             availableConfigOptions = opts
+            if case .configOption(let modelId) = chipState.models?.source {
+                currentModel = availableConfigOptions
+                    .first { $0.id == modelId }?.currentStringValue
+            }
             return []
         case .availableCommandsUpdate(let cmds):
             promptSuggestions = cmds
