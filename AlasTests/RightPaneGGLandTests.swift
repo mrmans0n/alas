@@ -167,6 +167,11 @@ private final class FreshUnstackGGRunner: GGCommandRunning, @unchecked Sendable 
 
 @MainActor
 struct RightPaneGGLandTests {
+    private struct MemoryStore: PersistenceStoreProtocol {
+        func write<T: Encodable>(_: T, to _: URL) throws {}
+        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
+    }
+
     private func landingState(
         store: GGLandingStore,
         runner: LiveLandGGRunner,
