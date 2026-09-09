@@ -19,6 +19,16 @@ struct WorkspaceCheckoutCreationModelTests {
         )
     }
 
+    @Test func selectedCheckoutParentDerivesRootWhenBranchIsEnteredLater() {
+        var model = WorkspaceCheckoutCreationModel(workspace: fixtureWorkspace())
+
+        model.selectCheckoutParent("/checkouts")
+        #expect(model.rootPath.isEmpty)
+
+        model.setBranch("feature/my-change")
+        #expect(model.rootPath == "/checkouts/feature-my-change")
+    }
+
     @Test func advancesThroughThreeStepsOnlyWithSharedBranchAndRoot() {
         let workspace = fixtureWorkspace()
         var model = WorkspaceCheckoutCreationModel(workspace: workspace, rootPath: "")

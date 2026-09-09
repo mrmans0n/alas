@@ -307,11 +307,11 @@ struct CreateWorkspaceCheckoutDialog: View {
     private var details: some View {
         VStack(alignment: .leading, spacing: 14) {
             DialogField(label: "Shared branch") {
-                AlasField(text: $model.branch, placeholder: "feature/my-change", monospaced: true, focusOnAppear: true)
+                AlasField(text: Binding(get: { model.branch }, set: { model.setBranch($0) }), placeholder: "feature/my-change", monospaced: true, focusOnAppear: true)
             }
             DialogField(label: "Checkout folder") {
                 HStack(spacing: 8) {
-                    AlasField(text: $model.rootPath, placeholder: "/path/to/checkouts/my-change", monospaced: true)
+                    AlasField(text: Binding(get: { model.rootPath }, set: { model.setRootPath($0) }), placeholder: "/path/to/checkouts/my-change", monospaced: true)
                     if workspace.executionLocation == .local {
                         ToolbarBtn(icon: "folder", tooltip: "Choose checkout parent folder", action: chooseCheckoutFolder)
                     }
@@ -436,10 +436,7 @@ struct CreateWorkspaceCheckoutDialog: View {
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
         if panel.runModal() == .OK, let url = panel.url {
-            model.rootPath = WorkspaceCheckoutCreationModel.checkoutRoot(
-                parentPath: url.path,
-                branch: model.branch
-            )
+            model.selectCheckoutParent(url.path)
         }
     }
 

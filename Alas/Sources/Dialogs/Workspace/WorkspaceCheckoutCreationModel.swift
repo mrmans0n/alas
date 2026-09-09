@@ -12,6 +12,7 @@ struct WorkspaceCheckoutCreationModel: Equatable {
     var branch: String
     var rootPath: String
     var baseReference: String
+    private(set) var checkoutParentPath: String?
     var memberBaseReferences: [UUID: String] = [:]
     private(set) var step: WorkspaceCheckoutCreationStep = .details
     private(set) var preflightResult: WorkspaceCheckoutPreflightResult?
@@ -29,9 +30,27 @@ struct WorkspaceCheckoutCreationModel: Equatable {
     }
 
     static func checkoutRoot(parentPath: String, branch: String) -> String {
+        guard !branch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "" }
         URL(fileURLWithPath: parentPath)
             .appendingPathComponent(branch.replacingOccurrences(of: "/", with: "-"))
             .path
+    }
+
+    mutating func selectCheckoutParent(_ parentPath: String) {
+        checkoutParentPath = parentPath
+        rootPath = Self.checkoutRoot(parentPath: parentPath, branch: branch)
+    }
+
+    mutating func setBranch(_ branch: String) {
+        self.branch = branch
+        if let checkoutParentPath {
+            rootPath = Self.checkoutRoot(parentPath: checkoutParentPath, branch: branch)
+        }
+    }
+
+    mutating func setRootPath(_ rootPath: String) {
+        checkoutParentPath = nil
+        self.rootPath = rootPath
     }
 
     var preflightMessages: [String] {
