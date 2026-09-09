@@ -817,6 +817,9 @@ struct ACPComposer: View {
     private func apply(spec: ChipSpec, selectedId: String) {
         let sid = session.id
         let remoteId = session.remoteSessionId ?? sid
+        var rollbackConfigOption: ACPConfigOption?
+        let rollbackModel = session.currentModel
+        var configOptionUpdatesModel = false
         switch spec.source {
         case .mode:
             session.currentMode = selectedId
@@ -825,11 +828,13 @@ struct ACPComposer: View {
         case .configOption(let id):
             if let idx = session.availableConfigOptions.firstIndex(where: { $0.id == id }) {
                 let old = session.availableConfigOptions[idx]
+                rollbackConfigOption = old
                 session.availableConfigOptions[idx] = ACPConfigOption(
                     id: old.id, name: old.name, type: old.type,
                     category: old.category, currentValue: .string(selectedId),
                     options: old.options)
                 if old.category == "model" || old.category == "Model" {
+                    configOptionUpdatesModel = true
                     session.currentModel = selectedId
                 }
             }
@@ -860,11 +865,12 @@ struct ACPComposer: View {
                 // for that option while still accepting dependent updates.
                 let baselineConfigOptions = session.availableConfigOptions
                 let baselineConfigOptionsRevision = session.availableConfigOptionsRevision
-                if let updated = try? await runner.connection.setConfigOption(
-                    sessionId: remoteId,
-                    configId: id,
-                    value: .string(selectedId)),
-                   !updated.isEmpty {
+                do {
+                    let updated = try await runner.connection.setConfigOption(
+                        sessionId: remoteId,
+                        configId: id,
+                        value: .string(selectedId))
+                    guard !updated.isEmpty else { return }
                     guard let merged = ACPConfigOption.mergingSuccessfulSetResponse(
                         updated,
                         configId: id,
@@ -879,6 +885,18 @@ struct ACPComposer: View {
                     if case .configOption(let modelId) = session.chipState.models?.source {
                         session.currentModel = session.availableConfigOptions
                             .first { $0.id == modelId }?.currentStringValue
+                    }
+                    manager.persist(session)
+                } catch {
+                    guard session.availableConfigOptionsRevision == baselineConfigOptionsRevision,
+                          let rollbackConfigOption,
+                          let idx = session.availableConfigOptions.firstIndex(where: { $0.id == id }),
+                          session.availableConfigOptions[idx].currentValue == .string(selectedId) else {
+                        return
+                    }
+                    session.availableConfigOptions[idx] = rollbackConfigOption
+                    if configOptionUpdatesModel, session.currentModel == selectedId {
+                        session.currentModel = rollbackModel
                     }
                     manager.persist(session)
                 }
