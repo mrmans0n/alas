@@ -5,6 +5,29 @@ import Testing
 @MainActor
 @Suite("ACPSessionManager")
 struct ACPSessionManagerTests {
+    private func scriptInitialize(_ client: ACPMockClient) {
+        client.script(method: "initialize") { _ in
+            try JSONEncoder().encode(ACPInitializeResult(
+                protocolVersion: 1,
+                agentCapabilities: nil,
+                authMethods: []
+            ))
+        }
+    }
+
+    private func scriptSessionResult(_ client: ACPMockClient, method: String, sessionId: String) {
+        client.script(method: method) { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: sessionId,
+                availableModels: [],
+                availableModes: [],
+                currentModel: nil,
+                currentMode: nil,
+                promptSuggestions: []
+            ))
+        }
+    }
+
     @Test("ordinary stable prompt is persisted only once")
     func ordinaryStablePromptIsPersistedOnlyOnce() async throws {
         let url = FileManager.default.temporaryDirectory
@@ -437,6 +460,34 @@ struct ACPSessionManagerTests {
 
         await mgr.detach(sessionId: session.id)
         #expect(session.queue[0].status == .pending)
+    }
+
+    @Test("attach normalizes an in-flight scheduled row before flushing")
+    func attachNormalizesSendingScheduleBeforeFlush() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-attach-sending-schedule-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote")
+        client.script(method: "session/prompt") { _ in Data("null".utf8) }
+        let mgr = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) }
+        )
+        let session = mgr.createSession(id: "session", agentId: "claude")
+        session.enqueueScheduled(blocks: [.text("queued")], scheduledAt: Date().addingTimeInterval(-1))
+        session.markQueueHeadSending()
+
+        await mgr.attach(to: session.id, freshlyCreated: true)
+        for _ in 0 ..< 20 where !session.queue.isEmpty {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        #expect(client.sent.contains { $0.method == "session/prompt" })
     }
 
     @Test("persistQueue writes to SQLite without requiring a runner")

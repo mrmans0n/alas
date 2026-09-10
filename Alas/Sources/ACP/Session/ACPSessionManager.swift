@@ -4006,6 +4006,9 @@ extension ACPSessionManager {
             }
             session.agentState = .ready
             scheduledReconnectTasks.removeValue(forKey: sessionId)?.task.cancel()
+            if session.queue.contains(where: { $0.status == .sending }) {
+                session.restoreQueue(session.queue)
+            }
             if let remoteMCPNotice {
                 runner.appendAndPersistSystemNotice(remoteMCPNotice)
             }
