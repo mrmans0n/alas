@@ -29,6 +29,18 @@ struct AdvancedPane: View {
                             }
                         ))
                     }
+                    SettingsRow(
+                        name: "Run tab preview",
+                        desc: "Shows the worktree Run tab for preview testing."
+                    ) {
+                        AlasToggle(on: Binding(
+                            get: { state.config.runTabEnabled },
+                            set: { enabled in
+                                state.config.runTabEnabled = enabled
+                                state.saveConfig()
+                            }
+                        ))
+                    }
                     if let recovery = state.workspaceRecoveryError {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Workspace recovery required: \(recovery.message)")

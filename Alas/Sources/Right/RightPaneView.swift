@@ -30,7 +30,12 @@ struct RightPaneView: View {
         // Resolve without activating: the cached state (if any) gives us
         // something to render immediately, and `.task` handles the mutating
         // activation + refresh off the view-update path.
-        _rps = State(initialValue: state.rightPaneStore.activeState(worktreeId: worktree.id))
+        let initialState = state.rightPaneStore.activeState(worktreeId: worktree.id)
+        initialState?.activeTab = RightPaneTab.visible(
+            initialState?.activeTab ?? .changes,
+            runTabEnabled: state.config.runTabEnabled
+        )
+        _rps = State(initialValue: initialState)
     }
 
     var body: some View {
@@ -58,7 +63,11 @@ struct RightPaneView: View {
                         onToggleShowIgnored: {
                             state.config.files.showIgnored.toggle()
                             state.saveConfig()
-                        }
+                        },
+                        showRunTab: state.config.runTabEnabled,
+                        activeRunCount: state.runRecords
+                            .records(worktreeID: worktree.id)
+                            .count { $0.status.isActive }
                     )
 
                     if rps.hasLoadedSnapshot {
@@ -105,12 +114,20 @@ struct RightPaneView: View {
                                 onClearReveal: { rps.clearReveal() },
                                 worktreeRoot: rps.worktree.path
                             )
+                        case .run:
+                            RunTabView(state: state, worktree: worktree)
                         }
                     } else {
                         RightPaneLoadingSkeletonView(activeTab: rps.activeTab)
                     }
                 }
                 .sidebarChromeTheme(textContrast: override.textContrast)
+                .onChange(of: state.config.runTabEnabled) {
+                    rps.activeTab = RightPaneTab.visible(
+                        rps.activeTab,
+                        runTabEnabled: state.config.runTabEnabled
+                    )
+                }
                 // Host the discard confirmation here (not on ChangesTabView) so
                 // diff-tab Discard actions still present the alert when the right
                 // pane is on the Files tab — `requestDiscardFile` sets pending state

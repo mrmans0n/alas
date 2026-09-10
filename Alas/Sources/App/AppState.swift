@@ -53,6 +53,17 @@ enum WorkspaceDefinitionSaveError: LocalizedError {
     }
 }
 
+struct PendingRunScriptLaunch: Equatable {
+    let id: UUID
+    let worktreeID: String
+    let scriptKey: String
+}
+
+struct PendingRunScriptLaunchKey: Hashable {
+    let worktreeID: String
+    let scriptKey: String
+}
+
 @Observable
 @MainActor
 final class AppState {
@@ -72,6 +83,10 @@ final class AppState {
     var projectsManager: ProjectsManager
     private(set) var closedTabHistory = ClosedTabHistory()
     var runScriptFailureQueue = RunScriptFailureQueue()
+    /// Observed command lifecycles, keyed by worktree then script. Deliberately
+    /// separate from `tabs`: a run's outcome outlives its terminal shell, and a
+    /// live shell never implies a live command.
+    var runRecords = RunRecordStore()
     var selectedRunScriptFailure: RunScriptFailure?
     @ObservationIgnored var runScriptCompletionTasks: [String: (worktreeID: String, sessionID: String, location: RunScriptCaptureLocation, task: Task<Void, Never>)] = [:]
     @ObservationIgnored let runScriptCompletionWaiter: RunScriptCompletionWaiter
@@ -160,13 +175,18 @@ final class AppState {
     @ObservationIgnored
     private var remoteAccelerationTasks: [String: Task<Void, Never>] = [:]
     private let remoteAccelerationProbeRetryDelay: TimeInterval = 30
-    /// Keys of in-flight run-script launches (`"<worktreeId>:<scriptKey>"`).
+    /// Keys of in-flight run-script launches.
     /// `RunScript.launchScript` inserts synchronously before starting its
     /// async `Task` and removes on completion, closing the window where two
     /// rapid invocations (double-click, repeated Enter) would both see no
     /// registered tab yet and both launch — see `AppState+RunScripts.swift`.
+    /// Worktree ids and script keys can contain `:`, so the dictionary key
+    /// must remain structured rather than serialized.
     @ObservationIgnored
-    var pendingScriptLaunches: Set<String> = []
+    var pendingScriptLaunches: [PendingRunScriptLaunchKey: PendingRunScriptLaunch] = [:]
+    @ObservationIgnored
+    var pendingScriptLaunchTasks: [UUID: Task<Void, Never>] = [:]
+    var runScriptCatalogGeneration = 0
     let rightPaneStore = RightPaneStore()
     let harness = HarnessService()
     let mcpRegistrationRegistry = MCPRegistrationRegistry()
@@ -4980,7 +5000,9 @@ final class AppState {
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             throw NSError(domain: "AppState", code: 2)
         }
+        try Task.checkCancellation()
         await prepareRemoteAccelerationIfNeeded(for: project)
+        try Task.checkCancellation()
         return try openTerminalTab(
             for: worktree,
             startupScriptSuffix: startupScriptSuffix,
@@ -5371,6 +5393,15 @@ final class AppState {
     func terminateAllTerminalSessionsAfterConfirmationForTesting() {
         terminateAllTerminalSessionsAfterConfirmation(snapshot: terminalTerminationSnapshot())
     }
+
+    func terminateAllTerminalSessionsAfterConfirmationWithStaleEmptySnapshotForTesting() {
+        terminateAllTerminalSessionsAfterConfirmation(snapshot: TerminalTerminationSnapshot(
+            terminalTabs: [],
+            checkoutTerminalTabs: [],
+            persistedSessions: [],
+            sessionCount: 0
+        ))
+    }
 #endif
 
     private struct TerminalTerminationSnapshot {
@@ -5418,10 +5449,21 @@ final class AppState {
     }
 
     private func terminateAllTerminalSessionsAfterConfirmation(snapshot: TerminalTerminationSnapshot) {
-        for (worktreeId, tabId) in snapshot.terminalTabs {
+        let confirmedSnapshot = terminalTerminationSnapshot()
+        cancelPendingRunScriptLaunches()
+        var seenTerminalTabs = Set<String>()
+        let terminalTabs = (snapshot.terminalTabs + confirmedSnapshot.terminalTabs).filter {
+            seenTerminalTabs.insert("\($0.worktreeId):\($0.tabId)").inserted
+        }
+        var seenCheckoutTerminalTabs = Set<String>()
+        let checkoutTerminalTabs = (snapshot.checkoutTerminalTabs + confirmedSnapshot.checkoutTerminalTabs).filter {
+            seenCheckoutTerminalTabs.insert("\($0.owner.storageKey):\($0.tabId)").inserted
+        }
+        let persistedSessions = Array(Set(snapshot.persistedSessions).union(confirmedSnapshot.persistedSessions))
+        for (worktreeId, tabId) in terminalTabs {
             closeTab(worktreeId: worktreeId, tabId: tabId)
         }
-        for (owner, tabId) in snapshot.checkoutTerminalTabs {
+        for (owner, tabId) in checkoutTerminalTabs {
             closeSharedSessionTab(owner: owner, tabID: tabId)
         }
         // Also kill persisted leaves whose tab the user never displayed
@@ -5429,7 +5471,7 @@ final class AppState {
         // own those persisted leaves too. Scoped to OUR instance's known
         // leaves so we don't trample sessions owned by a concurrently-
         // running Alas process under the same ZMX_DIR.
-        terminal.terminateAll(additionalSessions: snapshot.persistedSessions)
+        terminal.terminateAll(additionalSessions: persistedSessions)
     }
 
     /// All terminal sessions persisted under this Alas instance's projects.
@@ -6684,6 +6726,8 @@ final class AppState {
     private func cleanupWorktreeState(worktreeId: String, purgeRunScriptFailures: Bool = true) {
         if purgeRunScriptFailures {
             cleanupRunScriptState(worktreeID: worktreeId, purgeFailures: true)
+        } else {
+            cancelPendingRunScriptLaunches(worktreeID: worktreeId)
         }
         closedTabHistory.purge(worktreeID: worktreeId)
         let allTabs = tabs.tabs(forWorktree: worktreeId)
