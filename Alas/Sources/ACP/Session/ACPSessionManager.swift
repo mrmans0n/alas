@@ -4229,6 +4229,7 @@ extension ACPSessionManager {
         session.pendingQueuePersistenceCount -= 1
         guard persisted else {
             session.queue.removeAll { $0.delegatedSource == source }
+            runners[sessionId]?.flushQueueIfIdle()
             return false
         }
         runners[sessionId]?.flushQueueIfIdle()
@@ -4277,6 +4278,7 @@ extension ACPSessionManager {
             if let index = session.queue.firstIndex(where: { $0.id == id }) {
                 session.queue.remove(at: index)
             }
+            runners[sessionId]?.flushQueueIfIdle()
             return false
         }
         runners[sessionId]?.flushQueueIfIdle()
