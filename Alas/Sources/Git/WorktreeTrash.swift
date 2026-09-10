@@ -1,8 +1,14 @@
 import Foundation
 
+struct WorktreeTrashDirectoryIdentity: Equatable, Sendable {
+    let systemNumber: UInt64
+    let fileNumber: UInt64
+}
+
 struct WorktreeTrashCleanupTicket: Equatable, Sendable {
     let trashRoot: URL
     let stagedPath: URL
+    let directoryIdentity: WorktreeTrashDirectoryIdentity
 }
 
 enum WorktreeRemovalOutcome: Equatable, Sendable {
@@ -28,7 +34,10 @@ enum WorktreeTrash {
         originalPath: URL,
         now: Date = Date(),
         id: UUID = UUID()
-    ) -> WorktreeTrashCleanupTicket {
+    ) throws -> WorktreeTrashCleanupTicket {
+        guard let directoryIdentity = directoryIdentity(at: originalPath) else {
+            throw CocoaError(.fileReadNoSuchFile)
+        }
         let trashRoot = root(commonGitDirectory: commonGitDirectory)
         let safeBase = sanitizedBaseName(originalPath.lastPathComponent)
         let name = "\(safeBase).\(marker).\(Int(now.timeIntervalSince1970)).\(id.uuidString.lowercased())"
@@ -37,7 +46,8 @@ enum WorktreeTrash {
             stagedPath: URL(
                 fileURLWithPath: trashRoot.appendingPathComponent(name).path,
                 isDirectory: false
-            )
+            ),
+            directoryIdentity: directoryIdentity
         )
     }
 
@@ -87,12 +97,17 @@ enum WorktreeTrash {
                 options: [.skipsHiddenFiles]
             ) else { continue }
             for entry in entries {
+                guard let directoryIdentity = directoryIdentity(
+                    at: entry,
+                    fileManager: fileManager
+                ) else { continue }
                 let ticket = WorktreeTrashCleanupTicket(
                     trashRoot: trashRoot,
                     stagedPath: URL(
                         fileURLWithPath: trashRoot.path + "/" + entry.lastPathComponent,
                         isDirectory: false
-                    )
+                    ),
+                    directoryIdentity: directoryIdentity
                 )
                 guard isValid(ticket),
                       let values = try? entry.resourceValues(forKeys: keys),
@@ -105,6 +120,29 @@ enum WorktreeTrash {
             }
         }
         return tickets.sorted { $0.stagedPath.path < $1.stagedPath.path }
+    }
+
+    static func directoryIdentity(
+        at path: URL,
+        fileManager: FileManager = .default
+    ) -> WorktreeTrashDirectoryIdentity? {
+        guard let attributes = try? fileManager.attributesOfItem(atPath: path.path),
+              attributes[.type] as? FileAttributeType == .typeDirectory,
+              let systemNumber = attributes[.systemNumber] as? NSNumber,
+              let fileNumber = attributes[.systemFileNumber] as? NSNumber
+        else { return nil }
+        return WorktreeTrashDirectoryIdentity(
+            systemNumber: systemNumber.uint64Value,
+            fileNumber: fileNumber.uint64Value
+        )
+    }
+
+    static func matchesDirectoryIdentity(
+        _ ticket: WorktreeTrashCleanupTicket,
+        fileManager: FileManager = .default
+    ) -> Bool {
+        directoryIdentity(at: ticket.stagedPath, fileManager: fileManager)
+            == ticket.directoryIdentity
     }
 
     private static func sanitizedBaseName(_ value: String) -> String {

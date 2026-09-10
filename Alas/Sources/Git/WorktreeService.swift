@@ -835,7 +835,7 @@ struct WorktreeService {
         guard let expectedCommonDirectory = Self.localCommonGitDirectory(
             forWorktreeAt: repoPath
         ),
-              let expectedWorktreeIdentity = Self.linkedWorktreeIdentity(
+              let expectedRegistration = Self.linkedWorktreeRegistration(
                   worktree.path,
                   expectedCommonDirectory: expectedCommonDirectory
               )
@@ -901,7 +901,7 @@ struct WorktreeService {
                     "Git common directory no longer matches the registered worktree."
                 )
             }
-            ticket = WorktreeTrash.makeTicket(
+            ticket = try WorktreeTrash.makeTicket(
                 commonGitDirectory: commonDirectory,
                 originalPath: worktree.path
             )
@@ -921,7 +921,9 @@ struct WorktreeService {
             return .synchronous
         }
 
-        guard Self.directoryIdentity(at: worktree.path) == expectedWorktreeIdentity else {
+        guard WorktreeTrash.directoryIdentity(at: worktree.path)
+            == expectedRegistration.directoryIdentity
+        else {
             throw WorktreeError.gitFailed("Worktree changed before it could be staged.")
         }
         do {
@@ -938,19 +940,10 @@ struct WorktreeService {
             return .synchronous
         }
 
-        guard Self.directoryIdentity(at: ticket.stagedPath) == expectedWorktreeIdentity else {
-            do {
-                try moveItem(ticket.stagedPath, worktree.path)
-            } catch {
-                throw WorktreeError.gitFailed(
-                    "Worktree changed while it was being staged; staged files remain at "
-                        + "\(ticket.stagedPath.path). Rollback: \(error.localizedDescription)"
-                )
-            }
-            throw WorktreeError.gitFailed("Worktree changed while it was being staged.")
-        }
-
         func failAfterRollingBack(_ registryMessage: String) throws -> Never {
+            try? FileManager.default.removeItem(
+                at: WorktreeTrash.committedMarkerURL(for: ticket)
+            )
             do {
                 try moveItem(ticket.stagedPath, worktree.path)
             } catch {
@@ -964,6 +957,37 @@ struct WorktreeService {
                 )
             }
             throw WorktreeError.gitFailed(registryMessage)
+        }
+
+        guard WorktreeTrash.matchesDirectoryIdentity(ticket) else {
+            try failAfterRollingBack("Worktree changed while it was being staged.")
+        }
+
+        if !force {
+            let stagedIsClean: Bool
+            do {
+                if auditedMissingLFS {
+                    stagedIsClean = try await canForceRemoveAfterMissingLFS(
+                        ticket.stagedPath,
+                        gitDirectory: expectedRegistration.gitDirectory,
+                        usesRemoteHostRegistry: false
+                    )
+                } else {
+                    stagedIsClean = try await isWorktreeClean(
+                        ticket.stagedPath,
+                        gitDirectory: expectedRegistration.gitDirectory,
+                        usesRemoteHostRegistry: false
+                    )
+                }
+            } catch {
+                try failAfterRollingBack(error.localizedDescription)
+            }
+            guard stagedIsClean else {
+                try failAfterRollingBack("Worktree contains modified or untracked files.")
+            }
+            guard WorktreeTrash.matchesDirectoryIdentity(ticket) else {
+                try failAfterRollingBack("Worktree changed while its contents were audited.")
+            }
         }
 
         var removeArgs = ["worktree", "remove", worktree.path.path]
@@ -1135,37 +1159,19 @@ struct WorktreeService {
         resolvedFileSystemPath(lhs) == resolvedFileSystemPath(rhs)
     }
 
-    private struct FileSystemIdentity: Equatable {
-        let systemNumber: UInt64
-        let fileNumber: UInt64
+    private struct LinkedWorktreeRegistration {
+        let directoryIdentity: WorktreeTrashDirectoryIdentity
+        let gitDirectory: URL
     }
 
-    private static func directoryIdentity(at path: URL) -> FileSystemIdentity? {
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path.path),
-              attributes[.type] as? FileAttributeType == .typeDirectory,
-              let systemNumber = attributes[.systemNumber] as? NSNumber,
-              let fileNumber = attributes[.systemFileNumber] as? NSNumber
-        else { return nil }
-        return FileSystemIdentity(
-            systemNumber: systemNumber.uint64Value,
-            fileNumber: fileNumber.uint64Value
-        )
-    }
-
-    private static func linkedWorktreeIdentity(
+    private static func linkedWorktreeRegistration(
         _ worktreePath: URL,
         expectedCommonDirectory: URL
-    ) -> FileSystemIdentity? {
+    ) -> LinkedWorktreeRegistration? {
         let fileManager = FileManager.default
-        guard let rootAttributes = try? fileManager.attributesOfItem(atPath: worktreePath.path),
-              rootAttributes[.type] as? FileAttributeType == .typeDirectory,
-              let systemNumber = rootAttributes[.systemNumber] as? NSNumber,
-              let fileNumber = rootAttributes[.systemFileNumber] as? NSNumber
-        else { return nil }
-        let identity = FileSystemIdentity(
-            systemNumber: systemNumber.uint64Value,
-            fileNumber: fileNumber.uint64Value
-        )
+        guard let directoryIdentity = WorktreeTrash.directoryIdentity(at: worktreePath) else {
+            return nil
+        }
 
         let dotGit = worktreePath.appendingPathComponent(".git", isDirectory: false)
         guard let dotGitAttributes = try? fileManager.attributesOfItem(atPath: dotGit.path),
@@ -1190,7 +1196,11 @@ struct WorktreeService {
         let backlink = (rawBacklink as NSString).isAbsolutePath
             ? URL(fileURLWithPath: rawBacklink)
             : gitDirectory.appendingPathComponent(rawBacklink)
-        return fileSystemPathsEqual(backlink, dotGit) ? identity : nil
+        guard fileSystemPathsEqual(backlink, dotGit) else { return nil }
+        return LinkedWorktreeRegistration(
+            directoryIdentity: directoryIdentity,
+            gitDirectory: gitDirectory
+        )
     }
 
     private static func registrationState(
@@ -1287,12 +1297,22 @@ struct WorktreeService {
             }
     }
 
+    private static func gitContextArguments(
+        worktreePath: URL,
+        gitDirectory: URL?
+    ) -> [String] {
+        guard let gitDirectory else { return [] }
+        return ["--git-dir", gitDirectory.path, "--work-tree", worktreePath.path]
+    }
+
     private func isWorktreeClean(
         _ path: URL,
+        gitDirectory: URL? = nil,
         usesRemoteHostRegistry: Bool = true
     ) async throws -> Bool {
         let result = try await Process.git(
-            ["status", "--porcelain", "--ignore-submodules=none", "--untracked-files=all"],
+            Self.gitContextArguments(worktreePath: path, gitDirectory: gitDirectory)
+                + ["status", "--porcelain", "--ignore-submodules=none", "--untracked-files=all"],
             cwd: path,
             usesRemoteHostRegistry: usesRemoteHostRegistry
         )
@@ -1302,10 +1322,11 @@ struct WorktreeService {
 
     private func areInitializedSubmodulesClean(
         _ path: URL,
+        gitDirectory: URL? = nil,
         usesRemoteHostRegistry: Bool = true
     ) async throws -> Bool {
         let result = try await Process.git(
-            [
+            Self.gitContextArguments(worktreePath: path, gitDirectory: gitDirectory) + [
                 "submodule", "foreach", "--quiet", "--recursive",
                 "git status --porcelain --ignore-submodules=none --untracked-files=all"
             ],
@@ -1319,6 +1340,7 @@ struct WorktreeService {
     private func initializedSubmodulesHaveNoLocalState(
         _ path: URL,
         timeout: TimeInterval = 120,
+        gitDirectory: URL? = nil,
         usesRemoteHostRegistry: Bool = true
     ) async throws -> Bool {
         // Reachability set arithmetic for reflog and notes/stash (the
@@ -1374,7 +1396,8 @@ struct WorktreeService {
         fi
         """
         let result = try await Process.git(
-            ["submodule", "foreach", "--quiet", "--recursive", localStateScript],
+            Self.gitContextArguments(worktreePath: path, gitDirectory: gitDirectory)
+                + ["submodule", "foreach", "--quiet", "--recursive", localStateScript],
             cwd: path,
             usesRemoteHostRegistry: usesRemoteHostRegistry,
             timeout: timeout
@@ -1385,29 +1408,35 @@ struct WorktreeService {
 
     private func canForceRemoveAfterMissingLFS(
         _ path: URL,
+        gitDirectory: URL? = nil,
         usesRemoteHostRegistry: Bool = true
     ) async throws -> Bool {
         guard try await isWorktreeCleanAllowingSmudgedLFS(
             path,
+            gitDirectory: gitDirectory,
             usesRemoteHostRegistry: usesRemoteHostRegistry
         ) else { return false }
         let subsClean = try await areInitializedSubmodulesClean(
             path,
+            gitDirectory: gitDirectory,
             usesRemoteHostRegistry: usesRemoteHostRegistry
         )
         guard subsClean else { return false }
         return try await initializedSubmodulesHaveNoLocalState(
             path,
+            gitDirectory: gitDirectory,
             usesRemoteHostRegistry: usesRemoteHostRegistry
         )
     }
 
     private func isWorktreeCleanAllowingSmudgedLFS(
         _ path: URL,
+        gitDirectory: URL? = nil,
         usesRemoteHostRegistry: Bool = true
     ) async throws -> Bool {
         let result = try await Process.git(
-            Self.lfsFilterOverride + [
+            Self.lfsFilterOverride
+                + Self.gitContextArguments(worktreePath: path, gitDirectory: gitDirectory) + [
                 "status", "--porcelain=v2", "-z",
                 "--ignore-submodules=none", "--untracked-files=all"
             ],
@@ -1434,6 +1463,7 @@ struct WorktreeService {
             guard try await isCleanLFSFile(
                 relativePath,
                 in: path,
+                gitDirectory: gitDirectory,
                 usesRemoteHostRegistry: usesRemoteHostRegistry
             ) else { return false }
         }
@@ -1443,17 +1473,20 @@ struct WorktreeService {
     private func isCleanLFSFile(
         _ relativePath: String,
         in worktreePath: URL,
+        gitDirectory: URL? = nil,
         usesRemoteHostRegistry: Bool = true
     ) async throws -> Bool {
         guard try await usesLFSFilter(
             relativePath,
             in: worktreePath,
+            gitDirectory: gitDirectory,
             usesRemoteHostRegistry: usesRemoteHostRegistry
         ),
               let pointer = try await indexLFSPointer(
-                relativePath,
-                in: worktreePath,
-                usesRemoteHostRegistry: usesRemoteHostRegistry
+                  relativePath,
+                  in: worktreePath,
+                  gitDirectory: gitDirectory,
+                  usesRemoteHostRegistry: usesRemoteHostRegistry
               )
         else { return false }
 
@@ -1475,10 +1508,12 @@ struct WorktreeService {
     private func usesLFSFilter(
         _ relativePath: String,
         in worktreePath: URL,
+        gitDirectory: URL? = nil,
         usesRemoteHostRegistry: Bool = true
     ) async throws -> Bool {
         let result = try await Process.git(
-            ["check-attr", "-z", "filter", "--", relativePath],
+            Self.gitContextArguments(worktreePath: worktreePath, gitDirectory: gitDirectory)
+                + ["check-attr", "-z", "filter", "--", relativePath],
             cwd: worktreePath,
             usesRemoteHostRegistry: usesRemoteHostRegistry
         )
@@ -1490,10 +1525,12 @@ struct WorktreeService {
     private func indexLFSPointer(
         _ relativePath: String,
         in worktreePath: URL,
+        gitDirectory: URL? = nil,
         usesRemoteHostRegistry: Bool = true
     ) async throws -> LFSPointer? {
         let listed = try await Process.git(
-            ["ls-files", "-s", "--", relativePath],
+            Self.gitContextArguments(worktreePath: worktreePath, gitDirectory: gitDirectory)
+                + ["ls-files", "-s", "--", relativePath],
             cwd: worktreePath,
             usesRemoteHostRegistry: usesRemoteHostRegistry
         )
@@ -1503,7 +1540,8 @@ struct WorktreeService {
         }
 
         let blob = try await Process.git(
-            ["cat-file", "-p", String(sha)],
+            Self.gitContextArguments(worktreePath: worktreePath, gitDirectory: gitDirectory)
+                + ["cat-file", "-p", String(sha)],
             cwd: worktreePath,
             usesRemoteHostRegistry: usesRemoteHostRegistry
         )

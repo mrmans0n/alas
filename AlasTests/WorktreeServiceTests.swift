@@ -708,6 +708,42 @@ extension WorktreeServiceTests {
         #expect(FileManager.default.fileExists(atPath: fixture.worktree.path.path))
     }
 
+    @Test func fastLocalRemoveRestoresWorktreeMadeDirtyDuringStaging() async throws {
+        let fixture = try await makeLinkedWorktree(suffix: "dirty-during-stage")
+        let dirtyFile = fixture.worktree.path.appendingPathComponent("new-during-stage.txt")
+        let trashRoot = WorktreeTrash.root(
+            commonGitDirectory: fixture.repo.appendingPathComponent(".git")
+        )
+        defer {
+            try? FileManager.default.removeItem(at: trashRoot)
+            fixture.removeFiles()
+        }
+
+        await #expect(throws: WorktreeService.WorktreeError.self) {
+            try await fixture.service.removeFastLocal(
+                repoPath: fixture.repo,
+                worktree: fixture.worktree,
+                deleteBranchIfMerged: false,
+                force: false,
+                moveItem: { source, destination in
+                    try FileManager.default.moveItem(at: source, to: destination)
+                    try "do not discard".write(
+                        to: destination.appendingPathComponent(dirtyFile.lastPathComponent),
+                        atomically: true,
+                        encoding: .utf8
+                    )
+                }
+            )
+        }
+
+        #expect(FileManager.default.fileExists(atPath: dirtyFile.path))
+        let registrations = try await Process.git(
+            ["worktree", "list", "--porcelain"],
+            cwd: fixture.repo
+        )
+        #expect(registrations.stdout.contains(fixture.worktree.path.path))
+    }
+
     @Test func fastLocalRemoveDoesNotStageReplacementDirectoryEvenWithForce() async throws {
         let fixture = try await makeLinkedWorktree(suffix: "replaced-before-stage")
         let displaced = fixture.worktree.path.deletingLastPathComponent()

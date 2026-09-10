@@ -5,28 +5,31 @@ import Testing
 @Suite(.serialized)
 struct WorktreeTrashTests {
     @Test func ticketIsAnImmediateRecognizableChildOfTrashRoot() throws {
-        let common = URL(fileURLWithPath: "/tmp/repo/.git")
-        let original = URL(fileURLWithPath: "/tmp/feature/odd name")
+        let common = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-ticket-test-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: common) }
         let id = try #require(UUID(uuidString: "12345678-1234-1234-1234-123456789abc"))
 
-        let ticket = WorktreeTrash.makeTicket(
+        let ticket = try makeStagedTicket(
             commonGitDirectory: common,
-            originalPath: original,
+            originalBaseName: "odd name",
             now: Date(timeIntervalSince1970: 1_789_041_600),
             id: id
         )
 
-        #expect(ticket.trashRoot == common.appendingPathComponent("alas/trash").standardizedFileURL)
+        #expect(ticket.trashRoot.path == common.appendingPathComponent("alas/trash").standardizedFileURL.path)
         #expect(ticket.stagedPath.deletingLastPathComponent().path == ticket.trashRoot.path)
         #expect(ticket.stagedPath.lastPathComponent.hasSuffix(".1789041600.12345678-1234-1234-1234-123456789abc"))
         #expect(WorktreeTrash.isValid(ticket))
         #expect(!WorktreeTrash.isValid(.init(
             trashRoot: ticket.trashRoot,
-            stagedPath: ticket.trashRoot.appendingPathComponent("nested/entry")
+            stagedPath: ticket.trashRoot.appendingPathComponent("nested/entry"),
+            directoryIdentity: ticket.directoryIdentity
         )))
         #expect(!WorktreeTrash.isValid(.init(
             trashRoot: URL(fileURLWithPath: "/tmp"),
-            stagedPath: URL(fileURLWithPath: "/tmp/worktree.alas-worktree.1.12345678-1234-1234-1234-123456789abc")
+            stagedPath: URL(fileURLWithPath: "/tmp/worktree.alas-worktree.1.12345678-1234-1234-1234-123456789abc"),
+            directoryIdentity: ticket.directoryIdentity
         )))
     }
 
@@ -34,20 +37,18 @@ struct WorktreeTrashTests {
         let common = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-trash-test-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: common) }
-        let old = WorktreeTrash.makeTicket(
+        let old = try makeStagedTicket(
             commonGitDirectory: common,
-            originalPath: URL(fileURLWithPath: "/tmp/old"),
+            originalBaseName: "old",
             now: Date(timeIntervalSince1970: 100),
             id: UUID()
         )
-        let young = WorktreeTrash.makeTicket(
+        let young = try makeStagedTicket(
             commonGitDirectory: common,
-            originalPath: URL(fileURLWithPath: "/tmp/young"),
+            originalBaseName: "young",
             now: Date(timeIntervalSince1970: 200),
             id: UUID()
         )
-        try FileManager.default.createDirectory(at: old.stagedPath, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: young.stagedPath, withIntermediateDirectories: true)
         try WorktreeTrash.markCommitted(old, at: Date(timeIntervalSince1970: 100))
         try WorktreeTrash.markCommitted(young, at: Date(timeIntervalSince1970: 200))
         try FileManager.default.createDirectory(
@@ -75,26 +76,25 @@ struct WorktreeTrashTests {
         let common = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-trash-commit-test-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: common) }
-        let oldCommitted = WorktreeTrash.makeTicket(
+        let oldCommitted = try makeStagedTicket(
             commonGitDirectory: common,
-            originalPath: URL(fileURLWithPath: "/tmp/old-committed"),
+            originalBaseName: "old-committed",
             now: Date(timeIntervalSince1970: 10),
             id: UUID()
         )
-        let newlyCommitted = WorktreeTrash.makeTicket(
+        let newlyCommitted = try makeStagedTicket(
             commonGitDirectory: common,
-            originalPath: URL(fileURLWithPath: "/tmp/newly-committed"),
+            originalBaseName: "newly-committed",
             now: Date(timeIntervalSince1970: 20),
             id: UUID()
         )
-        let uncommitted = WorktreeTrash.makeTicket(
+        let uncommitted = try makeStagedTicket(
             commonGitDirectory: common,
-            originalPath: URL(fileURLWithPath: "/tmp/uncommitted"),
+            originalBaseName: "uncommitted",
             now: Date(timeIntervalSince1970: 30),
             id: UUID()
         )
         for ticket in [oldCommitted, newlyCommitted, uncommitted] {
-            try FileManager.default.createDirectory(at: ticket.stagedPath, withIntermediateDirectories: true)
             try FileManager.default.setAttributes(
                 [.modificationDate: Date(timeIntervalSince1970: 1)],
                 ofItemAtPath: ticket.stagedPath.path
@@ -112,9 +112,12 @@ struct WorktreeTrashTests {
     }
 
     @Test func cleanerPassesTheValidatedPathAsAnArgument() throws {
-        let ticket = WorktreeTrash.makeTicket(
-            commonGitDirectory: URL(fileURLWithPath: "/tmp/repo/.git"),
-            originalPath: URL(fileURLWithPath: "/tmp/a name; touch nope")
+        let common = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-cleaner-args-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: common) }
+        let ticket = try makeStagedTicket(
+            commonGitDirectory: common,
+            originalBaseName: "a name; touch nope"
         )
         var capturedExecutable: URL?
         var capturedArguments: [String] = []
@@ -125,9 +128,107 @@ struct WorktreeTrashTests {
         }
 
         #expect(capturedExecutable?.path == "/usr/bin/nice")
-        #expect(capturedArguments.last == ticket.stagedPath.path)
-        #expect(capturedArguments.dropLast().last == WorktreeTrash.committedMarkerURL(for: ticket).path)
-        #expect(capturedArguments.dropLast().allSatisfy { !$0.contains(ticket.stagedPath.path) })
+        #expect(capturedArguments[8] == ticket.stagedPath.path)
+        #expect(capturedArguments[7] == WorktreeTrash.committedMarkerURL(for: ticket).path)
+        #expect(!capturedArguments[4].contains(ticket.stagedPath.path))
+    }
+
+    @Test func cleanerShellLeavesReplacementInsertedAfterLaunchValidation() throws {
+        let common = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-cleaner-swap-\(UUID().uuidString)")
+        let original = common.appendingPathComponent("original")
+        let displaced = common.appendingPathComponent("displaced")
+        defer { try? FileManager.default.removeItem(at: common) }
+        try FileManager.default.createDirectory(at: original, withIntermediateDirectories: true)
+        let ticket = try WorktreeTrash.makeTicket(
+            commonGitDirectory: common,
+            originalPath: original
+        )
+        try FileManager.default.createDirectory(
+            at: ticket.trashRoot,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.moveItem(at: original, to: ticket.stagedPath)
+        try WorktreeTrash.markCommitted(ticket)
+        let replacementMarker = ticket.stagedPath.appendingPathComponent("replacement.txt")
+
+        try WorktreeTrashCleaner.launch(ticket, delaySeconds: 0) { executable, arguments in
+            try FileManager.default.moveItem(at: ticket.stagedPath, to: displaced)
+            try FileManager.default.createDirectory(
+                at: ticket.stagedPath,
+                withIntermediateDirectories: true
+            )
+            try "keep".write(to: replacementMarker, atomically: true, encoding: .utf8)
+            let process = Foundation.Process()
+            process.executableURL = executable
+            process.arguments = arguments
+            try process.run()
+            process.waitUntilExit()
+        }
+
+        #expect(FileManager.default.fileExists(atPath: replacementMarker.path))
+        #expect(FileManager.default.fileExists(
+            atPath: WorktreeTrash.committedMarkerURL(for: ticket).path
+        ))
+    }
+
+    @Test func staleSweepDoesNotSpawnCleanerForReplacementDirectory() async throws {
+        let repo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-stale-cleaner-swap-\(UUID().uuidString)")
+        let original = repo.deletingLastPathComponent()
+            .appendingPathComponent("\(repo.lastPathComponent)-original")
+        let displaced = repo.deletingLastPathComponent()
+            .appendingPathComponent("\(repo.lastPathComponent)-displaced")
+        defer {
+            try? FileManager.default.removeItem(at: original)
+            try? FileManager.default.removeItem(at: displaced)
+            try? FileManager.default.removeItem(at: repo)
+        }
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: repo)
+        try FileManager.default.createDirectory(at: original, withIntermediateDirectories: true)
+        let ticket = try WorktreeTrash.makeTicket(
+            commonGitDirectory: repo.appendingPathComponent(".git"),
+            originalPath: original,
+            now: Date(timeIntervalSince1970: 100)
+        )
+        try FileManager.default.createDirectory(
+            at: ticket.trashRoot,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.moveItem(at: original, to: ticket.stagedPath)
+        try WorktreeTrash.markCommitted(ticket, at: Date(timeIntervalSince1970: 100))
+        let replacementMarker = ticket.stagedPath.appendingPathComponent("replacement.txt")
+        var cleanerSpawned = false
+        var sweepLaunched = false
+
+        WorktreeTrashCleaner.sweep(
+            projects: [ProjectConfig(
+                id: "main",
+                name: "main",
+                path: repo.path,
+                color: "#000000",
+                addedAt: Date(timeIntervalSince1970: 1)
+            )],
+            now: Date(timeIntervalSince1970: 100_000),
+            launcher: { discoveredTicket in
+                sweepLaunched = true
+                try FileManager.default.moveItem(at: discoveredTicket.stagedPath, to: displaced)
+                try FileManager.default.createDirectory(
+                    at: discoveredTicket.stagedPath,
+                    withIntermediateDirectories: true
+                )
+                try "keep".write(to: replacementMarker, atomically: true, encoding: .utf8)
+                try WorktreeTrashCleaner.launch(discoveredTicket, delaySeconds: 0) { _, _ in
+                    cleanerSpawned = true
+                }
+            }
+        )
+
+        #expect(sweepLaunched)
+        #expect(!cleanerSpawned)
+        #expect(FileManager.default.fileExists(atPath: replacementMarker.path))
     }
 
     @Test func sweepLaunchesOnlyOldTicketsFromUniqueLocalProjects() async throws {
@@ -145,20 +246,18 @@ struct WorktreeTrashTests {
         _ = try await Process.git(["worktree", "add", "-q", "-b", "linked", linked.path], cwd: repo)
 
         let common = repo.appendingPathComponent(".git")
-        let old = WorktreeTrash.makeTicket(
+        let old = try makeStagedTicket(
             commonGitDirectory: common,
-            originalPath: linked,
+            originalBaseName: "old",
             now: Date(timeIntervalSince1970: 100),
             id: UUID()
         )
-        let young = WorktreeTrash.makeTicket(
+        let young = try makeStagedTicket(
             commonGitDirectory: common,
-            originalPath: linked,
+            originalBaseName: "young",
             now: Date(timeIntervalSince1970: 250),
             id: UUID()
         )
-        try FileManager.default.createDirectory(at: old.stagedPath, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: young.stagedPath, withIntermediateDirectories: true)
         try WorktreeTrash.markCommitted(old, at: Date(timeIntervalSince1970: 100))
         try WorktreeTrash.markCommitted(young, at: Date(timeIntervalSince1970: 99_990))
         try FileManager.default.setAttributes(
@@ -253,11 +352,10 @@ struct WorktreeTrashTests {
         let common = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-cleaner-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: common) }
-        let ticket = WorktreeTrash.makeTicket(
+        let ticket = try makeStagedTicket(
             commonGitDirectory: common,
-            originalPath: URL(fileURLWithPath: "/tmp/clean-me")
+            originalBaseName: "clean-me"
         )
-        try FileManager.default.createDirectory(at: ticket.stagedPath, withIntermediateDirectories: true)
         try "marker".write(
             to: ticket.stagedPath.appendingPathComponent("marker.txt"),
             atomically: true,
@@ -277,5 +375,29 @@ struct WorktreeTrashTests {
 
         #expect(!FileManager.default.fileExists(atPath: ticket.stagedPath.path))
         #expect(!FileManager.default.fileExists(atPath: committedMarker.path))
+    }
+
+    private func makeStagedTicket(
+        commonGitDirectory: URL,
+        originalBaseName: String,
+        now: Date = Date(),
+        id: UUID = UUID()
+    ) throws -> WorktreeTrashCleanupTicket {
+        let source = commonGitDirectory
+            .appendingPathComponent("alas/test-sources/\(UUID().uuidString)")
+            .appendingPathComponent(originalBaseName)
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+        let ticket = try WorktreeTrash.makeTicket(
+            commonGitDirectory: commonGitDirectory,
+            originalPath: source,
+            now: now,
+            id: id
+        )
+        try FileManager.default.createDirectory(
+            at: ticket.trashRoot,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.moveItem(at: source, to: ticket.stagedPath)
+        return ticket
     }
 }

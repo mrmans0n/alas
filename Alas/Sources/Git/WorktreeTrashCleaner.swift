@@ -12,9 +12,15 @@ enum WorktreeTrashCleaner {
 
     enum CleanerError: LocalizedError {
         case invalidTicket
+        case replacedDirectory
 
         var errorDescription: String? {
-            "Refusing to clean a path outside the Alas worktree trash directory."
+            switch self {
+            case .invalidTicket:
+                "Refusing to clean a path outside the Alas worktree trash directory."
+            case .replacedDirectory:
+                "Refusing to clean a replaced worktree trash directory."
+            }
         }
     }
 
@@ -24,13 +30,23 @@ enum WorktreeTrashCleaner {
         spawn: Spawn = spawnDetached
     ) throws {
         guard WorktreeTrash.isValid(ticket) else { throw CleanerError.invalidTicket }
+        guard WorktreeTrash.matchesDirectoryIdentity(ticket) else {
+            throw CleanerError.replacedDirectory
+        }
         try spawn(URL(fileURLWithPath: "/usr/bin/nice"), [
             "-n", "10", "/bin/sh", "-c",
-            "/bin/sleep \"$1\"; /bin/rm -rf -- \"$3\" && exec /bin/rm -f -- \"$2\"",
+            """
+            /bin/sleep "$1"
+            current=$(/usr/bin/stat -f '%d:%i' "$3" 2>/dev/null) || exit 0
+            test "$current" = "$4:$5" || exit 0
+            /bin/rm -rf -- "$3" && exec /bin/rm -f -- "$2"
+            """,
             "alas-worktree-cleaner",
             String(max(0, delaySeconds)),
             WorktreeTrash.committedMarkerURL(for: ticket).path,
             ticket.stagedPath.path,
+            String(ticket.directoryIdentity.systemNumber),
+            String(ticket.directoryIdentity.fileNumber),
         ])
     }
 
