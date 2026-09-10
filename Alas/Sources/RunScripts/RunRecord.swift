@@ -122,6 +122,11 @@ struct RunRecordStore: Equatable {
         Array(byWorktree[worktreeID, default: [:]].values)
     }
 
+    func isCurrentActiveRun(runID: String, worktreeID: String, scriptKey: String) -> Bool {
+        guard let record = record(worktreeID: worktreeID, scriptKey: scriptKey) else { return false }
+        return record.id == runID && record.status.isActive
+    }
+
     var activeRecords: [RunRecord] {
         byWorktree.values.flatMap(\.values).filter(\.status.isActive)
     }

@@ -220,6 +220,39 @@ struct AppStateRunRecordTests {
         #expect(current.status == .running)
     }
 
+    @Test func supersededFailureDoesNotEnqueueCapturedOutput() async throws {
+        let calls = LockedCounter()
+        let fixture = try makeFixture(waiter: { _ in
+            let call = calls.incrementAndGet()
+            if call == 1 {
+                try await Task.sleep(for: .milliseconds(150))
+                return RunScriptCompletion(exitCode: 42, transcript: Data("old failed\n".utf8), truncated: false)
+            }
+            try await Task.sleep(for: .seconds(5))
+            return RunScriptCompletion(exitCode: 0, transcript: nil, truncated: false)
+        })
+        defer {
+            fixture.state.cancelAllRunScriptCompletionTasks()
+            try? FileManager.default.removeItem(at: fixture.directory)
+        }
+
+        fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
+        try await Task.sleep(for: .milliseconds(50))
+        let firstRunID = try #require(runRecord(fixture)?.id)
+
+        fixture.state.restartScript(fixture.script, in: fixture.worktree)
+        try await Task.sleep(for: .milliseconds(50))
+        let secondRunID = try #require(runRecord(fixture)?.id)
+        #expect(secondRunID != firstRunID)
+
+        try await Task.sleep(for: .milliseconds(200))
+
+        let current = try #require(runRecord(fixture))
+        #expect(current.id == secondRunID)
+        #expect(current.status == .running)
+        #expect(fixture.state.runScriptFailures(in: fixture.worktree.id).isEmpty)
+    }
+
     // MARK: - Stop and interruption
 
     @Test func stoppingARunReportsStoppedNotFailed() async throws {
