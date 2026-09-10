@@ -68,4 +68,102 @@ struct WorktreeTrashTests {
 
         #expect(tickets == [old])
     }
+
+    @Test func cleanerPassesTheValidatedPathAsAnArgument() throws {
+        let ticket = WorktreeTrash.makeTicket(
+            commonGitDirectory: URL(fileURLWithPath: "/tmp/repo/.git"),
+            originalPath: URL(fileURLWithPath: "/tmp/a name; touch nope")
+        )
+        var capturedExecutable: URL?
+        var capturedArguments: [String] = []
+
+        try WorktreeTrashCleaner.launch(ticket, delaySeconds: 1) { executable, arguments in
+            capturedExecutable = executable
+            capturedArguments = arguments
+        }
+
+        #expect(capturedExecutable?.path == "/usr/bin/nice")
+        #expect(capturedArguments.last == ticket.stagedPath.path)
+        #expect(capturedArguments.dropLast().allSatisfy { !$0.contains(ticket.stagedPath.path) })
+    }
+
+    @Test func sweepLaunchesOnlyOldTicketsFromUniqueLocalProjects() async throws {
+        let repo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-sweep-\(UUID().uuidString)")
+        let linked = repo.deletingLastPathComponent()
+            .appendingPathComponent("\(repo.lastPathComponent)-linked")
+        defer {
+            try? FileManager.default.removeItem(at: linked)
+            try? FileManager.default.removeItem(at: repo)
+        }
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: repo)
+        _ = try await Process.git(["worktree", "add", "-q", "-b", "linked", linked.path], cwd: repo)
+
+        let common = repo.appendingPathComponent(".git")
+        let old = WorktreeTrash.makeTicket(
+            commonGitDirectory: common,
+            originalPath: linked,
+            now: Date(timeIntervalSince1970: 100),
+            id: UUID()
+        )
+        let young = WorktreeTrash.makeTicket(
+            commonGitDirectory: common,
+            originalPath: linked,
+            now: Date(timeIntervalSince1970: 250),
+            id: UUID()
+        )
+        try FileManager.default.createDirectory(at: old.stagedPath, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: young.stagedPath, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: 100)],
+            ofItemAtPath: old.stagedPath.path
+        )
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: 99_990)],
+            ofItemAtPath: young.stagedPath.path
+        )
+
+        let addedAt = Date(timeIntervalSince1970: 1)
+        let projects = [
+            ProjectConfig(id: "main", name: "main", path: repo.path, color: "#000000", addedAt: addedAt),
+            ProjectConfig(id: "linked", name: "linked", path: linked.path, color: "#000000", addedAt: addedAt),
+            ProjectConfig(id: "remote", name: "remote", path: "/repo", color: "#000000", addedAt: addedAt, host: "host"),
+            ProjectConfig(id: "missing", name: "missing", path: "/missing", color: "#000000", addedAt: addedAt),
+        ]
+        var launched: [WorktreeTrashCleanupTicket] = []
+
+        WorktreeTrashCleaner.sweep(
+            projects: projects,
+            now: Date(timeIntervalSince1970: 100_000),
+            launcher: { launched.append($0) }
+        )
+
+        #expect(launched == [old])
+    }
+
+    @Test func liveCleanerEventuallyDeletesTheTicketDirectory() async throws {
+        let common = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-cleaner-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: common) }
+        let ticket = WorktreeTrash.makeTicket(
+            commonGitDirectory: common,
+            originalPath: URL(fileURLWithPath: "/tmp/clean-me")
+        )
+        try FileManager.default.createDirectory(at: ticket.stagedPath, withIntermediateDirectories: true)
+        try "marker".write(
+            to: ticket.stagedPath.appendingPathComponent("marker.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        try WorktreeTrashCleaner.launch(ticket, delaySeconds: 0)
+        let deadline = Date().addingTimeInterval(5)
+        while FileManager.default.fileExists(atPath: ticket.stagedPath.path), Date() < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        #expect(!FileManager.default.fileExists(atPath: ticket.stagedPath.path))
+    }
 }

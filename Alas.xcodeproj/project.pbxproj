@@ -1310,6 +1310,7 @@
 		CA4CE5E97DB02330A1151245 /* ACPSetupCheck.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC8E722C16FFBEEEC43337D5 /* ACPSetupCheck.swift */; };
 		CA7269D9237C925D7C1358D7 /* RemoteWorktreePollTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32EEB37C08A315D65558B273 /* RemoteWorktreePollTests.swift */; };
 		CA73C930734C839D8EA9088D /* GGStackReadinessModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0DCBE3FBD88DC56C81B8FDB /* GGStackReadinessModelTests.swift */; };
+		CA84CE4A7E854E8E034A4F17 /* WorktreeTrashCleaner.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0EAD22528F97163977B065A /* WorktreeTrashCleaner.swift */; };
 		CAC084F6260D705CCA5D6FBE /* RemoteQueueProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = C782D92A16724E99D824C8A7 /* RemoteQueueProjection.swift */; };
 		CAD36BB3EBF8B31309B7BEFF /* DiffSelectableTextBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44E87586CA07BA62C84BAD24 /* DiffSelectableTextBuilder.swift */; };
 		CAE149AF78F3A62AC985EA2D /* TerminalIntegrationActionsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 606DD97D8F66AC2B5883F984 /* TerminalIntegrationActionsTests.swift */; };
@@ -2691,6 +2692,7 @@
 		A00CFC045C4BF9C13B4105BF /* ConflictMarkerParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConflictMarkerParserTests.swift; sourceTree = "<group>"; };
 		A02E6B12C5EC8FAA50202EEA /* GGUnstackSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGUnstackSheet.swift; sourceTree = "<group>"; };
 		A0D27AA18750DEA3843477D9 /* RunScriptFailureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunScriptFailureTests.swift; sourceTree = "<group>"; };
+		A0EAD22528F97163977B065A /* WorktreeTrashCleaner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeTrashCleaner.swift; sourceTree = "<group>"; };
 		A107DA120039DD59C4F5CDD7 /* MermaidRenderServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MermaidRenderServiceTests.swift; sourceTree = "<group>"; };
 		A1503D1CB549B39E499EFAB8 /* DiffInlineAnnotationCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffInlineAnnotationCard.swift; sourceTree = "<group>"; };
 		A172B476A5BF7E4016431E6A /* DiffReviewModelsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffReviewModelsTests.swift; sourceTree = "<group>"; };
@@ -4113,6 +4115,7 @@
 				91FA9EADDFC798777B5FC6A6 /* StatusParser.swift */,
 				6C4E238E48247A6CDD5565D2 /* WorktreeService.swift */,
 				5B270704174889BC7F24E3D4 /* WorktreeTrash.swift */,
+				A0EAD22528F97163977B065A /* WorktreeTrashCleaner.swift */,
 				FCE6979EDAEAE45BC2A49A20 /* CommitAI */,
 			);
 			path = Git;
@@ -7202,6 +7205,7 @@
 				9A3EB3ACA3AB366431C904EB /* WorktreeService.swift in Sources */,
 				52E3CDEB14242DB611348EEA /* WorktreeSortMenu.swift in Sources */,
 				92C1EDD306CEEF99DE875C62 /* WorktreeTrash.swift in Sources */,
+				CA84CE4A7E854E8E034A4F17 /* WorktreeTrashCleaner.swift in Sources */,
 				E681EB5B83BAC199B1ED5E24 /* WorktreeWatcher.swift in Sources */,
 				467BA12331DB76C41313BF70 /* WorktreesPane.swift in Sources */,
 				9C73FEDF9B7B93D60FA3B51F /* ZmxClient.swift in Sources */,

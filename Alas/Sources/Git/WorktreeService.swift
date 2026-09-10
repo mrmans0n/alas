@@ -183,7 +183,7 @@ struct WorktreeService {
         }
     }
 
-    private static func localGitDirectory(forWorktreeAt path: URL) -> URL? {
+    static func localGitDirectory(forWorktreeAt path: URL) -> URL? {
         let dotGit = path.appendingPathComponent(".git")
         var isDirectory = ObjCBool(false)
         guard FileManager.default.fileExists(atPath: dotGit.path, isDirectory: &isDirectory) else { return nil }
@@ -197,6 +197,18 @@ struct WorktreeService {
             return URL(fileURLWithPath: rawPath).standardizedFileURL
         }
         return path.appendingPathComponent(rawPath).standardizedFileURL
+    }
+
+    static func localCommonGitDirectory(forWorktreeAt path: URL) -> URL? {
+        guard let gitDirectory = localGitDirectory(forWorktreeAt: path) else { return nil }
+        let marker = gitDirectory.appendingPathComponent("commondir")
+        guard let raw = try? String(contentsOf: marker, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty
+        else { return gitDirectory.standardizedFileURL }
+        return (raw as NSString).isAbsolutePath
+            ? URL(fileURLWithPath: raw).standardizedFileURL
+            : gitDirectory.appendingPathComponent(raw).standardizedFileURL
     }
 
     static func remoteLineageIDCommand(path: String, candidateID: String = UUID().uuidString.lowercased()) -> String {
