@@ -270,6 +270,12 @@ extension AppState {
     }
 
     func restartScript(_ script: RunScript, in worktree: Worktree) {
+        let launchKey = "\(worktree.id):\(script.key)"
+        if pendingScriptLaunches[launchKey] != nil {
+            stopScript(script, in: worktree)
+            launchScript(script, in: worktree)
+            return
+        }
         if let existing = scriptTab(for: script, in: worktree) {
             runRecords.markStopped(worktreeID: worktree.id, scriptKey: script.key, at: Date())
             closeTab(worktreeId: worktree.id, tabId: existing.id)
@@ -282,9 +288,9 @@ extension AppState {
     /// can't relabel a deliberate stop as a lost process.
     func stopScript(_ script: RunScript, in worktree: Worktree) {
         let launchKey = "\(worktree.id):\(script.key)"
-        if let pendingLaunch = pendingScriptLaunches.removeValue(forKey: launchKey) {
+        if let pendingLaunchID = pendingScriptLaunches.removeValue(forKey: launchKey) {
             runRecords.markStopped(worktreeID: worktree.id, scriptKey: script.key, at: Date())
-            pendingLaunch.cancel()
+            pendingScriptLaunchTasks.removeValue(forKey: pendingLaunchID)?.cancel()
             return
         }
         guard let existing = scriptTab(for: script, in: worktree) else {
@@ -423,8 +429,15 @@ extension AppState {
             portConflict: conflict
         ))
 
+        let launchID = UUID()
+        pendingScriptLaunches[launchKey] = launchID
         let launchTask = Task { @MainActor in
-            defer { pendingScriptLaunches.removeValue(forKey: launchKey) }
+            defer {
+                if pendingScriptLaunches[launchKey] == launchID {
+                    pendingScriptLaunches.removeValue(forKey: launchKey)
+                }
+                pendingScriptLaunchTasks.removeValue(forKey: launchID)
+            }
             let captureLocation: RunScriptCaptureLocation
             do {
                 captureLocation = try RunScriptCompletionMonitor.paths(runID: runID, host: project.host)
@@ -481,7 +494,7 @@ extension AppState {
                 showFileActionError(title: "Run Script Failed", message: error.localizedDescription)
             }
         }
-        pendingScriptLaunches[launchKey] = launchTask
+        pendingScriptLaunchTasks[launchID] = launchTask
     }
 
     func runScriptFailures(in worktreeID: String) -> [RunScriptFailure] {
@@ -654,6 +667,11 @@ extension AppState {
     }
 
     func cleanupRunScriptState(worktreeID: String, purgeFailures: Bool = true) {
+        let pendingKeys = pendingScriptLaunches.keys.filter { $0.hasPrefix("\(worktreeID):") }
+        for key in pendingKeys {
+            guard let launchID = pendingScriptLaunches.removeValue(forKey: key) else { continue }
+            pendingScriptLaunchTasks.removeValue(forKey: launchID)?.cancel()
+        }
         for (runID, entry) in runScriptCompletionTasks where entry.worktreeID == worktreeID {
             runScriptCompletionTasks.removeValue(forKey: runID)?.task.cancel()
             cleanupCaptureLocation(entry.location)

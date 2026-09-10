@@ -167,7 +167,9 @@ final class AppState {
     /// rapid invocations (double-click, repeated Enter) would both see no
     /// registered tab yet and both launch — see `AppState+RunScripts.swift`.
     @ObservationIgnored
-    var pendingScriptLaunches: [String: Task<Void, Never>] = [:]
+    var pendingScriptLaunches: [String: UUID] = [:]
+    @ObservationIgnored
+    var pendingScriptLaunchTasks: [UUID: Task<Void, Never>] = [:]
     let rightPaneStore = RightPaneStore()
     let harness = HarnessService()
     let mcpRegistrationRegistry = MCPRegistrationRegistry()
