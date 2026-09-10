@@ -316,7 +316,8 @@ button.create-row.is-selected { border-color: var(--accent); background: color-m
 }
 .changes-section-title { margin: 14px 12px 4px; color: var(--fg-muted); font-size: 11px; font-weight: 700; letter-spacing: 0.45px; text-transform: uppercase; }
 .changes-section-title:first-child { margin-top: 4px; }
-.change-dir { color: var(--fg-faint); }
+.change-directory { padding: 8px 12px 4px; color: var(--fg-faint); font-size: 13px; }
+.change-row-nested { padding-left: 24px; }
 .change-name { font-weight: 600; }
 .change-counts { margin-left: auto; display: inline-flex; gap: 7px; font-variant-numeric: tabular-nums; }
 .count-add { color: var(--add); }
