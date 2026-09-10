@@ -6537,17 +6537,25 @@ final class AppState {
     private func retainedScheduledSessionCleanupDelay(
         manager: ACPSessionManager,
         sessionId: ACPSession.ID,
-        retainSendingPrompt: Bool = false
+        retainActivePrompt: Bool = false
     ) -> Duration? {
         guard let session = manager.liveSession(for: sessionId) else { return nil }
-        guard session.agentState == .ready else { return nil }
+        switch session.agentState {
+        case .ready, .spawning:
+            break
+        case .idle, .disconnected, .failed:
+            return nil
+        }
         if session.queue.first?.lastError != nil { return nil }
         let nextScheduledAt = session.queue.compactMap { item -> Date? in
             guard item.status == .pending, item.lastError == nil else { return nil }
             return item.scheduledAt
         }.min()
+        if retainActivePrompt && manager.retainedCleanupHasActivePromptWork(for: sessionId) {
+            return .milliseconds(250)
+        }
         if session.queue.contains(where: {
-            $0.status == .sending && ($0.scheduledAt != nil || retainSendingPrompt || nextScheduledAt != nil)
+            $0.status == .sending && ($0.scheduledAt != nil || nextScheduledAt != nil)
         }) {
             return .milliseconds(250)
         }
@@ -6560,7 +6568,7 @@ final class AppState {
     private func scheduleRetainedACPSessionCleanup(
         owner: SessionOwnerID,
         sessionId: ACPSession.ID,
-        retainSendingPrompt: Bool = false
+        retainActivePrompt: Bool = false
     ) {
         let key = owner.storageKey
         guard retainedACPSessionCleanupTasks[key]?[sessionId] == nil else { return }
@@ -6575,7 +6583,7 @@ final class AppState {
                 guard let delay = self.retainedScheduledSessionCleanupDelay(
                     manager: manager,
                     sessionId: sessionId,
-                    retainSendingPrompt: retainSendingPrompt
+                    retainActivePrompt: retainActivePrompt
                 ) else {
                     self.clearRetainedACPSessionCleanup(worktreeId: key, sessionId: sessionId, id: id)
                     self.cleanupACPSession(owner: owner, sessionId: sessionId)
@@ -6591,14 +6599,18 @@ final class AppState {
         retainedACPSessionCleanupTasks[key, default: [:]][sessionId] = PendingACPDetach(id: id, task: task)
     }
 
-    private func restartRetainedACPSessionCleanupIfNeeded(owner: SessionOwnerID, sessionId: ACPSession.ID) {
+    private func restartRetainedACPSessionCleanupIfNeeded(
+        owner: SessionOwnerID,
+        sessionId: ACPSession.ID,
+        retainActivePrompt: Bool = false
+    ) {
         guard retainedACPSessionCleanupTasks[owner.storageKey]?[sessionId] != nil else { return }
         cancelRetainedACPSessionCleanup(owner: owner, sessionId: sessionId)
-        guard acpManagers[owner]?.liveSession(for: sessionId)?.queue.contains(where: { $0.status == .sending }) == true else {
+        guard retainActivePrompt else {
             cleanupACPSession(owner: owner, sessionId: sessionId)
             return
         }
-        scheduleRetainedACPSessionCleanup(owner: owner, sessionId: sessionId, retainSendingPrompt: true)
+        scheduleRetainedACPSessionCleanup(owner: owner, sessionId: sessionId, retainActivePrompt: true)
     }
 
     private func cancelRetainedACPSessionCleanup(owner: SessionOwnerID, sessionId: ACPSession.ID) {
@@ -8284,8 +8296,12 @@ final class AppState {
                     await self.deliverPendingDelegatedMessages(to: sessionId, manager: manager)
                 }
             },
-            onQueueChanged: { [weak self] sessionId in
-                self?.restartRetainedACPSessionCleanupIfNeeded(owner: owner, sessionId: sessionId)
+            onQueueChanged: { [weak self] sessionId, retainActivePrompt in
+                self?.restartRetainedACPSessionCleanupIfNeeded(
+                    owner: owner,
+                    sessionId: sessionId,
+                    retainActivePrompt: retainActivePrompt
+                )
             },
             brokerServiceFactory: {
                 let resourceURL = Bundle.main.resourceURL ?? Bundle.main.bundleURL
@@ -8576,8 +8592,12 @@ final class AppState {
                     owner: owner
                 )
             },
-            onQueueChanged: { [weak self] sessionId in
-                self?.restartRetainedACPSessionCleanupIfNeeded(owner: owner, sessionId: sessionId)
+            onQueueChanged: { [weak self] sessionId, retainActivePrompt in
+                self?.restartRetainedACPSessionCleanupIfNeeded(
+                    owner: owner,
+                    sessionId: sessionId,
+                    retainActivePrompt: retainActivePrompt
+                )
             },
             launchSpecTransformer: { [weak self] spec in
                 guard let self,

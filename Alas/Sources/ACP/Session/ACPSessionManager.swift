@@ -103,7 +103,7 @@ final class ACPSessionManager: ObservableObject {
     private let onSessionTitleUpdated: ((ACPSession.ID, String) -> Void)?
     private let onInputAwaiting: ((ACPSession, ACPUserInputRequest) -> Void)?
     private let onDelegatedMessageAvailable: ((ACPSession.ID) -> Void)?
-    private let onQueueChanged: ((ACPSession.ID) -> Void)?
+    private let onQueueChanged: ((ACPSession.ID, Bool) -> Void)?
     private let mcpProjectContextProvider: MCPProjectContextProvider?
     private let frozenMCPAttachmentProvider: FrozenMCPAttachmentProvider?
     private let launchSpecTransformer: ACPLaunchSpecTransformer
@@ -168,6 +168,10 @@ final class ACPSessionManager: ObservableObject {
 
     /// Live session object if cached (does not trigger hydration).
     func liveSession(for id: ACPSession.ID) -> ACPSession? { sessions[id] }
+
+    func retainedCleanupHasActivePromptWork(for id: ACPSession.ID) -> Bool {
+        runners[id]?.hasRetainedCleanupPromptWork == true
+    }
 
     /// Permission policy for a session that currently has an attached runner.
     /// Returns nil if no runner is attached (session not actively connected).
@@ -284,7 +288,7 @@ final class ACPSessionManager: ObservableObject {
     func queueForceSend(for id: ACPSession.ID, itemId: UUID) async {
         guard await confirmedWriterLease(for: id) else { return }
         runners[id]?.forceSendQueuedItem(id: itemId)
-        onQueueChanged?(id)
+        onQueueChanged?(id, true)
     }
 
     func queueRemove(for id: ACPSession.ID, itemId: UUID) async {
@@ -292,7 +296,7 @@ final class ACPSessionManager: ObservableObject {
         session.removeFromQueue(id: itemId)
         persistQueue(for: session)
         runners[id]?.flushQueueIfIdle()
-        onQueueChanged?(id)
+        onQueueChanged?(id, false)
     }
 
     /// Clear a failed item's error so the flusher re-attempts it.
@@ -302,7 +306,7 @@ final class ACPSessionManager: ObservableObject {
         session.queue[idx].lastError = nil
         persistQueue(for: session)
         runners[id]?.flushQueueIfIdle()
-        onQueueChanged?(id)
+        onQueueChanged?(id, false)
     }
 
     /// Pull a queued item out for editing and hand its text back. `nil` when
@@ -332,7 +336,7 @@ final class ACPSessionManager: ObservableObject {
         guard let draft = session.takeForEditing(id: itemId) else { return nil }
         persistQueue(for: session)
         runners[id]?.flushQueueIfIdle()
-        onQueueChanged?(id)
+        onQueueChanged?(id, false)
         return RemoteQueueProjection.plainText(from: draft)
     }
 
@@ -341,12 +345,13 @@ final class ACPSessionManager: ObservableObject {
         session.clearPendingQueue()
         persistQueue(for: session)
         runners[id]?.flushQueueIfIdle()
-        onQueueChanged?(id)
+        onQueueChanged?(id, false)
     }
 
     func queueSteerUndo(for id: ACPSession.ID) async {
         guard await confirmedWriterLease(for: id) else { return }
         runners[id]?.steerUndo()
+        onQueueChanged?(id, false)
     }
 
     /// Steer from the remote client: same route the composer's ⌥⏎ takes.
@@ -359,6 +364,7 @@ final class ACPSessionManager: ObservableObject {
         }
         let accepted = submit(sessionId: id, text: text, attachments: attachments, intent: .steer,
                               onCompleted: { ok in onResult(ok) })
+        if accepted { onQueueChanged?(id, true) }
         if !accepted { onResult(false) }
     }
 
@@ -487,7 +493,7 @@ final class ACPSessionManager: ObservableObject {
          onSessionTitleUpdated: ((ACPSession.ID, String) -> Void)? = nil,
          onInputAwaiting: ((ACPSession, ACPUserInputRequest) -> Void)? = nil,
          onDelegatedMessageAvailable: ((ACPSession.ID) -> Void)? = nil,
-         onQueueChanged: ((ACPSession.ID) -> Void)? = nil,
+         onQueueChanged: ((ACPSession.ID, Bool) -> Void)? = nil,
          changeNotifier: ACPChangeNotifier? = nil,
          delegatedMessageNotifier: ACPChangeNotifier? = nil,
          setupEvaluator: ACPSetupEvaluator? = nil,
@@ -3438,7 +3444,7 @@ extension ACPSessionManager {
             runner.onUnexpectedDisconnect = { [weak self] in
                 Task { @MainActor in
                     self?.scheduleAutoReconnect(sessionId: sessionId)
-                    self?.onQueueChanged?(sessionId)
+                    self?.onQueueChanged?(sessionId, false)
                 }
             }
             var runnerStarted = false

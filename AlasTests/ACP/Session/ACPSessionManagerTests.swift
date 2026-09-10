@@ -60,7 +60,7 @@ struct ACPSessionManagerTests {
             worktreeId: "wt",
             worktreePath: "/tmp/wt",
             store: store,
-            onQueueChanged: { changedSessions.append($0) }
+            onQueueChanged: { sessionId, _ in changedSessions.append(sessionId) }
         )
         let session = manager.createSession(id: "session", agentId: "codex", autoRunDefault: false)
         session.enqueueScheduled(blocks: [.text("later")], scheduledAt: .distantFuture)

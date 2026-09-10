@@ -1715,6 +1715,10 @@ extension ACPSessionRunner {
     /// Exposed for tests + the toast view so it can show / hide.
     func steerUndoSnapshot() -> [QueuedPrompt]? { session.steerUndo?.snapshot }
 
+    var hasRetainedCleanupPromptWork: Bool {
+        steerInProgress || activePromptID != nil || session.transcript.streamingState != .idle
+    }
+
     private func armSteerUndoExpiry() {
         steerUndoExpiryTask?.cancel()
         steerUndoExpiryTask = Task { [weak self] in
