@@ -6540,6 +6540,7 @@ final class AppState {
         retainSendingPrompt: Bool = false
     ) -> Duration? {
         guard let session = manager.liveSession(for: sessionId) else { return nil }
+        guard session.agentState == .ready else { return nil }
         if session.queue.first?.lastError != nil { return nil }
         let nextScheduledAt = session.queue.compactMap { item -> Date? in
             guard item.status == .pending, item.lastError == nil else { return nil }

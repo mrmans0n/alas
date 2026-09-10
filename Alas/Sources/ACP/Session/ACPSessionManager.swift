@@ -3438,6 +3438,7 @@ extension ACPSessionManager {
             runner.onUnexpectedDisconnect = { [weak self] in
                 Task { @MainActor in
                     self?.scheduleAutoReconnect(sessionId: sessionId)
+                    self?.onQueueChanged?(sessionId)
                 }
             }
             var runnerStarted = false

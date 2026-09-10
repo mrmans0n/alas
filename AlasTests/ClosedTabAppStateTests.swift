@@ -267,6 +267,7 @@ struct ClosedTabAppStateTests {
         let fixture = makeFixture(state: state)
         let manager = try #require(fixture.state.acpManager(for: fixture.first))
         let session = manager.createSession(id: "scheduled-close", agentId: "claude")
+        session.agentState = .ready
         session.enqueueScheduled(blocks: [.text("later")], scheduledAt: Date().addingTimeInterval(0.05))
         let tab = fixture.state.tabs.append(
             acpSession: ACPSessionTabState(sessionId: session.id, title: "Closed chat"),
@@ -338,10 +339,44 @@ struct ClosedTabAppStateTests {
         let fixture = makeFixture(state: state)
         let manager = try #require(fixture.state.acpManager(for: fixture.first))
         let session = manager.createSession(id: "failed-head-close", agentId: "claude")
+        session.agentState = .ready
         session.enqueueScheduled(blocks: [.text("failed")], scheduledAt: Date().addingTimeInterval(-1))
         _ = session.markQueueHeadSending()
         session.setQueueHeadError("failed")
         session.enqueueScheduled(blocks: [.text("blocked later")], scheduledAt: Date().addingTimeInterval(60))
+        let tab = fixture.state.tabs.append(
+            acpSession: ACPSessionTabState(sessionId: session.id, title: "Closed chat"),
+            to: fixture.first.id
+        )
+
+        fixture.state.requestCloseTab(worktreeId: fixture.first.id, tabId: tab.id)
+        await gate.waitUntilEntered()
+
+        #expect(fixture.state.retainedACPSessionCleanupCountForTesting == 0)
+        #expect(fixture.state.pendingACPDetachCountForTesting == 1)
+
+        await gate.release()
+        for _ in 0 ..< 20 where fixture.state.pendingACPDetachCountForTesting != 0 {
+            await Task.yield()
+        }
+
+        #expect(fixture.state.pendingACPDetachCountForTesting == 0)
+    }
+
+    @Test func closedACPSessionWithDisconnectedScheduledPromptDetachesImmediately() async throws {
+        let gate = AsyncGate()
+        let state = AppState(
+            store: MemoryStore(),
+            acpDetachRunner: { _, sessionId in
+                #expect(sessionId == "disconnected-scheduled-close")
+                await gate.enterAndWait()
+            }
+        )
+        let fixture = makeFixture(state: state)
+        let manager = try #require(fixture.state.acpManager(for: fixture.first))
+        let session = manager.createSession(id: "disconnected-scheduled-close", agentId: "claude")
+        session.agentState = .disconnected
+        session.enqueueScheduled(blocks: [.text("later")], scheduledAt: Date().addingTimeInterval(60))
         let tab = fixture.state.tabs.append(
             acpSession: ACPSessionTabState(sessionId: session.id, title: "Closed chat"),
             to: fixture.first.id
