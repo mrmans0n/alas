@@ -133,6 +133,79 @@ struct WorktreeCleanupScannerTests {
         #expect(results[0].verdict == .active)
     }
 
+    /// `unpushedCount` reports 1 when `@{u}` cannot be resolved, which is what
+    /// happens after the forge deletes the branch on merge and a local prune
+    /// drops the tracking ref. A branch the forge says is merged must not be
+    /// held back as dirty by that artifact.
+    @Test func mergedOnForgeSuppressesFalseUnpushedSignalFromPrunedUpstream() async {
+        var facts = Self.cleanFacts
+        facts.unpushedCommitCount = 1   // simulates a pruned/missing @{u}
+        let ref = MergedReviewRequestRef(
+            number: 42,
+            headRefName: "feature/a",
+            url: URL(string: "https://github.com/o/r/pull/42")!
+        )
+        let scanner = Self.scanner(
+            facts: { _ in facts },
+            mergeIndex: { _ in
+                .success(WorktreeForgeMergeIndex(refsByHeadBranch: ["feature/a": ref]))
+            }
+        )
+        let results = await Self.scan(
+            scanner,
+            worktrees: [Self.worktree(branch: "feature/a")]
+        )
+        #expect(results[0].verdict == .candidate(confidence: .high))
+        #expect(!results[0].signals.contains { signal in
+            if case .unpushedCommits = signal { return true } else { return false }
+        })
+    }
+
+    /// The suppression is scoped to the forge-merged case only: a branch that
+    /// is not merged still reports its real unpushed work.
+    @Test func notMergedWorktreeStillReportsRealUnpushedCommits() async {
+        var facts = Self.cleanFacts
+        facts.unpushedCommitCount = 3
+        let scanner = Self.scanner(
+            facts: { _ in facts },
+            mergeIndex: { _ in
+                .success(WorktreeForgeMergeIndex(refsByHeadBranch: [:]))
+            }
+        )
+        let results = await Self.scan(
+            scanner,
+            worktrees: [Self.worktree(branch: "feature/a")]
+        )
+        #expect(results[0].verdict == .dirty)
+        #expect(results[0].signals.contains(.unpushedCommits(count: 3)))
+    }
+
+    /// Uncommitted work is never excused by a forge merge — only the unpushed
+    /// signal is, and only because a pruned upstream cannot be told apart from
+    /// an unpublished branch.
+    @Test func mergedOnForgeStillBlocksOnUncommittedChanges() async {
+        var facts = Self.cleanFacts
+        facts.unpushedCommitCount = 1
+        facts.hasUncommittedChanges = true
+        let ref = MergedReviewRequestRef(
+            number: 42,
+            headRefName: "feature/a",
+            url: URL(string: "https://github.com/o/r/pull/42")!
+        )
+        let scanner = Self.scanner(
+            facts: { _ in facts },
+            mergeIndex: { _ in
+                .success(WorktreeForgeMergeIndex(refsByHeadBranch: ["feature/a": ref]))
+            }
+        )
+        let results = await Self.scan(
+            scanner,
+            worktrees: [Self.worktree(branch: "feature/a")]
+        )
+        #expect(results[0].verdict == .dirty)
+        #expect(results[0].signals.contains(.uncommittedChanges))
+    }
+
     @Test func sshProjectShortCircuitsWithoutProbing() async {
         let probeCount = ProbeCounter()
         let scanner = Self.scanner(facts: { _ in

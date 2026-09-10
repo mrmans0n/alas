@@ -84,22 +84,35 @@ struct WorktreeCleanupScanner: Sendable {
         var candidates: [WorktreeCleanupCandidate] = []
         candidates.reserveCapacity(worktrees.count)
         for (offset, worktree) in worktrees.enumerated() {
+            let mergeState = Self.mergeState(
+                branch: worktree.branch,
+                baseBranch: baseBranch,
+                isMergedLocally: facts[offset].isMergedLocally,
+                indexResult: indexResult
+            )
+            // A branch the code host confirms is merged has its commits on the
+            // remote by definition. `unpushedCount` reports 1 whenever `@{u}`
+            // does not resolve, which is also what happens once the upstream
+            // has been pruned after a "delete branch on merge" — a stale
+            // local-tracking artifact, not unpublished work. It must not drive
+            // the dirty verdict the way a genuinely unpublished branch does.
+            let unpushedCommitCount: Int
+            if case .mergedOnForge = mergeState {
+                unpushedCommitCount = 0
+            } else {
+                unpushedCommitCount = facts[offset].unpushedCommitCount
+            }
             let probe = WorktreeCleanupProbe(
                 isMainWorktree: worktree.isMainWorktree == true,
                 isRemote: false,
                 hasUncommittedChanges: facts[offset].hasUncommittedChanges,
                 hasUntrackedFiles: facts[offset].hasUntrackedFiles,
-                unpushedCommitCount: facts[offset].unpushedCommitCount,
+                unpushedCommitCount: unpushedCommitCount,
                 stashCount: facts[offset].stashCount,
                 activeSessionCount: await dependencies.activeSessionCount(worktree.id),
                 operationInFlight: await dependencies.operationInFlight(worktree.id),
                 lastActivity: worktree.lastActivity,
-                mergeState: Self.mergeState(
-                    branch: worktree.branch,
-                    baseBranch: baseBranch,
-                    isMergedLocally: facts[offset].isMergedLocally,
-                    indexResult: indexResult
-                )
+                mergeState: mergeState
             )
             candidates.append(WorktreeCleanupClassifier.classify(
                 worktree: worktree,
