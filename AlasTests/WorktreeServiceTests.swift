@@ -688,6 +688,33 @@ extension WorktreeServiceTests {
         #expect(try await service.list(repoPath: repo, projectId: "p").count == 1)
     }
 
+    @Test func fastLocalRemoveSurvivesWhenProjectPathIsTheRemovedWorktree() async throws {
+        let fixture = try await makeLinkedWorktree(suffix: "project-path-target")
+        defer { fixture.removeFiles() }
+
+        let outcome = try await fixture.service.removeFastLocal(
+            repoPath: fixture.worktree.path,
+            worktree: fixture.worktree,
+            deleteBranchIfMerged: true,
+            force: false
+        )
+        guard case .staged(let ticket) = outcome else {
+            Issue.record("Expected staged removal")
+            return
+        }
+        defer { try? FileManager.default.removeItem(at: ticket.trashRoot) }
+
+        #expect(!FileManager.default.fileExists(atPath: fixture.worktree.path.path))
+        let worktrees = try await fixture.service.list(repoPath: fixture.repo, projectId: "p")
+        #expect(worktrees.count == 1)
+        #expect(!worktrees.contains { $0.path.standardizedFileURL == fixture.worktree.path.standardizedFileURL })
+        let branches = try await Process.git(
+            ["branch", "--list", fixture.worktree.branch],
+            cwd: fixture.repo
+        )
+        #expect(branches.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+
     @Test func fastLocalRemoveDeletesStagedFilesSynchronouslyWhenCommitMarkerCannotBeWritten() async throws {
         let fixture = try await makeLinkedWorktree(suffix: "marker-write-failure")
         let trashRoot = WorktreeTrash.root(

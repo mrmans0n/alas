@@ -990,7 +990,8 @@ struct WorktreeService {
             }
         }
 
-        var removeArgs = ["worktree", "remove", worktree.path.path]
+        let commonGitArguments = ["--git-dir", expectedCommonDirectory.path]
+        var removeArgs = commonGitArguments + ["worktree", "remove", worktree.path.path]
         if registration.isLocked && force {
             removeArgs.append(contentsOf: ["--force", "--force"])
         } else if force || auditedMissingLFS {
@@ -1003,7 +1004,7 @@ struct WorktreeService {
         do {
             var result = try await Process.git(
                 initialRemoveArgs,
-                cwd: repoPath,
+                cwd: expectedCommonDirectory,
                 usesRemoteHostRegistry: false,
                 timeout: 90
             )
@@ -1012,7 +1013,7 @@ struct WorktreeService {
                Self.looksLikeMissingLFS(result.stderr) {
                 result = try await Process.git(
                     Self.lfsFilterOverride + removeArgs,
-                    cwd: repoPath,
+                    cwd: expectedCommonDirectory,
                     usesRemoteHostRegistry: false,
                     timeout: 90
                 )
@@ -1056,8 +1057,8 @@ struct WorktreeService {
 
         if deleteBranchIfMerged && worktree.branch != "(detached)" {
             _ = try? await Process.git(
-                ["branch", "-d", worktree.branch],
-                cwd: repoPath,
+                commonGitArguments + ["branch", "-d", worktree.branch],
+                cwd: expectedCommonDirectory,
                 usesRemoteHostRegistry: false
             )
         }
