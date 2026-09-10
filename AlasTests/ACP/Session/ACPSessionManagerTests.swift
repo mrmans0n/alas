@@ -95,6 +95,32 @@ struct ACPSessionManagerTests {
         #expect(session.queue.map(\.id) == [itemId])
     }
 
+    @Test("remote queue retry ignores stale retry requests")
+    func remoteQueueRetryIgnoresStaleRequests() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-remote-queue-retry-stale-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        var changedSessions: [ACPSession.ID] = []
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            onQueueChanged: { sessionId, _ in changedSessions.append(sessionId) }
+        )
+        let session = manager.createSession(id: "session", agentId: "codex", autoRunDefault: false)
+        let sendingId = UUID()
+        let pendingId = UUID()
+        session.queue.append(QueuedPrompt(id: sendingId, blocks: [.text("sending")], status: .sending))
+        session.queue.append(QueuedPrompt(id: pendingId, blocks: [.text("pending")], status: .pending))
+
+        #expect(await manager.acquireWriterLease(sessionId: session.id))
+        await manager.queueRetry(for: session.id, itemId: sendingId)
+        await manager.queueRetry(for: session.id, itemId: pendingId)
+
+        #expect(changedSessions.isEmpty)
+        #expect(session.queue.map(\.id) == [sendingId, pendingId])
+    }
+
     @Test("delegated prompt already recorded in the transcript is not requeued")
     func delegatedPromptRecordedInTranscriptIsNotRequeued() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-delegated-dedupe-\(UUID()).sqlite")

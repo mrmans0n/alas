@@ -311,10 +311,11 @@ final class ACPSessionManager: ObservableObject {
     func queueRetry(for id: ACPSession.ID, itemId: UUID) async {
         guard await confirmedWriterLease(for: id), let session = sessions[id] else { return }
         guard let idx = session.queue.firstIndex(where: { $0.id == itemId }) else { return }
+        guard session.queue[idx].status == .pending, session.queue[idx].lastError != nil else { return }
         session.queue[idx].lastError = nil
         persistQueue(for: session)
         runners[id]?.flushQueueIfIdle()
-        onQueueChanged?(id, false)
+        onQueueChanged?(id, retainedCleanupHasActivePromptWork(for: id))
     }
 
     /// Pull a queued item out for editing and hand its text back. `nil` when
@@ -4113,6 +4114,7 @@ extension ACPSessionManager {
             defer {
                 self?.autoReconnectTasks.removeValue(forKey: sessionId)
                 self?.sessions[sessionId]?.autoReconnecting = false
+                self?.onQueueChanged?(sessionId, false)
             }
             self?.sessions[sessionId]?.autoReconnecting = true
             var attempt = 0

@@ -6597,9 +6597,7 @@ final class AppState {
         case .ready, .spawning:
             break
         case .disconnected:
-            guard nextScheduledAt != nil,
-                  manager.retainedCleanupHasAutoReconnectWork(for: sessionId)
-            else { return nil }
+            guard nextScheduledAt != nil else { return nil }
         case .idle, .failed:
             return nil
         }
@@ -6655,6 +6653,7 @@ final class AppState {
                     self.cleanupACPSession(owner: owner, sessionId: sessionId)
                     return
                 }
+                self.reattachRetainedScheduledSessionIfDue(manager: manager, sessionId: sessionId)
                 do {
                     try await Task.sleep(for: delay)
                 } catch {
@@ -6663,6 +6662,18 @@ final class AppState {
             }
         }
         retainedACPSessionCleanupTasks[key, default: [:]][sessionId] = PendingACPDetach(id: id, task: task)
+    }
+
+    private func reattachRetainedScheduledSessionIfDue(manager: ACPSessionManager, sessionId: ACPSession.ID) {
+        guard let session = manager.liveSession(for: sessionId),
+              case .disconnected = session.agentState,
+              session.queue.contains(where: { item in
+                  item.status == .pending
+                      && item.lastError == nil
+                      && (item.scheduledAt?.timeIntervalSinceNow ?? .greatestFiniteMagnitude) <= 0
+              })
+        else { return }
+        Task { @MainActor in await manager.reattach(to: sessionId) }
     }
 
     private func restartRetainedACPSessionCleanupIfNeeded(
