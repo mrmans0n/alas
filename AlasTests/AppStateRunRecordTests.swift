@@ -72,10 +72,12 @@ struct AppStateRunRecordTests {
             runScriptCompletionWaiter: waiter
         )
         state.projectsManager = ProjectsManager(persistedProjects: [project])
+        let primaryWorktree = worktree(id: "wt-1", branch: "main")
+        state.projectsManager.insertOptimisticWorktree(primaryWorktree)
         return Fixture(
             state: state,
             script: script,
-            worktree: worktree(id: "wt-1", branch: "main"),
+            worktree: primaryWorktree,
             directory: directory,
             errors: { errors.values }
         )
@@ -366,6 +368,20 @@ struct AppStateRunRecordTests {
         #expect(fixture.state.pendingScriptLaunchTasks.isEmpty)
         #expect(task.isCancelled)
         #expect(runRecord(fixture)?.status == .finished(.stopped))
+    }
+
+    @Test func terminateAllTerminalSessionsClosesTabsOpenedAfterInitialSnapshot() throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        _ = fixture.state.tabs.appendTerminal(
+            worktreeId: fixture.worktree.id,
+            title: "Late Terminal",
+            sessionId: "late-leaf"
+        )
+
+        fixture.state.terminateAllTerminalSessionsAfterConfirmationWithStaleEmptySnapshotForTesting()
+
+        #expect(fixture.state.tabs.tabs(forWorktree: fixture.worktree.id).isEmpty)
     }
 
     @Test func pendingLaunchCancellationDoesNotParseWorktreeIDFromKey() throws {

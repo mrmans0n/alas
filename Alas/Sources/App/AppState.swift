@@ -5375,6 +5375,15 @@ final class AppState {
     func terminateAllTerminalSessionsAfterConfirmationForTesting() {
         terminateAllTerminalSessionsAfterConfirmation(snapshot: terminalTerminationSnapshot())
     }
+
+    func terminateAllTerminalSessionsAfterConfirmationWithStaleEmptySnapshotForTesting() {
+        terminateAllTerminalSessionsAfterConfirmation(snapshot: TerminalTerminationSnapshot(
+            terminalTabs: [],
+            checkoutTerminalTabs: [],
+            persistedSessions: [],
+            sessionCount: 0
+        ))
+    }
 #endif
 
     private struct TerminalTerminationSnapshot {
@@ -5422,11 +5431,21 @@ final class AppState {
     }
 
     private func terminateAllTerminalSessionsAfterConfirmation(snapshot: TerminalTerminationSnapshot) {
+        let confirmedSnapshot = terminalTerminationSnapshot()
         cancelPendingRunScriptLaunches()
-        for (worktreeId, tabId) in snapshot.terminalTabs {
+        var seenTerminalTabs = Set<String>()
+        let terminalTabs = (snapshot.terminalTabs + confirmedSnapshot.terminalTabs).filter {
+            seenTerminalTabs.insert("\($0.worktreeId):\($0.tabId)").inserted
+        }
+        var seenCheckoutTerminalTabs = Set<String>()
+        let checkoutTerminalTabs = (snapshot.checkoutTerminalTabs + confirmedSnapshot.checkoutTerminalTabs).filter {
+            seenCheckoutTerminalTabs.insert("\($0.owner.storageKey):\($0.tabId)").inserted
+        }
+        let persistedSessions = Array(Set(snapshot.persistedSessions).union(confirmedSnapshot.persistedSessions))
+        for (worktreeId, tabId) in terminalTabs {
             closeTab(worktreeId: worktreeId, tabId: tabId)
         }
-        for (owner, tabId) in snapshot.checkoutTerminalTabs {
+        for (owner, tabId) in checkoutTerminalTabs {
             closeSharedSessionTab(owner: owner, tabID: tabId)
         }
         // Also kill persisted leaves whose tab the user never displayed
@@ -5434,7 +5453,7 @@ final class AppState {
         // own those persisted leaves too. Scoped to OUR instance's known
         // leaves so we don't trample sessions owned by a concurrently-
         // running Alas process under the same ZMX_DIR.
-        terminal.terminateAll(additionalSessions: snapshot.persistedSessions)
+        terminal.terminateAll(additionalSessions: persistedSessions)
     }
 
     /// All terminal sessions persisted under this Alas instance's projects.

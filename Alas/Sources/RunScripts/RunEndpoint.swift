@@ -27,11 +27,17 @@ enum RunEndpointPolicy {
     }
 
     private static func isIPv4MappedIPv6LoopbackLiteral(_ host: String) -> Bool {
-        for prefix in ["::ffff:", "0:0:0:0:0:ffff:"] where host.hasPrefix(prefix) {
-            let mappedIPv4 = String(host.dropFirst(prefix.count))
-            return isIPv4LoopbackLiteral(mappedIPv4)
+        var address = in6_addr()
+        guard inet_pton(AF_INET6, host, &address) == 1 else {
+            return false
         }
-        return false
+        let bytes = withUnsafeBytes(of: &address) { Array($0) }
+        guard bytes.count == 16,
+              bytes[0..<10].allSatisfy({ $0 == 0 }),
+              bytes[10] == 0xff,
+              bytes[11] == 0xff
+        else { return false }
+        return bytes[12] == 127
     }
 
     private static func isIPv4LoopbackLiteral(_ host: String) -> Bool {
