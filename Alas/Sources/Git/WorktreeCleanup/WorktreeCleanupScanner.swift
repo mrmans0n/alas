@@ -204,11 +204,12 @@ extension WorktreeCleanupScanner {
     /// conservative direction rather than failing the scan.
     static func gitFacts(
         worktreePath: URL,
+        branch: String,
         baseBranch: String
     ) async -> WorktreeCleanupGitFacts {
         async let status = statusFacts(worktreePath: worktreePath)
         async let unpushed = unpushedCount(worktreePath: worktreePath)
-        async let stashes = stashCount(worktreePath: worktreePath)
+        async let stashes = stashCount(worktreePath: worktreePath, branch: branch)
         async let merged = isMergedLocally(
             worktreePath: worktreePath,
             baseBranch: baseBranch
@@ -263,22 +264,33 @@ extension WorktreeCleanupScanner {
             // branch has work that exists nowhere else, so treat it as unpushed.
             return 1
         }
-        return Int(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+        // A successful command with unparseable output degrades the same way
+        // as a failed one: unpushed commits exist nowhere but this worktree,
+        // so a "we couldn't tell" case must not read as "nothing unpushed".
+        return Int(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 1
     }
 
-    private static func stashCount(worktreePath: URL) async -> Int {
-        // The stash stack is repository-wide, so filter to stashes whose
-        // recorded branch matches this worktree's branch.
-        guard let branch = try? await Process.git(
-            ["symbolic-ref", "--quiet", "--short", "HEAD"],
-            cwd: worktreePath
-        ), branch.exitCode == 0 else { return 0 }
-        let branchName = branch.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !branchName.isEmpty else { return 0 }
-
+    private static func stashCount(worktreePath: URL, branch: String) async -> Int {
+        // Unlike the unpushed-commit and status probes, a lookup failure here
+        // safely degrades to 0, not 1: the stash stack lives in the shared
+        // `.git` common directory, not this worktree's private state, so a
+        // stash survives `git worktree remove` regardless of whether this
+        // probe could read it. There is no way to lose a stash by
+        // under-counting it here — so 0 is the honest answer, and it avoids
+        // reporting a false "1 stash" blocker to a worktree that has none.
         guard let stashes = try? await GitService().stashes(worktreePath: worktreePath)
         else { return 0 }
-        return stashes.filter { $0.subject.contains(branchName) }.count
+        return stashes.filter { isStash($0, forBranch: branch) }.count
+    }
+
+    /// Matches a stash's `%gs` reflog subject against a branch name, anchored
+    /// on git's own subject shapes (`WIP on <branch>: ...` or
+    /// `On <branch>: ...`) rather than a bare substring — a bare
+    /// `subject.contains(branch)` would over-count branch `x` against a
+    /// stash actually belonging to `feature/x`.
+    static func isStash(_ stash: GitStash, forBranch branch: String) -> Bool {
+        stash.subject.hasPrefix("WIP on \(branch):")
+            || stash.subject.hasPrefix("On \(branch):")
     }
 
     private static func isMergedLocally(

@@ -184,6 +184,28 @@ struct WorktreeCleanupScannerTests {
         #expect(!clean.hasUncommittedChanges)
         #expect(!clean.hasUntrackedFiles)
     }
+
+    /// A bare substring match would let branch `x` claim a stash that
+    /// actually belongs to `feature/x`. The match must anchor on git's own
+    /// `%gs` subject shapes.
+    @Test func stashMatchDoesNotCollideOnBranchNameSubstrings() {
+        let stashOnFeatureX = GitStash(
+            ref: "stash@{0}",
+            subject: "WIP on feature/x: abc1234 message",
+            relativeTime: "2 days ago",
+            sha: "abc1234"
+        )
+        #expect(!WorktreeCleanupScanner.isStash(stashOnFeatureX, forBranch: "x"))
+        #expect(WorktreeCleanupScanner.isStash(stashOnFeatureX, forBranch: "feature/x"))
+
+        let stashOnX = GitStash(
+            ref: "stash@{1}",
+            subject: "On x: custom message",
+            relativeTime: "1 day ago",
+            sha: "def5678"
+        )
+        #expect(WorktreeCleanupScanner.isStash(stashOnX, forBranch: "x"))
+    }
 }
 
 private actor ProbeCounter {
