@@ -6534,23 +6534,33 @@ final class AppState {
         retainedScheduledSessionCleanupDelay(manager: manager, sessionId: sessionId) != nil
     }
 
-    private func retainedScheduledSessionCleanupDelay(manager: ACPSessionManager, sessionId: ACPSession.ID) -> Duration? {
+    private func retainedScheduledSessionCleanupDelay(
+        manager: ACPSessionManager,
+        sessionId: ACPSession.ID,
+        retainSendingPrompt: Bool = false
+    ) -> Duration? {
         guard let session = manager.liveSession(for: sessionId) else { return nil }
         if session.queue.first?.lastError != nil { return nil }
-        if session.queue.contains(where: { $0.status == .sending && $0.scheduledAt != nil }) {
-            return .milliseconds(250)
-        }
         let nextScheduledAt = session.queue.compactMap { item -> Date? in
             guard item.status == .pending, item.lastError == nil else { return nil }
             return item.scheduledAt
         }.min()
+        if session.queue.contains(where: {
+            $0.status == .sending && ($0.scheduledAt != nil || retainSendingPrompt || nextScheduledAt != nil)
+        }) {
+            return .milliseconds(250)
+        }
         guard let nextScheduledAt else { return nil }
         let secondsUntilScheduledSend = nextScheduledAt.timeIntervalSinceNow
         guard secondsUntilScheduledSend > 0 else { return .milliseconds(250) }
         return .seconds(secondsUntilScheduledSend)
     }
 
-    private func scheduleRetainedACPSessionCleanup(owner: SessionOwnerID, sessionId: ACPSession.ID) {
+    private func scheduleRetainedACPSessionCleanup(
+        owner: SessionOwnerID,
+        sessionId: ACPSession.ID,
+        retainSendingPrompt: Bool = false
+    ) {
         let key = owner.storageKey
         guard retainedACPSessionCleanupTasks[key]?[sessionId] == nil else { return }
         let id = UUID()
@@ -6561,7 +6571,11 @@ final class AppState {
                     self.clearRetainedACPSessionCleanup(worktreeId: key, sessionId: sessionId, id: id)
                     return
                 }
-                guard let delay = self.retainedScheduledSessionCleanupDelay(manager: manager, sessionId: sessionId) else {
+                guard let delay = self.retainedScheduledSessionCleanupDelay(
+                    manager: manager,
+                    sessionId: sessionId,
+                    retainSendingPrompt: retainSendingPrompt
+                ) else {
                     self.clearRetainedACPSessionCleanup(worktreeId: key, sessionId: sessionId, id: id)
                     self.cleanupACPSession(owner: owner, sessionId: sessionId)
                     return
@@ -6579,7 +6593,11 @@ final class AppState {
     private func restartRetainedACPSessionCleanupIfNeeded(owner: SessionOwnerID, sessionId: ACPSession.ID) {
         guard retainedACPSessionCleanupTasks[owner.storageKey]?[sessionId] != nil else { return }
         cancelRetainedACPSessionCleanup(owner: owner, sessionId: sessionId)
-        cleanupACPSession(owner: owner, sessionId: sessionId)
+        guard acpManagers[owner]?.liveSession(for: sessionId)?.queue.contains(where: { $0.status == .sending }) == true else {
+            cleanupACPSession(owner: owner, sessionId: sessionId)
+            return
+        }
+        scheduleRetainedACPSessionCleanup(owner: owner, sessionId: sessionId, retainSendingPrompt: true)
     }
 
     private func cancelRetainedACPSessionCleanup(owner: SessionOwnerID, sessionId: ACPSession.ID) {
