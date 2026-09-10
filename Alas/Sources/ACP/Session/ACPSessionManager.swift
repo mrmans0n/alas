@@ -4071,19 +4071,24 @@ extension ACPSessionManager {
             persistenceError = error.localizedDescription
             return []
         }
+        let tasks: [Task<ACPSession.ID?, Never>] = ids.map { id in
+            Task<ACPSession.ID?, Never> { @MainActor in
+                guard await persistedSessionRow(id: id) != nil,
+                      placeholderSession(id: id) != nil
+                else { return nil }
+                await hydrateIfNeeded(id: id)
+                guard let session = sessions[id],
+                      session.queue.contains(where: {
+                          $0.status == .pending && $0.lastError == nil && $0.scheduledAt != nil
+                      })
+                else { return nil }
+                await reattach(to: id)
+                return id
+            }
+        }
         var bootstrapped: [ACPSession.ID] = []
-        for id in ids {
-            guard await persistedSessionRow(id: id) != nil,
-                  placeholderSession(id: id) != nil
-            else { continue }
-            await hydrateIfNeeded(id: id)
-            guard let session = sessions[id],
-                  session.queue.contains(where: {
-                      $0.status == .pending && $0.lastError == nil && $0.scheduledAt != nil
-                  })
-            else { continue }
-            await reattach(to: id)
-            bootstrapped.append(id)
+        for task in tasks {
+            if let id = await task.value { bootstrapped.append(id) }
         }
         return bootstrapped
     }

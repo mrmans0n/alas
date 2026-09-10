@@ -1074,19 +1074,26 @@ final class AppState {
     }
 
     private func bootstrapScheduledACPSessions(worktreeIds: [String]) async {
-        for worktreeId in worktreeIds {
+        let tasks = worktreeIds.compactMap { worktreeId -> Task<Void, Never>? in
             guard let worktree = worktree(withId: worktreeId),
                   let manager = acpManager(for: worktree)
-            else { continue }
-            await bootstrapScheduledACPSessions(owner: .worktree(worktreeId), manager: manager)
+            else { return nil }
+            return Task { @MainActor in
+                await bootstrapScheduledACPSessions(owner: .worktree(worktreeId), manager: manager)
+            }
         }
+        for task in tasks { await task.value }
     }
 
     private func bootstrapScheduledACPSessions(owner: SessionOwnerID, manager: ACPSessionManager) async {
         let sessionIds = await manager.bootstrapScheduledQueueSessions()
-        for sessionId in sessionIds where !hasACPSessionTab(owner: owner, sessionId: sessionId) {
-            cleanupACPSession(owner: owner, sessionId: sessionId)
+        let tasks = sessionIds.compactMap { sessionId -> Task<Void, Never>? in
+            guard !hasACPSessionTab(owner: owner, sessionId: sessionId) else { return nil }
+            return Task { @MainActor in
+                cleanupACPSession(owner: owner, sessionId: sessionId)
+            }
         }
+        for task in tasks { await task.value }
     }
 
     private func hasACPSessionTab(owner: SessionOwnerID, sessionId: ACPSession.ID) -> Bool {
