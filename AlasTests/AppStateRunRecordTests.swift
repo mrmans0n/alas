@@ -130,6 +130,24 @@ struct AppStateRunRecordTests {
         #expect(scriptTabCount(fixture) == 1)
     }
 
+    @Test func completionUsesLocalObservationTimeForRunRecord() async throws {
+        let remoteClock = Date(timeIntervalSince1970: 1)
+        let fixture = try makeFixture(waiter: { _ in
+            RunScriptCompletion(exitCode: 0, completedAt: remoteClock, transcript: nil, truncated: false)
+        })
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        let beforeLaunch = Date()
+        fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
+        try await Task.sleep(for: .milliseconds(50))
+        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+
+        let record = try #require(runRecord(fixture))
+        let finishedAt = try #require(record.finishedAt)
+        #expect(finishedAt >= beforeLaunch)
+        #expect(finishedAt != remoteClock)
+    }
+
     @Test func remoteRepoScriptLaunchDoesNotRequireLocalScriptPath() throws {
         let fixture = try makeFixture(waiter: { _ in
             try await Task.sleep(for: .seconds(5))

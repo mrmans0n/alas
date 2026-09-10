@@ -23,17 +23,21 @@ struct RunTabView: View {
 
     var body: some View {
         Group {
+            let displayedScripts = activeOrAllScripts
             if !hasScanned {
                 Color.clear
-            } else if let scriptCatalogError {
+            } else if displayedScripts.isEmpty, let scriptCatalogError {
                 errorState(scriptCatalogError)
-            } else if scripts.isEmpty {
+            } else if displayedScripts.isEmpty {
                 emptyState
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
+                        if let scriptCatalogError {
+                            catalogErrorBanner(scriptCatalogError)
+                        }
                         ForEach(RunScriptScope.allCases, id: \.self) { scope in
-                            let scoped = scripts.filter { $0.scope == scope }
+                            let scoped = displayedScripts.filter { $0.scope == scope }
                             if !scoped.isEmpty {
                                 RunScopeHeader(title: scope.sectionTitle, count: scoped.count)
                                 ForEach(scoped) { script in
@@ -64,6 +68,13 @@ struct RunTabView: View {
                 await refreshScripts()
                 hasScanned = true
             }
+        }
+    }
+
+    private var activeOrAllScripts: [RunScript] {
+        guard scriptCatalogError != nil else { return scripts }
+        return scripts.filter { script in
+            state.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status.isActive == true
         }
     }
 
@@ -167,6 +178,38 @@ struct RunTabView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.horizontal, 20)
         .accessibilityIdentifier("run-tab-empty-state")
+    }
+
+    private func catalogErrorBanner(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Icon(name: "exclamationmark.triangle", size: 13, color: theme.color("warn"))
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Couldn’t refresh run scripts")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(theme.color("fg-muted"))
+                Text(message)
+                    .font(.system(size: 10))
+                    .foregroundColor(theme.color("fg-faint"))
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 8)
+            Button("Retry") {
+                Task {
+                    await refreshScripts()
+                    hasScanned = true
+                }
+            }
+            .controlSize(.small)
+        }
+        .padding(10)
+        .background(theme.color("warn").opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(theme.color("warn").opacity(0.25), lineWidth: 1)
+        )
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
     }
 
     private func errorState(_ message: String) -> some View {

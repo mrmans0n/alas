@@ -545,6 +545,7 @@ extension AppState {
                 defer { runScriptCompletionTasks.removeValue(forKey: runID) }
                 do {
                     let completion = try await runScriptCompletionWaiter(location)
+                    let observedAt = Date()
                     guard runRecords.isCurrentActiveRun(
                         runID: runID,
                         worktreeID: worktree.id,
@@ -559,7 +560,7 @@ extension AppState {
                         runID: runID
                     )
                     guard completion.exitCode != 0 else {
-                        runRecords.finish(runID: runID, outcome: .succeeded, at: completion.completedAt)
+                        runRecords.finish(runID: runID, outcome: .succeeded, at: observedAt)
                         return
                     }
                     let capturedOutput: RunScriptCapturedOutput
@@ -580,7 +581,7 @@ extension AppState {
                     runRecords.finish(
                         runID: runID,
                         outcome: .failed(exitCode: completion.exitCode),
-                        at: completion.completedAt,
+                        at: observedAt,
                         failureID: failureID
                     )
                     runScriptFailureQueue.append(RunScriptFailure(
@@ -591,7 +592,7 @@ extension AppState {
                         worktreeID: worktree.id,
                         branch: worktree.branch,
                         exitCode: completion.exitCode,
-                        completedAt: completion.completedAt,
+                        completedAt: observedAt,
                         capturedOutput: capturedOutput
                     ))
                 } catch is CancellationError {
