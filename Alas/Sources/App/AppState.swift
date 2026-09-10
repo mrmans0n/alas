@@ -6544,7 +6544,9 @@ final class AppState {
             return item.scheduledAt
         }.min()
         guard let nextScheduledAt else { return nil }
-        return .seconds(max(0, nextScheduledAt.timeIntervalSinceNow))
+        let secondsUntilScheduledSend = nextScheduledAt.timeIntervalSinceNow
+        guard secondsUntilScheduledSend > 0 else { return .milliseconds(250) }
+        return .seconds(secondsUntilScheduledSend)
     }
 
     private func scheduleRetainedACPSessionCleanup(owner: SessionOwnerID, sessionId: ACPSession.ID) {
