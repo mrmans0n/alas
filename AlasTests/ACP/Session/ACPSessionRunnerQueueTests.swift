@@ -218,31 +218,28 @@ struct ACPSessionRunnerQueueTests {
         #expect(acknowledgement.recordedCount == 1)
     }
 
-    @Test(".steer while streaming with queue → cancel sent, queue cleared, new prompt sent, snapshot captured")
-    func steerClearsAndSends() async throws {
+    @Test(".steer while streaming preserves the pending queue")
+    func steerPreservesPendingQueue() async throws {
         let (runner, mock, session, store) = try mkRunner()
         mock.script(method: "session/prompt") { _ in Data("null".utf8) }
-        // Pre-seed queue + put session in streaming.
         session.agentState = .ready
         session.transcript.streamingState = .streaming
-        session.enqueue(blocks: [.text("stale-a")])
-        session.enqueue(blocks: [.text("stale-b")])
+        session.enqueue(blocks: [.text("queued-a")])
+        session.enqueue(blocks: [.text("queued-b")])
         runner.persistQueue()
+        let queued = session.queue
 
         runner.send(blocks: [.text("redirect")], intent: .steer)
+
+        #expect(session.queue == queued)
+        #expect(runner.steerUndoSnapshot() == nil)
+
         try await Task.sleep(nanoseconds: 250_000_000)
 
-        // session/cancel was sent
         #expect(mock.sent.contains { $0.method == "session/cancel" })
-        // queue is empty after drain (cleared by steer, redirect popped after send)
         #expect(session.queue.isEmpty)
-        // session/prompt was sent with the steer blocks
         let prompts = mock.sent.filter { $0.method == "session/prompt" }
-        #expect(prompts.count == 1)
-        // Undo snapshot captured
-        #expect(runner.steerUndoSnapshot()?.count == 2)
-        #expect(runner.steerUndoSnapshot()?.map { $0.blocks } == [[.text("stale-a")], [.text("stale-b")]])
-        // Persisted queue empty
+        #expect(prompts.count == 3)
         #expect(try store.loadQueue(sessionId: "s").isEmpty)
     }
 
@@ -273,20 +270,20 @@ struct ACPSessionRunnerQueueTests {
         #expect(prompts.isEmpty)
     }
 
-    @Test("steerUndo() re-prepends snapshot and drains it on next idle")
-    func steerUndoRestores() async throws {
+    @Test("forceSendQueuedItem undo re-prepends discarded prompts and drains them on next idle")
+    func forceSendQueuedItemUndoRestores() async throws {
         let (runner, mock, session, store) = try mkRunner()
         mock.script(method: "session/prompt") { _ in Data("null".utf8) }
         session.agentState = .ready
         session.transcript.streamingState = .streaming
         session.enqueue(blocks: [.text("a")])
-        runner.send(blocks: [.text("redirect")], intent: .steer)
+        session.enqueue(blocks: [.text("selected")])
+        runner.forceSendQueuedItem(id: session.queue[1].id)
         try await Task.sleep(nanoseconds: 250_000_000)
-        // Steer fired: redirect sent, snapshot captured, state .idle.
         #expect(runner.steerUndoSnapshot() != nil)
         #expect(session.queue.isEmpty)
-        let promptsAfterSteer = mock.sent.filter { $0.method == "session/prompt" }.count
-        #expect(promptsAfterSteer == 1)
+        let promptsAfterForceSend = mock.sent.filter { $0.method == "session/prompt" }.count
+        #expect(promptsAfterForceSend == 1)
 
         runner.steerUndo()
         try await Task.sleep(nanoseconds: 200_000_000)
@@ -365,13 +362,12 @@ struct ACPSessionRunnerQueueTests {
         #expect(users.count == 1)
     }
 
-    @Test("steer drops a .sending head and excludes it from the undo snapshot")
-    func steerDiscardsSendingHead() async throws {
+    @Test("steer drops a .sending head and preserves the pending tail")
+    func steerDiscardsSendingHeadAndPreservesPendingTail() async throws {
         // Regression for the race where steer happens while the flusher
         // has already marked the head .sending. The .sending item must
-        // be evicted along with the .pending tail; otherwise the stale
-        // in-flight RPC would settle later and mutate session state
-        // behind the steer.
+        // be evicted while the pending tail stays queued; otherwise the
+        // stale in-flight RPC would settle later and mutate session state.
         let (runner, mock, session, store) = try mkRunner()
         mock.script(method: "session/prompt") { _ in Data("null".utf8) }
         session.agentState = .ready
@@ -382,21 +378,47 @@ struct ACPSessionRunnerQueueTests {
         session.enqueue(blocks: [.text("tail-pending")])
         runner.persistQueue()
         session.transcript.streamingState = .sending
+        let tail = session.queue[1]
 
         runner.send(blocks: [.text("redirect")], intent: .steer)
+
+        #expect(session.queue == [tail])
+        #expect(runner.steerUndoSnapshot() == nil)
+
         try await Task.sleep(nanoseconds: 250_000_000)
 
-        // Both queued items are gone; only the redirect prompt fired.
+        // The interrupted head is not retried. The redirect runs first,
+        // followed by the preserved tail.
         #expect(session.queue.isEmpty)
         #expect(mock.sent.contains { $0.method == "session/cancel" })
         let prompts = mock.sent.filter { $0.method == "session/prompt" }
-        #expect(prompts.count == 1)
-        // The .sending head MUST NOT appear in the undo snapshot — it was
-        // mid-flight; resurrecting it would just re-fire the prompt the
-        // user steered away from. Only the .pending tail is restorable.
-        let snapshot = runner.steerUndoSnapshot() ?? []
-        #expect(snapshot.map { $0.blocks } == [[.text("tail-pending")]])
+        #expect(prompts.count == 2)
         #expect(try store.loadQueue(sessionId: "s").isEmpty)
+    }
+
+    @Test("force send waits for an in-progress steer to install its redirect")
+    func forceSendWaitsForSteer() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        let cancelStarted = QueueTestGate()
+        let releaseCancel = QueueTestGate()
+        mock.scriptNotifyAsync(method: "session/cancel") { _ in
+            await cancelStarted.open()
+            await releaseCancel.wait()
+        }
+        mock.script(method: "session/prompt") { _ in Data("null".utf8) }
+        session.agentState = .ready
+        session.transcript.streamingState = .streaming
+        session.enqueue(blocks: [.text("send-now")])
+        let queuedID = session.queue[0].id
+
+        runner.send(blocks: [.text("redirect")], intent: .steer)
+        await cancelStarted.wait()
+        runner.forceSendQueuedItem(id: queuedID)
+        try await Task.sleep(nanoseconds: 20_000_000)
+
+        #expect(mock.sent.filter { $0.method == "session/cancel" }.count == 1)
+
+        await releaseCancel.open()
     }
 
     @Test("forceSendQueuedItem while busy steers with the selected queued item")
@@ -661,6 +683,23 @@ struct ACPSessionRunnerQueueTests {
         #expect(session2.queue.isEmpty)
         let prompts = mock2.sent.filter { $0.method == "session/prompt" }
         #expect(prompts.count == 2)
+    }
+}
+
+private actor QueueTestGate {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        guard !isOpen else { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func open() {
+        guard !isOpen else { return }
+        isOpen = true
+        waiters.forEach { $0.resume() }
+        waiters.removeAll()
     }
 }
 

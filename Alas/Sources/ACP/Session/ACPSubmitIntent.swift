@@ -10,7 +10,7 @@ enum ACPSubmitRoute: Equatable {
     /// flusher's FIFO order intact even if the user submits another prompt
     /// in the microsecond gap between state→.idle and the flusher firing.
     case enqueue
-    /// User explicitly steered: cancel the in-flight turn (if any), clear
+    /// User explicitly steered: cancel the in-flight turn (if any), preserve
     /// the queue, and send the new prompt as a fresh turn. Falls back to
     /// `.sendNow` only when there's literally nothing to interrupt
     /// (idle + empty queue) — handled by the resolver.
