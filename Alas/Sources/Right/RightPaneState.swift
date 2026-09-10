@@ -1282,6 +1282,7 @@ final class RightPaneState: GGSplitCommitServicing {
         // GG rewrites refs throughout mutations. Keep the last coherent stack
         // mounted until the coordinator performs its final refresh.
         if ggActionState.inFlightAction != nil, ggStackLoadState == .loaded {
+            supersedeGGStackRefreshForMutation()
             deferGGStackRefreshUntilMutationEnds()
             return nil
         }

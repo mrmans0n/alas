@@ -2422,7 +2422,6 @@ struct RightPaneGGStackTests {
         let staleRefresh = Task { @MainActor in await state.refreshGGStack(forceRemote: true) }
         await runner.waitUntilCall(1)
         _ = state.ggActionState.beginAction(action)
-        state.supersedeGGStackRefreshForMutation()
 
         let refresh = state.invalidateGGPresentation(startingRefresh: false)
 
@@ -2436,13 +2435,12 @@ struct RightPaneGGStackTests {
         await staleRefresh.value
         #expect(state.ggStack?.name == "feature")
 
+        state.ggActionState.endAction(action)
         let finalRefresh = Task { @MainActor in await state.refreshGGStack(forceRemote: true) }
         await runner.waitUntilCall(2)
-        _ = state.invalidateGGPresentation(startingRefresh: false)
         await runner.complete(call: 2)
         await finalRefresh.value
         #expect(state.ggStack?.name == "final-stack")
-        #expect(state.ggStackRefreshDeferredUntilMutationEnds)
 
         await state.refreshGGStack(forceRemote: true)
         #expect(!state.ggStackRefreshDeferredUntilMutationEnds)
