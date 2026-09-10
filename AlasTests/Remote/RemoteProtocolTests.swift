@@ -626,7 +626,7 @@ struct RemoteProtocolTests {
             sessionId: "s1",
             items: [
                 RemoteQueuedPrompt(id: "i1", text: "first", imageCount: 0, resourceCount: 0, status: "sending", lastError: nil, scheduledAt: nil),
-                RemoteQueuedPrompt(id: "i2", text: "second", imageCount: 2, resourceCount: 1, status: "pending", lastError: "boom", scheduledAt: Date(timeIntervalSince1970: 1_800_000_000)),
+                RemoteQueuedPrompt(id: "i2", text: "second", imageCount: 2, resourceCount: 1, status: "pending", lastError: "boom", scheduledAt: 1_800_000_000_000),
             ],
             steerUndoAvailable: true)
         #expect(try roundTrip(state) == state)

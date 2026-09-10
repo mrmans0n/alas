@@ -44,7 +44,7 @@ struct RemoteQueueProjectionTests {
         let deadline = Date(timeIntervalSince1970: 1_800_000_000)
         let projected = RemoteQueueProjection.project([item(text: "later", scheduledAt: deadline)])
 
-        #expect(projected[0].scheduledAt == deadline)
+        #expect(projected[0].scheduledAt == 1_800_000_000_000)
     }
 
     @Test func joinsMultipleTextBlocksAndCountsImages() {

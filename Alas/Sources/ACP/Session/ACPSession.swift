@@ -1492,6 +1492,10 @@ final class ACPSession: ObservableObject, Identifiable {
         if queue.indices.contains(src), queue[src].status == .sending { return }
         // If moving across the .sending head (index 0 when sending), refuse.
         if !queue.isEmpty, queue[0].status == .sending, dst == 0 { return }
+        if let firstScheduled = queue.firstIndex(where: { $0.status == .pending && $0.scheduledAt != nil }),
+           (queue[src].scheduledAt != nil || dst >= firstScheduled) {
+            return
+        }
         let item = queue.remove(at: src)
         queue.insert(item, at: min(dst, queue.count))
     }

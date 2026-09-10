@@ -64,6 +64,16 @@ struct ACPSessionQueueAPITests {
         #expect(s.queue.map { $0.blocks } == [[.text("b")], [.text("c")], [.text("a")]])
     }
 
+    @Test("moving a normal prompt cannot put it behind a scheduled prompt")
+    func moveKeepsNormalPromptsAheadOfScheduledPrompts() {
+        let s = mkSession()
+        s.enqueue(blocks: [.text("now")])
+        s.enqueueScheduled(blocks: [.text("later")], scheduledAt: .distantFuture)
+
+        s.moveInQueue(from: 0, to: 1)
+        #expect(s.queue.map(\.blocks) == [[.text("now")], [.text("later")]])
+    }
+
     @Test("move(from:to:) refuses to move a .sending head")
     func moveSendingNoop() {
         let s = mkSession()
