@@ -3,7 +3,17 @@ import Foundation
 import Observation
 import os
 
-enum RightPaneTab: String { case changes, files }
+enum RightPaneTab: String {
+    case changes, files, run
+
+    static func available(runTabEnabled: Bool) -> [Self] {
+        runTabEnabled ? [.changes, .files, .run] : [.changes, .files]
+    }
+
+    static func visible(_ tab: Self, runTabEnabled: Bool) -> Self {
+        tab == .run && !runTabEnabled ? .changes : tab
+    }
+}
 
 enum GGStackLoadState: Equatable {
     case inactive
@@ -975,7 +985,9 @@ final class RightPaneState: GGSplitCommitServicing {
             // ahead commits should stay on Changes so the Commits section
             // is visible. Applied exactly once; user toggles win thereafter.
             if !didInitDefaultTab {
-                if entries.isEmpty && commits.isEmpty && !tree.isEmpty {
+                // The tab bar is live before this first refresh lands, so only
+                // claim the default when the user hasn't already picked a tab.
+                if activeTab == .changes, entries.isEmpty, commits.isEmpty, !tree.isEmpty {
                     activeTab = .files
                 }
                 didInitDefaultTab = true

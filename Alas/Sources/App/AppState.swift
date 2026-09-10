@@ -71,6 +71,10 @@ final class AppState {
     var projectsManager: ProjectsManager
     private(set) var closedTabHistory = ClosedTabHistory()
     var runScriptFailureQueue = RunScriptFailureQueue()
+    /// Observed command lifecycles, keyed by worktree then script. Deliberately
+    /// separate from `tabs`: a run's outcome outlives its terminal shell, and a
+    /// live shell never implies a live command.
+    var runRecords = RunRecordStore()
     var selectedRunScriptFailure: RunScriptFailure?
     @ObservationIgnored var runScriptCompletionTasks: [String: (worktreeID: String, sessionID: String, location: RunScriptCaptureLocation, task: Task<Void, Never>)] = [:]
     @ObservationIgnored let runScriptCompletionWaiter: RunScriptCompletionWaiter

@@ -58,7 +58,11 @@ struct RightPaneView: View {
                         onToggleShowIgnored: {
                             state.config.files.showIgnored.toggle()
                             state.saveConfig()
-                        }
+                        },
+                        showRunTab: state.config.runTabEnabled,
+                        activeRunCount: state.runRecords
+                            .records(worktreeID: worktree.id)
+                            .count { $0.status.isActive }
                     )
 
                     if rps.hasLoadedSnapshot {
@@ -105,12 +109,20 @@ struct RightPaneView: View {
                                 onClearReveal: { rps.clearReveal() },
                                 worktreeRoot: rps.worktree.path
                             )
+                        case .run:
+                            RunTabView(state: state, worktree: worktree)
                         }
                     } else {
                         RightPaneLoadingSkeletonView(activeTab: rps.activeTab)
                     }
                 }
                 .sidebarChromeTheme(textContrast: override.textContrast)
+                .onChange(of: state.config.runTabEnabled) {
+                    rps.activeTab = RightPaneTab.visible(
+                        rps.activeTab,
+                        runTabEnabled: state.config.runTabEnabled
+                    )
+                }
                 // Host the discard confirmation here (not on ChangesTabView) so
                 // diff-tab Discard actions still present the alert when the right
                 // pane is on the Files tab — `requestDiscardFile` sets pending state

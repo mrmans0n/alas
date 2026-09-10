@@ -39,7 +39,8 @@ enum RunScriptStore {
                     displayName: meta.displayName,
                     onExit: meta.onExit,
                     cwd: meta.cwd,
-                    isExecutable: fm.isExecutableFile(atPath: url.path)
+                    isExecutable: fm.isExecutableFile(atPath: url.path),
+                    endpoint: meta.endpoint
                 )
             }
             .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }

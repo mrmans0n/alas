@@ -8,28 +8,22 @@ struct RightPaneTabBar: View {
     let onHidePane: () -> Void
     let showIgnored: Bool
     let onToggleShowIgnored: () -> Void
+    var showRunTab: Bool = false
+    /// Number of commands currently starting or running in this worktree.
+    var activeRunCount: Int = 0
 
     @Environment(\.theme) private var theme
 
     var body: some View {
         HStack(spacing: 8) {
-            HStack(spacing: 2) {
-                segment(.changes, icon: "diff", label: "Changes", count: changesCount)
-                segment(.files,   icon: "folder", label: "Files",  count: nil)
-                    .contextMenu {
-                        Toggle("Show ignored or excluded files", isOn: Binding(
-                            get: { showIgnored },
-                            set: { _ in onToggleShowIgnored() }
-                        ))
-                    }
+            // Three segments no longer fit beside the summary and hide button
+            // at the pane's 240pt minimum, so fall back to icon-only rather
+            // than truncating every label to an ellipsis.
+            ViewThatFits(in: .horizontal) {
+                segments(compact: false)
+                segments(compact: true)
             }
-            .padding(2)
-            .background(theme.color("seg-container-bg"))
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(theme.color("line"), lineWidth: 0.5)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .fixedSize()
 
             Spacer(minLength: 8)
             trailing
@@ -40,16 +34,53 @@ struct RightPaneTabBar: View {
         .windowDragHandle()
     }
 
-    private func segment(_ tab: RightPaneTab, icon: String, label: String, count: Int?) -> some View {
+    private func segments(compact: Bool) -> some View {
+        HStack(spacing: 2) {
+            segment(.changes, icon: "diff", label: "Changes", count: changesCount, compact: compact)
+            segment(.files, icon: "folder", label: "Files", count: nil, compact: compact)
+                .contextMenu {
+                    Toggle("Show ignored or excluded files", isOn: Binding(
+                        get: { showIgnored },
+                        set: { _ in onToggleShowIgnored() }
+                    ))
+                }
+            if RightPaneTab.available(runTabEnabled: showRunTab).contains(.run) {
+                segment(
+                    .run,
+                    icon: "play",
+                    label: "Run",
+                    count: activeRunCount > 0 ? activeRunCount : nil,
+                    compact: compact
+                )
+            }
+        }
+        .padding(2)
+        .background(theme.color("seg-container-bg"))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(theme.color("line"), lineWidth: 0.5)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func segment(
+        _ tab: RightPaneTab,
+        icon: String,
+        label: String,
+        count: Int?,
+        compact: Bool = false
+    ) -> some View {
         let isOn = activeTab == tab
         return Button {
             activeTab = tab
         } label: {
             HStack(spacing: 5) {
                 Icon(name: icon, size: 11, color: isOn ? theme.color("fg") : theme.color("fg-muted"))
-                Text(label)
-                    .font(.system(size: 11.5, weight: isOn ? .semibold : .medium))
-                    .foregroundColor(isOn ? theme.color("fg") : theme.color("fg-muted"))
+                if !compact {
+                    Text(label)
+                        .font(.system(size: 11.5, weight: isOn ? .semibold : .medium))
+                        .foregroundColor(isOn ? theme.color("fg") : theme.color("fg-muted"))
+                }
                 if let count {
                     Text("\(count)")
                         .font(.system(size: 10, weight: .semibold))
@@ -78,6 +109,8 @@ struct RightPaneTabBar: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .help(label)
+        .accessibilityLabel(label)
     }
 
     @ViewBuilder
@@ -92,7 +125,7 @@ struct RightPaneTabBar: View {
                 .font(.system(size: 11, design: .monospaced))
                 .padding(.trailing, 4)
             }
-        case .files:
+        case .files, .run:
             EmptyView()
         }
     }
