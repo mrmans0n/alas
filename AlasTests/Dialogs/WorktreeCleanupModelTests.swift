@@ -63,14 +63,17 @@ struct WorktreeCleanupModelTests {
     }
 
     @Test func confirmationNamesEveryWorktreeAndTheBranchPolicy() {
+        // Branch names deliberately avoid letters already present in the
+        // surrounding prose ("worktrees", "branches", "are removed") so the
+        // assertions can only pass if the bullet list is actually populated.
         let model = WorktreeCleanupModel.forTesting(candidates: [
-            candidate(branch: "a", verdict: .candidate(confidence: .high)),
-            candidate(branch: "b", verdict: .candidate(confidence: .medium)),
+            candidate(branch: "feature-alpha", verdict: .candidate(confidence: .high)),
+            candidate(branch: "feature-beta", verdict: .candidate(confidence: .medium)),
         ])
         model.keepBranches = false
         let message = model.confirmationMessage()
-        #expect(message.contains("a"))
-        #expect(message.contains("b"))
+        #expect(message.contains("feature-alpha"))
+        #expect(message.contains("feature-beta"))
         #expect(message.lowercased().contains("branch"))
 
         model.keepBranches = true
@@ -106,16 +109,51 @@ struct WorktreeCleanupModelTests {
 
     /// Rows that vanished from a rescan — typically because they were just
     /// deleted — must drop out of the selection rather than linger as ids
-    /// pointing at nothing.
+    /// pointing at nothing. Candidate "b" is `.dirty` — never in the default
+    /// selection — so its survival across the first rescan, and its absence
+    /// after the second, can only be explained by real intersection against
+    /// the manual selection, not by an implementation that always resets to
+    /// `defaultSelection`.
     @Test func rescanDropsSelectedRowsThatDisappeared() {
-        let model = WorktreeCleanupModel.forTesting(candidates: [
-            candidate(branch: "a", verdict: .candidate(confidence: .high)),
-            candidate(branch: "b", verdict: .candidate(confidence: .high)),
-        ])
+        let a = candidate(branch: "a", verdict: .candidate(confidence: .high))
+        let b = candidate(branch: "b", verdict: .dirty)
+        let model = WorktreeCleanupModel.forTesting(candidates: [a, b])
+        #expect(model.selectedIds == ["/tmp/wt-a"])
+
+        model.toggle("/tmp/wt-b")   // per-item override selects the dirty row
         #expect(model.selectedIds == ["/tmp/wt-a", "/tmp/wt-b"])
 
-        model.applyScanResult([candidate(branch: "a", verdict: .candidate(confidence: .high))])
+        model.applyScanResult([a, b])
+        #expect(model.selectedIds == ["/tmp/wt-a", "/tmp/wt-b"])
+
+        model.applyScanResult([a])
         #expect(model.selectedIds == ["/tmp/wt-a"])
+    }
+
+    /// Drives a rescan through `runScan()` itself, not `applyScanResult`
+    /// directly — this is the entry point the Refresh button and any
+    /// production rescan actually use, and `scanState` is `.scanning` for
+    /// the duration of the call, which is exactly what broke a prior
+    /// implementation that read `scanState` to decide whether to reconcile.
+    @Test func runScanThroughItsPublicEntryPointKeepsManualSelection() async {
+        let a = candidate(branch: "a", verdict: .candidate(confidence: .high))
+        let b = candidate(branch: "b", verdict: .candidate(confidence: .high))
+        let model = WorktreeCleanupModel(
+            projectId: "p",
+            keepBranches: false,
+            scan: { .success([a, b]) },
+            deleteBatch: { _, _ in [] },
+            archiveBatch: { _ in [] },
+            confirm: { _, _ in true }
+        )
+        await model.runScan()
+        #expect(model.selectedIds == ["/tmp/wt-a", "/tmp/wt-b"])
+
+        model.toggle("/tmp/wt-a")   // manual deselection, leaving only b
+        #expect(model.selectedIds == ["/tmp/wt-b"])
+
+        await model.runScan()       // a real rescan through the public API
+        #expect(model.selectedIds == ["/tmp/wt-b"])
     }
 
     @Test func selectedWorktreesFollowsDisplayOrder() {

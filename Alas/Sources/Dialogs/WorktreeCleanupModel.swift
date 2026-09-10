@@ -29,6 +29,12 @@ final class WorktreeCleanupModel {
     private let deleteBatch: ([Worktree], Bool) async -> [WorktreeBatchResult]
     private let archiveBatch: ([Worktree]) -> [WorktreeBatchResult]
     private let confirm: (String, String) -> Bool
+    /// Tracks whether a scan has ever completed, independent of the transient
+    /// `.scanning` state — `applyScanResult` uses this, not `scanState`, to
+    /// decide whether to reconcile against a manual selection or seed the
+    /// default one, since `scanState` is already `.scanning` by the time a
+    /// rescan's result comes back.
+    private var hasCompletedAScan = false
 
     init(
         projectId: String,
@@ -50,7 +56,6 @@ final class WorktreeCleanupModel {
 
     func runScan() async {
         scanState = .scanning
-        results = []
         switch await scan() {
         case .success(let candidates):
             applyScanResult(candidates)
@@ -61,12 +66,24 @@ final class WorktreeCleanupModel {
         }
     }
 
-    /// Applies a fresh scan, keeping any manual selection that still refers to
-    /// a row present in the new result, and adding newly-qualifying candidates.
+    /// User-triggered rescan — the sheet's Refresh button, and the initial
+    /// load. Clears any results from a prior batch action, since starting a
+    /// fresh manual scan means the user is done reviewing that outcome.
+    func refresh() async {
+        results = []
+        await runScan()
+    }
+
+    /// Applies a fresh scan. If a scan has completed before, keeps any manual
+    /// selection that still refers to a row present in the new result and is
+    /// still selectable, and drops rows that disappeared or are no longer
+    /// selectable — it never auto-selects newly-qualifying rows. Otherwise
+    /// (the very first scan) seeds the default selection.
     func applyScanResult(_ candidates: [WorktreeCleanupCandidate]) {
         let previousSelection = selectedIds
-        let hadResults = !scanState.candidates.isEmpty
+        let hadResults = hasCompletedAScan
         scanState = .loaded(candidates)
+        hasCompletedAScan = true
         if hadResults {
             let selectable = Set(candidates.filter(\.isSelectable).map(\.id))
             selectedIds = previousSelection.intersection(selectable)
