@@ -53,6 +53,12 @@ enum WorkspaceDefinitionSaveError: LocalizedError {
     }
 }
 
+struct PendingRunScriptLaunch: Equatable {
+    let id: UUID
+    let worktreeID: String
+    let scriptKey: String
+}
+
 @Observable
 @MainActor
 final class AppState {
@@ -166,10 +172,13 @@ final class AppState {
     /// async `Task` and removes on completion, closing the window where two
     /// rapid invocations (double-click, repeated Enter) would both see no
     /// registered tab yet and both launch — see `AppState+RunScripts.swift`.
+    /// The value carries structured identity because worktree ids can contain
+    /// `:`, so cancellation must not recover identities by splitting the key.
     @ObservationIgnored
-    var pendingScriptLaunches: [String: UUID] = [:]
+    var pendingScriptLaunches: [String: PendingRunScriptLaunch] = [:]
     @ObservationIgnored
     var pendingScriptLaunchTasks: [UUID: Task<Void, Never>] = [:]
+    var runScriptCatalogGeneration = 0
     let rightPaneStore = RightPaneStore()
     let harness = HarnessService()
     let mcpRegistrationRegistry = MCPRegistrationRegistry()

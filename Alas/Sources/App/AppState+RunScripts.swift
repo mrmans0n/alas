@@ -288,9 +288,9 @@ extension AppState {
     /// can't relabel a deliberate stop as a lost process.
     func stopScript(_ script: RunScript, in worktree: Worktree) {
         let launchKey = "\(worktree.id):\(script.key)"
-        if let pendingLaunchID = pendingScriptLaunches.removeValue(forKey: launchKey) {
+        if let pending = pendingScriptLaunches.removeValue(forKey: launchKey) {
             runRecords.markStopped(worktreeID: worktree.id, scriptKey: script.key, at: Date())
-            pendingScriptLaunchTasks.removeValue(forKey: pendingLaunchID)?.cancel()
+            pendingScriptLaunchTasks.removeValue(forKey: pending.id)?.cancel()
             return
         }
         guard let existing = scriptTab(for: script, in: worktree) else {
@@ -430,10 +430,14 @@ extension AppState {
         ))
 
         let launchID = UUID()
-        pendingScriptLaunches[launchKey] = launchID
+        pendingScriptLaunches[launchKey] = PendingRunScriptLaunch(
+            id: launchID,
+            worktreeID: worktree.id,
+            scriptKey: script.key
+        )
         let launchTask = Task { @MainActor in
             defer {
-                if pendingScriptLaunches[launchKey] == launchID {
+                if pendingScriptLaunches[launchKey]?.id == launchID {
                     pendingScriptLaunches.removeValue(forKey: launchKey)
                 }
                 pendingScriptLaunchTasks.removeValue(forKey: launchID)
@@ -700,12 +704,9 @@ extension AppState {
             return key.hasPrefix("\(worktreeID):")
         }
         for key in pendingKeys {
-            guard let launchID = pendingScriptLaunches.removeValue(forKey: key) else { continue }
-            pendingScriptLaunchTasks.removeValue(forKey: launchID)?.cancel()
-            guard let separator = key.firstIndex(of: ":") else { continue }
-            let keyWorktreeID = String(key[..<separator])
-            let scriptKey = String(key[key.index(after: separator)...])
-            runRecords.markStopped(worktreeID: keyWorktreeID, scriptKey: scriptKey, at: now)
+            guard let pending = pendingScriptLaunches.removeValue(forKey: key) else { continue }
+            pendingScriptLaunchTasks.removeValue(forKey: pending.id)?.cancel()
+            runRecords.markStopped(worktreeID: pending.worktreeID, scriptKey: pending.scriptKey, at: now)
         }
     }
 
@@ -808,6 +809,7 @@ extension AppState {
             )
         }
         pendingRunScriptCreation = nil
+        runScriptCatalogGeneration += 1
     }
 
     func cancelPendingRunScriptCreation() {

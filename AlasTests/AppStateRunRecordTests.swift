@@ -301,7 +301,11 @@ struct AppStateRunRecordTests {
         let task = Task<Void, Never> {
             try? await Task.sleep(for: .seconds(30))
         }
-        fixture.state.pendingScriptLaunches["\(fixture.worktree.id):\(fixture.script.key)"] = launchID
+        fixture.state.pendingScriptLaunches["\(fixture.worktree.id):\(fixture.script.key)"] = PendingRunScriptLaunch(
+            id: launchID,
+            worktreeID: fixture.worktree.id,
+            scriptKey: fixture.script.key
+        )
         fixture.state.pendingScriptLaunchTasks[launchID] = task
 
         fixture.state.closeAllTabs(worktreeId: fixture.worktree.id)
@@ -330,7 +334,11 @@ struct AppStateRunRecordTests {
         let task = Task<Void, Never> {
             try? await Task.sleep(for: .seconds(30))
         }
-        fixture.state.pendingScriptLaunches["\(fixture.worktree.id):\(fixture.script.key)"] = launchID
+        fixture.state.pendingScriptLaunches["\(fixture.worktree.id):\(fixture.script.key)"] = PendingRunScriptLaunch(
+            id: launchID,
+            worktreeID: fixture.worktree.id,
+            scriptKey: fixture.script.key
+        )
         fixture.state.pendingScriptLaunchTasks[launchID] = task
 
         fixture.state.terminateAllTerminalSessionsAfterConfirmationForTesting()
@@ -339,6 +347,38 @@ struct AppStateRunRecordTests {
         #expect(fixture.state.pendingScriptLaunchTasks.isEmpty)
         #expect(task.isCancelled)
         #expect(runRecord(fixture)?.status == .finished(.stopped))
+    }
+
+    @Test func pendingLaunchCancellationDoesNotParseWorktreeIDFromKey() throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let worktreeID = "repo:path:with:colons"
+        let record = RunRecord(
+            id: UUID().uuidString,
+            scriptKey: fixture.script.key,
+            scriptName: fixture.script.displayName,
+            worktreeID: worktreeID,
+            branch: fixture.worktree.branch,
+            target: fixture.state.runExecutionTarget(for: fixture.script, in: fixture.worktree),
+            status: .starting,
+            startedAt: Date()
+        )
+        fixture.state.runRecords.begin(record)
+        let launchID = UUID()
+        let task = Task<Void, Never> {
+            try? await Task.sleep(for: .seconds(30))
+        }
+        fixture.state.pendingScriptLaunches["\(worktreeID):\(fixture.script.key)"] = PendingRunScriptLaunch(
+            id: launchID,
+            worktreeID: worktreeID,
+            scriptKey: fixture.script.key
+        )
+        fixture.state.pendingScriptLaunchTasks[launchID] = task
+
+        fixture.state.cancelPendingRunScriptLaunches(worktreeID: worktreeID)
+
+        #expect(task.isCancelled)
+        #expect(fixture.state.runRecords.record(worktreeID: worktreeID, scriptKey: fixture.script.key)?.status == .finished(.stopped))
     }
 
     @Test func interruptedRunBecomesUnknownRatherThanSucceeded() async throws {

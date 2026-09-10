@@ -56,6 +56,10 @@ struct RunTabView: View {
             now = Date()
         }
         .onReceive(ticker) { now = $0 }
+        .onChange(of: state.runScriptCatalogGeneration) {
+            refreshScripts()
+            hasScanned = true
+        }
     }
 
     private func presentation(for script: RunScript) -> RunRowPresentation {
@@ -81,6 +85,8 @@ struct RunTabView: View {
         switch action {
         case .start:
             if case .finished? = state.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status {
+                state.restartScript(script, in: worktree)
+            } else if state.scriptTab(for: script, in: worktree) != nil {
                 state.restartScript(script, in: worktree)
             } else {
                 state.runOrFocusScript(script, in: worktree)
