@@ -948,7 +948,9 @@ extension ACPSessionStore {
                   let payload = row["payload"] as? Data,
                   let items = try? JSONDecoder().decode([QueuedPrompt].self, from: payload),
                   items.contains(where: {
-                      $0.status == .pending && $0.lastError == nil && $0.scheduledAt != nil
+                      ($0.status == .pending || $0.status == .sending)
+                          && $0.lastError == nil
+                          && $0.scheduledAt != nil
                   })
             else { return nil }
             return sessionId
