@@ -6617,15 +6617,15 @@ final class AppState {
         }) {
             return activePromptCleanupDelay
         }
+        if manager.retainedCleanupHasForkBarrierWork(for: sessionId) {
+            return .seconds(30)
+        }
         guard let nextScheduledAt else { return nil }
         let secondsUntilScheduledSend = nextScheduledAt.timeIntervalSinceNow
         if case .disconnected = session.agentState, secondsUntilScheduledSend <= 0 {
             return .seconds(30)
         }
         if case .spawning = session.agentState, secondsUntilScheduledSend <= 0 {
-            return .seconds(30)
-        }
-        if manager.retainedCleanupHasForkBarrierWork(for: sessionId), secondsUntilScheduledSend <= 0 {
             return .seconds(30)
         }
         guard secondsUntilScheduledSend > 0 else { return activePromptCleanupDelay }
