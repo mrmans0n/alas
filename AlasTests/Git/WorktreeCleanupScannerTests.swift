@@ -1,0 +1,192 @@
+import Testing
+import Foundation
+@testable import Alas
+
+struct WorktreeCleanupScannerTests {
+    private static let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+    private static func project(host: String? = nil) -> ProjectConfig {
+        ProjectConfig(
+            id: "p",
+            name: "alas",
+            path: "/tmp/repo",
+            color: "blue",
+            addedAt: now,
+            host: host
+        )
+    }
+
+    private static func worktree(branch: String, isMain: Bool = false) -> Worktree {
+        Worktree(
+            id: "/tmp/wt-\(branch)",
+            projectId: "p",
+            name: branch,
+            branch: branch,
+            path: URL(fileURLWithPath: "/tmp/wt-\(branch)"),
+            isMainWorktree: isMain,
+            status: .clean,
+            lastActivity: now.addingTimeInterval(-30 * 86_400)
+        )
+    }
+
+    private static let cleanFacts = WorktreeCleanupGitFacts(
+        hasUncommittedChanges: false,
+        hasUntrackedFiles: false,
+        unpushedCommitCount: 0,
+        stashCount: 0,
+        isMergedLocally: false
+    )
+
+    private static func scanner(
+        facts: @escaping @Sendable (Worktree) async -> WorktreeCleanupGitFacts = { _ in cleanFacts },
+        mergeIndex: @escaping @Sendable (ProjectConfig) async -> Result<WorktreeForgeMergeIndex, Error> = { _ in
+            .success(WorktreeForgeMergeIndex(refsByHeadBranch: [:]))
+        },
+        activeSessionCount: @escaping @Sendable (String) async -> Int = { _ in 0 },
+        operationInFlight: @escaping @Sendable (String) async -> Bool = { _ in false }
+    ) -> WorktreeCleanupScanner {
+        WorktreeCleanupScanner(
+            dependencies: WorktreeCleanupScanner.Dependencies(
+                gitFacts: facts,
+                mergeIndex: mergeIndex,
+                activeSessionCount: activeSessionCount,
+                operationInFlight: operationInFlight
+            )
+        )
+    }
+
+    private static func scan(
+        _ scanner: WorktreeCleanupScanner,
+        project: ProjectConfig = project(),
+        worktrees: [Worktree]
+    ) async -> [WorktreeCleanupCandidate] {
+        await scanner.scan(
+            project: project,
+            worktrees: worktrees,
+            baseBranch: "main",
+            now: now,
+            idleThresholdDays: 14
+        )
+    }
+
+    @Test func forgeIndexIsAppliedByHeadRefName() async {
+        let ref = MergedReviewRequestRef(
+            number: 42,
+            headRefName: "feature/a",
+            url: URL(string: "https://github.com/o/r/pull/42")!
+        )
+        let scanner = Self.scanner(mergeIndex: { _ in
+            .success(WorktreeForgeMergeIndex(refsByHeadBranch: ["feature/a": ref]))
+        })
+        let results = await Self.scan(
+            scanner,
+            worktrees: [Self.worktree(branch: "feature/a")]
+        )
+        #expect(results[0].verdict == .candidate(confidence: .high))
+        #expect(results[0].signals.contains(
+            .mergedOnForge(identity: "#42", url: ref.url)
+        ))
+    }
+
+    /// The core degradation rule: a forge failure must not manufacture a
+    /// "not merged" answer.
+    @Test func forgeFailureYieldsUnknownNotNotMerged() async {
+        let scanner = Self.scanner(mergeIndex: { _ in
+            .failure(CodeHostProviderError.cliMissing("gh"))
+        })
+        let results = await Self.scan(
+            scanner,
+            worktrees: [Self.worktree(branch: "feature/a")]
+        )
+        #expect(!results[0].signals.contains(.notMerged))
+        #expect(results[0].signals.contains { signal in
+            if case .mergeStateUnknown = signal { return true } else { return false }
+        })
+    }
+
+    /// A local merge-base check that succeeded is still reported, even when the
+    /// forge could not be reached — the two checks are independent.
+    @Test func localMergeSurvivesForgeFailure() async {
+        var facts = Self.cleanFacts
+        facts.isMergedLocally = true
+        let scanner = Self.scanner(
+            facts: { _ in facts },
+            mergeIndex: { _ in .failure(CodeHostProviderError.cliMissing("gh")) }
+        )
+        let results = await Self.scan(
+            scanner,
+            worktrees: [Self.worktree(branch: "feature/a")]
+        )
+        #expect(results[0].verdict == .candidate(confidence: .medium))
+        #expect(results[0].signals.contains(.mergedLocally(base: "main")))
+    }
+
+    @Test func branchAbsentFromForgeIndexIsNotMerged() async {
+        let scanner = Self.scanner(mergeIndex: { _ in
+            .success(WorktreeForgeMergeIndex(refsByHeadBranch: [:]))
+        })
+        let results = await Self.scan(
+            scanner,
+            worktrees: [Self.worktree(branch: "feature/a")]
+        )
+        #expect(results[0].signals.contains(.notMerged))
+        #expect(results[0].verdict == .active)
+    }
+
+    @Test func sshProjectShortCircuitsWithoutProbing() async {
+        let probeCount = ProbeCounter()
+        let scanner = Self.scanner(facts: { _ in
+            await probeCount.increment()
+            return Self.cleanFacts
+        })
+        let results = await Self.scan(
+            scanner,
+            project: Self.project(host: "devbox"),
+            worktrees: [Self.worktree(branch: "feature/a")]
+        )
+        #expect(results[0].verdict == .excluded)
+        #expect(results[0].signals.contains(.remoteWorktree))
+        #expect(await probeCount.value == 0)
+    }
+
+    @Test func activeSessionsAreCarriedIntoTheProbe() async {
+        let scanner = Self.scanner(activeSessionCount: { _ in 2 })
+        let results = await Self.scan(
+            scanner,
+            worktrees: [Self.worktree(branch: "feature/a")]
+        )
+        #expect(results[0].verdict == .busy)
+        #expect(results[0].signals.contains(.activeSessions(count: 2)))
+    }
+
+    @Test func resultsPreserveInputOrder() async {
+        let scanner = Self.scanner()
+        let worktrees = ["a", "b", "c"].map { Self.worktree(branch: "feature/\($0)") }
+        let results = await Self.scan(scanner, worktrees: worktrees)
+        #expect(results.map(\.worktree.branch)
+                == ["feature/a", "feature/b", "feature/c"])
+    }
+
+    @Test func statusPorcelainDistinguishesUntrackedFromModified() {
+        let modified = WorktreeCleanupScanner.parseStatusPorcelain(" M Sources/A.swift\n")
+        #expect(modified.hasUncommittedChanges)
+        #expect(!modified.hasUntrackedFiles)
+
+        let untracked = WorktreeCleanupScanner.parseStatusPorcelain("?? notes.txt\n")
+        #expect(!untracked.hasUncommittedChanges)
+        #expect(untracked.hasUntrackedFiles)
+
+        let both = WorktreeCleanupScanner.parseStatusPorcelain("M  A.swift\n?? B.swift\n")
+        #expect(both.hasUncommittedChanges)
+        #expect(both.hasUntrackedFiles)
+
+        let clean = WorktreeCleanupScanner.parseStatusPorcelain("")
+        #expect(!clean.hasUncommittedChanges)
+        #expect(!clean.hasUntrackedFiles)
+    }
+}
+
+private actor ProbeCounter {
+    private(set) var value = 0
+    func increment() { value += 1 }
+}
