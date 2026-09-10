@@ -618,13 +618,17 @@ function renderChanges() {
 
   for (const section of sections) {
     list.append(el("h2", "changes-section-title", section.title));
-    for (const file of section.files || []) {
-      const parts = RemoteChangesView.splitPath(file.path);
+    for (const item of RemoteChangesView.fileRows(section.files)) {
+      if (item.type === "directory") {
+        list.append(el("div", "change-directory", item.dir));
+        continue;
+      }
+      const file = item.file;
       const row = document.createElement("button");
       row.type = "button";
-      row.className = "change-row";
+      row.className = "change-row" + (item.dir ? " change-row-nested" : "");
       row.onclick = () => openDiff(file.path, section.stage || null);
-      row.append(el("span", "change-dir", parts.dir), el("span", "change-name", parts.name));
+      row.append(el("span", "change-name", item.name));
       if (file.conflict) row.append(el("span", "change-conflict", "conflict"));
       row.append(el("span", "change-status", file.status));
       const counts = el("span", "change-counts");
