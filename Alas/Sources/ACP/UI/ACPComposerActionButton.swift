@@ -108,8 +108,10 @@ struct ACPComposerActionButton: View {
                     Spacer()
                     Button("Cancel") { showsCustomSchedule = false }
                     Button("Schedule") {
-                        onSchedule(customScheduleDate)
-                        showsCustomSchedule = false
+                        if customScheduleDate > Date() {
+                            onSchedule(customScheduleDate)
+                            showsCustomSchedule = false
+                        }
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(customScheduleDate <= Date())

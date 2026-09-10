@@ -6480,6 +6480,9 @@ final class AppState {
 
     private func cleanupACPSession(owner: SessionOwnerID, sessionId: String) {
         guard let manager = acpManagers[owner] else { return }
+        if manager.liveSession(for: sessionId)?.queue.contains(where: { $0.status == .pending && $0.scheduledAt != nil }) == true {
+            return
+        }
         // Flush any in-flight debounced draft write for this session
         // before the tab goes away. The manager itself stays alive
         // (other tabs may share it), so the global flush from
