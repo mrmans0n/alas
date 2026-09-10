@@ -3152,6 +3152,7 @@ $("gate-retry").onclick = retryConnection;
 // keyboard) and keep the transcript pinned to the bottom as it resizes.
 const vp = window.visualViewport;
 if (vp) {
+  let isTrackingViewport = false;
   const syncViewport = () => {
     // Pin the fixed shell to the visual viewport's box: height shrinks for the
     // keyboard, and top follows offsetTop so the shell doesn't slide off-screen
@@ -3161,12 +3162,16 @@ if (vp) {
     const box = $("messages");
     if (box) box.scrollTop = box.scrollHeight;
   };
-  vp.addEventListener("resize", syncViewport);
-  vp.addEventListener("scroll", syncViewport);
+  const beginViewportTracking = () => {
+    if (isTrackingViewport) return;
+    isTrackingViewport = true;
+    vp.addEventListener("resize", syncViewport);
+    vp.addEventListener("scroll", syncViewport);
+  };
   // Safari can report a transiently short visual viewport while its browser
   // chrome settles on initial load. Only take over the CSS viewport once the
   // composer needs keyboard tracking.
-  $("prompt").addEventListener("focus", syncViewport);
+  $("prompt").addEventListener("focus", beginViewportTracking);
 }
 
 setStatus("Connecting…", "connecting");

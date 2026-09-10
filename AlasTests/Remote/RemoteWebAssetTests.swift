@@ -49,12 +49,12 @@ struct RemoteWebAssetTests {
         let sw = try asset("sw.js")
 
         #expect(html.contains(#"/session-ordering.js?v=1"#))
-        #expect(html.range(of: #"/session-ordering.js?v=1"#)!.lowerBound < html.range(of: #"/app.js?v=77"#)!.lowerBound)
-        #expect(html.contains(#"/app.js?v=77"#))
+        #expect(html.range(of: #"/session-ordering.js?v=1"#)!.lowerBound < html.range(of: #"/app.js?v=78"#)!.lowerBound)
+        #expect(html.contains(#"/app.js?v=78"#))
         #expect(html.contains(#"/style.css?v=44"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v57";"#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v58";"#))
         #expect(sw.contains(#""/session-ordering.js?v=1""#))
-        #expect(sw.contains(#""/app.js?v=77""#))
+        #expect(sw.contains(#""/app.js?v=78""#))
         #expect(sw.contains(#""/style.css?v=44""#))
     }
 
@@ -68,10 +68,10 @@ struct RemoteWebAssetTests {
         #expect(app.contains("toggle.tabIndex = 0"))
         #expect(app.contains("function handleCardToggleKeydown"))
         #expect(!app.contains(#"const button = el("button", "tool-toggle")"#))
-        #expect(html.contains(#"/app.js?v=77"#))
+        #expect(html.contains(#"/app.js?v=78"#))
         #expect(html.contains(#"/style.css?v=44"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v57";"#))
-        #expect(sw.contains(#""/app.js?v=77""#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v58";"#))
+        #expect(sw.contains(#""/app.js?v=78""#))
         #expect(sw.contains(#""/style.css?v=44""#))
     }
 
@@ -119,7 +119,7 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".session-section"))
         #expect(css.contains(".session-section-title"))
         #expect(css.contains(".session-section-list"))
-        #expect(html.contains("/app.js?v=77"))
+        #expect(html.contains("/app.js?v=78"))
         #expect(html.contains("/style.css?v=44"))
     }
 
@@ -147,7 +147,7 @@ struct RemoteWebAssetTests {
         #expect(css.contains("#detail-title { display: none; }"))
         #expect(!css.contains("#detail-title, #detail-rename { display: none; }"))
         #expect(css.contains(".sheet-input"))
-        #expect(sw.contains(#""/app.js?v=77""#))
+        #expect(sw.contains(#""/app.js?v=78""#))
         #expect(sw.contains(#""/style.css?v=44""#))
     }
 
@@ -198,7 +198,7 @@ struct RemoteWebAssetTests {
         let sw = try asset("sw.js")
 
         #expect(html.contains(#"/worktree-creation.js?v=1"#))
-        #expect(html.range(of: #"/worktree-creation.js?v=1"#)!.lowerBound < html.range(of: #"/app.js?v=77"#)!.lowerBound)
+        #expect(html.range(of: #"/worktree-creation.js?v=1"#)!.lowerBound < html.range(of: #"/app.js?v=78"#)!.lowerBound)
         #expect(js.contains("const worktreeCreation = RemoteWorktreeCreation.createFlow(send);"))
         #expect(js.contains(#"case "projectList":"#))
         #expect(js.contains(#"case "branchList":"#))
@@ -323,12 +323,18 @@ struct RemoteWebAssetTests {
     // Regression: syncing the fixed shell to visualViewport immediately during
     // page load can capture Safari's transient, shorter viewport before its
     // toolbar settles, leaving an unpainted strip above the browser controls.
-    @Test func remoteWebDoesNotApplyVisualViewportHeightUntilInputFocus() throws {
+    @Test func remoteWebDoesNotTrackVisualViewportUntilInputFocus() throws {
         let js = try asset("app.js")
         let viewportSetup = try #require(js.range(of: "const vp = window.visualViewport;").map { js[$0.lowerBound...] })
 
-        #expect(viewportSetup.contains(#"$("prompt").addEventListener("focus", syncViewport);"#))
-        #expect(!viewportSetup.contains("  syncViewport();\n}"))
+        #expect(viewportSetup.contains("const beginViewportTracking = () =>"))
+        #expect(viewportSetup.contains(#"$("prompt").addEventListener("focus", beginViewportTracking);"#))
+        let trackingStart = try #require(viewportSetup.range(of: "const beginViewportTracking = () =>")?.lowerBound)
+        #expect(!viewportSetup[..<trackingStart].contains(#"vp.addEventListener("resize", syncViewport);"#))
+        #expect(!viewportSetup[..<trackingStart].contains(#"vp.addEventListener("scroll", syncViewport);"#))
+        let trackingSetup = viewportSetup[trackingStart...]
+        #expect(trackingSetup.contains(#"vp.addEventListener("resize", syncViewport);"#))
+        #expect(trackingSetup.contains(#"vp.addEventListener("scroll", syncViewport);"#))
     }
 
     @Test func remoteWebSpeaksIncrementalTranscriptProtocol() throws {
@@ -347,9 +353,9 @@ struct RemoteWebAssetTests {
     @Test func incrementalTranscriptBustsServiceWorkerAssetCache() throws {
         let sw = try asset("sw.js")
         let html = try asset("index.html")
-        #expect(sw.contains("alas-remote-shell-v57"))
-        #expect(sw.contains("/app.js?v=77"))
-        #expect(html.contains("app.js?v=77"))
+        #expect(sw.contains("alas-remote-shell-v58"))
+        #expect(sw.contains("/app.js?v=78"))
+        #expect(html.contains("app.js?v=78"))
     }
 
     // Regression (codex review, PR #775): applyPage used to clear the
@@ -512,10 +518,10 @@ struct RemoteWebAssetTests {
         let html = try asset("index.html")
         let sw = try asset("sw.js")
 
-        #expect(html.contains(#"/app.js?v=77"#))
+        #expect(html.contains(#"/app.js?v=78"#))
         #expect(html.contains(#"/style.css?v=44"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v57";"#))
-        #expect(sw.contains(#""/app.js?v=77""#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v58";"#))
+        #expect(sw.contains(#""/app.js?v=78""#))
         #expect(sw.contains(#""/style.css?v=44""#))
     }
 
@@ -549,9 +555,9 @@ struct RemoteWebAssetTests {
         #expect(html.contains(#"/changes-view.js?v=6"#))
         #expect(html.contains(#"/file-browser.js?v=3"#))
         #expect(html.range(of: #"/changes-view.js?v=6"#)!.lowerBound
-            < html.range(of: #"/app.js?v=77"#)!.lowerBound)
+            < html.range(of: #"/app.js?v=78"#)!.lowerBound)
         #expect(html.range(of: #"/file-browser.js?v=3"#)!.lowerBound
-            < html.range(of: #"/app.js?v=77"#)!.lowerBound)
+            < html.range(of: #"/app.js?v=78"#)!.lowerBound)
         #expect(sw.contains(#""/changes-view.js?v=6""#))
         #expect(sw.contains(#""/file-browser.js?v=3""#))
     }
