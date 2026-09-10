@@ -3163,7 +3163,10 @@ if (vp) {
   };
   vp.addEventListener("resize", syncViewport);
   vp.addEventListener("scroll", syncViewport);
-  syncViewport();
+  // Safari can report a transiently short visual viewport while its browser
+  // chrome settles on initial load. Only take over the CSS viewport once the
+  // composer needs keyboard tracking.
+  $("prompt").addEventListener("focus", syncViewport);
 }
 
 setStatus("Connecting…", "connecting");
