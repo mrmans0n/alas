@@ -379,6 +379,63 @@ struct RunScriptLaunchTests {
     }
 
     @MainActor
+    @Test func cancelledTerminalPreparationDoesNotOpenTerminal() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let project = ProjectConfig(id: "project", name: "Project", path: dir.path, color: "blue", addedAt: Date())
+        let worktree = Worktree(
+            id: "wt", projectId: project.id, name: "main", branch: "main",
+            path: dir, status: .clean, lastActivity: Date()
+        )
+
+        var openCount = 0
+        let state = AppState(
+            store: MemoryStore(),
+            terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
+                openCount += 1
+                return AppState.OpenedTerminalSession(id: "session-\(openCount)", foregroundPid: { nil })
+            }
+        )
+        state.projectsManager = ProjectsManager(persistedProjects: [project])
+
+        final class Gate {
+            var continuation: CheckedContinuation<Void, Never>?
+
+            func wait() async {
+                await withCheckedContinuation { continuation in
+                    self.continuation = continuation
+                }
+            }
+
+            func open() {
+                continuation?.resume()
+            }
+        }
+
+        let gate = Gate()
+        let task = Task { @MainActor in
+            await gate.wait()
+            return try await state.openTerminalTabPreparingRemoteZmxIfNeeded(for: worktree)
+        }
+        while gate.continuation == nil {
+            await Task.yield()
+        }
+        task.cancel()
+        gate.open()
+
+        do {
+            _ = try await task.value
+            Issue.record("expected terminal launch to be cancelled")
+        } catch is CancellationError {
+            // Expected: cancellation must be observed before opening a terminal.
+        }
+
+        #expect(openCount == 0)
+        #expect(state.tabs.tabs(forWorktree: worktree.id).isEmpty)
+    }
+
+    @MainActor
     @Test func nonZeroRunCreatesFailureWithSanitizedOutput() async throws {
         let fixture = try makeAppStateFixture(waiter: { _ in
             RunScriptCompletion(

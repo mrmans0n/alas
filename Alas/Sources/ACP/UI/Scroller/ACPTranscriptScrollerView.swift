@@ -280,8 +280,10 @@ final class ACPTranscriptScrollerView: NSScrollView {
     /// next user scroll happens to correct it.
     func applyPrepend(delta: CGFloat, newDocumentHeight: CGFloat) {
         performProgrammatic {
-            flippedDocumentView.frame.size.height = newDocumentHeight
+            // Shrinking the document can synchronously clamp the clip view.
+            // Compensation must start from the position before that clamp.
             let origin = contentView.bounds.origin
+            flippedDocumentView.frame.size.height = newDocumentHeight
             contentView.setBoundsOrigin(NSPoint(x: origin.x, y: clampedScrollY(origin.y + delta)))
             reflectScrolledClipView(contentView)
         }

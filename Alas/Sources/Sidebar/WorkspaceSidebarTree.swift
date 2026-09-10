@@ -17,6 +17,8 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
     @State private var deletionConfirmation: PendingDeletionConfirmation?
     @State private var workspaceDeletionConfirmation: PendingWorkspaceDefinitionDeletion?
     @State private var repairPlan: PendingRepairPlan?
+    @State private var hoveringWorkspaceID: UUID?
+    @State private var plusHoveringWorkspaceID: UUID?
 
     var body: some View {
         let members = state.spacesManager.activeSpace?.members
@@ -121,6 +123,9 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
         let collapsed = collapsedWorkspaces.contains(workspace.id)
         let selected = state.workspaceNavigationState.selectedWorkspaceID == workspace.id
             && state.workspaceNavigationState.selectedCheckoutID == nil
+        let hovering = hoveringWorkspaceID == workspace.id
+        let plusHovering = plusHoveringWorkspaceID == workspace.id
+        let checkoutCount = state.workspacesManager.checkouts.count { $0.workspaceID == workspace.id }
         return HStack(spacing: 7) {
             Button {
                 if collapsed { collapsedWorkspaces.remove(workspace.id) }
@@ -146,9 +151,32 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
             }
             .buttonStyle(.plain)
             .help(workspace.name)
-            ToolbarBtn(icon: "plus", tooltip: "New checkout in \(workspace.name)") {
-                creatingCheckout = workspace
+            ZStack {
+                Text("\(checkoutCount)")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(theme.color("fg-faint"))
+                    .monospacedDigit()
+                    .opacity(hovering ? 0 : 1)
+                    .allowsHitTesting(false)
+                Button {
+                    creatingCheckout = workspace
+                } label: {
+                    Icon(
+                        name: "plus",
+                        size: 11,
+                        color: plusHovering ? theme.color("fg") : theme.color("fg-faint")
+                    )
+                    .frame(width: 18, height: 18)
+                    .background(plusHovering ? theme.color("bg-4") : .clear)
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                }
+                .buttonStyle(.plain)
+                .onHover { plusHoveringWorkspaceID = $0 ? workspace.id : nil }
+                .help("New checkout in \(workspace.name)")
+                .opacity(hovering ? 1 : 0)
+                .allowsHitTesting(hovering)
             }
+            .frame(width: 18, height: 18)
         }
         .padding(.leading, 6)
         .padding(.trailing, 8)
@@ -163,6 +191,7 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
             }
         }
         .padding(.horizontal, 6)
+        .onHover { hoveringWorkspaceID = $0 ? workspace.id : nil }
         .contextMenu {
             Button("New checkout...", systemImage: "plus") { creatingCheckout = workspace }
             Button("Edit workspace...", systemImage: "pencil") { editingWorkspace = workspace }

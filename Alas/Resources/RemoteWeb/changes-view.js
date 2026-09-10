@@ -13,6 +13,27 @@ function splitPath(path) {
   return { dir: value.slice(0, index + 1), name: value.slice(index + 1) };
 }
 
+function fileRows(files) {
+  const rows = [];
+  let previousDirectory = null;
+  const sortedByDirectory = (files || []).slice().sort((a, b) => {
+    const aParts = splitPath(a.path);
+    const bParts = splitPath(b.path);
+    if (aParts.dir < bParts.dir) return -1;
+    if (aParts.dir > bParts.dir) return 1;
+    return aParts.name < bParts.name ? -1 : aParts.name > bParts.name ? 1 : 0;
+  });
+  for (const file of sortedByDirectory) {
+    const parts = splitPath(file.path);
+    if (parts.dir && parts.dir !== previousDirectory) {
+      rows.push({ type: "directory", dir: parts.dir.slice(0, -1) });
+    }
+    rows.push({ type: "file", file, path: file.path, dir: parts.dir, name: parts.name });
+    previousDirectory = parts.dir;
+  }
+  return rows;
+}
+
 function formatFileCounts(file) {
   const add = file && file.add ? file.add : 0;
   const del = file && file.del ? file.del : 0;
@@ -94,6 +115,7 @@ function metadataOnlyNotice(hunks, metadataNote) {
 globalThis.RemoteChangesView = {
   sortFiles,
   splitPath,
+  fileRows,
   changeSections,
   formatSummary,
   formatFileCounts,

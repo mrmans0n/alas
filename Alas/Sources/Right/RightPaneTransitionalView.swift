@@ -100,7 +100,7 @@ struct RightPaneLoadingSkeletonView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
-        case .files:
+        case .files, .run:
             VStack(alignment: .leading, spacing: 6) {
                 SkeletonRow(widthFraction: 0.6,  leadingInset: 0)
                 SkeletonRow(widthFraction: 0.5,  leadingInset: 16)

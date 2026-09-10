@@ -117,6 +117,10 @@ private final class RowBuildCounter {
 @MainActor
 @Suite("ACPTranscriptScrollerReconciler apply")
 struct ACPTranscriptScrollerReconcilerApplyTests {
+    private final class ElasticClipView: NSClipView {
+        override func constrainBoundsRect(_ proposedBounds: NSRect) -> NSRect { proposedBounds }
+    }
+
     private struct CountingToken: Equatable {
         var revision = 0
         let recordComparison: () -> Void
@@ -150,6 +154,45 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
             reconciler.layoutMountedRowsForScroll()
         }
 
+        #expect(comparisons == 0)
+    }
+
+    @Test("elastic rebound preserves mounted rows without revisiting content", arguments: [false, true])
+    func elasticReboundSkipsRowWork(atBottom: Bool) {
+        let (reconciler, scroller, _) = makeStack()
+        // Allow the out-of-bounds positions AppKit uses during elastic scrolling.
+        scroller.contentView = ElasticClipView(frame: scroller.contentView.frame)
+        scroller.documentView = scroller.flippedDocumentView
+        let builds = RowBuildCounter()
+        var comparisons = 0
+        let specs = (0..<100).map { index in
+            ACPTranscriptRowSpec(
+                id: "r\(index)",
+                equalityToken: ACPRowEqualityToken(CountingToken { comparisons += 1 }),
+                build: {
+                    builds.record("r\(index)")
+                    return AnyView(Color.clear.frame(height: 100))
+                }
+            )
+        }
+        reconciler.apply(specs: specs, contentWidth: 600, followsTail: false)
+        let edge = atBottom ? scroller.contentHeight - scroller.viewportHeight : 0
+        scroller.setScrollY(edge)
+        reconciler.layoutMountedRowsForScroll()
+        let mounted = reconciler.mountedRowIdsForTesting
+        let initialBuilds = builds.counts
+        comparisons = 0
+
+        for overshoot in [40, 100, 180, 100, 40, 0] {
+            let y = edge + CGFloat(atBottom ? overshoot : -overshoot)
+            scroller.contentView.setBoundsOrigin(NSPoint(x: 0, y: y))
+            reconciler.noteUserScroll()
+            reconciler.layoutMountedRowsForScroll()
+            #expect(scroller.scrollY == y, "row layout must leave the native bounce alone")
+            #expect(reconciler.mountedRowIdsForTesting == mounted)
+        }
+
+        #expect(builds.counts == initialBuilds)
         #expect(comparisons == 0)
     }
 
@@ -608,6 +651,38 @@ struct ACPTranscriptScrollerReconcilerApplyTests {
 
         #expect(tiling.row(withId: "r0")!.height == 250)
         #expect(scroller.scrollY > scrollYBefore)
+    }
+
+    @Test("a row shrinking above a reader near the bottom preserves the visible content")
+    func shrinkingRowAboveViewportPreservesPosition() {
+        let (reconciler, scroller, tiling, pool) = makeStackWithPool()
+        let specs = (0..<10).map { spec("r\($0)", height: $0 == 0 ? 300 : 100) }
+        reconciler.apply(specs: specs, contentWidth: 600, followsTail: false)
+        scroller.setScrollY(scroller.contentHeight - scroller.viewportHeight - 40)
+        let offsetBefore = screenOffset(of: "r8", tiling: tiling, scroller: scroller)
+
+        let (view, _) = pool.view(for: specs[0])
+        view.updateRootView(AnyView(Color.clear.frame(height: 100)))
+        reconciler.remeasureRow(id: "r0")
+
+        #expect(tiling.row(withId: "r0")?.height == 100)
+        #expect(abs(screenOffset(of: "r8", tiling: tiling, scroller: scroller) - offsetBefore) < 0.5)
+        #expect(abs(scroller.distanceFromBottom - 40) < 0.5)
+    }
+
+    @Test("resuming tail-follow measures changed offscreen rows before settling at the bottom")
+    func resumeTailFollowWithChangedOffscreenRow() {
+        let (reconciler, scroller, tiling) = makeStack()
+        let specs = (0..<100).map { spec("r\($0)") }
+        reconciler.apply(specs: specs, contentWidth: 600, followsTail: false)
+        #expect(!reconciler.mountedRowIdsForTesting.contains("r99"))
+        var updated = specs
+        updated[99] = spec("r99", token: 1, height: 300)
+
+        reconciler.apply(specs: updated, contentWidth: 600, followsTail: true)
+
+        #expect(tiling.row(withId: "r99")?.height == 300)
+        #expect(scroller.distanceFromBottom < 0.5)
     }
 
     @Test("remeasureRow re-pins to the bottom when a mounted tail row grows while following the tail")

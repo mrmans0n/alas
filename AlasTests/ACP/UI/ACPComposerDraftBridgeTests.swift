@@ -423,7 +423,7 @@ struct ACPComposerDraftBridgeTests {
         // Regression: the inversion was previously applied to ALL submits
         // upstream of the composer, including the toolbar send button.
         // With `acpSendOnEnter = false`, a plain ↑ click would have been
-        // converted to `.steer` (cancel + discard) instead of `.auto`
+        // converted to `.steer` (cancel + immediate send) instead of `.auto`
         // (queue/send). The fix moves the keyboard inversion INTO the
         // coordinator's `doCommandBy`; `submit(_:intent:)` (which the
         // button calls via `actions.submitWithIntent`) emits the intent
