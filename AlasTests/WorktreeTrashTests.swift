@@ -207,7 +207,10 @@ struct WorktreeTrashTests {
 
         try WorktreeTrashCleaner.launch(ticket, delaySeconds: 0)
         let deadline = Date().addingTimeInterval(5)
-        while FileManager.default.fileExists(atPath: ticket.stagedPath.path), Date() < deadline {
+        while Date() < deadline {
+            let stagedExists = FileManager.default.fileExists(atPath: ticket.stagedPath.path)
+            let markerExists = FileManager.default.fileExists(atPath: committedMarker.path)
+            if !stagedExists && !markerExists { break }
             try await Task.sleep(for: .milliseconds(20))
         }
 
