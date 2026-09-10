@@ -7470,12 +7470,47 @@ final class AppState {
     /// recorded and the batch continues.
     ///
     /// Callers are responsible for confirming with the user first — this method
-    /// deletes without prompting.
+    /// deletes without prompting. Unsaved editor buffers are checked across the
+    /// whole selection before any deletion happens: `performDeleteWorktree`
+    /// alone does not check them (that gate lives in the single-item
+    /// `deleteWorktree`, above `beginDeleteWorktree`), so without this check a
+    /// worktree that is clean on disk but has an unsaved buffer would be
+    /// deleted and its buffer silently discarded by `cleanupWorktreeState`.
     func batchDeleteWorktrees(
         _ worktrees: [Worktree],
         keepBranch: Bool
     ) async -> [WorktreeBatchResult] {
         guard !worktrees.isEmpty else { return [] }
+
+        let dirtyCount = worktrees.reduce(0) { total, worktree in
+            total + dirtyEditorTabIds(worktreeId: worktree.id).count
+        }
+        if dirtyCount > 0 {
+            switch promptForDirtyBuffers(
+                action: "Delete",
+                branch: "\(worktrees.count) worktrees",
+                dirtyCount: dirtyCount,
+                onDiskDestructive: true,
+                keepBranch: keepBranch
+            ) {
+            case .save:
+                // Saving is per-worktree and asynchronous; the batch's flow is
+                // synchronous from here, so ask the user to save and retry
+                // rather than half-deleting. Report it as a skip, not a
+                // failure — mirrors `batchArchiveWorktrees`'s handling.
+                return worktrees.map {
+                    WorktreeBatchResult(
+                        worktreeId: $0.id,
+                        branch: $0.branch,
+                        outcome: .skipped(reason: "Save the open editors first")
+                    )
+                }
+            case .discard:
+                break
+            case .cancel:
+                return []
+            }
+        }
 
         var results: [WorktreeBatchResult] = []
         var touchedProjectIds: Set<String> = []
