@@ -5413,6 +5413,7 @@ final class AppState {
     }
 
     private func terminateAllTerminalSessionsAfterConfirmation(snapshot: TerminalTerminationSnapshot) {
+        cancelPendingRunScriptLaunches()
         for (worktreeId, tabId) in snapshot.terminalTabs {
             closeTab(worktreeId: worktreeId, tabId: tabId)
         }
@@ -6677,7 +6678,11 @@ final class AppState {
     /// touching git or persistence. Shared between Close-All, archive, and
     /// delete so the bookkeeping stays in one place.
     private func cleanupWorktreeState(worktreeId: String, purgeRunScriptFailures: Bool = true) {
-        cleanupRunScriptState(worktreeID: worktreeId, purgeFailures: purgeRunScriptFailures)
+        if purgeRunScriptFailures {
+            cleanupRunScriptState(worktreeID: worktreeId, purgeFailures: true)
+        } else {
+            cancelPendingRunScriptLaunches(worktreeID: worktreeId)
+        }
         closedTabHistory.purge(worktreeID: worktreeId)
         let allTabs = tabs.tabs(forWorktree: worktreeId)
         let closed = tabs.closeAll(worktreeId: worktreeId)

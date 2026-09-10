@@ -667,11 +667,7 @@ extension AppState {
     }
 
     func cleanupRunScriptState(worktreeID: String, purgeFailures: Bool = true) {
-        let pendingKeys = pendingScriptLaunches.keys.filter { $0.hasPrefix("\(worktreeID):") }
-        for key in pendingKeys {
-            guard let launchID = pendingScriptLaunches.removeValue(forKey: key) else { continue }
-            pendingScriptLaunchTasks.removeValue(forKey: launchID)?.cancel()
-        }
+        cancelPendingRunScriptLaunches(worktreeID: worktreeID)
         for (runID, entry) in runScriptCompletionTasks where entry.worktreeID == worktreeID {
             runScriptCompletionTasks.removeValue(forKey: runID)?.task.cancel()
             cleanupCaptureLocation(entry.location)
@@ -689,6 +685,22 @@ extension AppState {
         }
         if purgeFailures, selectedRunScriptFailure?.worktreeID == worktreeID {
             selectedRunScriptFailure = nil
+        }
+    }
+
+    func cancelPendingRunScriptLaunches(worktreeID: String? = nil) {
+        let now = Date()
+        let pendingKeys = pendingScriptLaunches.keys.filter { key in
+            guard let worktreeID else { return true }
+            return key.hasPrefix("\(worktreeID):")
+        }
+        for key in pendingKeys {
+            guard let launchID = pendingScriptLaunches.removeValue(forKey: key) else { continue }
+            pendingScriptLaunchTasks.removeValue(forKey: launchID)?.cancel()
+            guard let separator = key.firstIndex(of: ":") else { continue }
+            let keyWorktreeID = String(key[..<separator])
+            let scriptKey = String(key[key.index(after: separator)...])
+            runRecords.markStopped(worktreeID: keyWorktreeID, scriptKey: scriptKey, at: now)
         }
     }
 
