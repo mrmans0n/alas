@@ -293,7 +293,7 @@ final class ACPSessionManager: ObservableObject {
 
     func queueRemove(for id: ACPSession.ID, itemId: UUID) async {
         guard await confirmedWriterLease(for: id), let session = sessions[id] else { return }
-        session.removeFromQueue(id: itemId)
+        guard session.removeFromQueue(id: itemId) else { return }
         persistQueue(for: session)
         runners[id]?.flushQueueIfIdle()
         onQueueChanged?(id, false)

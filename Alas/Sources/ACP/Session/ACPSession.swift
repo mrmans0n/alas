@@ -1459,13 +1459,15 @@ final class ACPSession: ObservableObject, Identifiable {
     /// Remove a specific item by id. The drag-handle X on the bubble
     /// calls this. Safe on .sending items because the UI hides X then —
     /// but we double-guard here to avoid yanking an in-flight RPC.
-    func removeFromQueue(id: UUID) {
-        guard let idx = queue.firstIndex(where: { $0.id == id }) else { return }
-        if queue[idx].status == .sending { return }
+    @discardableResult
+    func removeFromQueue(id: UUID) -> Bool {
+        guard let idx = queue.firstIndex(where: { $0.id == id }) else { return false }
+        if queue[idx].status == .sending { return false }
         if forceSendAfterSendingHeadId == id {
             forceSendAfterSendingHeadId = nil
         }
         queue.remove(at: idx)
+        return true
     }
 
     /// Pull a queued item back into the composer for editing: remove it and

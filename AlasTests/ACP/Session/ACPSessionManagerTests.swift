@@ -72,6 +72,29 @@ struct ACPSessionManagerTests {
         #expect(session.queue.isEmpty)
     }
 
+    @Test("remote queue remove ignores sending items without notifying")
+    func remoteQueueRemoveSendingItemDoesNotNotify() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-remote-queue-remove-sending-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        var changedSessions: [ACPSession.ID] = []
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            onQueueChanged: { sessionId, _ in changedSessions.append(sessionId) }
+        )
+        let session = manager.createSession(id: "session", agentId: "codex", autoRunDefault: false)
+        let itemId = UUID()
+        session.queue.append(QueuedPrompt(id: itemId, blocks: [.text("sending")], status: .sending))
+
+        #expect(await manager.acquireWriterLease(sessionId: session.id))
+        await manager.queueRemove(for: session.id, itemId: itemId)
+
+        #expect(changedSessions.isEmpty)
+        #expect(session.queue.map(\.id) == [itemId])
+    }
+
     @Test("delegated prompt already recorded in the transcript is not requeued")
     func delegatedPromptRecordedInTranscriptIsNotRequeued() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-delegated-dedupe-\(UUID()).sqlite")
