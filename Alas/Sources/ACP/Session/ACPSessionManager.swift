@@ -173,6 +173,14 @@ final class ACPSessionManager: ObservableObject {
         runners[id]?.hasRetainedCleanupPromptWork == true
     }
 
+    func retainedCleanupHasForkBarrierWork(for id: ACPSession.ID) -> Bool {
+        runners[id]?.hasRetainedCleanupForkBarrierWork == true
+    }
+
+    func retainedCleanupHasAutoReconnectWork(for id: ACPSession.ID) -> Bool {
+        autoReconnectTasks[id] != nil
+    }
+
     /// Permission policy for a session that currently has an attached runner.
     /// Returns nil if no runner is attached (session not actively connected).
     func permissionPolicy(for id: ACPSession.ID) -> ACPPermissionPolicy? { runners[id]?.policy }
@@ -3444,7 +3452,7 @@ extension ACPSessionManager {
             runner.onUnexpectedDisconnect = { [weak self] in
                 Task { @MainActor in
                     self?.scheduleAutoReconnect(sessionId: sessionId)
-                    self?.onQueueChanged?(sessionId, false)
+                    self?.onQueueChanged?(sessionId, self?.retainedCleanupHasAutoReconnectWork(for: sessionId) == true)
                 }
             }
             var runnerStarted = false

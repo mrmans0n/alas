@@ -6589,17 +6589,21 @@ final class AppState {
         retainActivePrompt: Bool = false
     ) -> Duration? {
         guard let session = manager.liveSession(for: sessionId) else { return nil }
-        switch session.agentState {
-        case .ready, .spawning:
-            break
-        case .idle, .disconnected, .failed:
-            return nil
-        }
-        if session.queue.first?.lastError != nil { return nil }
         let nextScheduledAt = session.queue.compactMap { item -> Date? in
             guard item.status == .pending, item.lastError == nil else { return nil }
             return item.scheduledAt
         }.min()
+        switch session.agentState {
+        case .ready, .spawning:
+            break
+        case .disconnected:
+            guard nextScheduledAt != nil,
+                  manager.retainedCleanupHasAutoReconnectWork(for: sessionId)
+            else { return nil }
+        case .idle, .failed:
+            return nil
+        }
+        if session.queue.first?.lastError != nil { return nil }
         let activePromptCleanupDelay: Duration = switch session.transcript.streamingState {
         case .awaitingInput, .awaitingPermission: .seconds(3600)
         case .idle, .sending, .streaming: .milliseconds(250)
@@ -6614,7 +6618,13 @@ final class AppState {
         }
         guard let nextScheduledAt else { return nil }
         let secondsUntilScheduledSend = nextScheduledAt.timeIntervalSinceNow
+        if case .disconnected = session.agentState, secondsUntilScheduledSend <= 0 {
+            return .seconds(30)
+        }
         if case .spawning = session.agentState, secondsUntilScheduledSend <= 0 {
+            return .seconds(30)
+        }
+        if manager.retainedCleanupHasForkBarrierWork(for: sessionId), secondsUntilScheduledSend <= 0 {
             return .seconds(30)
         }
         guard secondsUntilScheduledSend > 0 else { return activePromptCleanupDelay }

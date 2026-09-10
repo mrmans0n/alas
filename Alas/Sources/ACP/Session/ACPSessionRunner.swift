@@ -1722,6 +1722,10 @@ extension ACPSessionRunner {
         steerInProgress || activePromptID != nil || session.transcript.streamingState != .idle
     }
 
+    var hasRetainedCleanupForkBarrierWork: Bool {
+        nativeForkBarrierActive
+    }
+
     private func armSteerUndoExpiry() {
         steerUndoExpiryTask?.cancel()
         steerUndoExpiryTask = Task { [weak self] in
