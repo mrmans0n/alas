@@ -4989,7 +4989,9 @@ final class AppState {
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             throw NSError(domain: "AppState", code: 2)
         }
+        try Task.checkCancellation()
         await prepareRemoteAccelerationIfNeeded(for: project)
+        try Task.checkCancellation()
         return try openTerminalTab(
             for: worktree,
             startupScriptSuffix: startupScriptSuffix,

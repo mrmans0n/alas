@@ -24,12 +24,18 @@ enum RunEndpointPolicy {
         if let zoneSeparator = normalized.firstIndex(of: "%") {
             normalized = String(normalized[..<zoneSeparator])
         }
+        if isLocalhostName(normalized) { return true }
         if isIPv6LoopbackLiteral(normalized) { return true }
         if isIPv6UnspecifiedLiteral(normalized) { return true }
         if isIPv4MappedIPv6LoopbackLiteral(normalized) { return true }
+        if isIPv4MappedIPv6UnspecifiedLiteral(normalized) { return true }
         if isIPv4LoopbackLiteral(normalized) { return true }
         if isIPv4UnspecifiedLiteral(normalized) { return true }
         return loopbackHosts.contains(normalized)
+    }
+
+    private static func isLocalhostName(_ host: String) -> Bool {
+        host == "localhost" || host.hasSuffix(".localhost")
     }
 
     private static func isIPv6LoopbackLiteral(_ host: String) -> Bool {
@@ -64,6 +70,20 @@ enum RunEndpointPolicy {
               bytes[11] == 0xff
         else { return false }
         return bytes[12] == 127
+    }
+
+    private static func isIPv4MappedIPv6UnspecifiedLiteral(_ host: String) -> Bool {
+        var address = in6_addr()
+        guard inet_pton(AF_INET6, host, &address) == 1 else {
+            return false
+        }
+        let bytes = withUnsafeBytes(of: &address) { Array($0) }
+        guard bytes.count == 16,
+              bytes[0..<10].allSatisfy({ $0 == 0 }),
+              bytes[10] == 0xff,
+              bytes[11] == 0xff
+        else { return false }
+        return bytes[12..<16].allSatisfy { $0 == 0 }
     }
 
     private static func isIPv4LoopbackLiteral(_ host: String) -> Bool {
