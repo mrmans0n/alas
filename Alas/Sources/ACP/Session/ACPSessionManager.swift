@@ -155,6 +155,7 @@ final class ACPSessionManager: ObservableObject {
     private(set) var runners: [ACPSession.ID: ACPSessionRunner] = [:]
     private var elicitationCoordinators: [ACPSession.ID: ACPElicitationCoordinator] = [:]
     private var autoReconnectTasks: [ACPSession.ID: Task<Void, Never>] = [:]
+    private var scheduledReconnectTasks: [ACPSession.ID: Task<Void, Never>] = [:]
     private var disposalTasks: [ACPSession.ID: Task<Void, Error>] = [:]
     /// Per-session attach counter. The built-in MCP registration grace timer
     /// captures the epoch at attach and only writes the row if it still matches,
@@ -1125,6 +1126,7 @@ final class ACPSessionManager: ObservableObject {
 
     func closeSession(id: ACPSession.ID) {
         autoReconnectTasks.removeValue(forKey: id)?.cancel()
+        scheduledReconnectTasks.removeValue(forKey: id)?.cancel()
         // Flush any pending draft write before dropping the in-memory
         // session reference — otherwise a tab-switch-while-typing
         // window can lose the last ~300ms of input.
@@ -1185,6 +1187,7 @@ final class ACPSessionManager: ObservableObject {
         killRemoteHelperACPProcIfPossible(sessionId: id)
         onSessionEnded?(id)
         autoReconnectTasks.removeValue(forKey: id)?.cancel()
+        scheduledReconnectTasks.removeValue(forKey: id)?.cancel()
         cancelPendingDraftWrite(for: id)
         inFlightBackfills[id]?.cancel()
         inFlightBackfills[id] = nil
@@ -3996,6 +3999,7 @@ extension ACPSessionManager {
                 return
             }
             session.agentState = .ready
+            scheduledReconnectTasks.removeValue(forKey: sessionId)?.cancel()
             if let remoteMCPNotice {
                 runner.appendAndPersistSystemNotice(remoteMCPNotice)
             }
@@ -4061,6 +4065,7 @@ extension ACPSessionManager {
                 await connection.shutdown()
             }
             await releaseWriterLease(sessionId: sessionId)
+            scheduleScheduledQueueReconnect(sessionId: sessionId)
         }
     }
 
@@ -4121,6 +4126,7 @@ extension ACPSessionManager {
             defer {
                 self?.autoReconnectTasks.removeValue(forKey: sessionId)
                 self?.sessions[sessionId]?.autoReconnecting = false
+                self?.scheduleScheduledQueueReconnect(sessionId: sessionId)
                 self?.onQueueChanged?(sessionId, false)
             }
             self?.sessions[sessionId]?.autoReconnecting = true
@@ -4145,6 +4151,43 @@ extension ACPSessionManager {
                 }
                 await self.reattach(to: sessionId)
                 if self.sessions[sessionId]?.agentState == .ready { return }
+            }
+        }
+    }
+
+    private func scheduleScheduledQueueReconnect(sessionId: ACPSession.ID) {
+        scheduledReconnectTasks.removeValue(forKey: sessionId)?.cancel()
+        guard let session = sessions[sessionId],
+              session.agentState != .ready,
+              session.queue.contains(where: {
+                  $0.status == .pending && $0.lastError == nil && $0.scheduledAt != nil
+              })
+        else { return }
+        if case .needsAuth = session.setupState { return }
+
+        let scheduledAt = session.queue.compactMap { item -> Date? in
+            guard item.status == .pending, item.lastError == nil else { return nil }
+            return item.scheduledAt
+        }.min()!
+        scheduledReconnectTasks[sessionId] = Task { @MainActor [weak self] in
+            defer { self?.scheduledReconnectTasks.removeValue(forKey: sessionId) }
+            try? await Task.sleep(for: .seconds(max(0, scheduledAt.timeIntervalSinceNow)))
+            while !Task.isCancelled {
+                guard let self,
+                      let session = self.sessions[sessionId],
+                      session.queue.contains(where: {
+                          $0.status == .pending
+                              && $0.lastError == nil
+                              && ($0.scheduledAt?.timeIntervalSinceNow ?? .greatestFiniteMagnitude) <= 0
+                      })
+                else { return }
+                if case .needsAuth = session.setupState { return }
+                await self.reattach(to: sessionId)
+                if self.sessions[sessionId]?.agentState == .ready {
+                    self.runners[sessionId]?.flushQueueIfIdle()
+                    return
+                }
+                try? await Task.sleep(for: .seconds(30))
             }
         }
     }
