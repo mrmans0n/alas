@@ -38,6 +38,7 @@ enum WorktreeTrashCleaner {
             """
             import errno
             import os
+            import stat as stat_module
             import sys
             import time
             import uuid
@@ -45,10 +46,14 @@ enum WorktreeTrashCleaner {
             def open_directory(name, dirfd):
                 flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
                 try:
-                    return os.open(name, flags, dir_fd=dirfd)
+                    fd = os.open(name, flags, dir_fd=dirfd)
                 except PermissionError:
                     os.chmod(name, 0o700, dir_fd=dirfd, follow_symlinks=False)
-                    return os.open(name, flags, dir_fd=dirfd)
+                    fd = os.open(name, flags, dir_fd=dirfd)
+                mode = stat_module.S_IMODE(os.fstat(fd).st_mode)
+                if (mode & 0o700) != 0o700:
+                    os.fchmod(fd, mode | 0o700)
+                return fd
 
             def remove_contents(dirfd):
                 for name in os.listdir(dirfd):
@@ -83,12 +88,14 @@ enum WorktreeTrashCleaner {
             parentfd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
             stagedfd = None
             renamedfd = None
+            renamed = False
             try:
                 stagedfd = open_directory(name, parentfd)
-                stat = os.fstat(stagedfd)
-                if (stat.st_dev, stat.st_ino) != (expected_device, expected_inode):
+                staged_stat = os.fstat(stagedfd)
+                if (staged_stat.st_dev, staged_stat.st_ino) != (expected_device, expected_inode):
                     sys.exit(0)
                 os.rename(name, private_name, src_dir_fd=parentfd, dst_dir_fd=parentfd)
+                renamed = True
                 renamedfd = open_directory(private_name, parentfd)
                 renamed_stat = os.fstat(renamedfd)
                 if (renamed_stat.st_dev, renamed_stat.st_ino) != (expected_device, expected_inode):
@@ -102,12 +109,23 @@ enum WorktreeTrashCleaner {
                     os.rmdir(private_name, dir_fd=parentfd)
                 except FileNotFoundError:
                     pass
+                renamed = False
                 try:
                     os.unlink(marker)
                 except FileNotFoundError:
                     pass
             except FileNotFoundError:
                 pass
+            except Exception:
+                if renamed:
+                    if renamedfd is not None:
+                        os.close(renamedfd)
+                        renamedfd = None
+                    try:
+                        os.rename(private_name, name, src_dir_fd=parentfd, dst_dir_fd=parentfd)
+                    except OSError:
+                        pass
+                raise
             finally:
                 if renamedfd is not None:
                     os.close(renamedfd)

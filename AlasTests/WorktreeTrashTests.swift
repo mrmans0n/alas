@@ -135,6 +135,10 @@ struct WorktreeTrashTests {
         #expect(capturedArguments[7] == ticket.stagedPath.path)
         #expect(capturedArguments[6] == WorktreeTrash.committedMarkerURL(for: ticket).path)
         #expect(!capturedArguments[4].contains(ticket.stagedPath.path))
+        #expect(capturedArguments[4].contains("except Exception:"))
+        #expect(capturedArguments[4].contains(
+            "os.rename(private_name, name, src_dir_fd=parentfd, dst_dir_fd=parentfd)"
+        ))
     }
 
     @Test func cleanerReplacementSurvivesWhenSwappedBeforeCleanerLaunch() throws {
@@ -213,7 +217,8 @@ struct WorktreeTrashTests {
         #expect(FileManager.default.fileExists(atPath: committedMarker.path))
     }
 
-    @Test func liveCleanerDeletesUnreadableDirectories() async throws {
+    @Test(arguments: [0o000, 0o500])
+    func liveCleanerDeletesDirectoriesWithoutOwnerWritePermission(permissions: Int) async throws {
         let common = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-cleaner-unreadable-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: common) }
@@ -229,7 +234,7 @@ struct WorktreeTrashTests {
             encoding: .utf8
         )
         try FileManager.default.setAttributes(
-            [.posixPermissions: 0o000],
+            [.posixPermissions: permissions],
             ofItemAtPath: unreadable.path
         )
         defer {
