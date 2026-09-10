@@ -4076,7 +4076,9 @@ extension ACPSessionManager {
         }
     }
 
-    func bootstrapScheduledQueueSessions() async -> [ACPSession.ID] {
+    func bootstrapScheduledQueueSessions(
+        onBootstrapped: (@MainActor (ACPSession.ID) -> Void)? = nil
+    ) async -> [ACPSession.ID] {
         let ids: [ACPSession.ID]
         do {
             ids = try await persistence.scheduledQueueSessionIds()
@@ -4096,6 +4098,7 @@ extension ACPSessionManager {
                       })
                 else { return nil }
                 await reattach(to: id)
+                onBootstrapped?(id)
                 return id
             }
         }

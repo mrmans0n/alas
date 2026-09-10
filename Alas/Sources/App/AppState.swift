@@ -1090,14 +1090,11 @@ final class AppState {
     }
 
     private func bootstrapScheduledACPSessions(owner: SessionOwnerID, manager: ACPSessionManager) async {
-        let sessionIds = await manager.bootstrapScheduledQueueSessions()
-        let tasks = sessionIds.compactMap { sessionId -> Task<Void, Never>? in
-            guard !hasACPSessionTab(owner: owner, sessionId: sessionId) else { return nil }
-            return Task { @MainActor in
-                cleanupACPSession(owner: owner, sessionId: sessionId)
-            }
+        _ = await manager.bootstrapScheduledQueueSessions { [weak self] sessionId in
+            guard let self else { return }
+            guard !hasACPSessionTab(owner: owner, sessionId: sessionId) else { return }
+            cleanupACPSession(owner: owner, sessionId: sessionId)
         }
-        for task in tasks { await task.value }
     }
 
     private func hasACPSessionTab(owner: SessionOwnerID, sessionId: ACPSession.ID) -> Bool {
@@ -6598,8 +6595,10 @@ final class AppState {
             break
         case .disconnected:
             guard nextScheduledAt != nil else { return nil }
-        case .idle, .failed:
+        case .idle:
             return nil
+        case .failed:
+            guard nextScheduledAt != nil else { return nil }
         }
         if session.queue.first?.lastError != nil { return nil }
         let activePromptCleanupDelay: Duration = switch session.transcript.streamingState {
@@ -6665,14 +6664,18 @@ final class AppState {
     }
 
     private func reattachRetainedScheduledSessionIfDue(manager: ACPSessionManager, sessionId: ACPSession.ID) {
-        guard let session = manager.liveSession(for: sessionId),
-              case .disconnected = session.agentState,
-              session.queue.contains(where: { item in
-                  item.status == .pending
-                      && item.lastError == nil
-                      && (item.scheduledAt?.timeIntervalSinceNow ?? .greatestFiniteMagnitude) <= 0
-              })
-        else { return }
+        guard let session = manager.liveSession(for: sessionId) else { return }
+        switch session.agentState {
+        case .disconnected, .failed:
+            break
+        case .idle, .ready, .spawning:
+            return
+        }
+        guard session.queue.contains(where: { item in
+            item.status == .pending
+                && item.lastError == nil
+                && (item.scheduledAt?.timeIntervalSinceNow ?? .greatestFiniteMagnitude) <= 0
+        }) else { return }
         Task { @MainActor in await manager.reattach(to: sessionId) }
     }
 

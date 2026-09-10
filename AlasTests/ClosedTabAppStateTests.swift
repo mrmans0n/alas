@@ -498,16 +498,8 @@ struct ClosedTabAppStateTests {
         #expect(fixture.state.pendingACPDetachCountForTesting == 0)
     }
 
-    @Test func closedACPSessionWithDisconnectedScheduledPromptDetachesImmediately() async throws {
-        let gate = AsyncGate()
-        let state = AppState(
-            store: MemoryStore(),
-            acpDetachRunner: { _, sessionId in
-                #expect(sessionId == "disconnected-scheduled-close")
-                await gate.enterAndWait()
-            }
-        )
-        let fixture = makeFixture(state: state)
+    @Test func closedACPSessionWithDisconnectedScheduledPromptStaysRetained() async throws {
+        let fixture = makeFixture()
         let manager = try #require(fixture.state.acpManager(for: fixture.first))
         let session = manager.createSession(id: "disconnected-scheduled-close", agentId: "claude")
         session.agentState = .disconnected
@@ -518,16 +510,8 @@ struct ClosedTabAppStateTests {
         )
 
         fixture.state.requestCloseTab(worktreeId: fixture.first.id, tabId: tab.id)
-        await gate.waitUntilEntered()
 
-        #expect(fixture.state.retainedACPSessionCleanupCountForTesting == 0)
-        #expect(fixture.state.pendingACPDetachCountForTesting == 1)
-
-        await gate.release()
-        for _ in 0 ..< 20 where fixture.state.pendingACPDetachCountForTesting != 0 {
-            await Task.yield()
-        }
-
+        #expect(fixture.state.retainedACPSessionCleanupCountForTesting == 1)
         #expect(fixture.state.pendingACPDetachCountForTesting == 0)
     }
 
