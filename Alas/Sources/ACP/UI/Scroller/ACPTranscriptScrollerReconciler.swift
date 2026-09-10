@@ -256,10 +256,7 @@ final class ACPTranscriptScrollerReconciler {
         keepMountedOffscreenIds = Set(specs.lazy.filter(\.keepsMountedOffscreen).map(\.id))
         lastAppliedSpecs = specs
         lastFollowsTail = followsTail
-        if repins {
-            scroller.scrollToBottom()
-        }
-        layoutMountedRows()
+        layoutMountedRows(pinToTail: repins)
     }
 
     /// Drops any remembered vanished anchor. Called by the coordinator on
@@ -651,10 +648,7 @@ final class ACPTranscriptScrollerReconciler {
         defer { isApplyingSpecs = false }
         let repins = repinsToTail(followsTail: lastFollowsTail, wasFollowingTail: lastFollowsTail)
         performReset(specs: lastAppliedSpecs, widthChanged: true, repinsToTail: repins)
-        if repins {
-            scroller.scrollToBottom()
-        }
-        layoutMountedRows()
+        layoutMountedRows(pinToTail: repins)
     }
 
     /// Re-apply specs whose equality token changed; re-measure those rows and
@@ -780,9 +774,10 @@ final class ACPTranscriptScrollerReconciler {
     private func applyHeightToTiling(id: String, height: CGFloat) -> Bool {
         guard let oldHeight = tiling.row(withId: id)?.height, oldHeight != height else { return false }
         let compensation = tiling.updateHeight(id: id, to: height, viewportMinY: scroller.scrollY)
-        scroller.setDocumentHeight(tiling.documentHeight)
         if compensation != 0 {
-            scroller.setScrollY(scroller.scrollY + compensation)
+            scroller.applyPrepend(delta: compensation, newDocumentHeight: tiling.documentHeight)
+        } else {
+            scroller.setDocumentHeight(tiling.documentHeight)
         }
         return true
     }
@@ -805,7 +800,7 @@ final class ACPTranscriptScrollerReconciler {
     /// Mount and position rows after content or geometry changes. Reentrant
     /// invalidations coalesce into another pass before the scroll fast path
     /// can reuse the resulting band.
-    func layoutMountedRows() {
+    func layoutMountedRows(pinToTail: Bool = false) {
         lastLaidOutBand = nil
         guard !isLayingOutRows else {
             pendingRelayout = true
@@ -814,11 +809,11 @@ final class ACPTranscriptScrollerReconciler {
         isLayingOutRows = true
         defer { isLayingOutRows = false }
 
-        performLayoutPass()
+        performLayoutPass(pinToTail: pinToTail)
         var safetyCount = 0
         while pendingRelayout {
             pendingRelayout = false
-            performLayoutPass()
+            performLayoutPass(pinToTail: pinToTail)
             safetyCount += 1
             if safetyCount > 8 {
                 assertionFailure("layoutMountedRows did not converge after \(safetyCount) extra passes")
@@ -831,14 +826,21 @@ final class ACPTranscriptScrollerReconciler {
     }
 
     private var currentMountBand: Range<Int> {
+        // Elastic overscroll reveals no new rows. Keep the edge's mount band
+        // stable so the rebound does not destroy and rebuild hosting views.
         tiling.mountBand(
-            viewportMinY: scroller.scrollY,
+            viewportMinY: min(max(0, scroller.scrollY), max(0, tiling.documentHeight - scroller.viewportHeight)),
             viewportHeight: scroller.viewportHeight,
             overscan: Self.overscan
         )
     }
 
-    private func performLayoutPass() {
+    private func performLayoutPass(pinToTail: Bool) {
+        // Mounting rows can correct stale offscreen heights. Re-pin before
+        // each resulting pass so tail-follow settles against the final geometry.
+        if pinToTail {
+            scroller.scrollToBottom()
+        }
         guard tiling.rowCount > 0 else {
             pool.releaseAll()
             return

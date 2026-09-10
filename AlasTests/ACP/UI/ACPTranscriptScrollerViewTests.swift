@@ -65,6 +65,18 @@ struct ACPTranscriptScrollerViewTests {
         #expect(abs(s.scrollY - 1200) < 0.5)
     }
 
+    @Test("removing content above a reader near the bottom preserves the reading position")
+    func removalNearBottomPreservesPosition() {
+        let s = scroller()
+        s.setScrollY(5000 - s.viewportHeight - 40)
+        let offsetBefore = s.scrollY
+
+        s.applyPrepend(delta: -700, newDocumentHeight: 4300)
+
+        #expect(abs(s.scrollY - (offsetBefore - 700)) < 0.5)
+        #expect(abs(s.distanceFromBottom - 40) < 0.5)
+    }
+
     @Test("scrollToBottom lands within tolerance of the bottom")
     func toBottom() {
         let s = scroller()
