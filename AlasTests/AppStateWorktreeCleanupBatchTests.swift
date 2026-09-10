@@ -74,6 +74,26 @@ struct AppStateWorktreeCleanupBatchTests {
         #expect(fixture.state.pendingForceDeleteWorktree == nil)
     }
 
+    /// The batch skips per-item selection reconciliation (its list is still
+    /// stale mid-run) and reconciles once at the end. Without that final pass
+    /// the selection stays pinned to a worktree that no longer exists.
+    @Test func selectionIsReconciledAfterBatchDeletesTheSelectedWorktree() async throws {
+        let fixture = try await makeCleanupFixture(worktreeCount: 3)
+        let targets = Array(fixture.worktrees.dropFirst())
+        fixture.state.selectWorktree(id: targets[0].id)
+        #expect(fixture.state.selectedWorktreeId == targets[0].id)
+
+        _ = await fixture.state.batchDeleteWorktrees(targets, keepBranch: false)
+
+        #expect(fixture.state.selectedWorktreeId != targets[0].id)
+        #expect(fixture.state.selectedWorktreeId != targets[1].id)
+        if let selected = fixture.state.selectedWorktreeId {
+            #expect(fixture.state.projectsManager
+                .worktrees(projectId: fixture.project.id)
+                .contains { $0.id == selected })
+        }
+    }
+
     @Test func emptySelectionReturnsNoResultsAndTouchesNothing() async throws {
         let fixture = try await makeCleanupFixture(worktreeCount: 2)
         let before = fixture.state.projectsManager

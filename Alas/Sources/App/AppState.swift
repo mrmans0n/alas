@@ -7474,6 +7474,12 @@ final class AppState {
         for projectId in touchedProjectIds {
             _ = try? await refreshProjectWorktrees(projectId: projectId)
         }
+        // Per-item deletion skipped selection reconciliation because the list
+        // was still stale at that point. Now that every touched project has
+        // been refreshed, drop a selection that points at a deleted worktree.
+        if let current = selectedWorktreeId, !allWorktreeIds().contains(current) {
+            selectWorktree(id: resolvedSelectionForActiveSpace())
+        }
         return results
     }
 
@@ -8040,14 +8046,18 @@ final class AppState {
             projectId: worktree.projectId,
             worktreeId: worktree.id
         )
+        // Selection reconciliation only makes sense once the project list no
+        // longer contains the deleted worktree. Callers that skip the refresh
+        // (batches, which refresh once at the end) reconcile the selection
+        // themselves afterwards.
         if refreshAfter {
             _ = try? await refreshProjectWorktrees(projectId: worktree.projectId)
-        }
-        if selectedWorktreeId == worktree.id {
-            selectWorktree(id: selectionAfterRemoval(
-                removedFromProjectId: worktree.projectId,
-                removedAtIndex: removedIndex
-            ))
+            if selectedWorktreeId == worktree.id {
+                selectWorktree(id: selectionAfterRemoval(
+                    removedFromProjectId: worktree.projectId,
+                    removedAtIndex: removedIndex
+                ))
+            }
         }
         return .deleted
     }
