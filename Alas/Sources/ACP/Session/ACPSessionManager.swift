@@ -294,8 +294,12 @@ final class ACPSessionManager: ObservableObject {
     /// Promote a queued item to the head (or steer to it when a turn is
     /// running) — the remote-web twin of the queued bubble's "send now".
     func queueForceSend(for id: ACPSession.ID, itemId: UUID) async {
-        guard await confirmedWriterLease(for: id) else { return }
-        runners[id]?.forceSendQueuedItem(id: itemId)
+        guard await confirmedWriterLease(for: id), let session = sessions[id] else { return }
+        if session.agentState != .ready {
+            await reattach(to: id)
+        }
+        guard let runner = runners[id] else { return }
+        runner.forceSendQueuedItem(id: itemId)
         onQueueChanged?(id, true)
     }
 
