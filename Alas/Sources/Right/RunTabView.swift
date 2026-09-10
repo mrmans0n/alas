@@ -92,9 +92,9 @@ struct RunTabView: View {
     }
 
     private func perform(_ action: RunRowAction, matching staleScript: RunScript) async {
-        let script = await freshScript(matching: staleScript) ?? staleScript
         switch action {
         case .start:
+            let script = await freshScript(matching: staleScript) ?? staleScript
             if case .finished? = state.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status {
                 state.restartScript(script, in: worktree)
             } else if state.scriptTab(for: script, in: worktree) != nil {
@@ -103,19 +103,22 @@ struct RunTabView: View {
                 state.runOrFocusScript(script, in: worktree)
             }
         case .stop:
-            state.stopScript(script, in: worktree)
+            state.stopScript(staleScript, in: worktree)
         case .restart:
+            state.stopScript(staleScript, in: worktree)
+            let script = await freshScript(matching: staleScript) ?? staleScript
             state.restartScript(script, in: worktree)
         case .openTerminal:
-            state.focusScriptTerminal(script, in: worktree)
+            state.focusScriptTerminal(staleScript, in: worktree)
         case .openEndpoint:
+            let script = await freshScript(matching: staleScript) ?? staleScript
             state.openRunEndpoint(script, in: worktree)
         case .showOutput(let failureID):
             guard let failure = state.runScriptFailures(in: worktree.id).first(where: { $0.id == failureID })
             else { return }
             state.presentRunScriptFailure(failure)
         case .edit:
-            state.editScript(script, in: worktree)
+            state.editScript(staleScript, in: worktree)
         }
     }
 

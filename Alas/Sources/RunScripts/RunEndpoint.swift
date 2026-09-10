@@ -21,6 +21,9 @@ enum RunEndpointPolicy {
         if normalized.hasSuffix(".") {
             normalized.removeLast()
         }
+        if let zoneSeparator = normalized.firstIndex(of: "%") {
+            normalized = String(normalized[..<zoneSeparator])
+        }
         if isIPv4MappedIPv6LoopbackLiteral(normalized) { return true }
         if isIPv4LoopbackLiteral(normalized) { return true }
         return loopbackHosts.contains(normalized)
