@@ -6590,15 +6590,19 @@ final class AppState {
             guard item.status == .pending, item.lastError == nil else { return nil }
             return item.scheduledAt
         }.min()
+        if case .needsAuth = session.setupState { return nil }
+        let hasScheduledQueueWork = nextScheduledAt != nil || session.queue.contains {
+            $0.status == .sending && $0.scheduledAt != nil
+        }
         switch session.agentState {
         case .ready, .spawning:
             break
         case .disconnected:
-            guard nextScheduledAt != nil else { return nil }
+            guard hasScheduledQueueWork else { return nil }
         case .idle:
             return nil
         case .failed:
-            guard nextScheduledAt != nil else { return nil }
+            guard hasScheduledQueueWork else { return nil }
         }
         if session.queue.first?.lastError != nil { return nil }
         let activePromptCleanupDelay: Duration = switch session.transcript.streamingState {

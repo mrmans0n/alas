@@ -62,6 +62,19 @@ struct ACPSessionRunnerQueueTests {
         #expect(try store.loadQueue(sessionId: "s") == session.queue)
     }
 
+    @Test("force send preserves schedules while disconnected")
+    func forceSendPreservesScheduleWhileDisconnected() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        session.enqueueScheduled(blocks: [.text("later")], scheduledAt: Date().addingTimeInterval(60))
+        let itemId = try #require(session.queue.first?.id)
+        session.agentState = .disconnected
+
+        runner.forceSendQueuedItem(id: itemId)
+
+        #expect(session.queue.first?.scheduledAt != nil)
+        #expect(!mock.sent.contains { $0.method == "session/prompt" })
+    }
+
     @Test("scheduled prompt flushes once its deadline arrives")
     func scheduledPromptFlushesAtDeadline() async throws {
         let (runner, mock, session, _) = try mkRunner()

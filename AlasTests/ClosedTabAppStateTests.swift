@@ -362,6 +362,38 @@ struct ClosedTabAppStateTests {
         )
     }
 
+    @Test func closedACPSessionDisconnectedSendingScheduleStaysRetained() async throws {
+        let fixture = makeFixture()
+        let manager = try #require(fixture.state.acpManager(for: fixture.first))
+        let session = manager.createSession(id: "disconnected-sending-schedule", agentId: "claude")
+        session.agentState = .disconnected
+        session.enqueueScheduled(blocks: [.text("later")], scheduledAt: Date().addingTimeInterval(60))
+        _ = session.markQueueHeadSending()
+
+        #expect(
+            fixture.state.retainedACPSessionCleanupDelayForTesting(
+                manager: manager,
+                sessionId: session.id
+            ) == .milliseconds(250)
+        )
+    }
+
+    @Test func closedACPSessionAuthBlockedScheduleDoesNotStayRetained() async throws {
+        let fixture = makeFixture()
+        let manager = try #require(fixture.state.acpManager(for: fixture.first))
+        let session = manager.createSession(id: "auth-blocked-schedule", agentId: "claude")
+        session.agentState = .failed("authentication required")
+        session.setupState = .needsAuth(methods: [], reason: "Sign in")
+        session.enqueueScheduled(blocks: [.text("later")], scheduledAt: Date().addingTimeInterval(60))
+
+        #expect(
+            fixture.state.retainedACPSessionCleanupDelayForTesting(
+                manager: manager,
+                sessionId: session.id
+            ) == nil
+        )
+    }
+
     @Test func openExistingACPSessionCancelsRetainedCleanup() async throws {
         let fixture = makeFixture()
         fixture.state.selectWorktree(id: fixture.first.id)

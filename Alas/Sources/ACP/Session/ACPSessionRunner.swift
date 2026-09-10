@@ -1600,6 +1600,7 @@ extension ACPSessionRunner {
         guard let idx = session.queue.firstIndex(where: { $0.id == id }),
               session.queue[idx].status == .pending
         else { return }
+        guard session.agentState == .ready else { return }
 
         if nativeForkBarrierActive {
             guard session.forceQueueItem(id: id) else { return }
