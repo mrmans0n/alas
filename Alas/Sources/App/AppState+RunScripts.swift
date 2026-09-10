@@ -699,9 +699,9 @@ extension AppState {
 
     func cancelPendingRunScriptLaunches(worktreeID: String? = nil) {
         let now = Date()
-        let pendingKeys = pendingScriptLaunches.keys.filter { key in
-            guard let worktreeID else { return true }
-            return key.hasPrefix("\(worktreeID):")
+        let pendingKeys = pendingScriptLaunches.compactMap { key, pending -> String? in
+            guard let worktreeID else { return key }
+            return pending.worktreeID == worktreeID ? key : nil
         }
         for key in pendingKeys {
             guard let pending = pendingScriptLaunches.removeValue(forKey: key) else { continue }

@@ -381,6 +381,43 @@ struct AppStateRunRecordTests {
         #expect(fixture.state.runRecords.record(worktreeID: worktreeID, scriptKey: fixture.script.key)?.status == .finished(.stopped))
     }
 
+    @Test func pendingLaunchCancellationMatchesExactWorktreeID() throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let firstWorktreeID = "/tmp/repo"
+        let secondWorktreeID = "/tmp/repo:staging"
+        for worktreeID in [firstWorktreeID, secondWorktreeID] {
+            fixture.state.runRecords.begin(RunRecord(
+                id: UUID().uuidString,
+                scriptKey: fixture.script.key,
+                scriptName: fixture.script.displayName,
+                worktreeID: worktreeID,
+                branch: fixture.worktree.branch,
+                target: fixture.state.runExecutionTarget(for: fixture.script, in: fixture.worktree),
+                status: .starting,
+                startedAt: Date()
+            ))
+            let launchID = UUID()
+            let task = Task<Void, Never> {
+                try? await Task.sleep(for: .seconds(30))
+            }
+            fixture.state.pendingScriptLaunches["\(worktreeID):\(fixture.script.key)"] = PendingRunScriptLaunch(
+                id: launchID,
+                worktreeID: worktreeID,
+                scriptKey: fixture.script.key
+            )
+            fixture.state.pendingScriptLaunchTasks[launchID] = task
+        }
+
+        fixture.state.cancelPendingRunScriptLaunches(worktreeID: firstWorktreeID)
+
+        #expect(fixture.state.pendingScriptLaunches.count == 1)
+        #expect(fixture.state.pendingScriptLaunches.values.first?.worktreeID == secondWorktreeID)
+        #expect(fixture.state.runRecords.record(worktreeID: firstWorktreeID, scriptKey: fixture.script.key)?.status == .finished(.stopped))
+        #expect(fixture.state.runRecords.record(worktreeID: secondWorktreeID, scriptKey: fixture.script.key)?.status == .starting)
+        fixture.state.cancelPendingRunScriptLaunches()
+    }
+
     @Test func interruptedRunBecomesUnknownRatherThanSucceeded() async throws {
         let fixture = try makeFixture(waiter: { _ in
             try await Task.sleep(for: .seconds(5))
