@@ -478,6 +478,32 @@ private actor ThrowingFrozenRemoteRunner {
 }
 
 extension WorktreeServiceTests {
+    private struct LinkedWorktreeFixture {
+        let repo: URL
+        let service: WorktreeService
+        let worktree: Worktree
+
+        func removeFiles() {
+            try? FileManager.default.removeItem(at: worktree.path)
+            try? FileManager.default.removeItem(at: repo)
+        }
+    }
+
+    private func makeLinkedWorktree(suffix: String) async throws -> LinkedWorktreeFixture {
+        let repo = try await makeRepo()
+        let destination = repo.deletingLastPathComponent()
+            .appendingPathComponent("\(repo.lastPathComponent)-\(suffix)")
+        let service = WorktreeService()
+        let worktree = try await service.add(
+            repoPath: repo,
+            base: "main",
+            branch: "feature/\(suffix)",
+            destination: destination,
+            projectId: "p"
+        )
+        return LinkedWorktreeFixture(repo: repo, service: service, worktree: worktree)
+    }
+
     @Test func deletePreflightReportsCleanForCleanWorktree() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
@@ -621,6 +647,521 @@ extension WorktreeServiceTests {
         }
     }
 
+    @Test func fastLocalRemoveReturnsStagedTicketBeforeFilesAreDeleted() async throws {
+        let repo = try await makeRepo()
+        let destination = repo.deletingLastPathComponent()
+            .appendingPathComponent("\(repo.lastPathComponent)-fast")
+        defer {
+            try? FileManager.default.removeItem(at: destination)
+            try? FileManager.default.removeItem(at: repo)
+        }
+        let service = WorktreeService()
+        let worktree = try await service.add(
+            repoPath: repo,
+            base: "main",
+            branch: "feature/fast",
+            destination: destination,
+            projectId: "p"
+        )
+        try "keep until cleaner".write(
+            to: destination.appendingPathComponent("marker.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let outcome = try await service.removeFastLocal(
+            repoPath: repo,
+            worktree: worktree,
+            deleteBranchIfMerged: false,
+            force: true
+        )
+        guard case .staged(let ticket) = outcome else {
+            Issue.record("Expected staged removal")
+            return
+        }
+        defer { try? FileManager.default.removeItem(at: ticket.trashRoot) }
+
+        #expect(!FileManager.default.fileExists(atPath: destination.path))
+        #expect(FileManager.default.fileExists(
+            atPath: ticket.stagedPath.appendingPathComponent("marker.txt").path
+        ))
+        #expect(try await service.list(repoPath: repo, projectId: "p").count == 1)
+    }
+
+    @Test func fastLocalRemoveSurvivesWhenProjectPathIsTheRemovedWorktree() async throws {
+        let fixture = try await makeLinkedWorktree(suffix: "project-path-target")
+        defer { fixture.removeFiles() }
+
+        let outcome = try await fixture.service.removeFastLocal(
+            repoPath: fixture.worktree.path,
+            worktree: fixture.worktree,
+            deleteBranchIfMerged: true,
+            force: false
+        )
+        guard case .staged(let ticket) = outcome else {
+            Issue.record("Expected staged removal")
+            return
+        }
+        defer { try? FileManager.default.removeItem(at: ticket.trashRoot) }
+
+        #expect(!FileManager.default.fileExists(atPath: fixture.worktree.path.path))
+        let worktrees = try await fixture.service.list(repoPath: fixture.repo, projectId: "p")
+        #expect(worktrees.count == 1)
+        #expect(!worktrees.contains { $0.path.standardizedFileURL == fixture.worktree.path.standardizedFileURL })
+        let branches = try await Process.git(
+            ["branch", "--list", fixture.worktree.branch],
+            cwd: fixture.repo
+        )
+        #expect(branches.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+
+    @Test func fastLocalRemoveDeletesBranchMergedIntoSurvivingLinkedProject() async throws {
+        let fixture = try await makeLinkedWorktree(suffix: "linked-project-merge")
+        let project = fixture.repo.deletingLastPathComponent()
+            .appendingPathComponent("\(fixture.repo.lastPathComponent)-project")
+        defer {
+            try? FileManager.default.removeItem(at: project)
+            fixture.removeFiles()
+        }
+        let commit = try await Process.git(
+            ["commit", "--allow-empty", "-m", "only merged into project"],
+            cwd: fixture.worktree.path
+        )
+        try #require(commit.exitCode == 0)
+        _ = try await fixture.service.add(
+            repoPath: fixture.repo,
+            base: fixture.worktree.branch,
+            branch: "project",
+            destination: project,
+            projectId: "p"
+        )
+
+        _ = try await fixture.service.removeFastLocal(
+            repoPath: project,
+            worktree: fixture.worktree,
+            deleteBranchIfMerged: true
+        )
+
+        let branches = try await Process.git(
+            ["branch", "--list", fixture.worktree.branch], cwd: project
+        )
+        #expect(branches.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+
+    @Test func fastLocalRemovePersistsRecoveryJournalBeforeMovingFiles() async throws {
+        let fixture = try await makeLinkedWorktree(suffix: "pending-before-rename")
+        defer { fixture.removeFiles() }
+        _ = try await fixture.service.removeFastLocal(
+            repoPath: fixture.repo,
+            worktree: fixture.worktree,
+            deleteBranchIfMerged: false,
+            moveItem: { source, destination in
+                let identifier = destination.lastPathComponent.split(separator: ".").last!
+                let pending = destination.deletingLastPathComponent()
+                    .appendingPathComponent(".alas-worktree-deletion-pending.\(identifier)")
+                #expect(FileManager.default.fileExists(atPath: pending.path))
+                try FileManager.default.moveItem(at: source, to: destination)
+            }
+        )
+    }
+
+    @Test func fastLocalRemoveDeletesStagedFilesSynchronouslyWhenCommitMarkerCannotBeWritten() async throws {
+        let fixture = try await makeLinkedWorktree(suffix: "marker-write-failure")
+        let trashRoot = WorktreeTrash.root(
+            commonGitDirectory: fixture.repo.appendingPathComponent(".git")
+        )
+        defer {
+            try? FileManager.default.removeItem(at: trashRoot)
+            fixture.removeFiles()
+        }
+
+        let outcome = try await fixture.service.removeFastLocal(
+            repoPath: fixture.repo,
+            worktree: fixture.worktree,
+            deleteBranchIfMerged: false,
+            force: false,
+            moveItem: { source, destination in
+                try FileManager.default.moveItem(at: source, to: destination)
+                guard let directoryIdentity = WorktreeTrash.directoryIdentity(at: destination) else {
+                    throw CocoaError(.fileReadUnknown)
+                }
+                let ticket = WorktreeTrashCleanupTicket(
+                    trashRoot: destination.deletingLastPathComponent(),
+                    stagedPath: destination,
+                    directoryIdentity: directoryIdentity
+                )
+                try FileManager.default.createDirectory(
+                    at: WorktreeTrash.committedMarkerURL(for: ticket),
+                    withIntermediateDirectories: false
+                )
+            }
+        )
+
+        #expect(outcome == .synchronous)
+        #expect(!FileManager.default.fileExists(atPath: fixture.worktree.path.path))
+        let stagedDirectories = try FileManager.default.contentsOfDirectory(
+            at: trashRoot,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )
+        #expect(stagedDirectories.isEmpty)
+        #expect(try await fixture.service.list(repoPath: fixture.repo, projectId: "p").count == 1)
+    }
+
+    @Test func fastLocalRemoveFailsClosedWhenWorktreeBecameDirty() async throws {
+        let fixture = try await makeLinkedWorktree(suffix: "became-dirty")
+        defer { fixture.removeFiles() }
+        try "dirty".write(
+            to: fixture.worktree.path.appendingPathComponent("new.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        await #expect(throws: WorktreeService.WorktreeError.self) {
+            try await fixture.service.removeFastLocal(
+                repoPath: fixture.repo,
+                worktree: fixture.worktree,
+                deleteBranchIfMerged: false,
+                force: false
+            )
+        }
+        #expect(FileManager.default.fileExists(atPath: fixture.worktree.path.path))
+    }
+
+    @Test func fastLocalRemoveRestoresWorktreeMadeDirtyDuringStaging() async throws {
+        let fixture = try await makeLinkedWorktree(suffix: "dirty-during-stage")
+        let dirtyFile = fixture.worktree.path.appendingPathComponent("new-during-stage.txt")
+        let trashRoot = WorktreeTrash.root(
+            commonGitDirectory: fixture.repo.appendingPathComponent(".git")
+        )
+        defer {
+            try? FileManager.default.removeItem(at: trashRoot)
+            fixture.removeFiles()
+        }
+
+        await #expect(throws: WorktreeService.WorktreeError.self) {
+            try await fixture.service.removeFastLocal(
+                repoPath: fixture.repo,
+                worktree: fixture.worktree,
+                deleteBranchIfMerged: false,
+                force: false,
+                moveItem: { source, destination in
+                    try FileManager.default.moveItem(at: source, to: destination)
+                    try "do not discard".write(
+                        to: destination.appendingPathComponent(dirtyFile.lastPathComponent),
+                        atomically: true,
+                        encoding: .utf8
+                    )
+                }
+            )
+        }
+
+        #expect(FileManager.default.fileExists(atPath: dirtyFile.path))
+        let registrations = try await Process.git(
+            ["worktree", "list", "--porcelain"],
+            cwd: fixture.repo
+        )
+        #expect(registrations.stdout.contains(fixture.worktree.path.path))
+    }
+
+    @Test func fastLocalRemoveDoesNotStageReplacementDirectoryEvenWithForce() async throws {
+        let fixture = try await makeLinkedWorktree(suffix: "replaced-before-stage")
+        let displaced = fixture.worktree.path.deletingLastPathComponent()
+            .appendingPathComponent("\(fixture.worktree.path.lastPathComponent)-displaced")
+        defer {
+            try? FileManager.default.removeItem(at: fixture.worktree.path)
+            try? FileManager.default.removeItem(at: displaced)
+            try? FileManager.default.removeItem(at: fixture.repo)
+        }
+        try FileManager.default.moveItem(at: fixture.worktree.path, to: displaced)
+        try FileManager.default.createDirectory(
+            at: fixture.worktree.path,
+            withIntermediateDirectories: true
+        )
+        let unrelatedMarker = fixture.worktree.path.appendingPathComponent("unrelated.txt")
+        try "do not delete".write(to: unrelatedMarker, atomically: true, encoding: .utf8)
+
+        await #expect(throws: WorktreeService.WorktreeError.self) {
+            try await fixture.service.removeFastLocal(
+                repoPath: fixture.repo,
+                worktree: fixture.worktree,
+                deleteBranchIfMerged: false,
+                force: true
+            )
+        }
+
+        #expect(FileManager.default.fileExists(atPath: unrelatedMarker.path))
+    }
+
+    @Test func fastLocalRemoveRestoresReplacementStagedDuringRenameWithoutRemovingRegistration() async throws {
+        let fixture = try await makeLinkedWorktree(suffix: "replaced-during-stage")
+        let originalPath = fixture.worktree.path.standardizedFileURL
+        let displaced = originalPath.deletingLastPathComponent()
+            .appendingPathComponent("\(originalPath.lastPathComponent)-displaced")
+        let unrelatedMarker = originalPath.appendingPathComponent("unrelated.txt")
+        defer {
+            try? FileManager.default.removeItem(at: originalPath)
+            try? FileManager.default.removeItem(at: displaced)
+            try? FileManager.default.removeItem(at: fixture.repo)
+        }
+
+        await #expect(throws: WorktreeService.WorktreeError.self) {
+            try await fixture.service.removeFastLocal(
+                repoPath: fixture.repo,
+                worktree: fixture.worktree,
+                deleteBranchIfMerged: false,
+                force: true,
+                moveItem: { source, destination in
+                    if source.standardizedFileURL == originalPath {
+                        try FileManager.default.moveItem(at: source, to: displaced)
+                        try FileManager.default.createDirectory(
+                            at: source,
+                            withIntermediateDirectories: true
+                        )
+                        try "do not delete".write(
+                            to: unrelatedMarker,
+                            atomically: true,
+                            encoding: .utf8
+                        )
+                    }
+                    try FileManager.default.moveItem(at: source, to: destination)
+                }
+            )
+        }
+
+        #expect(FileManager.default.fileExists(atPath: unrelatedMarker.path))
+        #expect(FileManager.default.fileExists(atPath: displaced.appendingPathComponent(".git").path))
+        let registrations = try await Process.git(
+            ["worktree", "list", "--porcelain"],
+            cwd: fixture.repo
+        )
+        let registeredPaths = registrations.stdout
+            .split(separator: "\n")
+            .compactMap { line -> String? in
+                guard line.hasPrefix("worktree ") else { return nil }
+                return URL(fileURLWithPath: String(line.dropFirst("worktree ".count)))
+                    .resolvingSymlinksInPath()
+                    .path
+            }
+        #expect(registeredPaths.contains(originalPath.resolvingSymlinksInPath().path))
+    }
+
+    @Test func fastLocalRemoveFallsBackWhenRenameFails() async throws {
+        let fixture = try await makeLinkedWorktree(suffix: "rename-fallback")
+        defer { fixture.removeFiles() }
+
+        let outcome = try await fixture.service.removeFastLocal(
+            repoPath: fixture.repo,
+            worktree: fixture.worktree,
+            deleteBranchIfMerged: false,
+            force: false,
+            moveItem: { _, _ in throw CocoaError(.fileWriteNoPermission) }
+        )
+
+        #expect(outcome == .synchronous)
+        #expect(!FileManager.default.fileExists(atPath: fixture.worktree.path.path))
+    }
+
+    @Test func fastLocalRemoveRestoresPathWhenRegistryRemovalFails() async throws {
+        let fixture = try await makeLinkedWorktree(suffix: "rollback")
+        defer { fixture.removeFiles() }
+        _ = try await Process.git(["worktree", "lock", fixture.worktree.path.path], cwd: fixture.repo)
+
+        await #expect(throws: WorktreeService.WorktreeError.self) {
+            try await fixture.service.removeFastLocal(
+                repoPath: fixture.repo,
+                worktree: fixture.worktree,
+                deleteBranchIfMerged: false,
+                force: false
+            )
+        }
+
+        #expect(FileManager.default.fileExists(atPath: fixture.worktree.path.path))
+    }
+
+    @Test func fastLocalRemoveUsesDoubleForceForApprovedLockedWorktree() async throws {
+        let fixture = try await makeLinkedWorktree(suffix: "locked-fast")
+        defer { fixture.removeFiles() }
+        _ = try await Process.git(["worktree", "lock", fixture.worktree.path.path], cwd: fixture.repo)
+
+        let outcome = try await fixture.service.removeFastLocal(
+            repoPath: fixture.repo,
+            worktree: fixture.worktree,
+            deleteBranchIfMerged: false,
+            force: true
+        )
+        guard case .staged(let ticket) = outcome else {
+            Issue.record("Expected staged removal")
+            return
+        }
+        defer { try? FileManager.default.removeItem(at: ticket.trashRoot) }
+        #expect(!FileManager.default.fileExists(atPath: fixture.worktree.path.path))
+    }
+
+    @Test func fastLocalRemoveNeverStagesARegisteredRemotePath() async throws {
+        let fixture = try await makeLinkedWorktree(suffix: "remote-fallback")
+        defer { fixture.removeFiles() }
+        RemoteHostRegistry.shared.register(root: fixture.worktree.path.path, host: "test-host")
+        defer { RemoteHostRegistry.shared.unregister(root: fixture.worktree.path.path) }
+
+        let outcome = try await fixture.service.removeFastLocal(
+            repoPath: fixture.repo,
+            worktree: fixture.worktree,
+            deleteBranchIfMerged: false,
+            force: false,
+            usesRemoteHostRegistry: false
+        )
+
+        #expect(outcome == .synchronous)
+        #expect(!FileManager.default.fileExists(atPath: fixture.worktree.path.path))
+    }
+
+    @Test func fastLocalRemoveWithDeleteBranchUsesRealBranchName() async throws {
+        let repo = try await makeRepo()
+        let destination = repo.deletingLastPathComponent()
+            .appendingPathComponent("\(repo.lastPathComponent)-feature-name")
+        defer {
+            try? FileManager.default.removeItem(at: destination)
+            try? FileManager.default.removeItem(at: repo)
+        }
+        let service = WorktreeService()
+        let worktree = try await service.add(
+            repoPath: repo,
+            base: "main",
+            branch: "feature/name",
+            destination: destination,
+            projectId: "p"
+        )
+
+        let outcome = try await service.removeFastLocal(
+            repoPath: repo,
+            worktree: worktree,
+            deleteBranchIfMerged: true,
+            force: false
+        )
+        guard case .staged(let ticket) = outcome else {
+            Issue.record("Expected staged removal")
+            return
+        }
+        defer { try? FileManager.default.removeItem(at: ticket.trashRoot) }
+
+        let branches = try await Process.git(["branch", "--list", "feature/name"], cwd: repo)
+        #expect(branches.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+
+    @Test func fastLocalRemoveReportsBothPathsWhenRollbackFails() async throws {
+        let fixture = try await makeLinkedWorktree(suffix: "rollback-fails")
+        defer { fixture.removeFiles() }
+        _ = try await Process.git(["worktree", "lock", fixture.worktree.path.path], cwd: fixture.repo)
+        let originalPath = fixture.worktree.path.standardizedFileURL
+
+        do {
+            _ = try await fixture.service.removeFastLocal(
+                repoPath: fixture.repo,
+                worktree: fixture.worktree,
+                deleteBranchIfMerged: false,
+                force: false,
+                moveItem: { source, destination in
+                    if source.standardizedFileURL == originalPath {
+                        try FileManager.default.moveItem(at: source, to: destination)
+                        try "collision".write(to: source, atomically: true, encoding: .utf8)
+                    } else {
+                        throw CocoaError(.fileWriteFileExists)
+                    }
+                }
+            )
+            Issue.record("Expected registry and rollback failure")
+        } catch {
+            let message = error.localizedDescription
+            #expect(message.contains(fixture.worktree.path.path))
+            let trash = WorktreeTrash.root(
+                commonGitDirectory: fixture.repo.appendingPathComponent(".git")
+            )
+            let staged = try #require(
+                FileManager.default.contentsOfDirectory(at: trash, includingPropertiesForKeys: nil).first
+            )
+            #expect(message.contains(staged.path))
+            #expect(FileManager.default.fileExists(atPath: staged.appendingPathComponent(".git").path))
+            try? FileManager.default.removeItem(at: trash)
+        }
+    }
+
+    @Test func fastLocalRemoveRollbackFailureIsNotSweepEligible() async throws {
+        let fixture = try await makeLinkedWorktree(suffix: "rollback-not-committed")
+        defer { fixture.removeFiles() }
+        _ = try await Process.git(["worktree", "lock", fixture.worktree.path.path], cwd: fixture.repo)
+        let originalPath = fixture.worktree.path.standardizedFileURL
+
+        await #expect(throws: WorktreeService.WorktreeError.self) {
+            try await fixture.service.removeFastLocal(
+                repoPath: fixture.repo,
+                worktree: fixture.worktree,
+                deleteBranchIfMerged: false,
+                force: false,
+                moveItem: { source, destination in
+                    if source.standardizedFileURL == originalPath {
+                        try FileManager.default.moveItem(at: source, to: destination)
+                        try "collision".write(to: source, atomically: true, encoding: .utf8)
+                    } else {
+                        throw CocoaError(.fileWriteFileExists)
+                    }
+                }
+            )
+        }
+
+        let common = fixture.repo.appendingPathComponent(".git")
+        let staged = try #require(
+            FileManager.default.contentsOfDirectory(
+                at: WorktreeTrash.root(commonGitDirectory: common),
+                includingPropertiesForKeys: nil
+            ).first
+        )
+        #expect(FileManager.default.fileExists(atPath: staged.appendingPathComponent(".git").path))
+        #expect(WorktreeTrash.staleTickets(
+            commonGitDirectories: [common],
+            olderThan: .distantFuture
+        ).isEmpty)
+    }
+
+    @Test func rollbackFailureIgnoresCommitMarkerLookalikeInsideWorktree() async throws {
+        let fixture = try await makeLinkedWorktree(suffix: "rollback-marker-lookalike")
+        defer { fixture.removeFiles() }
+        try ".alas-worktree-deletion-committed\n".write(
+            to: fixture.repo.appendingPathComponent(".git/info/exclude"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try "1\n".write(
+            to: fixture.worktree.path.appendingPathComponent(".alas-worktree-deletion-committed"),
+            atomically: true,
+            encoding: .utf8
+        )
+        _ = try await Process.git(["worktree", "lock", fixture.worktree.path.path], cwd: fixture.repo)
+        let originalPath = fixture.worktree.path.standardizedFileURL
+
+        await #expect(throws: WorktreeService.WorktreeError.self) {
+            try await fixture.service.removeFastLocal(
+                repoPath: fixture.repo,
+                worktree: fixture.worktree,
+                deleteBranchIfMerged: false,
+                force: false,
+                moveItem: { source, destination in
+                    if source.standardizedFileURL == originalPath {
+                        try FileManager.default.moveItem(at: source, to: destination)
+                        try "collision".write(to: source, atomically: true, encoding: .utf8)
+                    } else {
+                        throw CocoaError(.fileWriteFileExists)
+                    }
+                }
+            )
+        }
+
+        #expect(WorktreeTrash.staleTickets(
+            commonGitDirectories: [fixture.repo.appendingPathComponent(".git")],
+            olderThan: .distantFuture
+        ).isEmpty)
+    }
+
     @Test func removeWithForceSucceedsOnDirtyWorktree() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
@@ -641,10 +1182,20 @@ extension WorktreeServiceTests {
         #expect(listed.count == 1) // only main remains
     }
 
-    @Test func removeRetriesWithoutLFSFiltersWhenGitStatusRequiresMissingLFS() async throws {
-        let repo = try await makeRepo()
-        defer { try? FileManager.default.removeItem(at: repo) }
+    private struct MissingLFSFixture {
+        let repo: URL
+        let destination: URL
+        let worktree: Worktree
+        let marker: URL
 
+        func removeFiles() {
+            try? FileManager.default.removeItem(at: destination)
+            try? FileManager.default.removeItem(at: repo)
+        }
+    }
+
+    private func makeMissingLFSFixture(suffix: String) async throws -> MissingLFSFixture {
+        let repo = try await makeRepo()
         let lfsOverride = [
             "-c", "filter.lfs.process=",
             "-c", "filter.lfs.smudge=",
@@ -671,8 +1222,8 @@ extension WorktreeServiceTests {
         _ = try await Process.git(lfsOverride + ["commit", "-q", "-m", "add lfs pointer"], cwd: repo)
 
         let dest = repo.deletingLastPathComponent()
-            .appendingPathComponent("\(repo.lastPathComponent)-missing-lfs-remove")
-        let branch = "feat/missing-lfs-remove"
+            .appendingPathComponent("\(repo.lastPathComponent)-\(suffix)")
+        let branch = "feat/\(suffix)"
         _ = try await Process.git(
             lfsOverride + ["worktree", "add", "-q", dest.path, "-b", branch],
             cwd: repo
@@ -691,9 +1242,46 @@ extension WorktreeServiceTests {
             status: .clean,
             lastActivity: Date()
         )
-        try await WorktreeService().remove(repoPath: repo, worktree: wt, deleteBranchIfMerged: false)
+        return MissingLFSFixture(
+            repo: repo,
+            destination: dest,
+            worktree: wt,
+            marker: dest.appendingPathComponent("data.bin")
+        )
+    }
 
-        #expect(!FileManager.default.fileExists(atPath: dest.path))
+    @Test func removeRetriesWithoutLFSFiltersWhenGitStatusRequiresMissingLFS() async throws {
+        let fixture = try await makeMissingLFSFixture(suffix: "missing-lfs-remove")
+        defer { fixture.removeFiles() }
+
+        try await WorktreeService().remove(
+            repoPath: fixture.repo,
+            worktree: fixture.worktree,
+            deleteBranchIfMerged: false
+        )
+
+        #expect(!FileManager.default.fileExists(atPath: fixture.destination.path))
+    }
+
+    @Test func fastLocalRemovePreservesMissingLFSCleanSemantics() async throws {
+        let fixture = try await makeMissingLFSFixture(suffix: "fast-missing-lfs")
+        defer { fixture.removeFiles() }
+
+        let outcome = try await WorktreeService().removeFastLocal(
+            repoPath: fixture.repo,
+            worktree: fixture.worktree,
+            deleteBranchIfMerged: false
+        )
+        guard case .staged(let ticket) = outcome else {
+            Issue.record("Expected staged removal")
+            return
+        }
+        defer { try? FileManager.default.removeItem(at: ticket.trashRoot) }
+
+        #expect(!FileManager.default.fileExists(atPath: fixture.worktree.path.path))
+        #expect(FileManager.default.fileExists(
+            atPath: ticket.stagedPath.appendingPathComponent(fixture.marker.lastPathComponent).path
+        ))
     }
 
     @Test func removePreservesSmudgedLFSCleanSemanticsWhenGitLFSIsMissing() async throws {
@@ -839,6 +1427,12 @@ extension WorktreeServiceTests {
         let submoduleRepo: URL
         let service: WorktreeService
         let worktree: Worktree
+
+        func removeFiles() {
+            try? FileManager.default.removeItem(at: worktree.path)
+            try? FileManager.default.removeItem(at: repo)
+            try? FileManager.default.removeItem(at: submoduleRepo)
+        }
     }
 
     private func makeRepoWithInitializedSubmodule(suffix: String) async throws -> InitializedSubmoduleFixture {
@@ -914,6 +1508,73 @@ extension WorktreeServiceTests {
         let listed = try await fixture.service.list(repoPath: fixture.repo, projectId: "p")
         #expect(listed.count == 1)
         #expect(!FileManager.default.fileExists(atPath: fixture.worktree.path.path))
+    }
+
+    @Test func fastLocalRemoveSupportsInitializedSubmodulesAfterForceApproval() async throws {
+        let fixture = try await makeRepoWithInitializedSubmodule(suffix: "fast-submodule")
+        defer { fixture.removeFiles() }
+
+        let outcome = try await fixture.service.removeFastLocal(
+            repoPath: fixture.repo,
+            worktree: fixture.worktree,
+            deleteBranchIfMerged: false,
+            force: true
+        )
+        guard case .staged(let ticket) = outcome else {
+            Issue.record("Expected staged removal")
+            return
+        }
+        defer { try? FileManager.default.removeItem(at: ticket.trashRoot) }
+
+        let listed = try await fixture.service.list(repoPath: fixture.repo, projectId: "p")
+        #expect(listed.count == 1)
+    }
+
+    @Test func fastLocalRemoveRestoresWhenSubmoduleLocalStateAppearsAfterApproval() async throws {
+        let fixture = try await makeRepoWithInitializedSubmodule(
+            suffix: "fast-submodule-local-state-race"
+        )
+        let trashRoot = WorktreeTrash.root(
+            commonGitDirectory: fixture.repo.appendingPathComponent(".git")
+        )
+        defer {
+            try? FileManager.default.removeItem(at: trashRoot)
+            fixture.removeFiles()
+        }
+
+        await #expect(throws: WorktreeService.WorktreeError.self) {
+            try await fixture.service.removeFastLocal(
+                repoPath: fixture.repo,
+                worktree: fixture.worktree,
+                deleteBranchIfMerged: false,
+                force: true,
+                moveItem: { source, destination in
+                    if source.standardizedFileURL == fixture.worktree.path.standardizedFileURL {
+                        let submodule = source.appendingPathComponent("Deps/Submodule")
+                        let process = Foundation.Process()
+                        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+                        process.arguments = ["tag", "local-after-approval"]
+                        process.currentDirectoryURL = submodule
+                        try process.run()
+                        process.waitUntilExit()
+                        guard process.terminationStatus == 0 else {
+                            throw CocoaError(.fileWriteUnknown)
+                        }
+                    }
+                    try FileManager.default.moveItem(at: source, to: destination)
+                }
+            )
+        }
+
+        #expect(FileManager.default.fileExists(atPath: fixture.worktree.path.path))
+        #expect(FileManager.default.fileExists(
+            atPath: fixture.worktree.path.appendingPathComponent("Deps/Submodule").path
+        ))
+        let registrations = try await Process.git(
+            ["worktree", "list", "--porcelain"],
+            cwd: fixture.repo
+        )
+        #expect(registrations.stdout.contains(fixture.worktree.path.path))
     }
 
     @Test func removeDoesNotForceDeleteIgnoredDirtySubmodule() async throws {

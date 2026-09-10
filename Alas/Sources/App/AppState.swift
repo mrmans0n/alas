@@ -60,6 +60,7 @@ final class AppState {
     typealias ACPDetachRunner = @MainActor (ACPSessionManager, ACPSession.ID) async -> Void
     typealias RemoteAccelerationPreparer = @MainActor (ProjectConfig) async -> Void
     typealias RunScriptCompletionWaiter = @Sendable (RunScriptCaptureLocation) async throws -> RunScriptCompletion
+    typealias WorktreeCleanupLauncher = @MainActor (WorktreeTrashCleanupTicket) throws -> Void
     static let piMCPGeneratedConfigExcludePath = ".pi/mcp.json"
 
     /// Stable for this process; identifies this app instance to the ACP
@@ -131,6 +132,8 @@ final class AppState {
     private let acpDetachRunner: ACPDetachRunner?
     @ObservationIgnored
     private let remoteAccelerationPreparer: RemoteAccelerationPreparer?
+    @ObservationIgnored
+    private let worktreeCleanupLauncher: WorktreeCleanupLauncher
 
     private struct PendingACPDetach {
         let id: UUID
@@ -637,7 +640,10 @@ final class AppState {
         workspaceSpacePersistenceBridge: WorkspaceSpacePersistenceBridge? = nil,
         workspacesManager: WorkspacesManager? = nil,
         workspaceStore: WorkspaceStore = WorkspaceStore(),
-        workspaceRemoteTransport: WorkspaceRemoteTransport = .init()
+        workspaceRemoteTransport: WorkspaceRemoteTransport = .init(),
+        worktreeCleanupLauncher: @escaping WorktreeCleanupLauncher = {
+            try WorktreeTrashCleaner.launch($0)
+        }
     ) {
         self.store = store
         self.workspaceStore = workspaceStore
@@ -655,6 +661,7 @@ final class AppState {
         self.closeTabConfirmer = closeTabConfirmer
         self.acpDetachRunner = acpDetachRunner
         self.remoteAccelerationPreparer = remoteAccelerationPreparer
+        self.worktreeCleanupLauncher = worktreeCleanupLauncher
         self.projectGitWatcherFactory = projectGitWatcherFactory
         self.runScriptCompletionWaiter = runScriptCompletionWaiter
         let workspaceBridge = workspaceSpacePersistenceBridge ?? WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore)
@@ -719,6 +726,10 @@ final class AppState {
         }
         Task.detached {
             RunScriptCompletionMonitor.cleanupStaleLocalFiles()
+        }
+        let cleanupProjects = projectsFile.projects
+        Task.detached(priority: .utility) {
+            WorktreeTrashCleaner.sweep(projects: cleanupProjects)
         }
 
         // Kick off a background resolution of the user's login-shell PATH so
@@ -7725,8 +7736,9 @@ final class AppState {
         force: Bool,
         removedIndex: Int
     ) async {
+        let outcome: WorktreeRemovalOutcome
         do {
-            try await Self.performRemoveWorktree(
+            outcome = try await Self.performRemoveWorktree(
                 repoPath: repoPath,
                 worktree: worktree,
                 deleteBranchIfMerged: deleteBranchIfMerged,
@@ -7761,6 +7773,19 @@ final class AppState {
         }
 
         cleanupWorktreeState(worktreeId: worktree.id)
+        if case .staged(let ticket) = outcome {
+            do {
+                try worktreeCleanupLauncher(ticket)
+            } catch {
+                Self.logger.error(
+                    "Could not launch worktree cleanup for \(ticket.stagedPath.path, privacy: .public): \(error.localizedDescription, privacy: .public)"
+                )
+            }
+            let cleanupProjects = projects
+            Task.detached(priority: .utility) {
+                WorktreeTrashCleaner.sweep(projects: cleanupProjects)
+            }
+        }
         // Always clear the deleting state after a successful remove,
         // even if the subsequent refresh fails.
         projectsManager.setOperationState(id: worktree.id, state: nil)
@@ -7819,10 +7844,19 @@ final class AppState {
         worktree: Worktree,
         deleteBranchIfMerged: Bool,
         force: Bool
-    ) async throws {
+    ) async throws -> WorktreeRemovalOutcome {
         try await ProjectMutationGate.shared.withMutation(projectID: worktree.projectId) {
             try await Task.detached {
-                try await WorktreeService().remove(
+                if worktree.path.isRemoteAlasPath {
+                    try await WorktreeService().remove(
+                        repoPath: repoPath,
+                        worktree: worktree,
+                        deleteBranchIfMerged: deleteBranchIfMerged,
+                        force: force
+                    )
+                    return .synchronous
+                }
+                return try await WorktreeService().removeFastLocal(
                     repoPath: repoPath,
                     worktree: worktree,
                     deleteBranchIfMerged: deleteBranchIfMerged,

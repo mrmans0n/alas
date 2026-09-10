@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 
 struct WorktreeDeletePreflight: Equatable {
@@ -182,7 +183,7 @@ struct WorktreeService {
         }
     }
 
-    private static func localGitDirectory(forWorktreeAt path: URL) -> URL? {
+    static func localGitDirectory(forWorktreeAt path: URL) -> URL? {
         let dotGit = path.appendingPathComponent(".git")
         var isDirectory = ObjCBool(false)
         guard FileManager.default.fileExists(atPath: dotGit.path, isDirectory: &isDirectory) else { return nil }
@@ -196,6 +197,18 @@ struct WorktreeService {
             return URL(fileURLWithPath: rawPath).standardizedFileURL
         }
         return path.appendingPathComponent(rawPath).standardizedFileURL
+    }
+
+    static func localCommonGitDirectory(forWorktreeAt path: URL) -> URL? {
+        guard let gitDirectory = localGitDirectory(forWorktreeAt: path) else { return nil }
+        let marker = gitDirectory.appendingPathComponent("commondir")
+        guard let raw = try? String(contentsOf: marker, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty
+        else { return gitDirectory.standardizedFileURL }
+        return (raw as NSString).isAbsolutePath
+            ? URL(fileURLWithPath: raw).standardizedFileURL
+            : gitDirectory.appendingPathComponent(raw).standardizedFileURL
     }
 
     static func remoteLineageIDCommand(path: String, candidateID: String = UUID().uuidString.lowercased()) -> String {
@@ -783,6 +796,304 @@ struct WorktreeService {
         }
     }
 
+    func removeFastLocal(
+        repoPath: URL,
+        worktree: Worktree,
+        deleteBranchIfMerged: Bool,
+        force: Bool = false,
+        usesRemoteHostRegistry: Bool = true,
+        moveItem: @Sendable (URL, URL) throws -> Void = {
+            try WorktreeService.renameAtomically(from: $0, to: $1)
+        }
+    ) async throws -> WorktreeRemovalOutcome {
+        if repoPath.isRemoteAlasPath || worktree.path.isRemoteAlasPath {
+            try await remove(
+                repoPath: repoPath,
+                worktree: worktree,
+                deleteBranchIfMerged: deleteBranchIfMerged,
+                force: force,
+                usesRemoteHostRegistry: usesRemoteHostRegistry
+            )
+            return .synchronous
+        }
+
+        let registrations = try await Process.git(
+            ["worktree", "list", "--porcelain"],
+            cwd: repoPath,
+            usesRemoteHostRegistry: false
+        )
+        guard registrations.exitCode == 0 else {
+            throw WorktreeError.gitFailed(registrations.stderr)
+        }
+        let registration = Self.registrationState(
+            in: registrations.stdout,
+            matching: worktree.path
+        )
+        guard registration.isPresent else {
+            throw WorktreeError.gitFailed("Worktree registration was not found.")
+        }
+        guard let expectedCommonDirectory = Self.localCommonGitDirectory(
+            forWorktreeAt: repoPath
+        ),
+              let expectedRegistration = Self.linkedWorktreeRegistration(
+                  worktree.path,
+                  expectedCommonDirectory: expectedCommonDirectory
+              )
+        else {
+            throw WorktreeError.gitFailed(
+                "Worktree path no longer matches its Git registration."
+            )
+        }
+        let branchDeletionGitDirectory = repoPath.standardizedFileURL == worktree.path.standardizedFileURL
+            ? nil
+            : Self.localGitDirectory(forWorktreeAt: repoPath)
+
+        var auditedMissingLFS = false
+        if !force {
+            do {
+                guard try await isWorktreeClean(
+                    worktree.path,
+                    usesRemoteHostRegistry: false
+                ) else {
+                    throw WorktreeError.gitFailed("Worktree contains modified or untracked files.")
+                }
+            } catch let error as WorktreeError {
+                guard case .gitFailed(let message) = error,
+                      Self.looksLikeMissingLFS(message),
+                      try await canForceRemoveAfterMissingLFS(
+                          worktree.path,
+                          usesRemoteHostRegistry: false
+                      )
+                else { throw error }
+                auditedMissingLFS = true
+            }
+        }
+
+        _ = try? await Process.git(
+            ["fsmonitor--daemon", "stop"],
+            cwd: worktree.path,
+            usesRemoteHostRegistry: false,
+            timeout: 2
+        )
+
+        let ticket: WorktreeTrashCleanupTicket
+        do {
+            let commonDirectoryResult = try await Process.git(
+                ["rev-parse", "--git-common-dir"],
+                cwd: repoPath,
+                usesRemoteHostRegistry: false
+            )
+            guard commonDirectoryResult.exitCode == 0 else {
+                throw WorktreeError.gitFailed(commonDirectoryResult.stderr)
+            }
+            let commonDirectoryOutput = commonDirectoryResult.stdout
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !commonDirectoryOutput.isEmpty else {
+                throw WorktreeError.gitFailed("Git returned an empty common directory.")
+            }
+            let commonDirectory: URL
+            if (commonDirectoryOutput as NSString).isAbsolutePath {
+                commonDirectory = URL(fileURLWithPath: commonDirectoryOutput).standardizedFileURL
+            } else {
+                commonDirectory = repoPath
+                    .appendingPathComponent(commonDirectoryOutput)
+                    .standardizedFileURL
+            }
+            guard Self.fileSystemPathsEqual(commonDirectory, expectedCommonDirectory) else {
+                throw WorktreeError.gitFailed(
+                    "Git common directory no longer matches the registered worktree."
+                )
+            }
+            ticket = try WorktreeTrash.makeTicket(
+                commonGitDirectory: commonDirectory,
+                originalPath: worktree.path
+            )
+            try FileManager.default.createDirectory(
+                at: ticket.trashRoot,
+                withIntermediateDirectories: true
+            )
+        } catch {
+            try await remove(
+                repoPath: repoPath,
+                worktree: worktree,
+                deleteBranchIfMerged: deleteBranchIfMerged,
+                force: force,
+                forceTwice: registration.isLocked && force,
+                usesRemoteHostRegistry: false
+            )
+            return .synchronous
+        }
+
+        guard WorktreeTrash.directoryIdentity(at: worktree.path)
+            == expectedRegistration.directoryIdentity
+        else {
+            throw WorktreeError.gitFailed("Worktree changed before it could be staged.")
+        }
+        do {
+            try WorktreeTrash.markPending(
+                ticket,
+                originalPath: worktree.path,
+                linkedGitDirectory: expectedRegistration.gitDirectory
+            )
+            try moveItem(worktree.path, ticket.stagedPath)
+        } catch {
+            try await remove(
+                repoPath: repoPath,
+                worktree: worktree,
+                deleteBranchIfMerged: deleteBranchIfMerged,
+                force: force,
+                forceTwice: registration.isLocked && force,
+                usesRemoteHostRegistry: false
+            )
+            return .synchronous
+        }
+
+        func failAfterRollingBack(_ registryMessage: String) throws -> Never {
+            try? FileManager.default.removeItem(
+                at: WorktreeTrash.committedMarkerURL(for: ticket)
+            )
+            try? FileManager.default.removeItem(
+                at: WorktreeTrash.pendingMarkerURL(for: ticket)
+            )
+            do {
+                try moveItem(ticket.stagedPath, worktree.path)
+            } catch {
+                let gitMessage = registryMessage
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let stagedPath = Self.resolvedFileSystemPath(ticket.stagedPath)
+                throw WorktreeError.gitFailed(
+                    "Failed to remove Git registration for \(worktree.path.path); "
+                        + "staged files remain at \(stagedPath). "
+                        + "Git: \(gitMessage). Rollback: \(error.localizedDescription)"
+                )
+            }
+            throw WorktreeError.gitFailed(registryMessage)
+        }
+
+        guard WorktreeTrash.matchesDirectoryIdentity(ticket) else {
+            try failAfterRollingBack("Worktree changed while it was being staged.")
+        }
+
+        let stagedSubmodulesHaveNoLocalState: Bool
+        do {
+            stagedSubmodulesHaveNoLocalState = try await stagedInitializedSubmodulesHaveNoLocalState(
+                ticket.stagedPath,
+                gitDirectory: expectedRegistration.gitDirectory
+            )
+        } catch {
+            try failAfterRollingBack(error.localizedDescription)
+        }
+        guard stagedSubmodulesHaveNoLocalState else {
+            try failAfterRollingBack("Worktree contains initialized submodule local state.")
+        }
+        guard WorktreeTrash.matchesDirectoryIdentity(ticket) else {
+            try failAfterRollingBack("Worktree changed while its submodules were audited.")
+        }
+
+        if !force {
+            let stagedIsClean: Bool
+            do {
+                if auditedMissingLFS {
+                    stagedIsClean = try await canForceRemoveAfterMissingLFS(
+                        ticket.stagedPath,
+                        gitDirectory: expectedRegistration.gitDirectory,
+                        usesRemoteHostRegistry: false
+                    )
+                } else {
+                    stagedIsClean = try await isWorktreeClean(
+                        ticket.stagedPath,
+                        gitDirectory: expectedRegistration.gitDirectory,
+                        usesRemoteHostRegistry: false
+                    )
+                }
+            } catch {
+                try failAfterRollingBack(error.localizedDescription)
+            }
+            guard stagedIsClean else {
+                try failAfterRollingBack("Worktree contains modified or untracked files.")
+            }
+            guard WorktreeTrash.matchesDirectoryIdentity(ticket) else {
+                try failAfterRollingBack("Worktree changed while its contents were audited.")
+            }
+        }
+
+        let commonGitArguments = ["--git-dir", expectedCommonDirectory.path]
+        var removeArgs = commonGitArguments + ["worktree", "remove", worktree.path.path]
+        if registration.isLocked && force {
+            removeArgs.append(contentsOf: ["--force", "--force"])
+        } else if force || auditedMissingLFS {
+            removeArgs.append("--force")
+        }
+        let initialRemoveArgs = auditedMissingLFS
+            ? Self.lfsFilterOverride + removeArgs
+            : removeArgs
+        let removeResult: ProcessResult
+        do {
+            var result = try await Process.git(
+                initialRemoveArgs,
+                cwd: expectedCommonDirectory,
+                usesRemoteHostRegistry: false,
+                timeout: 90
+            )
+            if result.exitCode != 0,
+               !auditedMissingLFS,
+               Self.looksLikeMissingLFS(result.stderr) {
+                result = try await Process.git(
+                    Self.lfsFilterOverride + removeArgs,
+                    cwd: expectedCommonDirectory,
+                    usesRemoteHostRegistry: false,
+                    timeout: 90
+                )
+            }
+            removeResult = result
+        } catch {
+            try failAfterRollingBack(error.localizedDescription)
+        }
+        if removeResult.exitCode != 0 {
+            try failAfterRollingBack(removeResult.stderr)
+        }
+
+        let outcome: WorktreeRemovalOutcome
+        do {
+            try WorktreeTrash.markCommitted(ticket)
+            try? FileManager.default.removeItem(at: WorktreeTrash.pendingMarkerURL(for: ticket))
+            outcome = .staged(ticket)
+        } catch {
+            let markerFailure = error.localizedDescription
+            let stagedPath = Self.resolvedFileSystemPath(ticket.stagedPath)
+            guard WorktreeTrash.isValid(ticket),
+                  WorktreeTrash.matchesDirectoryIdentity(ticket)
+            else {
+                throw WorktreeError.gitFailed(
+                    "Git removed the worktree registration, but the deletion marker "
+                        + "could not be written and the staged directory changed. "
+                        + "Files remain at \(stagedPath). Marker: \(markerFailure)"
+                )
+            }
+            do {
+                try FileManager.default.removeItem(at: ticket.stagedPath)
+                outcome = .synchronous
+            } catch {
+                throw WorktreeError.gitFailed(
+                    "Git removed the worktree registration, but the deletion marker "
+                        + "could not be written and synchronous cleanup failed; "
+                        + "staged files remain at \(stagedPath). "
+                        + "Marker: \(markerFailure). Cleanup: \(error.localizedDescription)"
+                )
+            }
+        }
+
+        if deleteBranchIfMerged && worktree.branch != "(detached)" {
+            let branchGitDirectory = branchDeletionGitDirectory ?? expectedCommonDirectory
+            _ = try? await Process.git(
+                ["--git-dir", branchGitDirectory.path, "branch", "-d", worktree.branch],
+                cwd: expectedCommonDirectory,
+                usesRemoteHostRegistry: false
+            )
+        }
+        return outcome
+    }
+
     func deletePreflight(
         worktreePath: URL,
         usesRemoteHostRegistry: Bool = true
@@ -880,6 +1191,102 @@ struct WorktreeService {
 
     // MARK: - Helpers
 
+    private static func renameAtomically(from source: URL, to destination: URL) throws {
+        let result: (status: Int32, error: Int32) = source.withUnsafeFileSystemRepresentation { sourcePath in
+            destination.withUnsafeFileSystemRepresentation { destinationPath in
+                guard let sourcePath, let destinationPath else { return (-1, EINVAL) }
+                let status = Darwin.rename(sourcePath, destinationPath)
+                return (status, status == 0 ? 0 : errno)
+            }
+        }
+        guard result.status == 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(result.error))
+        }
+    }
+
+    private static func resolvedFileSystemPath(_ url: URL) -> String {
+        url.withUnsafeFileSystemRepresentation { path in
+            guard let path, let resolved = Darwin.realpath(path, nil) else { return url.path }
+            defer { Darwin.free(resolved) }
+            return String(cString: resolved)
+        }
+    }
+
+    private static func fileSystemPathsEqual(_ lhs: URL, _ rhs: URL) -> Bool {
+        resolvedFileSystemPath(lhs) == resolvedFileSystemPath(rhs)
+    }
+
+    private struct LinkedWorktreeRegistration {
+        let directoryIdentity: WorktreeTrashDirectoryIdentity
+        let gitDirectory: URL
+    }
+
+    private static func linkedWorktreeRegistration(
+        _ worktreePath: URL,
+        expectedCommonDirectory: URL
+    ) -> LinkedWorktreeRegistration? {
+        let fileManager = FileManager.default
+        guard let directoryIdentity = WorktreeTrash.directoryIdentity(at: worktreePath) else {
+            return nil
+        }
+
+        let dotGit = worktreePath.appendingPathComponent(".git", isDirectory: false)
+        guard let dotGitAttributes = try? fileManager.attributesOfItem(atPath: dotGit.path),
+              dotGitAttributes[.type] as? FileAttributeType == .typeRegular,
+              let gitDirectory = localGitDirectory(forWorktreeAt: worktreePath),
+              let commonDirectory = localCommonGitDirectory(forWorktreeAt: worktreePath),
+              fileSystemPathsEqual(commonDirectory, expectedCommonDirectory)
+        else { return nil }
+
+        let expectedWorktreesDirectory = expectedCommonDirectory
+            .appendingPathComponent("worktrees", isDirectory: true)
+        guard fileSystemPathsEqual(
+            gitDirectory.deletingLastPathComponent(),
+            expectedWorktreesDirectory
+        ) else { return nil }
+
+        let backlinkFile = gitDirectory.appendingPathComponent("gitdir", isDirectory: false)
+        guard let rawBacklink = try? String(contentsOf: backlinkFile, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawBacklink.isEmpty
+        else { return nil }
+        let backlink = (rawBacklink as NSString).isAbsolutePath
+            ? URL(fileURLWithPath: rawBacklink)
+            : gitDirectory.appendingPathComponent(rawBacklink)
+        guard fileSystemPathsEqual(backlink, dotGit) else { return nil }
+        return LinkedWorktreeRegistration(
+            directoryIdentity: directoryIdentity,
+            gitDirectory: gitDirectory
+        )
+    }
+
+    private static func registrationState(
+        in porcelain: String,
+        matching worktreePath: URL
+    ) -> (isPresent: Bool, isLocked: Bool) {
+        let target = worktreePath.standardizedFileURL.path
+        var currentPath: String?
+        var currentLocked = false
+
+        func currentMatch() -> (isPresent: Bool, isLocked: Bool)? {
+            guard let currentPath,
+                  URL(fileURLWithPath: currentPath).standardizedFileURL.path == target
+            else { return nil }
+            return (true, currentLocked)
+        }
+
+        for line in porcelain.split(separator: "\n") {
+            if line.hasPrefix("worktree ") {
+                if let match = currentMatch() { return match }
+                currentPath = String(line.dropFirst("worktree ".count))
+                currentLocked = false
+            } else if line.hasPrefix("locked") {
+                currentLocked = true
+            }
+        }
+        return currentMatch() ?? (false, false)
+    }
+
     private static let lfsFilterOverride = [
         "-c", "filter.lfs.process=",
         "-c", "filter.lfs.smudge=",
@@ -904,10 +1311,12 @@ struct WorktreeService {
 
     private func containsInitializedSubmodules(
         _ path: URL,
+        gitDirectory: URL? = nil,
         usesRemoteHostRegistry: Bool = true
     ) async throws -> Bool {
         let result = try await Process.git(
-            ["submodule", "status", "--recursive"],
+            Self.gitContextArguments(worktreePath: path, gitDirectory: gitDirectory)
+                + ["submodule", "status", "--recursive"],
             cwd: path,
             usesRemoteHostRegistry: usesRemoteHostRegistry
         )
@@ -947,12 +1356,84 @@ struct WorktreeService {
             }
     }
 
+    private func stagedInitializedSubmodulesHaveNoLocalState(
+        _ path: URL,
+        gitDirectory: URL
+    ) async throws -> Bool {
+        let submodulePaths = try await submodulePathsFromGitmodules(
+            path,
+            usesRemoteHostRegistry: false
+        )
+        for relativePath in submodulePaths {
+            let submodulePath = path.appendingPathComponent(relativePath)
+            guard FileManager.default.fileExists(
+                atPath: submodulePath.appendingPathComponent(".git").path
+            ) else { continue }
+            guard let submoduleGitDirectory = Self.submoduleGitDirectory(
+                for: submodulePath,
+                relativePath: relativePath,
+                parentGitDirectory: gitDirectory
+            ) else { return false }
+            guard try await isWorktreeClean(
+                submodulePath,
+                gitDirectory: submoduleGitDirectory,
+                usesRemoteHostRegistry: false
+            ) else { return false }
+            guard try await repositoryHasNoLocalState(
+                submodulePath,
+                gitDirectory: submoduleGitDirectory
+            ) else { return false }
+            guard try await stagedInitializedSubmodulesHaveNoLocalState(
+                submodulePath,
+                gitDirectory: submoduleGitDirectory
+            ) else { return false }
+        }
+        return true
+    }
+
+    private static func submoduleGitDirectory(
+        for submodulePath: URL,
+        relativePath: String,
+        parentGitDirectory: URL
+    ) -> URL? {
+        let dotGit = submodulePath.appendingPathComponent(".git")
+        if (try? dotGit.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+            return dotGit
+        }
+        guard let rawGitFile = try? String(contentsOf: dotGit, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              rawGitFile.hasPrefix("gitdir:")
+        else { return nil }
+        let rawPath = rawGitFile.dropFirst("gitdir:".count).trimmingCharacters(in: .whitespaces)
+        let recordedGitDirectory = (rawPath as NSString).isAbsolutePath
+            ? URL(fileURLWithPath: rawPath)
+            : submodulePath.appendingPathComponent(rawPath)
+        if FileManager.default.fileExists(atPath: recordedGitDirectory.path) {
+            return recordedGitDirectory.standardizedFileURL
+        }
+        let fallback = parentGitDirectory
+            .appendingPathComponent("modules", isDirectory: true)
+            .appendingPathComponent(relativePath, isDirectory: true)
+            .standardizedFileURL
+        return FileManager.default.fileExists(atPath: fallback.path) ? fallback : nil
+    }
+
+    private static func gitContextArguments(
+        worktreePath: URL,
+        gitDirectory: URL?
+    ) -> [String] {
+        guard let gitDirectory else { return [] }
+        return ["--git-dir", gitDirectory.path, "--work-tree", worktreePath.path]
+    }
+
     private func isWorktreeClean(
         _ path: URL,
+        gitDirectory: URL? = nil,
         usesRemoteHostRegistry: Bool = true
     ) async throws -> Bool {
         let result = try await Process.git(
-            ["status", "--porcelain", "--ignore-submodules=none", "--untracked-files=all"],
+            Self.gitContextArguments(worktreePath: path, gitDirectory: gitDirectory)
+                + ["status", "--porcelain", "--ignore-submodules=none", "--untracked-files=all"],
             cwd: path,
             usesRemoteHostRegistry: usesRemoteHostRegistry
         )
@@ -962,10 +1443,11 @@ struct WorktreeService {
 
     private func areInitializedSubmodulesClean(
         _ path: URL,
+        gitDirectory: URL? = nil,
         usesRemoteHostRegistry: Bool = true
     ) async throws -> Bool {
         let result = try await Process.git(
-            [
+            Self.gitContextArguments(worktreePath: path, gitDirectory: gitDirectory) + [
                 "submodule", "foreach", "--quiet", "--recursive",
                 "git status --porcelain --ignore-submodules=none --untracked-files=all"
             ],
@@ -979,6 +1461,7 @@ struct WorktreeService {
     private func initializedSubmodulesHaveNoLocalState(
         _ path: URL,
         timeout: TimeInterval = 120,
+        gitDirectory: URL? = nil,
         usesRemoteHostRegistry: Bool = true
     ) async throws -> Bool {
         // Reachability set arithmetic for reflog and notes/stash (the
@@ -1034,7 +1517,8 @@ struct WorktreeService {
         fi
         """
         let result = try await Process.git(
-            ["submodule", "foreach", "--quiet", "--recursive", localStateScript],
+            Self.gitContextArguments(worktreePath: path, gitDirectory: gitDirectory)
+                + ["submodule", "foreach", "--quiet", "--recursive", localStateScript],
             cwd: path,
             usesRemoteHostRegistry: usesRemoteHostRegistry,
             timeout: timeout
@@ -1043,31 +1527,128 @@ struct WorktreeService {
         return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    private func repositoryHasNoLocalState(
+        _ path: URL,
+        gitDirectory: URL
+    ) async throws -> Bool {
+        let context = Self.gitContextArguments(worktreePath: path, gitDirectory: gitDirectory)
+        let reflog = try await Process.git(
+            context + ["rev-list", "--max-count=1", "--reflog", "--not", "--remotes"],
+            cwd: path,
+            usesRemoteHostRegistry: false
+        )
+        guard reflog.exitCode == 0 else { throw WorktreeError.gitFailed(reflog.stderr) }
+        guard reflog.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return false
+        }
+
+        let extraRefs = try await Process.git(
+            context + ["for-each-ref", "--format=%(refname)", "refs/notes", "refs/stash"],
+            cwd: path,
+            usesRemoteHostRegistry: false
+        )
+        guard extraRefs.exitCode == 0 else { throw WorktreeError.gitFailed(extraRefs.stderr) }
+        let extraRefNames = extraRefs.stdout
+            .split(separator: "\n")
+            .map(String.init)
+        if !extraRefNames.isEmpty {
+            let extraReachability = try await Process.git(
+                context + ["rev-list", "--max-count=1"] + extraRefNames + ["--not", "--remotes"],
+                cwd: path,
+                usesRemoteHostRegistry: false
+            )
+            guard extraReachability.exitCode == 0 else {
+                throw WorktreeError.gitFailed(extraReachability.stderr)
+            }
+            guard extraReachability.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return false
+            }
+        }
+
+        let localBranches = try await Process.git(
+            context + ["for-each-ref", "--format=%(refname)=%(objectname)", "refs/heads"],
+            cwd: path,
+            usesRemoteHostRegistry: false
+        )
+        guard localBranches.exitCode == 0 else { throw WorktreeError.gitFailed(localBranches.stderr) }
+        let remoteBranches = try await Process.git(
+            context + ["for-each-ref", "--format=%(refname)=%(objectname)", "refs/remotes"],
+            cwd: path,
+            usesRemoteHostRegistry: false
+        )
+        guard remoteBranches.exitCode == 0 else { throw WorktreeError.gitFailed(remoteBranches.stderr) }
+        let remoteHeadLines = Set(remoteBranches.stdout
+            .split(separator: "\n")
+            .compactMap { line -> String? in
+                let value = String(line)
+                guard !value.contains("/HEAD=") else { return nil }
+                guard let refsRange = value.range(of: "refs/remotes/") else { return nil }
+                let suffix = value[refsRange.upperBound...]
+                guard let slash = suffix.firstIndex(of: "/") else { return nil }
+                return "refs/heads/" + suffix[suffix.index(after: slash)...]
+            })
+        for branch in localBranches.stdout.split(separator: "\n").map(String.init) {
+            guard remoteHeadLines.contains(branch) else { return false }
+        }
+
+        let localTags = try await Process.git(
+            context + ["for-each-ref", "--format=%(refname)=%(objectname)", "refs/tags"],
+            cwd: path,
+            usesRemoteHostRegistry: false
+        )
+        guard localTags.exitCode == 0 else { throw WorktreeError.gitFailed(localTags.stderr) }
+        let remoteTags = try await Process.git(
+            ["-c", "protocol.file.allow=always"] + context + ["ls-remote", "--tags", "--refs", "origin"],
+            cwd: path,
+            usesRemoteHostRegistry: false
+        )
+        guard remoteTags.exitCode == 0 else {
+            return localTags.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        let remoteTagLines = Set(remoteTags.stdout
+            .split(separator: "\n")
+            .compactMap { line -> String? in
+                let parts = line.split(separator: "\t", maxSplits: 1)
+                guard parts.count == 2 else { return nil }
+                return "\(parts[1])=\(parts[0])"
+            })
+        for tag in localTags.stdout.split(separator: "\n").map(String.init) {
+            guard remoteTagLines.contains(tag) else { return false }
+        }
+        return true
+    }
+
     private func canForceRemoveAfterMissingLFS(
         _ path: URL,
+        gitDirectory: URL? = nil,
         usesRemoteHostRegistry: Bool = true
     ) async throws -> Bool {
         guard try await isWorktreeCleanAllowingSmudgedLFS(
             path,
+            gitDirectory: gitDirectory,
             usesRemoteHostRegistry: usesRemoteHostRegistry
         ) else { return false }
         let subsClean = try await areInitializedSubmodulesClean(
             path,
+            gitDirectory: gitDirectory,
             usesRemoteHostRegistry: usesRemoteHostRegistry
         )
         guard subsClean else { return false }
         return try await initializedSubmodulesHaveNoLocalState(
             path,
+            gitDirectory: gitDirectory,
             usesRemoteHostRegistry: usesRemoteHostRegistry
         )
     }
 
     private func isWorktreeCleanAllowingSmudgedLFS(
         _ path: URL,
+        gitDirectory: URL? = nil,
         usesRemoteHostRegistry: Bool = true
     ) async throws -> Bool {
         let result = try await Process.git(
-            Self.lfsFilterOverride + [
+            Self.lfsFilterOverride
+                + Self.gitContextArguments(worktreePath: path, gitDirectory: gitDirectory) + [
                 "status", "--porcelain=v2", "-z",
                 "--ignore-submodules=none", "--untracked-files=all"
             ],
@@ -1094,6 +1675,7 @@ struct WorktreeService {
             guard try await isCleanLFSFile(
                 relativePath,
                 in: path,
+                gitDirectory: gitDirectory,
                 usesRemoteHostRegistry: usesRemoteHostRegistry
             ) else { return false }
         }
@@ -1103,17 +1685,20 @@ struct WorktreeService {
     private func isCleanLFSFile(
         _ relativePath: String,
         in worktreePath: URL,
+        gitDirectory: URL? = nil,
         usesRemoteHostRegistry: Bool = true
     ) async throws -> Bool {
         guard try await usesLFSFilter(
             relativePath,
             in: worktreePath,
+            gitDirectory: gitDirectory,
             usesRemoteHostRegistry: usesRemoteHostRegistry
         ),
               let pointer = try await indexLFSPointer(
-                relativePath,
-                in: worktreePath,
-                usesRemoteHostRegistry: usesRemoteHostRegistry
+                  relativePath,
+                  in: worktreePath,
+                  gitDirectory: gitDirectory,
+                  usesRemoteHostRegistry: usesRemoteHostRegistry
               )
         else { return false }
 
@@ -1135,10 +1720,12 @@ struct WorktreeService {
     private func usesLFSFilter(
         _ relativePath: String,
         in worktreePath: URL,
+        gitDirectory: URL? = nil,
         usesRemoteHostRegistry: Bool = true
     ) async throws -> Bool {
         let result = try await Process.git(
-            ["check-attr", "-z", "filter", "--", relativePath],
+            Self.gitContextArguments(worktreePath: worktreePath, gitDirectory: gitDirectory)
+                + ["check-attr", "-z", "filter", "--", relativePath],
             cwd: worktreePath,
             usesRemoteHostRegistry: usesRemoteHostRegistry
         )
@@ -1150,10 +1737,12 @@ struct WorktreeService {
     private func indexLFSPointer(
         _ relativePath: String,
         in worktreePath: URL,
+        gitDirectory: URL? = nil,
         usesRemoteHostRegistry: Bool = true
     ) async throws -> LFSPointer? {
         let listed = try await Process.git(
-            ["ls-files", "-s", "--", relativePath],
+            Self.gitContextArguments(worktreePath: worktreePath, gitDirectory: gitDirectory)
+                + ["ls-files", "-s", "--", relativePath],
             cwd: worktreePath,
             usesRemoteHostRegistry: usesRemoteHostRegistry
         )
@@ -1163,7 +1752,8 @@ struct WorktreeService {
         }
 
         let blob = try await Process.git(
-            ["cat-file", "-p", String(sha)],
+            Self.gitContextArguments(worktreePath: worktreePath, gitDirectory: gitDirectory)
+                + ["cat-file", "-p", String(sha)],
             cwd: worktreePath,
             usesRemoteHostRegistry: usesRemoteHostRegistry
         )
