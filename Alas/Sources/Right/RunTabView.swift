@@ -12,6 +12,7 @@ struct RunTabView: View {
 
     @Environment(\.theme) private var theme
     @State private var scripts: [RunScript] = []
+    @State private var scriptCatalogError: String?
     /// Keeps the "no scripts yet" copy from flashing before the first scan.
     @State private var hasScanned = false
     /// Drives the relative timestamps ("3m ago") without re-scanning anything.
@@ -24,6 +25,8 @@ struct RunTabView: View {
         Group {
             if !hasScanned {
                 Color.clear
+            } else if let scriptCatalogError {
+                errorState(scriptCatalogError)
             } else if scripts.isEmpty {
                 emptyState
             } else {
@@ -119,10 +122,17 @@ struct RunTabView: View {
     @discardableResult
     private func refreshScripts() async -> [RunScript] {
         let host = RemoteHostRegistry.shared.host(forPath: worktree.path.path)
-        let fresh = await RunScriptStore.scripts(worktreeRoot: worktree.path, remoteHost: host)
+        let result = await RunScriptStore.discoverScripts(worktreeRoot: worktree.path, remoteHost: host)
         guard !Task.isCancelled else { return scripts }
-        scripts = fresh
-        return fresh
+        switch result {
+        case .scripts(let fresh):
+            scriptCatalogError = nil
+            scripts = fresh
+            return fresh
+        case .failed(let message):
+            scriptCatalogError = message
+            return scripts
+        }
     }
 
     private func freshScript(matching script: RunScript) async -> RunScript? {
@@ -149,6 +159,29 @@ struct RunTabView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.horizontal, 20)
         .accessibilityIdentifier("run-tab-empty-state")
+    }
+
+    private func errorState(_ message: String) -> some View {
+        VStack(spacing: 10) {
+            Icon(name: "exclamationmark.triangle", size: 22, color: theme.color("warn"))
+            Text("Couldn’t Load Run Scripts")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(theme.color("fg-muted"))
+            Text(message)
+                .font(.system(size: 11))
+                .foregroundColor(theme.color("fg-faint"))
+                .multilineTextAlignment(.center)
+            Button("Retry") {
+                Task {
+                    await refreshScripts()
+                    hasScanned = true
+                }
+            }
+            .controlSize(.small)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, 20)
+        .accessibilityIdentifier("run-tab-error-state")
     }
 
     private var newScriptFooter: some View {

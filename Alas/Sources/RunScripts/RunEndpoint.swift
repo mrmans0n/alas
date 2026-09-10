@@ -72,6 +72,10 @@ enum RunPortProbe {
     /// the port.
     static func isLocalPortInUse(_ port: Int) -> Bool {
         guard (1...65_535).contains(port) else { return false }
+        return isIPv4PortInUse(port) || isIPv6PortInUse(port)
+    }
+
+    private static func isIPv4PortInUse(_ port: Int) -> Bool {
         let descriptor = socket(AF_INET, SOCK_STREAM, 0)
         guard descriptor >= 0 else { return false }
         defer { Darwin.close(descriptor) }
@@ -83,6 +87,23 @@ enum RunPortProbe {
         let result = withUnsafePointer(to: &address) { pointer in
             pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
                 bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        return result != 0 && errno == EADDRINUSE
+    }
+
+    private static func isIPv6PortInUse(_ port: Int) -> Bool {
+        let descriptor = socket(AF_INET6, SOCK_STREAM, 0)
+        guard descriptor >= 0 else { return false }
+        defer { Darwin.close(descriptor) }
+        var address = sockaddr_in6()
+        address.sin6_len = UInt8(MemoryLayout<sockaddr_in6>.size)
+        address.sin6_family = sa_family_t(AF_INET6)
+        address.sin6_port = UInt16(port).bigEndian
+        address.sin6_addr = in6addr_any
+        let result = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in6>.size))
             }
         }
         return result != 0 && errno == EADDRINUSE

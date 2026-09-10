@@ -8,6 +8,11 @@ enum RunScriptStore {
     /// Only this many leading bytes are read for metadata parsing.
     private static let headerReadLimit = 4096
 
+    enum DiscoveryResult {
+        case scripts([RunScript])
+        case failed(String)
+    }
+
     static func repoScriptsDir(worktreeRoot: URL) -> URL {
         worktreeRoot.appendingPathComponent(repoScriptsRelativeDir, isDirectory: true)
     }
@@ -29,10 +34,25 @@ enum RunScriptStore {
         remoteHost: String?,
         globalDir: URL = Paths.runScriptsGlobalDir
     ) async -> [RunScript] {
-        guard let remoteHost else {
-            return scripts(worktreeRoot: worktreeRoot, globalDir: globalDir)
+        switch await discoverScripts(worktreeRoot: worktreeRoot, remoteHost: remoteHost, globalDir: globalDir) {
+        case .scripts(let scripts): scripts
+        case .failed: []
         }
-        return await remoteRepoScripts(worktreeRoot: worktreeRoot, host: remoteHost)
+    }
+
+    static func discoverScripts(
+        worktreeRoot: URL,
+        remoteHost: String?,
+        globalDir: URL = Paths.runScriptsGlobalDir
+    ) async -> DiscoveryResult {
+        guard let remoteHost else {
+            return .scripts(scripts(worktreeRoot: worktreeRoot, globalDir: globalDir))
+        }
+        do {
+            return .scripts(try await remoteRepoScripts(worktreeRoot: worktreeRoot, host: remoteHost))
+        } catch {
+            return .failed(error.localizedDescription)
+        }
     }
 
     private static func discover(in dir: URL, scope: RunScriptScope) -> [RunScript] {
@@ -64,13 +84,9 @@ enum RunScriptStore {
         return String(decoding: data, as: UTF8.self)
     }
 
-    private static func remoteRepoScripts(worktreeRoot: URL, host: String) async -> [RunScript] {
+    private static func remoteRepoScripts(worktreeRoot: URL, host: String) async throws -> [RunScript] {
         let directory = repoScriptsDir(worktreeRoot: worktreeRoot)
-        guard let entries = try? await RemoteFileStats.directoryEntries(
-            host: host,
-            worktreeRoot: worktreeRoot.path,
-            path: directory.path
-        ) else { return [] }
+        let entries = try await remoteRepoScriptEntries(host: host, worktreeRoot: worktreeRoot, directory: directory)
 
         var scripts: [RunScript] = []
         for entry in entries where !entry.isDirectory && !entry.name.hasPrefix(".") {
@@ -93,6 +109,27 @@ enum RunScriptStore {
             ))
         }
         return scripts.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+    }
+
+    private static func remoteRepoScriptEntries(
+        host: String,
+        worktreeRoot: URL,
+        directory: URL
+    ) async throws -> [(name: String, isDirectory: Bool)] {
+        switch try await RemotePathContainment.containedList(
+            host: host,
+            path: directory.path,
+            worktreeRoot: worktreeRoot.path
+        ) {
+        case .ok(let entries):
+            return entries
+        case .notADirectory:
+            return []
+        case .outsideWorktree:
+            throw RemotePathContainment.ContainmentError.outsideWorktree(directory.path)
+        case .unreadable:
+            throw RemoteFileStatsError.directoryListingFailed(path: directory.path)
+        }
     }
 
     private static func isRemoteExecutable(host: String, path: String) async -> Bool {

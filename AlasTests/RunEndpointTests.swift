@@ -78,6 +78,14 @@ struct RunEndpointTests {
         #expect(RunPortProbe.isLocalPortInUse(listener.port))
     }
 
+    @Test func portProbeDetectsIPv6OnlyListener() throws {
+        let listener = try IPv6OnlyListener()
+        defer { listener.close() }
+
+        #expect(RunPortProbe.isLocalPortInUse(listener.port))
+        #expect(listener.isOpen)
+    }
+
     @Test func portProbeRejectsPortsOutsideTheValidRange() {
         #expect(!RunPortProbe.isLocalPortInUse(0))
         #expect(!RunPortProbe.isLocalPortInUse(-1))
@@ -132,4 +140,54 @@ private final class Listener {
     }
 
     enum ListenerError: Error { case failed }
+}
+
+private final class IPv6OnlyListener {
+    let descriptor: Int32
+    let port: Int
+
+    init() throws {
+        let fd = socket(AF_INET6, SOCK_STREAM, 0)
+        guard fd >= 0 else { throw Listener.ListenerError.failed }
+        var only: Int32 = 1
+        guard setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &only, socklen_t(MemoryLayout<Int32>.size)) == 0 else {
+            Darwin.close(fd)
+            throw Listener.ListenerError.failed
+        }
+        var address = sockaddr_in6()
+        address.sin6_len = UInt8(MemoryLayout<sockaddr_in6>.size)
+        address.sin6_family = sa_family_t(AF_INET6)
+        address.sin6_port = 0
+        address.sin6_addr = in6addr_loopback
+        let bound = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in6>.size))
+            }
+        }
+        guard bound == 0, listen(fd, 1) == 0 else {
+            Darwin.close(fd)
+            throw Listener.ListenerError.failed
+        }
+        var assigned = sockaddr_in6()
+        var length = socklen_t(MemoryLayout<sockaddr_in6>.size)
+        let named = withUnsafeMutablePointer(to: &assigned) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                getsockname(fd, $0, &length)
+            }
+        }
+        guard named == 0 else {
+            Darwin.close(fd)
+            throw Listener.ListenerError.failed
+        }
+        descriptor = fd
+        port = Int(UInt16(bigEndian: assigned.sin6_port))
+    }
+
+    var isOpen: Bool {
+        fcntl(descriptor, F_GETFL) != -1
+    }
+
+    func close() {
+        Darwin.close(descriptor)
+    }
 }
