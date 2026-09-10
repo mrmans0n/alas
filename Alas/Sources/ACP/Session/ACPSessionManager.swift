@@ -155,7 +155,7 @@ final class ACPSessionManager: ObservableObject {
     private(set) var runners: [ACPSession.ID: ACPSessionRunner] = [:]
     private var elicitationCoordinators: [ACPSession.ID: ACPElicitationCoordinator] = [:]
     private var autoReconnectTasks: [ACPSession.ID: Task<Void, Never>] = [:]
-    private var scheduledReconnectTasks: [ACPSession.ID: Task<Void, Never>] = [:]
+    private var scheduledReconnectTasks: [ACPSession.ID: (deadline: Date, task: Task<Void, Never>)] = [:]
     private var disposalTasks: [ACPSession.ID: Task<Void, Error>] = [:]
     /// Per-session attach counter. The built-in MCP registration grace timer
     /// captures the epoch at attach and only writes the row if it still matches,
@@ -1126,7 +1126,7 @@ final class ACPSessionManager: ObservableObject {
 
     func closeSession(id: ACPSession.ID) {
         autoReconnectTasks.removeValue(forKey: id)?.cancel()
-        scheduledReconnectTasks.removeValue(forKey: id)?.cancel()
+        scheduledReconnectTasks.removeValue(forKey: id)?.task.cancel()
         // Flush any pending draft write before dropping the in-memory
         // session reference — otherwise a tab-switch-while-typing
         // window can lose the last ~300ms of input.
@@ -1187,7 +1187,7 @@ final class ACPSessionManager: ObservableObject {
         killRemoteHelperACPProcIfPossible(sessionId: id)
         onSessionEnded?(id)
         autoReconnectTasks.removeValue(forKey: id)?.cancel()
-        scheduledReconnectTasks.removeValue(forKey: id)?.cancel()
+        scheduledReconnectTasks.removeValue(forKey: id)?.task.cancel()
         cancelPendingDraftWrite(for: id)
         inFlightBackfills[id]?.cancel()
         inFlightBackfills[id] = nil
@@ -1669,6 +1669,7 @@ final class ACPSessionManager: ObservableObject {
         let sessionId = session.id
         let items = session.queue
         let fence = leaseFence(sessionId: sessionId)
+        scheduleScheduledQueueReconnect(sessionId: sessionId)
         enqueuePersistence { persistence in
             _ = try await persistence.upsertQueue(
                 sessionId: sessionId,
@@ -4000,7 +4001,7 @@ extension ACPSessionManager {
                 return
             }
             session.agentState = .ready
-            scheduledReconnectTasks.removeValue(forKey: sessionId)?.cancel()
+            scheduledReconnectTasks.removeValue(forKey: sessionId)?.task.cancel()
             if let remoteMCPNotice {
                 runner.appendAndPersistSystemNotice(remoteMCPNotice)
             }
@@ -4157,30 +4158,26 @@ extension ACPSessionManager {
     }
 
     private func scheduleScheduledQueueReconnect(sessionId: ACPSession.ID) {
-        guard scheduledReconnectTasks[sessionId] == nil else { return }
         guard let session = sessions[sessionId],
               session.agentState != .ready,
-              session.queue.contains(where: {
-                  $0.status == .pending && $0.lastError == nil && $0.scheduledAt != nil
-              })
+              let scheduledAt = earliestReconnectSchedule(in: session)
         else { return }
         if case .needsAuth = session.setupState { return }
-
-        let scheduledAt = session.queue.compactMap { item -> Date? in
-            guard item.status == .pending, item.lastError == nil else { return nil }
-            return item.scheduledAt
-        }.min()!
-        scheduledReconnectTasks[sessionId] = Task { @MainActor [weak self] in
-            defer { self?.scheduledReconnectTasks.removeValue(forKey: sessionId) }
+        if let existing = scheduledReconnectTasks[sessionId] {
+            guard existing.deadline != scheduledAt else { return }
+            existing.task.cancel()
+        }
+        let task = Task { @MainActor [weak self] in
+            defer {
+                if self?.scheduledReconnectTasks[sessionId]?.deadline == scheduledAt {
+                    self?.scheduledReconnectTasks.removeValue(forKey: sessionId)
+                }
+            }
             try? await Task.sleep(for: .seconds(max(0, scheduledAt.timeIntervalSinceNow)))
             while !Task.isCancelled {
                 guard let self,
                       let session = self.sessions[sessionId],
-                      session.queue.contains(where: {
-                          $0.status == .pending
-                              && $0.lastError == nil
-                              && ($0.scheduledAt?.timeIntervalSinceNow ?? .greatestFiniteMagnitude) <= 0
-                      })
+                      self.hasDueReconnectSchedule(in: session)
                 else { return }
                 if case .needsAuth = session.setupState { return }
                 await self.reattach(to: sessionId)
@@ -4190,6 +4187,24 @@ extension ACPSessionManager {
                 }
                 try? await Task.sleep(for: .seconds(30))
             }
+        }
+        scheduledReconnectTasks[sessionId] = (scheduledAt, task)
+    }
+
+    private func earliestReconnectSchedule(in session: ACPSession) -> Date? {
+        session.queue.compactMap { item -> Date? in
+            guard item.lastError == nil,
+                  item.status == .pending || item.status == .sending
+            else { return nil }
+            return item.scheduledAt
+        }.min()
+    }
+
+    private func hasDueReconnectSchedule(in session: ACPSession) -> Bool {
+        session.queue.contains { item in
+            item.lastError == nil
+                && (item.status == .pending || item.status == .sending)
+                && (item.scheduledAt?.timeIntervalSinceNow ?? .greatestFiniteMagnitude) <= 0
         }
     }
 

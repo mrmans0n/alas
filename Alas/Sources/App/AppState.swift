@@ -6676,7 +6676,7 @@ final class AppState {
             return
         }
         guard session.queue.contains(where: { item in
-            item.status == .pending
+            (item.status == .pending || item.status == .sending)
                 && item.lastError == nil
                 && (item.scheduledAt?.timeIntervalSinceNow ?? .greatestFiniteMagnitude) <= 0
         }) else { return }
