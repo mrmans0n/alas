@@ -6614,6 +6614,9 @@ final class AppState {
         }
         guard let nextScheduledAt else { return nil }
         let secondsUntilScheduledSend = nextScheduledAt.timeIntervalSinceNow
+        if case .spawning = session.agentState, secondsUntilScheduledSend <= 0 {
+            return .seconds(30)
+        }
         guard secondsUntilScheduledSend > 0 else { return activePromptCleanupDelay }
         return .seconds(secondsUntilScheduledSend)
     }

@@ -336,7 +336,7 @@ final class ACPSessionManager: ObservableObject {
         guard let draft = session.takeForEditing(id: itemId) else { return nil }
         persistQueue(for: session)
         runners[id]?.flushQueueIfIdle()
-        onQueueChanged?(id, false)
+        onQueueChanged?(id, retainedCleanupHasActivePromptWork(for: id))
         return RemoteQueueProjection.plainText(from: draft)
     }
 
@@ -345,7 +345,7 @@ final class ACPSessionManager: ObservableObject {
         session.clearPendingQueue()
         persistQueue(for: session)
         runners[id]?.flushQueueIfIdle()
-        onQueueChanged?(id, false)
+        onQueueChanged?(id, retainedCleanupHasActivePromptWork(for: id))
     }
 
     func queueSteerUndo(for id: ACPSession.ID) async {
