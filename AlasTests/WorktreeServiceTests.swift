@@ -715,6 +715,56 @@ extension WorktreeServiceTests {
         #expect(branches.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 
+    @Test func fastLocalRemoveDeletesBranchMergedIntoSurvivingLinkedProject() async throws {
+        let fixture = try await makeLinkedWorktree(suffix: "linked-project-merge")
+        let project = fixture.repo.deletingLastPathComponent()
+            .appendingPathComponent("\(fixture.repo.lastPathComponent)-project")
+        defer {
+            try? FileManager.default.removeItem(at: project)
+            fixture.removeFiles()
+        }
+        let commit = try await Process.git(
+            ["commit", "--allow-empty", "-m", "only merged into project"],
+            cwd: fixture.worktree.path
+        )
+        try #require(commit.exitCode == 0)
+        _ = try await fixture.service.add(
+            repoPath: fixture.repo,
+            base: fixture.worktree.branch,
+            branch: "project",
+            destination: project,
+            projectId: "p"
+        )
+
+        _ = try await fixture.service.removeFastLocal(
+            repoPath: project,
+            worktree: fixture.worktree,
+            deleteBranchIfMerged: true
+        )
+
+        let branches = try await Process.git(
+            ["branch", "--list", fixture.worktree.branch], cwd: project
+        )
+        #expect(branches.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+
+    @Test func fastLocalRemovePersistsRecoveryJournalBeforeMovingFiles() async throws {
+        let fixture = try await makeLinkedWorktree(suffix: "pending-before-rename")
+        defer { fixture.removeFiles() }
+        _ = try await fixture.service.removeFastLocal(
+            repoPath: fixture.repo,
+            worktree: fixture.worktree,
+            deleteBranchIfMerged: false,
+            moveItem: { source, destination in
+                let identifier = destination.lastPathComponent.split(separator: ".").last!
+                let pending = destination.deletingLastPathComponent()
+                    .appendingPathComponent(".alas-worktree-deletion-pending.\(identifier)")
+                #expect(FileManager.default.fileExists(atPath: pending.path))
+                try FileManager.default.moveItem(at: source, to: destination)
+            }
+        )
+    }
+
     @Test func fastLocalRemoveDeletesStagedFilesSynchronouslyWhenCommitMarkerCannotBeWritten() async throws {
         let fixture = try await makeLinkedWorktree(suffix: "marker-write-failure")
         let trashRoot = WorktreeTrash.root(

@@ -21,6 +21,8 @@ enum WorktreeTrash {
     private static let marker = "alas-worktree"
     private static let committedMarkerName = ".alas-worktree-deletion-committed"
     private static let committedMarkerVersion = "1"
+    private static let pendingMarkerName = ".alas-worktree-deletion-pending"
+    private static let pendingMarkerVersion = "1"
 
     private struct CommittedMetadata {
         let date: Date
@@ -90,6 +92,33 @@ enum WorktreeTrash {
         )
     }
 
+    static func markPending(
+        _ ticket: WorktreeTrashCleanupTicket,
+        originalPath: URL,
+        linkedGitDirectory: URL,
+        at date: Date = Date()
+    ) throws {
+        guard isValid(ticket) else { throw CocoaError(.fileWriteInvalidFileName) }
+        let seconds = date.timeIntervalSince1970
+        guard seconds.isFinite, seconds >= 0,
+              !linkedGitDirectory.lastPathComponent.isEmpty
+        else { throw CocoaError(.fileWriteUnknown) }
+        let metadata = [
+            pendingMarkerVersion,
+            String(seconds),
+            String(ticket.directoryIdentity.systemNumber),
+            String(ticket.directoryIdentity.fileNumber),
+            ticket.stagedPath.lastPathComponent,
+            Data(originalPath.standardizedFileURL.path.utf8).base64EncodedString(),
+            Data(linkedGitDirectory.lastPathComponent.utf8).base64EncodedString(),
+            "",
+        ].joined(separator: "\n")
+        try Data(metadata.utf8).write(
+            to: pendingMarkerURL(for: ticket),
+            options: .atomic
+        )
+    }
+
     static func staleTickets(
         commonGitDirectories: [URL],
         olderThan cutoff: Date,
@@ -121,6 +150,11 @@ enum WorktreeTrash {
                         isDirectory: false
                     ),
                     directoryIdentity: directoryIdentity
+                )
+                reconcilePendingTicket(
+                    ticket,
+                    commonGitDirectory: commonGitDirectory,
+                    fileManager: fileManager
                 )
                 guard isValid(ticket),
                       let values = try? entry.resourceValues(forKeys: keys),
@@ -193,6 +227,41 @@ enum WorktreeTrash {
         )
     }
 
+    static func pendingMarkerURL(for ticket: WorktreeTrashCleanupTicket) -> URL {
+        let identifier = ticket.stagedPath.lastPathComponent
+            .split(separator: ".", omittingEmptySubsequences: false)
+            .last
+            .map(String.init) ?? "invalid"
+        return ticket.trashRoot.appendingPathComponent(
+            "\(pendingMarkerName).\(identifier)",
+            isDirectory: false
+        )
+    }
+
+    private static func reconcilePendingTicket(
+        _ ticket: WorktreeTrashCleanupTicket,
+        commonGitDirectory: URL,
+        fileManager: FileManager
+    ) {
+        guard isValid(ticket),
+              matchesDirectoryIdentity(ticket, fileManager: fileManager),
+              let pending = pendingMetadata(ticket, fileManager: fileManager),
+              pending.directoryIdentity == ticket.directoryIdentity,
+              pending.stagedName == ticket.stagedPath.lastPathComponent,
+              !fileManager.fileExists(atPath: pending.originalPath.path),
+              !fileManager.fileExists(atPath: commonGitDirectory
+                .appendingPathComponent("worktrees", isDirectory: true)
+                .appendingPathComponent(pending.linkedGitDirectoryName, isDirectory: true)
+                .path)
+        else { return }
+        do {
+            try markCommitted(ticket, at: pending.date)
+            try fileManager.removeItem(at: pendingMarkerURL(for: ticket))
+        } catch {
+            return
+        }
+    }
+
     private static func committedMetadata(
         _ ticket: WorktreeTrashCleanupTicket,
         fileManager: FileManager
@@ -222,6 +291,57 @@ enum WorktreeTrash {
                 systemNumber: systemNumber,
                 fileNumber: fileNumber
             )
+        )
+    }
+
+    private struct PendingMetadata {
+        let date: Date
+        let directoryIdentity: WorktreeTrashDirectoryIdentity
+        let stagedName: String
+        let originalPath: URL
+        let linkedGitDirectoryName: String
+    }
+
+    private static func pendingMetadata(
+        _ ticket: WorktreeTrashCleanupTicket,
+        fileManager: FileManager
+    ) -> PendingMetadata? {
+        let markerURL = pendingMarkerURL(for: ticket)
+        guard let attributes = try? fileManager.attributesOfItem(atPath: markerURL.path),
+              attributes[.type] as? FileAttributeType == .typeRegular,
+              let size = attributes[.size] as? NSNumber,
+              size.uint64Value <= 1_024,
+              let data = fileManager.contents(atPath: markerURL.path),
+              let raw = String(data: data, encoding: .utf8),
+              raw.utf8.count == data.count
+        else { return nil }
+        let fields = raw.components(separatedBy: "\n")
+        guard fields.count == 8,
+              fields[0] == pendingMarkerVersion,
+              fields[7].isEmpty,
+              let seconds = TimeInterval(fields[1]), seconds.isFinite, seconds >= 0,
+              let systemNumber = UInt64(fields[2]),
+              let fileNumber = UInt64(fields[3]),
+              isRecognizedEntryName(fields[4]),
+              let originalData = Data(base64Encoded: fields[5]),
+              let original = String(data: originalData, encoding: .utf8),
+              original.utf8.count == originalData.count,
+              original.hasPrefix("/"),
+              let linkedGitDirectoryNameData = Data(base64Encoded: fields[6]),
+              let linkedGitDirectoryName = String(data: linkedGitDirectoryNameData, encoding: .utf8),
+              linkedGitDirectoryName.utf8.count == linkedGitDirectoryNameData.count,
+              !linkedGitDirectoryName.isEmpty,
+              !linkedGitDirectoryName.contains("/")
+        else { return nil }
+        return PendingMetadata(
+            date: Date(timeIntervalSince1970: seconds),
+            directoryIdentity: WorktreeTrashDirectoryIdentity(
+                systemNumber: systemNumber,
+                fileNumber: fileNumber
+            ),
+            stagedName: fields[4],
+            originalPath: URL(fileURLWithPath: original).standardizedFileURL,
+            linkedGitDirectoryName: linkedGitDirectoryName
         )
     }
 

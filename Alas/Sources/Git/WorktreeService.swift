@@ -844,6 +844,9 @@ struct WorktreeService {
                 "Worktree path no longer matches its Git registration."
             )
         }
+        let branchDeletionGitDirectory = repoPath.standardizedFileURL == worktree.path.standardizedFileURL
+            ? nil
+            : Self.localGitDirectory(forWorktreeAt: repoPath)
 
         var auditedMissingLFS = false
         if !force {
@@ -927,6 +930,11 @@ struct WorktreeService {
             throw WorktreeError.gitFailed("Worktree changed before it could be staged.")
         }
         do {
+            try WorktreeTrash.markPending(
+                ticket,
+                originalPath: worktree.path,
+                linkedGitDirectory: expectedRegistration.gitDirectory
+            )
             try moveItem(worktree.path, ticket.stagedPath)
         } catch {
             try await remove(
@@ -943,6 +951,9 @@ struct WorktreeService {
         func failAfterRollingBack(_ registryMessage: String) throws -> Never {
             try? FileManager.default.removeItem(
                 at: WorktreeTrash.committedMarkerURL(for: ticket)
+            )
+            try? FileManager.default.removeItem(
+                at: WorktreeTrash.pendingMarkerURL(for: ticket)
             )
             do {
                 try moveItem(ticket.stagedPath, worktree.path)
@@ -1029,6 +1040,7 @@ struct WorktreeService {
         let outcome: WorktreeRemovalOutcome
         do {
             try WorktreeTrash.markCommitted(ticket)
+            try? FileManager.default.removeItem(at: WorktreeTrash.pendingMarkerURL(for: ticket))
             outcome = .staged(ticket)
         } catch {
             let markerFailure = error.localizedDescription
@@ -1056,8 +1068,9 @@ struct WorktreeService {
         }
 
         if deleteBranchIfMerged && worktree.branch != "(detached)" {
+            let branchGitDirectory = branchDeletionGitDirectory ?? expectedCommonDirectory
             _ = try? await Process.git(
-                commonGitArguments + ["branch", "-d", worktree.branch],
+                ["--git-dir", branchGitDirectory.path, "branch", "-d", worktree.branch],
                 cwd: expectedCommonDirectory,
                 usesRemoteHostRegistry: false
             )

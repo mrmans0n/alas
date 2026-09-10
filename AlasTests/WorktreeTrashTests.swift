@@ -356,6 +356,48 @@ struct WorktreeTrashTests {
         #expect(recovered == [ticket])
     }
 
+    @Test(arguments: [true, false])
+    func sweepReconcilesPendingDeletionWithGitRegistration(registrationRemoved: Bool) async throws {
+        let repo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-pending-recovery-\(UUID().uuidString)")
+        let original = repo.deletingLastPathComponent()
+            .appendingPathComponent("\(repo.lastPathComponent)-linked")
+        defer {
+            try? FileManager.default.removeItem(at: original)
+            try? FileManager.default.removeItem(at: repo)
+        }
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: repo)
+        _ = try await WorktreeService().add(
+            repoPath: repo, base: "main", branch: "linked", destination: original, projectId: "p"
+        )
+        let gitDirectory = try #require(WorktreeService.localGitDirectory(forWorktreeAt: original))
+        let ticket = try WorktreeTrash.makeTicket(
+            commonGitDirectory: repo.appendingPathComponent(".git"), originalPath: original
+        )
+        try FileManager.default.createDirectory(at: ticket.trashRoot, withIntermediateDirectories: true)
+        let identifier = ticket.stagedPath.lastPathComponent.split(separator: ".").last!
+        let pending = ticket.trashRoot.appendingPathComponent(".alas-worktree-deletion-pending.\(identifier)")
+        let metadata = [
+            "1", "100", String(ticket.directoryIdentity.systemNumber),
+            String(ticket.directoryIdentity.fileNumber), ticket.stagedPath.lastPathComponent,
+            Data(original.standardizedFileURL.path.utf8).base64EncodedString(),
+            Data(gitDirectory.lastPathComponent.utf8).base64EncodedString(), "",
+        ].joined(separator: "\n")
+        try Data(metadata.utf8).write(to: pending, options: .atomic)
+        try FileManager.default.moveItem(at: original, to: ticket.stagedPath)
+        if registrationRemoved {
+            let removal = try await Process.git(["worktree", "remove", original.path], cwd: repo)
+            try #require(removal.exitCode == 0)
+        }
+        let project = ProjectConfig(id: "p", name: "repo", path: repo.path, color: "#000000", addedAt: .now)
+        var recovered: [WorktreeTrashCleanupTicket] = []
+        WorktreeTrashCleaner.sweep(projects: [project], launcher: { recovered.append($0) })
+        #expect(recovered == (registrationRemoved ? [ticket] : []))
+        #expect(FileManager.default.fileExists(atPath: ticket.stagedPath.path))
+    }
+
     @Test func liveCleanerEventuallyDeletesTheTicketDirectory() async throws {
         let common = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-cleaner-\(UUID().uuidString)")
