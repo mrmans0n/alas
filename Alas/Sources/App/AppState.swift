@@ -6657,9 +6657,14 @@ final class AppState {
     }
 
     private func awaitPendingACPDetach(worktreeId: String, sessionId: ACPSession.ID) async {
-        guard let pending = pendingACPDetachTasks[worktreeId]?[sessionId] else { return }
+        await awaitPendingACPDetach(owner: .worktree(worktreeId), sessionId: sessionId)
+    }
+
+    private func awaitPendingACPDetach(owner: SessionOwnerID, sessionId: ACPSession.ID) async {
+        let key = owner.storageKey
+        guard let pending = pendingACPDetachTasks[key]?[sessionId] else { return }
         await pending.task.value
-        clearPendingACPDetach(worktreeId: worktreeId, sessionId: sessionId, id: pending.id)
+        clearPendingACPDetach(worktreeId: key, sessionId: sessionId, id: pending.id)
     }
 
     private func clearPendingACPDetach(worktreeId: String, sessionId: ACPSession.ID, id: UUID) {
@@ -9188,6 +9193,7 @@ final class AppState {
     func openExistingACPSession(sessionId: ACPSession.ID) async {
         guard let worktreeId = selectedWorktreeId,
               let worktree = worktree(withId: worktreeId) else { return }
+        await awaitPendingACPDetach(owner: .worktree(worktree.id), sessionId: sessionId)
         guard let mgr = acpManager(for: worktree) else { return }
         cancelRetainedACPSessionCleanup(owner: .worktree(worktree.id), sessionId: sessionId)
 
@@ -9222,6 +9228,7 @@ final class AppState {
     /// Checkout-owned sessions must not fall back to Repository Focus because
     /// their database, tabs, and lifecycle are tied to the checkout owner.
     func openExistingACPSession(sessionId: ACPSession.ID, owner: SessionOwnerID) async {
+        await awaitPendingACPDetach(owner: owner, sessionId: sessionId)
         guard let mgr = acpManager(for: owner) else { return }
         cancelRetainedACPSessionCleanup(owner: owner, sessionId: sessionId)
 

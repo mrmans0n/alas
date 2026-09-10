@@ -401,6 +401,67 @@ struct ClosedTabAppStateTests {
         #expect(fixture.state.retainedACPSessionCleanupCountForTesting == 0)
     }
 
+    @Test func openExistingACPSessionWaitsForPendingDetach() async throws {
+        let gate = AsyncGate()
+        let state = AppState(
+            store: MemoryStore(),
+            acpDetachRunner: { _, _ in await gate.enterAndWait() }
+        )
+        let fixture = makeFixture(state: state)
+        fixture.state.selectWorktree(id: fixture.first.id)
+        let manager = try #require(fixture.state.acpManager(for: fixture.first))
+        let session = manager.createSession(id: "reopen-pending-detach", agentId: "claude")
+        let tab = fixture.state.tabs.append(
+            acpSession: ACPSessionTabState(sessionId: session.id, title: "Closed chat"),
+            to: fixture.first.id
+        )
+        fixture.state.requestCloseTab(worktreeId: fixture.first.id, tabId: tab.id)
+        await gate.waitUntilEntered()
+
+        let reopen = Task { @MainActor in
+            await fixture.state.openExistingACPSession(sessionId: session.id)
+        }
+        await Task.yield()
+        #expect(fixture.state.tabs.tabs(forWorktree: fixture.first.id).isEmpty)
+
+        await gate.release()
+        await reopen.value
+
+        #expect(fixture.state.pendingACPDetachCountForTesting == 0)
+        #expect(fixture.state.tabs.tabs(forWorktree: fixture.first.id).count == 1)
+    }
+
+    @Test func openExistingOwnedACPSessionWaitsForPendingDetach() async throws {
+        let gate = AsyncGate()
+        let state = AppState(
+            store: MemoryStore(),
+            acpDetachRunner: { _, _ in await gate.enterAndWait() }
+        )
+        let fixture = makeFixture(state: state)
+        let owner = SessionOwnerID.worktree(fixture.first.id)
+        _ = fixture.state.acpManager(for: fixture.first)
+        let manager = try #require(fixture.state.acpManager(for: owner))
+        let session = manager.createSession(id: "reopen-owned-pending-detach", agentId: "claude")
+        let tab = fixture.state.tabs.append(
+            acpSession: ACPSessionTabState(sessionId: session.id, title: "Closed chat"),
+            to: owner
+        )
+        fixture.state.requestCloseTab(worktreeId: fixture.first.id, tabId: tab.id)
+        await gate.waitUntilEntered()
+
+        let reopen = Task { @MainActor in
+            await fixture.state.openExistingACPSession(sessionId: session.id, owner: owner)
+        }
+        await Task.yield()
+        #expect(fixture.state.tabs.tabs(for: owner).isEmpty)
+
+        await gate.release()
+        await reopen.value
+
+        #expect(fixture.state.pendingACPDetachCountForTesting == 0)
+        #expect(fixture.state.tabs.tabs(for: owner).count == 1)
+    }
+
     @Test func closedACPSessionWithFailedQueueHeadDetachesImmediately() async throws {
         let gate = AsyncGate()
         let state = AppState(
