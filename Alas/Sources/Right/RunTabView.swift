@@ -94,7 +94,7 @@ struct RunTabView: View {
     private func perform(_ action: RunRowAction, matching staleScript: RunScript) async {
         switch action {
         case .start:
-            let script = await freshScript(matching: staleScript) ?? staleScript
+            guard let script = await freshScript(matching: staleScript) else { return }
             if case .finished? = state.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status {
                 state.restartScript(script, in: worktree)
             } else if state.scriptTab(for: script, in: worktree) != nil {
@@ -107,7 +107,7 @@ struct RunTabView: View {
         case .restart:
             let stoppedRunID = state.runRecords.record(worktreeID: worktree.id, scriptKey: staleScript.key)?.id
             state.stopScript(staleScript, in: worktree)
-            let script = await freshScript(matching: staleScript) ?? staleScript
+            guard let script = await freshScript(matching: staleScript) else { return }
             if let stoppedRunID,
                state.runRecords.record(worktreeID: worktree.id, scriptKey: staleScript.key)?.id != stoppedRunID {
                 return
@@ -116,7 +116,7 @@ struct RunTabView: View {
         case .openTerminal:
             state.focusScriptTerminal(staleScript, in: worktree)
         case .openEndpoint:
-            let script = await freshScript(matching: staleScript) ?? staleScript
+            guard let script = await freshScript(matching: staleScript) else { return }
             state.openRunEndpoint(script, in: worktree)
         case .showOutput(let failureID):
             guard let failure = state.runScriptFailures(in: worktree.id).first(where: { $0.id == failureID })
@@ -128,10 +128,10 @@ struct RunTabView: View {
     }
 
     @discardableResult
-    private func refreshScripts() async -> [RunScript] {
+    private func refreshScripts() async -> [RunScript]? {
         let host = RemoteHostRegistry.shared.host(forPath: worktree.path.path)
         let result = await RunScriptStore.discoverScripts(worktreeRoot: worktree.path, remoteHost: host)
-        guard !Task.isCancelled else { return scripts }
+        guard !Task.isCancelled else { return nil }
         switch result {
         case .scripts(let fresh):
             scriptCatalogError = nil
@@ -139,12 +139,12 @@ struct RunTabView: View {
             return fresh
         case .failed(let message):
             scriptCatalogError = message
-            return scripts
+            return nil
         }
     }
 
     private func freshScript(matching script: RunScript) async -> RunScript? {
-        let fresh = await refreshScripts()
+        guard let fresh = await refreshScripts() else { return nil }
         return fresh.first { $0.key == script.key }
     }
 

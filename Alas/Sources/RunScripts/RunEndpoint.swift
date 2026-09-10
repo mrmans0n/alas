@@ -25,8 +25,10 @@ enum RunEndpointPolicy {
             normalized = String(normalized[..<zoneSeparator])
         }
         if isIPv6LoopbackLiteral(normalized) { return true }
+        if isIPv6UnspecifiedLiteral(normalized) { return true }
         if isIPv4MappedIPv6LoopbackLiteral(normalized) { return true }
         if isIPv4LoopbackLiteral(normalized) { return true }
+        if isIPv4UnspecifiedLiteral(normalized) { return true }
         return loopbackHosts.contains(normalized)
     }
 
@@ -39,6 +41,15 @@ enum RunEndpointPolicy {
         return bytes.count == 16
             && bytes[0..<15].allSatisfy { $0 == 0 }
             && bytes[15] == 1
+    }
+
+    private static func isIPv6UnspecifiedLiteral(_ host: String) -> Bool {
+        var address = in6_addr()
+        guard inet_pton(AF_INET6, host, &address) == 1 else {
+            return false
+        }
+        let bytes = withUnsafeBytes(of: &address) { Array($0) }
+        return bytes.count == 16 && bytes.allSatisfy { $0 == 0 }
     }
 
     private static func isIPv4MappedIPv6LoopbackLiteral(_ host: String) -> Bool {
@@ -60,6 +71,12 @@ enum RunEndpointPolicy {
         guard inet_aton(host, &address) == 1 else { return false }
         let ipv4 = UInt32(bigEndian: address.s_addr)
         return (ipv4 >> 24) == 127
+    }
+
+    private static func isIPv4UnspecifiedLiteral(_ host: String) -> Bool {
+        var address = in_addr()
+        guard inet_aton(host, &address) == 1 else { return false }
+        return UInt32(bigEndian: address.s_addr) == 0
     }
 
     static func action(for url: URL, target: RunExecutionTarget) -> RunEndpointAction {

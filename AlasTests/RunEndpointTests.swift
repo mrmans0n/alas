@@ -46,7 +46,7 @@ struct RunEndpointTests {
     /// The dangerous case: an SSH run whose URL says "localhost" would open a
     /// completely unrelated service on the user's own machine.
     @Test func remoteRunRefusesToOpenALoopbackURL() {
-        for host in ["localhost", "localhost.", "127.0.0.1", "127.0.0.2", "127.1", "2130706433", "0177.0.0.1", "0x7f000001", "0.0.0.0", "[::1]", "[0:0::1]", "[0000::0001]", "[::1%25lo0]", "[::ffff:127.0.0.1]", "[::ffff:7f00:1]"] {
+        for host in ["localhost", "localhost.", "127.0.0.1", "127.0.0.2", "127.1", "2130706433", "0177.0.0.1", "0x7f000001", "0.0.0.0", "0", "[::1]", "[0:0::1]", "[0000::0001]", "[::1%25lo0]", "[::ffff:127.0.0.1]", "[::ffff:7f00:1]", "[::]", "[0:0::]", "[0000:0000:0000:0000:0000:0000:0000:0000]"] {
             let url = URL(string: "http://\(host):3000")!
             #expect(
                 RunEndpointPolicy.action(for: url, target: target(host: "devbox"))
