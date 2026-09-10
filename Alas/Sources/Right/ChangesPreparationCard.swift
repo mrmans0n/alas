@@ -48,6 +48,7 @@ struct ChangesPreparationCard: View {
     let onDismissSyncFailure: () -> Void
 
     @Environment(\.theme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
@@ -302,7 +303,9 @@ struct ChangesPreparationCard: View {
         }
         .buttonStyle(.plain)
         .disabled(!action.isEnabled)
-        .opacity(action.isEnabled || action.isInFlight ? 1 : 0.5)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
+            $0.opacity(action.isEnabled || action.isInFlight ? 1 : 0.65)
+        }
         .background(
             RoundedRectangle(cornerRadius: 6)
                 .fill(theme.color("bg-2").opacity(0.72))
@@ -367,7 +370,9 @@ struct ChangesPreparationCard: View {
         }
         .buttonStyle(.plain)
         .disabled(!action.isEnabled)
-        .opacity(action.isEnabled || action.isInFlight ? 1 : 0.5)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
+            $0.opacity(action.isEnabled || action.isInFlight ? 1 : 0.65)
+        }
         .background(
             RoundedRectangle(cornerRadius: 6)
                 .fill(

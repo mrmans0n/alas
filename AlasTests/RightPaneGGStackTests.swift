@@ -660,13 +660,14 @@ struct RightPaneGGStackErrorPresentationTests {
 
 @MainActor
 struct RightPaneGGRefreshSchedulingTests {
-    @Test func watcherStackRefreshIsSuppressedOnlyDuringSync() {
+    @Test func watcherStackRefreshIsSuppressedDuringMutations() {
         #expect(!RightPaneState.shouldScheduleGGStackRefresh(inFlightAction: .sync))
-        #expect(RightPaneState.shouldScheduleGGStackRefresh(inFlightAction: .rebase))
+        #expect(!RightPaneState.shouldScheduleGGStackRefresh(inFlightAction: .rebase))
+        #expect(!RightPaneState.shouldScheduleGGStackRefresh(inFlightAction: .amendCurrent))
         #expect(RightPaneState.shouldScheduleGGStackRefresh(inFlightAction: nil))
     }
 
-    @Test func refreshWorkDefersOnlyDuringSync() {
+    @Test func refreshWorkDefersDuringMutations() {
         #expect(RightPaneState.shouldDeferGGStackRefresh(
             inFlightAction: .sync,
             refreshRequired: true
@@ -675,8 +676,12 @@ struct RightPaneGGRefreshSchedulingTests {
             inFlightAction: .sync,
             refreshRequired: false
         ))
-        #expect(!RightPaneState.shouldDeferGGStackRefresh(
+        #expect(RightPaneState.shouldDeferGGStackRefresh(
             inFlightAction: .rebase,
+            refreshRequired: true
+        ))
+        #expect(!RightPaneState.shouldDeferGGStackRefresh(
+            inFlightAction: nil,
             refreshRequired: true
         ))
     }
@@ -695,15 +700,15 @@ struct RightPaneGGRefreshSchedulingTests {
     @Test func deferredRefreshForcesTheNextStackLoad() {
         #expect(RightPaneState.shouldForceGGStackRefresh(
             forceRemote: false,
-            deferredUntilSyncEnds: true
+            deferredUntilMutationEnds: true
         ))
         #expect(RightPaneState.shouldForceGGStackRefresh(
             forceRemote: true,
-            deferredUntilSyncEnds: false
+            deferredUntilMutationEnds: false
         ))
         #expect(!RightPaneState.shouldForceGGStackRefresh(
             forceRemote: false,
-            deferredUntilSyncEnds: false
+            deferredUntilMutationEnds: false
         ))
     }
 }
@@ -2371,7 +2376,8 @@ struct RightPaneGGStackTests {
         #expect(GGStackSummaryStore.shared.summaries[worktree.path.path] == nil)
     }
 
-    @Test func headInvalidationKeepsLoadedStackVisibleDuringSync() async {
+    @Test(arguments: [GGStackActionKind.sync, .rebase, .amendCurrent, .reorder, .absorbStaged])
+    func headInvalidationKeepsLoadedStackVisibleDuringMutation(action: GGStackActionKind) async {
         let worktree = makeWorktree()
         let state = makeState(worktree: worktree)
         let staleSnapshot = GGStackModelsTests.fixture.replacingOccurrences(
@@ -2415,13 +2421,13 @@ struct RightPaneGGStackTests {
 
         let staleRefresh = Task { @MainActor in await state.refreshGGStack(forceRemote: true) }
         await runner.waitUntilCall(1)
-        _ = state.ggActionState.beginAction(.sync)
-        state.supersedeGGStackRefreshForSync()
+        _ = state.ggActionState.beginAction(action)
+        state.supersedeGGStackRefreshForMutation()
 
         let refresh = state.invalidateGGPresentation(startingRefresh: false)
 
         #expect(refresh == nil)
-        #expect(state.ggStackRefreshDeferredUntilSyncEnds)
+        #expect(state.ggStackRefreshDeferredUntilMutationEnds)
         #expect(state.ggStackLoadState == .loaded)
         #expect(state.ggStack?.name == "feature")
         #expect(state.ggStackCommitsKey == state.currentGGStackCommitsKey)
@@ -2436,10 +2442,10 @@ struct RightPaneGGStackTests {
         await runner.complete(call: 2)
         await finalRefresh.value
         #expect(state.ggStack?.name == "final-stack")
-        #expect(state.ggStackRefreshDeferredUntilSyncEnds)
+        #expect(state.ggStackRefreshDeferredUntilMutationEnds)
 
         await state.refreshGGStack(forceRemote: true)
-        #expect(!state.ggStackRefreshDeferredUntilSyncEnds)
+        #expect(!state.ggStackRefreshDeferredUntilMutationEnds)
     }
 
     @Test func activeHeadInvalidationReplacesInFlightColdDetachedRecovery() async throws {
@@ -3127,12 +3133,14 @@ struct RightPaneGGStackTests {
             commit(sha: String(repeating: "s", count: 40), stackShaped: true),
         ]
 
-        state.onGGStackAction(.sync, appState: AppState(store: MemoryStore()))
+        let operation = state.runGGMutation(.sync)
         await runner.waitUntilPostSyncReadSuspends()
 
         await state.reevaluateGGGate().value
 
         await runner.waitUntilPostSyncReadCancellationIsObserved()
+        // Cancellation is observed before the coordinator finishes clearing its busy state.
+        await operation?.value
         #expect(await runner.didObservePostSyncReadCancellation())
         #expect(state.ggStack?.name == "replacement-stack")
         #expect(state.ggActionState.inFlightAction == nil)
