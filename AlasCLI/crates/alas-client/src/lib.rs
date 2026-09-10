@@ -625,7 +625,7 @@ pub fn send_hello(socket: &Path, session_id: &str, transport: &str) {
                     return;
                 }
                 if attempt < 2 {
-                    std::thread::sleep(Duration::from_secs(1));
+                    std::thread::sleep(Duration::from_secs(4));
                 }
             }
         });
@@ -788,7 +788,7 @@ mod tests {
     }
 
     #[test]
-    fn send_hello_retries_until_socket_is_available() {
+    fn send_hello_retries_across_registration_grace_period() {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -799,7 +799,7 @@ mod tests {
         ));
         let server_socket = socket.clone();
         let server = thread::spawn(move || {
-            thread::sleep(Duration::from_millis(100));
+            thread::sleep(Duration::from_millis(2_500));
             let listener = UnixListener::bind(&server_socket).unwrap();
             listener.set_nonblocking(true).unwrap();
             let deadline = Instant::now() + Duration::from_millis(2_500);
