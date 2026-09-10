@@ -73,24 +73,56 @@ struct RunTabView: View {
 
     private var activeOrAllScripts: [RunScript] {
         guard scriptCatalogError != nil else { return scripts }
-        return scripts.filter { script in
-            state.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status.isActive == true
+        let scriptsByKey = Dictionary(uniqueKeysWithValues: scripts.map { ($0.key, $0) })
+        return state.runRecords.records(worktreeID: worktree.id)
+            .filter(\.status.isActive)
+            .compactMap { record in
+                scriptsByKey[record.scriptKey] ?? script(from: record)
+            }
+            .sorted {
+                if $0.scope != $1.scope { return $0.scope.rawValue < $1.scope.rawValue }
+                return $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending
+            }
+    }
+
+    private func script(from record: RunRecord) -> RunScript? {
+        let parts = record.scriptKey.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2,
+              let scope = RunScriptScope(rawValue: String(parts[0]))
+        else { return nil }
+        let fileName = String(parts[1])
+        let fileURL = switch scope {
+        case .repo:
+            RunScriptStore.repoScriptsDir(worktreeRoot: worktree.path).appendingPathComponent(fileName)
+        case .global:
+            Paths.runScriptsGlobalDir.appendingPathComponent(fileName)
         }
+        return RunScript(
+            scope: scope,
+            fileName: fileName,
+            fileURL: fileURL,
+            displayName: record.scriptName,
+            onExit: .keep,
+            cwd: nil,
+            isExecutable: false,
+            endpoint: record.endpoint
+        )
     }
 
     private func presentation(for script: RunScript) -> RunRowPresentation {
-        RunTabPresentation.row(
+        let record = state.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)
+        return RunTabPresentation.row(
             RunRowInput(
                 script: script,
-                record: state.runRecords.record(worktreeID: worktree.id, scriptKey: script.key),
+                record: record,
                 hasTerminal: state.runningScriptTab(for: script, in: worktree) != nil,
-                hasCapturedOutput: state.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)
-                    .flatMap { record in
-                        record.failureID.map { failureID in
+                hasCapturedOutput: record
+                    .flatMap { current in
+                        current.failureID.map { failureID in
                             state.runScriptFailures(in: worktree.id).contains { $0.id == failureID }
                         }
                     } ?? false,
-                target: state.runExecutionTarget(for: script, in: worktree)
+                target: record?.target ?? state.runExecutionTarget(for: script, in: worktree)
             ),
             now: now
         )
@@ -105,7 +137,11 @@ struct RunTabView: View {
     private func perform(_ action: RunRowAction, matching staleScript: RunScript) async {
         switch action {
         case .start:
+            let preRefreshRunID = state.runRecords.record(worktreeID: worktree.id, scriptKey: staleScript.key)?.id
             guard let script = await freshScript(matching: staleScript) else { return }
+            guard state.runRecords.record(worktreeID: worktree.id, scriptKey: staleScript.key)?.id == preRefreshRunID else {
+                return
+            }
             if case .finished? = state.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status {
                 state.restartScript(script, in: worktree)
             } else if state.scriptTab(for: script, in: worktree) != nil {
