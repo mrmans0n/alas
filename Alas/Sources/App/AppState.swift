@@ -4361,6 +4361,23 @@ final class AppState {
         saveProjects()
     }
 
+    /// Live sessions attached to a worktree's open terminal/ACP tabs, counted
+    /// directly rather than through harness activity state (busy/awaiting) —
+    /// mirrors the cleanup sheet's own `activeSessionCount` probe. Used to
+    /// re-check a worktree immediately before a batch action touches it: the
+    /// scan that produced the candidate list can be stale by the time the
+    /// user confirms, and a session opened in that window (from another
+    /// window, say) must not be torn down by `cleanupWorktreeState`.
+    private func hasLiveSessions(worktreeId: String) -> Bool {
+        tabs.tabs(forWorktree: worktreeId).contains { tab in
+            switch tab {
+            case .terminal(let s):   return !s.root.leaves().isEmpty
+            case .acpSession:        return true
+            default:                 return false
+            }
+        }
+    }
+
     /// Archive several worktrees at once. Nothing on disk is touched — this
     /// only marks each path hidden in `ProjectConfig`, which is what persists
     /// across relaunch.
@@ -4401,6 +4418,19 @@ final class AppState {
                     worktreeId: worktree.id,
                     branch: worktree.branch,
                     outcome: .skipped(reason: "Main worktree")
+                ))
+                continue
+            }
+            // Re-check right before archiving: the scan that selected this
+            // worktree can be stale by the time the user confirms, and a
+            // session opened since then must not be torn down.
+            guard !hasLiveSessions(worktreeId: worktree.id),
+                  projectsManager.operationState(for: worktree.id) == nil
+            else {
+                results.append(WorktreeBatchResult(
+                    worktreeId: worktree.id,
+                    branch: worktree.branch,
+                    outcome: .skipped(reason: "Became busy since this list was scanned")
                 ))
                 continue
             }
@@ -7499,6 +7529,19 @@ final class AppState {
                     worktreeId: worktree.id,
                     branch: worktree.branch,
                     outcome: .skipped(reason: "Main worktree")
+                ))
+                continue
+            }
+            // Re-check right before deleting: the scan that selected this
+            // worktree can be stale by the time the user confirms, and a
+            // session opened since then must not be torn down.
+            guard !hasLiveSessions(worktreeId: worktree.id),
+                  projectsManager.operationState(for: worktree.id) == nil
+            else {
+                results.append(WorktreeBatchResult(
+                    worktreeId: worktree.id,
+                    branch: worktree.branch,
+                    outcome: .skipped(reason: "Became busy since this list was scanned")
                 ))
                 continue
             }
