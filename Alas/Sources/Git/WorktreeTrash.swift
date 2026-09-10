@@ -248,18 +248,82 @@ enum WorktreeTrash {
               let pending = pendingMetadata(ticket, fileManager: fileManager),
               pending.directoryIdentity == ticket.directoryIdentity,
               pending.stagedName == ticket.stagedPath.lastPathComponent,
-              !fileManager.fileExists(atPath: pending.originalPath.path),
-              !fileManager.fileExists(atPath: commonGitDirectory
-                .appendingPathComponent("worktrees", isDirectory: true)
-                .appendingPathComponent(pending.linkedGitDirectoryName, isDirectory: true)
-                .path)
+              !fileManager.fileExists(atPath: pending.originalPath.path)
         else { return }
+        let registrationDirectory = commonGitDirectory
+            .appendingPathComponent("worktrees", isDirectory: true)
+            .appendingPathComponent(pending.linkedGitDirectoryName, isDirectory: true)
+        if fileManager.fileExists(atPath: registrationDirectory.path) {
+            restorePendingTicket(
+                ticket,
+                pending: pending,
+                registrationDirectory: registrationDirectory,
+                fileManager: fileManager
+            )
+            return
+        }
         do {
             try markCommitted(ticket, at: pending.date)
             try fileManager.removeItem(at: pendingMarkerURL(for: ticket))
         } catch {
             return
         }
+    }
+
+    private static func restorePendingTicket(
+        _ ticket: WorktreeTrashCleanupTicket,
+        pending: PendingMetadata,
+        registrationDirectory: URL,
+        fileManager: FileManager
+    ) {
+        guard registrationGitFilePointsToOriginalPath(
+            registrationDirectory: registrationDirectory,
+            originalPath: pending.originalPath,
+            fileManager: fileManager
+        ) else { return }
+        do {
+            try fileManager.moveItem(at: ticket.stagedPath, to: pending.originalPath)
+            try fileManager.removeItem(at: pendingMarkerURL(for: ticket))
+        } catch {
+            return
+        }
+    }
+
+    private static func registrationGitFilePointsToOriginalPath(
+        registrationDirectory: URL,
+        originalPath: URL,
+        fileManager: FileManager
+    ) -> Bool {
+        let gitdirFile = registrationDirectory.appendingPathComponent("gitdir", isDirectory: false)
+        guard let data = fileManager.contents(atPath: gitdirFile.path),
+              let raw = String(data: data, encoding: .utf8),
+              raw.utf8.count == data.count
+        else { return false }
+        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return false }
+        let gitdir = (value as NSString).isAbsolutePath
+            ? URL(fileURLWithPath: value)
+            : registrationDirectory.appendingPathComponent(value)
+        let expected = originalPath.appendingPathComponent(".git", isDirectory: false)
+        return pathsReferToSameFile(gitdir, expected)
+            || gitdir.standardizedFileURL.path == expected.standardizedFileURL.path
+    }
+
+    private static func pathsReferToSameFile(_ lhs: URL, _ rhs: URL) -> Bool {
+        let lhsPath = lhs.resolvingSymlinksInPath().standardizedFileURL.path
+        let rhsPath = rhs.resolvingSymlinksInPath().standardizedFileURL.path
+        return lhsPath == rhsPath
+            || normalizedDarwinPath(lhsPath) == normalizedDarwinPath(rhsPath)
+    }
+
+    private static func normalizedDarwinPath(_ path: String) -> String {
+        if path.hasPrefix("/private/var/") {
+            return String(path.dropFirst("/private".count))
+        }
+        if path == "/private/var" {
+            return "/var"
+        }
+        return path
     }
 
     private static func committedMetadata(

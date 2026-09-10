@@ -395,7 +395,12 @@ struct WorktreeTrashTests {
         var recovered: [WorktreeTrashCleanupTicket] = []
         WorktreeTrashCleaner.sweep(projects: [project], launcher: { recovered.append($0) })
         #expect(recovered == (registrationRemoved ? [ticket] : []))
-        #expect(FileManager.default.fileExists(atPath: ticket.stagedPath.path))
+        #expect(FileManager.default.fileExists(
+            atPath: (registrationRemoved ? ticket.stagedPath : original).path
+        ))
+        #expect(!FileManager.default.fileExists(
+            atPath: (registrationRemoved ? original : ticket.stagedPath).path
+        ))
     }
 
     @Test func liveCleanerEventuallyDeletesTheTicketDirectory() async throws {
