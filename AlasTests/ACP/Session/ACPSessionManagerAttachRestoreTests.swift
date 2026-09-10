@@ -89,6 +89,34 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(queueChanges.contains { $0.0 == session.id && $0.1 == false })
     }
 
+    @Test("bootstrap attaches overdue persisted scheduled queues")
+    func bootstrapAttachesOverduePersistedScheduledQueues() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let seeded = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let seededSession = seeded.createSession(id: "scheduled-session", agentId: "claude")
+        seeded.enqueueWhileRecovering(
+            text: "overdue",
+            attachments: [],
+            scheduledAt: Date().addingTimeInterval(-1),
+            into: seededSession.id
+        )
+        await seeded.flushPersistence()
+
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-scheduled")
+        client.script(method: "session/prompt") { _ in Data("null".utf8) }
+        let manager = manager(store: store, client: client)
+
+        let bootstrapped = await manager.bootstrapScheduledQueueSessions()
+        try await waitUntilAsync {
+            await client.sent.contains { $0.method == "session/prompt" }
+        }
+
+        #expect(bootstrapped == [seededSession.id])
+        #expect(try store.loadQueue(sessionId: seededSession.id).isEmpty)
+    }
+
     @Test("reopened local broker session attaches from persisted cursor")
     func reopenedLocalBrokerSessionAttachesFromPersistedCursor() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())

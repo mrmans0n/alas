@@ -714,6 +714,8 @@ final class ACPSessionRunner {
         )
         session.clearRetryStatus()
         flushStreamingPersistOnStop()
+        scheduledQueueWakeTask?.cancel()
+        scheduledQueueWakeTask = nil
         incomingUpdateFlushTask?.cancel()
         incomingUpdateFlushTask = nil
         updatesTask?.cancel()

@@ -1061,12 +1061,38 @@ final class AppState {
         Task { [weak self] in
             await self?.reconcileInterruptedDelegations()
         }
+        Task { @MainActor [weak self] in
+            await self?.bootstrapScheduledACPSessions(worktreeIds: allWorktreeIds)
+        }
     }
 
     private func restoreLoadedWorkspaceCheckoutACPSessions() async {
         guard config.workspacesEnabled, workspacesManager.canMutate else { return }
         for checkout in workspacesManager.checkouts where checkout.archivedAt == nil {
             _ = await restoreWorkspaceCheckoutACPSessions(checkout)
+        }
+    }
+
+    private func bootstrapScheduledACPSessions(worktreeIds: [String]) async {
+        for worktreeId in worktreeIds {
+            guard let worktree = worktree(withId: worktreeId),
+                  let manager = acpManager(for: worktree)
+            else { continue }
+            await bootstrapScheduledACPSessions(owner: .worktree(worktreeId), manager: manager)
+        }
+    }
+
+    private func bootstrapScheduledACPSessions(owner: SessionOwnerID, manager: ACPSessionManager) async {
+        let sessionIds = await manager.bootstrapScheduledQueueSessions()
+        for sessionId in sessionIds where !hasACPSessionTab(owner: owner, sessionId: sessionId) {
+            cleanupACPSession(owner: owner, sessionId: sessionId)
+        }
+    }
+
+    private func hasACPSessionTab(owner: SessionOwnerID, sessionId: ACPSession.ID) -> Bool {
+        tabs.tabs(for: owner).contains {
+            guard case .acpSession(let state) = $0 else { return false }
+            return state.sessionId == sessionId
         }
     }
 
@@ -8949,6 +8975,7 @@ final class AppState {
             guard manager.placeholderSession(id: state.sessionId) != nil else { continue }
             await manager.hydrateIfNeeded(id: state.sessionId)
         }
+        await bootstrapScheduledACPSessions(owner: owner, manager: manager)
         return true
     }
 

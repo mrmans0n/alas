@@ -79,6 +79,22 @@ struct ACPSessionRunnerQueueTests {
         #expect(mock.sent.contains { $0.method == "session/prompt" })
     }
 
+    @Test("stop cancels a scheduled queue wake")
+    func stopCancelsScheduledQueueWake() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        mock.script(method: "session/prompt") { _ in Data("null".utf8) }
+        runner.send(
+            blocks: [.text("soon")],
+            intent: .schedule(Date().addingTimeInterval(0.05))
+        )
+
+        runner.stop()
+        try await Task.sleep(nanoseconds: 150_000_000)
+
+        #expect(session.queue.first?.status == .pending)
+        #expect(!mock.sent.contains { $0.method == "session/prompt" })
+    }
+
     @Test("an immediate prompt does not wait behind a scheduled prompt")
     func immediatePromptBypassesScheduledPrompt() async throws {
         let (runner, mock, session, _) = try mkRunner()

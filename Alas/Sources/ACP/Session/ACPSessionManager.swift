@@ -4063,6 +4063,31 @@ extension ACPSessionManager {
         }
     }
 
+    func bootstrapScheduledQueueSessions() async -> [ACPSession.ID] {
+        let ids: [ACPSession.ID]
+        do {
+            ids = try await persistence.scheduledQueueSessionIds()
+        } catch {
+            persistenceError = error.localizedDescription
+            return []
+        }
+        var bootstrapped: [ACPSession.ID] = []
+        for id in ids {
+            guard await persistedSessionRow(id: id) != nil,
+                  placeholderSession(id: id) != nil
+            else { continue }
+            await hydrateIfNeeded(id: id)
+            guard let session = sessions[id],
+                  session.queue.contains(where: {
+                      $0.status == .pending && $0.lastError == nil && $0.scheduledAt != nil
+                  })
+            else { continue }
+            await reattach(to: id)
+            bootstrapped.append(id)
+        }
+        return bootstrapped
+    }
+
     /// Remote SSH channel drops are commonly transient. Reuse the regular
     /// reattach path so restoration and queued-prompt handling stay identical.
     func scheduleAutoReconnect(sessionId: ACPSession.ID) {
