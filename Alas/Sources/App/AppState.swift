@@ -4330,6 +4330,74 @@ final class AppState {
         saveProjects()
     }
 
+    /// Archive several worktrees at once. Nothing on disk is touched — this
+    /// only marks each path hidden in `ProjectConfig`, which is what persists
+    /// across relaunch.
+    ///
+    /// Unsaved editor buffers are checked across the whole selection before any
+    /// archiving happens, so the user answers one prompt rather than one per
+    /// worktree. Cancelling that prompt cancels the whole batch.
+    @discardableResult
+    func batchArchiveWorktrees(_ worktrees: [Worktree]) -> [WorktreeBatchResult] {
+        guard !worktrees.isEmpty else { return [] }
+
+        let dirtyCount = worktrees.reduce(0) { total, worktree in
+            total + dirtyEditorTabIds(worktreeId: worktree.id).count
+        }
+        if dirtyCount > 0 {
+            switch promptForDirtyBuffers(
+                action: "Archive",
+                branch: "\(worktrees.count) worktrees",
+                dirtyCount: dirtyCount,
+                onDiskDestructive: false
+            ) {
+            case .save:
+                // Saving is per-worktree and asynchronous; the sheet's flow is
+                // synchronous, so ask the user to save and retry rather than
+                // half-archiving. Report it as a skip, not a failure.
+                return worktrees.map {
+                    WorktreeBatchResult(
+                        worktreeId: $0.id,
+                        branch: $0.branch,
+                        outcome: .skipped(reason: "Save the open editors first")
+                    )
+                }
+            case .discard:
+                break
+            case .cancel:
+                return []
+            }
+        }
+
+        var results: [WorktreeBatchResult] = []
+        for worktree in worktrees {
+            guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
+                results.append(WorktreeBatchResult(
+                    worktreeId: worktree.id,
+                    branch: worktree.branch,
+                    outcome: .failed(message: "Could not find the project for this worktree.")
+                ))
+                continue
+            }
+            guard !projectsManager.isMain(worktree, in: project) else {
+                results.append(WorktreeBatchResult(
+                    worktreeId: worktree.id,
+                    branch: worktree.branch,
+                    outcome: .skipped(reason: "Main worktree")
+                ))
+                continue
+            }
+
+            archiveWorktreeAfterSaving(worktree)
+            results.append(WorktreeBatchResult(
+                worktreeId: worktree.id,
+                branch: worktree.branch,
+                outcome: .archived
+            ))
+        }
+        return results
+    }
+
     func startHarness() {
         LegacyHookSweep.sweepAll()
         harness.notifications.setEnabled(config.harness.notifyOnFinish)
