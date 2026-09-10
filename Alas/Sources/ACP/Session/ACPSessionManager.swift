@@ -296,7 +296,7 @@ final class ACPSessionManager: ObservableObject {
         guard session.removeFromQueue(id: itemId) else { return }
         persistQueue(for: session)
         runners[id]?.flushQueueIfIdle()
-        onQueueChanged?(id, false)
+        onQueueChanged?(id, retainedCleanupHasActivePromptWork(for: id))
     }
 
     /// Clear a failed item's error so the flusher re-attempts it.
