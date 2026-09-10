@@ -6617,6 +6617,14 @@ final class AppState {
         }) {
             return activePromptCleanupDelay
         }
+        let hasForcedQueueWork = session.queue.contains {
+            $0.scheduledAt == nil && (
+                $0.status == .sending || ($0.status == .pending && session.pendingQueuePersistenceCount > 0)
+            )
+        }
+        if hasForcedQueueWork, manager.retainedCleanupHasActivePromptWork(for: sessionId) {
+            return activePromptCleanupDelay
+        }
         if manager.retainedCleanupHasForkBarrierWork(for: sessionId) {
             return .seconds(30)
         }
