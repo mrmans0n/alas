@@ -35,6 +35,21 @@ struct ACPSessionManagerTests {
         #expect(try store.loadQueue(sessionId: "session").map(\.id) == [promptID])
     }
 
+    @Test("mission prompts stay ahead of scheduled prompts")
+    func missionPromptStaysAheadOfScheduledPrompt() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-mission-schedule-order-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let session = manager.createSession(id: "session", agentId: "codex", autoRunDefault: false)
+        session.enqueueScheduled(blocks: [.text("later")], scheduledAt: .distantFuture)
+        let promptID = UUID()
+
+        #expect(await manager.enqueuePrompt(id: promptID, text: "now", into: session.id))
+        #expect(session.queue.map(\.blocks) == [[.text("now")], [.text("later")]])
+        #expect(session.queue.map(\.scheduledAt) == [nil, .distantFuture])
+    }
+
     @Test("delegated prompt already recorded in the transcript is not requeued")
     func delegatedPromptRecordedInTranscriptIsNotRequeued() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-delegated-dedupe-\(UUID()).sqlite")

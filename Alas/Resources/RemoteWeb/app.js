@@ -9,7 +9,7 @@ let messageNodes = new Map();                          // stableId → DOM node
 let transcriptMeta = null;   // {epoch, revision, firstIndex, totalCount} for the open session
 let olderFetchInFlight = false;
 let stopPending = false;
-let queueItems = [];             // [{id, text, imageCount, resourceCount, status, lastError}] from queueState
+let queueItems = [];             // [{id, text, imageCount, resourceCount, status, lastError, scheduledAt}] from queueState
 let steerUndoAvailable = false;
 let lastStreamingState = "idle"; // so composer state can be recomputed on text input
 let sessionTitles = new Map();
@@ -1416,7 +1416,7 @@ function queuedRow(item) {
 
   const stack = el("div", "queued-stack");
   const status = el("div", "queued-status");
-  status.appendChild(el("span", null, "Queued"));
+  status.appendChild(el("span", null, queuedStatus(item)));
   if (item.lastError) status.appendChild(el("span", "queued-error", " · " + item.lastError));
   stack.appendChild(status);
 
@@ -1433,6 +1433,10 @@ function queuedRow(item) {
 
   row.appendChild(stack);
   return row;
+}
+
+function queuedStatus(item) {
+  return item.scheduledAt ? "Scheduled for " + new Date(item.scheduledAt).toLocaleString() : "Queued";
 }
 
 function queuedActions(item) {

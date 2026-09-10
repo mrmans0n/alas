@@ -1433,11 +1433,12 @@ final class ACPSession: ObservableObject, Identifiable {
     /// runner when the user submits while the agent is busy (or while
     /// the queue is already non-empty — see ACPSubmitRoute).
     func enqueue(
+        id: UUID = UUID(),
         blocks: [ACPContentBlock],
         draft: ACPComposerDraft? = nil,
         delegatedSource: ACPDelegatedPromptSource? = nil
     ) {
-        let item = QueuedPrompt(blocks: blocks, draft: draft, delegatedSource: delegatedSource)
+        let item = QueuedPrompt(id: id, blocks: blocks, draft: draft, delegatedSource: delegatedSource)
         let insertAt = queue.firstIndex { $0.status == .pending && $0.scheduledAt != nil } ?? queue.endIndex
         queue.insert(item, at: insertAt)
     }

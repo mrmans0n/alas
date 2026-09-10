@@ -31,6 +31,18 @@ struct ComposerActionTests {
         #expect(ACPSchedulePreset.laterToday.date(after: now, calendar: calendar) == nil)
     }
 
+    @Test("morning presets retain their wall-clock time across daylight saving changes")
+    func morningPresetsAreDSTSafe() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/New_York")!
+        let now = calendar.date(from: DateComponents(
+            year: 2026, month: 3, day: 7, hour: 12
+        ))!
+
+        #expect(ACPSchedulePreset.tomorrowMorning.date(after: now, calendar: calendar)
+            == calendar.date(from: DateComponents(year: 2026, month: 3, day: 8, hour: 9)))
+    }
+
     // MARK: - Agent lifecycle
 
     @Test("idle streaming + text shows Send for every agent lifecycle state")

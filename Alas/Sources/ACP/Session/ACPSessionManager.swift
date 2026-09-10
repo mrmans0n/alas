@@ -4217,19 +4217,18 @@ extension ACPSessionManager {
             return recordedSource == source
         }) else { return true }
 
-        let item = QueuedPrompt(
+        session.enqueue(
             id: id,
             blocks: ACPSessionRunner.blocks(text: text, attachments: []),
             delegatedSource: source
         )
-        session.queue.append(item)
         let fence = leaseFence(sessionId: sessionId)
         let items = session.queue
         let task = enqueuePersistenceResult { persistence in
             try await persistence.upsertQueue(sessionId: sessionId, items: items, fence: fence)
         }
         guard await task.value == true else {
-            if let index = session.queue.firstIndex(where: { $0.id == item.id }) {
+            if let index = session.queue.firstIndex(where: { $0.id == id }) {
                 session.queue.remove(at: index)
             }
             return false

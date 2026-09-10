@@ -24,6 +24,7 @@ struct RemoteQueuedPrompt: Codable, Equatable, Sendable {
     let resourceCount: Int
     let status: String      // "pending" | "sending"
     let lastError: String?
+    let scheduledAt: Date?
 }
 
 struct RemoteWorktreeSummary: Codable, Equatable, Sendable {
