@@ -1,8 +1,36 @@
+import Foundation
 import Testing
 @testable import Alas
 
 @Suite("ComposerAction derive function")
 struct ComposerActionTests {
+    @Test("schedule presets use the local calendar and round later today up to 30 minutes")
+    func schedulePresets() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let now = calendar.date(from: DateComponents(
+            year: 2026, month: 9, day: 10, hour: 14, minute: 10
+        ))!
+
+        #expect(ACPSchedulePreset.laterToday.date(after: now, calendar: calendar)
+            == calendar.date(from: DateComponents(year: 2026, month: 9, day: 10, hour: 16, minute: 30)))
+        #expect(ACPSchedulePreset.tomorrowMorning.date(after: now, calendar: calendar)
+            == calendar.date(from: DateComponents(year: 2026, month: 9, day: 11, hour: 9)))
+        #expect(ACPSchedulePreset.nextMondayMorning.date(after: now, calendar: calendar)
+            == calendar.date(from: DateComponents(year: 2026, month: 9, day: 14, hour: 9)))
+    }
+
+    @Test("later today is unavailable when two rounded hours cross midnight")
+    func laterTodayDoesNotCrossMidnight() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let now = calendar.date(from: DateComponents(
+            year: 2026, month: 9, day: 10, hour: 22, minute: 15
+        ))!
+
+        #expect(ACPSchedulePreset.laterToday.date(after: now, calendar: calendar) == nil)
+    }
+
     // MARK: - Agent lifecycle
 
     @Test("idle streaming + text shows Send for every agent lifecycle state")

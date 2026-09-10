@@ -1437,7 +1437,21 @@ final class ACPSession: ObservableObject, Identifiable {
         draft: ACPComposerDraft? = nil,
         delegatedSource: ACPDelegatedPromptSource? = nil
     ) {
-        queue.append(QueuedPrompt(blocks: blocks, draft: draft, delegatedSource: delegatedSource))
+        let item = QueuedPrompt(blocks: blocks, draft: draft, delegatedSource: delegatedSource)
+        let insertAt = queue.firstIndex { $0.status == .pending && $0.scheduledAt != nil } ?? queue.endIndex
+        queue.insert(item, at: insertAt)
+    }
+
+    func enqueueScheduled(
+        blocks: [ACPContentBlock],
+        scheduledAt: Date,
+        draft: ACPComposerDraft? = nil
+    ) {
+        let item = QueuedPrompt(blocks: blocks, scheduledAt: scheduledAt, draft: draft)
+        let insertAt = queue.firstIndex {
+            $0.status == .pending && ($0.scheduledAt.map { $0 > scheduledAt } ?? false)
+        } ?? queue.endIndex
+        queue.insert(item, at: insertAt)
     }
 
     /// Remove a specific item by id. The drag-handle X on the bubble
@@ -1501,6 +1515,7 @@ final class ACPSession: ObservableObject, Identifiable {
         var item = queue.remove(at: idx)
         item.status = .pending
         item.lastError = nil
+        item.scheduledAt = nil
 
         let insertAt = protectedPrefixCount
         queue.insert(item, at: min(insertAt, queue.count))

@@ -20,6 +20,38 @@ struct QueuedPromptTests {
         #expect(decoded == original)
     }
 
+    @Test("scheduled date round-trips while legacy queue JSON decodes without one")
+    func scheduledDateCompatibility() throws {
+        let scheduledAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let prompt = QueuedPrompt(
+            blocks: [.text("later")],
+            enqueuedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            scheduledAt: scheduledAt
+        )
+
+        let decoded = try JSONDecoder().decode(
+            QueuedPrompt.self,
+            from: JSONEncoder().encode(prompt)
+        )
+        #expect(decoded.scheduledAt == scheduledAt)
+
+        let legacy = #"{"id":"00000000-0000-0000-0000-000000000001","blocks":[{"type":"text","text":"legacy"}],"enqueuedAt":0,"status":"pending"}"#
+        #expect(try JSONDecoder().decode(
+            QueuedPrompt.self,
+            from: Data(legacy.utf8)
+        ).scheduledAt == nil)
+    }
+
+    @Test("a scheduled prompt becomes ready at its deadline")
+    func scheduledPromptReadiness() {
+        let deadline = Date(timeIntervalSince1970: 100)
+        let prompt = QueuedPrompt(blocks: [.text("later")], scheduledAt: deadline)
+
+        #expect(!prompt.isReady(at: Date(timeIntervalSince1970: 99)))
+        #expect(prompt.isReady(at: deadline))
+        #expect(prompt.isReady(at: Date(timeIntervalSince1970: 101)))
+    }
+
     @Test("normalizeAfterRestore flips .sending to .pending and clears lastError untouched")
     func normalize() {
         let q = QueuedPrompt(id: UUID(), blocks: [.text("x")],

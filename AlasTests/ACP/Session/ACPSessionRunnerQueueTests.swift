@@ -47,6 +47,54 @@ struct ACPSessionRunnerQueueTests {
         #expect(session.queue.isEmpty)
     }
 
+    @Test("scheduled intent persists without sending before its deadline")
+    func scheduledIntentWaits() async throws {
+        let (runner, mock, session, store) = try mkRunner()
+        runner.send(
+            blocks: [.text("later")],
+            intent: .schedule(Date().addingTimeInterval(60))
+        )
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        #expect(session.queue.count == 1)
+        #expect(session.queue[0].scheduledAt != nil)
+        #expect(!mock.sent.contains { $0.method == "session/prompt" })
+        #expect(try store.loadQueue(sessionId: "s") == session.queue)
+    }
+
+    @Test("scheduled prompt flushes once its deadline arrives")
+    func scheduledPromptFlushesAtDeadline() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        mock.script(method: "session/prompt") { _ in Data("null".utf8) }
+        runner.send(
+            blocks: [.text("soon")],
+            intent: .schedule(Date().addingTimeInterval(0.1))
+        )
+
+        try await Task.sleep(nanoseconds: 50_000_000)
+        #expect(!mock.sent.contains { $0.method == "session/prompt" })
+
+        try await Task.sleep(nanoseconds: 250_000_000)
+        #expect(session.queue.isEmpty)
+        #expect(mock.sent.contains { $0.method == "session/prompt" })
+    }
+
+    @Test("an immediate prompt does not wait behind a scheduled prompt")
+    func immediatePromptBypassesScheduledPrompt() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        mock.script(method: "session/prompt") { _ in Data("null".utf8) }
+        runner.send(
+            blocks: [.text("later")],
+            intent: .schedule(Date().addingTimeInterval(60))
+        )
+        runner.send(blocks: [.text("now")], intent: .auto)
+
+        try await Task.sleep(nanoseconds: 150_000_000)
+        #expect(mock.sent.contains { $0.method == "session/prompt" })
+        #expect(session.queue.count == 1)
+        #expect(session.queue[0].blocks == [.text("later")])
+    }
+
     @Test(".auto while .idle with non-empty queue → enqueues (queue is authoritative)")
     func enqueuesWhenIdleAndQueueNonEmpty() async throws {
         let (runner, mock, session, _) = try mkRunner()

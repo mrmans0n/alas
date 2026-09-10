@@ -1,6 +1,6 @@
 import Foundation
 
-enum ACPSubmitIntent: Equatable { case auto, steer }
+enum ACPSubmitIntent: Equatable { case auto, steer, schedule(Date) }
 
 enum ACPSubmitRoute: Equatable {
     /// State is idle AND queue is empty — send the prompt directly.
@@ -39,6 +39,8 @@ enum ACPSubmitRoute: Equatable {
             return canSendNow ? .sendNow : .enqueue
         case .steer:
             return canSendNow ? .sendNow : .steer
+        case .schedule:
+            return .enqueue
         }
     }
 }

@@ -23,6 +23,26 @@ struct ACPSessionQueueAPITests {
         #expect(s.queue[0].blocks == [.text("hello")])
     }
 
+    @Test("normal prompts stay ahead of scheduled prompts")
+    func normalPromptsStayAheadOfScheduledPrompts() {
+        let s = mkSession()
+        s.enqueueScheduled(
+            blocks: [.text("tomorrow")],
+            scheduledAt: Date(timeIntervalSince1970: 200)
+        )
+        s.enqueueScheduled(
+            blocks: [.text("later today")],
+            scheduledAt: Date(timeIntervalSince1970: 100)
+        )
+        s.enqueue(blocks: [.text("now")])
+
+        #expect(s.queue.map(\.blocks) == [
+            [.text("now")],
+            [.text("later today")],
+            [.text("tomorrow")],
+        ])
+    }
+
     @Test("remove(id:) drops matching item, leaves others")
     func remove() {
         let s = mkSession()
@@ -65,6 +85,18 @@ struct ACPSessionQueueAPITests {
         #expect(s.forceQueueItem(id: id))
         #expect(s.queue.map { $0.blocks } == [[.text("b")], [.text("a")]])
         #expect(s.queue[0].status == .pending)
+    }
+
+    @Test("forcing a scheduled prompt sends it now")
+    func forceScheduledPromptClearsDeadline() {
+        let s = mkSession()
+        s.enqueueScheduled(
+            blocks: [.text("later")],
+            scheduledAt: Date(timeIntervalSince1970: 200)
+        )
+
+        #expect(s.forceQueueItem(id: s.queue[0].id))
+        #expect(s.queue[0].scheduledAt == nil)
     }
 
     @Test("forceQueueItem clears a previous queue error")

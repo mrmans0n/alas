@@ -56,6 +56,7 @@ final class ACPSessionRunner {
     private var terminalsTask: Task<Void, Never>?
     private var seq: Int64 = 0
     private var steerUndoExpiryTask: Task<Void, Never>?
+    private var scheduledQueueWakeTask: Task<Void, Never>?
     /// Monotonic prompt counter + active/cancelled bookkeeping (inherited
     /// from main / PR #338). Reused by the queue's sendNow path:
     /// `activePromptID` identifies the task that currently owns
@@ -1354,6 +1355,17 @@ extension ACPSessionRunner {
         draft: ACPComposerDraft? = nil,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
     ) {
+        if case .schedule(let date) = intent {
+            guard !blocks.isEmpty else {
+                Task { @MainActor in onPromptFinished?(false) }
+                return
+            }
+            session.enqueueScheduled(blocks: blocks, scheduledAt: date, draft: draft)
+            persistQueue()
+            flushQueueIfIdle()
+            Task { @MainActor in onPromptFinished?(true) }
+            return
+        }
         if nativeForkBarrierActive {
             guard !blocks.isEmpty else {
                 Task { @MainActor in onPromptFinished?(false) }
@@ -1380,8 +1392,10 @@ extension ACPSessionRunner {
         case .sendNow:
             sendNow(blocks: blocks, queuedItemId: nil, draft: draft, onPromptFinished: onPromptFinished)
         case .enqueue:
+            let scheduledWasHead = session.queue.first?.scheduledAt != nil
             session.enqueue(blocks: blocks, draft: draft)
             persistQueue()
+            if scheduledWasHead { flushQueueIfIdle() }
             // The user's prompt was accepted into the queue — from the
             // composer's perspective this is a successful submission so
             // the persisted draft can be cleared. The actual RPC fires
@@ -1517,6 +1531,12 @@ extension ACPSessionRunner {
               head.lastError == nil
         else { return }
         if case .needsAuth = session.setupState { return }
+        guard head.isReady() else {
+            scheduleQueueWake(at: head.scheduledAt!)
+            return
+        }
+        scheduledQueueWakeTask?.cancel()
+        scheduledQueueWakeTask = nil
         let brokerOperationKey = session.markQueueHeadSending()
         persistQueue()
         sendNow(
@@ -1525,6 +1545,17 @@ extension ACPSessionRunner {
             delegatedSource: head.delegatedSource,
             brokerOperationKey: brokerOperationKey
         )
+    }
+
+    private func scheduleQueueWake(at date: Date) {
+        scheduledQueueWakeTask?.cancel()
+        let delay = max(0, date.timeIntervalSinceNow)
+        scheduledQueueWakeTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled else { return }
+            self?.scheduledQueueWakeTask = nil
+            self?.flushQueueIfIdle()
+        }
     }
 
     func beginNativeForkBarrier() async -> Bool {
