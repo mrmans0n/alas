@@ -34,14 +34,91 @@ enum WorktreeTrashCleaner {
             throw CleanerError.replacedDirectory
         }
         try spawn(URL(fileURLWithPath: "/usr/bin/nice"), [
-            "-n", "10", "/bin/sh", "-c",
+            "-n", "10", "/usr/bin/python3", "-c",
             """
-            /bin/sleep "$1"
-            current=$(/usr/bin/stat -f '%d:%i' "$3" 2>/dev/null) || exit 0
-            test "$current" = "$4:$5" || exit 0
-            /bin/rm -rf -- "$3" && exec /bin/rm -f -- "$2"
+            import errno
+            import os
+            import sys
+            import time
+            import uuid
+
+            def remove_contents(dirfd):
+                for name in os.listdir(dirfd):
+                    try:
+                        childfd = os.open(
+                            name,
+                            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                            dir_fd=dirfd,
+                        )
+                    except OSError as error:
+                        if error.errno in (errno.ENOTDIR, errno.ELOOP):
+                            try:
+                                os.unlink(name, dir_fd=dirfd)
+                            except FileNotFoundError:
+                                pass
+                            continue
+                        if error.errno == errno.ENOENT:
+                            continue
+                        raise
+                    try:
+                        remove_contents(childfd)
+                    finally:
+                        os.close(childfd)
+                    try:
+                        os.rmdir(name, dir_fd=dirfd)
+                    except FileNotFoundError:
+                        pass
+
+            time.sleep(max(0, int(sys.argv[1])))
+            marker = sys.argv[2]
+            staged = sys.argv[3]
+            expected_device = int(sys.argv[4])
+            expected_inode = int(sys.argv[5])
+            parent, name = os.path.split(staged)
+            private_name = f".{name}.deleting.{os.getpid()}.{uuid.uuid4().hex}"
+            parentfd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
+            stagedfd = None
+            renamedfd = None
+            try:
+                stagedfd = os.open(
+                    name,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=parentfd,
+                )
+                stat = os.fstat(stagedfd)
+                if (stat.st_dev, stat.st_ino) != (expected_device, expected_inode):
+                    sys.exit(0)
+                os.rename(name, private_name, src_dir_fd=parentfd, dst_dir_fd=parentfd)
+                renamedfd = os.open(
+                    private_name,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=parentfd,
+                )
+                renamed_stat = os.fstat(renamedfd)
+                if (renamed_stat.st_dev, renamed_stat.st_ino) != (expected_device, expected_inode):
+                    try:
+                        os.rename(private_name, name, src_dir_fd=parentfd, dst_dir_fd=parentfd)
+                    except OSError:
+                        pass
+                    sys.exit(0)
+                remove_contents(renamedfd)
+                try:
+                    os.rmdir(private_name, dir_fd=parentfd)
+                except FileNotFoundError:
+                    pass
+                try:
+                    os.unlink(marker)
+                except FileNotFoundError:
+                    pass
+            except FileNotFoundError:
+                pass
+            finally:
+                if renamedfd is not None:
+                    os.close(renamedfd)
+                if stagedfd is not None:
+                    os.close(stagedfd)
+                os.close(parentfd)
             """,
-            "alas-worktree-cleaner",
             String(max(0, delaySeconds)),
             WorktreeTrash.committedMarkerURL(for: ticket).path,
             ticket.stagedPath.path,

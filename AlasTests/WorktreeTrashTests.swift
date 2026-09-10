@@ -131,12 +131,13 @@ struct WorktreeTrashTests {
         }
 
         #expect(capturedExecutable?.path == "/usr/bin/nice")
-        #expect(capturedArguments[8] == ticket.stagedPath.path)
-        #expect(capturedArguments[7] == WorktreeTrash.committedMarkerURL(for: ticket).path)
+        #expect(capturedArguments[2] == "/usr/bin/python3")
+        #expect(capturedArguments[7] == ticket.stagedPath.path)
+        #expect(capturedArguments[6] == WorktreeTrash.committedMarkerURL(for: ticket).path)
         #expect(!capturedArguments[4].contains(ticket.stagedPath.path))
     }
 
-    @Test func cleanerReplacementSurvivesAndNeverBecomesStaleCandidate() throws {
+    @Test func cleanerReplacementSurvivesWhenSwappedBeforeCleanerLaunch() throws {
         let common = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-cleaner-swap-\(UUID().uuidString)")
         let original = common.appendingPathComponent("original")
@@ -178,6 +179,38 @@ struct WorktreeTrashTests {
             olderThan: Date(timeIntervalSince1970: 200)
         )
         #expect(staleTickets.isEmpty)
+    }
+
+    @Test func liveCleanerDoesNotDeleteReplacementSwappedInAfterLaunch() async throws {
+        let common = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-cleaner-live-swap-\(UUID().uuidString)")
+        let displaced = common.appendingPathComponent("displaced")
+        defer { try? FileManager.default.removeItem(at: common) }
+        let ticket = try makeStagedTicket(
+            commonGitDirectory: common,
+            originalBaseName: "clean-me"
+        )
+        try "trash".write(
+            to: ticket.stagedPath.appendingPathComponent("trash.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try WorktreeTrash.markCommitted(ticket)
+        let replacementMarker = ticket.stagedPath.appendingPathComponent("replacement.txt")
+        let committedMarker = WorktreeTrash.committedMarkerURL(for: ticket)
+
+        try WorktreeTrashCleaner.launch(ticket, delaySeconds: 1)
+        try FileManager.default.moveItem(at: ticket.stagedPath, to: displaced)
+        try FileManager.default.createDirectory(
+            at: ticket.stagedPath,
+            withIntermediateDirectories: true
+        )
+        try "keep".write(to: replacementMarker, atomically: true, encoding: .utf8)
+        try await Task.sleep(for: .milliseconds(1_500))
+
+        #expect(FileManager.default.fileExists(atPath: replacementMarker.path))
+        #expect(FileManager.default.fileExists(atPath: displaced.path))
+        #expect(FileManager.default.fileExists(atPath: committedMarker.path))
     }
 
     @Test func staleSweepDoesNotSpawnCleanerForReplacementDirectory() async throws {
@@ -403,6 +436,54 @@ struct WorktreeTrashTests {
         ))
     }
 
+    @Test func sweepReconcilesPendingDeletionWithLongOriginalPath() async throws {
+        let repo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-pending-long-recovery-\(UUID().uuidString)")
+        let original = try longWorktreePath(
+            root: repo.deletingLastPathComponent(),
+            prefix: "\(repo.lastPathComponent)-linked"
+        )
+        defer {
+            try? FileManager.default.removeItem(at: original)
+            try? FileManager.default.removeItem(at: repo)
+        }
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: repo)
+        _ = try await WorktreeService().add(
+            repoPath: repo, base: "main", branch: "linked", destination: original, projectId: "p"
+        )
+        let gitDirectory = try #require(WorktreeService.localGitDirectory(forWorktreeAt: original))
+        let ticket = try WorktreeTrash.makeTicket(
+            commonGitDirectory: repo.appendingPathComponent(".git"), originalPath: original
+        )
+        try FileManager.default.createDirectory(at: ticket.trashRoot, withIntermediateDirectories: true)
+        try WorktreeTrash.markPending(
+            ticket,
+            originalPath: original,
+            linkedGitDirectory: gitDirectory,
+            at: Date(timeIntervalSince1970: 100)
+        )
+        let pendingSize = try #require(
+            FileManager.default.attributesOfItem(
+                atPath: WorktreeTrash.pendingMarkerURL(for: ticket).path
+            )[.size] as? NSNumber
+        )
+        #expect(pendingSize.uint64Value > 1_024)
+        try FileManager.default.moveItem(at: original, to: ticket.stagedPath)
+        try FileManager.default.removeItem(at: gitDirectory)
+        let project = ProjectConfig(id: "p", name: "repo", path: repo.path, color: "#000000", addedAt: .now)
+        var recovered: [WorktreeTrashCleanupTicket] = []
+
+        WorktreeTrashCleaner.sweep(
+            projects: [project],
+            now: Date(timeIntervalSince1970: 100_000),
+            launcher: { recovered.append($0) }
+        )
+
+        #expect(recovered == [ticket])
+    }
+
     @Test func liveCleanerEventuallyDeletesTheTicketDirectory() async throws {
         let common = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-cleaner-\(UUID().uuidString)")
@@ -454,5 +535,19 @@ struct WorktreeTrashTests {
         )
         try FileManager.default.moveItem(at: source, to: ticket.stagedPath)
         return ticket
+    }
+
+    private func longWorktreePath(root: URL, prefix: String) throws -> URL {
+        var path = root.appendingPathComponent(prefix)
+        var index = 0
+        while path.standardizedFileURL.path.utf8.count < 780 {
+            path.appendPathComponent("segment-\(index)-abcdefghijklmnopqrstuvwxyz")
+            index += 1
+        }
+        try FileManager.default.createDirectory(
+            at: path.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        return path
     }
 }

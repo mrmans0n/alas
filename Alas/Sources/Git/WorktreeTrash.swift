@@ -23,6 +23,7 @@ enum WorktreeTrash {
     private static let committedMarkerVersion = "1"
     private static let pendingMarkerName = ".alas-worktree-deletion-pending"
     private static let pendingMarkerVersion = "1"
+    private static let maximumPendingMarkerBytes: UInt64 = 4_096
 
     private struct CommittedMetadata {
         let date: Date
@@ -113,6 +114,9 @@ enum WorktreeTrash {
             Data(linkedGitDirectory.lastPathComponent.utf8).base64EncodedString(),
             "",
         ].joined(separator: "\n")
+        guard metadata.utf8.count <= maximumPendingMarkerBytes else {
+            throw CocoaError(.fileWriteOutOfSpace)
+        }
         try Data(metadata.utf8).write(
             to: pendingMarkerURL(for: ticket),
             options: .atomic
@@ -374,7 +378,7 @@ enum WorktreeTrash {
         guard let attributes = try? fileManager.attributesOfItem(atPath: markerURL.path),
               attributes[.type] as? FileAttributeType == .typeRegular,
               let size = attributes[.size] as? NSNumber,
-              size.uint64Value <= 1_024,
+              size.uint64Value <= maximumPendingMarkerBytes,
               let data = fileManager.contents(atPath: markerURL.path),
               let raw = String(data: data, encoding: .utf8),
               raw.utf8.count == data.count
