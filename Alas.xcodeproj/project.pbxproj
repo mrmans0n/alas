@@ -550,6 +550,7 @@
 		4FD9E5FFB4C75850CF7B2FE7 /* StagedDiffLoaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99CD99C81057F377C5E249B7 /* StagedDiffLoaderTests.swift */; };
 		4FE322C88A2B06C317DDA9B5 /* ReviewSessionTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64C593F9F14DD962C9822C64 /* ReviewSessionTabView.swift */; };
 		5015F89D084573BFC8A9E2C3 /* AttachedIssueDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7A1961A7FEA8DC28BD6C87A /* AttachedIssueDraft.swift */; };
+		502424D2A1042DF67A4332EE /* WorktreeCleanupConfigTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEB33BFC223CB0A5C6CBC4AF /* WorktreeCleanupConfigTests.swift */; };
 		5026424BC4EA8196D12E6F46 /* BuildIdentityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0EE31A4EB90FFE45DC46420 /* BuildIdentityTests.swift */; };
 		502B274A6E7E801B76B8564A /* ACPScrollDirectionClassifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DE5F609BDA1D7CE2DF4A491 /* ACPScrollDirectionClassifier.swift */; };
 		5031D53ED872A86B7C253696 /* MergeConflictToolbar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91B5694DB75F80C8D7B51E82 /* MergeConflictToolbar.swift */; };
@@ -3214,6 +3215,7 @@
 		EE607EE1ACDE73C1DB0FCA00 /* SettingsRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsRow.swift; sourceTree = "<group>"; };
 		EE6F36C31DB1C13D86416B4B /* PiACPInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiACPInstaller.swift; sourceTree = "<group>"; };
 		EE91017BB71AB08265C7B56E /* ACPComposerControlPresentationDictationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPComposerControlPresentationDictationTests.swift; sourceTree = "<group>"; };
+		EEB33BFC223CB0A5C6CBC4AF /* WorktreeCleanupConfigTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeCleanupConfigTests.swift; sourceTree = "<group>"; };
 		EECB91379591DA21D216A894 /* RelativeTime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelativeTime.swift; sourceTree = "<group>"; };
 		EECD5B53A23694EF60F63041 /* MergeConflictAgentProposalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergeConflictAgentProposalView.swift; sourceTree = "<group>"; };
 		EF16ADC997E65FD6AEE5562A /* DiffReviewComments.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffReviewComments.swift; sourceTree = "<group>"; };
@@ -5740,6 +5742,7 @@
 				5B9261D66BAD364C3EEAB4DA /* AppConfigHarnessMCPTests.swift */,
 				4D4F87B7B6F4A6E6ED882F1F /* HarnessConfigAutoRunTests.swift */,
 				792BD8DAE4AAED201252C9E2 /* ProjectMCPServerTests.swift */,
+				EEB33BFC223CB0A5C6CBC4AF /* WorktreeCleanupConfigTests.swift */,
 			);
 			path = Persistence;
 			sourceTree = "<group>";
@@ -7975,6 +7978,7 @@
 				E0AB8DE437378E43F55AAFDD /* WorkspaceTerminalSessionTests.swift in Sources */,
 				806C55C225BA072937201651 /* WorkspaceWorkItemTests.swift in Sources */,
 				9B783C828AE04E6F346E1B2C /* WorktreeCleanupClassifierTests.swift in Sources */,
+				502424D2A1042DF67A4332EE /* WorktreeCleanupConfigTests.swift in Sources */,
 				B34227BF866AFDACB3194333 /* WorktreeCodableTests.swift in Sources */,
 				8B0593FC9BC9E683E0685DD0 /* WorktreeCreateFetchTests.swift in Sources */,
 				A127B7AA4E95BEF74927FBDE /* WorktreePathTemplateRendererTests.swift in Sources */,

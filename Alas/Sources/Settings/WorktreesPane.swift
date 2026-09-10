@@ -67,6 +67,14 @@ struct WorktreesPane: View {
                                 desc: "When removing a worktree, also delete its local branch if merged.") {
                         AlasToggle(on: bind(\.worktrees.deleteBranchOnRemove))
                     }
+                    SettingsRow(name: "Idle threshold",
+                                desc: "Days a worktree must sit untouched before cleanup treats it as idle.") {
+                        Stepper(
+                            "\(state.config.worktrees.cleanupIdleDays) days",
+                            value: idleThresholdBinding,
+                            in: 1...365
+                        )
+                    }
                 }
 
                 if hasAnyArchived {
@@ -102,6 +110,16 @@ struct WorktreesPane: View {
         Binding(
             get: { state.config.worktrees.defaultOrdering },
             set: { state.setDefaultWorktreeOrdering($0) }
+        )
+    }
+
+    private var idleThresholdBinding: Binding<Int> {
+        Binding(
+            get: { state.config.worktrees.cleanupIdleDays },
+            set: {
+                state.config.worktrees.cleanupIdleDays = $0
+                state.saveConfig()
+            }
         )
     }
 
