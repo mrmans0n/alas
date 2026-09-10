@@ -153,6 +153,38 @@ struct ACPTranscriptScrollerLiveScrollTests {
         withExtendedLifetime(coordinator) {}
     }
 
+    @Test("returning to the tail keeps the history window until rubberband scrolling settles")
+    func returningToTailDefersWindowCompaction() async throws {
+        let (host, scroller, coordinator) = tailFollowingHost()
+        defer { withExtendedLifetime(coordinator) {} }
+        let originalHeight = scroller.contentHeight
+        let bottom = originalHeight - scroller.viewportHeight
+        liveScroll(scroller, to: bottom - 470)
+        #expect(!host.session.followsTranscriptTail)
+
+        NotificationCenter.default.post(
+            name: NSScrollView.willStartLiveScrollNotification, object: scroller
+        )
+        scroller.contentView.setBoundsOrigin(NSPoint(x: 0, y: bottom))
+        scroller.reflectScrolledClipView(scroller.contentView)
+        #expect(host.session.followsTranscriptTail)
+        #expect(host.transcript.visibleTail == nil, "new messages must remain visible while following")
+        #expect(host.transcript.visibleHead == 0, "do not discard history during the gesture")
+
+        coordinator.update(host: host)
+        try await Task.sleep(for: .milliseconds(400))
+        #expect(host.transcript.visibleHead == 0, "the settle timer must wait for live scrolling to end")
+        #expect(scroller.contentHeight == originalHeight)
+
+        NotificationCenter.default.post(
+            name: NSScrollView.didEndLiveScrollNotification, object: scroller
+        )
+        try await Task.sleep(for: .milliseconds(700))
+        #expect(host.transcript.visibleHead == 120 - ACPTranscript.tailWindow)
+        #expect(host.transcript.visibleTail == nil)
+        #expect(scroller.distanceFromBottom < 1)
+    }
+
     @Test("settling an input-request chat does not compact the reading window")
     func settlingInputRequestChatDoesNotCompactReadingWindow() async throws {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")

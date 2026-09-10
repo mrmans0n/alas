@@ -990,7 +990,9 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             guard let host, !host.session.followsTranscriptTail else { return }
             host.session.followsTranscriptTail = true
             reconciler?.setFollowsTail(true)
-            host.transcript.resetWindowToTail()
+            // Follow new messages now, but keep older rows through the rebound.
+            // Trimming them changes document geometry while AppKit is scrolling.
+            host.transcript.visibleTail = nil
             host.onRememberScrollAnchor(nil, nil, true)
         }
 
@@ -1005,6 +1007,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 return
             }
             if host.session.followsTranscriptTail {
+                host.transcript.resetWindowToTail()
                 update(host: host)
                 return
             }
