@@ -128,6 +128,25 @@ struct AppStateRunRecordTests {
         #expect(scriptTabCount(fixture) == 1)
     }
 
+    @Test func remoteRepoScriptLaunchDoesNotRequireLocalScriptPath() throws {
+        let fixture = try makeFixture(waiter: { _ in
+            try await Task.sleep(for: .seconds(5))
+            return RunScriptCompletion(exitCode: 0, transcript: nil, truncated: false)
+        })
+        defer {
+            fixture.state.cancelPendingRunScriptLaunches()
+            RemoteHostRegistry.shared.unregister(root: fixture.worktree.path.path)
+            try? FileManager.default.removeItem(at: fixture.directory)
+        }
+        try FileManager.default.removeItem(at: fixture.script.fileURL)
+        RemoteHostRegistry.shared.register(root: fixture.worktree.path.path, host: "devbox")
+
+        fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
+
+        #expect(fixture.errors().isEmpty)
+        #expect(runRecord(fixture)?.status == .starting)
+    }
+
     @Test func failedRunLinksTheCapturedOutput() async throws {
         let fixture = try makeFixture(waiter: { _ in
             RunScriptCompletion(exitCode: 42, transcript: Data("boom\n".utf8), truncated: false)

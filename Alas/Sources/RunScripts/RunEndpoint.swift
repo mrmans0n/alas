@@ -21,8 +21,17 @@ enum RunEndpointPolicy {
         if normalized.hasSuffix(".") {
             normalized.removeLast()
         }
+        if isIPv4MappedIPv6LoopbackLiteral(normalized) { return true }
         if isIPv4LoopbackLiteral(normalized) { return true }
         return loopbackHosts.contains(normalized)
+    }
+
+    private static func isIPv4MappedIPv6LoopbackLiteral(_ host: String) -> Bool {
+        for prefix in ["::ffff:", "0:0:0:0:0:ffff:"] where host.hasPrefix(prefix) {
+            let mappedIPv4 = String(host.dropFirst(prefix.count))
+            return isIPv4LoopbackLiteral(mappedIPv4)
+        }
+        return false
     }
 
     private static func isIPv4LoopbackLiteral(_ host: String) -> Bool {

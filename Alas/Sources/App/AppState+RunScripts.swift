@@ -381,8 +381,9 @@ extension AppState {
         // Global scripts live in local Application Support and are read by
         // path, not content — launching one into a remote worktree would ship
         // a Mac-only path into the SSH-launched remote shell, which can't see
-        // it. Repo scripts aren't affected: RunScriptStore only discovers them
-        // from a locally-reachable worktree root in the first place.
+        // it. Remote repo scripts are discovered through the remote file layer,
+        // so their absolute path is intentionally not local-file-system
+        // reachable here.
         if script.scope == .global, worktree.path.isRemoteAlasPath {
             showFileActionError(
                 title: "Run Script Failed",
@@ -390,7 +391,8 @@ extension AppState {
             )
             return
         }
-        guard FileManager.default.fileExists(atPath: script.fileURL.path) else {
+        let requiresLocalScriptPath = !(script.scope == .repo && worktree.path.isRemoteAlasPath)
+        guard !requiresLocalScriptPath || FileManager.default.fileExists(atPath: script.fileURL.path) else {
             showFileActionError(
                 title: "Run Script Failed",
                 message: "\(script.fileName) no longer exists on disk."
