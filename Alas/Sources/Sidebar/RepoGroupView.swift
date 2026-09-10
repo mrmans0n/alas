@@ -34,6 +34,7 @@ struct RepoGroupView: View {
     let onCopyBranch: (Worktree) -> Void
     let onRevealInFinder: (Worktree) -> Void
     let onArchive: (Worktree) -> Void
+    let onCleanupWorktrees: () -> Void
     let onDelete: (Worktree) -> Void
     let onDeleteKeepBranch: (Worktree) -> Void
     let showKeepBranchOption: Bool
@@ -97,6 +98,7 @@ struct RepoGroupView: View {
                 }
                 Button("Reset Sort to Default", action: onResetSort)
                     .disabled(!project.worktreeOrderIsManual)
+                Button("Clean Up Worktrees…", action: onCleanupWorktrees)
                 Menu("Spaces") {
                     ForEach(spaces) { space in
                         let isMember = isProjectInSpace(space.id)

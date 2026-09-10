@@ -9,6 +9,7 @@ struct SidebarView: View {
     let onEditProject: (_ projectId: String) -> Void
     let onRemoveProject: (_ projectId: String) -> Void
     let onNewWorktree: (_ projectId: String?) -> Void
+    let onCleanupWorktrees: (_ projectId: String) -> Void
     let onHideSidebar: () -> Void
     @Environment(\.theme) var theme
     @State private var spaceTitleVisible = false
@@ -114,6 +115,7 @@ struct SidebarView: View {
                                     NSWorkspace.shared.activateFileViewerSelecting([wt.path])
                                 },
                                 onArchive: { wt in state.archiveWorktree(wt) },
+                                onCleanupWorktrees: { onCleanupWorktrees(project.id) },
                                 onDelete: { wt in state.deleteWorktree(wt) },
                                 onDeleteKeepBranch: { wt in state.deleteWorktree(wt, keepBranch: true) },
                                 showKeepBranchOption: state.config.worktrees.deleteBranchOnRemove,

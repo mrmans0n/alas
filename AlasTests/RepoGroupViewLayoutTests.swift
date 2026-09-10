@@ -76,6 +76,7 @@ struct RepoGroupViewLayoutTests {
             onCopyBranch: { _ in },
             onRevealInFinder: { _ in },
             onArchive: { _ in },
+            onCleanupWorktrees: { },
             onDelete: { _ in },
             onDeleteKeepBranch: { _ in },
             showKeepBranchOption: false,

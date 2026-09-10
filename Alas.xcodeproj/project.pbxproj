@@ -891,6 +891,7 @@
 		8876AC7DC1852F059506AF41 /* WorkspaceNavigationStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AF872EEC1CAD3B6B84D92F3 /* WorkspaceNavigationStateTests.swift */; };
 		8878193CEBDB48D61823D7FE /* MemberReviewRollupBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 278E898CD3B7402DD67E8787 /* MemberReviewRollupBuilder.swift */; };
 		887B90FE9E87033A31567CC0 /* WorktreeSortMenuTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C3F4EE1590F6355AF2AD9DA /* WorktreeSortMenuTests.swift */; };
+		88A13347D0CB153554F00B24 /* WorktreeCleanupSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D5B56D03C0EDB3BA50D6E13 /* WorktreeCleanupSheet.swift */; };
 		88A139C7B3C3C9F20EF5945A /* ACPChangeNotifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 419EF533C4D29448483045DA /* ACPChangeNotifier.swift */; };
 		88C1A4EBC12F7F7BA7FE9B06 /* ACPMarkdownInlineTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84A01D6512394EF1C41782AD /* ACPMarkdownInlineTextView.swift */; };
 		8915EF49F1031BD55C419625 /* GeminiInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F1CBD7C9E0119EC1656C1E2 /* GeminiInstallerTests.swift */; };
@@ -2191,6 +2192,7 @@
 		4D5507CA73F4EE1717FD4D79 /* NumstatParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NumstatParserTests.swift; sourceTree = "<group>"; };
 		4D5734FB0E75909C5E9DBD7D /* AppState+ReviewPalette.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppState+ReviewPalette.swift"; sourceTree = "<group>"; };
 		4D59124348BCE765816A0C6C /* GGStackReadinessModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGStackReadinessModel.swift; sourceTree = "<group>"; };
+		4D5B56D03C0EDB3BA50D6E13 /* WorktreeCleanupSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeCleanupSheet.swift; sourceTree = "<group>"; };
 		4D63B166AF2C533BE6E59365 /* session-update-agent-chunk.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "session-update-agent-chunk.json"; sourceTree = "<group>"; };
 		4D974BDA7FAE214495278557 /* ACPUserInputPrompt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPUserInputPrompt.swift; sourceTree = "<group>"; };
 		4DA695BB3D2901435BFF6C0E /* ACPProcessLiveness.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPProcessLiveness.swift; sourceTree = "<group>"; };
@@ -4010,6 +4012,7 @@
 				0FA3C5D49DC1B6AB83479412 /* SSHHostPicker.swift */,
 				3790CACE965BC5005DA5A51B /* SSHHostSuggestions.swift */,
 				C5C3DA2CD5F77528816E599E /* WorktreeCleanupModel.swift */,
+				4D5B56D03C0EDB3BA50D6E13 /* WorktreeCleanupSheet.swift */,
 				C2E05FF3EC7EAB497BA0FFE0 /* RepoSelector */,
 				0FBA7369556FEE7D57C06F44 /* ReviewTarget */,
 				32D9058F5A271C892A5B2515 /* Workspace */,
@@ -7252,6 +7255,7 @@
 				069D7DFAE10DD2D73FA51FAC /* WorktreeCleanupClassifier.swift in Sources */,
 				2046F27F05CD33F89D4C250B /* WorktreeCleanupModel.swift in Sources */,
 				E83E41675C0AB59BB72DC989 /* WorktreeCleanupScanner.swift in Sources */,
+				88A13347D0CB153554F00B24 /* WorktreeCleanupSheet.swift in Sources */,
 				40530C892BEFDCDB0831C22F /* WorktreeCleanupTypes.swift in Sources */,
 				2D63742A552F72DC6BEBF7DC /* WorktreeCreationCompletion.swift in Sources */,
 				9D2E53FB0A57BC38C146EA5E /* WorktreeLaunchSurface.swift in Sources */,

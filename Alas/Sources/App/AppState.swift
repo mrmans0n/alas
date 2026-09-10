@@ -7477,6 +7477,123 @@ final class AppState {
         return results
     }
 
+    /// Builds a cleanup model wired to live git, code-host, and session state.
+    /// Returns nil when the project no longer exists.
+    func makeWorktreeCleanupModel(projectId: String) -> WorktreeCleanupModel? {
+        guard let project = projects.first(where: { $0.id == projectId }) else { return nil }
+        let idleThresholdDays = config.worktrees.cleanupIdleDays
+        let baseBranch = config.worktrees.baseBranch
+
+        let scanner = WorktreeCleanupScanner(
+            dependencies: WorktreeCleanupScanner.Dependencies(
+                gitFacts: { worktree in
+                    await WorktreeCleanupScanner.gitFacts(
+                        worktreePath: worktree.path,
+                        branch: worktree.branch,
+                        baseBranch: baseBranch
+                    )
+                },
+                mergeIndex: { project in
+                    await Self.forgeMergeIndex(project: project, baseBranch: baseBranch)
+                },
+                // Both hop to the main actor: session and operation state are
+                // main-actor isolated, the scanner is not.
+                activeSessionCount: { [weak self] worktreeId in
+                    await MainActor.run {
+                        guard let self else { return 0 }
+                        let ids = self.tabs.tabs(forWorktree: worktreeId).flatMap { tab -> [String] in
+                            switch tab {
+                            case .terminal(let s):   return s.root.leaves().map(\.sessionId)
+                            case .acpSession(let s): return [s.sessionId]
+                            default:                 return []
+                            }
+                        }
+                        guard let summary = self.harness.summary(forSessionIds: ids) else { return 0 }
+                        return summary.sessions.count
+                    }
+                },
+                operationInFlight: { [weak self] worktreeId in
+                    await MainActor.run {
+                        self?.projectsManager.operationState(for: worktreeId) != nil
+                    }
+                }
+            )
+        )
+
+        return WorktreeCleanupModel(
+            projectId: projectId,
+            keepBranches: !config.worktrees.deleteBranchOnRemove,
+            scan: { [weak self] in
+                guard let self else { return .success([]) }
+                let worktrees = await MainActor.run {
+                    self.projectsManager.visibleWorktrees(projectId: projectId)
+                }
+                return .success(await scanner.scan(
+                    project: project,
+                    worktrees: worktrees,
+                    baseBranch: baseBranch,
+                    now: Date(),
+                    idleThresholdDays: idleThresholdDays
+                ))
+            },
+            deleteBatch: { [weak self] worktrees, keepBranch in
+                guard let self else { return [] }
+                return await self.batchDeleteWorktrees(worktrees, keepBranch: keepBranch)
+            },
+            archiveBatch: { [weak self] worktrees in
+                self?.batchArchiveWorktrees(worktrees) ?? []
+            },
+            confirm: { title, message in
+                let alert = NSAlert()
+                alert.messageText = title
+                alert.informativeText = message
+                alert.alertStyle = .warning
+                let deleteButton = alert.addButton(withTitle: "Delete")
+                alert.addButton(withTitle: "Cancel")
+                deleteButton.hasDestructiveAction = true
+                return alert.runModal() == .alertFirstButtonReturn
+            }
+        )
+    }
+
+    /// One batched merged-review-request query per repository. Any failure —
+    /// no remote, no provider, CLI missing, auth expired — surfaces as a
+    /// `.failure` so the scanner can report `unknown` rather than inventing a
+    /// "not merged" answer.
+    nonisolated private static func forgeMergeIndex(
+        project: ProjectConfig,
+        baseBranch: String
+    ) async -> Result<WorktreeForgeMergeIndex, Error> {
+        let repoPath = URL(fileURLWithPath: project.path)
+        let registry = CodeHostProviderRegistry.live()
+        do {
+            let remotes = try await GitService().remotes(worktreePath: repoPath)
+            guard let remote = CodeHostRemoteDetector.detect(
+                from: remotes,
+                supportedKinds: registry.supportedKinds,
+                preferredRemoteName: CodeHostRemoteDetector.preferredRemoteName(
+                    forBaseBranch: baseBranch,
+                    remotes: remotes
+                )
+            ) else {
+                return .failure(CodeHostProviderError.malformedOutput(
+                    "no supported code host remote"
+                ))
+            }
+            guard let provider = registry.provider(for: remote.kind) else {
+                return .failure(CodeHostProviderError.unsupportedProvider(remote.kind))
+            }
+            let refs = try await provider.mergedReviewRequests(
+                remote: remote,
+                limit: 200,
+                cwd: repoPath
+            )
+            return .success(WorktreeForgeMergeIndex(refs: refs))
+        } catch {
+            return .failure(error)
+        }
+    }
+
     private func beginDeleteWorktree(_ worktree: Worktree, keepBranch: Bool) {
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             showFileActionError(title: "Delete Failed", message: "Could not find the project for this worktree.")
