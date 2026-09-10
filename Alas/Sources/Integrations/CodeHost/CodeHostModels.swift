@@ -590,6 +590,16 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
     }
 }
 
+/// A minimal reference to a merged review request. Deliberately far smaller
+/// than `ReviewRequest`: worktree cleanup only needs to answer "was this head
+/// branch merged, and where can I link to it", and building a full
+/// `ReviewRequest` would mean per-item thread and check queries.
+struct MergedReviewRequestRef: Equatable, Sendable {
+    let number: Int
+    let headRefName: String
+    let url: URL
+}
+
 struct ReviewLoopLocalState: Equatable, Sendable {
     let branchName: String
     let headSHA: String
