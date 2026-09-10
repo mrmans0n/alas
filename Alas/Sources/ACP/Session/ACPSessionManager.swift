@@ -4442,6 +4442,7 @@ extension ACPSessionManager {
         await runner.flushPersistence()
         runners[sessionId] = nil
         elicitationCoordinators.removeValue(forKey: sessionId)?.stop()
+        onQueueChanged?(sessionId, false)
         await runner.connection.shutdown()
     }
 

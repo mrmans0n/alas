@@ -59,6 +59,36 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(row.acpBrokerAcknowledgedCursor == 0)
     }
 
+    @Test("auth-required runner teardown notifies queue cleanup")
+    func authRequiredRunnerTeardownNotifiesQueueCleanup() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let client = ACPMockClient()
+        let method = terminalAuthMethod()
+        scriptInitialize(client, authMethods: [method])
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-auth")
+        client.script(method: "session/prompt") { _ in
+            throw JSONRPCError(
+                code: -32000,
+                message: "Internal error: authentication required",
+                data: nil
+            )
+        }
+        var queueChanges: [(ACPSession.ID, Bool)] = []
+        let manager = manager(store: store, client: client, onQueueChanged: { sessionId, retainActivePrompt in
+            queueChanges.append((sessionId, retainActivePrompt))
+        })
+        let session = manager.createSession(id: "auth-session", agentId: "claude")
+        await manager.attach(to: session.id, freshlyCreated: true)
+
+        await manager.sendPrompt(for: session.id, text: "hello", attachments: []) { _ in }
+        try await waitUntil {
+            queueChanges.contains { $0.0 == session.id && $0.1 == false }
+        }
+
+        #expect(session.agentState == .failed("authentication required"))
+        #expect(queueChanges.contains { $0.0 == session.id && $0.1 == false })
+    }
+
     @Test("reopened local broker session attaches from persisted cursor")
     func reopenedLocalBrokerSessionAttachesFromPersistedCursor() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
@@ -2532,12 +2562,14 @@ struct ACPSessionManagerAttachRestoreTests {
     private func manager(
         store: ACPSessionStore,
         client: ACPMockClient,
-        mcpProjectContextProvider: ACPSessionManager.MCPProjectContextProvider? = nil
+        mcpProjectContextProvider: ACPSessionManager.MCPProjectContextProvider? = nil,
+        onQueueChanged: ((ACPSession.ID, Bool) -> Void)? = nil
     ) -> ACPSessionManager {
         ACPSessionManager(
             worktreeId: "wt",
             worktreePath: "/tmp/wt",
             store: store,
+            onQueueChanged: onQueueChanged,
             setupEvaluator: { _ in .ready },
             connectionFactory: { _, _, _ in ACPConnection(client: client) },
             mcpProjectContextProvider: mcpProjectContextProvider
