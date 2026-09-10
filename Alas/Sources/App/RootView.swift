@@ -440,7 +440,8 @@ private struct WorkspaceOverviewView: View {
     var body: some View {
         VStack(spacing: 18) {
             VStack(spacing: 8) {
-                WorkspaceRepositoryPile(workspace: workspace, projects: projects)
+                WorkspaceRepositoryPile(workspace: workspace, projects: projects, size: .overview)
+                    .padding(.bottom, 4)
                 Text(workspace.name)
                     .font(.system(size: 20, weight: .semibold))
                     .foregroundColor(theme.color("fg"))
