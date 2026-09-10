@@ -3048,6 +3048,7 @@ extension ACPSessionManager {
                 // creation). Tear it down so it doesn't linger bound on
                 // localhost; a later reattach respawns it. No-op for stdio sessions.
                 onSessionEnded?(sessionId)
+                scheduleScheduledQueueReconnect(sessionId: sessionId)
             }
         }
         // The runner persists transcript mutations under `msg-<sid>-<index>`,
@@ -4156,7 +4157,7 @@ extension ACPSessionManager {
     }
 
     private func scheduleScheduledQueueReconnect(sessionId: ACPSession.ID) {
-        scheduledReconnectTasks.removeValue(forKey: sessionId)?.cancel()
+        guard scheduledReconnectTasks[sessionId] == nil else { return }
         guard let session = sessions[sessionId],
               session.agentState != .ready,
               session.queue.contains(where: {
