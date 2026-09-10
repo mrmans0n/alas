@@ -59,6 +59,11 @@ struct PendingRunScriptLaunch: Equatable {
     let scriptKey: String
 }
 
+struct PendingRunScriptLaunchKey: Hashable {
+    let worktreeID: String
+    let scriptKey: String
+}
+
 @Observable
 @MainActor
 final class AppState {
@@ -167,15 +172,15 @@ final class AppState {
     @ObservationIgnored
     private var remoteAccelerationTasks: [String: Task<Void, Never>] = [:]
     private let remoteAccelerationProbeRetryDelay: TimeInterval = 30
-    /// Keys of in-flight run-script launches (`"<worktreeId>:<scriptKey>"`).
+    /// Keys of in-flight run-script launches.
     /// `RunScript.launchScript` inserts synchronously before starting its
     /// async `Task` and removes on completion, closing the window where two
     /// rapid invocations (double-click, repeated Enter) would both see no
     /// registered tab yet and both launch — see `AppState+RunScripts.swift`.
-    /// The value carries structured identity because worktree ids can contain
-    /// `:`, so cancellation must not recover identities by splitting the key.
+    /// Worktree ids and script keys can contain `:`, so the dictionary key
+    /// must remain structured rather than serialized.
     @ObservationIgnored
-    var pendingScriptLaunches: [String: PendingRunScriptLaunch] = [:]
+    var pendingScriptLaunches: [PendingRunScriptLaunchKey: PendingRunScriptLaunch] = [:]
     @ObservationIgnored
     var pendingScriptLaunchTasks: [UUID: Task<Void, Never>] = [:]
     var runScriptCatalogGeneration = 0

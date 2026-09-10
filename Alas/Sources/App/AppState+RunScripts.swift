@@ -270,7 +270,7 @@ extension AppState {
     }
 
     func restartScript(_ script: RunScript, in worktree: Worktree) {
-        let launchKey = "\(worktree.id):\(script.key)"
+        let launchKey = PendingRunScriptLaunchKey(worktreeID: worktree.id, scriptKey: script.key)
         if pendingScriptLaunches[launchKey] != nil {
             stopScript(script, in: worktree)
             launchScript(script, in: worktree)
@@ -287,7 +287,7 @@ extension AppState {
     /// is marked stopped *before* the close so the monitor-cancellation path
     /// can't relabel a deliberate stop as a lost process.
     func stopScript(_ script: RunScript, in worktree: Worktree) {
-        let launchKey = "\(worktree.id):\(script.key)"
+        let launchKey = PendingRunScriptLaunchKey(worktreeID: worktree.id, scriptKey: script.key)
         if let pending = pendingScriptLaunches.removeValue(forKey: launchKey) {
             runRecords.markStopped(worktreeID: worktree.id, scriptKey: script.key, at: Date())
             pendingScriptLaunchTasks.removeValue(forKey: pending.id)?.cancel()
@@ -375,7 +375,7 @@ extension AppState {
         // that (double-click, repeated Enter) would both see "not running"
         // and both launch. Close that window with a synchronous in-flight
         // guard instead.
-        let launchKey = "\(worktree.id):\(script.key)"
+        let launchKey = PendingRunScriptLaunchKey(worktreeID: worktree.id, scriptKey: script.key)
         guard pendingScriptLaunches[launchKey] == nil else { return }
 
         // Global scripts live in local Application Support and are read by
@@ -701,7 +701,7 @@ extension AppState {
 
     func cancelPendingRunScriptLaunches(worktreeID: String? = nil) {
         let now = Date()
-        let pendingKeys = pendingScriptLaunches.compactMap { key, pending -> String? in
+        let pendingKeys = pendingScriptLaunches.compactMap { key, pending -> PendingRunScriptLaunchKey? in
             guard let worktreeID else { return key }
             return pending.worktreeID == worktreeID ? key : nil
         }

@@ -75,10 +75,14 @@ enum RunScriptStore {
         var scripts: [RunScript] = []
         for entry in entries where !entry.isDirectory && !entry.name.hasPrefix(".") {
             let url = directory.appendingPathComponent(entry.name)
-            guard case .file(let data, _) = try? await RemoteFileAccess.read(host: host, path: url.path) else {
+            guard let data = try? await RemoteFileAccess.readPrefix(
+                host: host,
+                path: url.path,
+                maxBytes: headerReadLimit
+            ) else {
                 continue
             }
-            let header = String(decoding: data.prefix(headerReadLimit), as: UTF8.self)
+            let header = String(decoding: data, as: UTF8.self)
             let isExecutable = await isRemoteExecutable(host: host, path: url.path)
             scripts.append(script(
                 scope: .repo,

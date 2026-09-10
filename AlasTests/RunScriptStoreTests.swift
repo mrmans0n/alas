@@ -81,4 +81,11 @@ struct RunScriptStoreTests {
         #expect(script.isExecutable)
         #expect(script.endpoint?.absoluteString == "http://localhost:3000")
     }
+
+    @Test func remoteMetadataReadUsesBoundedPrefixCommand() {
+        let script = RemoteFileAccess.readPrefixScript(path: "/repo/.alas/scripts/web.sh", maxBytes: 4096)
+
+        #expect(script.contains("head -c 4096"))
+        #expect(!script.contains("cat "))
+    }
 }

@@ -322,7 +322,7 @@ struct AppStateRunRecordTests {
         let task = Task<Void, Never> {
             try? await Task.sleep(for: .seconds(30))
         }
-        fixture.state.pendingScriptLaunches["\(fixture.worktree.id):\(fixture.script.key)"] = PendingRunScriptLaunch(
+        fixture.state.pendingScriptLaunches[PendingRunScriptLaunchKey(worktreeID: fixture.worktree.id, scriptKey: fixture.script.key)] = PendingRunScriptLaunch(
             id: launchID,
             worktreeID: fixture.worktree.id,
             scriptKey: fixture.script.key
@@ -355,7 +355,7 @@ struct AppStateRunRecordTests {
         let task = Task<Void, Never> {
             try? await Task.sleep(for: .seconds(30))
         }
-        fixture.state.pendingScriptLaunches["\(fixture.worktree.id):\(fixture.script.key)"] = PendingRunScriptLaunch(
+        fixture.state.pendingScriptLaunches[PendingRunScriptLaunchKey(worktreeID: fixture.worktree.id, scriptKey: fixture.script.key)] = PendingRunScriptLaunch(
             id: launchID,
             worktreeID: fixture.worktree.id,
             scriptKey: fixture.script.key
@@ -403,7 +403,7 @@ struct AppStateRunRecordTests {
         let task = Task<Void, Never> {
             try? await Task.sleep(for: .seconds(30))
         }
-        fixture.state.pendingScriptLaunches["\(worktreeID):\(fixture.script.key)"] = PendingRunScriptLaunch(
+        fixture.state.pendingScriptLaunches[PendingRunScriptLaunchKey(worktreeID: worktreeID, scriptKey: fixture.script.key)] = PendingRunScriptLaunch(
             id: launchID,
             worktreeID: worktreeID,
             scriptKey: fixture.script.key
@@ -436,7 +436,7 @@ struct AppStateRunRecordTests {
             let task = Task<Void, Never> {
                 try? await Task.sleep(for: .seconds(30))
             }
-            fixture.state.pendingScriptLaunches["\(worktreeID):\(fixture.script.key)"] = PendingRunScriptLaunch(
+            fixture.state.pendingScriptLaunches[PendingRunScriptLaunchKey(worktreeID: worktreeID, scriptKey: fixture.script.key)] = PendingRunScriptLaunch(
                 id: launchID,
                 worktreeID: worktreeID,
                 scriptKey: fixture.script.key
@@ -450,6 +450,47 @@ struct AppStateRunRecordTests {
         #expect(fixture.state.pendingScriptLaunches.values.first?.worktreeID == secondWorktreeID)
         #expect(fixture.state.runRecords.record(worktreeID: firstWorktreeID, scriptKey: fixture.script.key)?.status == .finished(.stopped))
         #expect(fixture.state.runRecords.record(worktreeID: secondWorktreeID, scriptKey: fixture.script.key)?.status == .starting)
+        fixture.state.cancelPendingRunScriptLaunches()
+    }
+
+    @Test func pendingLaunchKeysDoNotCollideWhenIdentitiesContainColons() throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let first = (worktreeID: "/tmp/a", scriptKey: "x:repo:y")
+        let second = (worktreeID: "/tmp/a:repo:x", scriptKey: "y")
+        #expect("\(first.worktreeID):repo:\(first.scriptKey)" == "\(second.worktreeID):repo:\(second.scriptKey)")
+
+        for identity in [first, second] {
+            fixture.state.runRecords.begin(RunRecord(
+                id: UUID().uuidString,
+                scriptKey: identity.scriptKey,
+                scriptName: identity.scriptKey,
+                worktreeID: identity.worktreeID,
+                branch: fixture.worktree.branch,
+                target: fixture.state.runExecutionTarget(for: fixture.script, in: fixture.worktree),
+                status: .starting,
+                startedAt: Date()
+            ))
+            let launchID = UUID()
+            fixture.state.pendingScriptLaunches[PendingRunScriptLaunchKey(
+                worktreeID: identity.worktreeID,
+                scriptKey: identity.scriptKey
+            )] = PendingRunScriptLaunch(
+                id: launchID,
+                worktreeID: identity.worktreeID,
+                scriptKey: identity.scriptKey
+            )
+            fixture.state.pendingScriptLaunchTasks[launchID] = Task<Void, Never> {
+                try? await Task.sleep(for: .seconds(30))
+            }
+        }
+
+        fixture.state.cancelPendingRunScriptLaunches(worktreeID: first.worktreeID)
+
+        #expect(fixture.state.pendingScriptLaunches.count == 1)
+        #expect(fixture.state.pendingScriptLaunches.values.first?.worktreeID == second.worktreeID)
+        #expect(fixture.state.runRecords.record(worktreeID: first.worktreeID, scriptKey: first.scriptKey)?.status == .finished(.stopped))
+        #expect(fixture.state.runRecords.record(worktreeID: second.worktreeID, scriptKey: second.scriptKey)?.status == .starting)
         fixture.state.cancelPendingRunScriptLaunches()
     }
 
