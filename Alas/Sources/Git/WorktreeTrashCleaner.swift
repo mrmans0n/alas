@@ -26,9 +26,10 @@ enum WorktreeTrashCleaner {
         guard WorktreeTrash.isValid(ticket) else { throw CleanerError.invalidTicket }
         try spawn(URL(fileURLWithPath: "/usr/bin/nice"), [
             "-n", "10", "/bin/sh", "-c",
-            "/bin/sleep \"$1\"; exec /bin/rm -rf -- \"$2\"",
+            "/bin/sleep \"$1\"; /bin/rm -rf -- \"$3\" && exec /bin/rm -f -- \"$2\"",
             "alas-worktree-cleaner",
             String(max(0, delaySeconds)),
+            WorktreeTrash.committedMarkerURL(for: ticket).path,
             ticket.stagedPath.path,
         ])
     }

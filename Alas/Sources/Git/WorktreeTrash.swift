@@ -13,6 +13,7 @@ enum WorktreeRemovalOutcome: Equatable, Sendable {
 enum WorktreeTrash {
     static let relativeDirectory = "alas/trash"
     private static let marker = "alas-worktree"
+    private static let committedMarkerName = ".alas-worktree-deletion-committed"
 
     static func root(commonGitDirectory: URL) -> URL {
         let path = commonGitDirectory
@@ -49,16 +50,29 @@ enum WorktreeTrash {
             && isRecognizedEntryName(target.lastPathComponent)
     }
 
+    static func markCommitted(
+        _ ticket: WorktreeTrashCleanupTicket,
+        at date: Date = Date()
+    ) throws {
+        guard isValid(ticket) else {
+            throw CocoaError(.fileWriteInvalidFileName)
+        }
+        let seconds = date.timeIntervalSince1970
+        guard seconds.isFinite, seconds >= 0 else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        try Data("\(seconds)\n".utf8).write(
+            to: committedMarkerURL(for: ticket),
+            options: .atomic
+        )
+    }
+
     static func staleTickets(
         commonGitDirectories: [URL],
         olderThan cutoff: Date,
         fileManager: FileManager = .default
     ) -> [WorktreeTrashCleanupTicket] {
-        let keys: Set<URLResourceKey> = [
-            .contentModificationDateKey,
-            .isDirectoryKey,
-            .isSymbolicLinkKey,
-        ]
+        let keys: Set<URLResourceKey> = [.isDirectoryKey, .isSymbolicLinkKey]
         let commonDirectories = Dictionary(
             commonGitDirectories.map { ($0.standardizedFileURL.path, $0) },
             uniquingKeysWith: { first, _ in first }
@@ -84,8 +98,8 @@ enum WorktreeTrash {
                       let values = try? entry.resourceValues(forKeys: keys),
                       values.isDirectory == true,
                       values.isSymbolicLink != true,
-                      let modified = values.contentModificationDate,
-                      modified < cutoff
+                      let committedAt = committedAt(ticket, fileManager: fileManager),
+                      committedAt < cutoff
                 else { continue }
                 tickets.append(ticket)
             }
@@ -114,6 +128,33 @@ enum WorktreeTrash {
         let trimmed = result.trimmingCharacters(in: CharacterSet(charactersIn: "-_"))
         let limited = String(trimmed.prefix(48))
         return limited.isEmpty ? "worktree" : limited
+    }
+
+    static func committedMarkerURL(for ticket: WorktreeTrashCleanupTicket) -> URL {
+        let identifier = ticket.stagedPath.lastPathComponent
+            .split(separator: ".", omittingEmptySubsequences: false)
+            .last
+            .map(String.init) ?? "invalid"
+        return ticket.trashRoot.appendingPathComponent(
+            "\(committedMarkerName).\(identifier)",
+            isDirectory: false
+        )
+    }
+
+    private static func committedAt(
+        _ ticket: WorktreeTrashCleanupTicket,
+        fileManager: FileManager
+    ) -> Date? {
+        let markerURL = committedMarkerURL(for: ticket)
+        guard let attributes = try? fileManager.attributesOfItem(atPath: markerURL.path),
+              attributes[.type] as? FileAttributeType == .typeRegular,
+              let data = fileManager.contents(atPath: markerURL.path),
+              let raw = String(data: data, encoding: .utf8),
+              let seconds = TimeInterval(raw.trimmingCharacters(in: .whitespacesAndNewlines)),
+              seconds.isFinite,
+              seconds >= 0
+        else { return nil }
+        return Date(timeIntervalSince1970: seconds)
     }
 
     private static func isRecognizedEntryName(_ value: String) -> Bool {

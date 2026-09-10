@@ -832,6 +832,18 @@ struct WorktreeService {
         guard registration.isPresent else {
             throw WorktreeError.gitFailed("Worktree registration was not found.")
         }
+        guard let expectedCommonDirectory = Self.localCommonGitDirectory(
+            forWorktreeAt: repoPath
+        ),
+              Self.matchesLinkedWorktreeRegistration(
+                  worktree.path,
+                  expectedCommonDirectory: expectedCommonDirectory
+              )
+        else {
+            throw WorktreeError.gitFailed(
+                "Worktree path no longer matches its Git registration."
+            )
+        }
 
         var auditedMissingLFS = false
         if !force {
@@ -883,6 +895,11 @@ struct WorktreeService {
                 commonDirectory = repoPath
                     .appendingPathComponent(commonDirectoryOutput)
                     .standardizedFileURL
+            }
+            guard Self.fileSystemPathsEqual(commonDirectory, expectedCommonDirectory) else {
+                throw WorktreeError.gitFailed(
+                    "Git common directory no longer matches the registered worktree."
+                )
             }
             ticket = WorktreeTrash.makeTicket(
                 commonGitDirectory: commonDirectory,
@@ -955,6 +972,8 @@ struct WorktreeService {
         if removeResult.exitCode != 0 {
             try failAfterRollingBack(removeResult.stderr)
         }
+
+        try? WorktreeTrash.markCommitted(ticket)
 
         if deleteBranchIfMerged && worktree.branch != "(detached)" {
             _ = try? await Process.git(
@@ -1082,6 +1101,45 @@ struct WorktreeService {
             defer { Darwin.free(resolved) }
             return String(cString: resolved)
         }
+    }
+
+    private static func fileSystemPathsEqual(_ lhs: URL, _ rhs: URL) -> Bool {
+        resolvedFileSystemPath(lhs) == resolvedFileSystemPath(rhs)
+    }
+
+    private static func matchesLinkedWorktreeRegistration(
+        _ worktreePath: URL,
+        expectedCommonDirectory: URL
+    ) -> Bool {
+        let fileManager = FileManager.default
+        guard let rootAttributes = try? fileManager.attributesOfItem(atPath: worktreePath.path),
+              rootAttributes[.type] as? FileAttributeType == .typeDirectory
+        else { return false }
+
+        let dotGit = worktreePath.appendingPathComponent(".git", isDirectory: false)
+        guard let dotGitAttributes = try? fileManager.attributesOfItem(atPath: dotGit.path),
+              dotGitAttributes[.type] as? FileAttributeType == .typeRegular,
+              let gitDirectory = localGitDirectory(forWorktreeAt: worktreePath),
+              let commonDirectory = localCommonGitDirectory(forWorktreeAt: worktreePath),
+              fileSystemPathsEqual(commonDirectory, expectedCommonDirectory)
+        else { return false }
+
+        let expectedWorktreesDirectory = expectedCommonDirectory
+            .appendingPathComponent("worktrees", isDirectory: true)
+        guard fileSystemPathsEqual(
+            gitDirectory.deletingLastPathComponent(),
+            expectedWorktreesDirectory
+        ) else { return false }
+
+        let backlinkFile = gitDirectory.appendingPathComponent("gitdir", isDirectory: false)
+        guard let rawBacklink = try? String(contentsOf: backlinkFile, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawBacklink.isEmpty
+        else { return false }
+        let backlink = (rawBacklink as NSString).isAbsolutePath
+            ? URL(fileURLWithPath: rawBacklink)
+            : gitDirectory.appendingPathComponent(rawBacklink)
+        return fileSystemPathsEqual(backlink, dotGit)
     }
 
     private static func registrationState(

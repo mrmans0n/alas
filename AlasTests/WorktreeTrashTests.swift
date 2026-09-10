@@ -48,6 +48,8 @@ struct WorktreeTrashTests {
         )
         try FileManager.default.createDirectory(at: old.stagedPath, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: young.stagedPath, withIntermediateDirectories: true)
+        try WorktreeTrash.markCommitted(old, at: Date(timeIntervalSince1970: 100))
+        try WorktreeTrash.markCommitted(young, at: Date(timeIntervalSince1970: 200))
         try FileManager.default.createDirectory(
             at: old.trashRoot.appendingPathComponent("unrecognized"),
             withIntermediateDirectories: true
@@ -69,6 +71,46 @@ struct WorktreeTrashTests {
         #expect(tickets == [old])
     }
 
+    @Test func staleTicketsUseCommitTimeAndIgnoreUncommittedDirectories() throws {
+        let common = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-trash-commit-test-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: common) }
+        let oldCommitted = WorktreeTrash.makeTicket(
+            commonGitDirectory: common,
+            originalPath: URL(fileURLWithPath: "/tmp/old-committed"),
+            now: Date(timeIntervalSince1970: 10),
+            id: UUID()
+        )
+        let newlyCommitted = WorktreeTrash.makeTicket(
+            commonGitDirectory: common,
+            originalPath: URL(fileURLWithPath: "/tmp/newly-committed"),
+            now: Date(timeIntervalSince1970: 20),
+            id: UUID()
+        )
+        let uncommitted = WorktreeTrash.makeTicket(
+            commonGitDirectory: common,
+            originalPath: URL(fileURLWithPath: "/tmp/uncommitted"),
+            now: Date(timeIntervalSince1970: 30),
+            id: UUID()
+        )
+        for ticket in [oldCommitted, newlyCommitted, uncommitted] {
+            try FileManager.default.createDirectory(at: ticket.stagedPath, withIntermediateDirectories: true)
+            try FileManager.default.setAttributes(
+                [.modificationDate: Date(timeIntervalSince1970: 1)],
+                ofItemAtPath: ticket.stagedPath.path
+            )
+        }
+        try WorktreeTrash.markCommitted(oldCommitted, at: Date(timeIntervalSince1970: 100))
+        try WorktreeTrash.markCommitted(newlyCommitted, at: Date(timeIntervalSince1970: 200))
+
+        let tickets = WorktreeTrash.staleTickets(
+            commonGitDirectories: [common],
+            olderThan: Date(timeIntervalSince1970: 150)
+        )
+
+        #expect(tickets == [oldCommitted])
+    }
+
     @Test func cleanerPassesTheValidatedPathAsAnArgument() throws {
         let ticket = WorktreeTrash.makeTicket(
             commonGitDirectory: URL(fileURLWithPath: "/tmp/repo/.git"),
@@ -84,6 +126,7 @@ struct WorktreeTrashTests {
 
         #expect(capturedExecutable?.path == "/usr/bin/nice")
         #expect(capturedArguments.last == ticket.stagedPath.path)
+        #expect(capturedArguments.dropLast().last == WorktreeTrash.committedMarkerURL(for: ticket).path)
         #expect(capturedArguments.dropLast().allSatisfy { !$0.contains(ticket.stagedPath.path) })
     }
 
@@ -116,6 +159,8 @@ struct WorktreeTrashTests {
         )
         try FileManager.default.createDirectory(at: old.stagedPath, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: young.stagedPath, withIntermediateDirectories: true)
+        try WorktreeTrash.markCommitted(old, at: Date(timeIntervalSince1970: 100))
+        try WorktreeTrash.markCommitted(young, at: Date(timeIntervalSince1970: 99_990))
         try FileManager.default.setAttributes(
             [.modificationDate: Date(timeIntervalSince1970: 100)],
             ofItemAtPath: old.stagedPath.path
@@ -157,6 +202,8 @@ struct WorktreeTrashTests {
             atomically: true,
             encoding: .utf8
         )
+        try WorktreeTrash.markCommitted(ticket)
+        let committedMarker = WorktreeTrash.committedMarkerURL(for: ticket)
 
         try WorktreeTrashCleaner.launch(ticket, delaySeconds: 0)
         let deadline = Date().addingTimeInterval(5)
@@ -165,5 +212,6 @@ struct WorktreeTrashTests {
         }
 
         #expect(!FileManager.default.fileExists(atPath: ticket.stagedPath.path))
+        #expect(!FileManager.default.fileExists(atPath: committedMarker.path))
     }
 }
