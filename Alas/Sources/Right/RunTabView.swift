@@ -72,9 +72,8 @@ struct RunTabView: View {
     }
 
     private var activeOrAllScripts: [RunScript] {
-        guard scriptCatalogError != nil else { return scripts }
         let scriptsByKey = Dictionary(uniqueKeysWithValues: scripts.map { ($0.key, $0) })
-        return state.runRecords.records(worktreeID: worktree.id)
+        let activeScripts = state.runRecords.records(worktreeID: worktree.id)
             .filter(\.status.isActive)
             .compactMap { record in
                 scriptsByKey[record.scriptKey] ?? script(from: record)
@@ -83,6 +82,9 @@ struct RunTabView: View {
                 if $0.scope != $1.scope { return $0.scope.rawValue < $1.scope.rawValue }
                 return $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending
             }
+        guard scriptCatalogError == nil else { return activeScripts }
+        let catalogKeys = Set(scripts.map(\.key))
+        return scripts + activeScripts.filter { !catalogKeys.contains($0.key) }
     }
 
     private func script(from record: RunRecord) -> RunScript? {
