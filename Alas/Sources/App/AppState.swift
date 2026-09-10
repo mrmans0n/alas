@@ -7488,43 +7488,13 @@ final class AppState {
     func makeWorktreeCleanupModel(projectId: String) -> WorktreeCleanupModel? {
         guard let project = projects.first(where: { $0.id == projectId }) else { return nil }
         let idleThresholdDays = config.worktrees.cleanupIdleDays
-        let baseBranch = config.worktrees.baseBranch
-
-        let scanner = WorktreeCleanupScanner(
-            dependencies: WorktreeCleanupScanner.Dependencies(
-                gitFacts: { worktree in
-                    await WorktreeCleanupScanner.gitFacts(
-                        worktreePath: worktree.path,
-                        branch: worktree.branch,
-                        baseBranch: baseBranch
-                    )
-                },
-                mergeIndex: { project in
-                    await Self.forgeMergeIndex(project: project, baseBranch: baseBranch)
-                },
-                // Both hop to the main actor: session and operation state are
-                // main-actor isolated, the scanner is not.
-                activeSessionCount: { [weak self] worktreeId in
-                    await MainActor.run {
-                        guard let self else { return 0 }
-                        let ids = self.tabs.tabs(forWorktree: worktreeId).flatMap { tab -> [String] in
-                            switch tab {
-                            case .terminal(let s):   return s.root.leaves().map(\.sessionId)
-                            case .acpSession(let s): return [s.sessionId]
-                            default:                 return []
-                            }
-                        }
-                        guard let summary = self.harness.summary(forSessionIds: ids) else { return 0 }
-                        return summary.sessions.count
-                    }
-                },
-                operationInFlight: { [weak self] worktreeId in
-                    await MainActor.run {
-                        self?.projectsManager.operationState(for: worktreeId) != nil
-                    }
-                }
-            )
-        )
+        let repoPath = URL(fileURLWithPath: project.path)
+        // `config.worktrees.baseBranch` is a global default across every
+        // project and may not exist in this repository. Resolve it against the
+        // repo's real branches the way every other base-branch consumer does,
+        // and do it per scan rather than once here: branches can change while
+        // the sheet is open.
+        let configuredDefault = config.worktrees.baseBranch
 
         return WorktreeCleanupModel(
             projectId: projectId,
@@ -7534,6 +7504,48 @@ final class AppState {
                 let worktrees = await MainActor.run {
                     self.projectsManager.visibleWorktrees(projectId: projectId)
                 }
+                let availableBranches = (try? await GitService().branches(at: repoPath)) ?? []
+                let baseBranch = NewWorktreeDialog.preferredBaseBranch(
+                    availableBranches: availableBranches,
+                    configuredDefault: configuredDefault
+                )
+                // Built here, not once per model, so all three dependencies
+                // close over the base branch resolved for *this* scan.
+                let scanner = WorktreeCleanupScanner(
+                    dependencies: WorktreeCleanupScanner.Dependencies(
+                        gitFacts: { worktree in
+                            await WorktreeCleanupScanner.gitFacts(
+                                worktreePath: worktree.path,
+                                branch: worktree.branch,
+                                baseBranch: baseBranch
+                            )
+                        },
+                        mergeIndex: { project in
+                            await Self.forgeMergeIndex(project: project, baseBranch: baseBranch)
+                        },
+                        // Both hop to the main actor: session and operation
+                        // state are main-actor isolated, the scanner is not.
+                        activeSessionCount: { [weak self] worktreeId in
+                            await MainActor.run {
+                                guard let self else { return 0 }
+                                let ids = self.tabs.tabs(forWorktree: worktreeId).flatMap { tab -> [String] in
+                                    switch tab {
+                                    case .terminal(let s):   return s.root.leaves().map(\.sessionId)
+                                    case .acpSession(let s): return [s.sessionId]
+                                    default:                 return []
+                                    }
+                                }
+                                guard let summary = self.harness.summary(forSessionIds: ids) else { return 0 }
+                                return summary.sessions.count
+                            }
+                        },
+                        operationInFlight: { [weak self] worktreeId in
+                            await MainActor.run {
+                                self?.projectsManager.operationState(for: worktreeId) != nil
+                            }
+                        }
+                    )
+                )
                 return .success(await scanner.scan(
                     project: project,
                     worktrees: worktrees,
