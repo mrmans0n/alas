@@ -351,7 +351,7 @@ final class ACPSessionManager: ObservableObject {
     func queueSteerUndo(for id: ACPSession.ID) async {
         guard await confirmedWriterLease(for: id) else { return }
         runners[id]?.steerUndo()
-        onQueueChanged?(id, false)
+        onQueueChanged?(id, retainedCleanupHasActivePromptWork(for: id))
     }
 
     /// Steer from the remote client: same route the composer's ⌥⏎ takes.
