@@ -7340,6 +7340,75 @@ final class AppState {
         beginDeleteWorktree(worktree, keepBranch: keepBranch)
     }
 
+    /// Delete several worktrees in one pass, reusing the single-item deletion
+    /// path so every existing protection applies. Runs sequentially: git
+    /// worktree mutations on one repository serialize anyway, and sequential
+    /// execution keeps per-item results in a predictable order. A failure is
+    /// recorded and the batch continues.
+    ///
+    /// Callers are responsible for confirming with the user first — this method
+    /// deletes without prompting.
+    func batchDeleteWorktrees(
+        _ worktrees: [Worktree],
+        keepBranch: Bool
+    ) async -> [WorktreeBatchResult] {
+        guard !worktrees.isEmpty else { return [] }
+
+        var results: [WorktreeBatchResult] = []
+        var touchedProjectIds: Set<String> = []
+
+        for worktree in worktrees {
+            guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
+                results.append(WorktreeBatchResult(
+                    worktreeId: worktree.id,
+                    branch: worktree.branch,
+                    outcome: .failed(message: "Could not find the project for this worktree.")
+                ))
+                continue
+            }
+            guard !projectsManager.isMain(worktree, in: project) else {
+                results.append(WorktreeBatchResult(
+                    worktreeId: worktree.id,
+                    branch: worktree.branch,
+                    outcome: .skipped(reason: "Main worktree")
+                ))
+                continue
+            }
+
+            let siblingsBefore = projectsManager.visibleWorktrees(projectId: worktree.projectId)
+            let removedIndex = siblingsBefore.firstIndex(where: { $0.id == worktree.id }) ?? 0
+            projectsManager.setOperationState(id: worktree.id, state: .deleting)
+
+            let outcome = await performDeleteWorktree(
+                worktree: worktree,
+                repoPath: URL(fileURLWithPath: project.path),
+                deleteBranchIfMerged: Self.resolveDeleteBranchIfMerged(
+                    globalDeleteOnRemove: config.worktrees.deleteBranchOnRemove,
+                    keepBranch: keepBranch
+                ),
+                force: false,
+                removedIndex: removedIndex,
+                // One refresh at the end, not one per item.
+                refreshAfter: false,
+                // No modal mid-batch: a worktree needing force is reported and
+                // left for the user to handle through the single-item flow.
+                promptsForForce: false
+            )
+
+            results.append(WorktreeBatchResult(
+                worktreeId: worktree.id,
+                branch: worktree.branch,
+                outcome: outcome
+            ))
+            touchedProjectIds.insert(worktree.projectId)
+        }
+
+        for projectId in touchedProjectIds {
+            _ = try? await refreshProjectWorktrees(projectId: projectId)
+        }
+        return results
+    }
+
     private func beginDeleteWorktree(_ worktree: Worktree, keepBranch: Bool) {
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             showFileActionError(title: "Delete Failed", message: "Could not find the project for this worktree.")
@@ -7717,14 +7786,20 @@ final class AppState {
 
     /// Runs the git removal off the main actor, then resumes on MainActor
     /// for state cleanup. On dirty-worktree failure publishes
-    /// `pendingForceDeleteWorktree` instead of showing a blocking modal.
+    /// `pendingForceDeleteWorktree` instead of showing a blocking modal —
+    /// unless `promptsForForce` is false, in which case that modal is
+    /// suppressed and the outcome is reported back instead (see
+    /// `batchDeleteWorktrees`, which must never pop a modal mid-run).
+    @discardableResult
     private func performDeleteWorktree(
         worktree: Worktree,
         repoPath: URL,
         deleteBranchIfMerged: Bool,
         force: Bool,
-        removedIndex: Int
-    ) async {
+        removedIndex: Int,
+        refreshAfter: Bool = true,
+        promptsForForce: Bool = true
+    ) async -> WorktreeBatchOutcome {
         do {
             try await Self.performRemoveWorktree(
                 repoPath: repoPath,
@@ -7734,6 +7809,7 @@ final class AppState {
             )
         } catch let WorktreeService.WorktreeError.gitFailed(stderr) {
             if !force,
+               promptsForForce,
                let pending = Self.pendingForceDelete(
                     for: worktree,
                     repoPath: repoPath,
@@ -7744,20 +7820,31 @@ final class AppState {
                 // Clear deleting so the user can see the row again while deciding.
                 projectsManager.setOperationState(id: worktree.id, state: nil)
                 pendingForceDeleteWorktree = pending
-                return
+                return .needsForce
+            } else if !force,
+                      !promptsForForce,
+                      Self.forceDeleteReason(for: stderr) != nil {
+                // Batches never force implicitly and must not hijack the app
+                // with a modal mid-run: record the state and report it back so
+                // the sheet can tell the user to handle this one individually.
+                projectsManager.setOperationState(
+                    id: worktree.id,
+                    state: .deleteFailed(message: stderr)
+                )
+                return .needsForce
             } else {
                 projectsManager.setOperationState(
                     id: worktree.id,
                     state: .deleteFailed(message: stderr)
                 )
-                return
+                return .failed(message: stderr)
             }
         } catch {
             projectsManager.setOperationState(
                 id: worktree.id,
                 state: .deleteFailed(message: "\(error)")
             )
-            return
+            return .failed(message: "\(error)")
         }
 
         cleanupWorktreeState(worktreeId: worktree.id)
@@ -7768,13 +7855,16 @@ final class AppState {
             projectId: worktree.projectId,
             worktreeId: worktree.id
         )
-        _ = try? await refreshProjectWorktrees(projectId: worktree.projectId)
+        if refreshAfter {
+            _ = try? await refreshProjectWorktrees(projectId: worktree.projectId)
+        }
         if selectedWorktreeId == worktree.id {
             selectWorktree(id: selectionAfterRemoval(
                 removedFromProjectId: worktree.projectId,
                 removedAtIndex: removedIndex
             ))
         }
+        return .deleted
     }
 
     /// Called from the SwiftUI alert when the user confirms force delete.
@@ -9626,6 +9716,26 @@ final class AppState {
         else { return }
         state.restartGGLand(target: session.target)
     }
+}
+
+/// Per-item outcome of a bulk worktree operation. The batch never aborts, so
+/// each selected worktree always produces exactly one of these.
+enum WorktreeBatchOutcome: Equatable, Sendable {
+    case deleted
+    case archived
+    case failed(message: String)
+    /// Git refused without `--force`. Batches never force implicitly; the user
+    /// handles these individually through the existing single-item flow.
+    case needsForce
+    case skipped(reason: String)
+}
+
+struct WorktreeBatchResult: Identifiable, Equatable, Sendable {
+    let worktreeId: String
+    let branch: String
+    let outcome: WorktreeBatchOutcome
+
+    var id: String { worktreeId }
 }
 
 private extension WorkspaceCheckoutMember {
