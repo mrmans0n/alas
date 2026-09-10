@@ -3169,9 +3169,11 @@ if (vp) {
     vp.addEventListener("scroll", syncViewport);
   };
   // Safari can report a transiently short visual viewport while its browser
-  // chrome settles on initial load. Only take over the CSS viewport once the
-  // composer needs keyboard tracking.
-  $("prompt").addEventListener("focus", beginViewportTracking);
+  // chrome settles on initial load. Only take over the CSS viewport when an
+  // input can open the keyboard.
+  document.addEventListener("focusin", (event) => {
+    if (event.target.matches("input, textarea, select")) beginViewportTracking();
+  });
 }
 
 setStatus("Connecting…", "connecting");
