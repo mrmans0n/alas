@@ -151,6 +151,18 @@ final class AppState {
     var retainedACPSessionCleanupCountForTesting: Int {
         retainedACPSessionCleanupTasks.values.reduce(0) { $0 + $1.count }
     }
+
+    func retainedACPSessionCleanupDelayForTesting(
+        manager: ACPSessionManager,
+        sessionId: ACPSession.ID,
+        retainActivePrompt: Bool = false
+    ) -> Duration? {
+        retainedScheduledSessionCleanupDelay(
+            manager: manager,
+            sessionId: sessionId,
+            retainActivePrompt: retainActivePrompt
+        )
+    }
 #endif
     @ObservationIgnored
     private var acpAuthTerminalExitHandlers: [String: () -> Void] = [:]
@@ -6551,13 +6563,17 @@ final class AppState {
             guard item.status == .pending, item.lastError == nil else { return nil }
             return item.scheduledAt
         }.min()
+        let activePromptCleanupDelay: Duration = switch session.transcript.streamingState {
+        case .awaitingInput, .awaitingPermission: .seconds(3600)
+        case .idle, .sending, .streaming: .milliseconds(250)
+        }
         if retainActivePrompt && manager.retainedCleanupHasActivePromptWork(for: sessionId) {
-            return .milliseconds(250)
+            return activePromptCleanupDelay
         }
         if session.queue.contains(where: {
             $0.status == .sending && ($0.scheduledAt != nil || nextScheduledAt != nil)
         }) {
-            return .milliseconds(250)
+            return activePromptCleanupDelay
         }
         guard let nextScheduledAt else { return nil }
         let secondsUntilScheduledSend = nextScheduledAt.timeIntervalSinceNow

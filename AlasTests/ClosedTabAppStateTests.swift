@@ -327,6 +327,25 @@ struct ClosedTabAppStateTests {
         #expect(fixture.state.pendingACPDetachCountForTesting == 0)
     }
 
+    @Test func closedACPSessionAwaitingInputUsesParkedRetainedCleanupDelay() async throws {
+        let fixture = makeFixture()
+        let manager = try #require(fixture.state.acpManager(for: fixture.first))
+        let session = manager.createSession(id: "awaiting-input-close", agentId: "claude")
+        session.agentState = .ready
+        session.transcript.streamingState = .awaitingInput
+        session.enqueue(blocks: [.text("now")])
+        _ = session.markQueueHeadSending()
+        session.enqueueScheduled(blocks: [.text("later")], scheduledAt: Date().addingTimeInterval(60))
+
+        #expect(
+            fixture.state.retainedACPSessionCleanupDelayForTesting(
+                manager: manager,
+                sessionId: session.id,
+                retainActivePrompt: true
+            ) == .seconds(3600)
+        )
+    }
+
     @Test func closedACPSessionWithFailedQueueHeadDetachesImmediately() async throws {
         let gate = AsyncGate()
         let state = AppState(
