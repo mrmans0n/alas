@@ -42,14 +42,18 @@ enum WorktreeTrashCleaner {
             import time
             import uuid
 
+            def open_directory(name, dirfd):
+                flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+                try:
+                    return os.open(name, flags, dir_fd=dirfd)
+                except PermissionError:
+                    os.chmod(name, 0o700, dir_fd=dirfd, follow_symlinks=False)
+                    return os.open(name, flags, dir_fd=dirfd)
+
             def remove_contents(dirfd):
                 for name in os.listdir(dirfd):
                     try:
-                        childfd = os.open(
-                            name,
-                            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                            dir_fd=dirfd,
-                        )
+                        childfd = open_directory(name, dirfd)
                     except OSError as error:
                         if error.errno in (errno.ENOTDIR, errno.ELOOP):
                             try:
@@ -80,20 +84,12 @@ enum WorktreeTrashCleaner {
             stagedfd = None
             renamedfd = None
             try:
-                stagedfd = os.open(
-                    name,
-                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                    dir_fd=parentfd,
-                )
+                stagedfd = open_directory(name, parentfd)
                 stat = os.fstat(stagedfd)
                 if (stat.st_dev, stat.st_ino) != (expected_device, expected_inode):
                     sys.exit(0)
                 os.rename(name, private_name, src_dir_fd=parentfd, dst_dir_fd=parentfd)
-                renamedfd = os.open(
-                    private_name,
-                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                    dir_fd=parentfd,
-                )
+                renamedfd = open_directory(private_name, parentfd)
                 renamed_stat = os.fstat(renamedfd)
                 if (renamed_stat.st_dev, renamed_stat.st_ino) != (expected_device, expected_inode):
                     try:

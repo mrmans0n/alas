@@ -213,6 +213,47 @@ struct WorktreeTrashTests {
         #expect(FileManager.default.fileExists(atPath: committedMarker.path))
     }
 
+    @Test func liveCleanerDeletesUnreadableDirectories() async throws {
+        let common = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-cleaner-unreadable-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: common) }
+        let ticket = try makeStagedTicket(
+            commonGitDirectory: common,
+            originalBaseName: "clean-me"
+        )
+        let unreadable = ticket.stagedPath.appendingPathComponent("unreadable")
+        try FileManager.default.createDirectory(at: unreadable, withIntermediateDirectories: true)
+        try "trash".write(
+            to: unreadable.appendingPathComponent("trash.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o000],
+            ofItemAtPath: unreadable.path
+        )
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o700],
+                ofItemAtPath: unreadable.path
+            )
+        }
+        try WorktreeTrash.markCommitted(ticket)
+        let committedMarker = WorktreeTrash.committedMarkerURL(for: ticket)
+
+        try WorktreeTrashCleaner.launch(ticket, delaySeconds: 0)
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline {
+            let stagedExists = FileManager.default.fileExists(atPath: ticket.stagedPath.path)
+            let markerExists = FileManager.default.fileExists(atPath: committedMarker.path)
+            if !stagedExists && !markerExists { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        #expect(!FileManager.default.fileExists(atPath: ticket.stagedPath.path))
+        #expect(!FileManager.default.fileExists(atPath: committedMarker.path))
+    }
+
     @Test func staleSweepDoesNotSpawnCleanerForReplacementDirectory() async throws {
         let repo = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-stale-cleaner-swap-\(UUID().uuidString)")
