@@ -1720,7 +1720,10 @@ extension ACPSessionRunner {
     func steerUndoSnapshot() -> [QueuedPrompt]? { session.steerUndo?.snapshot }
 
     var hasRetainedCleanupPromptWork: Bool {
-        steerInProgress || activePromptID != nil || session.transcript.streamingState != .idle
+        steerInProgress
+            || activePromptID != nil
+            || session.transcript.streamingState != .idle
+            || (session.pendingQueuePersistenceCount > 0 && !session.queue.isEmpty)
     }
 
     var hasRetainedCleanupForkBarrierWork: Bool {

@@ -208,6 +208,23 @@ struct ACPSessionRunnerQueueTests {
         #expect(mock.sent.contains { $0.method == "session/prompt" })
     }
 
+    @Test("force send parked by queue persistence is retained")
+    func forceSendBlockedByQueuePersistenceIsRetained() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        mock.script(method: "session/prompt") { _ in Data("null".utf8) }
+        session.enqueueScheduled(blocks: [.text("later")], scheduledAt: Date().addingTimeInterval(60))
+        let itemId = try #require(session.queue.first?.id)
+        session.pendingQueuePersistenceCount = 1
+
+        runner.forceSendQueuedItem(id: itemId)
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        #expect(session.queue.first?.scheduledAt == nil)
+        #expect(session.queue.first?.status == .pending)
+        #expect(!mock.sent.contains { $0.method == "session/prompt" })
+        #expect(runner.hasRetainedCleanupPromptWork)
+    }
+
     @Test("flushQueueIfIdle is a no-op while state is .streaming")
     func noopWhileStreaming() async throws {
         let (runner, mock, session, _) = try mkRunner()
