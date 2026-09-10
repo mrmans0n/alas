@@ -974,6 +974,22 @@ struct WorktreeService {
             try failAfterRollingBack("Worktree changed while it was being staged.")
         }
 
+        let stagedSubmodulesHaveNoLocalState: Bool
+        do {
+            stagedSubmodulesHaveNoLocalState = try await stagedInitializedSubmodulesHaveNoLocalState(
+                ticket.stagedPath,
+                gitDirectory: expectedRegistration.gitDirectory
+            )
+        } catch {
+            try failAfterRollingBack(error.localizedDescription)
+        }
+        guard stagedSubmodulesHaveNoLocalState else {
+            try failAfterRollingBack("Worktree contains initialized submodule local state.")
+        }
+        guard WorktreeTrash.matchesDirectoryIdentity(ticket) else {
+            try failAfterRollingBack("Worktree changed while its submodules were audited.")
+        }
+
         if !force {
             let stagedIsClean: Bool
             do {
@@ -1295,10 +1311,12 @@ struct WorktreeService {
 
     private func containsInitializedSubmodules(
         _ path: URL,
+        gitDirectory: URL? = nil,
         usesRemoteHostRegistry: Bool = true
     ) async throws -> Bool {
         let result = try await Process.git(
-            ["submodule", "status", "--recursive"],
+            Self.gitContextArguments(worktreePath: path, gitDirectory: gitDirectory)
+                + ["submodule", "status", "--recursive"],
             cwd: path,
             usesRemoteHostRegistry: usesRemoteHostRegistry
         )
@@ -1336,6 +1354,68 @@ struct WorktreeService {
             .compactMap { line in
                 line.split(separator: " ", maxSplits: 1).dropFirst().first.map(String.init)
             }
+    }
+
+    private func stagedInitializedSubmodulesHaveNoLocalState(
+        _ path: URL,
+        gitDirectory: URL
+    ) async throws -> Bool {
+        let submodulePaths = try await submodulePathsFromGitmodules(
+            path,
+            usesRemoteHostRegistry: false
+        )
+        for relativePath in submodulePaths {
+            let submodulePath = path.appendingPathComponent(relativePath)
+            guard FileManager.default.fileExists(
+                atPath: submodulePath.appendingPathComponent(".git").path
+            ) else { continue }
+            guard let submoduleGitDirectory = Self.submoduleGitDirectory(
+                for: submodulePath,
+                relativePath: relativePath,
+                parentGitDirectory: gitDirectory
+            ) else { return false }
+            guard try await isWorktreeClean(
+                submodulePath,
+                gitDirectory: submoduleGitDirectory,
+                usesRemoteHostRegistry: false
+            ) else { return false }
+            guard try await repositoryHasNoLocalState(
+                submodulePath,
+                gitDirectory: submoduleGitDirectory
+            ) else { return false }
+            guard try await stagedInitializedSubmodulesHaveNoLocalState(
+                submodulePath,
+                gitDirectory: submoduleGitDirectory
+            ) else { return false }
+        }
+        return true
+    }
+
+    private static func submoduleGitDirectory(
+        for submodulePath: URL,
+        relativePath: String,
+        parentGitDirectory: URL
+    ) -> URL? {
+        let dotGit = submodulePath.appendingPathComponent(".git")
+        if (try? dotGit.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+            return dotGit
+        }
+        guard let rawGitFile = try? String(contentsOf: dotGit, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              rawGitFile.hasPrefix("gitdir:")
+        else { return nil }
+        let rawPath = rawGitFile.dropFirst("gitdir:".count).trimmingCharacters(in: .whitespaces)
+        let recordedGitDirectory = (rawPath as NSString).isAbsolutePath
+            ? URL(fileURLWithPath: rawPath)
+            : submodulePath.appendingPathComponent(rawPath)
+        if FileManager.default.fileExists(atPath: recordedGitDirectory.path) {
+            return recordedGitDirectory.standardizedFileURL
+        }
+        let fallback = parentGitDirectory
+            .appendingPathComponent("modules", isDirectory: true)
+            .appendingPathComponent(relativePath, isDirectory: true)
+            .standardizedFileURL
+        return FileManager.default.fileExists(atPath: fallback.path) ? fallback : nil
     }
 
     private static func gitContextArguments(
@@ -1445,6 +1525,97 @@ struct WorktreeService {
         )
         guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
         return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func repositoryHasNoLocalState(
+        _ path: URL,
+        gitDirectory: URL
+    ) async throws -> Bool {
+        let context = Self.gitContextArguments(worktreePath: path, gitDirectory: gitDirectory)
+        let reflog = try await Process.git(
+            context + ["rev-list", "--max-count=1", "--reflog", "--not", "--remotes"],
+            cwd: path,
+            usesRemoteHostRegistry: false
+        )
+        guard reflog.exitCode == 0 else { throw WorktreeError.gitFailed(reflog.stderr) }
+        guard reflog.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return false
+        }
+
+        let extraRefs = try await Process.git(
+            context + ["for-each-ref", "--format=%(refname)", "refs/notes", "refs/stash"],
+            cwd: path,
+            usesRemoteHostRegistry: false
+        )
+        guard extraRefs.exitCode == 0 else { throw WorktreeError.gitFailed(extraRefs.stderr) }
+        let extraRefNames = extraRefs.stdout
+            .split(separator: "\n")
+            .map(String.init)
+        if !extraRefNames.isEmpty {
+            let extraReachability = try await Process.git(
+                context + ["rev-list", "--max-count=1"] + extraRefNames + ["--not", "--remotes"],
+                cwd: path,
+                usesRemoteHostRegistry: false
+            )
+            guard extraReachability.exitCode == 0 else {
+                throw WorktreeError.gitFailed(extraReachability.stderr)
+            }
+            guard extraReachability.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return false
+            }
+        }
+
+        let localBranches = try await Process.git(
+            context + ["for-each-ref", "--format=%(refname)=%(objectname)", "refs/heads"],
+            cwd: path,
+            usesRemoteHostRegistry: false
+        )
+        guard localBranches.exitCode == 0 else { throw WorktreeError.gitFailed(localBranches.stderr) }
+        let remoteBranches = try await Process.git(
+            context + ["for-each-ref", "--format=%(refname)=%(objectname)", "refs/remotes"],
+            cwd: path,
+            usesRemoteHostRegistry: false
+        )
+        guard remoteBranches.exitCode == 0 else { throw WorktreeError.gitFailed(remoteBranches.stderr) }
+        let remoteHeadLines = Set(remoteBranches.stdout
+            .split(separator: "\n")
+            .compactMap { line -> String? in
+                let value = String(line)
+                guard !value.contains("/HEAD=") else { return nil }
+                guard let refsRange = value.range(of: "refs/remotes/") else { return nil }
+                let suffix = value[refsRange.upperBound...]
+                guard let slash = suffix.firstIndex(of: "/") else { return nil }
+                return "refs/heads/" + suffix[suffix.index(after: slash)...]
+            })
+        for branch in localBranches.stdout.split(separator: "\n").map(String.init) {
+            guard remoteHeadLines.contains(branch) else { return false }
+        }
+
+        let localTags = try await Process.git(
+            context + ["for-each-ref", "--format=%(refname)=%(objectname)", "refs/tags"],
+            cwd: path,
+            usesRemoteHostRegistry: false
+        )
+        guard localTags.exitCode == 0 else { throw WorktreeError.gitFailed(localTags.stderr) }
+        let remoteTags = try await Process.git(
+            ["-c", "protocol.file.allow=always"] + context + ["ls-remote", "--tags", "--refs", "origin"],
+            cwd: path,
+            usesRemoteHostRegistry: false
+        )
+        guard remoteTags.exitCode == 0 else {
+            return localTags.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        let remoteTagLines = Set(remoteTags.stdout
+            .split(separator: "\n")
+            .compactMap { line -> String? in
+                let parts = line.split(separator: "\t", maxSplits: 1)
+                guard parts.count == 2 else { return nil }
+                return "\(parts[1])=\(parts[0])"
+            })
+        for tag in localTags.stdout.split(separator: "\n").map(String.init) {
+            guard remoteTagLines.contains(tag) else { return false }
+        }
+        return true
     }
 
     private func canForceRemoveAfterMissingLFS(

@@ -43,11 +43,29 @@ enum WorktreeTrashCleaner {
             import time
             import uuid
 
-            def open_directory(name, dirfd):
+            REMOVABLE_FLAGS = sum(
+                getattr(stat_module, name, 0)
+                for name in ("UF_IMMUTABLE", "UF_APPEND")
+            )
+
+            def clear_removable_flags(name, directory):
+                if REMOVABLE_FLAGS == 0:
+                    return
+                path = os.path.join(directory, name)
+                try:
+                    entry_stat = os.stat(path, follow_symlinks=False)
+                    flags = getattr(entry_stat, "st_flags", 0)
+                    if flags & REMOVABLE_FLAGS:
+                        os.chflags(path, flags & ~REMOVABLE_FLAGS, follow_symlinks=False)
+                except (AttributeError, FileNotFoundError):
+                    pass
+
+            def open_directory(name, dirfd, directory):
                 flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
                 try:
                     fd = os.open(name, flags, dir_fd=dirfd)
                 except PermissionError:
+                    clear_removable_flags(name, directory)
                     os.chmod(name, 0o700, dir_fd=dirfd, follow_symlinks=False)
                     fd = os.open(name, flags, dir_fd=dirfd)
                 mode = stat_module.S_IMODE(os.fstat(fd).st_mode)
@@ -55,13 +73,14 @@ enum WorktreeTrashCleaner {
                     os.fchmod(fd, mode | 0o700)
                 return fd
 
-            def remove_contents(dirfd):
+            def remove_contents(dirfd, directory):
                 for name in os.listdir(dirfd):
                     try:
-                        childfd = open_directory(name, dirfd)
+                        childfd = open_directory(name, dirfd, directory)
                     except OSError as error:
                         if error.errno in (errno.ENOTDIR, errno.ELOOP):
                             try:
+                                clear_removable_flags(name, directory)
                                 os.unlink(name, dir_fd=dirfd)
                             except FileNotFoundError:
                                 pass
@@ -70,10 +89,11 @@ enum WorktreeTrashCleaner {
                             continue
                         raise
                     try:
-                        remove_contents(childfd)
+                        remove_contents(childfd, os.path.join(directory, name))
                     finally:
                         os.close(childfd)
                     try:
+                        clear_removable_flags(name, directory)
                         os.rmdir(name, dir_fd=dirfd)
                     except FileNotFoundError:
                         pass
@@ -85,18 +105,19 @@ enum WorktreeTrashCleaner {
             expected_inode = int(sys.argv[5])
             parent, name = os.path.split(staged)
             private_name = f".{name}.deleting.{os.getpid()}.{uuid.uuid4().hex}"
+            private_path = os.path.join(parent, private_name)
             parentfd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
             stagedfd = None
             renamedfd = None
             renamed = False
             try:
-                stagedfd = open_directory(name, parentfd)
+                stagedfd = open_directory(name, parentfd, parent)
                 staged_stat = os.fstat(stagedfd)
                 if (staged_stat.st_dev, staged_stat.st_ino) != (expected_device, expected_inode):
                     sys.exit(0)
                 os.rename(name, private_name, src_dir_fd=parentfd, dst_dir_fd=parentfd)
                 renamed = True
-                renamedfd = open_directory(private_name, parentfd)
+                renamedfd = open_directory(private_name, parentfd, parent)
                 renamed_stat = os.fstat(renamedfd)
                 if (renamed_stat.st_dev, renamed_stat.st_ino) != (expected_device, expected_inode):
                     try:
@@ -104,8 +125,9 @@ enum WorktreeTrashCleaner {
                     except OSError:
                         pass
                     sys.exit(0)
-                remove_contents(renamedfd)
+                remove_contents(renamedfd, private_path)
                 try:
+                    clear_removable_flags(private_name, parent)
                     os.rmdir(private_name, dir_fd=parentfd)
                 except FileNotFoundError:
                     pass

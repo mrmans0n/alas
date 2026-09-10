@@ -259,6 +259,35 @@ struct WorktreeTrashTests {
         #expect(!FileManager.default.fileExists(atPath: committedMarker.path))
     }
 
+    @Test func liveCleanerDeletesUserImmutableFiles() async throws {
+        let common = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-cleaner-immutable-\(UUID().uuidString)")
+        defer { try? chflags("nouchg", at: common, recursive: true) }
+        defer { try? FileManager.default.removeItem(at: common) }
+        let ticket = try makeStagedTicket(
+            commonGitDirectory: common,
+            originalBaseName: "clean-me"
+        )
+        let lockedFile = ticket.stagedPath.appendingPathComponent("locked.txt")
+        try "trash".write(to: lockedFile, atomically: true, encoding: .utf8)
+        try chflags("uchg", at: lockedFile)
+        defer { try? chflags("nouchg", at: lockedFile) }
+        try WorktreeTrash.markCommitted(ticket)
+        let committedMarker = WorktreeTrash.committedMarkerURL(for: ticket)
+
+        try WorktreeTrashCleaner.launch(ticket, delaySeconds: 0)
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline {
+            let stagedExists = FileManager.default.fileExists(atPath: ticket.stagedPath.path)
+            let markerExists = FileManager.default.fileExists(atPath: committedMarker.path)
+            if !stagedExists && !markerExists { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        #expect(!FileManager.default.fileExists(atPath: ticket.stagedPath.path))
+        #expect(!FileManager.default.fileExists(atPath: committedMarker.path))
+    }
+
     @Test func staleSweepDoesNotSpawnCleanerForReplacementDirectory() async throws {
         let repo = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-stale-cleaner-swap-\(UUID().uuidString)")
@@ -595,5 +624,17 @@ struct WorktreeTrashTests {
             withIntermediateDirectories: true
         )
         return path
+    }
+
+    private func chflags(_ flags: String, at url: URL, recursive: Bool = false) throws {
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        let process = Foundation.Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/chflags")
+        process.arguments = recursive ? ["-R", flags, url.path] : [flags, url.path]
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw CocoaError(.fileWriteUnknown)
+        }
     }
 }
