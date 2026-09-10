@@ -245,6 +245,40 @@ struct AppStateRunRecordTests {
         #expect(runRecord(fixture)?.status == .finished(.stopped))
     }
 
+    @Test func closeAllTabsCancelsPendingLaunchesWithoutPurgingRunHistory() throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let previous = RunRecord(
+            id: UUID().uuidString,
+            scriptKey: fixture.script.key,
+            scriptName: fixture.script.displayName,
+            worktreeID: fixture.worktree.id,
+            branch: fixture.worktree.branch,
+            target: fixture.state.runExecutionTarget(for: fixture.script, in: fixture.worktree),
+            status: .starting,
+            startedAt: Date()
+        )
+        fixture.state.runRecords.begin(previous)
+        fixture.state.runRecords.finish(
+            runID: previous.id,
+            outcome: .succeeded,
+            at: Date()
+        )
+        let launchID = UUID()
+        let task = Task<Void, Never> {
+            try? await Task.sleep(for: .seconds(30))
+        }
+        fixture.state.pendingScriptLaunches["\(fixture.worktree.id):\(fixture.script.key)"] = launchID
+        fixture.state.pendingScriptLaunchTasks[launchID] = task
+
+        fixture.state.closeAllTabs(worktreeId: fixture.worktree.id)
+
+        #expect(fixture.state.pendingScriptLaunches.isEmpty)
+        #expect(fixture.state.pendingScriptLaunchTasks.isEmpty)
+        #expect(task.isCancelled)
+        #expect(runRecord(fixture)?.status == .finished(.succeeded))
+    }
+
     @Test func interruptedRunBecomesUnknownRatherThanSucceeded() async throws {
         let fixture = try makeFixture(waiter: { _ in
             try await Task.sleep(for: .seconds(5))

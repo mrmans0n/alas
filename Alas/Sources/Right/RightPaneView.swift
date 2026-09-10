@@ -30,7 +30,12 @@ struct RightPaneView: View {
         // Resolve without activating: the cached state (if any) gives us
         // something to render immediately, and `.task` handles the mutating
         // activation + refresh off the view-update path.
-        _rps = State(initialValue: state.rightPaneStore.activeState(worktreeId: worktree.id))
+        let initialState = state.rightPaneStore.activeState(worktreeId: worktree.id)
+        initialState?.activeTab = RightPaneTab.visible(
+            initialState?.activeTab ?? .changes,
+            runTabEnabled: state.config.runTabEnabled
+        )
+        _rps = State(initialValue: initialState)
     }
 
     var body: some View {

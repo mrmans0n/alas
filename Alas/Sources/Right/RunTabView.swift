@@ -48,7 +48,7 @@ struct RunTabView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .task(id: worktree.id) {
-            scripts = RunScriptStore.scripts(worktreeRoot: worktree.path)
+            refreshScripts()
             hasScanned = true
             // Reconnecting to a worktree is the moment to settle runs whose
             // terminal disappeared while nothing was watching them.
@@ -77,6 +77,7 @@ struct RunTabView: View {
     }
 
     private func perform(_ action: RunRowAction, script: RunScript) {
+        let script = freshScript(matching: script) ?? script
         switch action {
         case .start:
             if case .finished? = state.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status {
@@ -99,6 +100,16 @@ struct RunTabView: View {
         case .edit:
             state.editScript(script, in: worktree)
         }
+    }
+
+    private func refreshScripts() {
+        scripts = RunScriptStore.scripts(worktreeRoot: worktree.path)
+    }
+
+    private func freshScript(matching script: RunScript) -> RunScript? {
+        let fresh = RunScriptStore.scripts(worktreeRoot: worktree.path)
+        scripts = fresh
+        return fresh.first { $0.key == script.key }
     }
 
     private var emptyState: some View {

@@ -61,6 +61,11 @@ struct RunEndpointTests {
         #expect(RunEndpointPolicy.action(for: url, target: target(host: "devbox")) == .open(url))
     }
 
+    @Test func remoteRunDoesNotTreatDnsNamesStartingWith127AsLoopback() {
+        let url = URL(string: "https://127.example.internal:8443/app")!
+        #expect(RunEndpointPolicy.action(for: url, target: target(host: "devbox")) == .open(url))
+    }
+
     // MARK: - Port probe
 
     @Test func portProbeDetectsAListenerWithoutTouchingIt() throws {

@@ -18,8 +18,19 @@ enum RunEndpointPolicy {
     static func isLoopback(_ url: URL) -> Bool {
         guard let host = url.host?.lowercased() else { return false }
         let normalized = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
-        if normalized.split(separator: ".").first == "127" { return true }
+        if isIPv4LoopbackLiteral(normalized) { return true }
         return loopbackHosts.contains(normalized)
+    }
+
+    private static func isIPv4LoopbackLiteral(_ host: String) -> Bool {
+        let parts = host.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 4 else { return false }
+        var octets: [Int] = []
+        for part in parts {
+            guard let value = Int(part), (0...255).contains(value) else { return false }
+            octets.append(value)
+        }
+        return octets.first == 127
     }
 
     static func action(for url: URL, target: RunExecutionTarget) -> RunEndpointAction {
