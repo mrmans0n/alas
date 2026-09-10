@@ -102,6 +102,9 @@ struct WorktreeTrashTests {
         }
         try WorktreeTrash.markCommitted(oldCommitted, at: Date(timeIntervalSince1970: 100))
         try WorktreeTrash.markCommitted(newlyCommitted, at: Date(timeIntervalSince1970: 200))
+        try Data("100\n".utf8).write(
+            to: WorktreeTrash.committedMarkerURL(for: uncommitted)
+        )
 
         let tickets = WorktreeTrash.staleTickets(
             commonGitDirectories: [common],
@@ -133,7 +136,7 @@ struct WorktreeTrashTests {
         #expect(!capturedArguments[4].contains(ticket.stagedPath.path))
     }
 
-    @Test func cleanerShellLeavesReplacementInsertedAfterLaunchValidation() throws {
+    @Test func cleanerReplacementSurvivesAndNeverBecomesStaleCandidate() throws {
         let common = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-cleaner-swap-\(UUID().uuidString)")
         let original = common.appendingPathComponent("original")
@@ -149,7 +152,7 @@ struct WorktreeTrashTests {
             withIntermediateDirectories: true
         )
         try FileManager.default.moveItem(at: original, to: ticket.stagedPath)
-        try WorktreeTrash.markCommitted(ticket)
+        try WorktreeTrash.markCommitted(ticket, at: Date(timeIntervalSince1970: 100))
         let replacementMarker = ticket.stagedPath.appendingPathComponent("replacement.txt")
 
         try WorktreeTrashCleaner.launch(ticket, delaySeconds: 0) { executable, arguments in
@@ -170,6 +173,11 @@ struct WorktreeTrashTests {
         #expect(FileManager.default.fileExists(
             atPath: WorktreeTrash.committedMarkerURL(for: ticket).path
         ))
+        let staleTickets = WorktreeTrash.staleTickets(
+            commonGitDirectories: [common],
+            olderThan: Date(timeIntervalSince1970: 200)
+        )
+        #expect(staleTickets.isEmpty)
     }
 
     @Test func staleSweepDoesNotSpawnCleanerForReplacementDirectory() async throws {

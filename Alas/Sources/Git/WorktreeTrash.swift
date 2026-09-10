@@ -20,6 +20,12 @@ enum WorktreeTrash {
     static let relativeDirectory = "alas/trash"
     private static let marker = "alas-worktree"
     private static let committedMarkerName = ".alas-worktree-deletion-committed"
+    private static let committedMarkerVersion = "1"
+
+    private struct CommittedMetadata {
+        let date: Date
+        let directoryIdentity: WorktreeTrashDirectoryIdentity
+    }
 
     static func root(commonGitDirectory: URL) -> URL {
         let path = commonGitDirectory
@@ -71,7 +77,14 @@ enum WorktreeTrash {
         guard seconds.isFinite, seconds >= 0 else {
             throw CocoaError(.fileWriteUnknown)
         }
-        try Data("\(seconds)\n".utf8).write(
+        let metadata = [
+            committedMarkerVersion,
+            String(seconds),
+            String(ticket.directoryIdentity.systemNumber),
+            String(ticket.directoryIdentity.fileNumber),
+            "",
+        ].joined(separator: "\n")
+        try Data(metadata.utf8).write(
             to: committedMarkerURL(for: ticket),
             options: .atomic
         )
@@ -113,8 +126,9 @@ enum WorktreeTrash {
                       let values = try? entry.resourceValues(forKeys: keys),
                       values.isDirectory == true,
                       values.isSymbolicLink != true,
-                      let committedAt = committedAt(ticket, fileManager: fileManager),
-                      committedAt < cutoff
+                      let committed = committedMetadata(ticket, fileManager: fileManager),
+                      committed.directoryIdentity == directoryIdentity,
+                      committed.date < cutoff
                 else { continue }
                 tickets.append(ticket)
             }
@@ -179,20 +193,36 @@ enum WorktreeTrash {
         )
     }
 
-    private static func committedAt(
+    private static func committedMetadata(
         _ ticket: WorktreeTrashCleanupTicket,
         fileManager: FileManager
-    ) -> Date? {
+    ) -> CommittedMetadata? {
         let markerURL = committedMarkerURL(for: ticket)
         guard let attributes = try? fileManager.attributesOfItem(atPath: markerURL.path),
               attributes[.type] as? FileAttributeType == .typeRegular,
+              let size = attributes[.size] as? NSNumber,
+              size.uint64Value <= 256,
               let data = fileManager.contents(atPath: markerURL.path),
               let raw = String(data: data, encoding: .utf8),
-              let seconds = TimeInterval(raw.trimmingCharacters(in: .whitespacesAndNewlines)),
-              seconds.isFinite,
-              seconds >= 0
+              raw.utf8.count == data.count
         else { return nil }
-        return Date(timeIntervalSince1970: seconds)
+        let fields = raw.components(separatedBy: "\n")
+        guard fields.count == 5,
+              fields[0] == committedMarkerVersion,
+              fields[4].isEmpty,
+              let seconds = TimeInterval(fields[1]),
+              seconds.isFinite,
+              seconds >= 0,
+              let systemNumber = UInt64(fields[2]),
+              let fileNumber = UInt64(fields[3])
+        else { return nil }
+        return CommittedMetadata(
+            date: Date(timeIntervalSince1970: seconds),
+            directoryIdentity: WorktreeTrashDirectoryIdentity(
+                systemNumber: systemNumber,
+                fileNumber: fileNumber
+            )
+        )
     }
 
     private static func isRecognizedEntryName(_ value: String) -> Bool {
