@@ -140,10 +140,16 @@ final class AppState {
     @ObservationIgnored
     private var pendingACPDetachTasks: [String: [ACPSession.ID: PendingACPDetach]] = [:]
     @ObservationIgnored
+    private var retainedACPSessionCleanupTasks: [String: [ACPSession.ID: PendingACPDetach]] = [:]
+    @ObservationIgnored
     private var reconciledCreateFailureCompletionClaims: Set<String> = []
 #if DEBUG
     var pendingACPDetachCountForTesting: Int {
         pendingACPDetachTasks.values.reduce(0) { $0 + $1.count }
+    }
+
+    var retainedACPSessionCleanupCountForTesting: Int {
+        retainedACPSessionCleanupTasks.values.reduce(0) { $0 + $1.count }
     }
 #endif
     @ObservationIgnored
@@ -6480,9 +6486,11 @@ final class AppState {
 
     private func cleanupACPSession(owner: SessionOwnerID, sessionId: String) {
         guard let manager = acpManagers[owner] else { return }
-        if manager.liveSession(for: sessionId)?.queue.contains(where: { $0.status == .pending && $0.scheduledAt != nil }) == true {
+        if retainedScheduledSessionStillNeedsRunner(manager: manager, sessionId: sessionId) {
+            scheduleRetainedACPSessionCleanup(owner: owner, sessionId: sessionId)
             return
         }
+        cancelRetainedACPSessionCleanup(owner: owner, sessionId: sessionId)
         // Flush any in-flight debounced draft write for this session
         // before the tab goes away. The manager itself stays alive
         // (other tabs may share it), so the global flush from
@@ -6519,6 +6527,66 @@ final class AppState {
         Task { @MainActor [weak self] in
             await task.value
             self?.clearPendingACPDetach(worktreeId: pendingKey, sessionId: sessionId, id: pendingID)
+        }
+    }
+
+    private func retainedScheduledSessionStillNeedsRunner(manager: ACPSessionManager, sessionId: ACPSession.ID) -> Bool {
+        guard let session = manager.liveSession(for: sessionId) else { return false }
+        return session.queue.contains { item in
+            item.status == .sending || (item.status == .pending && item.scheduledAt != nil && item.lastError == nil)
+        }
+    }
+
+    private func scheduleRetainedACPSessionCleanup(owner: SessionOwnerID, sessionId: ACPSession.ID) {
+        let key = owner.storageKey
+        guard retainedACPSessionCleanupTasks[key]?[sessionId] == nil else { return }
+        let id = UUID()
+        let task = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                guard let manager = self.acpManagers[owner] else {
+                    self.clearRetainedACPSessionCleanup(worktreeId: key, sessionId: sessionId, id: id)
+                    return
+                }
+                if !self.retainedScheduledSessionStillNeedsRunner(manager: manager, sessionId: sessionId) {
+                    self.clearRetainedACPSessionCleanup(worktreeId: key, sessionId: sessionId, id: id)
+                    self.cleanupACPSession(owner: owner, sessionId: sessionId)
+                    return
+                }
+                do {
+                    try await Task.sleep(for: .milliseconds(250))
+                } catch {
+                    return
+                }
+            }
+        }
+        retainedACPSessionCleanupTasks[key, default: [:]][sessionId] = PendingACPDetach(id: id, task: task)
+    }
+
+    private func cancelRetainedACPSessionCleanup(owner: SessionOwnerID, sessionId: ACPSession.ID) {
+        let key = owner.storageKey
+        retainedACPSessionCleanupTasks[key]?[sessionId]?.task.cancel()
+        retainedACPSessionCleanupTasks[key]?.removeValue(forKey: sessionId)
+        if retainedACPSessionCleanupTasks[key]?.isEmpty == true {
+            retainedACPSessionCleanupTasks.removeValue(forKey: key)
+        }
+    }
+
+    private func cancelRetainedACPSessionCleanups(owner: SessionOwnerID) {
+        let key = owner.storageKey
+        if let pendingBySession = retainedACPSessionCleanupTasks[key] {
+            for pending in pendingBySession.values {
+                pending.task.cancel()
+            }
+        }
+        retainedACPSessionCleanupTasks.removeValue(forKey: key)
+    }
+
+    private func clearRetainedACPSessionCleanup(worktreeId: String, sessionId: ACPSession.ID, id: UUID) {
+        guard retainedACPSessionCleanupTasks[worktreeId]?[sessionId]?.id == id else { return }
+        retainedACPSessionCleanupTasks[worktreeId]?.removeValue(forKey: sessionId)
+        if retainedACPSessionCleanupTasks[worktreeId]?.isEmpty == true {
+            retainedACPSessionCleanupTasks.removeValue(forKey: worktreeId)
         }
     }
 
@@ -6586,6 +6654,7 @@ final class AppState {
                 }
                 if case .acpSession(let state) = tab {
                     await awaitPendingACPDetach(worktreeId: worktreeID, sessionId: state.sessionId)
+                    cancelRetainedACPSessionCleanup(owner: .worktree(worktreeID), sessionId: state.sessionId)
                     guard closedTabHistory.last?.id == entry.id else { continue }
                     guard worktree(withId: worktreeID) != nil else {
                         closedTabHistory.remove(id: entry.id)
@@ -8684,6 +8753,7 @@ final class AppState {
     }
 
     private func prepareACPManagerForDisposal(_ manager: ACPSessionManager, owner: SessionOwnerID) {
+        cancelRetainedACPSessionCleanups(owner: owner)
         // Flush any pending debounced draft writes before tearing the
         // manager down — otherwise the last ~300ms of typing in any
         // composer for this worktree never reaches SQLite.

@@ -255,6 +255,44 @@ struct ClosedTabAppStateTests {
         #expect(fixture.state.canReopenClosedTab)
     }
 
+    @Test func closedACPSessionWithScheduledPromptDetachesAfterQueueDrains() async throws {
+        let gate = AsyncGate()
+        let state = AppState(
+            store: MemoryStore(),
+            acpDetachRunner: { _, sessionId in
+                #expect(sessionId == "scheduled-close")
+                await gate.enterAndWait()
+            }
+        )
+        let fixture = makeFixture(state: state)
+        let manager = try #require(fixture.state.acpManager(for: fixture.first))
+        let session = manager.createSession(id: "scheduled-close", agentId: "claude")
+        session.enqueueScheduled(blocks: [.text("later")], scheduledAt: .distantFuture)
+        let tab = fixture.state.tabs.append(
+            acpSession: ACPSessionTabState(sessionId: session.id, title: "Closed chat"),
+            to: fixture.first.id
+        )
+
+        fixture.state.requestCloseTab(worktreeId: fixture.first.id, tabId: tab.id)
+
+        #expect(fixture.state.retainedACPSessionCleanupCountForTesting == 1)
+        #expect(fixture.state.pendingACPDetachCountForTesting == 0)
+        #expect(manager.liveSession(for: session.id) != nil)
+
+        session.queue.removeAll()
+        await gate.waitUntilEntered()
+
+        #expect(fixture.state.retainedACPSessionCleanupCountForTesting == 0)
+        #expect(fixture.state.pendingACPDetachCountForTesting == 1)
+
+        await gate.release()
+        for _ in 0 ..< 20 where fixture.state.pendingACPDetachCountForTesting != 0 {
+            await Task.yield()
+        }
+
+        #expect(fixture.state.pendingACPDetachCountForTesting == 0)
+    }
+
     @Test func reopeningACPSessionDoesNotRestoreAfterWorktreeCleanupDuringDetach() async {
         let gate = AsyncGate()
         let state = AppState(
