@@ -1068,9 +1068,13 @@ final class AppState {
 
     private func restoreLoadedWorkspaceCheckoutACPSessions() async {
         guard config.workspacesEnabled, workspacesManager.canMutate else { return }
-        for checkout in workspacesManager.checkouts where checkout.archivedAt == nil {
-            _ = await restoreWorkspaceCheckoutACPSessions(checkout)
+        let tasks = workspacesManager.checkouts.compactMap { checkout -> Task<Void, Never>? in
+            guard checkout.archivedAt == nil else { return nil }
+            return Task { @MainActor in
+                _ = await restoreWorkspaceCheckoutACPSessions(checkout)
+            }
         }
+        for task in tasks { await task.value }
     }
 
     private func bootstrapScheduledACPSessions(worktreeIds: [String]) async {
