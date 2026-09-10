@@ -103,6 +103,7 @@ final class ACPSessionManager: ObservableObject {
     private let onSessionTitleUpdated: ((ACPSession.ID, String) -> Void)?
     private let onInputAwaiting: ((ACPSession, ACPUserInputRequest) -> Void)?
     private let onDelegatedMessageAvailable: ((ACPSession.ID) -> Void)?
+    private let onQueueChanged: ((ACPSession.ID) -> Void)?
     private let mcpProjectContextProvider: MCPProjectContextProvider?
     private let frozenMCPAttachmentProvider: FrozenMCPAttachmentProvider?
     private let launchSpecTransformer: ACPLaunchSpecTransformer
@@ -283,6 +284,7 @@ final class ACPSessionManager: ObservableObject {
     func queueForceSend(for id: ACPSession.ID, itemId: UUID) async {
         guard await confirmedWriterLease(for: id) else { return }
         runners[id]?.forceSendQueuedItem(id: itemId)
+        onQueueChanged?(id)
     }
 
     func queueRemove(for id: ACPSession.ID, itemId: UUID) async {
@@ -290,6 +292,7 @@ final class ACPSessionManager: ObservableObject {
         session.removeFromQueue(id: itemId)
         persistQueue(for: session)
         runners[id]?.flushQueueIfIdle()
+        onQueueChanged?(id)
     }
 
     /// Clear a failed item's error so the flusher re-attempts it.
@@ -299,6 +302,7 @@ final class ACPSessionManager: ObservableObject {
         session.queue[idx].lastError = nil
         persistQueue(for: session)
         runners[id]?.flushQueueIfIdle()
+        onQueueChanged?(id)
     }
 
     /// Pull a queued item out for editing and hand its text back. `nil` when
@@ -328,6 +332,7 @@ final class ACPSessionManager: ObservableObject {
         guard let draft = session.takeForEditing(id: itemId) else { return nil }
         persistQueue(for: session)
         runners[id]?.flushQueueIfIdle()
+        onQueueChanged?(id)
         return RemoteQueueProjection.plainText(from: draft)
     }
 
@@ -336,6 +341,7 @@ final class ACPSessionManager: ObservableObject {
         session.clearPendingQueue()
         persistQueue(for: session)
         runners[id]?.flushQueueIfIdle()
+        onQueueChanged?(id)
     }
 
     func queueSteerUndo(for id: ACPSession.ID) async {
@@ -481,6 +487,7 @@ final class ACPSessionManager: ObservableObject {
          onSessionTitleUpdated: ((ACPSession.ID, String) -> Void)? = nil,
          onInputAwaiting: ((ACPSession, ACPUserInputRequest) -> Void)? = nil,
          onDelegatedMessageAvailable: ((ACPSession.ID) -> Void)? = nil,
+         onQueueChanged: ((ACPSession.ID) -> Void)? = nil,
          changeNotifier: ACPChangeNotifier? = nil,
          delegatedMessageNotifier: ACPChangeNotifier? = nil,
          setupEvaluator: ACPSetupEvaluator? = nil,
@@ -514,6 +521,7 @@ final class ACPSessionManager: ObservableObject {
         self.onSessionTitleUpdated = onSessionTitleUpdated
         self.onInputAwaiting = onInputAwaiting
         self.onDelegatedMessageAvailable = onDelegatedMessageAvailable
+        self.onQueueChanged = onQueueChanged
         self.mcpProjectContextProvider = mcpProjectContextProvider
         self.frozenMCPAttachmentProvider = frozenMCPAttachmentProvider
         self.launchSpecTransformer = launchSpecTransformer ?? { $0 }

@@ -50,6 +50,28 @@ struct ACPSessionManagerTests {
         #expect(session.queue.map(\.scheduledAt) == [nil, .distantFuture])
     }
 
+    @Test("remote queue clear notifies queue change")
+    func remoteQueueClearNotifiesQueueChange() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-remote-queue-change-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        var changedSessions: [ACPSession.ID] = []
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            onQueueChanged: { changedSessions.append($0) }
+        )
+        let session = manager.createSession(id: "session", agentId: "codex", autoRunDefault: false)
+        session.enqueueScheduled(blocks: [.text("later")], scheduledAt: .distantFuture)
+
+        #expect(await manager.acquireWriterLease(sessionId: session.id))
+        await manager.queueClear(for: session.id)
+
+        #expect(changedSessions == [session.id])
+        #expect(session.queue.isEmpty)
+    }
+
     @Test("delegated prompt already recorded in the transcript is not requeued")
     func delegatedPromptRecordedInTranscriptIsNotRequeued() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-delegated-dedupe-\(UUID()).sqlite")

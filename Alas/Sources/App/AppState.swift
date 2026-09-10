@@ -6536,6 +6536,7 @@ final class AppState {
 
     private func retainedScheduledSessionCleanupDelay(manager: ACPSessionManager, sessionId: ACPSession.ID) -> Duration? {
         guard let session = manager.liveSession(for: sessionId) else { return nil }
+        if session.queue.first?.lastError != nil { return nil }
         if session.queue.contains(where: { $0.status == .sending && $0.scheduledAt != nil }) {
             return .milliseconds(250)
         }
@@ -6573,6 +6574,12 @@ final class AppState {
             }
         }
         retainedACPSessionCleanupTasks[key, default: [:]][sessionId] = PendingACPDetach(id: id, task: task)
+    }
+
+    private func restartRetainedACPSessionCleanupIfNeeded(owner: SessionOwnerID, sessionId: ACPSession.ID) {
+        guard retainedACPSessionCleanupTasks[owner.storageKey]?[sessionId] != nil else { return }
+        cancelRetainedACPSessionCleanup(owner: owner, sessionId: sessionId)
+        cleanupACPSession(owner: owner, sessionId: sessionId)
     }
 
     private func cancelRetainedACPSessionCleanup(owner: SessionOwnerID, sessionId: ACPSession.ID) {
@@ -8258,6 +8265,9 @@ final class AppState {
                     await self.deliverPendingDelegatedMessages(to: sessionId, manager: manager)
                 }
             },
+            onQueueChanged: { [weak self] sessionId in
+                self?.restartRetainedACPSessionCleanupIfNeeded(owner: owner, sessionId: sessionId)
+            },
             brokerServiceFactory: {
                 let resourceURL = Bundle.main.resourceURL ?? Bundle.main.bundleURL
                 return try await LocalACPBrokerServicePool.shared.service(resourceURL: resourceURL)
@@ -8546,6 +8556,9 @@ final class AppState {
                     requestId: self.notificationRequestId(for: request),
                     owner: owner
                 )
+            },
+            onQueueChanged: { [weak self] sessionId in
+                self?.restartRetainedACPSessionCleanupIfNeeded(owner: owner, sessionId: sessionId)
             },
             launchSpecTransformer: { [weak self] spec in
                 guard let self,
