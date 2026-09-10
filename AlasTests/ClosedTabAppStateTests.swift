@@ -346,6 +346,22 @@ struct ClosedTabAppStateTests {
         )
     }
 
+    @Test func closedACPSessionDirectAwaitingInputUsesParkedDelayForOverdueSchedule() async throws {
+        let fixture = makeFixture()
+        let manager = try #require(fixture.state.acpManager(for: fixture.first))
+        let session = manager.createSession(id: "direct-awaiting-input-close", agentId: "claude")
+        session.agentState = .ready
+        session.transcript.streamingState = .awaitingInput
+        session.enqueueScheduled(blocks: [.text("later")], scheduledAt: Date().addingTimeInterval(-1))
+
+        #expect(
+            fixture.state.retainedACPSessionCleanupDelayForTesting(
+                manager: manager,
+                sessionId: session.id
+            ) == .seconds(3600)
+        )
+    }
+
     @Test func closedACPSessionWithFailedQueueHeadDetachesImmediately() async throws {
         let gate = AsyncGate()
         let state = AppState(

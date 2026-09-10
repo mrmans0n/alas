@@ -6577,7 +6577,7 @@ final class AppState {
         }
         guard let nextScheduledAt else { return nil }
         let secondsUntilScheduledSend = nextScheduledAt.timeIntervalSinceNow
-        guard secondsUntilScheduledSend > 0 else { return .milliseconds(250) }
+        guard secondsUntilScheduledSend > 0 else { return activePromptCleanupDelay }
         return .seconds(secondsUntilScheduledSend)
     }
 
