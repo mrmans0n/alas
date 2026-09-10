@@ -21,6 +21,20 @@ enum RunScriptStore {
             + discover(in: globalDir, scope: .global)
     }
 
+    /// Host-aware discovery for UI surfaces attached to a concrete worktree.
+    /// Local worktrees keep the synchronous FileManager path; remote worktrees
+    /// scan repository scripts through SSH so the list matches what launches.
+    static func scripts(
+        worktreeRoot: URL,
+        remoteHost: String?,
+        globalDir: URL = Paths.runScriptsGlobalDir
+    ) async -> [RunScript] {
+        guard let remoteHost else {
+            return scripts(worktreeRoot: worktreeRoot, globalDir: globalDir)
+        }
+        return await remoteRepoScripts(worktreeRoot: worktreeRoot, host: remoteHost)
+    }
+
     private static func discover(in dir: URL, scope: RunScriptScope) -> [RunScript] {
         let fm = FileManager.default
         guard let entries = try? fm.contentsOfDirectory(
@@ -31,16 +45,12 @@ enum RunScriptStore {
         return entries
             .filter { (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true }
             .map { url in
-                let meta = RunScriptMetadata.parse(fileName: url.lastPathComponent, contents: headText(of: url))
-                return RunScript(
+                script(
                     scope: scope,
                     fileName: url.lastPathComponent,
                     fileURL: url,
-                    displayName: meta.displayName,
-                    onExit: meta.onExit,
-                    cwd: meta.cwd,
-                    isExecutable: fm.isExecutableFile(atPath: url.path),
-                    endpoint: meta.endpoint
+                    contents: headText(of: url),
+                    isExecutable: fm.isExecutableFile(atPath: url.path)
                 )
             }
             .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
@@ -52,5 +62,60 @@ enum RunScriptStore {
         let data = (try? handle.read(upToCount: headerReadLimit)) ?? nil
         guard let data else { return "" }
         return String(decoding: data, as: UTF8.self)
+    }
+
+    private static func remoteRepoScripts(worktreeRoot: URL, host: String) async -> [RunScript] {
+        let directory = repoScriptsDir(worktreeRoot: worktreeRoot)
+        guard let entries = try? await RemoteFileStats.directoryEntries(
+            host: host,
+            worktreeRoot: worktreeRoot.path,
+            path: directory.path
+        ) else { return [] }
+
+        var scripts: [RunScript] = []
+        for entry in entries where !entry.isDirectory && !entry.name.hasPrefix(".") {
+            let url = directory.appendingPathComponent(entry.name)
+            guard case .file(let data, _) = try? await RemoteFileAccess.read(host: host, path: url.path) else {
+                continue
+            }
+            let header = String(decoding: data.prefix(headerReadLimit), as: UTF8.self)
+            let isExecutable = await isRemoteExecutable(host: host, path: url.path)
+            scripts.append(script(
+                scope: .repo,
+                fileName: entry.name,
+                fileURL: url,
+                contents: header,
+                isExecutable: isExecutable
+            ))
+        }
+        return scripts.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+    }
+
+    private static func isRemoteExecutable(host: String, path: String) async -> Bool {
+        let command = "test -x \(SSHCommand.shellQuote(path))"
+        guard let result = try? await RemoteExec.run(host: host, cwd: nil, command: command, timeout: 5) else {
+            return false
+        }
+        return result.exitCode == 0
+    }
+
+    static func script(
+        scope: RunScriptScope,
+        fileName: String,
+        fileURL: URL,
+        contents: String,
+        isExecutable: Bool
+    ) -> RunScript {
+        let meta = RunScriptMetadata.parse(fileName: fileName, contents: contents)
+        return RunScript(
+            scope: scope,
+            fileName: fileName,
+            fileURL: fileURL,
+            displayName: meta.displayName,
+            onExit: meta.onExit,
+            cwd: meta.cwd,
+            isExecutable: isExecutable,
+            endpoint: meta.endpoint
+        )
     }
 }

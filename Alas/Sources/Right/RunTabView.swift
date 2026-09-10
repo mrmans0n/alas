@@ -48,7 +48,7 @@ struct RunTabView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .task(id: worktree.id) {
-            refreshScripts()
+            await refreshScripts()
             hasScanned = true
             // Reconnecting to a worktree is the moment to settle runs whose
             // terminal disappeared while nothing was watching them.
@@ -57,8 +57,10 @@ struct RunTabView: View {
         }
         .onReceive(ticker) { now = $0 }
         .onChange(of: state.runScriptCatalogGeneration) {
-            refreshScripts()
-            hasScanned = true
+            Task {
+                await refreshScripts()
+                hasScanned = true
+            }
         }
     }
 
@@ -81,7 +83,13 @@ struct RunTabView: View {
     }
 
     private func perform(_ action: RunRowAction, script: RunScript) {
-        let script = freshScript(matching: script) ?? script
+        Task {
+            await perform(action, matching: script)
+        }
+    }
+
+    private func perform(_ action: RunRowAction, matching staleScript: RunScript) async {
+        let script = await freshScript(matching: staleScript) ?? staleScript
         switch action {
         case .start:
             if case .finished? = state.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status {
@@ -108,13 +116,17 @@ struct RunTabView: View {
         }
     }
 
-    private func refreshScripts() {
-        scripts = RunScriptStore.scripts(worktreeRoot: worktree.path)
+    @discardableResult
+    private func refreshScripts() async -> [RunScript] {
+        let host = RemoteHostRegistry.shared.host(forPath: worktree.path.path)
+        let fresh = await RunScriptStore.scripts(worktreeRoot: worktree.path, remoteHost: host)
+        guard !Task.isCancelled else { return scripts }
+        scripts = fresh
+        return fresh
     }
 
-    private func freshScript(matching script: RunScript) -> RunScript? {
-        let fresh = RunScriptStore.scripts(worktreeRoot: worktree.path)
-        scripts = fresh
+    private func freshScript(matching script: RunScript) async -> RunScript? {
+        let fresh = await refreshScripts()
         return fresh.first { $0.key == script.key }
     }
 

@@ -59,4 +59,26 @@ struct RunScriptStoreTests {
         )
         #expect(scripts.map(\.fileName) == ["visible.sh"])
     }
+
+    @Test func scriptConstructionPreservesMetadataAndExecutableBit() {
+        let directory = URL(fileURLWithPath: #"/srv/repos/app/.alas/scripts"#, isDirectory: true)
+        let script = RunScriptStore.script(
+            scope: .repo,
+            fileName: "web.sh",
+            fileURL: directory.appendingPathComponent("web.sh"),
+            contents: """
+            # alas-name: Web
+            # alas-cwd: app
+            # alas-url: http://localhost:3000
+            """,
+            isExecutable: true
+        )
+
+        #expect(script.displayName == "Web")
+        #expect(script.scope == .repo)
+        #expect(script.fileURL.path == "/srv/repos/app/.alas/scripts/web.sh")
+        #expect(script.cwd == "app")
+        #expect(script.isExecutable)
+        #expect(script.endpoint?.absoluteString == "http://localhost:3000")
+    }
 }

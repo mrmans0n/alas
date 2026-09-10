@@ -23,7 +23,6 @@ struct RightPaneTabBar: View {
                 segments(compact: false)
                 segments(compact: true)
             }
-            .fixedSize()
 
             Spacer(minLength: 8)
             trailing
