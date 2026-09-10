@@ -1025,7 +1025,34 @@ struct WorktreeService {
             try failAfterRollingBack(removeResult.stderr)
         }
 
-        try? WorktreeTrash.markCommitted(ticket)
+        let outcome: WorktreeRemovalOutcome
+        do {
+            try WorktreeTrash.markCommitted(ticket)
+            outcome = .staged(ticket)
+        } catch {
+            let markerFailure = error.localizedDescription
+            let stagedPath = Self.resolvedFileSystemPath(ticket.stagedPath)
+            guard WorktreeTrash.isValid(ticket),
+                  WorktreeTrash.matchesDirectoryIdentity(ticket)
+            else {
+                throw WorktreeError.gitFailed(
+                    "Git removed the worktree registration, but the deletion marker "
+                        + "could not be written and the staged directory changed. "
+                        + "Files remain at \(stagedPath). Marker: \(markerFailure)"
+                )
+            }
+            do {
+                try FileManager.default.removeItem(at: ticket.stagedPath)
+                outcome = .synchronous
+            } catch {
+                throw WorktreeError.gitFailed(
+                    "Git removed the worktree registration, but the deletion marker "
+                        + "could not be written and synchronous cleanup failed; "
+                        + "staged files remain at \(stagedPath). "
+                        + "Marker: \(markerFailure). Cleanup: \(error.localizedDescription)"
+                )
+            }
+        }
 
         if deleteBranchIfMerged && worktree.branch != "(detached)" {
             _ = try? await Process.git(
@@ -1034,7 +1061,7 @@ struct WorktreeService {
                 usesRemoteHostRegistry: false
             )
         }
-        return .staged(ticket)
+        return outcome
     }
 
     func deletePreflight(

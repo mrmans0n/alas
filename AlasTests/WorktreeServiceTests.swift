@@ -688,6 +688,49 @@ extension WorktreeServiceTests {
         #expect(try await service.list(repoPath: repo, projectId: "p").count == 1)
     }
 
+    @Test func fastLocalRemoveDeletesStagedFilesSynchronouslyWhenCommitMarkerCannotBeWritten() async throws {
+        let fixture = try await makeLinkedWorktree(suffix: "marker-write-failure")
+        let trashRoot = WorktreeTrash.root(
+            commonGitDirectory: fixture.repo.appendingPathComponent(".git")
+        )
+        defer {
+            try? FileManager.default.removeItem(at: trashRoot)
+            fixture.removeFiles()
+        }
+
+        let outcome = try await fixture.service.removeFastLocal(
+            repoPath: fixture.repo,
+            worktree: fixture.worktree,
+            deleteBranchIfMerged: false,
+            force: false,
+            moveItem: { source, destination in
+                try FileManager.default.moveItem(at: source, to: destination)
+                guard let directoryIdentity = WorktreeTrash.directoryIdentity(at: destination) else {
+                    throw CocoaError(.fileReadUnknown)
+                }
+                let ticket = WorktreeTrashCleanupTicket(
+                    trashRoot: destination.deletingLastPathComponent(),
+                    stagedPath: destination,
+                    directoryIdentity: directoryIdentity
+                )
+                try FileManager.default.createDirectory(
+                    at: WorktreeTrash.committedMarkerURL(for: ticket),
+                    withIntermediateDirectories: false
+                )
+            }
+        )
+
+        #expect(outcome == .synchronous)
+        #expect(!FileManager.default.fileExists(atPath: fixture.worktree.path.path))
+        let stagedDirectories = try FileManager.default.contentsOfDirectory(
+            at: trashRoot,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )
+        #expect(stagedDirectories.isEmpty)
+        #expect(try await fixture.service.list(repoPath: fixture.repo, projectId: "p").count == 1)
+    }
+
     @Test func fastLocalRemoveFailsClosedWhenWorktreeBecameDirty() async throws {
         let fixture = try await makeLinkedWorktree(suffix: "became-dirty")
         defer { fixture.removeFiles() }
