@@ -1523,6 +1523,7 @@ extension ACPSessionRunner {
         guard !nativeForkBarrierActive,
               !steerInProgress,
               session.agentState == .ready,
+              session.pendingQueuePersistenceCount == 0,
               activePromptID == nil,
               session.transcript.streamingState == .idle,
               session.transcript.pendingUserInputs.isEmpty,

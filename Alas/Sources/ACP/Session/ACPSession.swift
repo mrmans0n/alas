@@ -237,6 +237,7 @@ final class ACPSession: ObservableObject, Identifiable {
     /// `session/new` or `session/load`.
     var remoteSessionId: String?
     @Published var queue: [QueuedPrompt] = []
+    var pendingQueuePersistenceCount = 0
     @Published var steerUndo: SteerUndoState?
     struct SteerUndoState: Equatable {
         /// Unique per-snapshot id used by SwiftUI for view diffing — letting

@@ -158,6 +158,27 @@ struct ACPSessionRunnerQueueTests {
         #expect(try store.loadQueue(sessionId: "s").isEmpty)
     }
 
+    @Test("flushQueueIfIdle waits for pending queue persistence")
+    func waitsForPendingQueuePersistence() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        mock.script(method: "session/prompt") { _ in Data("null".utf8) }
+        session.enqueue(blocks: [.text("pending durable enqueue")])
+        session.pendingQueuePersistenceCount = 1
+
+        runner.flushQueueIfIdle()
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        #expect(session.queue.first?.status == .pending)
+        #expect(!mock.sent.contains { $0.method == "session/prompt" })
+
+        session.pendingQueuePersistenceCount = 0
+        runner.flushQueueIfIdle()
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        #expect(session.queue.isEmpty)
+        #expect(mock.sent.contains { $0.method == "session/prompt" })
+    }
+
     @Test("flushQueueIfIdle is a no-op while state is .streaming")
     func noopWhileStreaming() async throws {
         let (runner, mock, session, _) = try mkRunner()

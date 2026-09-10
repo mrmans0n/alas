@@ -4196,10 +4196,13 @@ extension ACPSessionManager {
         session.enqueue(blocks: blocks, delegatedSource: source)
         let fence = leaseFence(sessionId: sessionId)
         let items = session.queue
+        session.pendingQueuePersistenceCount += 1
         let task = enqueuePersistenceResult { persistence in
             try await persistence.upsertQueue(sessionId: sessionId, items: items, fence: fence)
         }
-        guard await task.value == true else {
+        let persisted = await task.value == true
+        session.pendingQueuePersistenceCount -= 1
+        guard persisted else {
             session.queue.removeAll { $0.delegatedSource == source }
             return false
         }
@@ -4239,10 +4242,13 @@ extension ACPSessionManager {
         )
         let fence = leaseFence(sessionId: sessionId)
         let items = session.queue
+        session.pendingQueuePersistenceCount += 1
         let task = enqueuePersistenceResult { persistence in
             try await persistence.upsertQueue(sessionId: sessionId, items: items, fence: fence)
         }
-        guard await task.value == true else {
+        let persisted = await task.value == true
+        session.pendingQueuePersistenceCount -= 1
+        guard persisted else {
             if let index = session.queue.firstIndex(where: { $0.id == id }) {
                 session.queue.remove(at: index)
             }
