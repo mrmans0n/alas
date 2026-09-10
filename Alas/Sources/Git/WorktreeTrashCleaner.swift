@@ -39,11 +39,14 @@ enum WorktreeTrashCleaner {
         now: Date = Date(),
         launcher: Launcher = { try launch($0) }
     ) {
-        let commonDirectories = projects.compactMap { project -> URL? in
-            guard project.host == nil else { return nil }
-            let path = URL(fileURLWithPath: project.path)
-            guard !path.isRemoteAlasPath else { return nil }
-            return WorktreeService.localCommonGitDirectory(forWorktreeAt: path)
+        let commonDirectories = projects.flatMap { project -> [URL] in
+            guard project.host == nil else { return [] }
+            let paths = [URL(fileURLWithPath: project.path)]
+                + project.cachedWorktrees.map(\.path)
+            return paths.compactMap { path in
+                guard !path.isRemoteAlasPath else { return nil }
+                return WorktreeService.localCommonGitDirectory(forWorktreeAt: path)
+            }
         }
         let cutoff = now.addingTimeInterval(-24 * 60 * 60)
         for ticket in WorktreeTrash.staleTickets(

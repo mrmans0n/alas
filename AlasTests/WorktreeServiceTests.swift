@@ -737,6 +737,59 @@ extension WorktreeServiceTests {
         #expect(FileManager.default.fileExists(atPath: unrelatedMarker.path))
     }
 
+    @Test func fastLocalRemoveRestoresReplacementStagedDuringRenameWithoutRemovingRegistration() async throws {
+        let fixture = try await makeLinkedWorktree(suffix: "replaced-during-stage")
+        let originalPath = fixture.worktree.path.standardizedFileURL
+        let displaced = originalPath.deletingLastPathComponent()
+            .appendingPathComponent("\(originalPath.lastPathComponent)-displaced")
+        let unrelatedMarker = originalPath.appendingPathComponent("unrelated.txt")
+        defer {
+            try? FileManager.default.removeItem(at: originalPath)
+            try? FileManager.default.removeItem(at: displaced)
+            try? FileManager.default.removeItem(at: fixture.repo)
+        }
+
+        await #expect(throws: WorktreeService.WorktreeError.self) {
+            try await fixture.service.removeFastLocal(
+                repoPath: fixture.repo,
+                worktree: fixture.worktree,
+                deleteBranchIfMerged: false,
+                force: true,
+                moveItem: { source, destination in
+                    if source.standardizedFileURL == originalPath {
+                        try FileManager.default.moveItem(at: source, to: displaced)
+                        try FileManager.default.createDirectory(
+                            at: source,
+                            withIntermediateDirectories: true
+                        )
+                        try "do not delete".write(
+                            to: unrelatedMarker,
+                            atomically: true,
+                            encoding: .utf8
+                        )
+                    }
+                    try FileManager.default.moveItem(at: source, to: destination)
+                }
+            )
+        }
+
+        #expect(FileManager.default.fileExists(atPath: unrelatedMarker.path))
+        #expect(FileManager.default.fileExists(atPath: displaced.appendingPathComponent(".git").path))
+        let registrations = try await Process.git(
+            ["worktree", "list", "--porcelain"],
+            cwd: fixture.repo
+        )
+        let registeredPaths = registrations.stdout
+            .split(separator: "\n")
+            .compactMap { line -> String? in
+                guard line.hasPrefix("worktree ") else { return nil }
+                return URL(fileURLWithPath: String(line.dropFirst("worktree ".count)))
+                    .resolvingSymlinksInPath()
+                    .path
+            }
+        #expect(registeredPaths.contains(originalPath.resolvingSymlinksInPath().path))
+    }
+
     @Test func fastLocalRemoveFallsBackWhenRenameFails() async throws {
         let fixture = try await makeLinkedWorktree(suffix: "rename-fallback")
         defer { fixture.removeFiles() }

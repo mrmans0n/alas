@@ -835,7 +835,7 @@ struct WorktreeService {
         guard let expectedCommonDirectory = Self.localCommonGitDirectory(
             forWorktreeAt: repoPath
         ),
-              Self.matchesLinkedWorktreeRegistration(
+              let expectedWorktreeIdentity = Self.linkedWorktreeIdentity(
                   worktree.path,
                   expectedCommonDirectory: expectedCommonDirectory
               )
@@ -909,6 +909,22 @@ struct WorktreeService {
                 at: ticket.trashRoot,
                 withIntermediateDirectories: true
             )
+        } catch {
+            try await remove(
+                repoPath: repoPath,
+                worktree: worktree,
+                deleteBranchIfMerged: deleteBranchIfMerged,
+                force: force,
+                forceTwice: registration.isLocked && force,
+                usesRemoteHostRegistry: false
+            )
+            return .synchronous
+        }
+
+        guard Self.directoryIdentity(at: worktree.path) == expectedWorktreeIdentity else {
+            throw WorktreeError.gitFailed("Worktree changed before it could be staged.")
+        }
+        do {
             try moveItem(worktree.path, ticket.stagedPath)
         } catch {
             try await remove(
@@ -920,6 +936,18 @@ struct WorktreeService {
                 usesRemoteHostRegistry: false
             )
             return .synchronous
+        }
+
+        guard Self.directoryIdentity(at: ticket.stagedPath) == expectedWorktreeIdentity else {
+            do {
+                try moveItem(ticket.stagedPath, worktree.path)
+            } catch {
+                throw WorktreeError.gitFailed(
+                    "Worktree changed while it was being staged; staged files remain at "
+                        + "\(ticket.stagedPath.path). Rollback: \(error.localizedDescription)"
+                )
+            }
+            throw WorktreeError.gitFailed("Worktree changed while it was being staged.")
         }
 
         func failAfterRollingBack(_ registryMessage: String) throws -> Never {
@@ -1107,14 +1135,37 @@ struct WorktreeService {
         resolvedFileSystemPath(lhs) == resolvedFileSystemPath(rhs)
     }
 
-    private static func matchesLinkedWorktreeRegistration(
+    private struct FileSystemIdentity: Equatable {
+        let systemNumber: UInt64
+        let fileNumber: UInt64
+    }
+
+    private static func directoryIdentity(at path: URL) -> FileSystemIdentity? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path.path),
+              attributes[.type] as? FileAttributeType == .typeDirectory,
+              let systemNumber = attributes[.systemNumber] as? NSNumber,
+              let fileNumber = attributes[.systemFileNumber] as? NSNumber
+        else { return nil }
+        return FileSystemIdentity(
+            systemNumber: systemNumber.uint64Value,
+            fileNumber: fileNumber.uint64Value
+        )
+    }
+
+    private static func linkedWorktreeIdentity(
         _ worktreePath: URL,
         expectedCommonDirectory: URL
-    ) -> Bool {
+    ) -> FileSystemIdentity? {
         let fileManager = FileManager.default
         guard let rootAttributes = try? fileManager.attributesOfItem(atPath: worktreePath.path),
-              rootAttributes[.type] as? FileAttributeType == .typeDirectory
-        else { return false }
+              rootAttributes[.type] as? FileAttributeType == .typeDirectory,
+              let systemNumber = rootAttributes[.systemNumber] as? NSNumber,
+              let fileNumber = rootAttributes[.systemFileNumber] as? NSNumber
+        else { return nil }
+        let identity = FileSystemIdentity(
+            systemNumber: systemNumber.uint64Value,
+            fileNumber: fileNumber.uint64Value
+        )
 
         let dotGit = worktreePath.appendingPathComponent(".git", isDirectory: false)
         guard let dotGitAttributes = try? fileManager.attributesOfItem(atPath: dotGit.path),
@@ -1122,24 +1173,24 @@ struct WorktreeService {
               let gitDirectory = localGitDirectory(forWorktreeAt: worktreePath),
               let commonDirectory = localCommonGitDirectory(forWorktreeAt: worktreePath),
               fileSystemPathsEqual(commonDirectory, expectedCommonDirectory)
-        else { return false }
+        else { return nil }
 
         let expectedWorktreesDirectory = expectedCommonDirectory
             .appendingPathComponent("worktrees", isDirectory: true)
         guard fileSystemPathsEqual(
             gitDirectory.deletingLastPathComponent(),
             expectedWorktreesDirectory
-        ) else { return false }
+        ) else { return nil }
 
         let backlinkFile = gitDirectory.appendingPathComponent("gitdir", isDirectory: false)
         guard let rawBacklink = try? String(contentsOf: backlinkFile, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines),
               !rawBacklink.isEmpty
-        else { return false }
+        else { return nil }
         let backlink = (rawBacklink as NSString).isAbsolutePath
             ? URL(fileURLWithPath: rawBacklink)
             : gitDirectory.appendingPathComponent(rawBacklink)
-        return fileSystemPathsEqual(backlink, dotGit)
+        return fileSystemPathsEqual(backlink, dotGit) ? identity : nil
     }
 
     private static func registrationState(

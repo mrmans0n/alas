@@ -188,6 +188,67 @@ struct WorktreeTrashTests {
         #expect(launched == [old])
     }
 
+    @Test func sweepRecoversCommittedTicketWhenConfiguredLinkedWorktreeWasDeleted() async throws {
+        let repo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-sweep-deleted-anchor-\(UUID().uuidString)")
+        let linked = repo.deletingLastPathComponent()
+            .appendingPathComponent("\(repo.lastPathComponent)-linked")
+        defer {
+            try? FileManager.default.removeItem(at: linked)
+            try? FileManager.default.removeItem(at: repo)
+        }
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "init"], cwd: repo)
+        let service = WorktreeService()
+        let linkedWorktree = try await service.add(
+            repoPath: repo,
+            base: "main",
+            branch: "linked",
+            destination: linked,
+            projectId: "linked-project"
+        )
+        let cachedWorktrees = try await service.list(repoPath: repo, projectId: "linked-project")
+        let project = ProjectConfig(
+            id: "linked-project",
+            name: "linked",
+            path: linked.path,
+            color: "#000000",
+            addedAt: .now,
+            cachedWorktrees: cachedWorktrees
+        )
+
+        let outcome = try await service.removeFastLocal(
+            repoPath: repo,
+            worktree: linkedWorktree,
+            deleteBranchIfMerged: false,
+            force: true
+        )
+        let ticket: WorktreeTrashCleanupTicket
+        switch outcome {
+        case .staged(let stagedTicket):
+            ticket = stagedTicket
+        case .synchronous:
+            Issue.record("Expected staged removal")
+            return
+        }
+        defer { try? FileManager.default.removeItem(at: ticket.trashRoot) }
+        #expect(throws: CocoaError.self) {
+            try WorktreeTrashCleaner.launch(ticket, delaySeconds: 0) { _, _ in
+                throw CocoaError(.fileWriteUnknown)
+            }
+        }
+
+        var recovered: [WorktreeTrashCleanupTicket] = []
+        WorktreeTrashCleaner.sweep(
+            projects: [project],
+            now: Date().addingTimeInterval(48 * 60 * 60),
+            launcher: { recovered.append($0) }
+        )
+
+        #expect(recovered == [ticket])
+    }
+
     @Test func liveCleanerEventuallyDeletesTheTicketDirectory() async throws {
         let common = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-cleaner-\(UUID().uuidString)")
