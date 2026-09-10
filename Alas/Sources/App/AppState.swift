@@ -4376,26 +4376,12 @@ final class AppState {
             total + dirtyEditorTabIds(worktreeId: worktree.id).count
         }
         if dirtyCount > 0 {
-            switch promptForDirtyBuffers(
+            guard promptForDirtyBuffersInBatch(
                 action: "Archive",
-                branch: "\(worktrees.count) worktrees",
+                worktreeCount: worktrees.count,
                 dirtyCount: dirtyCount,
                 onDiskDestructive: false
-            ) {
-            case .save:
-                // Saving is per-worktree and asynchronous; the sheet's flow is
-                // synchronous, so ask the user to save and retry rather than
-                // half-archiving. Report it as a skip, not a failure.
-                return worktrees.map {
-                    WorktreeBatchResult(
-                        worktreeId: $0.id,
-                        branch: $0.branch,
-                        outcome: .skipped(reason: "Save the open editors first")
-                    )
-                }
-            case .discard:
-                break
-            case .cancel:
+            ) == .discard else {
                 return []
             }
         }
@@ -7486,28 +7472,12 @@ final class AppState {
             total + dirtyEditorTabIds(worktreeId: worktree.id).count
         }
         if dirtyCount > 0 {
-            switch promptForDirtyBuffers(
+            guard promptForDirtyBuffersInBatch(
                 action: "Delete",
-                branch: "\(worktrees.count) worktrees",
+                worktreeCount: worktrees.count,
                 dirtyCount: dirtyCount,
-                onDiskDestructive: true,
-                keepBranch: keepBranch
-            ) {
-            case .save:
-                // Saving is per-worktree and asynchronous; the batch's flow is
-                // synchronous from here, so ask the user to save and retry
-                // rather than half-deleting. Report it as a skip, not a
-                // failure — mirrors `batchArchiveWorktrees`'s handling.
-                return worktrees.map {
-                    WorktreeBatchResult(
-                        worktreeId: $0.id,
-                        branch: $0.branch,
-                        outcome: .skipped(reason: "Save the open editors first")
-                    )
-                }
-            case .discard:
-                break
-            case .cancel:
+                onDiskDestructive: true
+            ) == .discard else {
                 return []
             }
         }
@@ -7618,15 +7588,23 @@ final class AppState {
                         activeSessionCount: { [weak self] worktreeId in
                             await MainActor.run {
                                 guard let self else { return 0 }
-                                let ids = self.tabs.tabs(forWorktree: worktreeId).flatMap { tab -> [String] in
+                                // Count every open terminal/ACP session tab, not just
+                                // ones the harness currently reports as busy or
+                                // awaiting input. `HarnessService.summary` filters
+                                // out idle activity — including a session with no
+                                // activity record at all — so a plain shell or an
+                                // idle agent session would read as zero live
+                                // sessions even though `cleanupWorktreeState` closes
+                                // it (and can kill its process) on delete/archive.
+                                // The acceptance criterion is "no active agent OR
+                                // terminal sessions", not "no busy agent sessions".
+                                return self.tabs.tabs(forWorktree: worktreeId).reduce(0) { count, tab in
                                     switch tab {
-                                    case .terminal(let s):   return s.root.leaves().map(\.sessionId)
-                                    case .acpSession(let s): return [s.sessionId]
-                                    default:                 return []
+                                    case .terminal(let s):   return count + s.root.leaves().count
+                                    case .acpSession:        return count + 1
+                                    default:                 return count
                                     }
                                 }
-                                guard let summary = self.harness.summary(forSessionIds: ids) else { return 0 }
-                                return summary.sessions.count
                             }
                         },
                         operationInFlight: { [weak self] worktreeId in
@@ -8373,6 +8351,39 @@ final class AppState {
         case save
         case discard
         case cancel
+    }
+
+    private enum DirtyBufferBatchChoice {
+        case discard
+        case cancel
+    }
+
+    /// Two-choice variant of `promptForDirtyBuffers` for batch actions. The
+    /// single-item flow can offer a truthful "Save & <action>" button because
+    /// it saves that one worktree before proceeding; a batch has no such step
+    /// wired in, so offering the same button and then neither saving nor
+    /// acting on it would make the button lie about what it does. This asks
+    /// the user to save manually and retry instead.
+    private func promptForDirtyBuffersInBatch(
+        action: String,
+        worktreeCount: Int,
+        dirtyCount: Int,
+        onDiskDestructive: Bool
+    ) -> DirtyBufferBatchChoice {
+        let alert = NSAlert()
+        alert.messageText = "\(action) \(worktreeCount) \(worktreeCount == 1 ? "worktree" : "worktrees")?"
+        let countSentence = dirtyCount == 1
+            ? "1 file has unsaved changes."
+            : "\(dirtyCount) files have unsaved changes."
+        let actionSentence = onDiskDestructive
+            ? "Save it first, then retry — \(action.lowercased())ing will discard it along with the worktree's files."
+            : "Save it first, then retry — the worktree stays on disk, but its open tabs will close."
+        alert.informativeText = "\(countSentence) \(actionSentence)"
+        alert.alertStyle = .warning
+        let discardButton = alert.addButton(withTitle: "Discard & \(action)")
+        alert.addButton(withTitle: "Cancel")
+        discardButton.hasDestructiveAction = true
+        return alert.runModal() == .alertFirstButtonReturn ? .discard : .cancel
     }
 
     /// Returns the editor tabs in this worktree whose buffers have unsaved
