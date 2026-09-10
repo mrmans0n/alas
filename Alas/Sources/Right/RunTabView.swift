@@ -105,8 +105,13 @@ struct RunTabView: View {
         case .stop:
             state.stopScript(staleScript, in: worktree)
         case .restart:
+            let stoppedRunID = state.runRecords.record(worktreeID: worktree.id, scriptKey: staleScript.key)?.id
             state.stopScript(staleScript, in: worktree)
             let script = await freshScript(matching: staleScript) ?? staleScript
+            if let stoppedRunID,
+               state.runRecords.record(worktreeID: worktree.id, scriptKey: staleScript.key)?.id != stoppedRunID {
+                return
+            }
             state.restartScript(script, in: worktree)
         case .openTerminal:
             state.focusScriptTerminal(staleScript, in: worktree)

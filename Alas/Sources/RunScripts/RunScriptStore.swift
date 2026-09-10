@@ -13,6 +13,17 @@ enum RunScriptStore {
         case failed(String)
     }
 
+    enum RemoteProbeError: LocalizedError {
+        case executableProbeFailed(path: String, status: Int32)
+
+        var errorDescription: String? {
+            switch self {
+            case let .executableProbeFailed(path, status):
+                "Could not determine whether remote script is executable: \(path) (exit \(status))"
+            }
+        }
+    }
+
     static func repoScriptsDir(worktreeRoot: URL) -> URL {
         worktreeRoot.appendingPathComponent(repoScriptsRelativeDir, isDirectory: true)
     }
@@ -91,7 +102,7 @@ enum RunScriptStore {
         var scripts: [RunScript] = []
         for entry in entries where !entry.isDirectory && !entry.name.hasPrefix(".") {
             let url = directory.appendingPathComponent(entry.name)
-            guard let data = try? await RemoteFileAccess.readPrefix(
+            guard let data = try await RemoteFileAccess.readPrefix(
                 host: host,
                 path: url.path,
                 maxBytes: headerReadLimit
@@ -99,7 +110,7 @@ enum RunScriptStore {
                 continue
             }
             let header = String(decoding: data, as: UTF8.self)
-            let isExecutable = await isRemoteExecutable(host: host, path: url.path)
+            let isExecutable = try await isRemoteExecutable(host: host, path: url.path)
             scripts.append(script(
                 scope: .repo,
                 fileName: entry.name,
@@ -132,12 +143,17 @@ enum RunScriptStore {
         }
     }
 
-    private static func isRemoteExecutable(host: String, path: String) async -> Bool {
+    private static func isRemoteExecutable(host: String, path: String) async throws -> Bool {
         let command = "test -x \(SSHCommand.shellQuote(path))"
-        guard let result = try? await RemoteExec.run(host: host, cwd: nil, command: command, timeout: 5) else {
+        let result = try await RemoteExec.run(host: host, cwd: nil, command: command, timeout: 5)
+        switch result.exitCode {
+        case 0:
+            return true
+        case 1:
             return false
+        default:
+            throw RemoteProbeError.executableProbeFailed(path: path, status: result.exitCode)
         }
-        return result.exitCode == 0
     }
 
     static func script(

@@ -24,9 +24,21 @@ enum RunEndpointPolicy {
         if let zoneSeparator = normalized.firstIndex(of: "%") {
             normalized = String(normalized[..<zoneSeparator])
         }
+        if isIPv6LoopbackLiteral(normalized) { return true }
         if isIPv4MappedIPv6LoopbackLiteral(normalized) { return true }
         if isIPv4LoopbackLiteral(normalized) { return true }
         return loopbackHosts.contains(normalized)
+    }
+
+    private static func isIPv6LoopbackLiteral(_ host: String) -> Bool {
+        var address = in6_addr()
+        guard inet_pton(AF_INET6, host, &address) == 1 else {
+            return false
+        }
+        let bytes = withUnsafeBytes(of: &address) { Array($0) }
+        return bytes.count == 16
+            && bytes[0..<15].allSatisfy { $0 == 0 }
+            && bytes[15] == 1
     }
 
     private static func isIPv4MappedIPv6LoopbackLiteral(_ host: String) -> Bool {
