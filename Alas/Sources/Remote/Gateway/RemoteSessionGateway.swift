@@ -183,9 +183,9 @@ final class RemoteSessionGateway {
                     if refusalIsSynchronous { self.discardAttachmentFiles(materialized) }
                 }
             }
-            // "steer" cancels the running turn and discards the queue before
-            // sending; "auto" (the default, and everything an older client
-            // sends) takes the ordinary enqueue-or-send route.
+            // "steer" cancels the running turn and sends immediately while
+            // preserving the queue; "auto" (the default, and everything an
+            // older client sends) takes the ordinary enqueue-or-send route.
             if intent == "steer" {
                 await provider.steerPrompt(for: id, text: trimmed, attachments: materialized, onResult: onResult)
             } else {

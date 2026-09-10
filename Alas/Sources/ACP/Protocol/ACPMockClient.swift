@@ -8,6 +8,7 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
     private var scripts: [String: (ACPRequest) throws -> Data] = [:]
     private var asyncScripts: [String: (ACPRequest) async throws -> Data] = [:]
     private var responseScripts: [String: (ACPRequest) async throws -> ACPResponse] = [:]
+    private var notificationAsyncScripts: [String: (ACPRequest) async throws -> Void] = [:]
     private let updatesCont: AsyncStream<ACPSessionUpdateParams>.Continuation
     private let permsCont: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>.Continuation
     private let questionsCont: AsyncStream<ACPQuestionRequest>.Continuation
@@ -79,6 +80,9 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
     /// order) without needing to script a reply.
     func notify(_ request: ACPRequest) async throws {
         sent.append(request)
+        if let script = notificationAsyncScripts[request.method] {
+            try await script(request)
+        }
     }
 
     func emit(_ update: ACPSessionUpdateParams) {
@@ -133,6 +137,10 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
 
     func scriptAsync(method: String, _ handler: @escaping (ACPRequest) async throws -> Data) {
         asyncScripts[method] = handler
+    }
+
+    func scriptNotifyAsync(method: String, _ handler: @escaping (ACPRequest) async throws -> Void) {
+        notificationAsyncScripts[method] = handler
     }
 
     func shutdown() async {
