@@ -60,12 +60,15 @@ struct ACPComposerActionButton: View {
             Menu {
                 let now = Date()
                 ForEach(ACPSchedulePreset.allCases) { preset in
-                    if let date = preset.date(after: now) {
-                        Button(preset.title) { onSchedule(date) }
+                    if preset.date(after: now) != nil {
+                        Button(preset.title) {
+                            if let date = preset.date(after: Date()) { onSchedule(date) }
+                        }
                     }
                 }
                 Divider()
                 Button("Custom date and time…") {
+                    let now = Date()
                     customScheduleDate = ACPSchedulePreset.laterToday.date(after: now)
                         ?? ACPSchedulePreset.tomorrowMorning.date(after: now)!
                     showsCustomSchedule = true

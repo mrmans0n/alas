@@ -352,6 +352,21 @@ struct ACPSessionQueueAPITests {
         #expect(s.queue[1].blocks == [.text("existing-pending")])
     }
 
+    @Test("restorePendingSnapshot keeps restored schedules behind normal prompts")
+    func restoreSnapshotKeepsSchedulesBehindNormalPrompts() {
+        let s = mkSession()
+        s.enqueue(blocks: [.text("queued while undo was available")])
+
+        s.restorePendingSnapshot([
+            QueuedPrompt(blocks: [.text("restored schedule")], scheduledAt: .distantFuture),
+        ])
+
+        #expect(s.queue.map(\.blocks) == [
+            [.text("queued while undo was available")],
+            [.text("restored schedule")],
+        ])
+    }
+
     @Test("enqueue(blocks:draft:) stores the structured draft on the item")
     func enqueueWithDraft() {
         let s = mkSession()

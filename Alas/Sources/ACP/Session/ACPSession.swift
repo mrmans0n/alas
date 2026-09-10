@@ -1563,7 +1563,14 @@ final class ACPSession: ObservableObject, Identifiable {
     /// item and the `.sending` head would stay stranded in the queue.
     func restorePendingSnapshot(_ snapshot: [QueuedPrompt]) {
         let insertAt = (queue.first?.status == .sending) ? 1 : 0
-        queue.insert(contentsOf: snapshot, at: insertAt)
+        queue.insert(contentsOf: snapshot.filter { $0.scheduledAt == nil }, at: insertAt)
+        for item in snapshot {
+            guard let scheduledAt = item.scheduledAt else { continue }
+            let index = queue.firstIndex {
+                $0.status == .pending && ($0.scheduledAt.map { $0 > scheduledAt } ?? false)
+            } ?? queue.endIndex
+            queue.insert(item, at: index)
+        }
     }
 
     /// Number of pending queue items. The transcript UI may render additional
