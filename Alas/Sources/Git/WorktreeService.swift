@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 
 struct WorktreeDeletePreflight: Equatable {
@@ -783,6 +784,176 @@ struct WorktreeService {
         }
     }
 
+    func removeFastLocal(
+        repoPath: URL,
+        worktree: Worktree,
+        deleteBranchIfMerged: Bool,
+        force: Bool = false,
+        usesRemoteHostRegistry: Bool = true,
+        moveItem: @Sendable (URL, URL) throws -> Void = {
+            try WorktreeService.renameAtomically(from: $0, to: $1)
+        }
+    ) async throws -> WorktreeRemovalOutcome {
+        if repoPath.isRemoteAlasPath || worktree.path.isRemoteAlasPath {
+            try await remove(
+                repoPath: repoPath,
+                worktree: worktree,
+                deleteBranchIfMerged: deleteBranchIfMerged,
+                force: force,
+                usesRemoteHostRegistry: usesRemoteHostRegistry
+            )
+            return .synchronous
+        }
+
+        let registrations = try await Process.git(
+            ["worktree", "list", "--porcelain"],
+            cwd: repoPath,
+            usesRemoteHostRegistry: false
+        )
+        guard registrations.exitCode == 0 else {
+            throw WorktreeError.gitFailed(registrations.stderr)
+        }
+        let registration = Self.registrationState(
+            in: registrations.stdout,
+            matching: worktree.path
+        )
+        guard registration.isPresent else {
+            throw WorktreeError.gitFailed("Worktree registration was not found.")
+        }
+
+        var auditedMissingLFS = false
+        if !force {
+            do {
+                guard try await isWorktreeClean(
+                    worktree.path,
+                    usesRemoteHostRegistry: false
+                ) else {
+                    throw WorktreeError.gitFailed("Worktree contains modified or untracked files.")
+                }
+            } catch let error as WorktreeError {
+                guard case .gitFailed(let message) = error,
+                      Self.looksLikeMissingLFS(message),
+                      try await canForceRemoveAfterMissingLFS(
+                          worktree.path,
+                          usesRemoteHostRegistry: false
+                      )
+                else { throw error }
+                auditedMissingLFS = true
+            }
+        }
+
+        _ = try? await Process.git(
+            ["fsmonitor--daemon", "stop"],
+            cwd: worktree.path,
+            usesRemoteHostRegistry: false,
+            timeout: 2
+        )
+
+        let ticket: WorktreeTrashCleanupTicket
+        do {
+            let commonDirectoryResult = try await Process.git(
+                ["rev-parse", "--git-common-dir"],
+                cwd: repoPath,
+                usesRemoteHostRegistry: false
+            )
+            guard commonDirectoryResult.exitCode == 0 else {
+                throw WorktreeError.gitFailed(commonDirectoryResult.stderr)
+            }
+            let commonDirectoryOutput = commonDirectoryResult.stdout
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !commonDirectoryOutput.isEmpty else {
+                throw WorktreeError.gitFailed("Git returned an empty common directory.")
+            }
+            let commonDirectory: URL
+            if (commonDirectoryOutput as NSString).isAbsolutePath {
+                commonDirectory = URL(fileURLWithPath: commonDirectoryOutput).standardizedFileURL
+            } else {
+                commonDirectory = repoPath
+                    .appendingPathComponent(commonDirectoryOutput)
+                    .standardizedFileURL
+            }
+            ticket = WorktreeTrash.makeTicket(
+                commonGitDirectory: commonDirectory,
+                originalPath: worktree.path
+            )
+            try FileManager.default.createDirectory(
+                at: ticket.trashRoot,
+                withIntermediateDirectories: true
+            )
+            try moveItem(worktree.path, ticket.stagedPath)
+        } catch {
+            try await remove(
+                repoPath: repoPath,
+                worktree: worktree,
+                deleteBranchIfMerged: deleteBranchIfMerged,
+                force: force,
+                forceTwice: registration.isLocked && force,
+                usesRemoteHostRegistry: false
+            )
+            return .synchronous
+        }
+
+        func failAfterRollingBack(_ registryMessage: String) throws -> Never {
+            do {
+                try moveItem(ticket.stagedPath, worktree.path)
+            } catch {
+                let gitMessage = registryMessage
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let stagedPath = Self.resolvedFileSystemPath(ticket.stagedPath)
+                throw WorktreeError.gitFailed(
+                    "Failed to remove Git registration for \(worktree.path.path); "
+                        + "staged files remain at \(stagedPath). "
+                        + "Git: \(gitMessage). Rollback: \(error.localizedDescription)"
+                )
+            }
+            throw WorktreeError.gitFailed(registryMessage)
+        }
+
+        var removeArgs = ["worktree", "remove", worktree.path.path]
+        if registration.isLocked && force {
+            removeArgs.append(contentsOf: ["--force", "--force"])
+        } else if force || auditedMissingLFS {
+            removeArgs.append("--force")
+        }
+        let initialRemoveArgs = auditedMissingLFS
+            ? Self.lfsFilterOverride + removeArgs
+            : removeArgs
+        let removeResult: ProcessResult
+        do {
+            var result = try await Process.git(
+                initialRemoveArgs,
+                cwd: repoPath,
+                usesRemoteHostRegistry: false,
+                timeout: 90
+            )
+            if result.exitCode != 0,
+               !auditedMissingLFS,
+               Self.looksLikeMissingLFS(result.stderr) {
+                result = try await Process.git(
+                    Self.lfsFilterOverride + removeArgs,
+                    cwd: repoPath,
+                    usesRemoteHostRegistry: false,
+                    timeout: 90
+                )
+            }
+            removeResult = result
+        } catch {
+            try failAfterRollingBack(error.localizedDescription)
+        }
+        if removeResult.exitCode != 0 {
+            try failAfterRollingBack(removeResult.stderr)
+        }
+
+        if deleteBranchIfMerged && worktree.branch != "(detached)" {
+            _ = try? await Process.git(
+                ["branch", "-d", worktree.branch],
+                cwd: repoPath,
+                usesRemoteHostRegistry: false
+            )
+        }
+        return .staged(ticket)
+    }
+
     func deletePreflight(
         worktreePath: URL,
         usesRemoteHostRegistry: Bool = true
@@ -879,6 +1050,54 @@ struct WorktreeService {
     }
 
     // MARK: - Helpers
+
+    private static func renameAtomically(from source: URL, to destination: URL) throws {
+        let result: (status: Int32, error: Int32) = source.withUnsafeFileSystemRepresentation { sourcePath in
+            destination.withUnsafeFileSystemRepresentation { destinationPath in
+                guard let sourcePath, let destinationPath else { return (-1, EINVAL) }
+                let status = Darwin.rename(sourcePath, destinationPath)
+                return (status, status == 0 ? 0 : errno)
+            }
+        }
+        guard result.status == 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(result.error))
+        }
+    }
+
+    private static func resolvedFileSystemPath(_ url: URL) -> String {
+        url.withUnsafeFileSystemRepresentation { path in
+            guard let path, let resolved = Darwin.realpath(path, nil) else { return url.path }
+            defer { Darwin.free(resolved) }
+            return String(cString: resolved)
+        }
+    }
+
+    private static func registrationState(
+        in porcelain: String,
+        matching worktreePath: URL
+    ) -> (isPresent: Bool, isLocked: Bool) {
+        let target = worktreePath.standardizedFileURL.path
+        var currentPath: String?
+        var currentLocked = false
+
+        func currentMatch() -> (isPresent: Bool, isLocked: Bool)? {
+            guard let currentPath,
+                  URL(fileURLWithPath: currentPath).standardizedFileURL.path == target
+            else { return nil }
+            return (true, currentLocked)
+        }
+
+        for line in porcelain.split(separator: "\n") {
+            if line.hasPrefix("worktree ") {
+                if let match = currentMatch() { return match }
+                currentPath = String(line.dropFirst("worktree ".count))
+                currentLocked = false
+            } else if line.hasPrefix("locked") {
+                currentLocked = true
+            }
+        }
+        return currentMatch() ?? (false, false)
+    }
 
     private static let lfsFilterOverride = [
         "-c", "filter.lfs.process=",
