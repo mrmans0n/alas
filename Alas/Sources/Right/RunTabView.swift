@@ -64,6 +64,12 @@ struct RunTabView: View {
                 script: script,
                 record: state.runRecords.record(worktreeID: worktree.id, scriptKey: script.key),
                 hasTerminal: state.runningScriptTab(for: script, in: worktree) != nil,
+                hasCapturedOutput: state.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)
+                    .flatMap { record in
+                        record.failureID.map { failureID in
+                            state.runScriptFailures(in: worktree.id).contains { $0.id == failureID }
+                        }
+                    } ?? false,
                 target: state.runExecutionTarget(for: script, in: worktree)
             ),
             now: now
@@ -73,7 +79,11 @@ struct RunTabView: View {
     private func perform(_ action: RunRowAction, script: RunScript) {
         switch action {
         case .start:
-            state.runOrFocusScript(script, in: worktree)
+            if case .finished? = state.runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status {
+                state.restartScript(script, in: worktree)
+            } else {
+                state.runOrFocusScript(script, in: worktree)
+            }
         case .stop:
             state.stopScript(script, in: worktree)
         case .restart:

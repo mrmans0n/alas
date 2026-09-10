@@ -281,6 +281,12 @@ extension AppState {
     /// is marked stopped *before* the close so the monitor-cancellation path
     /// can't relabel a deliberate stop as a lost process.
     func stopScript(_ script: RunScript, in worktree: Worktree) {
+        let launchKey = "\(worktree.id):\(script.key)"
+        if let pendingLaunch = pendingScriptLaunches.removeValue(forKey: launchKey) {
+            runRecords.markStopped(worktreeID: worktree.id, scriptKey: script.key, at: Date())
+            pendingLaunch.cancel()
+            return
+        }
         guard let existing = scriptTab(for: script, in: worktree) else {
             // Nothing left to stop: whatever we thought was running is gone,
             // and we never saw it exit.
@@ -364,7 +370,7 @@ extension AppState {
         // and both launch. Close that window with a synchronous in-flight
         // guard instead.
         let launchKey = "\(worktree.id):\(script.key)"
-        guard !pendingScriptLaunches.contains(launchKey) else { return }
+        guard pendingScriptLaunches[launchKey] == nil else { return }
 
         // Global scripts live in local Application Support and are read by
         // path, not content — launching one into a remote worktree would ship
@@ -398,8 +404,6 @@ extension AppState {
             return
         }
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else { return }
-        pendingScriptLaunches.insert(launchKey)
-
         // Claim the slot synchronously, alongside `pendingScriptLaunches`, so
         // the row flips to "Starting" on the same turn the user clicked and a
         // second click can't open a second run behind the first one's back.
@@ -419,8 +423,8 @@ extension AppState {
             portConflict: conflict
         ))
 
-        Task { @MainActor in
-            defer { pendingScriptLaunches.remove(launchKey) }
+        let launchTask = Task { @MainActor in
+            defer { pendingScriptLaunches.removeValue(forKey: launchKey) }
             let captureLocation: RunScriptCaptureLocation
             do {
                 captureLocation = try RunScriptCompletionMonitor.paths(runID: runID, host: project.host)
@@ -440,6 +444,10 @@ extension AppState {
                         titleOverride: script.displayName,
                         runScriptKey: script.key
                     )
+                    if Task.isCancelled {
+                        closeTab(worktreeId: worktree.id, tabId: tab.id)
+                        return
+                    }
                     guard case .terminal(let terminalState) = tab,
                           let sessionID = terminalState.runScriptLeafId
                     else {
@@ -466,12 +474,14 @@ extension AppState {
                     throw error
                 }
             } catch {
+                if Task.isCancelled { return }
                 // The command never started, so the previous outcome is still
                 // the most recent thing we actually observed — put it back.
                 runRecords.rollback(runID: runID, to: displacedRecord)
                 showFileActionError(title: "Run Script Failed", message: error.localizedDescription)
             }
         }
+        pendingScriptLaunches[launchKey] = launchTask
     }
 
     func runScriptFailures(in worktreeID: String) -> [RunScriptFailure] {

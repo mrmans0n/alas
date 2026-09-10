@@ -28,6 +28,8 @@ struct RunRowInput {
     /// shell is not evidence the command is still running — it only decides
     /// whether "jump to terminal" has anywhere to go.
     let hasTerminal: Bool
+    /// Whether the record's captured failure is still retained and can be opened.
+    let hasCapturedOutput: Bool
     let target: RunExecutionTarget
 }
 
@@ -188,7 +190,7 @@ enum RunTabPresentation {
         } else {
             let hasOutcome = if case .finished = status { true } else { false }
             actions.append(.start(label: hasOutcome ? "Rerun" : "Run"))
-            if let failureID = input.record?.failureID {
+            if input.hasCapturedOutput, let failureID = input.record?.failureID {
                 actions.append(.showOutput(failureID: failureID))
             }
         }

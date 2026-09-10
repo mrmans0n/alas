@@ -50,6 +50,7 @@ struct RunTabPresentationTests {
         script: RunScript? = nil,
         record: RunRecord? = nil,
         hasTerminal: Bool = false,
+        hasCapturedOutput: Bool = false,
         host: String? = nil,
         workingDirectory: String = "/wt",
         now: Date? = nil
@@ -59,6 +60,7 @@ struct RunTabPresentationTests {
                 script: script ?? self.script(),
                 record: record,
                 hasTerminal: hasTerminal,
+                hasCapturedOutput: hasCapturedOutput,
                 target: RunExecutionTarget(host: host, workingDirectory: workingDirectory)
             ),
             now: now ?? epoch
@@ -115,14 +117,19 @@ struct RunTabPresentationTests {
             record: record(
                 status: .finished(.failed(exitCode: 42)),
                 finishedAt: epoch.addingTimeInterval(75),
-                failureID: "failure-1"
-            ),
+                failureID: "failure-1"),
+            hasCapturedOutput: true,
             now: epoch.addingTimeInterval(75 + 3_600)
         )
         #expect(row.statusLabel == "Failed")
         #expect(row.tone == .failure)
         #expect(row.detail == "exit 42 · 1m 15s · 1h ago")
         #expect(row.actions == [.start(label: "Rerun"), .showOutput(failureID: "failure-1"), .edit])
+    }
+
+    @Test func failedRunWithoutRetainedOutputDoesNotOfferDeadOutputAction() {
+        let row = row(record: record(status: .finished(.failed(exitCode: 42)), failureID: "gone"))
+        #expect(row.actions == [.start(label: "Rerun"), .edit])
     }
 
     @Test func succeededRunReportsDurationWithoutClaimingVerification() {

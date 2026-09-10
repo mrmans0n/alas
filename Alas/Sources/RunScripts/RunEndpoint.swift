@@ -17,7 +17,9 @@ enum RunEndpointPolicy {
 
     static func isLoopback(_ url: URL) -> Bool {
         guard let host = url.host?.lowercased() else { return false }
-        return loopbackHosts.contains(host.trimmingCharacters(in: CharacterSet(charactersIn: "[]")))
+        let normalized = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        if normalized.split(separator: ".").first == "127" { return true }
+        return loopbackHosts.contains(normalized)
     }
 
     static func action(for url: URL, target: RunExecutionTarget) -> RunEndpointAction {
