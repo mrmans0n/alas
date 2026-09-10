@@ -6531,10 +6531,20 @@ final class AppState {
     }
 
     private func retainedScheduledSessionStillNeedsRunner(manager: ACPSessionManager, sessionId: ACPSession.ID) -> Bool {
-        guard let session = manager.liveSession(for: sessionId) else { return false }
-        return session.queue.contains { item in
-            item.status == .sending || (item.status == .pending && item.scheduledAt != nil && item.lastError == nil)
+        retainedScheduledSessionCleanupDelay(manager: manager, sessionId: sessionId) != nil
+    }
+
+    private func retainedScheduledSessionCleanupDelay(manager: ACPSessionManager, sessionId: ACPSession.ID) -> Duration? {
+        guard let session = manager.liveSession(for: sessionId) else { return nil }
+        if session.queue.contains(where: { $0.status == .sending && $0.scheduledAt != nil }) {
+            return .milliseconds(250)
         }
+        let nextScheduledAt = session.queue.compactMap { item -> Date? in
+            guard item.status == .pending, item.lastError == nil else { return nil }
+            return item.scheduledAt
+        }.min()
+        guard let nextScheduledAt else { return nil }
+        return .seconds(max(0, nextScheduledAt.timeIntervalSinceNow))
     }
 
     private func scheduleRetainedACPSessionCleanup(owner: SessionOwnerID, sessionId: ACPSession.ID) {
@@ -6548,13 +6558,13 @@ final class AppState {
                     self.clearRetainedACPSessionCleanup(worktreeId: key, sessionId: sessionId, id: id)
                     return
                 }
-                if !self.retainedScheduledSessionStillNeedsRunner(manager: manager, sessionId: sessionId) {
+                guard let delay = self.retainedScheduledSessionCleanupDelay(manager: manager, sessionId: sessionId) else {
                     self.clearRetainedACPSessionCleanup(worktreeId: key, sessionId: sessionId, id: id)
                     self.cleanupACPSession(owner: owner, sessionId: sessionId)
                     return
                 }
                 do {
-                    try await Task.sleep(for: .milliseconds(250))
+                    try await Task.sleep(for: delay)
                 } catch {
                     return
                 }
