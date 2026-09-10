@@ -362,6 +362,45 @@ struct ClosedTabAppStateTests {
         )
     }
 
+    @Test func openExistingACPSessionCancelsRetainedCleanup() async throws {
+        let fixture = makeFixture()
+        fixture.state.selectWorktree(id: fixture.first.id)
+        let manager = try #require(fixture.state.acpManager(for: fixture.first))
+        let session = manager.createSession(id: "reopen-scheduled-close", agentId: "claude")
+        session.agentState = .ready
+        session.enqueueScheduled(blocks: [.text("later")], scheduledAt: Date().addingTimeInterval(60))
+        let tab = fixture.state.tabs.append(
+            acpSession: ACPSessionTabState(sessionId: session.id, title: "Closed chat"),
+            to: fixture.first.id
+        )
+        fixture.state.requestCloseTab(worktreeId: fixture.first.id, tabId: tab.id)
+        #expect(fixture.state.retainedACPSessionCleanupCountForTesting == 1)
+
+        await fixture.state.openExistingACPSession(sessionId: session.id)
+
+        #expect(fixture.state.retainedACPSessionCleanupCountForTesting == 0)
+    }
+
+    @Test func openExistingOwnedACPSessionCancelsRetainedCleanup() async throws {
+        let fixture = makeFixture()
+        let owner = SessionOwnerID.worktree(fixture.first.id)
+        _ = fixture.state.acpManager(for: fixture.first)
+        let manager = try #require(fixture.state.acpManager(for: owner))
+        let session = manager.createSession(id: "reopen-owned-scheduled-close", agentId: "claude")
+        session.agentState = .ready
+        session.enqueueScheduled(blocks: [.text("later")], scheduledAt: Date().addingTimeInterval(60))
+        let tab = fixture.state.tabs.append(
+            acpSession: ACPSessionTabState(sessionId: session.id, title: "Closed chat"),
+            to: owner
+        )
+        fixture.state.requestCloseTab(worktreeId: fixture.first.id, tabId: tab.id)
+        #expect(fixture.state.retainedACPSessionCleanupCountForTesting == 1)
+
+        await fixture.state.openExistingACPSession(sessionId: session.id, owner: owner)
+
+        #expect(fixture.state.retainedACPSessionCleanupCountForTesting == 0)
+    }
+
     @Test func closedACPSessionWithFailedQueueHeadDetachesImmediately() async throws {
         let gate = AsyncGate()
         let state = AppState(

@@ -9189,6 +9189,7 @@ final class AppState {
         guard let worktreeId = selectedWorktreeId,
               let worktree = worktree(withId: worktreeId) else { return }
         guard let mgr = acpManager(for: worktree) else { return }
+        cancelRetainedACPSessionCleanup(owner: .worktree(worktree.id), sessionId: sessionId)
 
         // Focus the tab if it's already there.
         let tabIdToFocus: TabID? = tabs.tabs(forWorktree: worktree.id).compactMap { tab -> TabID? in
@@ -9222,6 +9223,7 @@ final class AppState {
     /// their database, tabs, and lifecycle are tied to the checkout owner.
     func openExistingACPSession(sessionId: ACPSession.ID, owner: SessionOwnerID) async {
         guard let mgr = acpManager(for: owner) else { return }
+        cancelRetainedACPSessionCleanup(owner: owner, sessionId: sessionId)
 
         let tabIdToFocus: TabID? = tabs.tabs(for: owner).compactMap { tab -> TabID? in
             if case .acpSession(let state) = tab, state.sessionId == sessionId { return tab.id }
