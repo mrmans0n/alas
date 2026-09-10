@@ -144,7 +144,7 @@ struct WorktreeCleanupModelTests {
             scan: { .success([a, b]) },
             deleteBatch: { _, _ in [] },
             archiveBatch: { _ in [] },
-            confirm: { _, _ in true }
+            confirm: { _, _, _ in true }
         )
         await model.runScan()
         #expect(model.selectedIds == ["/tmp/wt-a", "/tmp/wt-b"])
@@ -154,6 +154,89 @@ struct WorktreeCleanupModelTests {
 
         await model.runScan()       // a real rescan through the public API
         #expect(model.selectedIds == ["/tmp/wt-b"])
+    }
+
+    /// Bulk archive tears down tabs, terminals and agent sessions that are not
+    /// recreated on restore, so it must prompt exactly like bulk delete does.
+    @Test func archiveSelectedIsGatedOnConfirmation() async {
+        let a = candidate(branch: "a", verdict: .candidate(confidence: .high))
+        var confirmCalls: [(title: String, message: String, button: String)] = []
+        var archiveBatchCalls = 0
+        let model = WorktreeCleanupModel(
+            projectId: "p",
+            keepBranches: false,
+            scan: { .success([a]) },
+            deleteBatch: { _, _ in [] },
+            archiveBatch: { worktrees in
+                archiveBatchCalls += 1
+                return worktrees.map {
+                    WorktreeBatchResult(worktreeId: $0.id, branch: $0.branch, outcome: .archived)
+                }
+            },
+            confirm: { title, message, button in
+                confirmCalls.append((title, message, button))
+                return false   // decline — nothing should archive
+            }
+        )
+        model.applyScanResult([a])
+
+        await model.archiveSelected()
+
+        #expect(confirmCalls.count == 1)
+        #expect(confirmCalls[0].title.contains("Archive"))
+        #expect(confirmCalls[0].message.contains("a"))
+        #expect(confirmCalls[0].button == "Archive")
+        #expect(archiveBatchCalls == 0)
+        #expect(model.results.isEmpty)
+    }
+
+    @Test func archiveSelectedProceedsWhenConfirmed() async {
+        let a = candidate(branch: "a", verdict: .candidate(confidence: .high))
+        var archiveBatchCalls = 0
+        let model = WorktreeCleanupModel(
+            projectId: "p",
+            keepBranches: false,
+            scan: { .success([a]) },
+            deleteBatch: { _, _ in [] },
+            archiveBatch: { worktrees in
+                archiveBatchCalls += 1
+                return worktrees.map {
+                    WorktreeBatchResult(worktreeId: $0.id, branch: $0.branch, outcome: .archived)
+                }
+            },
+            confirm: { _, _, _ in true }
+        )
+        model.applyScanResult([a])
+
+        await model.archiveSelected()
+
+        #expect(archiveBatchCalls == 1)
+    }
+
+    @Test func deleteSelectedIsGatedOnConfirmation() async {
+        let a = candidate(branch: "a", verdict: .candidate(confidence: .high))
+        var deleteBatchCalls = 0
+        var confirmButtons: [String] = []
+        let model = WorktreeCleanupModel(
+            projectId: "p",
+            keepBranches: false,
+            scan: { .success([a]) },
+            deleteBatch: { _, _ in
+                deleteBatchCalls += 1
+                return []
+            },
+            archiveBatch: { _ in [] },
+            confirm: { _, _, button in
+                confirmButtons.append(button)
+                return false
+            }
+        )
+        model.applyScanResult([a])
+
+        await model.deleteSelected()
+
+        #expect(confirmButtons == ["Delete"])
+        #expect(deleteBatchCalls == 0)
     }
 
     @Test func selectedWorktreesFollowsDisplayOrder() {

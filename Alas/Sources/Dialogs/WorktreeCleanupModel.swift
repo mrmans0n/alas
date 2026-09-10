@@ -28,7 +28,10 @@ final class WorktreeCleanupModel {
     private let scan: @Sendable () async -> Result<[WorktreeCleanupCandidate], Error>
     private let deleteBatch: ([Worktree], Bool) async -> [WorktreeBatchResult]
     private let archiveBatch: ([Worktree]) -> [WorktreeBatchResult]
-    private let confirm: (String, String) -> Bool
+    /// `(title, message, confirmButtonTitle) -> confirmed`. The button title is
+    /// passed in because both destructive batch actions route through the same
+    /// prompt, and an archive confirmation must not offer a "Delete" button.
+    private let confirm: (String, String, String) -> Bool
     /// Tracks whether a scan has ever completed, independent of the transient
     /// `.scanning` state — `applyScanResult` uses this, not `scanState`, to
     /// decide whether to reconcile against a manual selection or seed the
@@ -42,7 +45,7 @@ final class WorktreeCleanupModel {
         scan: @escaping @Sendable () async -> Result<[WorktreeCleanupCandidate], Error>,
         deleteBatch: @escaping ([Worktree], Bool) async -> [WorktreeBatchResult],
         archiveBatch: @escaping ([Worktree]) -> [WorktreeBatchResult],
-        confirm: @escaping (String, String) -> Bool
+        confirm: @escaping (String, String, String) -> Bool
     ) {
         self.projectId = projectId
         self.keepBranches = keepBranches
@@ -134,12 +137,29 @@ final class WorktreeCleanupModel {
         """
     }
 
+    /// Archive-flavoured counterpart to `confirmationMessage()`: nothing is
+    /// removed from disk and no branch policy applies, but the tabs, terminals
+    /// and agent sessions of every archived worktree are torn down and are not
+    /// recreated when it is restored.
+    func archiveConfirmationMessage() -> String {
+        let branches = selectedWorktrees().map(\.branch)
+        let list = branches.map { "• \($0)" }.joined(separator: "\n")
+        return """
+        These worktrees will be hidden from the sidebar. Their files stay on \
+        disk and can be restored later, but open terminals and agent sessions \
+        will be closed:
+
+        \(list)
+        """
+    }
+
     func deleteSelected() async {
         let targets = selectedWorktrees()
         guard !targets.isEmpty, !isRunning else { return }
         guard confirm(
             "Delete \(targets.count) \(targets.count == 1 ? "worktree" : "worktrees")?",
-            confirmationMessage()
+            confirmationMessage(),
+            "Delete"
         ) else { return }
 
         isRunning = true
@@ -151,6 +171,12 @@ final class WorktreeCleanupModel {
     func archiveSelected() async {
         let targets = selectedWorktrees()
         guard !targets.isEmpty, !isRunning else { return }
+        guard confirm(
+            "Archive \(targets.count) \(targets.count == 1 ? "worktree" : "worktrees")?",
+            archiveConfirmationMessage(),
+            "Archive"
+        ) else { return }
+
         isRunning = true
         results = archiveBatch(targets)
         isRunning = false
@@ -190,7 +216,7 @@ extension WorktreeCleanupModel {
             scan: { .success(candidates) },
             deleteBatch: { _, _ in [] },
             archiveBatch: { _ in [] },
-            confirm: { _, _ in true }
+            confirm: { _, _, _ in true }
         )
         model.applyScanResult(candidates)
         return model

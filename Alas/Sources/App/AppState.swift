@@ -7561,14 +7561,14 @@ final class AppState {
             archiveBatch: { [weak self] worktrees in
                 self?.batchArchiveWorktrees(worktrees) ?? []
             },
-            confirm: { title, message in
+            confirm: { title, message, confirmButtonTitle in
                 let alert = NSAlert()
                 alert.messageText = title
                 alert.informativeText = message
                 alert.alertStyle = .warning
-                let deleteButton = alert.addButton(withTitle: "Delete")
+                let confirmButton = alert.addButton(withTitle: confirmButtonTitle)
                 alert.addButton(withTitle: "Cancel")
-                deleteButton.hasDestructiveAction = true
+                confirmButton.hasDestructiveAction = true
                 return alert.runModal() == .alertFirstButtonReturn
             }
         )
