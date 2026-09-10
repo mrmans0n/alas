@@ -174,6 +174,10 @@ final class ACPSessionManager: ObservableObject {
         runners[id]?.hasRetainedCleanupPromptWork == true
     }
 
+    func retainedCleanupHasSteerWork(for id: ACPSession.ID) -> Bool {
+        runners[id]?.hasRetainedCleanupSteerWork == true
+    }
+
     func retainedCleanupHasForkBarrierWork(for id: ACPSession.ID) -> Bool {
         runners[id]?.hasRetainedCleanupForkBarrierWork == true
     }

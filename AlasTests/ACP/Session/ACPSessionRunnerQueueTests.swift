@@ -528,6 +528,7 @@ struct ACPSessionRunnerQueueTests {
         runner.persistQueue()
 
         runner.forceSendQueuedItem(id: selectedId)
+        #expect(runner.hasRetainedCleanupSteerWork)
         try await Task.sleep(nanoseconds: 250_000_000)
 
         #expect(mock.sent.contains { $0.method == "session/cancel" })

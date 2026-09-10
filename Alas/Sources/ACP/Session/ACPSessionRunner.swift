@@ -1726,6 +1726,10 @@ extension ACPSessionRunner {
             || (session.pendingQueuePersistenceCount > 0 && !session.queue.isEmpty)
     }
 
+    var hasRetainedCleanupSteerWork: Bool {
+        steerInProgress
+    }
+
     var hasRetainedCleanupForkBarrierWork: Bool {
         nativeForkBarrierActive
     }

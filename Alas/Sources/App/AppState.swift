@@ -6625,6 +6625,9 @@ final class AppState {
         if hasForcedQueueWork, manager.retainedCleanupHasActivePromptWork(for: sessionId) {
             return activePromptCleanupDelay
         }
+        if manager.retainedCleanupHasSteerWork(for: sessionId) {
+            return activePromptCleanupDelay
+        }
         if manager.retainedCleanupHasForkBarrierWork(for: sessionId) {
             return .seconds(30)
         }
