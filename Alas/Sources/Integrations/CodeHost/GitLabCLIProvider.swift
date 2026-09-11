@@ -17,6 +17,69 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         self.runner = runner
     }
 
+    func mergedReviewRequests(
+        remote: CodeHostRemote,
+        limit: Int,
+        cwd: URL
+    ) async throws -> [MergedReviewRequestRef] {
+        let result = try await runner.run(
+            "glab",
+            args: [
+                // glab spells this `--merged`; there is no `--state` flag on
+                // `mr list` (verified against `glab mr list --help`).
+                "mr", "list",
+                "--merged",
+                "--per-page", "\(limit)",
+                "--output", "json",
+                "-R", remote.repositorySlug,
+            ],
+            cwd: cwd
+        )
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(
+                command: "glab mr list",
+                stderr: result.stderr
+            )
+        }
+        return try Self.parseMergedMRList(result.stdout)
+    }
+
+    static func parseMergedMRList(_ json: String) throws -> [MergedReviewRequestRef] {
+        struct Item: Decodable {
+            let iid: Int
+            let sourceBranch: String
+            let webURL: URL
+            // GitLab's merge request objects carry `sha`: the SHA of the
+            // most recent commit on the source branch as of the MR. `glab
+            // mr list --output json` has no field-selection flag, so this
+            // is already present in the full object without extra args.
+            let sha: String
+
+            enum CodingKeys: String, CodingKey {
+                case iid
+                case sourceBranch = "source_branch"
+                case webURL = "web_url"
+                case sha
+            }
+        }
+        do {
+            return try JSONDecoder()
+                .decode([Item].self, from: Data(json.utf8))
+                .map {
+                    MergedReviewRequestRef(
+                        number: $0.iid,
+                        headRefName: $0.sourceBranch,
+                        url: $0.webURL,
+                        headSHA: $0.sha
+                    )
+                }
+        } catch {
+            throw CodeHostProviderError.malformedOutput(
+                "Unable to parse glab mr list output"
+            )
+        }
+    }
+
     func isAvailable(cwd: URL) async -> Bool {
         do {
             let result = try await runner.run("glab", args: ["--version"], cwd: cwd)

@@ -243,6 +243,15 @@ protocol CodeHostProvider: Sendable {
 
     func publishReview(_ request: ProviderReviewPublishRequest) async throws -> ProviderReviewPublishResult
     func mutateReviewThread(_ mutation: ProviderThreadMutation) async throws -> ProviderThreadMutationResult
+
+    /// Merged review requests for the repository, newest first, in one batched
+    /// query. Cleanup needs the whole set at once; asking per branch would be
+    /// one network round-trip per worktree.
+    func mergedReviewRequests(
+        remote: CodeHostRemote,
+        limit: Int,
+        cwd: URL
+    ) async throws -> [MergedReviewRequestRef]
 }
 
 extension CodeHostProvider {
@@ -433,6 +442,17 @@ extension CodeHostProvider {
 
     func mutateReviewThread(_ mutation: ProviderThreadMutation) async throws -> ProviderThreadMutationResult {
         throw CodeHostProviderError.unsupportedProvider(kind)
+    }
+
+    // Throwing rather than returning `[]` is deliberate: an empty list is
+    // indistinguishable from "nothing is merged", and the scanner must be able
+    // to tell those apart so it can report `unknown`.
+    func mergedReviewRequests(
+        remote: CodeHostRemote,
+        limit: Int,
+        cwd: URL
+    ) async throws -> [MergedReviewRequestRef] {
+        throw CodeHostProviderError.unsupportedProvider(remote.kind)
     }
 }
 

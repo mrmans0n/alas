@@ -4413,6 +4413,111 @@ final class AppState {
         saveProjects()
     }
 
+    /// Live sessions attached to a worktree's open terminal/ACP tabs, counted
+    /// directly rather than through harness activity state (busy/awaiting) —
+    /// mirrors the cleanup sheet's own `activeSessionCount` probe. Used to
+    /// re-check a worktree immediately before a batch action touches it: the
+    /// scan that produced the candidate list can be stale by the time the
+    /// user confirms, and a session opened in that window (from another
+    /// window, say) must not be torn down by `cleanupWorktreeState`.
+    private func hasLiveSessions(worktreeId: String) -> Bool {
+        tabs.tabs(forWorktree: worktreeId).contains { tab in
+            switch tab {
+            case .terminal(let s):   return !s.root.leaves().isEmpty
+            case .acpSession:        return true
+            default:                 return false
+            }
+        }
+    }
+
+    /// Archive several worktrees at once. Nothing on disk is touched — this
+    /// only marks each path hidden in `ProjectConfig`, which is what persists
+    /// across relaunch.
+    ///
+    /// Unsaved editor buffers are checked across the whole selection before any
+    /// archiving happens, so the user answers one prompt rather than one per
+    /// worktree. Cancelling that prompt cancels the whole batch.
+    @discardableResult
+    func batchArchiveWorktrees(_ worktrees: [Worktree]) -> [WorktreeBatchResult] {
+        guard !worktrees.isEmpty else { return [] }
+
+        // Snapshot which tabs are dirty right now, before the prompt. If the
+        // user confirms "Discard & Archive", those specific buffers stay
+        // marked dirty in the tab model until cleanup actually closes them —
+        // discarding doesn't retroactively un-dirty anything — so the
+        // per-item re-check below must compare against this snapshot rather
+        // than against "is anything dirty right now", or the confirmed
+        // discard would skip every worktree it was meant to cover.
+        let dirtyTabsAtConfirmation = Dictionary(
+            uniqueKeysWithValues: worktrees.map { ($0.id, Set(dirtyEditorTabIds(worktreeId: $0.id))) }
+        )
+        let dirtyCount = dirtyTabsAtConfirmation.values.reduce(0) { $0 + $1.count }
+        if dirtyCount > 0 {
+            guard promptForDirtyBuffersInBatch(
+                action: "Archive",
+                worktreeCount: worktrees.count,
+                dirtyCount: dirtyCount,
+                onDiskDestructive: false
+            ) == .discard else {
+                return []
+            }
+        }
+
+        var results: [WorktreeBatchResult] = []
+        for worktree in worktrees {
+            guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
+                results.append(WorktreeBatchResult(
+                    worktreeId: worktree.id,
+                    branch: worktree.branch,
+                    outcome: .failed(message: "Could not find the project for this worktree.")
+                ))
+                continue
+            }
+            guard !projectsManager.isMain(worktree, in: project) else {
+                results.append(WorktreeBatchResult(
+                    worktreeId: worktree.id,
+                    branch: worktree.branch,
+                    outcome: .skipped(reason: "Main worktree")
+                ))
+                continue
+            }
+            // Re-check right before archiving: the scan that selected this
+            // worktree — and even the whole-batch dirty-buffer prompt above —
+            // can be stale by the time this specific item is reached. Only
+            // dirtiness the confirmation didn't already cover counts: a tab
+            // dirty at confirmation time and discarded is expected here, but
+            // a tab that turned dirty (or newly opened dirty) since then must
+            // not be torn down.
+            let currentDirtyTabs = Set(dirtyEditorTabIds(worktreeId: worktree.id))
+            guard currentDirtyTabs.isSubset(of: dirtyTabsAtConfirmation[worktree.id] ?? []) else {
+                results.append(WorktreeBatchResult(
+                    worktreeId: worktree.id,
+                    branch: worktree.branch,
+                    outcome: .skipped(reason: "Has unsaved changes since this list was scanned")
+                ))
+                continue
+            }
+            guard !hasLiveSessions(worktreeId: worktree.id),
+                  projectsManager.operationState(for: worktree.id) == nil
+            else {
+                results.append(WorktreeBatchResult(
+                    worktreeId: worktree.id,
+                    branch: worktree.branch,
+                    outcome: .skipped(reason: "Became busy since this list was scanned")
+                ))
+                continue
+            }
+
+            archiveWorktreeAfterSaving(worktree)
+            results.append(WorktreeBatchResult(
+                worktreeId: worktree.id,
+                branch: worktree.branch,
+                outcome: .archived
+            ))
+        }
+        return results
+    }
+
     func startHarness() {
         LegacyHookSweep.sweepAll()
         harness.notifications.setEnabled(config.harness.notifyOnFinish)
@@ -7630,6 +7735,289 @@ final class AppState {
         beginDeleteWorktree(worktree, keepBranch: keepBranch)
     }
 
+    /// Delete several worktrees in one pass, reusing the single-item deletion
+    /// path so every existing protection applies. Runs sequentially: git
+    /// worktree mutations on one repository serialize anyway, and sequential
+    /// execution keeps per-item results in a predictable order. A failure is
+    /// recorded and the batch continues.
+    ///
+    /// Callers are responsible for confirming with the user first — this method
+    /// deletes without prompting. Unsaved editor buffers are checked across the
+    /// whole selection before any deletion happens: `performDeleteWorktree`
+    /// alone does not check them (that gate lives in the single-item
+    /// `deleteWorktree`, above `beginDeleteWorktree`), so without this check a
+    /// worktree that is clean on disk but has an unsaved buffer would be
+    /// deleted and its buffer silently discarded by `cleanupWorktreeState`.
+    func batchDeleteWorktrees(
+        _ worktrees: [Worktree],
+        keepBranch: Bool
+    ) async -> [WorktreeBatchResult] {
+        guard !worktrees.isEmpty else { return [] }
+
+        // Snapshot which tabs are dirty right now, before the prompt. If the
+        // user confirms "Discard & Delete", those specific buffers stay
+        // marked dirty in the tab model until cleanup actually closes them —
+        // discarding doesn't retroactively un-dirty anything — so the
+        // per-item re-check below must compare against this snapshot rather
+        // than against "is anything dirty right now", or the confirmed
+        // discard would skip every worktree it was meant to cover.
+        let dirtyTabsAtConfirmation = Dictionary(
+            uniqueKeysWithValues: worktrees.map { ($0.id, Set(dirtyEditorTabIds(worktreeId: $0.id))) }
+        )
+        let dirtyCount = dirtyTabsAtConfirmation.values.reduce(0) { $0 + $1.count }
+        if dirtyCount > 0 {
+            guard promptForDirtyBuffersInBatch(
+                action: "Delete",
+                worktreeCount: worktrees.count,
+                dirtyCount: dirtyCount,
+                onDiskDestructive: true
+            ) == .discard else {
+                return []
+            }
+        }
+
+        var results: [WorktreeBatchResult] = []
+        var touchedProjectIds: Set<String> = []
+
+        for worktree in worktrees {
+            guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
+                results.append(WorktreeBatchResult(
+                    worktreeId: worktree.id,
+                    branch: worktree.branch,
+                    outcome: .failed(message: "Could not find the project for this worktree.")
+                ))
+                continue
+            }
+            guard !projectsManager.isMain(worktree, in: project) else {
+                results.append(WorktreeBatchResult(
+                    worktreeId: worktree.id,
+                    branch: worktree.branch,
+                    outcome: .skipped(reason: "Main worktree")
+                ))
+                continue
+            }
+            // Re-check right before deleting. This closes two gaps at once:
+            // the scan that selected this worktree (or even the whole-batch
+            // dirty-buffer prompt above) can be stale by the time the user
+            // confirms, and — because each `await performDeleteWorktree`
+            // below suspends and yields the main actor — a *later* item in
+            // this very loop can pick up a buffer edited or a session opened
+            // while an *earlier* item was still being removed. Only
+            // dirtiness the confirmation didn't already cover counts: a tab
+            // dirty at confirmation time and discarded is expected here, but
+            // a tab that turned dirty since then must not be torn down.
+            let currentDirtyTabs = Set(dirtyEditorTabIds(worktreeId: worktree.id))
+            guard currentDirtyTabs.isSubset(of: dirtyTabsAtConfirmation[worktree.id] ?? []) else {
+                results.append(WorktreeBatchResult(
+                    worktreeId: worktree.id,
+                    branch: worktree.branch,
+                    outcome: .skipped(reason: "Has unsaved changes since this list was scanned")
+                ))
+                continue
+            }
+            guard !hasLiveSessions(worktreeId: worktree.id),
+                  projectsManager.operationState(for: worktree.id) == nil
+            else {
+                results.append(WorktreeBatchResult(
+                    worktreeId: worktree.id,
+                    branch: worktree.branch,
+                    outcome: .skipped(reason: "Became busy since this list was scanned")
+                ))
+                continue
+            }
+            // Re-read the worktree's actual current branch immediately before
+            // removal — the cached `Worktree.branch` from the scan could be
+            // stale if something switched this checkout to a detached HEAD
+            // (or a different branch entirely) in the meantime. A detached
+            // worktree's commits are reachable only via its own HEAD, so
+            // removing one on stale information risks orphaning commits that
+            // did not exist, or were not detached, at scan time.
+            guard WorktreeService.localBranchName(forWorktreeAt: worktree.path) == worktree.branch else {
+                results.append(WorktreeBatchResult(
+                    worktreeId: worktree.id,
+                    branch: worktree.branch,
+                    outcome: .skipped(reason: "Branch changed since this list was scanned")
+                ))
+                continue
+            }
+
+            let siblingsBefore = projectsManager.visibleWorktrees(projectId: worktree.projectId)
+            let removedIndex = siblingsBefore.firstIndex(where: { $0.id == worktree.id }) ?? 0
+            projectsManager.setOperationState(id: worktree.id, state: .deleting)
+
+            let outcome = await performDeleteWorktree(
+                worktree: worktree,
+                repoPath: URL(fileURLWithPath: project.path),
+                deleteBranchIfMerged: Self.resolveDeleteBranchIfMerged(
+                    globalDeleteOnRemove: config.worktrees.deleteBranchOnRemove,
+                    keepBranch: keepBranch
+                ),
+                force: false,
+                removedIndex: removedIndex,
+                // One refresh at the end, not one per item.
+                refreshAfter: false,
+                // No modal mid-batch: a worktree needing force is reported and
+                // left for the user to handle through the single-item flow.
+                promptsForForce: false
+            )
+
+            results.append(WorktreeBatchResult(
+                worktreeId: worktree.id,
+                branch: worktree.branch,
+                outcome: outcome
+            ))
+            touchedProjectIds.insert(worktree.projectId)
+        }
+
+        for projectId in touchedProjectIds {
+            _ = try? await refreshProjectWorktrees(projectId: projectId)
+        }
+        // Per-item deletion skipped selection reconciliation because the list
+        // was still stale at that point. Now that every touched project has
+        // been refreshed, drop a selection that points at a deleted worktree.
+        if let current = selectedWorktreeId, !allWorktreeIds().contains(current) {
+            selectWorktree(id: resolvedSelectionForActiveSpace())
+        }
+        return results
+    }
+
+    /// Builds a cleanup model wired to live git, code-host, and session state.
+    /// Returns nil when the project no longer exists.
+    func makeWorktreeCleanupModel(projectId: String) -> WorktreeCleanupModel? {
+        guard let project = projects.first(where: { $0.id == projectId }) else { return nil }
+        let idleThresholdDays = config.worktrees.cleanupIdleDays
+        let repoPath = URL(fileURLWithPath: project.path)
+        // `config.worktrees.baseBranch` is a global default across every
+        // project and may not exist in this repository. Resolve it against the
+        // repo's real branches the way every other base-branch consumer does,
+        // and do it per scan rather than once here: branches can change while
+        // the sheet is open.
+        let configuredDefault = config.worktrees.baseBranch
+
+        return WorktreeCleanupModel(
+            projectId: projectId,
+            keepBranches: !config.worktrees.deleteBranchOnRemove,
+            scan: { [weak self] in
+                guard let self else { return .success([]) }
+                let worktrees = await MainActor.run {
+                    self.projectsManager.visibleWorktrees(projectId: projectId)
+                }
+                let availableBranches = (try? await GitService().branches(at: repoPath)) ?? []
+                let baseBranch = NewWorktreeDialog.preferredBaseBranch(
+                    availableBranches: availableBranches,
+                    configuredDefault: configuredDefault
+                )
+                // Built here, not once per model, so all three dependencies
+                // close over the base branch resolved for *this* scan.
+                let scanner = WorktreeCleanupScanner(
+                    dependencies: WorktreeCleanupScanner.Dependencies(
+                        gitFacts: { worktree in
+                            await WorktreeCleanupScanner.gitFacts(
+                                worktreePath: worktree.path,
+                                branch: worktree.branch,
+                                baseBranch: baseBranch
+                            )
+                        },
+                        mergeIndex: { project in
+                            await Self.forgeMergeIndex(project: project, baseBranch: baseBranch)
+                        },
+                        // Both hop to the main actor: session and operation
+                        // state are main-actor isolated, the scanner is not.
+                        activeSessionCount: { [weak self] worktreeId in
+                            await MainActor.run {
+                                guard let self else { return 0 }
+                                // Count every open terminal/ACP session tab, not just
+                                // ones the harness currently reports as busy or
+                                // awaiting input. `HarnessService.summary` filters
+                                // out idle activity — including a session with no
+                                // activity record at all — so a plain shell or an
+                                // idle agent session would read as zero live
+                                // sessions even though `cleanupWorktreeState` closes
+                                // it (and can kill its process) on delete/archive.
+                                // The acceptance criterion is "no active agent OR
+                                // terminal sessions", not "no busy agent sessions".
+                                return self.tabs.tabs(forWorktree: worktreeId).reduce(0) { count, tab in
+                                    switch tab {
+                                    case .terminal(let s):   return count + s.root.leaves().count
+                                    case .acpSession:        return count + 1
+                                    default:                 return count
+                                    }
+                                }
+                            }
+                        },
+                        operationInFlight: { [weak self] worktreeId in
+                            await MainActor.run {
+                                self?.projectsManager.operationState(for: worktreeId) != nil
+                            }
+                        }
+                    )
+                )
+                return .success(await scanner.scan(
+                    project: project,
+                    worktrees: worktrees,
+                    baseBranch: baseBranch,
+                    now: Date(),
+                    idleThresholdDays: idleThresholdDays
+                ))
+            },
+            deleteBatch: { [weak self] worktrees, keepBranch in
+                guard let self else { return [] }
+                return await self.batchDeleteWorktrees(worktrees, keepBranch: keepBranch)
+            },
+            archiveBatch: { [weak self] worktrees in
+                self?.batchArchiveWorktrees(worktrees) ?? []
+            },
+            confirm: { title, message, confirmButtonTitle in
+                let alert = NSAlert()
+                alert.messageText = title
+                alert.informativeText = message
+                alert.alertStyle = .warning
+                let confirmButton = alert.addButton(withTitle: confirmButtonTitle)
+                alert.addButton(withTitle: "Cancel")
+                confirmButton.hasDestructiveAction = true
+                return alert.runModal() == .alertFirstButtonReturn
+            }
+        )
+    }
+
+    /// One batched merged-review-request query per repository. Any failure —
+    /// no remote, no provider, CLI missing, auth expired — surfaces as a
+    /// `.failure` so the scanner can report `unknown` rather than inventing a
+    /// "not merged" answer.
+    nonisolated private static func forgeMergeIndex(
+        project: ProjectConfig,
+        baseBranch: String
+    ) async -> Result<WorktreeForgeMergeIndex, Error> {
+        let repoPath = URL(fileURLWithPath: project.path)
+        let registry = CodeHostProviderRegistry.live()
+        do {
+            let remotes = try await GitService().remotes(worktreePath: repoPath)
+            guard let remote = CodeHostRemoteDetector.detect(
+                from: remotes,
+                supportedKinds: registry.supportedKinds,
+                preferredRemoteName: CodeHostRemoteDetector.preferredRemoteName(
+                    forBaseBranch: baseBranch,
+                    remotes: remotes
+                )
+            ) else {
+                return .failure(CodeHostProviderError.malformedOutput(
+                    "no supported code host remote"
+                ))
+            }
+            guard let provider = registry.provider(for: remote.kind) else {
+                return .failure(CodeHostProviderError.unsupportedProvider(remote.kind))
+            }
+            let refs = try await provider.mergedReviewRequests(
+                remote: remote,
+                limit: 200,
+                cwd: repoPath
+            )
+            return .success(WorktreeForgeMergeIndex(refs: refs))
+        } catch {
+            return .failure(error)
+        }
+    }
+
     private func beginDeleteWorktree(_ worktree: Worktree, keepBranch: Bool) {
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             showFileActionError(title: "Delete Failed", message: "Could not find the project for this worktree.")
@@ -8007,14 +8395,20 @@ final class AppState {
 
     /// Runs the git removal off the main actor, then resumes on MainActor
     /// for state cleanup. On dirty-worktree failure publishes
-    /// `pendingForceDeleteWorktree` instead of showing a blocking modal.
+    /// `pendingForceDeleteWorktree` instead of showing a blocking modal —
+    /// unless `promptsForForce` is false, in which case that modal is
+    /// suppressed and the outcome is reported back instead (see
+    /// `batchDeleteWorktrees`, which must never pop a modal mid-run).
+    @discardableResult
     private func performDeleteWorktree(
         worktree: Worktree,
         repoPath: URL,
         deleteBranchIfMerged: Bool,
         force: Bool,
-        removedIndex: Int
-    ) async {
+        removedIndex: Int,
+        refreshAfter: Bool = true,
+        promptsForForce: Bool = true
+    ) async -> WorktreeBatchOutcome {
         let outcome: WorktreeRemovalOutcome
         do {
             outcome = try await Self.performRemoveWorktree(
@@ -8025,6 +8419,7 @@ final class AppState {
             )
         } catch let WorktreeService.WorktreeError.gitFailed(stderr) {
             if !force,
+               promptsForForce,
                let pending = Self.pendingForceDelete(
                     for: worktree,
                     repoPath: repoPath,
@@ -8035,20 +8430,31 @@ final class AppState {
                 // Clear deleting so the user can see the row again while deciding.
                 projectsManager.setOperationState(id: worktree.id, state: nil)
                 pendingForceDeleteWorktree = pending
-                return
+                return .needsForce
+            } else if !force,
+                      !promptsForForce,
+                      Self.forceDeleteReason(for: stderr) != nil {
+                // Batches never force implicitly and must not hijack the app
+                // with a modal mid-run: record the state and report it back so
+                // the sheet can tell the user to handle this one individually.
+                projectsManager.setOperationState(
+                    id: worktree.id,
+                    state: .deleteFailed(message: stderr)
+                )
+                return .needsForce
             } else {
                 projectsManager.setOperationState(
                     id: worktree.id,
                     state: .deleteFailed(message: stderr)
                 )
-                return
+                return .failed(message: stderr)
             }
         } catch {
             projectsManager.setOperationState(
                 id: worktree.id,
                 state: .deleteFailed(message: "\(error)")
             )
-            return
+            return .failed(message: "\(error)")
         }
 
         cleanupWorktreeState(worktreeId: worktree.id)
@@ -8072,13 +8478,20 @@ final class AppState {
             projectId: worktree.projectId,
             worktreeId: worktree.id
         )
-        _ = try? await refreshProjectWorktrees(projectId: worktree.projectId)
-        if selectedWorktreeId == worktree.id {
-            selectWorktree(id: selectionAfterRemoval(
-                removedFromProjectId: worktree.projectId,
-                removedAtIndex: removedIndex
-            ))
+        // Selection reconciliation only makes sense once the project list no
+        // longer contains the deleted worktree. Callers that skip the refresh
+        // (batches, which refresh once at the end) reconcile the selection
+        // themselves afterwards.
+        if refreshAfter {
+            _ = try? await refreshProjectWorktrees(projectId: worktree.projectId)
+            if selectedWorktreeId == worktree.id {
+                selectWorktree(id: selectionAfterRemoval(
+                    removedFromProjectId: worktree.projectId,
+                    removedAtIndex: removedIndex
+                ))
+            }
         }
+        return .deleted
     }
 
     /// Called from the SwiftUI alert when the user confirms force delete.
@@ -8276,6 +8689,39 @@ final class AppState {
         case save
         case discard
         case cancel
+    }
+
+    private enum DirtyBufferBatchChoice {
+        case discard
+        case cancel
+    }
+
+    /// Two-choice variant of `promptForDirtyBuffers` for batch actions. The
+    /// single-item flow can offer a truthful "Save & <action>" button because
+    /// it saves that one worktree before proceeding; a batch has no such step
+    /// wired in, so offering the same button and then neither saving nor
+    /// acting on it would make the button lie about what it does. This asks
+    /// the user to save manually and retry instead.
+    private func promptForDirtyBuffersInBatch(
+        action: String,
+        worktreeCount: Int,
+        dirtyCount: Int,
+        onDiskDestructive: Bool
+    ) -> DirtyBufferBatchChoice {
+        let alert = NSAlert()
+        alert.messageText = "\(action) \(worktreeCount) \(worktreeCount == 1 ? "worktree" : "worktrees")?"
+        let countSentence = dirtyCount == 1
+            ? "1 file has unsaved changes."
+            : "\(dirtyCount) files have unsaved changes."
+        let actionSentence = onDiskDestructive
+            ? "Save it first, then retry — \(action.lowercased())ing will discard it along with the worktree's files."
+            : "Save it first, then retry — the worktree stays on disk, but its open tabs will close."
+        alert.informativeText = "\(countSentence) \(actionSentence)"
+        alert.alertStyle = .warning
+        let discardButton = alert.addButton(withTitle: "Discard & \(action)")
+        alert.addButton(withTitle: "Cancel")
+        discardButton.hasDestructiveAction = true
+        return alert.runModal() == .alertFirstButtonReturn ? .discard : .cancel
     }
 
     /// Returns the editor tabs in this worktree whose buffers have unsaved
@@ -9959,6 +10405,26 @@ final class AppState {
         else { return }
         state.restartGGLand(target: session.target)
     }
+}
+
+/// Per-item outcome of a bulk worktree operation. The batch never aborts, so
+/// each selected worktree always produces exactly one of these.
+enum WorktreeBatchOutcome: Equatable, Sendable {
+    case deleted
+    case archived
+    case failed(message: String)
+    /// Git refused without `--force`. Batches never force implicitly; the user
+    /// handles these individually through the existing single-item flow.
+    case needsForce
+    case skipped(reason: String)
+}
+
+struct WorktreeBatchResult: Identifiable, Equatable, Sendable {
+    let worktreeId: String
+    let branch: String
+    let outcome: WorktreeBatchOutcome
+
+    var id: String { worktreeId }
 }
 
 private extension WorkspaceCheckoutMember {

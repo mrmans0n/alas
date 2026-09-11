@@ -108,12 +108,14 @@ struct AppConfig: Codable, Equatable {
         var pruneStale: Bool
         var fetchRemoteBeforeCreate: Bool
         var defaultOrdering: WorktreeSortMode
+        /// Days a worktree must sit untouched before cleanup considers it idle.
+        var cleanupIdleDays: Int
 
         enum CodingKeys: String, CodingKey {
             case rootPath, pathTemplate, branchPrefix, baseBranch,
                  trackUpstream, deleteBranchOnRemove, autoFetch,
                  fetchIntervalMinutes, pruneStale, fetchRemoteBeforeCreate,
-                 defaultOrdering
+                 defaultOrdering, cleanupIdleDays
         }
 
         init(
@@ -127,7 +129,8 @@ struct AppConfig: Codable, Equatable {
             fetchIntervalMinutes: Int,
             pruneStale: Bool,
             fetchRemoteBeforeCreate: Bool = false,
-            defaultOrdering: WorktreeSortMode = .lastUpdateDesc
+            defaultOrdering: WorktreeSortMode = .lastUpdateDesc,
+            cleanupIdleDays: Int = 14
         ) {
             self.rootPath = rootPath
             self.pathTemplate = pathTemplate
@@ -140,6 +143,7 @@ struct AppConfig: Codable, Equatable {
             self.pruneStale = pruneStale
             self.fetchRemoteBeforeCreate = fetchRemoteBeforeCreate
             self.defaultOrdering = defaultOrdering
+            self.cleanupIdleDays = cleanupIdleDays
         }
 
         init(from decoder: Decoder) throws {
@@ -155,6 +159,7 @@ struct AppConfig: Codable, Equatable {
             pruneStale = try c.decode(Bool.self, forKey: .pruneStale)
             fetchRemoteBeforeCreate = (try? c.decode(Bool.self, forKey: .fetchRemoteBeforeCreate)) ?? false
             defaultOrdering = (try? c.decode(WorktreeSortMode.self, forKey: .defaultOrdering)) ?? .lastUpdateDesc
+            cleanupIdleDays = (try? c.decode(Int.self, forKey: .cleanupIdleDays)) ?? 14
         }
     }
 

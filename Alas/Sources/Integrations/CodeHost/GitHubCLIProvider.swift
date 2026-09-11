@@ -252,6 +252,56 @@ struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         self.runner = runner
     }
 
+    func mergedReviewRequests(
+        remote: CodeHostRemote,
+        limit: Int,
+        cwd: URL
+    ) async throws -> [MergedReviewRequestRef] {
+        let result = try await runner.run(
+            "gh",
+            args: [
+                "pr", "list",
+                "--state", "merged",
+                "--limit", "\(limit)",
+                "--json", "number,headRefName,url,headRefOid",
+                "-R", Self.highLevelRepositorySelector(remote: remote),
+            ],
+            cwd: cwd
+        )
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(
+                command: "gh pr list",
+                stderr: result.stderr
+            )
+        }
+        return try Self.parseMergedPRList(result.stdout)
+    }
+
+    static func parseMergedPRList(_ json: String) throws -> [MergedReviewRequestRef] {
+        struct Item: Decodable {
+            let number: Int
+            let headRefName: String
+            let url: URL
+            let headRefOid: String
+        }
+        do {
+            return try JSONDecoder()
+                .decode([Item].self, from: Data(json.utf8))
+                .map {
+                    MergedReviewRequestRef(
+                        number: $0.number,
+                        headRefName: $0.headRefName,
+                        url: $0.url,
+                        headSHA: $0.headRefOid
+                    )
+                }
+        } catch {
+            throw CodeHostProviderError.malformedOutput(
+                "Unable to parse gh pr list output"
+            )
+        }
+    }
+
     func isAvailable(cwd: URL) async -> Bool {
         do {
             let result = try await runner.run("gh", args: ["--version"], cwd: cwd)
