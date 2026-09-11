@@ -117,6 +117,24 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(try store.loadQueue(sessionId: seededSession.id).isEmpty)
     }
 
+    @Test("bootstrap defers future scheduled queues until deadline")
+    func bootstrapDefersFutureScheduledQueuesUntilDeadline() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: nil))
+        try store.upsertQueue(sessionId: "local", items: [
+            QueuedPrompt(blocks: [.text("later")], scheduledAt: Date().addingTimeInterval(60))
+        ])
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
+        let manager = manager(store: store, client: client)
+
+        let bootstrapped = await manager.bootstrapScheduledQueueSessions()
+
+        #expect(bootstrapped == ["local"])
+        #expect(client.sent.isEmpty)
+    }
+
     @Test("bootstrapped scheduled mirror claims released lease at deadline")
     func bootstrappedScheduledMirrorClaimsReleasedLeaseAtDeadline() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())

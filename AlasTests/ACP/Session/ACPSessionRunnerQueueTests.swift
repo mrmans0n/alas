@@ -65,6 +65,20 @@ struct ACPSessionRunnerQueueTests {
         #expect(try store.loadQueue(sessionId: "s") == session.queue)
     }
 
+    @Test("force send waits for initial scheduled persistence")
+    func forceSendWaitsForInitialScheduledPersistence() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        mock.script(method: "session/prompt") { _ in Data("null".utf8) }
+        runner.send(blocks: [.text("later")], intent: .schedule(Date().addingTimeInterval(60)))
+        let itemId = try #require(session.queue.first?.id)
+
+        runner.forceSendQueuedItem(id: itemId)
+        try await Task.sleep(nanoseconds: 150_000_000)
+
+        #expect(session.queue.isEmpty)
+        #expect(mock.sent.contains { $0.method == "session/prompt" })
+    }
+
     @Test("failed scheduled persist rollback wins over later snapshots")
     func failedScheduledPersistRollbackWinsOverLaterSnapshots() async throws {
         let url = FileManager.default.temporaryDirectory
@@ -258,7 +272,7 @@ struct ACPSessionRunnerQueueTests {
         runner.forceSendQueuedItem(id: itemId)
         try await Task.sleep(nanoseconds: 50_000_000)
 
-        #expect(session.queue.first?.scheduledAt == nil)
+        #expect(session.queue.first?.scheduledAt != nil)
         #expect(session.queue.first?.status == .pending)
         #expect(!mock.sent.contains { $0.method == "session/prompt" })
         #expect(runner.hasRetainedCleanupPromptWork)

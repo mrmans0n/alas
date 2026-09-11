@@ -71,6 +71,7 @@ final class ACPSessionRunner {
     private var persistedMessageCount: Int
     private var persistenceTail: Task<Void, Never>?
     private var persistenceGeneration = 0
+    private var pendingQueueForceSendsAfterPersistence: [UUID] = []
     private var pendingCompletedOutputBoundaryUpdateCount: Int?
     private var pendingStreamingPersistIndices: Set<Int> = []
     /// Revisions distinguish a new streamed chunk from the payload currently
@@ -1435,6 +1436,7 @@ extension ACPSessionRunner {
         let fence = leaseFenceProvider()
         let sessionId = sessionId
         if acknowledgement != nil || completion != nil {
+            session.pendingQueuePersistenceCount += 1
             enqueuePersistence({ persistence in
                 try await persistence.upsertQueue(
                     sessionId: sessionId,
@@ -1442,10 +1444,13 @@ extension ACPSessionRunner {
                     fence: fence
                 )
             }, completion: { persisted in
-                if persisted == true {
+                let didPersist = persisted == true
+                self.session.pendingQueuePersistenceCount -= 1
+                if didPersist {
                     acknowledgement?()
+                    self.sendPendingQueueForceSendsAfterPersistence()
                 }
-                completion?(persisted == true)
+                completion?(didPersist)
             })
         } else {
             enqueuePersistence { persistence in
@@ -1618,6 +1623,12 @@ extension ACPSessionRunner {
               session.queue[idx].status == .pending
         else { return }
         guard session.agentState == .ready else { return }
+        guard session.pendingQueuePersistenceCount == 0 else {
+            if !pendingQueueForceSendsAfterPersistence.contains(id) {
+                pendingQueueForceSendsAfterPersistence.append(id)
+            }
+            return
+        }
 
         if nativeForkBarrierActive {
             guard session.forceQueueItem(id: id) else { return }
@@ -1648,6 +1659,21 @@ extension ACPSessionRunner {
             delegatedSource: item.delegatedSource,
             recordUserPrompt: !item.transcriptRecorded
         )
+    }
+
+    private func sendPendingQueueForceSendsAfterPersistence() {
+        guard session.pendingQueuePersistenceCount == 0,
+              !pendingQueueForceSendsAfterPersistence.isEmpty
+        else { return }
+        let itemIds = pendingQueueForceSendsAfterPersistence
+        pendingQueueForceSendsAfterPersistence.removeAll()
+        var forced = false
+        for itemId in itemIds.reversed() {
+            forced = session.forceQueueItem(id: itemId) || forced
+        }
+        guard forced else { return }
+        persistQueue()
+        flushQueueIfIdle()
     }
 
     /// Cancel the in-flight turn (if any), discard the ENTIRE queue

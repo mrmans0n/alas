@@ -319,6 +319,10 @@ final class ACPSessionManager: ObservableObject {
 
     private func deferQueueForceSend(session: ACPSession, itemId: UUID) {
         pendingQueueForceSends[session.id, default: []].append(itemId)
+        guard session.pendingQueuePersistenceCount == 0 else {
+            onQueueChanged?(session.id, true)
+            return
+        }
         var promoted = false
         for pendingId in pendingQueueForceSends[session.id, default: []].reversed() {
             promoted = session.forceQueueItem(id: pendingId) || promoted
@@ -4138,7 +4142,9 @@ extension ACPSessionManager {
                           $0.status == .pending && $0.lastError == nil && $0.scheduledAt != nil
                       })
                 else { return nil }
-                await reattach(to: id)
+                if hasDueReconnectSchedule(in: session) {
+                    await reattach(to: id)
+                }
                 scheduleScheduledQueueReconnect(sessionId: id)
                 onBootstrapped?(id)
                 return id
