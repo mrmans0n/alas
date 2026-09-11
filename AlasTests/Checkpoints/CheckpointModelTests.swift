@@ -13,7 +13,7 @@ struct CheckpointModelTests {
             blob: .init(sha256: String(repeating: "b", count: 64), byteCount: 8),
             executable: true
         )
-        let manifest = fixture(index: index, worktree: disk)
+        let manifest = try fixture(index: index, worktree: disk)
 
         let decoded = try JSONDecoder.checkpoints.decode(
             WorktreeCheckpointManifest.self,
