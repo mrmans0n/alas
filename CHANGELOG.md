@@ -6,9 +6,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.16.2] - 2026-09-11
+
+### ✨ Features
+
+- Show worktree cleanup results as they arrive (#1183).
+- Add loading placeholders to the Run tab (#1181).
+
+### 🐛 Fixes
+
+- Treat cancelled Git refreshes as cancellations instead of failures (#1186).
+- Keep workspace title hover actions within their intended boundary (#1185).
+- Correct OMP agent logo colors (#1182).
+
 ### 🎨 Changed
 
-- Polish the Agent tab with provider logos, status colors, compact cards, and clearer controls.
+- Polish the Agent tab with provider logos, status colors, compact cards, and clearer controls (#1184).
+- Unify the queue split-button color (#1180).
 
 ## [0.16.1] - 2026-09-11
 
