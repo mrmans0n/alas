@@ -1,0 +1,134 @@
+import Foundation
+import Testing
+@testable import Alas
+
+@Suite("AppState attention", .serialized)
+@MainActor
+struct AppStateAttentionTests {
+    @Test func harnessChangesRecordHistoryAndUseLiveStateForPresentation() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeState()
+        let project = ProjectConfig(id: "project", name: "Project", path: "/repo", color: "blue", addedAt: fixture.now)
+        let worktree = Worktree(id: "worktree", projectId: project.id, name: "main", branch: "main",
+                                path: URL(fileURLWithPath: "/repo"), status: .clean, lastActivity: fixture.now)
+        state.projectsManager = ProjectsManager(persistedProjects: [project])
+        state.projectsManager.insertOptimisticWorktree(worktree)
+        _ = state.tabs.appendTerminal(worktreeId: worktree.id, title: "Agent", sessionId: "session")
+
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput)
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput)
+        #expect(state.attentionStore.events.count == 1)
+        #expect(state.attentionAggregation.items.first?.presentation == .live)
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .permissionRequest)
+        #expect(state.attentionAggregation.unresolvedCount == 2)
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .idle)
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .idle)
+
+        #expect(state.attentionStore.events.map(\.kind) == [.agentAwaiting, .agentPermission, .agentFinished])
+        #expect(state.attentionAggregation.items.allSatisfy { $0.presentation == .historical })
+        #expect(state.attentionAggregation.items.contains { $0.title == "Claude Code waited for input" })
+        #expect(state.attentionStore.document.observations[.init(rawValue: "session:session:awaiting")]?.isActive == false)
+        #expect(state.attentionStore.document.observations[.init(rawValue: "session:session:permission")]?.isActive == false)
+    }
+
+    @Test func acknowledgedActiveOccurrenceDoesNotReturnAfterAppStateRelaunch() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        fixture.store.observe(.active(fixture.signal), at: fixture.now)
+        let event = try #require(fixture.store.events.first)
+        fixture.store.acknowledge(eventID: event.id, at: fixture.now)
+
+        let state = fixture.makeState()
+        state.reconcileAttention(liveSignals: [fixture.signal])
+
+        #expect(state.attentionStore.events.count == 1)
+        #expect(state.attentionAggregation.unresolvedCount == 0)
+        #expect(state.attentionAggregation.history.first?.eventID == event.id)
+    }
+
+    @Test func unreadableHistorySuppressesStartupUntilSourceChanges() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        try Data("broken history".utf8).write(to: fixture.url)
+        let state = fixture.makeState()
+        state.reconcileAttention(liveSignals: [fixture.signal])
+        state.observeAttention(.active(fixture.signal))
+
+        #expect(state.attentionStore.loadError != nil)
+        #expect(state.attentionAggregation.unresolvedCount == 0)
+
+        state.observeAttention(.inactive(sourceKey: fixture.signal.sourceKey))
+        state.observeAttention(.active(fixture.signal))
+        #expect(state.attentionAggregation.unresolvedCount == 1)
+    }
+
+    @Test func corruptHistorySuppressesFirstRestoredHarnessStateButAcceptsLaterTransition() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        try Data("broken history".utf8).write(to: fixture.url)
+        let state = fixture.makeState()
+        let project = ProjectConfig(id: "project", name: "Project", path: "/repo", color: "blue", addedAt: fixture.now)
+        let worktree = Worktree(id: "worktree", projectId: project.id, name: "main", branch: "main",
+                                path: URL(fileURLWithPath: "/repo"), status: .clean, lastActivity: fixture.now)
+        state.projectsManager = ProjectsManager(persistedProjects: [project])
+        state.projectsManager.insertOptimisticWorktree(worktree)
+        _ = state.tabs.appendTerminal(worktreeId: worktree.id, title: "Agent", sessionId: "session")
+
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput)
+        #expect(state.attentionAggregation.unresolvedCount == 0)
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .busy)
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput)
+        #expect(state.attentionAggregation.unresolvedCount == 1)
+    }
+
+    @Test func inboxRestoresOriginalTabAfterRepeatedOpen() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeState()
+        let first = state.tabs.appendTerminal(worktreeId: "worktree", title: "First", sessionId: "first")
+        state.selectedWorktreeId = "worktree"
+        state.openAttentionInbox()
+        _ = state.tabs.appendTerminal(worktreeId: "worktree", title: "Second", sessionId: "second")
+        state.openAttentionInbox()
+        state.closeAttentionInbox()
+
+        #expect(!state.isAttentionInboxOpen)
+        #expect(state.selectedWorktreeId == "worktree")
+        #expect(state.tabs.activeTabId(forWorktree: "worktree") == first.id)
+    }
+
+    private struct MemoryStore: PersistenceStoreProtocol {
+        func write<T: Encodable>(_: T, to _: URL) throws {}
+        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
+    }
+
+    @MainActor
+    private struct Fixture {
+        let now = Date()
+        let url: URL
+        let store: AttentionStore
+        let signal = AttentionSignal(
+            sourceKey: .init(rawValue: "session:session:awaiting"), fingerprint: "awaitingInput",
+            owner: .init(projectID: "project", location: .local, lineageID: nil, legacyPath: "/repo"),
+            kind: .agentAwaiting, title: "Claude Code is waiting for input", body: nil,
+            jumpTarget: .session(sessionID: "session"),
+            display: .init(projectName: "Project", branch: "main", path: "/repo", host: nil)
+        )
+
+        init() throws {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            url = directory.appendingPathComponent("attention-events.json")
+            store = AttentionStore(url: url)
+        }
+
+        func makeState() -> AppState {
+            AppState(store: MemoryStore(), attentionStore: AttentionStore(url: url))
+        }
+
+        func cleanup() {
+            try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
+        }
+    }
+}

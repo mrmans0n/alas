@@ -462,6 +462,26 @@ struct RunScriptLaunchTests {
     }
 
     @MainActor
+    @Test func failedRunRecordsAttentionWithExactFailureTarget() async throws {
+        let fixture = try makeAppStateFixture(waiter: { _ in
+            RunScriptCompletion(exitCode: 65, transcript: Data("compile failed\n".utf8), truncated: false)
+        })
+        fixture.state.harness.notifications.notificationAdder = { _ in }
+        fixture.state.runOrFocusScript(fixture.script, in: fixture.worktree)
+        try await Task.sleep(for: .milliseconds(50))
+        await fixture.state.waitForRunScriptCompletionTasksForTesting()
+
+        let failure = try #require(fixture.state.runScriptFailures(in: fixture.worktree.id).first)
+        let events = fixture.state.attentionStore.events
+        #expect(events.count == 1)
+        let event = try #require(events.first)
+        #expect(event.kind == .runScriptFailure)
+        #expect(event.jumpTarget == .runScriptFailure(failureID: failure.id))
+        #expect(event.occurredAt == failure.completedAt)
+        #expect(event.body == "compile failed\n")
+    }
+
+    @MainActor
     @Test func zeroRunCreatesNoFailure() async throws {
         let fixture = try makeAppStateFixture(waiter: { _ in
             RunScriptCompletion(exitCode: 0, transcript: Data("ok\n".utf8), truncated: false)
@@ -474,6 +494,7 @@ struct RunScriptLaunchTests {
         await fixture.state.waitForRunScriptCompletionTasksForTesting()
 
         #expect(fixture.state.runScriptFailures(in: fixture.worktree.id).isEmpty)
+        #expect(fixture.state.attentionStore.events.isEmpty)
         #expect(notifications.count == 1)
         #expect(notifications[0].content.body == "Succeeded")
     }
@@ -886,7 +907,8 @@ struct RunScriptLaunchTests {
             store: MemoryStore(),
             fileActionErrorHandler: { _, _ in },
             terminalSessionOpener: opener,
-            runScriptCompletionWaiter: waiter
+            runScriptCompletionWaiter: waiter,
+            attentionStore: AttentionStore(url: dir.appendingPathComponent("attention-events.json"))
         )
         state.projectsManager = ProjectsManager(persistedProjects: [project])
         return (state, runScript, worktree)

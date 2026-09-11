@@ -6,6 +6,33 @@ import UserNotifications
 
 @Suite(.serialized)
 struct HarnessServiceTests {
+    @Test func activityTransitionsDeduplicateAwaitingAndReportIdleAndForget() {
+        let (service, _) = makeService()
+        var transitions: [HarnessActivityTransition] = []
+        service.onActivityTransition = { transitions.append($0) }
+        for event in [ActivityEvent.awaitingInput, .awaitingInput, .idle] {
+            service.handleSocketEvent(makeEvent(event: event, body: "Need input"),
+                                      stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false })
+        }
+        service.forgetSession("session-1")
+
+        #expect(transitions.map(\.state) == [.awaitingInput, .idle, nil])
+        #expect(transitions.first?.body == "Need input")
+        #expect(transitions.allSatisfy { $0.sessionID == "session-1" && $0.agent == .claude })
+    }
+
+    @Test func externalActivityReportsPermissionAndDeduplicatesRepeatedState() {
+        let (service, collector) = makeService()
+        var transitions: [HarnessActivityTransition] = []
+        service.onActivityTransition = { transitions.append($0) }
+        service.setExternalActivity(sessionId: "acp", agent: .codex, state: .permissionRequest)
+        service.setExternalActivity(sessionId: "acp", agent: .codex, state: .permissionRequest)
+        service.setExternalActivity(sessionId: "acp", agent: .codex, state: .busy)
+
+        #expect(transitions.map(\.state) == [.permissionRequest, .busy])
+        #expect(collector.requests.isEmpty)
+    }
+
     private func makeEvent(
         event: ActivityEvent, agent: AgentKind = .claude,
         sessionId: String = "session-1", body: String? = nil
@@ -401,6 +428,8 @@ struct HarnessServiceTests {
 
     @Test func cursorIdle_isDebounced() async throws {
         let (service, _) = makeService(cursorIdleDebounceInterval: 0.05)
+        var transitions: [HarnessActivityTransition] = []
+        service.onActivityTransition = { transitions.append($0) }
         service.handleSocketEvent(
             makeEvent(event: .busy, agent: .cursor),
             stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
@@ -411,9 +440,11 @@ struct HarnessServiceTests {
             stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
         )
         #expect(service.activityBySession["session-1"]?.state == .busy)
+        #expect(transitions.map(\.state) == [.busy])
 
         await waitForActivity(service) { $0?.state == .idle }
         #expect(service.activityBySession["session-1"]?.state == .idle)
+        #expect(transitions.map(\.state) == [.busy, .idle])
     }
 
     @Test func cursorIdleDebounce_commitsLatestIdleEvent() async throws {

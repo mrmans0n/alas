@@ -90,6 +90,11 @@ final class AppState {
     /// Follow-up composers outlive the conditional Agent pane and worktree navigation.
     var agentSidebarFollowUps: [String: [ACPSession.ID: AgentSidebarFollowUpDraft]] = [:]
     var selectedRunScriptFailure: RunScriptFailure?
+    let attentionStore: AttentionStore
+    var isAttentionInboxOpen = false
+    @ObservationIgnored var attentionReturnDestination: AttentionReturnDestination?
+    @ObservationIgnored var attentionSuppressedStartupSignals: [AttentionSourceKey: String] = [:]
+    @ObservationIgnored var attentionObservedHarnessSessions: Set<String> = []
     @ObservationIgnored var runScriptCompletionTasks: [String: (worktreeID: String, sessionID: String, location: RunScriptCaptureLocation, task: Task<Void, Never>)] = [:]
     @ObservationIgnored let runScriptCompletionWaiter: RunScriptCompletionWaiter
     private(set) var isReopeningClosedTab = false
@@ -683,11 +688,13 @@ final class AppState {
         workspaceRemoteTransport: WorkspaceRemoteTransport = .init(),
         worktreeCleanupLauncher: @escaping WorktreeCleanupLauncher = {
             try WorktreeTrashCleaner.launch($0)
-        }
+        },
+        attentionStore: AttentionStore? = nil
     ) {
         self.store = store
         self.workspaceStore = workspaceStore
         self.workspaceRemoteTransport = workspaceRemoteTransport
+        self.attentionStore = attentionStore ?? AttentionStore()
         restoreActiveTabsOnNextReload = restoreActiveTabsOnStartup
         suppressesRestoredRightPaneAfterAbandonedStartup = !restoreActiveTabsOnStartup
         _tabs = tabsManager
@@ -759,6 +766,9 @@ final class AppState {
         // we'd resolve to a 0-element id list. RootView calls reloadTabs() after
         // refreshAll() returns.
         rightPaneStore.appState = self
+        harness.onActivityTransition = { [weak self] transition in
+            self?.observeHarnessAttention(transition)
+        }
         AlasTerminationCoordinator.shared.flush = { [weak self] in
             await GGLandingStore.shared.cancelAllAndWait()
             await self?.cancelAllRunScriptCompletionTasks()
@@ -1091,6 +1101,7 @@ final class AppState {
         // TerminalTabView.task) to fire when the user opens the tab.
         refreshPersistedHookSymlinks()
         sweepOrphanZmxSessions(worktreeIds: allWorktreeIds)
+        reconcileAttention(liveSignals: currentAttentionSignals)
         Task { [weak self] in
             await self?.reconcileInterruptedDelegations()
         }
