@@ -54,11 +54,13 @@ final class AttentionStore {
                 eventID: event.id
             )
         case .inactive(let sourceKey):
-            guard document.observations[sourceKey]?.isActive != false else { return }
+            guard let previous = document.observations[sourceKey],
+                  previous.isActive != false
+            else { return }
             document.observations[sourceKey] = AttentionStoredObservation(
                 isActive: false,
                 fingerprint: nil,
-                eventID: document.observations[sourceKey]?.eventID
+                eventID: previous.eventID
             )
         }
         retain(at: date)

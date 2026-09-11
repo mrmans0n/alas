@@ -227,7 +227,9 @@ extension AppState {
         }
         for entry in attentionWorktrees {
             let owner = AttentionWorktreeIdentity.make(worktree: entry.worktree, project: entry.project)
-            if let pane = rightPaneStore.activeState(worktreeId: entry.worktree.id), pane.hasLoadedSnapshot {
+            if rightPaneStore.isActiveState(worktreeId: entry.worktree.id),
+               let pane = rightPaneStore.activeState(worktreeId: entry.worktree.id),
+               pane.hasLoadedSnapshot {
                 signals += rightPaneAttentionObservations(snapshot: pane.attentionSnapshot, owner: owner, display: entry.resolved.display).compactMap(\.activeSignal)
             }
             if let host = entry.project.host {

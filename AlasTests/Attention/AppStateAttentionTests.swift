@@ -163,6 +163,29 @@ struct AppStateAttentionTests {
         #expect(state.tabs.activeTabId(forWorktree: "worktree") == first.id)
     }
 
+    @Test func stoppedRightPaneStatesDoNotContributeLiveAttentionSignals() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeState()
+        let project = ProjectConfig(id: "project", name: "Project", path: "/repo", color: "blue", addedAt: fixture.now)
+        let first = Worktree(id: "first", projectId: project.id, name: "first", branch: "main",
+                             path: URL(fileURLWithPath: "/repo/first"), status: .clean, lastActivity: fixture.now)
+        let second = Worktree(id: "second", projectId: project.id, name: "second", branch: "main",
+                              path: URL(fileURLWithPath: "/repo/second"), status: .clean, lastActivity: fixture.now)
+        state.projectsManager = ProjectsManager(persistedProjects: [project])
+        state.projectsManager.insertOptimisticWorktree(first)
+        state.projectsManager.insertOptimisticWorktree(second)
+
+        _ = state.rightPaneStore.state(for: first, baseBranch: "", comparisonMode: state.config.changes.comparisonMode)
+        #expect(state.rightPaneStore.isActiveState(worktreeId: first.id))
+        _ = state.rightPaneStore.state(for: second, baseBranch: "", comparisonMode: state.config.changes.comparisonMode)
+
+        #expect(!state.rightPaneStore.isActiveState(worktreeId: first.id))
+        #expect(state.rightPaneStore.isActiveState(worktreeId: second.id))
+        state.rightPaneStore.deactivate()
+        #expect(!state.rightPaneStore.isActiveState(worktreeId: second.id))
+    }
+
     private struct MemoryStore: PersistenceStoreProtocol {
         func write<T: Encodable>(_: T, to _: URL) throws {}
         func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }

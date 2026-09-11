@@ -41,6 +41,16 @@ struct AttentionProducerTests {
         #expect(signal.jumpTarget == .runScriptFailure(failureID: "failure-1"))
     }
 
+    @Test func scriptFailureOutputMarksTruncationBeforeUtf8Repair() throws {
+        let output = String(repeating: "a", count: 8_191) + "é"
+        let failure = Fixtures.failure(runID: "run-1", id: "failure-1", exitCode: 23, capturedOutput: .available(text: output, truncated: false))
+
+        let signal = try #require(AttentionProducer.script(failure: failure, owner: Fixtures.owner, display: Fixtures.display).compactMap(\.activeSignal).first)
+
+        #expect(signal.body?.hasSuffix("\n\n[Output truncated]") == true)
+        #expect(signal.body?.contains("é") == false)
+    }
+
     @Test(arguments: [
         (MergeOperation.merge(sourceBranch: "main"), "Merge is in progress"),
         (MergeOperation.rebase(plan: RebasePlan(ontoBranch: "main", sourceBranch: "feature", commits: [])), "Rebase is in progress"),
@@ -116,8 +126,13 @@ struct AttentionProducerTests {
         static let owner = AttentionWorktreeIdentity(projectID: "project", location: .local, lineageID: "lineage", legacyPath: nil)
         static let display = AttentionWorktreeDisplaySnapshot(projectName: "Project", branch: "feature", path: "/repo", host: nil)
 
-        static func failure(runID: String, id: String, exitCode: Int32) -> RunScriptFailure {
-            RunScriptFailure(id: id, runID: runID, scriptKey: "build", scriptName: "Build", worktreeID: "wt", branch: "feature", exitCode: exitCode, completedAt: .distantPast, capturedOutput: .unavailable)
+        static func failure(
+            runID: String,
+            id: String,
+            exitCode: Int32,
+            capturedOutput: RunScriptCapturedOutput = .unavailable
+        ) -> RunScriptFailure {
+            RunScriptFailure(id: id, runID: runID, scriptKey: "build", scriptName: "Build", worktreeID: "wt", branch: "feature", exitCode: exitCode, completedAt: .distantPast, capturedOutput: capturedOutput)
         }
 
         static func conflicts(_ paths: [String]) -> [ChangedFile] {

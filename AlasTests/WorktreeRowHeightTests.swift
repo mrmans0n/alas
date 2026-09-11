@@ -28,6 +28,7 @@ struct WorktreeRowHeightTests {
             onResetSort: {}, spaces: [], activeSpaceId: "", isProjectInSpace: { _ in true },
             canRemoveFromSpace: { _ in false }, onToggleSpaceMembership: { _ in }, onOpenTerminal: { _ in },
             onCopyPath: { _ in }, onCopyBranch: { _ in }, onRevealInFinder: { _ in }, onArchive: { _ in },
+            onCleanupWorktrees: {},
             onDelete: { _ in }, onDeleteKeepBranch: { _ in }, showKeepBranchOption: false,
             onActivateHarness: { _, _ in }, onCopyError: { _ in }, onRetryCreate: { _ in }, onRetryDelete: { _ in },
             onSetGGWorktreeMode: { _, _ in }, onRemoveFailed: { _ in }, onDropWorktree: { _, _ in },

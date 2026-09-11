@@ -414,6 +414,10 @@ final class RightPaneStore {
         states[worktreeId]
     }
 
+    func isActiveState(worktreeId: String) -> Bool {
+        activeId == worktreeId
+    }
+
     func activeState(worktreeId: String, baseBranch: String) -> RightPaneState? {
         guard let state = states[worktreeId],
               state.reviewLoop.currentBaseBranch == baseBranch

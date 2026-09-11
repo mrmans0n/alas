@@ -50,6 +50,15 @@ struct AttentionStoreTests {
         #expect(fixture.store.document.events.map(\.fingerprint) == ["request-1", "request-2"])
     }
 
+    @Test func inactiveObservationWithoutPriorActiveStateIsANoop() throws {
+        let fixture = try Fixture()
+
+        fixture.store.observe(.inactive(sourceKey: .init(rawValue: "git:project:conflicts")), at: fixture.now)
+
+        #expect(fixture.store.document.observations.isEmpty)
+        #expect(fixture.store.document.events.isEmpty)
+    }
+
     @Test func acknowledgmentAndAliasSurviveRelaunch() throws {
         let fixture = try Fixture()
         fixture.store.observe(.active(fixture.signal(fingerprint: "request-1")), at: fixture.now)
