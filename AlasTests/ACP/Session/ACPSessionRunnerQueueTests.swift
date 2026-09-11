@@ -5,7 +5,9 @@ import Testing
 @MainActor
 @Suite("ACPSessionRunner queue routing")
 struct ACPSessionRunnerQueueTests {
-    private func mkRunner() throws -> (ACPSessionRunner, ACPMockClient, ACPSession, ACPSessionStore) {
+    private func mkRunner(
+        onPromptWorkChanged: (() -> Void)? = nil
+    ) throws -> (ACPSessionRunner, ACPMockClient, ACPSession, ACPSessionStore) {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-q-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
         try store.upsertSession(.init(
@@ -20,7 +22,8 @@ struct ACPSessionRunnerQueueTests {
             connection: ACPConnection(client: mock),
             store: store,
             sessionId: "s",
-            worktreePath: FileManager.default.temporaryDirectory.path)
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            onPromptWorkChanged: onPromptWorkChanged)
         return (runner, mock, session, store)
     }
 
@@ -223,6 +226,24 @@ struct ACPSessionRunnerQueueTests {
         #expect(session.queue.first?.status == .pending)
         #expect(!mock.sent.contains { $0.method == "session/prompt" })
         #expect(runner.hasRetainedCleanupPromptWork)
+    }
+
+    @Test("queued prompt completion notifies prompt work changed")
+    func queuedPromptCompletionNotifiesPromptWorkChanged() async throws {
+        var changeCount = 0
+        let (runner, mock, session, _) = try mkRunner {
+            changeCount += 1
+        }
+        mock.script(method: "session/prompt") { _ in Data("null".utf8) }
+        session.enqueue(blocks: [.text("queued")])
+
+        runner.flushQueueIfIdle()
+        for _ in 0 ..< 20 where changeCount == 0 {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        #expect(changeCount > 0)
+        #expect(session.queue.isEmpty)
     }
 
     @Test("flushQueueIfIdle is a no-op while state is .streaming")

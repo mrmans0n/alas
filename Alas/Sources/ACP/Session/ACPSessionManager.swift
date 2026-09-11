@@ -3438,6 +3438,9 @@ extension ACPSessionManager {
                                               )
                                           },
                                           onPersist: { [weak self] in self?.changeNotifier.post() },
+                                          onPromptWorkChanged: { [weak self] in
+                                              self?.onQueueChanged?(sessionId, self?.retainedCleanupHasActivePromptWork(for: sessionId) == true)
+                                          },
                                           onSessionTitleUpdated: { [weak self] title in
                                               self?.refreshRecent()
                                               self?.onSessionTitleUpdated?(sessionId, title)

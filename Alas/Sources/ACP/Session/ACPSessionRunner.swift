@@ -49,6 +49,7 @@ final class ACPSessionRunner {
     private let leaseFenceProvider: () -> ACPSessionLeaseFence?
     private let onAuthRequired: ((ACPSessionRunner, String) async -> Void)?
     private let onPersist: (() -> Void)?
+    private let onPromptWorkChanged: (() -> Void)?
     private let onSessionTitleUpdated: ((String) -> Void)?
     private var updatesTask: Task<Void, Never>?
     private var permissionsTask: Task<Void, Never>?
@@ -137,6 +138,7 @@ final class ACPSessionRunner {
          onUserCancel: (() -> Void)? = nil,
          onAuthRequired: ((ACPSessionRunner, String) async -> Void)? = nil,
          onPersist: (() -> Void)? = nil,
+         onPromptWorkChanged: (() -> Void)? = nil,
          onSessionTitleUpdated: ((String) -> Void)? = nil,
          onResumeTranscriptTail: (() -> Void)? = nil,
          streamingPersistDebounceNanos: UInt64 = 250_000_000,
@@ -161,6 +163,7 @@ final class ACPSessionRunner {
         self.ownerInstanceId = ownerInstanceId
         self.onAuthRequired = onAuthRequired
         self.onPersist = onPersist
+        self.onPromptWorkChanged = onPromptWorkChanged
         self.onSessionTitleUpdated = onSessionTitleUpdated
         self.streamingPersistDebounceNanos = streamingPersistDebounceNanos
         self.incomingUpdateCoalesceNanos = incomingUpdateCoalesceNanos
@@ -1927,6 +1930,7 @@ extension ACPSessionRunner {
                         if self.deferCompletedOutputBoundaryUntilUpdatesDrain() {
                             self.flushQueueIfIdle()
                         }
+                        self.onPromptWorkChanged?()
                     }
                     self.cancelledPromptIDs.remove(promptID)
                     if !hasNewerActivePrompt {
@@ -1980,6 +1984,7 @@ extension ACPSessionRunner {
                         if self.deferCompletedOutputBoundaryUntilUpdatesDrain() {
                             self.flushQueueIfIdle()
                         }
+                        self.onPromptWorkChanged?()
                     }
                     if !hasNewerActivePrompt {
                         onPromptFinished?(wasCancelled)
@@ -2029,6 +2034,7 @@ extension ACPSessionRunner {
                         if self.deferCompletedOutputBoundaryUntilUpdatesDrain() {
                             self.flushQueueIfIdle()
                         }
+                        self.onPromptWorkChanged?()
                     }
                     // Always resolve the recovery status, even when a newer
                     // prompt (e.g. the user steered) has taken over the
@@ -2046,6 +2052,7 @@ extension ACPSessionRunner {
                         self.flushStreamingPersist()
                         self.activePromptID = nil
                         self.session.transcript.streamingState = .idle
+                        self.onPromptWorkChanged?()
                     }
                     // See the success path above: the recovery status must
                     // resolve regardless of supersession or the spinner strands.
