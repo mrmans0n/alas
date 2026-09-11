@@ -301,22 +301,32 @@ final class ACPSessionManager: ObservableObject {
     func queueForceSend(for id: ACPSession.ID, itemId: UUID) async {
         guard let session = sessions[id] else { return }
         if case .spawning = session.agentState {
-            pendingQueueForceSends[id, default: []].append(itemId)
-            onQueueChanged?(id, true)
+            deferQueueForceSend(session: session, itemId: itemId)
             return
         }
         if session.agentState != .ready {
             await reattach(to: id)
         }
         if case .spawning = session.agentState {
-            pendingQueueForceSends[id, default: []].append(itemId)
-            onQueueChanged?(id, true)
+            deferQueueForceSend(session: session, itemId: itemId)
             return
         }
         guard await confirmedWriterLease(for: id) else { return }
         guard let runner = runners[id] else { return }
         runner.forceSendQueuedItem(id: itemId)
         onQueueChanged?(id, true)
+    }
+
+    private func deferQueueForceSend(session: ACPSession, itemId: UUID) {
+        pendingQueueForceSends[session.id, default: []].append(itemId)
+        var promoted = false
+        for pendingId in pendingQueueForceSends[session.id, default: []].reversed() {
+            promoted = session.forceQueueItem(id: pendingId) || promoted
+        }
+        if promoted {
+            persistQueue(for: session)
+        }
+        onQueueChanged?(session.id, true)
     }
 
     func queueRemove(for id: ACPSession.ID, itemId: UUID) async {

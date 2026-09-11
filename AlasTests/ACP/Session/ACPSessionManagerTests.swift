@@ -679,8 +679,11 @@ struct ACPSessionManagerTests {
         let itemId = try #require(session.queue.first?.id)
 
         await mgr.queueForceSend(for: session.id, itemId: itemId)
+        await mgr.flushPersistence()
 
         #expect(queueChanged)
+        #expect(session.queue.first?.scheduledAt == nil)
+        #expect(try store.loadQueue(sessionId: session.id).first?.scheduledAt == nil)
     }
 
     @Test("stale force send during attach falls back to queue flush")
