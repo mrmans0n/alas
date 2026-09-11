@@ -156,6 +156,7 @@ final class ACPSessionManager: ObservableObject {
     private var elicitationCoordinators: [ACPSession.ID: ACPElicitationCoordinator] = [:]
     private var autoReconnectTasks: [ACPSession.ID: Task<Void, Never>] = [:]
     private var scheduledReconnectTasks: [ACPSession.ID: (deadline: Date, task: Task<Void, Never>)] = [:]
+    private var managerQueuePersistenceSessionIds: Set<ACPSession.ID> = []
     private var disposalTasks: [ACPSession.ID: Task<Void, Error>] = [:]
     /// Per-session attach counter. The built-in MCP registration grace timer
     /// captures the epoch at attach and only writes the row if it still matches,
@@ -300,7 +301,7 @@ final class ACPSessionManager: ObservableObject {
     /// running) — the remote-web twin of the queued bubble's "send now".
     func queueForceSend(for id: ACPSession.ID, itemId: UUID) async {
         guard let session = sessions[id] else { return }
-        guard session.pendingQueuePersistenceCount == 0 else {
+        guard !managerQueuePersistenceSessionIds.contains(id) else {
             deferQueueForceSend(session: session, itemId: itemId)
             return
         }
@@ -1703,7 +1704,8 @@ final class ACPSessionManager: ObservableObject {
         guard !isMirror(sessionId: session.id) else { return }
         let sessionId = session.id
         scheduleScheduledQueueReconnect(sessionId: sessionId)
-        if session.pendingQueuePersistenceCount == 0, let runner = runners[sessionId] {
+        if !managerQueuePersistenceSessionIds.contains(sessionId),
+           let runner = runners[sessionId] {
             runner.persistQueue()
             return
         }
@@ -4375,10 +4377,12 @@ extension ACPSessionManager {
         let task = enqueuePersistenceResult { persistence in
             try await persistence.upsertQueue(sessionId: sessionId, items: items, fence: fence)
         }
+        managerQueuePersistenceSessionIds.insert(sessionId)
         session.pendingQueuePersistenceCount += 1
         Task { @MainActor in
             let persisted = await task.value == true
             session.pendingQueuePersistenceCount -= 1
+            managerQueuePersistenceSessionIds.remove(sessionId)
             if !persisted, let scheduledId {
                 if session.removeFromQueue(id: scheduledId) {
                     persistQueue(for: session)
