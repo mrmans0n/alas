@@ -174,11 +174,15 @@ struct ProcessGitTests {
         try await Task.sleep(nanoseconds: 100_000_000)   // let it spawn
         task.cancel()
         let start = Date()
-        let result = try await task.value
-        let elapsed = Date().timeIntervalSince(start)
-        #expect(elapsed < 3.0, "expected cancellation to terminate quickly, took \(elapsed)s")
-        // SIGTERM => exit code 15 by convention, or non-zero signal status
-        #expect(result.exitCode != 0)
+        do {
+            _ = try await task.value
+            Issue.record("expected cancellation")
+        } catch is CancellationError {
+            let elapsed = Date().timeIntervalSince(start)
+            #expect(elapsed < 3.0, "expected cancellation to terminate quickly, took \(elapsed)s")
+        } catch {
+            Issue.record("wrong error: \(error)")
+        }
     }
 
     @Test func gitConvenienceCallStillWorks() async throws {
