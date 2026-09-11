@@ -762,7 +762,8 @@ struct WorktreeService {
         deleteBranchIfMerged: Bool,
         force: Bool = false,
         forceTwice: Bool = false,
-        usesRemoteHostRegistry: Bool = true
+        usesRemoteHostRegistry: Bool = true,
+        branchVerifiedMergedOnForge: Bool = false
     ) async throws {
         var args = ["worktree", "remove", worktree.path.path]
         if forceTwice {
@@ -791,8 +792,17 @@ struct WorktreeService {
             throw WorktreeError.gitFailed(result.stderr)
         }
         if deleteBranchIfMerged && worktree.branch != "(detached)" {
-            // Best-effort delete. -d only succeeds if merged; ignore failures.
-            _ = try? await Process.git(["branch", "-d", worktree.branch], cwd: repoPath, usesRemoteHostRegistry: usesRemoteHostRegistry)
+            // `-d` only succeeds when git's own local ancestry check shows
+            // the branch merged, which a squash or rebase merge can never
+            // satisfy — the resulting commit on the base branch isn't a
+            // descendant of the original branch tip by history alone. When
+            // the caller has independently verified the merge via the code
+            // host (a SHA-matched, confirmed-merged review request), `-D`
+            // trusts that stronger evidence instead of git's own blind spot.
+            // Still best-effort: ignore failures either way, and never do
+            // this for a branch we haven't ourselves verified.
+            let branchDeleteFlag = branchVerifiedMergedOnForge ? "-D" : "-d"
+            _ = try? await Process.git(["branch", branchDeleteFlag, worktree.branch], cwd: repoPath, usesRemoteHostRegistry: usesRemoteHostRegistry)
         }
     }
 
@@ -802,6 +812,7 @@ struct WorktreeService {
         deleteBranchIfMerged: Bool,
         force: Bool = false,
         usesRemoteHostRegistry: Bool = true,
+        branchVerifiedMergedOnForge: Bool = false,
         moveItem: @Sendable (URL, URL) throws -> Void = {
             try WorktreeService.renameAtomically(from: $0, to: $1)
         }
@@ -812,7 +823,8 @@ struct WorktreeService {
                 worktree: worktree,
                 deleteBranchIfMerged: deleteBranchIfMerged,
                 force: force,
-                usesRemoteHostRegistry: usesRemoteHostRegistry
+                usesRemoteHostRegistry: usesRemoteHostRegistry,
+                branchVerifiedMergedOnForge: branchVerifiedMergedOnForge
             )
             return .synchronous
         }
@@ -919,7 +931,8 @@ struct WorktreeService {
                 deleteBranchIfMerged: deleteBranchIfMerged,
                 force: force,
                 forceTwice: registration.isLocked && force,
-                usesRemoteHostRegistry: false
+                usesRemoteHostRegistry: false,
+                branchVerifiedMergedOnForge: branchVerifiedMergedOnForge
             )
             return .synchronous
         }
@@ -943,7 +956,8 @@ struct WorktreeService {
                 deleteBranchIfMerged: deleteBranchIfMerged,
                 force: force,
                 forceTwice: registration.isLocked && force,
-                usesRemoteHostRegistry: false
+                usesRemoteHostRegistry: false,
+                branchVerifiedMergedOnForge: branchVerifiedMergedOnForge
             )
             return .synchronous
         }
@@ -1085,8 +1099,12 @@ struct WorktreeService {
 
         if deleteBranchIfMerged && worktree.branch != "(detached)" {
             let branchGitDirectory = branchDeletionGitDirectory ?? expectedCommonDirectory
+            // See `remove(...)`'s matching comment: `-d` can't recognize a
+            // squash/rebase merge, so a branch verified merged via the code
+            // host uses `-D` instead of silently lingering.
+            let branchDeleteFlag = branchVerifiedMergedOnForge ? "-D" : "-d"
             _ = try? await Process.git(
-                ["--git-dir", branchGitDirectory.path, "branch", "-d", worktree.branch],
+                ["--git-dir", branchGitDirectory.path, "branch", branchDeleteFlag, worktree.branch],
                 cwd: expectedCommonDirectory,
                 usesRemoteHostRegistry: false
             )

@@ -1049,6 +1049,107 @@ extension WorktreeServiceTests {
         #expect(branches.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 
+    /// Squash-merging breaks the ancestry chain `git branch -d` relies on:
+    /// the resulting commit on the base branch is not a descendant of the
+    /// original branch tip by history alone, so an un-forced delete
+    /// genuinely fails. `branchVerifiedMergedOnForge` trusts a stronger,
+    /// external signal (the code host's own record of the merge) and uses
+    /// `-D` instead.
+    @Test func fastLocalRemoveDeletesSquashMergedBranchWhenForgeVerified() async throws {
+        let repo = try await makeRepo()
+        let destination = repo.deletingLastPathComponent()
+            .appendingPathComponent("\(repo.lastPathComponent)-squash-verified")
+        defer {
+            try? FileManager.default.removeItem(at: destination)
+            try? FileManager.default.removeItem(at: repo)
+        }
+        let service = WorktreeService()
+        let worktree = try await service.add(
+            repoPath: repo,
+            base: "main",
+            branch: "feature/squash",
+            destination: destination,
+            projectId: "p"
+        )
+        try "content".write(
+            to: destination.appendingPathComponent("file.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        _ = try await Process.git(["add", "."], cwd: destination)
+        _ = try await Process.git(["commit", "-q", "-m", "feature work"], cwd: destination)
+        let squash = try await Process.git(["merge", "--squash", "feature/squash"], cwd: repo)
+        #expect(squash.exitCode == 0)
+        let squashCommit = try await Process.git(["commit", "-q", "-m", "squashed"], cwd: repo)
+        #expect(squashCommit.exitCode == 0)
+
+        // Sanity check the premise: an unverified `-d` genuinely can't do this.
+        let plainDelete = try await Process.git(["branch", "-d", "feature/squash"], cwd: repo)
+        #expect(plainDelete.exitCode != 0)
+
+        let outcome = try await service.removeFastLocal(
+            repoPath: repo,
+            worktree: worktree,
+            deleteBranchIfMerged: true,
+            force: false,
+            branchVerifiedMergedOnForge: true
+        )
+        guard case .staged(let ticket) = outcome else {
+            Issue.record("Expected staged removal")
+            return
+        }
+        defer { try? FileManager.default.removeItem(at: ticket.trashRoot) }
+
+        let branches = try await Process.git(["branch", "--list", "feature/squash"], cwd: repo)
+        #expect(branches.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+
+    /// Without forge verification, a squash-merged branch is left behind —
+    /// this is the pre-existing, unchanged behavior for every worktree the
+    /// scanner hasn't independently confirmed via the code host.
+    @Test func fastLocalRemoveKeepsSquashMergedBranchWithoutForgeVerification() async throws {
+        let repo = try await makeRepo()
+        let destination = repo.deletingLastPathComponent()
+            .appendingPathComponent("\(repo.lastPathComponent)-squash-unverified")
+        defer {
+            try? FileManager.default.removeItem(at: destination)
+            try? FileManager.default.removeItem(at: repo)
+        }
+        let service = WorktreeService()
+        let worktree = try await service.add(
+            repoPath: repo,
+            base: "main",
+            branch: "feature/squash-unverified",
+            destination: destination,
+            projectId: "p"
+        )
+        try "content".write(
+            to: destination.appendingPathComponent("file.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        _ = try await Process.git(["add", "."], cwd: destination)
+        _ = try await Process.git(["commit", "-q", "-m", "feature work"], cwd: destination)
+        _ = try await Process.git(["merge", "--squash", "feature/squash-unverified"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "squashed"], cwd: repo)
+
+        let outcome = try await service.removeFastLocal(
+            repoPath: repo,
+            worktree: worktree,
+            deleteBranchIfMerged: true,
+            force: false
+            // branchVerifiedMergedOnForge defaults to false
+        )
+        guard case .staged(let ticket) = outcome else {
+            Issue.record("Expected staged removal")
+            return
+        }
+        defer { try? FileManager.default.removeItem(at: ticket.trashRoot) }
+
+        let branches = try await Process.git(["branch", "--list", "feature/squash-unverified"], cwd: repo)
+        #expect(!branches.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+
     @Test func fastLocalRemoveReportsBothPathsWhenRollbackFails() async throws {
         let fixture = try await makeLinkedWorktree(suffix: "rollback-fails")
         defer { fixture.removeFiles() }

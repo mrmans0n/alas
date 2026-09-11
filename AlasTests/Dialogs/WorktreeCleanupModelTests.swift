@@ -142,7 +142,7 @@ struct WorktreeCleanupModelTests {
             projectId: "p",
             keepBranches: false,
             scan: { .success([a, b]) },
-            deleteBatch: { _, _ in [] },
+            deleteBatch: { _, _, _ in [] },
             archiveBatch: { _ in [] },
             confirm: { _, _, _ in true }
         )
@@ -166,7 +166,7 @@ struct WorktreeCleanupModelTests {
             projectId: "p",
             keepBranches: false,
             scan: { .success([a]) },
-            deleteBatch: { _, _ in [] },
+            deleteBatch: { _, _, _ in [] },
             archiveBatch: { worktrees in
                 archiveBatchCalls += 1
                 return worktrees.map {
@@ -197,7 +197,7 @@ struct WorktreeCleanupModelTests {
             projectId: "p",
             keepBranches: false,
             scan: { .success([a]) },
-            deleteBatch: { _, _ in [] },
+            deleteBatch: { _, _, _ in [] },
             archiveBatch: { worktrees in
                 archiveBatchCalls += 1
                 return worktrees.map {
@@ -221,7 +221,7 @@ struct WorktreeCleanupModelTests {
             projectId: "p",
             keepBranches: false,
             scan: { .success([a]) },
-            deleteBatch: { _, _ in
+            deleteBatch: { _, _, _ in
                 deleteBatchCalls += 1
                 return []
             },
@@ -237,6 +237,35 @@ struct WorktreeCleanupModelTests {
 
         #expect(confirmButtons == ["Delete"])
         #expect(deleteBatchCalls == 0)
+    }
+
+    /// Only a high-confidence candidate — the scan matched its exact HEAD SHA
+    /// against a confirmed-merged review request — is trusted enough to
+    /// force-delete its branch. A selected dirty row overridden by the user,
+    /// or a medium/low-confidence match, must not be swept into that set even
+    /// though both are part of the same batch.
+    @Test func deleteSelectedNamesOnlyHighConfidenceCandidatesAsForgeConfirmed() async {
+        let highConfidence = candidate(branch: "a", verdict: .candidate(confidence: .high))
+        let mediumConfidence = candidate(branch: "b", verdict: .candidate(confidence: .medium))
+        let overriddenDirty = candidate(branch: "c", verdict: .dirty)
+        var passedForgeConfirmedIds: Set<String> = []
+        let model = WorktreeCleanupModel(
+            projectId: "p",
+            keepBranches: false,
+            scan: { .success([highConfidence, mediumConfidence, overriddenDirty]) },
+            deleteBatch: { _, _, forgeConfirmedMergedWorktreeIds in
+                passedForgeConfirmedIds = forgeConfirmedMergedWorktreeIds
+                return []
+            },
+            archiveBatch: { _ in [] },
+            confirm: { _, _, _ in true }
+        )
+        model.applyScanResult([highConfidence, mediumConfidence, overriddenDirty])
+        model.toggle("/tmp/wt-c")   // per-item override on the dirty row
+
+        await model.deleteSelected()
+
+        #expect(passedForgeConfirmedIds == ["/tmp/wt-a"])
     }
 
     @Test func selectedWorktreesFollowsDisplayOrder() {
