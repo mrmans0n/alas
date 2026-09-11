@@ -193,12 +193,12 @@ struct LiveCheckpointFileSystem: CheckpointFileSystem, Sendable {
     }
 
     private func requireSafeDirectoryTree(at url: URL) throws {
-        let standardized = url.standardizedFileURL
-        guard standardized.path.hasPrefix("/") else { throw CheckpointFileSystemError.unsafePath }
+        let path = url.path
+        guard path.hasPrefix("/") else { throw CheckpointFileSystemError.unsafePath }
 
         var current = URL(fileURLWithPath: "/", isDirectory: true)
-        for component in standardized.pathComponents.dropFirst() {
-            current.appendPathComponent(component, isDirectory: true)
+        for component in path.split(separator: "/") {
+            current.appendPathComponent(String(component), isDirectory: true)
             let attributes = try lstat(at: current)
             guard isDirectory(attributes), !isSymlink(attributes) else {
                 throw CheckpointFileSystemError.unsafePath
