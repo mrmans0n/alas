@@ -179,6 +179,25 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
                                  paths: selectedPaths, kind: .recovery, label: "Before checkpoint restore")
     }
 
+    func prepareRestore(target: CheckpointWorktreeTarget, preview: CheckpointRestorePreview,
+                        selectedGroupIDs: Set<UUID>, faultInjector: CheckpointRestoreFaultInjector = .none) async throws -> CheckpointRestorePreparation {
+        if let blocker = preview.blocker { throw CheckpointRestoreError.blocked(blocker) }
+        let manifest = try await store.load(id: preview.checkpointID, lineageID: target.lineageID)
+        let selected = selectedGroupIDs.isEmpty ? preview.selectedGroupIDs : selectedGroupIDs
+        let groups = Dictionary(uniqueKeysWithValues: preview.groups.map { ($0.id, $0) })
+        for id in selected where groups[id] == nil { throw CheckpointRestoreError.missingPreviewGroup(id) }
+        let selectedPaths = Set(selected.compactMap { groups[$0] }.flatMap(\.memberPaths))
+        let current = try await snapshotter.snapshot(target: target, includingPaths: Set(manifest.paths.map(\.relativePath)))
+        guard current.fingerprint == preview.currentFingerprint else { throw CheckpointRestoreError.stalePreview }
+        let recovery = try await createRecovery(target: target, current: current, selectedPaths: selectedPaths)
+        _ = try await store.load(id: recovery.id, lineageID: target.lineageID)
+        try faultInjector.hit(.afterRecoveryPublication)
+        return try await CheckpointRestoreTransaction(store: store, git: snapshotter.git, fileSystem: snapshotter.fileSystem,
+                                                       faultInjector: faultInjector)
+            .prepare(target: target, preview: preview, manifest: manifest, current: current,
+                     selectedPaths: selectedPaths.sorted(), recoveryCheckpointID: recovery.id)
+    }
+
     private func normalizedLabel(_ label: String) throws -> String {
         let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw CheckpointModelError.invalidLabel }

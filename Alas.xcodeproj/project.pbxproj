@@ -485,6 +485,7 @@
 		42502D6356225A4304C93818 /* TerminalTabStateCodableTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71BFAD7D324EEAE4DA5D402E /* TerminalTabStateCodableTests.swift */; };
 		4262F32CB96356E13E3F6608 /* session-update-tool-call.json in Resources */ = {isa = PBXBuildFile; fileRef = 21FCF9A0DD5C474C9E5EC50A /* session-update-tool-call.json */; };
 		4272DA5A4AB30C72A694CAE5 /* CommitContextBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4865995B2D4B92166321201F /* CommitContextBuilder.swift */; };
+		4298EEB78022505605DC2D39 /* CheckpointRestoreTransaction.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1114EC8A4F5E38B99EAE6B /* CheckpointRestoreTransaction.swift */; };
 		42C0AE388E5CF8B2AAEADE3C /* SearchEmptyState.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACFF914E16884DAC97F11C76 /* SearchEmptyState.swift */; };
 		42D8417781E790CA6AA49F7E /* CursorInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF3F87CE04B7E98606BF76CA /* CursorInstallerTests.swift */; };
 		433EC05E13C676C1C2EB6888 /* ACPLaunchCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E669FEBE09BC250B477B335 /* ACPLaunchCatalog.swift */; };
@@ -692,6 +693,7 @@
 		636ED129478744F9169AD774 /* ProjectConfigAgentOverrideTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1FD24B10ED0B3D4280F15E8 /* ProjectConfigAgentOverrideTests.swift */; };
 		63B3A5BB582C8C7ACE51E9E5 /* MermaidDiagramThemeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED658A433AAE57984ACCD0D /* MermaidDiagramThemeTests.swift */; };
 		64402D666DBDAA9B98D641F6 /* ShortcutRecorderValidationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60F628A45666E477DD695AD7 /* ShortcutRecorderValidationTests.swift */; };
+		644E16E231DD77B4A6DD5B9B /* CheckpointRestorePreparationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7418FC4CE7EBD544B58108EE /* CheckpointRestorePreparationTests.swift */; };
 		64ADA6AFE69C52F121A163E1 /* FileTypeIconView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F721FB733081A583D4053DDA /* FileTypeIconView.swift */; };
 		64DD701281B8BF9468C50C58 /* ACPUserInputFormState.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC35CACDC7D469C7D0382F31 /* ACPUserInputFormState.swift */; };
 		64E8AEA26165143714AE32BB /* WebPreviewBrowserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C6281C3FC6602FD3C92B699 /* WebPreviewBrowserTests.swift */; };
@@ -2542,6 +2544,7 @@
 		73A34259DE8E978943E8BE16 /* OKLCH.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OKLCH.swift; sourceTree = "<group>"; };
 		73B17505E5DB94014B6FCB18 /* EditorLSPStatusOverridePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorLSPStatusOverridePicker.swift; sourceTree = "<group>"; };
 		73B4D726525024EBE47A0C7E /* AgentLifecycleEventMapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentLifecycleEventMapper.swift; sourceTree = "<group>"; };
+		7418FC4CE7EBD544B58108EE /* CheckpointRestorePreparationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckpointRestorePreparationTests.swift; sourceTree = "<group>"; };
 		741EFB94AD886324DBC73C72 /* AppKitDiffRowHostingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppKitDiffRowHostingView.swift; sourceTree = "<group>"; };
 		743E347E3DE3EEAD3942CD78 /* StartupScriptResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartupScriptResolver.swift; sourceTree = "<group>"; };
 		7445ABFD7914FF0550AAC81F /* RightPaneRailModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RightPaneRailModelTests.swift; sourceTree = "<group>"; };
@@ -2878,6 +2881,7 @@
 		A9294E94F46763CC8DCD93A3 /* SpacePagerIndicator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpacePagerIndicator.swift; sourceTree = "<group>"; };
 		A948C5D9B5EB13DBAC21E538 /* GGStackModelsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGStackModelsTests.swift; sourceTree = "<group>"; };
 		A98D0A96093087BF4C284053 /* AlasSlider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasSlider.swift; sourceTree = "<group>"; };
+		AA1114EC8A4F5E38B99EAE6B /* CheckpointRestoreTransaction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckpointRestoreTransaction.swift; sourceTree = "<group>"; };
 		AA6486CAD3FE633F9B6F4ABF /* MCPAttachmentPlanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPAttachmentPlanner.swift; sourceTree = "<group>"; };
 		AA98E1DB8D77DE67918D6B9F /* CopilotInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CopilotInstallerTests.swift; sourceTree = "<group>"; };
 		AACA0D87BA93646BD5A24E91 /* WarningCharactersSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WarningCharactersSheet.swift; sourceTree = "<group>"; };
@@ -5902,6 +5906,7 @@
 				3D2E6D4519852A8D11C67FA1 /* CheckpointFileSystem.swift */,
 				E4CB43791CFECA7937B248D2 /* CheckpointGitRunner.swift */,
 				67FE3B76C1F63C58B56BEC61 /* CheckpointModels.swift */,
+				AA1114EC8A4F5E38B99EAE6B /* CheckpointRestoreTransaction.swift */,
 				90C70716C03252CDE8CCBD01 /* WorktreeCheckpointService.swift */,
 				A590233EFB2E98E5415B9B95 /* WorktreeCheckpointStore.swift */,
 				C578D9D88DECCC2F3A03C6FD /* WorktreeStateSnapshotter.swift */,
@@ -6013,6 +6018,7 @@
 				38CB485BA93482126CCAA211 /* CheckpointDiffLoaderTests.swift */,
 				2342E857ED037E8FF8024BAE /* CheckpointFileSystemTests.swift */,
 				BDCDFEB92EF701A089548A02 /* CheckpointModelTests.swift */,
+				7418FC4CE7EBD544B58108EE /* CheckpointRestorePreparationTests.swift */,
 				7B5260A5CDFBC249F1C17D2C /* CheckpointRestorePreviewTests.swift */,
 				87A4D51E84CA952506A66F9B /* CheckpointTestRepository.swift */,
 				13F66EC4AF2B62C3637A6282 /* WorktreeCheckpointCaptureTests.swift */,
@@ -6937,6 +6943,7 @@
 				C14ECC6D006CCA4B671D9389 /* CheckpointFileSystem.swift in Sources */,
 				EC2E7F94D59AF27F12CF3A96 /* CheckpointGitRunner.swift in Sources */,
 				B99253604B1E778E3F4D7135 /* CheckpointModels.swift in Sources */,
+				4298EEB78022505605DC2D39 /* CheckpointRestoreTransaction.swift in Sources */,
 				CD7FB3120E4B194063C76817 /* ClaudeCodeACPInstaller.swift in Sources */,
 				87ECE63567C08B2847844EDE /* ClaudeInstaller.swift in Sources */,
 				D0F4A4F5BF5F1C3C625F11D9 /* Clipboard.swift in Sources */,
@@ -7839,6 +7846,7 @@
 				CFC115C9F16F0ADF90034C4F /* CheckpointDiffLoaderTests.swift in Sources */,
 				F9B7BD2F0A73C31B97E712CB /* CheckpointFileSystemTests.swift in Sources */,
 				E48489F352E8AD513310DF2B /* CheckpointModelTests.swift in Sources */,
+				644E16E231DD77B4A6DD5B9B /* CheckpointRestorePreparationTests.swift in Sources */,
 				C1E18B4441216AB7D7E9E2CA /* CheckpointRestorePreviewTests.swift in Sources */,
 				0002CD0916DDDAA9ACC89C12 /* CheckpointTestRepository.swift in Sources */,
 				188D02B853162BF4533020E2 /* ChevronStabilityTests.swift in Sources */,
