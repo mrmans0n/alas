@@ -54,6 +54,36 @@ struct CheckpointModelTests {
         }
     }
 
+    @Test func corruptNonAbsentFileStateFailsDuringDecoding() {
+        let data = Data("""
+        {"kind":"regular","mode":"100644","blob":null}
+        """.utf8)
+
+        #expect(throws: CheckpointModelError.self) {
+            _ = try JSONDecoder.checkpoints.decode(CheckpointFileState.self, from: data)
+        }
+    }
+
+    @Test func manifestInitializerRejectsInvalidPathState() {
+        let invalid = CheckpointFileState(kind: .symlink, mode: "120000", blob: nil)
+
+        #expect(throws: CheckpointModelError.self) {
+            _ = try WorktreeCheckpointManifest(
+                kind: .manual,
+                label: "Before edit",
+                byteCount: 0,
+                lineageID: "22222222-2222-2222-2222-222222222222",
+                capturedPath: "/tmp/repository",
+                repositoryName: "Alas",
+                branch: "main",
+                headOID: String(repeating: "f", count: 40),
+                exclusions: [],
+                groups: [],
+                paths: [.init(relativePath: "link", head: .absent, index: .absent, worktree: invalid)]
+            )
+        }
+    }
+
     @Test func checkpointLabelTrimsWhitespaceAndCapsAtOneHundredTwentyCharacters() throws {
         let manifest = try fixture(label: "  " + String(repeating: "x", count: 130) + "  ")
 

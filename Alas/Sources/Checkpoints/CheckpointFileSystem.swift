@@ -167,7 +167,7 @@ struct LiveCheckpointFileSystem: CheckpointFileSystem, Sendable {
     }
 
     func list(_ url: URL) throws -> [URL] {
-        try requireDirectory(at: url)
+        try requireSafeDirectoryTree(at: url)
         return try FileManager.default.contentsOfDirectory(
             at: url,
             includingPropertiesForKeys: nil,
@@ -181,7 +181,7 @@ struct LiveCheckpointFileSystem: CheckpointFileSystem, Sendable {
     }
 
     func synchronizeDirectory(_ url: URL) throws {
-        try requireDirectory(at: url)
+        try requireSafeDirectoryTree(at: url)
         let descriptor = Darwin.open(url.path, O_RDONLY | O_DIRECTORY)
         guard descriptor >= 0 else { throw posixError("open") }
         defer { _ = Darwin.close(descriptor) }
@@ -189,12 +189,21 @@ struct LiveCheckpointFileSystem: CheckpointFileSystem, Sendable {
     }
 
     private func requireSafeParent(of url: URL) throws {
-        try requireDirectory(at: url.deletingLastPathComponent())
+        try requireSafeDirectoryTree(at: url.deletingLastPathComponent())
     }
 
-    private func requireDirectory(at url: URL) throws {
-        let attributes = try lstat(at: url.standardizedFileURL)
-        guard isDirectory(attributes), !isSymlink(attributes) else { throw CheckpointFileSystemError.unsafePath }
+    private func requireSafeDirectoryTree(at url: URL) throws {
+        let standardized = url.standardizedFileURL
+        guard standardized.path.hasPrefix("/") else { throw CheckpointFileSystemError.unsafePath }
+
+        var current = URL(fileURLWithPath: "/", isDirectory: true)
+        for component in standardized.pathComponents.dropFirst() {
+            current.appendPathComponent(component, isDirectory: true)
+            let attributes = try lstat(at: current)
+            guard isDirectory(attributes), !isSymlink(attributes) else {
+                throw CheckpointFileSystemError.unsafePath
+            }
+        }
     }
 
     private func readData(at url: URL) throws -> Data {

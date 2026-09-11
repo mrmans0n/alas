@@ -50,6 +50,12 @@ struct CheckpointFileState: Codable, Equatable, Sendable {
     let mode: String?
     let blob: CheckpointBlobReference?
 
+    init(kind: CheckpointLeafKind, mode: String?, blob: CheckpointBlobReference?) {
+        self.kind = kind
+        self.mode = mode
+        self.blob = blob
+    }
+
     static let absent = Self(kind: .absent, mode: nil, blob: nil)
 
     static func regular(blob: CheckpointBlobReference, executable: Bool) -> Self {
@@ -58,6 +64,14 @@ struct CheckpointFileState: Codable, Equatable, Sendable {
 
     static func symlink(blob: CheckpointBlobReference) -> Self {
         Self(kind: .symlink, mode: "120000", blob: blob)
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.kind = try container.decode(CheckpointLeafKind.self, forKey: .kind)
+        self.mode = try container.decodeIfPresent(String.self, forKey: .mode)
+        self.blob = try container.decodeIfPresent(CheckpointBlobReference.self, forKey: .blob)
+        try validate()
     }
 
     func validate() throws {
@@ -173,6 +187,28 @@ struct WorktreeCheckpointManifest: Codable, Equatable, Sendable, Identifiable {
         self.exclusions = exclusions
         self.groups = groups
         self.paths = paths
+        try validate()
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            schemaVersion: container.decode(Int.self, forKey: .schemaVersion),
+            id: container.decode(CheckpointID.self, forKey: .id),
+            kind: container.decode(CheckpointKind.self, forKey: .kind),
+            label: container.decode(String.self, forKey: .label),
+            createdAt: container.decode(Date.self, forKey: .createdAt),
+            byteCount: container.decode(Int64.self, forKey: .byteCount),
+            lineageID: container.decode(String.self, forKey: .lineageID),
+            capturedPath: container.decode(String.self, forKey: .capturedPath),
+            repositoryName: container.decode(String.self, forKey: .repositoryName),
+            branch: container.decode(String.self, forKey: .branch),
+            headOID: container.decode(String.self, forKey: .headOID),
+            capturePolicyVersion: container.decode(Int.self, forKey: .capturePolicyVersion),
+            exclusions: container.decode([CheckpointExclusion].self, forKey: .exclusions),
+            groups: container.decode([CheckpointFileGroup].self, forKey: .groups),
+            paths: container.decode([CheckpointPathState].self, forKey: .paths)
+        )
     }
 
     func validate() throws {
