@@ -190,6 +190,49 @@ struct WorktreeCleanupModelTests {
         #expect(model.selectedIds == [a.id])
     }
 
+    @Test func batchActionsAreBlockedWhileScanning() async {
+        let candidate = candidate(branch: "a", verdict: .candidate(confidence: .high))
+        let worktrees = [candidate.worktree]
+        let gate = WorktreeCleanupScanGate()
+        var confirmationCount = 0
+        var deleteBatchCount = 0
+        var archiveBatchCount = 0
+        let model = WorktreeCleanupModel(
+            projectId: "p",
+            worktrees: worktrees,
+            keepBranches: false,
+            loadWorktrees: { worktrees },
+            scan: { _, _ in
+                await gate.pause()
+                return .success([candidate])
+            },
+            deleteBatch: { _, _, _ in
+                deleteBatchCount += 1
+                return []
+            },
+            archiveBatch: { _ in
+                archiveBatchCount += 1
+                return []
+            },
+            confirm: { _, _, _ in
+                confirmationCount += 1
+                return true
+            }
+        )
+        model.applyScanResult([candidate])
+        let scanTask = Task { await model.runScan() }
+        await gate.waitUntilPaused()
+
+        await model.deleteSelected()
+        await model.archiveSelected()
+
+        #expect(confirmationCount == 0)
+        #expect(deleteBatchCount == 0)
+        #expect(archiveBatchCount == 0)
+        await gate.resume()
+        await scanTask.value
+    }
+
     /// Drives a rescan through `runScan()` itself, not `applyScanResult`
     /// directly — this is the entry point the Refresh button and any
     /// production rescan actually use. The model is already marked as scanning

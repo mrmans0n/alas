@@ -218,7 +218,11 @@ final class WorktreeCleanupModel {
 
     func deleteSelected() async {
         let targets = selectedWorktrees()
-        guard !targets.isEmpty, !isRunning else { return }
+        guard !targets.isEmpty,
+              !isRunning,
+              !isScanning,
+              scanError == nil
+        else { return }
         guard confirm(
             "Delete \(targets.count) \(targets.count == 1 ? "worktree" : "worktrees")?",
             confirmationMessage(),
@@ -257,7 +261,11 @@ final class WorktreeCleanupModel {
 
     func archiveSelected() async {
         let targets = selectedWorktrees()
-        guard !targets.isEmpty, !isRunning else { return }
+        guard !targets.isEmpty,
+              !isRunning,
+              !isScanning,
+              scanError == nil
+        else { return }
         guard confirm(
             "Archive \(targets.count) \(targets.count == 1 ? "worktree" : "worktrees")?",
             archiveConfirmationMessage(),
