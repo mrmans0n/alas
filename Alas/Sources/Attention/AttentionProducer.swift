@@ -193,7 +193,14 @@ enum AttentionProducer {
 
     private static func output(for failure: RunScriptFailure) -> String? {
         guard case .available(let text, _) = failure.capturedOutput else { return nil }
-        return text
+        let preview = String(decoding: text.utf8.prefix(8_192), as: UTF8.self)
+        let isTruncated: Bool
+        if case .available(_, let capturedTruncated) = failure.capturedOutput {
+            isTruncated = capturedTruncated || preview.utf8.count < text.utf8.count
+        } else {
+            isTruncated = false
+        }
+        return isTruncated ? "\(preview)\n\n[Output truncated]" : preview
     }
 }
 

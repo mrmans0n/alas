@@ -55,12 +55,18 @@ struct AttentionNavigationEnvironment {
                         id: failureID,
                         runID: "attention:\(item.eventID.uuidString)",
                         scriptKey: "attention-history",
-                        scriptName: item.title.replacingOccurrences(of: " failed with exit code \\(.*)$", with: "", options: .regularExpression),
+                        scriptName: item.title.replacingOccurrences(of: " failed with exit code [0-9]+$", with: "", options: .regularExpression),
                         worktreeID: worktree.id,
                         branch: item.display.branch,
                         exitCode: Int32(item.title.split(separator: " ").last ?? "-1") ?? -1,
                         completedAt: item.occurredAt,
-                        capturedOutput: item.body.map { .available(text: $0, truncated: false) } ?? .unavailable
+                        capturedOutput: item.body.map { body in
+                            let marker = "\n\n[Output truncated]"
+                            if body.hasSuffix(marker) {
+                                return .available(text: String(body.dropLast(marker.count)), truncated: true)
+                            }
+                            return .available(text: body, truncated: false)
+                        } ?? .unavailable
                     )
                 appState.presentRunScriptFailure(failure)
                 return true
