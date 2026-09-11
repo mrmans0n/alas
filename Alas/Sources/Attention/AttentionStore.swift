@@ -73,7 +73,7 @@ final class AttentionStore {
     }
 
     func acknowledge(eventID: UUID, at date: Date) {
-        guard document.events.contains(where: { $0.id == eventID }) else { return }
+        guard document.events.contains(where: { $0.id == eventID }), document.acknowledgments[eventID] == nil else { return }
         document.acknowledgments[eventID] = AttentionAcknowledgment(eventID: eventID, acknowledgedAt: date)
         retain(at: date)
         persist()

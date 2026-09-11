@@ -5,6 +5,16 @@ import Testing
 @Suite("Attention store", .serialized)
 @MainActor
 struct AttentionStoreTests {
+    @Test func acknowledgingAnAlreadyAddressedEventPreservesItsOriginalTimestamp() throws {
+        let fixture = try Fixture()
+        fixture.store.observe(.active(fixture.signal(fingerprint: "failure")), at: fixture.now)
+        let event = try #require(fixture.store.events.first)
+        let first = fixture.now.addingTimeInterval(10)
+        fixture.store.acknowledge(eventID: event.id, at: first)
+        fixture.store.acknowledge(eventID: event.id, at: fixture.now.addingTimeInterval(20))
+        #expect(fixture.store.acknowledgments[event.id]?.acknowledgedAt == first)
+    }
+
     @Test func distinctSourcesAndAliasesRemainBoundedAfterEventsExpire() throws {
         let fixture = try Fixture(maxEvents: 3)
         for index in 0..<30 {

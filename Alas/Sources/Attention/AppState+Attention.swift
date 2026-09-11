@@ -1,6 +1,7 @@
 import Foundation
 
 struct AttentionReturnDestination {
+    let spaceID: String
     let worktreeID: String?
     let activeTabID: TabID?
 }
@@ -306,6 +307,7 @@ extension AppState {
         guard !isAttentionInboxOpen else { return }
         if let selectedWorktreeId { rightPaneStore.activeState(worktreeId: selectedWorktreeId)?.endAttentionReveal() }
         attentionReturnDestination = AttentionReturnDestination(
+            spaceID: spacesManager.activeSpaceId,
             worktreeID: selectedWorktreeId,
             activeTabID: selectedWorktreeId.flatMap { tabs.activeTabId(forWorktree: $0) }
         )
@@ -317,6 +319,7 @@ extension AppState {
         isAttentionInboxOpen = false
         guard let destination = attentionReturnDestination else { return }
         attentionReturnDestination = nil
+        _ = switchToSpace(id: destination.spaceID)
         selectedWorktreeId = destination.worktreeID
         if let worktreeID = destination.worktreeID {
             if let tabID = destination.activeTabID,
