@@ -56,11 +56,12 @@ struct AgentSidebarRollupTests {
             worktreeID: "worktree-a", persistedACP: [makeRow(id: "a")],
             liveACP: [makeLiveSession(id: "b", worktreeID: "worktree-b")],
             terminalTabs: [makeTerminal(id: "terminal-a", sessionID: "shell-a")],
-            harnessActivity: [:], remoteHost: nil
+            harnessActivity: [:], remoteHost: "builder.example"
         ))
 
         #expect(rollup.rows.map(\.id) == [.acp("a"), .terminal(tabID: "terminal-a", sessionID: "shell-a")])
         #expect(rollup.rows.last?.state == .unknown)
+        #expect(rollup.rows.map(\.host) == ["builder.example", "builder.example"])
     }
 
     @Test @MainActor
@@ -77,6 +78,40 @@ struct AgentSidebarRollupTests {
         let row = try! #require(rollup.rows.first)
         #expect(row.state == .permissionRequest)
         #expect(row.id == .terminal(tabID: "terminal-a", sessionID: "shell-a"))
+    }
+
+    @Test @MainActor
+    func splitTerminalTabEmitsRowsForEveryLeafWithFocusedLeafFirst() {
+        let terminal = TerminalTabState(
+            id: "terminal-a",
+            title: "Terminal",
+            root: .split(PaneSplit(
+                id: "split",
+                axis: .vertical,
+                fraction: 0.5,
+                children: [
+                    .leaf(PaneLeaf(id: "left-leaf", sessionId: "left-session", lastCwd: nil)),
+                    .leaf(PaneLeaf(id: "right-leaf", sessionId: "right-session", lastCwd: nil)),
+                ]
+            )),
+            focusedLeafId: "right-leaf"
+        )
+        let rollup = AgentSidebarRollupBuilder.build(.init(
+            worktreeID: "worktree-a", persistedACP: [], liveACP: [],
+            terminalTabs: [terminal],
+            harnessActivity: [
+                "left-session": .init(agent: .claude, state: .busy, pid: nil, lastBody: nil, updatedAt: .now),
+                "right-session": .init(agent: .codex, state: .awaitingInput, pid: nil, lastBody: nil, updatedAt: .now),
+            ],
+            remoteHost: nil
+        ))
+
+        #expect(rollup.rows.map(\.id) == [
+            .terminal(tabID: "terminal-a", sessionID: "right-session"),
+            .terminal(tabID: "terminal-a", sessionID: "left-session"),
+        ])
+        #expect(rollup.rows.map(\.state) == [.awaitingInput, .running])
+        #expect(rollup.rows.map(\.agentID) == ["codex", "claude"])
     }
 
     @MainActor
@@ -154,6 +189,33 @@ struct AgentSidebarRollupTests {
         await state.focusAgentSidebarRow(.terminal(tabID: terminal.id, sessionID: "shell-a"), in: second)
         #expect(state.tabs.activeTabId(forWorktree: second.id) == nil)
         #expect(state.selectedWorktreeId == first.id)
+    }
+
+    @Test @MainActor
+    func terminalFocusTargetsLeafSessionAndRejectsStaleRows() async {
+        let (state, first, _) = makeAppFixture()
+        let terminal = state.tabs.appendTerminal(worktreeId: first.id, title: "Split", sessionId: "left-session")
+        _ = state.tabs.splitFocusedLeaf(
+            worktreeId: first.id,
+            tabId: terminal.id,
+            axis: .vertical,
+            newLeafId: "right-session",
+            newSessionId: "right-session"
+        )
+
+        await state.focusAgentSidebarRow(.terminal(tabID: terminal.id, sessionID: "left-session"), in: first)
+        let focusedLeft = try! #require(state.tabs.tabs(forWorktree: first.id).compactMap { tab -> String? in
+            guard tab.id == terminal.id, case .terminal(let terminal) = tab else { return nil }
+            return terminal.focusedLeafId
+        }.first)
+        #expect(focusedLeft == "left-session")
+
+        await state.focusAgentSidebarRow(.terminal(tabID: terminal.id, sessionID: "missing-session"), in: first)
+        let focusedAfterStaleAction = try! #require(state.tabs.tabs(forWorktree: first.id).compactMap { tab -> String? in
+            guard tab.id == terminal.id, case .terminal(let terminal) = tab else { return nil }
+            return terminal.focusedLeafId
+        }.first)
+        #expect(focusedAfterStaleAction == "left-session")
     }
 
     @Test @MainActor

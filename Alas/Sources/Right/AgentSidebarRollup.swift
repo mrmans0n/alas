@@ -63,7 +63,8 @@ struct AgentSidebarRow: Identifiable, Equatable {
         sessionID: String,
         agentID: String,
         title: String,
-        state: AgentSidebarState
+        state: AgentSidebarState,
+        host: String? = nil
     ) -> Self {
         Self(
             id: .terminal(tabID: tabID, sessionID: sessionID),
@@ -73,7 +74,7 @@ struct AgentSidebarRow: Identifiable, Equatable {
             state: state,
             contextUsage: nil,
             plan: nil,
-            host: nil,
+            host: host,
             createdAt: .distantPast,
             isLiveACP: false
         )
@@ -112,10 +113,12 @@ struct AgentSidebarRollupBuilder {
         let liveRows = liveSessions.map { liveRow(for: $0, remoteHost: input.remoteHost) }
         let persistedRows = input.persistedACP
             .filter { !liveIDs.contains($0.id) }
-            .map(persistedRow)
-        let terminalRows = input.terminalTabs.map { terminalRow(for: $0, activity: input.harnessActivity) }
+            .map { persistedRow($0, remoteHost: input.remoteHost) }
+        let terminalRowsList = input.terminalTabs.flatMap {
+            terminalRows(for: $0, activity: input.harnessActivity, remoteHost: input.remoteHost)
+        }
 
-        return AgentSidebarRollup(rows: liveRows + persistedRows + terminalRows)
+        return AgentSidebarRollup(rows: liveRows + persistedRows + terminalRowsList)
     }
 
     private static func liveRow(for session: ACPSession, remoteHost: String?) -> AgentSidebarRow {
@@ -133,30 +136,47 @@ struct AgentSidebarRollupBuilder {
         )
     }
 
-    private static func persistedRow(_ row: ACPSessionRow) -> AgentSidebarRow {
+    private static func persistedRow(_ row: ACPSessionRow, remoteHost: String?) -> AgentSidebarRow {
         .acp(
             id: row.id,
             agentID: row.agentId,
             title: row.title,
             model: row.currentModel,
             state: .detached,
+            host: remoteHost,
             createdAt: Date(timeIntervalSince1970: TimeInterval(row.createdAt)),
             isLive: false
         )
     }
 
+    private static func terminalRows(
+        for tab: TerminalTabState,
+        activity: [String: HarnessService.HarnessActivityState],
+        remoteHost: String?
+    ) -> [AgentSidebarRow] {
+        tab.root.leaves()
+            .sorted { lhs, rhs in
+                if lhs.id == tab.focusedLeafId { return true }
+                if rhs.id == tab.focusedLeafId { return false }
+                return lhs.id < rhs.id
+            }
+            .map { terminalRow(for: tab, leaf: $0, activity: activity, remoteHost: remoteHost) }
+    }
+
     private static func terminalRow(
         for tab: TerminalTabState,
-        activity: [String: HarnessService.HarnessActivityState]
+        leaf: PaneLeaf,
+        activity: [String: HarnessService.HarnessActivityState],
+        remoteHost: String?
     ) -> AgentSidebarRow {
-        let leaf = tab.root.find(leafId: tab.focusedLeafId)?.leaf ?? tab.root.firstLeaf()
         let hook = activity[leaf.sessionId]
         return .terminal(
             tabID: tab.id,
             sessionID: leaf.sessionId,
             agentID: hook?.agent.rawValue ?? "terminal",
             title: tab.title,
-            state: hook.map { state(for: $0.state) } ?? .unknown
+            state: hook.map { state(for: $0.state) } ?? .unknown,
+            host: remoteHost
         )
     }
 

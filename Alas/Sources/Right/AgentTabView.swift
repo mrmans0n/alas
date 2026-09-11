@@ -148,6 +148,10 @@ private struct AgentSidebarRowView: View {
                     HStack(spacing: 5) {
                         Text(row.agentID)
                         if let model = row.model { Text("· \(model)") }
+                        if row.createdAt != .distantPast {
+                            Text("·")
+                            Text(row.createdAt, style: .relative)
+                        }
                     }
                     .font(.system(size: 10))
                     .foregroundStyle(theme.color("fg-muted"))

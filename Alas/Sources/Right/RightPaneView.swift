@@ -68,7 +68,8 @@ struct RightPaneView: View {
                         showRunTab: state.config.runTabEnabled,
                         activeRunCount: state.runRecords
                             .records(worktreeID: worktree.id)
-                            .count { $0.status.isActive }
+                            .count { $0.status.isActive },
+                        activeAgentCount: state.agentSidebarRollup(for: worktree).active.count
                     )
 
                     if rps.hasLoadedSnapshot || rps.activeTab == .agent {

@@ -37,7 +37,8 @@ struct RightPaneTransitionalView: View {
                     totalDel: 0,
                     onHidePane: {},
                     showIgnored: state.config.files.showIgnored,
-                    onToggleShowIgnored: {}
+                    onToggleShowIgnored: {},
+                    activeAgentCount: state.agentSidebarRollup(for: worktree).active.count
                 )
                 .disabled(true)
 

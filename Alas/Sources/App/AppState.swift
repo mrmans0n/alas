@@ -8916,12 +8916,17 @@ final class AppState {
             else { return }
             selectWorktree(id: worktree.id)
             await openExistingACPSession(sessionId: sessionID, worktree: worktree)
-        case .terminal(let tabID, _):
-            guard tabs.tabs(forWorktree: worktree.id).contains(where: {
-                guard case .terminal = $0 else { return false }
-                return $0.id == tabID
-            }) else { return }
+        case .terminal(let tabID, let sessionID):
+            let matchingLeafID = tabs.tabs(forWorktree: worktree.id).compactMap { tab -> String? in
+                guard tab.id == tabID,
+                      case .terminal(let terminal) = tab,
+                      let leaf = terminal.root.leaves().first(where: { $0.sessionId == sessionID })
+                else { return nil }
+                return leaf.id
+            }.first
+            guard let matchingLeafID else { return }
             selectWorktree(id: worktree.id)
+            _ = tabs.setFocusedLeaf(worktreeId: worktree.id, tabId: tabID, leafId: matchingLeafID)
             activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tabID)
         }
     }
