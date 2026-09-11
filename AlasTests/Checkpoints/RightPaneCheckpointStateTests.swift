@@ -15,6 +15,7 @@ private actor RecordingCheckpointService: WorktreeCheckpointServicing {
     private var previewCoordinations: [CheckpointCoordinationSnapshot] = []
     private var restoreCoordinations: [CheckpointCoordinationSnapshot] = []
     private var recoveryCoordinations: [CheckpointCoordinationSnapshot] = []
+    private var createShouldFail = false
 
     init(target: CheckpointWorktreeTarget) throws {
         self.target = target
@@ -57,6 +58,7 @@ private actor RecordingCheckpointService: WorktreeCheckpointServicing {
 
     func createManual(target: CheckpointWorktreeTarget, label: String) async throws -> WorktreeCheckpointSummary {
         callCount += 1
+        guard !createShouldFail else { throw RecordingCheckpointServiceError.unsupported }
         guard label == "Before edit" else { throw RecordingCheckpointServiceError.unsupported }
         created = true
         return summary
@@ -116,6 +118,7 @@ private actor RecordingCheckpointService: WorktreeCheckpointServicing {
     }
 
     func calls() -> Int { callCount }
+    func failNextCreate() { createShouldFail = true }
     func installJournal(_ journal: CheckpointRestoreJournal) { journals = [journal] }
     func previewCoordinationHistory() -> [CheckpointCoordinationSnapshot] { previewCoordinations }
     func restoreCoordinationHistory() -> [CheckpointCoordinationSnapshot] { restoreCoordinations }
@@ -230,6 +233,22 @@ struct RightPaneCheckpointStateTests {
 
         #expect(state.hasLoadedSnapshot)
         #expect(state.lastCheckpointError != nil)
+    }
+
+    @Test func failedCheckpointCaptureRefreshesTheChangesSnapshot() async throws {
+        let repository = try await CheckpointTestRepository.make()
+        defer { repository.remove() }
+        let service = try RecordingCheckpointService(target: repository.target)
+        let state = makeState(repository: repository, service: service)
+        await state.refresh()
+        #expect(state.hasLoadedSnapshot)
+
+        await service.failNextCreate()
+        await state.createCheckpoint(label: "Before edit")
+
+        #expect(state.hasLoadedSnapshot)
+        #expect(state.lastCheckpointError != nil)
+        #expect(state.checkpointSummaries.isEmpty)
     }
 
     private func makeState(repository: CheckpointTestRepository, service: RecordingCheckpointService) -> RightPaneState {
