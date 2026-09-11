@@ -274,6 +274,22 @@ struct RootView: View {
 
     @ViewBuilder
     private func centerContent(effectiveRightPaneVisible: Bool) -> some View {
+        if state.isAttentionInboxOpen {
+            AttentionInboxView(
+                aggregation: state.attentionAggregation,
+                loadError: state.attentionStore.loadError?.localizedDescription,
+                writeError: state.attentionStore.writeError?.localizedDescription,
+                navigationErrors: state.attentionNavigationErrors,
+                onClose: { state.closeAttentionInbox() },
+                onOpen: { item in _ = await state.openAttentionItem(item) }
+            )
+        } else {
+            worktreeCenterContent(effectiveRightPaneVisible: effectiveRightPaneVisible)
+        }
+    }
+
+    @ViewBuilder
+    private func worktreeCenterContent(effectiveRightPaneVisible: Bool) -> some View {
         let resolver = CenterSelectionStateResolver(
             selectedWorktreeId: state.selectedWorktreeId,
             projects: state.navigationProjects,

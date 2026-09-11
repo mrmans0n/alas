@@ -33,7 +33,10 @@ struct SidebarView: View {
                         NotificationCenter.default.post(name: .alasOpenSearch, object: nil)
                     },
                     onHideSidebar: onHideSidebar,
-                    onNewWorkspace: state.config.workspacesEnabled ? { showingNewWorkspace = true } : nil
+                    onNewWorkspace: state.config.workspacesEnabled ? { showingNewWorkspace = true } : nil,
+                    attentionCount: state.attentionAggregation.unresolvedCount,
+                    attentionInboxOpen: state.isAttentionInboxOpen,
+                    onOpenAttentionInbox: { state.openAttentionInbox() }
                 )
                 ScrollView(.vertical, showsIndicators: true) {
                     VStack(alignment: .leading, spacing: 8) {
@@ -174,7 +177,8 @@ struct SidebarView: View {
                                         destinationId: destinationId
                                     )
                                     state.saveSpaces()
-                                }
+                                },
+                                attentionCount: state.attentionAggregation.unresolvedCountByProject[project.id, default: 0]
                             )
                         }
                         Color.clear

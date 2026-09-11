@@ -46,6 +46,7 @@ struct RepoGroupView: View {
     let onRemoveFailed: (Worktree) -> Void
     let onDropWorktree: (_ draggedId: String, _ destinationId: String) -> Void
     let onDropProject: (_ draggedId: String, _ destinationId: String) -> Void
+    var attentionCount: Int = 0
     @Environment(\.theme) var theme
     @ObservedObject private var hostStatus = RemoteHostStatusStore.shared
     @State private var hovering = false
@@ -66,6 +67,7 @@ struct RepoGroupView: View {
                 Text(project.name)
                     .font(.system(size: 11.5, weight: .semibold))
                     .foregroundColor(theme.color("fg-muted"))
+                    .lineLimit(1)
                 if let host = project.host {
                     HStack(spacing: 3) {
                         if hostStatus.isOffline(host) {
@@ -88,6 +90,7 @@ struct RepoGroupView: View {
                 Spacer(minLength: 0)
             }
             .padding(.leading, 12)
+            .padding(.trailing, attentionCount > 0 ? 84 : 0)
             .padding(.vertical, 5)
             .contentShape(Rectangle())
             .onTapGesture { collapsed.toggle() }
@@ -121,6 +124,19 @@ struct RepoGroupView: View {
                 // it stays visible — and its tooltip stays reachable — when
                 // the user hovers the row.
                 HStack(spacing: 6) {
+                    if attentionCount > 0 {
+                        HStack(spacing: 3) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 8))
+                            Text("\(attentionCount)")
+                                .font(.system(size: 10, weight: .medium))
+                                .monospacedDigit()
+                        }
+                        .foregroundStyle(theme.color("warn"))
+                        .help("\(attentionCount) attention \(attentionCount == 1 ? "item" : "items") in \(project.name)")
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("\(attentionCount) attention \(attentionCount == 1 ? "item" : "items") in \(project.name)")
+                    }
                     if collapsed, let summary = projectSummary() {
                         HarnessPill(
                             summary: summary,

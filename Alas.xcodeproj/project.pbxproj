@@ -362,6 +362,7 @@
 		3388D5141427C0046BD8CCC7 /* LanguageRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 328607AAAAA12EE2206ED5A4 /* LanguageRegistry.swift */; };
 		33A0FC862C45CDFF47053A04 /* ACPComposerActionButtonMetricsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B7ADCB7C4178FE036A31214 /* ACPComposerActionButtonMetricsTests.swift */; };
 		33A617BC5DE8DAA9F67E239D /* DiffPaneDocumentCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B98E7424CBFF07A59BCB703A /* DiffPaneDocumentCacheTests.swift */; };
+		33FB1D7405DF1866B0FCE2DA /* AttentionInboxViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B94718853C122C45B52E1859 /* AttentionInboxViewTests.swift */; };
 		342C28B197D5048F78D2E8D6 /* RemotePairingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F77AE52695B7B19A9F11B89 /* RemotePairingService.swift */; };
 		34F18AB368DC5D93196056CA /* ACPComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = C496549308D5C3DD20E988AD /* ACPComposer.swift */; };
 		35024237A37355969D6FA76A /* MergeResultPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DC787CE0F5625F8114C9F6F /* MergeResultPane.swift */; };
@@ -622,6 +623,7 @@
 		58ED3DFB6576F9B3C473D16C /* ACPNewChatEmptyStateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7294C0B27241ADEB9A95347A /* ACPNewChatEmptyStateView.swift */; };
 		5936DF2636F0B74BEAB33A57 /* DraftAmendPrefillTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB02326DBD7A82431A33C50F /* DraftAmendPrefillTests.swift */; };
 		59765FD789179C1BDC3F1BB9 /* ChangesTreeBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7D49EBCE99D6F1690646F80 /* ChangesTreeBuilderTests.swift */; };
+		597B1697EFF3B1CE03D538A3 /* AttentionInboxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75CBEC5902D78CEB4F03E481 /* AttentionInboxView.swift */; };
 		599302478830809946BF6D66 /* BinaryFileTypeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 308A1ADAE5DCA81A50FFDF82 /* BinaryFileTypeTests.swift */; };
 		599A6D9A3A1CCF1F618146C8 /* LegacyHookSweepTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 835D847AD52A2CEB36DD5022 /* LegacyHookSweepTests.swift */; };
 		59AF95D3DFDFE7736051EF4A /* DiffReviewModelsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A172B476A5BF7E4016431E6A /* DiffReviewModelsTests.swift */; };
@@ -2486,6 +2488,7 @@
 		7532F1267DB3F18530C9AD84 /* GGServiceActionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGServiceActionsTests.swift; sourceTree = "<group>"; };
 		7544FD20BC61E587CAFAC099 /* AgentRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRegistry.swift; sourceTree = "<group>"; };
 		7554DEF788B5448132F2B93F /* BulkConflictResolveReport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BulkConflictResolveReport.swift; sourceTree = "<group>"; };
+		75CBEC5902D78CEB4F03E481 /* AttentionInboxView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttentionInboxView.swift; sourceTree = "<group>"; };
 		75D19208F2DE728FB5D6F8FF /* ClosedTabHistoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClosedTabHistoryTests.swift; sourceTree = "<group>"; };
 		75DFDC1BD30B1D1CC469D54C /* ZmxEnvTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZmxEnvTests.swift; sourceTree = "<group>"; };
 		7615FEA1F225EBDE52CF5E14 /* ACPSessionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSessionManager.swift; sourceTree = "<group>"; };
@@ -2903,6 +2906,7 @@
 		B91A41EAF672B0160FF4D275 /* AppStateAttentionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateAttentionTests.swift; sourceTree = "<group>"; };
 		B91E5E766925FD6499548CFC /* ACPSessionRunnerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSessionRunnerTests.swift; sourceTree = "<group>"; };
 		B9454F0214E21F91473C96F6 /* ACPComposerDraftBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPComposerDraftBridgeTests.swift; sourceTree = "<group>"; };
+		B94718853C122C45B52E1859 /* AttentionInboxViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttentionInboxViewTests.swift; sourceTree = "<group>"; };
 		B96B454EC8216FFF50B92C1D /* SSHHostSuggestionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHHostSuggestionsTests.swift; sourceTree = "<group>"; };
 		B9749FB435319F01F9E70D08 /* GitServiceMergeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitServiceMergeTests.swift; sourceTree = "<group>"; };
 		B982F5063B516804E4321F08 /* RunTabPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunTabPresentationTests.swift; sourceTree = "<group>"; };
@@ -3570,6 +3574,7 @@
 			isa = PBXGroup;
 			children = (
 				B91A41EAF672B0160FF4D275 /* AppStateAttentionTests.swift */,
+				B94718853C122C45B52E1859 /* AttentionInboxViewTests.swift */,
 				DCFF5B8A4148D1592A207C57 /* AttentionIntegrationTests.swift */,
 				1E66D42CC183484DCB15ADF4 /* AttentionNavigationTests.swift */,
 				4A8610E332E73953BFB7778F /* AttentionProducerTests.swift */,
@@ -4362,6 +4367,7 @@
 			isa = PBXGroup;
 			children = (
 				C242BCDF2D847493A48EBC3C /* AppState+Attention.swift */,
+				75CBEC5902D78CEB4F03E481 /* AttentionInboxView.swift */,
 				870511370FA25B7E381C6DA6 /* AttentionModels.swift */,
 				71EFA4A9A18BBF57AAA2B17A /* AttentionProducer.swift */,
 				D1602559D20B8086D3D5EA6D /* AttentionSignalAggregator.swift */,
@@ -6735,6 +6741,7 @@
 				17EA736FA0386E75D8D42B2E /* AttachIssueDialog.swift in Sources */,
 				4DE075F8DA19958C4D55D671 /* AttachIssueDialogModel.swift in Sources */,
 				5015F89D084573BFC8A9E2C3 /* AttachedIssueDraft.swift in Sources */,
+				597B1697EFF3B1CE03D538A3 /* AttentionInboxView.swift in Sources */,
 				F4289D57A9E01AA926A2996B /* AttentionModels.swift in Sources */,
 				96796789172B8CB0F83CDEC5 /* AttentionProducer.swift in Sources */,
 				AC2D744E41F25F8B6D708544 /* AttentionSignalAggregator.swift in Sources */,
@@ -7626,6 +7633,7 @@
 				A5ED5D357F25C442E3B9F37F /* AppStateWorktreeArchiveBatchTests.swift in Sources */,
 				322ACA90D1ED6EDEA8B40D1D /* AppStateWorktreeCleanupBatchTests.swift in Sources */,
 				536F79023AAEDB205061DAA0 /* AttachIssueDialogModelTests.swift in Sources */,
+				33FB1D7405DF1866B0FCE2DA /* AttentionInboxViewTests.swift in Sources */,
 				ED9A3EE716A5060EC949BC01 /* AttentionIntegrationTests.swift in Sources */,
 				A841973EDB1E757B1C27AF9C /* AttentionNavigationTests.swift in Sources */,
 				89124893F33E6061C6A35FEB /* AttentionProducerTests.swift in Sources */,
