@@ -15,8 +15,8 @@ struct MergedReviewRequestTests {
     @Test func parsesGitHubMergedPRList() throws {
         let json = """
         [
-          {"number": 42, "headRefName": "feature/a", "url": "https://github.com/mrmans0n/alas/pull/42"},
-          {"number": 43, "headRefName": "feature/b", "url": "https://github.com/mrmans0n/alas/pull/43"}
+          {"number": 42, "headRefName": "feature/a", "url": "https://github.com/mrmans0n/alas/pull/42", "headRefOid": "abc123"},
+          {"number": 43, "headRefName": "feature/b", "url": "https://github.com/mrmans0n/alas/pull/43", "headRefOid": "def456"}
         ]
         """
         let refs = try GitHubCLIProvider.parseMergedPRList(json)
@@ -24,9 +24,11 @@ struct MergedReviewRequestTests {
         #expect(refs[0] == MergedReviewRequestRef(
             number: 42,
             headRefName: "feature/a",
-            url: URL(string: "https://github.com/mrmans0n/alas/pull/42")!
+            url: URL(string: "https://github.com/mrmans0n/alas/pull/42")!,
+            headSHA: "abc123"
         ))
         #expect(refs[1].headRefName == "feature/b")
+        #expect(refs[1].headSHA == "def456")
     }
 
     @Test func parsesEmptyGitHubList() throws {
@@ -42,18 +44,20 @@ struct MergedReviewRequestTests {
     @Test func parsesGitLabMergedMRList() throws {
         let json = """
         [
-          {"iid": 7, "source_branch": "feature/a", "web_url": "https://gitlab.com/o/r/-/merge_requests/7"}
+          {"iid": 7, "source_branch": "feature/a", "web_url": "https://gitlab.com/o/r/-/merge_requests/7", "sha": "abc123"}
         ]
         """
         let refs = try GitLabCLIProvider.parseMergedMRList(json)
         #expect(refs.count == 1)
         #expect(refs[0].number == 7)
         #expect(refs[0].headRefName == "feature/a")
+        #expect(refs[0].url == URL(string: "https://gitlab.com/o/r/-/merge_requests/7")!)
+        #expect(refs[0].headSHA == "abc123")
     }
 
     @Test func gitHubProviderIssuesOneBatchedQuery() async throws {
         let runner = RecordingRunner(stdout: """
-        [{"number": 42, "headRefName": "feature/a", "url": "https://github.com/mrmans0n/alas/pull/42"}]
+        [{"number": 42, "headRefName": "feature/a", "url": "https://github.com/mrmans0n/alas/pull/42", "headRefOid": "abc123"}]
         """)
         let provider = GitHubCLIProvider(runner: runner)
         let refs = try await provider.mergedReviewRequests(
@@ -62,11 +66,13 @@ struct MergedReviewRequestTests {
             cwd: URL(fileURLWithPath: "/tmp")
         )
         #expect(refs.count == 1)
+        #expect(refs[0].headSHA == "abc123")
         let invocations = await runner.invocations
         #expect(invocations.count == 1)
         #expect(invocations[0].args.contains("--state"))
         #expect(invocations[0].args.contains("merged"))
         #expect(invocations[0].args.contains("200"))
+        #expect(invocations[0].args.contains { $0.contains("headRefOid") })
     }
 
     @Test func gitHubProviderThrowsOnNonZeroExit() async {

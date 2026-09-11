@@ -49,11 +49,17 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
             let iid: Int
             let sourceBranch: String
             let webURL: URL
+            // GitLab's merge request objects carry `sha`: the SHA of the
+            // most recent commit on the source branch as of the MR. `glab
+            // mr list --output json` has no field-selection flag, so this
+            // is already present in the full object without extra args.
+            let sha: String
 
             enum CodingKeys: String, CodingKey {
                 case iid
                 case sourceBranch = "source_branch"
                 case webURL = "web_url"
+                case sha
             }
         }
         do {
@@ -63,7 +69,8 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
                     MergedReviewRequestRef(
                         number: $0.iid,
                         headRefName: $0.sourceBranch,
-                        url: $0.webURL
+                        url: $0.webURL,
+                        headSHA: $0.sha
                     )
                 }
         } catch {

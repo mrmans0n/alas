@@ -598,6 +598,13 @@ struct MergedReviewRequestRef: Equatable, Sendable {
     let number: Int
     let headRefName: String
     let url: URL
+    /// The head commit SHA the code host recorded for this merged review.
+    /// A branch name match alone is not enough to call a worktree
+    /// forge-merged: branch names get reused after an old, unrelated PR on
+    /// the same name merged, so the caller must also verify this SHA is
+    /// actually present in the worktree's current history before trusting
+    /// the match.
+    let headSHA: String
 }
 
 struct ReviewLoopLocalState: Equatable, Sendable {

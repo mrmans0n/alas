@@ -9,6 +9,10 @@ struct WorktreeCleanupGitFacts: Equatable, Sendable {
     var unpushedCommitCount: Int
     var stashCount: Int
     var isMergedLocally: Bool
+    /// Current `HEAD` SHA, used to verify a forge-reported merge actually
+    /// applies to what is checked out here — a branch-name match alone is
+    /// not enough, since names get reused. `nil` when it could not be read.
+    var headSHA: String?
 }
 
 /// Merged review requests for one repository, keyed by head branch.
@@ -88,6 +92,7 @@ struct WorktreeCleanupScanner: Sendable {
                 branch: worktree.branch,
                 baseBranch: baseBranch,
                 isMergedLocally: facts[offset].isMergedLocally,
+                localHeadSHA: facts[offset].headSHA,
                 indexResult: indexResult
             )
             // A branch the code host confirms is merged has its commits on the
@@ -127,15 +132,25 @@ struct WorktreeCleanupScanner: Sendable {
     /// Resolves merge state, preserving the distinction the acceptance criteria
     /// require: forge-merged, locally merged, genuinely not merged, and
     /// "we could not find out". A forge failure never becomes `.notMerged`.
+    ///
+    /// A branch-name match against the forge index is not enough on its own:
+    /// branch names get reused after an old, unrelated PR on the same name
+    /// merged, and a stale name match would misreport the current, unrelated
+    /// commits as merged. `localHeadSHA` — this worktree's actual `HEAD` —
+    /// must equal the matched ref's recorded head SHA before the match is
+    /// trusted; otherwise this falls through to the local-merge check exactly
+    /// as if the forge had never reported a match at all.
     static func mergeState(
         branch: String,
         baseBranch: String,
         isMergedLocally: Bool,
+        localHeadSHA: String?,
         indexResult: Result<WorktreeForgeMergeIndex, Error>
     ) -> WorktreeMergeState {
         switch indexResult {
         case .success(let index):
-            if let ref = index.ref(forBranch: branch) {
+            if let ref = index.ref(forBranch: branch),
+               let localHeadSHA, ref.headSHA == localHeadSHA {
                 return .mergedOnForge(identity: "#\(ref.number)", url: ref.url)
             }
             if isMergedLocally { return .mergedLocally(base: baseBranch) }
@@ -205,7 +220,8 @@ struct WorktreeCleanupScanner: Sendable {
                     hasUntrackedFiles: false,
                     unpushedCommitCount: 0,
                     stashCount: 0,
-                    isMergedLocally: false
+                    isMergedLocally: false,
+                    headSHA: nil
                 )
             }
         }
@@ -227,16 +243,18 @@ extension WorktreeCleanupScanner {
             worktreePath: worktreePath,
             baseBranch: baseBranch
         )
+        async let head = headSHA(worktreePath: worktreePath)
 
-        let (statusFacts, unpushedCount, stashCount, mergedLocally) =
-            await (status, unpushed, stashes, merged)
+        let (statusFacts, unpushedCount, stashCount, mergedLocally, headSHA) =
+            await (status, unpushed, stashes, merged, head)
 
         return WorktreeCleanupGitFacts(
             hasUncommittedChanges: statusFacts.hasUncommittedChanges,
             hasUntrackedFiles: statusFacts.hasUntrackedFiles,
             unpushedCommitCount: unpushedCount,
             stashCount: stashCount,
-            isMergedLocally: mergedLocally
+            isMergedLocally: mergedLocally,
+            headSHA: headSHA
         )
     }
 
@@ -315,5 +333,14 @@ extension WorktreeCleanupScanner {
             cwd: worktreePath
         ) else { return false }
         return result.exitCode == 0
+    }
+
+    private static func headSHA(worktreePath: URL) async -> String? {
+        guard let result = try? await Process.git(
+            ["rev-parse", "HEAD"],
+            cwd: worktreePath
+        ), result.exitCode == 0 else { return nil }
+        let sha = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        return sha.isEmpty ? nil : sha
     }
 }

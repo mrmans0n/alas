@@ -263,7 +263,7 @@ struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding {
                 "pr", "list",
                 "--state", "merged",
                 "--limit", "\(limit)",
-                "--json", "number,headRefName,url",
+                "--json", "number,headRefName,url,headRefOid",
                 "-R", Self.highLevelRepositorySelector(remote: remote),
             ],
             cwd: cwd
@@ -282,6 +282,7 @@ struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding {
             let number: Int
             let headRefName: String
             let url: URL
+            let headRefOid: String
         }
         do {
             return try JSONDecoder()
@@ -290,7 +291,8 @@ struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding {
                     MergedReviewRequestRef(
                         number: $0.number,
                         headRefName: $0.headRefName,
-                        url: $0.url
+                        url: $0.url,
+                        headSHA: $0.headRefOid
                     )
                 }
         } catch {
