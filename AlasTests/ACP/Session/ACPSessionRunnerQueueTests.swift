@@ -5,7 +5,9 @@ import Testing
 @MainActor
 @Suite("ACPSessionRunner queue routing")
 struct ACPSessionRunnerQueueTests {
-    private func mkRunner() throws -> (ACPSessionRunner, ACPMockClient, ACPSession, ACPSessionStore) {
+    private func mkRunner(
+        onPromptWorkChanged: (() -> Void)? = nil
+    ) throws -> (ACPSessionRunner, ACPMockClient, ACPSession, ACPSessionStore) {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-q-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
         try store.upsertSession(.init(
@@ -20,7 +22,8 @@ struct ACPSessionRunnerQueueTests {
             connection: ACPConnection(client: mock),
             store: store,
             sessionId: "s",
-            worktreePath: FileManager.default.temporaryDirectory.path)
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            onPromptWorkChanged: onPromptWorkChanged)
         return (runner, mock, session, store)
     }
 
@@ -45,6 +48,133 @@ struct ACPSessionRunnerQueueTests {
         try await Task.sleep(nanoseconds: 100_000_000)
         #expect(mock.sent.contains { $0.method == "session/prompt" })
         #expect(session.queue.isEmpty)
+    }
+
+    @Test("scheduled intent persists without sending before its deadline")
+    func scheduledIntentWaits() async throws {
+        let (runner, mock, session, store) = try mkRunner()
+        runner.send(
+            blocks: [.text("later")],
+            intent: .schedule(Date().addingTimeInterval(60))
+        )
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        #expect(session.queue.count == 1)
+        #expect(session.queue[0].scheduledAt != nil)
+        #expect(!mock.sent.contains { $0.method == "session/prompt" })
+        #expect(try store.loadQueue(sessionId: "s") == session.queue)
+    }
+
+    @Test("force send waits for initial scheduled persistence")
+    func forceSendWaitsForInitialScheduledPersistence() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        mock.script(method: "session/prompt") { _ in Data("null".utf8) }
+        runner.send(blocks: [.text("later")], intent: .schedule(Date().addingTimeInterval(60)))
+        let itemId = try #require(session.queue.first?.id)
+
+        runner.forceSendQueuedItem(id: itemId)
+        try await Task.sleep(nanoseconds: 150_000_000)
+
+        #expect(session.queue.isEmpty)
+        #expect(mock.sent.contains { $0.method == "session/prompt" })
+    }
+
+    @Test("failed scheduled persist rollback wins over later snapshots")
+    func failedScheduledPersistRollbackWinsOverLaterSnapshots() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-scheduled-rollback-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(
+            id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let mock = ACPMockClient()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.agentState = .ready
+        var fenceCalls = 0
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            ownerInstanceId: "ME",
+            canWrite: { true },
+            leaseFenceProvider: {
+                fenceCalls += 1
+                return fenceCalls == 1
+                    ? ACPSessionLeaseFence(sessionId: "s", ownerInstance: "ME", token: "stale")
+                    : nil
+            })
+
+        runner.send(blocks: [.text("failed")], intent: .schedule(Date().addingTimeInterval(60)))
+        runner.send(blocks: [.text("kept")], intent: .schedule(Date().addingTimeInterval(120)))
+        await runner.flushPersistence()
+
+        #expect(session.queue.map(\.blocks) == [[.text("kept")]])
+        #expect(try store.loadQueue(sessionId: "s").map(\.blocks) == [[.text("kept")]])
+    }
+
+    @Test("force send preserves schedules while disconnected")
+    func forceSendPreservesScheduleWhileDisconnected() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        session.enqueueScheduled(blocks: [.text("later")], scheduledAt: Date().addingTimeInterval(60))
+        let itemId = try #require(session.queue.first?.id)
+        session.agentState = .disconnected
+
+        runner.forceSendQueuedItem(id: itemId)
+
+        #expect(session.queue.first?.scheduledAt != nil)
+        #expect(!mock.sent.contains { $0.method == "session/prompt" })
+    }
+
+    @Test("scheduled prompt flushes once its deadline arrives")
+    func scheduledPromptFlushesAtDeadline() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        mock.script(method: "session/prompt") { _ in Data("null".utf8) }
+        runner.send(
+            blocks: [.text("soon")],
+            intent: .schedule(Date().addingTimeInterval(0.1))
+        )
+
+        try await Task.sleep(nanoseconds: 50_000_000)
+        #expect(!mock.sent.contains { $0.method == "session/prompt" })
+
+        try await Task.sleep(nanoseconds: 250_000_000)
+        #expect(session.queue.isEmpty)
+        #expect(mock.sent.contains { $0.method == "session/prompt" })
+    }
+
+    @Test("stop cancels a scheduled queue wake")
+    func stopCancelsScheduledQueueWake() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        mock.script(method: "session/prompt") { _ in Data("null".utf8) }
+        runner.send(
+            blocks: [.text("soon")],
+            intent: .schedule(Date().addingTimeInterval(0.05))
+        )
+
+        runner.stop()
+        try await Task.sleep(nanoseconds: 150_000_000)
+
+        #expect(session.queue.first?.status == .pending)
+        #expect(!mock.sent.contains { $0.method == "session/prompt" })
+    }
+
+    @Test("an immediate prompt does not wait behind a scheduled prompt")
+    func immediatePromptBypassesScheduledPrompt() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        mock.script(method: "session/prompt") { _ in Data("null".utf8) }
+        runner.send(
+            blocks: [.text("later")],
+            intent: .schedule(Date().addingTimeInterval(60))
+        )
+        runner.send(blocks: [.text("now")], intent: .auto)
+
+        try await Task.sleep(nanoseconds: 150_000_000)
+        #expect(mock.sent.contains { $0.method == "session/prompt" })
+        #expect(session.queue.count == 1)
+        #expect(session.queue[0].blocks == [.text("later")])
     }
 
     @Test(".auto while .idle with non-empty queue → enqueues (queue is authoritative)")
@@ -108,6 +238,62 @@ struct ACPSessionRunnerQueueTests {
         #expect(prompts.count == 2)
         // Persisted queue is empty after drain.
         #expect(try store.loadQueue(sessionId: "s").isEmpty)
+    }
+
+    @Test("flushQueueIfIdle waits for pending queue persistence")
+    func waitsForPendingQueuePersistence() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        mock.script(method: "session/prompt") { _ in Data("null".utf8) }
+        session.enqueue(blocks: [.text("pending durable enqueue")])
+        session.pendingQueuePersistenceCount = 1
+
+        runner.flushQueueIfIdle()
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        #expect(session.queue.first?.status == .pending)
+        #expect(!mock.sent.contains { $0.method == "session/prompt" })
+
+        session.pendingQueuePersistenceCount = 0
+        runner.flushQueueIfIdle()
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        #expect(session.queue.isEmpty)
+        #expect(mock.sent.contains { $0.method == "session/prompt" })
+    }
+
+    @Test("force send parked by queue persistence is retained")
+    func forceSendBlockedByQueuePersistenceIsRetained() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        mock.script(method: "session/prompt") { _ in Data("null".utf8) }
+        session.enqueueScheduled(blocks: [.text("later")], scheduledAt: Date().addingTimeInterval(60))
+        let itemId = try #require(session.queue.first?.id)
+        session.pendingQueuePersistenceCount = 1
+
+        runner.forceSendQueuedItem(id: itemId)
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        #expect(session.queue.first?.scheduledAt != nil)
+        #expect(session.queue.first?.status == .pending)
+        #expect(!mock.sent.contains { $0.method == "session/prompt" })
+        #expect(runner.hasRetainedCleanupPromptWork)
+    }
+
+    @Test("queued prompt completion notifies prompt work changed")
+    func queuedPromptCompletionNotifiesPromptWorkChanged() async throws {
+        var changeCount = 0
+        let (runner, mock, session, _) = try mkRunner {
+            changeCount += 1
+        }
+        mock.script(method: "session/prompt") { _ in Data("null".utf8) }
+        session.enqueue(blocks: [.text("queued")])
+
+        runner.flushQueueIfIdle()
+        for _ in 0 ..< 20 where changeCount == 0 {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        #expect(changeCount > 0)
+        #expect(session.queue.isEmpty)
     }
 
     @Test("flushQueueIfIdle is a no-op while state is .streaming")
@@ -195,8 +381,8 @@ struct ACPSessionRunnerQueueTests {
         #expect(session.queue[0].brokerOperationKey != operationKey)
     }
 
-    @Test("queued prompt response ack waits for durable queue pop")
-    func queuedPromptResponseAckWaitsForDurableQueuePop() async throws {
+    @Test("queued prompt response ack waits for durable queue pop and resumes draining")
+    func queuedPromptResponseAckWaitsForDurableQueuePopAndResumesDraining() async throws {
         let (runner, mock, session, store) = try mkRunner()
         let acknowledgement = DurableAcknowledgementRecorder()
         mock.scriptResponse(method: "session/prompt") { _ in
@@ -206,16 +392,19 @@ struct ACPSessionRunnerQueueTests {
             )
         }
         session.enqueue(blocks: [.text("ack-after-pop")])
+        session.enqueue(blocks: [.text("next")])
         runner.persistQueue()
         await runner.flushPersistence()
 
         runner.flushQueueIfIdle()
-        try await Task.sleep(nanoseconds: 200_000_000)
+        try await Task.sleep(nanoseconds: 300_000_000)
         await runner.flushPersistence()
 
+        let prompts = mock.sent.filter { $0.method == "session/prompt" }
+        #expect(prompts.count == 2)
         #expect(session.queue.isEmpty)
         #expect(try store.loadQueue(sessionId: "s").isEmpty)
-        #expect(acknowledgement.recordedCount == 1)
+        #expect(acknowledgement.recordedCount == 2)
     }
 
     @Test(".steer while streaming preserves the pending queue")
@@ -435,6 +624,7 @@ struct ACPSessionRunnerQueueTests {
         runner.persistQueue()
 
         runner.forceSendQueuedItem(id: selectedId)
+        #expect(runner.hasRetainedCleanupSteerWork)
         try await Task.sleep(nanoseconds: 250_000_000)
 
         #expect(mock.sent.contains { $0.method == "session/cancel" })

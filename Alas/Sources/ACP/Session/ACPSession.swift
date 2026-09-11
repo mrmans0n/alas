@@ -237,6 +237,7 @@ final class ACPSession: ObservableObject, Identifiable {
     /// `session/new` or `session/load`.
     var remoteSessionId: String?
     @Published var queue: [QueuedPrompt] = []
+    var pendingQueuePersistenceCount = 0
     @Published var steerUndo: SteerUndoState?
     struct SteerUndoState: Equatable {
         /// Unique per-snapshot id used by SwiftUI for view diffing — letting
@@ -1433,23 +1434,42 @@ final class ACPSession: ObservableObject, Identifiable {
     /// runner when the user submits while the agent is busy (or while
     /// the queue is already non-empty — see ACPSubmitRoute).
     func enqueue(
+        id: UUID = UUID(),
         blocks: [ACPContentBlock],
         draft: ACPComposerDraft? = nil,
         delegatedSource: ACPDelegatedPromptSource? = nil
     ) {
-        queue.append(QueuedPrompt(blocks: blocks, draft: draft, delegatedSource: delegatedSource))
+        let item = QueuedPrompt(id: id, blocks: blocks, draft: draft, delegatedSource: delegatedSource)
+        let insertAt = queue.firstIndex { $0.status == .pending && $0.scheduledAt != nil } ?? queue.endIndex
+        queue.insert(item, at: insertAt)
+    }
+
+    @discardableResult
+    func enqueueScheduled(
+        blocks: [ACPContentBlock],
+        scheduledAt: Date,
+        draft: ACPComposerDraft? = nil
+    ) -> UUID {
+        let item = QueuedPrompt(blocks: blocks, scheduledAt: scheduledAt, draft: draft)
+        let insertAt = queue.firstIndex {
+            $0.status == .pending && ($0.scheduledAt.map { $0 > scheduledAt } ?? false)
+        } ?? queue.endIndex
+        queue.insert(item, at: insertAt)
+        return item.id
     }
 
     /// Remove a specific item by id. The drag-handle X on the bubble
     /// calls this. Safe on .sending items because the UI hides X then —
     /// but we double-guard here to avoid yanking an in-flight RPC.
-    func removeFromQueue(id: UUID) {
-        guard let idx = queue.firstIndex(where: { $0.id == id }) else { return }
-        if queue[idx].status == .sending { return }
+    @discardableResult
+    func removeFromQueue(id: UUID) -> Bool {
+        guard let idx = queue.firstIndex(where: { $0.id == id }) else { return false }
+        if queue[idx].status == .sending { return false }
         if forceSendAfterSendingHeadId == id {
             forceSendAfterSendingHeadId = nil
         }
         queue.remove(at: idx)
+        return true
     }
 
     /// Pull a queued item back into the composer for editing: remove it and
@@ -1477,6 +1497,10 @@ final class ACPSession: ObservableObject, Identifiable {
         if queue.indices.contains(src), queue[src].status == .sending { return }
         // If moving across the .sending head (index 0 when sending), refuse.
         if !queue.isEmpty, queue[0].status == .sending, dst == 0 { return }
+        if let firstScheduled = queue.firstIndex(where: { $0.status == .pending && $0.scheduledAt != nil }),
+           (queue[src].scheduledAt != nil || dst >= firstScheduled) {
+            return
+        }
         let item = queue.remove(at: src)
         queue.insert(item, at: min(dst, queue.count))
     }
@@ -1501,6 +1525,7 @@ final class ACPSession: ObservableObject, Identifiable {
         var item = queue.remove(at: idx)
         item.status = .pending
         item.lastError = nil
+        item.scheduledAt = nil
 
         let insertAt = protectedPrefixCount
         queue.insert(item, at: min(insertAt, queue.count))
@@ -1543,7 +1568,14 @@ final class ACPSession: ObservableObject, Identifiable {
     /// item and the `.sending` head would stay stranded in the queue.
     func restorePendingSnapshot(_ snapshot: [QueuedPrompt]) {
         let insertAt = (queue.first?.status == .sending) ? 1 : 0
-        queue.insert(contentsOf: snapshot, at: insertAt)
+        queue.insert(contentsOf: snapshot.filter { $0.scheduledAt == nil }, at: insertAt)
+        for item in snapshot {
+            guard let scheduledAt = item.scheduledAt else { continue }
+            let index = queue.firstIndex {
+                $0.status == .pending && ($0.scheduledAt.map { $0 > scheduledAt } ?? false)
+            } ?? queue.endIndex
+            queue.insert(item, at: index)
+        }
     }
 
     /// Number of pending queue items. The transcript UI may render additional

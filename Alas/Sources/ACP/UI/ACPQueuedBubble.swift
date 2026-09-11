@@ -37,7 +37,10 @@ struct ACPQueuedBubble: View {
         .onHover { inside in
             if inside { hover.enter() } else { hover.leave() }
         }
-        .modifier(PendingDraggableModifier(enabled: item.status == .pending, payload: item.id.uuidString))
+        .modifier(PendingDraggableModifier(
+            enabled: item.status == .pending && item.scheduledAt == nil,
+            payload: item.id.uuidString
+        ))
     }
 
     private var statusRow: some View {
@@ -45,7 +48,7 @@ struct ACPQueuedBubble: View {
             if item.status == .sending {
                 ProgressView().scaleEffect(0.45).frame(width: 12, height: 12)
             }
-            Text(item.status == .sending ? "Sending" : "Queued")
+            statusText
                 .font(.system(size: 9, weight: .semibold))
                 .tracking(0.4)
                 .textCase(.uppercase)
@@ -58,6 +61,17 @@ struct ACPQueuedBubble: View {
             }
         }
         .lineLimit(1)
+    }
+
+    @ViewBuilder
+    private var statusText: some View {
+        if item.status == .sending {
+            Text("Sending")
+        } else if let scheduledAt = item.scheduledAt {
+            Text("Scheduled for \(scheduledAt, format: .dateTime.weekday(.abbreviated).month(.abbreviated).day().hour().minute())")
+        } else {
+            Text("Queued")
+        }
     }
 
     private var imageRow: some View {

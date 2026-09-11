@@ -158,10 +158,28 @@ final class AppState {
     @ObservationIgnored
     private var pendingACPDetachTasks: [String: [ACPSession.ID: PendingACPDetach]] = [:]
     @ObservationIgnored
+    private var retainedACPSessionCleanupTasks: [String: [ACPSession.ID: PendingACPDetach]] = [:]
+    @ObservationIgnored
     private var reconciledCreateFailureCompletionClaims: Set<String> = []
 #if DEBUG
     var pendingACPDetachCountForTesting: Int {
         pendingACPDetachTasks.values.reduce(0) { $0 + $1.count }
+    }
+
+    var retainedACPSessionCleanupCountForTesting: Int {
+        retainedACPSessionCleanupTasks.values.reduce(0) { $0 + $1.count }
+    }
+
+    func retainedACPSessionCleanupDelayForTesting(
+        manager: ACPSessionManager,
+        sessionId: ACPSession.ID,
+        retainActivePrompt: Bool = false
+    ) -> Duration? {
+        retainedScheduledSessionCleanupDelay(
+            manager: manager,
+            sessionId: sessionId,
+            retainActivePrompt: retainActivePrompt
+        )
     }
 #endif
     @ObservationIgnored
@@ -1074,12 +1092,46 @@ final class AppState {
         Task { [weak self] in
             await self?.reconcileInterruptedDelegations()
         }
+        Task { @MainActor [weak self] in
+            await self?.bootstrapScheduledACPSessions(worktreeIds: allWorktreeIds)
+        }
     }
 
     private func restoreLoadedWorkspaceCheckoutACPSessions() async {
         guard config.workspacesEnabled, workspacesManager.canMutate else { return }
-        for checkout in workspacesManager.checkouts where checkout.archivedAt == nil {
-            _ = await restoreWorkspaceCheckoutACPSessions(checkout)
+        let tasks = workspacesManager.checkouts.compactMap { checkout -> Task<Void, Never>? in
+            guard checkout.archivedAt == nil else { return nil }
+            return Task { @MainActor in
+                _ = await restoreWorkspaceCheckoutACPSessions(checkout)
+            }
+        }
+        for task in tasks { await task.value }
+    }
+
+    private func bootstrapScheduledACPSessions(worktreeIds: [String]) async {
+        let tasks = worktreeIds.compactMap { worktreeId -> Task<Void, Never>? in
+            guard let worktree = worktree(withId: worktreeId),
+                  let manager = acpManager(for: worktree)
+            else { return nil }
+            return Task { @MainActor in
+                await bootstrapScheduledACPSessions(owner: .worktree(worktreeId), manager: manager)
+            }
+        }
+        for task in tasks { await task.value }
+    }
+
+    private func bootstrapScheduledACPSessions(owner: SessionOwnerID, manager: ACPSessionManager) async {
+        _ = await manager.bootstrapScheduledQueueSessions { [weak self] sessionId in
+            guard let self else { return }
+            guard !hasACPSessionTab(owner: owner, sessionId: sessionId) else { return }
+            cleanupACPSession(owner: owner, sessionId: sessionId)
+        }
+    }
+
+    private func hasACPSessionTab(owner: SessionOwnerID, sessionId: ACPSession.ID) -> Bool {
+        tabs.tabs(for: owner).contains {
+            guard case .acpSession(let state) = $0 else { return false }
+            return state.sessionId == sessionId
         }
     }
 
@@ -6533,6 +6585,11 @@ final class AppState {
 
     private func cleanupACPSession(owner: SessionOwnerID, sessionId: String) {
         guard let manager = acpManagers[owner] else { return }
+        if retainedScheduledSessionStillNeedsRunner(manager: manager, sessionId: sessionId) {
+            scheduleRetainedACPSessionCleanup(owner: owner, sessionId: sessionId)
+            return
+        }
+        cancelRetainedACPSessionCleanup(owner: owner, sessionId: sessionId)
         // Flush any in-flight debounced draft write for this session
         // before the tab goes away. The manager itself stays alive
         // (other tabs may share it), so the global flush from
@@ -6572,10 +6629,187 @@ final class AppState {
         }
     }
 
+    private func retainedScheduledSessionStillNeedsRunner(manager: ACPSessionManager, sessionId: ACPSession.ID) -> Bool {
+        retainedScheduledSessionCleanupDelay(manager: manager, sessionId: sessionId) != nil
+    }
+
+    private func retainedScheduledSessionCleanupDelay(
+        manager: ACPSessionManager,
+        sessionId: ACPSession.ID,
+        retainActivePrompt: Bool = false
+    ) -> Duration? {
+        guard let session = manager.liveSession(for: sessionId) else { return nil }
+        let nextScheduledAt = session.queue.compactMap { item -> Date? in
+            guard item.status == .pending, item.lastError == nil else { return nil }
+            return item.scheduledAt
+        }.min()
+        if case .needsAuth = session.setupState { return nil }
+        let hasScheduledQueueWork = nextScheduledAt != nil || session.queue.contains {
+            $0.status == .sending && $0.scheduledAt != nil
+        }
+        let hasForcedQueueWork = session.queue.contains {
+            $0.scheduledAt == nil && (
+                $0.status == .sending || ($0.status == .pending && session.pendingQueuePersistenceCount > 0)
+            )
+        }
+        switch session.agentState {
+        case .ready, .spawning:
+            break
+        case .disconnected:
+            guard hasScheduledQueueWork || hasForcedQueueWork else { return nil }
+        case .idle:
+            guard hasScheduledQueueWork || hasForcedQueueWork else { return nil }
+        case .failed:
+            guard hasScheduledQueueWork || hasForcedQueueWork else { return nil }
+        }
+        if session.queue.first?.lastError != nil { return nil }
+        let activePromptCleanupDelay: Duration = switch session.transcript.streamingState {
+        case .awaitingInput, .awaitingPermission: .seconds(3600)
+        case .idle, .sending, .streaming: .milliseconds(250)
+        }
+        if retainActivePrompt && manager.retainedCleanupHasActivePromptWork(for: sessionId) {
+            return activePromptCleanupDelay
+        }
+        if session.queue.contains(where: {
+            $0.status == .sending && ($0.scheduledAt != nil || nextScheduledAt != nil)
+        }) {
+            return activePromptCleanupDelay
+        }
+        if hasForcedQueueWork, manager.retainedCleanupHasActivePromptWork(for: sessionId) {
+            return activePromptCleanupDelay
+        }
+        if manager.retainedCleanupHasSteerWork(for: sessionId) {
+            return activePromptCleanupDelay
+        }
+        if manager.retainedCleanupHasForkBarrierWork(for: sessionId) {
+            return .seconds(30)
+        }
+        guard let nextScheduledAt else { return nil }
+        let secondsUntilScheduledSend = nextScheduledAt.timeIntervalSinceNow
+        if case .disconnected = session.agentState, secondsUntilScheduledSend <= 0 {
+            return .seconds(30)
+        }
+        if case .idle = session.agentState, secondsUntilScheduledSend <= 0 {
+            return .seconds(30)
+        }
+        if case .spawning = session.agentState, secondsUntilScheduledSend <= 0 {
+            return .seconds(30)
+        }
+        guard secondsUntilScheduledSend > 0 else { return activePromptCleanupDelay }
+        return .seconds(secondsUntilScheduledSend)
+    }
+
+    private func scheduleRetainedACPSessionCleanup(
+        owner: SessionOwnerID,
+        sessionId: ACPSession.ID,
+        retainActivePrompt: Bool = false
+    ) {
+        let key = owner.storageKey
+        guard retainedACPSessionCleanupTasks[key]?[sessionId] == nil else { return }
+        acpManagers[owner]?.retainSession(id: sessionId)
+        let id = UUID()
+        let task = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                guard let manager = self.acpManagers[owner] else {
+                    self.clearRetainedACPSessionCleanup(owner: owner, sessionId: sessionId, id: id)
+                    return
+                }
+                guard let delay = self.retainedScheduledSessionCleanupDelay(
+                    manager: manager,
+                    sessionId: sessionId,
+                    retainActivePrompt: retainActivePrompt
+                ) else {
+                    self.clearRetainedACPSessionCleanup(owner: owner, sessionId: sessionId, id: id)
+                    self.cleanupACPSession(owner: owner, sessionId: sessionId)
+                    return
+                }
+                self.reattachRetainedScheduledSessionIfDue(manager: manager, sessionId: sessionId)
+                do {
+                    try await Task.sleep(for: delay)
+                } catch {
+                    return
+                }
+            }
+        }
+        retainedACPSessionCleanupTasks[key, default: [:]][sessionId] = PendingACPDetach(id: id, task: task)
+    }
+
+    private func reattachRetainedScheduledSessionIfDue(manager: ACPSessionManager, sessionId: ACPSession.ID) {
+        guard let session = manager.liveSession(for: sessionId) else { return }
+        switch session.agentState {
+        case .disconnected, .failed:
+            break
+        case .idle:
+            break
+        case .ready, .spawning:
+            return
+        }
+        guard session.queue.contains(where: { item in
+            (item.status == .pending || item.status == .sending)
+                && item.lastError == nil
+                && (item.scheduledAt?.timeIntervalSinceNow ?? .greatestFiniteMagnitude) <= 0
+        }) else { return }
+        Task { @MainActor in await manager.reattach(to: sessionId) }
+    }
+
+    private func restartRetainedACPSessionCleanupIfNeeded(
+        owner: SessionOwnerID,
+        sessionId: ACPSession.ID,
+        retainActivePrompt: Bool = false
+    ) {
+        guard retainedACPSessionCleanupTasks[owner.storageKey]?[sessionId] != nil else { return }
+        acpManagers[owner]?.retainSession(id: sessionId)
+        defer { acpManagers[owner]?.releaseSession(id: sessionId) }
+        cancelRetainedACPSessionCleanup(owner: owner, sessionId: sessionId)
+        guard retainActivePrompt else {
+            cleanupACPSession(owner: owner, sessionId: sessionId)
+            return
+        }
+        scheduleRetainedACPSessionCleanup(owner: owner, sessionId: sessionId, retainActivePrompt: true)
+    }
+
+    private func cancelRetainedACPSessionCleanup(owner: SessionOwnerID, sessionId: ACPSession.ID) {
+        let key = owner.storageKey
+        guard let pending = retainedACPSessionCleanupTasks[key]?[sessionId] else { return }
+        pending.task.cancel()
+        retainedACPSessionCleanupTasks[key]?.removeValue(forKey: sessionId)
+        if retainedACPSessionCleanupTasks[key]?.isEmpty == true {
+            retainedACPSessionCleanupTasks.removeValue(forKey: key)
+        }
+        acpManagers[owner]?.releaseSession(id: sessionId)
+    }
+
+    private func cancelRetainedACPSessionCleanups(owner: SessionOwnerID) {
+        let key = owner.storageKey
+        if let pendingBySession = retainedACPSessionCleanupTasks[key] {
+            for (sessionId, pending) in pendingBySession {
+                pending.task.cancel()
+                acpManagers[owner]?.releaseSession(id: sessionId)
+            }
+        }
+        retainedACPSessionCleanupTasks.removeValue(forKey: key)
+    }
+
+    private func clearRetainedACPSessionCleanup(owner: SessionOwnerID, sessionId: ACPSession.ID, id: UUID) {
+        let key = owner.storageKey
+        guard retainedACPSessionCleanupTasks[key]?[sessionId]?.id == id else { return }
+        retainedACPSessionCleanupTasks[key]?.removeValue(forKey: sessionId)
+        if retainedACPSessionCleanupTasks[key]?.isEmpty == true {
+            retainedACPSessionCleanupTasks.removeValue(forKey: key)
+        }
+        acpManagers[owner]?.releaseSession(id: sessionId)
+    }
+
     private func awaitPendingACPDetach(worktreeId: String, sessionId: ACPSession.ID) async {
-        guard let pending = pendingACPDetachTasks[worktreeId]?[sessionId] else { return }
+        await awaitPendingACPDetach(owner: .worktree(worktreeId), sessionId: sessionId)
+    }
+
+    private func awaitPendingACPDetach(owner: SessionOwnerID, sessionId: ACPSession.ID) async {
+        let key = owner.storageKey
+        guard let pending = pendingACPDetachTasks[key]?[sessionId] else { return }
         await pending.task.value
-        clearPendingACPDetach(worktreeId: worktreeId, sessionId: sessionId, id: pending.id)
+        clearPendingACPDetach(worktreeId: key, sessionId: sessionId, id: pending.id)
     }
 
     private func clearPendingACPDetach(worktreeId: String, sessionId: ACPSession.ID, id: UUID) {
@@ -6636,6 +6870,7 @@ final class AppState {
                 }
                 if case .acpSession(let state) = tab {
                     await awaitPendingACPDetach(worktreeId: worktreeID, sessionId: state.sessionId)
+                    cancelRetainedACPSessionCleanup(owner: .worktree(worktreeID), sessionId: state.sessionId)
                     guard closedTabHistory.last?.id == entry.id else { continue }
                     guard worktree(withId: worktreeID) != nil else {
                         closedTabHistory.remove(id: entry.id)
@@ -8252,6 +8487,13 @@ final class AppState {
                     await self.deliverPendingDelegatedMessages(to: sessionId, manager: manager)
                 }
             },
+            onQueueChanged: { [weak self] sessionId, retainActivePrompt in
+                self?.restartRetainedACPSessionCleanupIfNeeded(
+                    owner: owner,
+                    sessionId: sessionId,
+                    retainActivePrompt: retainActivePrompt
+                )
+            },
             brokerServiceFactory: {
                 let resourceURL = Bundle.main.resourceURL ?? Bundle.main.bundleURL
                 return try await LocalACPBrokerServicePool.shared.service(resourceURL: resourceURL)
@@ -8541,6 +8783,13 @@ final class AppState {
                     owner: owner
                 )
             },
+            onQueueChanged: { [weak self] sessionId, retainActivePrompt in
+                self?.restartRetainedACPSessionCleanupIfNeeded(
+                    owner: owner,
+                    sessionId: sessionId,
+                    retainActivePrompt: retainActivePrompt
+                )
+            },
             launchSpecTransformer: { [weak self] spec in
                 guard let self,
                       checkout.configurationSnapshot?.shared.creationLaunchPreference.useBypassPermissions == true,
@@ -8759,6 +9008,7 @@ final class AppState {
     }
 
     private func prepareACPManagerForDisposal(_ manager: ACPSessionManager, owner: SessionOwnerID) {
+        cancelRetainedACPSessionCleanups(owner: owner)
         // Flush any pending debounced draft writes before tearing the
         // manager down — otherwise the last ~300ms of typing in any
         // composer for this worktree never reaches SQLite.
@@ -8869,6 +9119,7 @@ final class AppState {
             guard manager.placeholderSession(id: state.sessionId) != nil else { continue }
             await manager.hydrateIfNeeded(id: state.sessionId)
         }
+        await bootstrapScheduledACPSessions(owner: owner, manager: manager)
         return true
     }
 
@@ -9113,7 +9364,9 @@ final class AppState {
     func openExistingACPSession(sessionId: ACPSession.ID) async {
         guard let worktreeId = selectedWorktreeId,
               let worktree = worktree(withId: worktreeId) else { return }
+        await awaitPendingACPDetach(owner: .worktree(worktree.id), sessionId: sessionId)
         guard let mgr = acpManager(for: worktree) else { return }
+        cancelRetainedACPSessionCleanup(owner: .worktree(worktree.id), sessionId: sessionId)
 
         // Focus the tab if it's already there.
         let tabIdToFocus: TabID? = tabs.tabs(forWorktree: worktree.id).compactMap { tab -> TabID? in
@@ -9146,7 +9399,9 @@ final class AppState {
     /// Checkout-owned sessions must not fall back to Repository Focus because
     /// their database, tabs, and lifecycle are tied to the checkout owner.
     func openExistingACPSession(sessionId: ACPSession.ID, owner: SessionOwnerID) async {
+        await awaitPendingACPDetach(owner: owner, sessionId: sessionId)
         guard let mgr = acpManager(for: owner) else { return }
+        cancelRetainedACPSessionCleanup(owner: owner, sessionId: sessionId)
 
         let tabIdToFocus: TabID? = tabs.tabs(for: owner).compactMap { tab -> TabID? in
             if case .acpSession(let state) = tab, state.sessionId == sessionId { return tab.id }

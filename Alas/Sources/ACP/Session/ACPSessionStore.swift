@@ -935,6 +935,27 @@ extension ACPSessionStore {
         guard let payload = rows.first?["payload"] as? Data else { return [] }
         return (try? JSONDecoder().decode([QueuedPrompt].self, from: payload)) ?? []
     }
+
+    func scheduledQueueSessionIds() throws -> [String] {
+        let rows = try db.query("""
+        SELECT q.session_id, q.payload
+        FROM session_queue q
+        JOIN sessions s ON s.id = q.session_id
+        WHERE s.archived = 0
+        """)
+        return rows.compactMap { row in
+            guard let sessionId = row["session_id"] as? String,
+                  let payload = row["payload"] as? Data,
+                  let items = try? JSONDecoder().decode([QueuedPrompt].self, from: payload),
+                  items.contains(where: {
+                      ($0.status == .pending || $0.status == .sending)
+                          && $0.lastError == nil
+                          && $0.scheduledAt != nil
+                  })
+            else { return nil }
+            return sessionId
+        }
+    }
 }
 
 extension ACPSessionStore {

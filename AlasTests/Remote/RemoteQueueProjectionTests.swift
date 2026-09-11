@@ -7,14 +7,15 @@ struct RemoteQueueProjectionTests {
         text: String? = nil,
         imageURIs: [String] = [],
         status: QueuedPrompt.Status = .pending,
-        lastError: String? = nil
+        lastError: String? = nil,
+        scheduledAt: Date? = nil
     ) -> QueuedPrompt {
         var blocks: [ACPContentBlock] = []
         if let text { blocks.append(.text(text)) }
         for uri in imageURIs {
             blocks.append(.image(data: "AAAA", uri: uri, mimeType: "image/png"))
         }
-        return QueuedPrompt(blocks: blocks, status: status, lastError: lastError)
+        return QueuedPrompt(blocks: blocks, scheduledAt: scheduledAt, status: status, lastError: lastError)
     }
 
     @Test func projectsPendingTextItem() {
@@ -37,6 +38,13 @@ struct RemoteQueueProjectionTests {
         let errored = RemoteQueueProjection.project([item(text: "b", lastError: "boom")])
         #expect(errored[0].status == "pending")
         #expect(errored[0].lastError == "boom")
+    }
+
+    @Test func projectsScheduledDeadline() {
+        let deadline = Date(timeIntervalSince1970: 1_800_000_000)
+        let projected = RemoteQueueProjection.project([item(text: "later", scheduledAt: deadline)])
+
+        #expect(projected[0].scheduledAt == 1_800_000_000_000)
     }
 
     @Test func joinsMultipleTextBlocksAndCountsImages() {

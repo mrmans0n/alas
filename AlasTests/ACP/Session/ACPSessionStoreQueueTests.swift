@@ -52,6 +52,20 @@ struct ACPSessionStoreQueueTests {
         #expect(loaded.isEmpty)
     }
 
+    @Test("scheduledQueueSessionIds includes scheduled sending items")
+    func scheduledQueueSessionIdsIncludesSending() throws {
+        let (store, sid) = try mkStore()
+        try store.upsertQueue(sessionId: sid, items: [
+            QueuedPrompt(
+                blocks: [.text("half sent")],
+                scheduledAt: Date().addingTimeInterval(-1),
+                status: .sending
+            ),
+        ])
+
+        #expect(try store.scheduledQueueSessionIds() == [sid])
+    }
+
     @Test("schema target version includes session_queue (v3+)")
     func schemaIncludesQueue() throws {
         let (store, _) = try mkStore()

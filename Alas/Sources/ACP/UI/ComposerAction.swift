@@ -1,3 +1,5 @@
+import Foundation
+
 /// Mutually-exclusive states the composer's single action button can be in.
 /// Derived from `(streamingState, hasText, agentState)` via
 /// `composerAction(...)`. The view layer renders one capsule per case.
@@ -7,7 +9,8 @@ enum ComposerAction: Equatable {
     /// Idle agent + non-empty composer. Tapping submits the prompt.
     case send
     /// Busy agent + non-empty composer. Primary action enqueues the prompt;
-    /// the menu exposes steer and stop.
+    /// the menu exposes steer and stop. Scheduling stays on the idle Send
+    /// affordance so the busy Queue button keeps its existing shape.
     case queue(menu: [ComposerMenuItem])
     /// Busy agent + empty composer. Tapping cancels the in-flight turn.
     case stop
@@ -18,6 +21,43 @@ enum ComposerAction: Equatable {
 enum ComposerMenuItem: Hashable {
     case steer
     case stop
+}
+
+enum ACPSchedulePreset: CaseIterable, Identifiable {
+    case laterToday
+    case tomorrowMorning
+    case nextMondayMorning
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .laterToday: "Later today"
+        case .tomorrowMorning: "Tomorrow at 9:00 AM"
+        case .nextMondayMorning: "Next Monday at 9:00 AM"
+        }
+    }
+
+    func date(after now: Date, calendar: Calendar = .current) -> Date? {
+        switch self {
+        case .laterToday:
+            let components = calendar.dateComponents([.hour, .minute], from: now)
+            let minutes = (components.hour ?? 0) * 60 + (components.minute ?? 0) + 120
+            let rounded = ((minutes + 29) / 30) * 30
+            guard rounded < 24 * 60,
+                  let date = calendar.date(bySettingHour: rounded / 60, minute: rounded % 60, second: 0, of: now)
+            else { return nil }
+            return date
+        case .tomorrowMorning:
+            guard let tomorrow = calendar.date(byAdding: .day, value: 1, to: now) else { return nil }
+            return calendar.date(bySettingHour: 9, minute: 0, second: 0, of: tomorrow)
+        case .nextMondayMorning:
+            let weekday = calendar.component(.weekday, from: now)
+            let days = (9 - weekday) % 7
+            guard let monday = calendar.date(byAdding: .day, value: days == 0 ? 7 : days, to: now) else { return nil }
+            return calendar.date(bySettingHour: 9, minute: 0, second: 0, of: monday)
+        }
+    }
 }
 
 /// Pure derive — no SwiftUI imports, no session/runner references.

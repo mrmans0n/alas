@@ -255,6 +255,345 @@ struct ClosedTabAppStateTests {
         #expect(fixture.state.canReopenClosedTab)
     }
 
+    @Test func closedACPSessionWithScheduledPromptDetachesAfterQueueDrains() async throws {
+        let gate = AsyncGate()
+        let state = AppState(
+            store: MemoryStore(),
+            acpDetachRunner: { _, sessionId in
+                #expect(sessionId == "scheduled-close")
+                await gate.enterAndWait()
+            }
+        )
+        let fixture = makeFixture(state: state)
+        let manager = try #require(fixture.state.acpManager(for: fixture.first))
+        let session = manager.createSession(id: "scheduled-close", agentId: "claude")
+        session.agentState = .ready
+        session.enqueueScheduled(blocks: [.text("later")], scheduledAt: Date().addingTimeInterval(0.05))
+        let tab = fixture.state.tabs.append(
+            acpSession: ACPSessionTabState(sessionId: session.id, title: "Closed chat"),
+            to: fixture.first.id
+        )
+
+        fixture.state.requestCloseTab(worktreeId: fixture.first.id, tabId: tab.id)
+
+        #expect(fixture.state.retainedACPSessionCleanupCountForTesting == 1)
+        #expect(fixture.state.pendingACPDetachCountForTesting == 0)
+        #expect(manager.liveSession(for: session.id) != nil)
+
+        session.queue.removeAll()
+        await gate.waitUntilEntered()
+
+        #expect(fixture.state.retainedACPSessionCleanupCountForTesting == 0)
+        #expect(fixture.state.pendingACPDetachCountForTesting == 1)
+
+        await gate.release()
+        for _ in 0 ..< 20 where fixture.state.pendingACPDetachCountForTesting != 0 {
+            await Task.yield()
+        }
+
+        #expect(fixture.state.pendingACPDetachCountForTesting == 0)
+    }
+
+    @Test func closedACPSessionWithOrdinarySendingPromptDetachesImmediately() async throws {
+        let gate = AsyncGate()
+        let state = AppState(
+            store: MemoryStore(),
+            acpDetachRunner: { _, sessionId in
+                #expect(sessionId == "ordinary-sending-close")
+                await gate.enterAndWait()
+            }
+        )
+        let fixture = makeFixture(state: state)
+        let manager = try #require(fixture.state.acpManager(for: fixture.first))
+        let session = manager.createSession(id: "ordinary-sending-close", agentId: "claude")
+        session.enqueue(blocks: [.text("now")])
+        _ = session.markQueueHeadSending()
+        let tab = fixture.state.tabs.append(
+            acpSession: ACPSessionTabState(sessionId: session.id, title: "Closed chat"),
+            to: fixture.first.id
+        )
+
+        fixture.state.requestCloseTab(worktreeId: fixture.first.id, tabId: tab.id)
+        await gate.waitUntilEntered()
+
+        #expect(fixture.state.retainedACPSessionCleanupCountForTesting == 0)
+        #expect(fixture.state.pendingACPDetachCountForTesting == 1)
+
+        await gate.release()
+        for _ in 0 ..< 20 where fixture.state.pendingACPDetachCountForTesting != 0 {
+            await Task.yield()
+        }
+
+        #expect(fixture.state.pendingACPDetachCountForTesting == 0)
+    }
+
+    @Test func closedACPSessionAwaitingInputUsesParkedRetainedCleanupDelay() async throws {
+        let fixture = makeFixture()
+        let manager = try #require(fixture.state.acpManager(for: fixture.first))
+        let session = manager.createSession(id: "awaiting-input-close", agentId: "claude")
+        session.agentState = .ready
+        session.transcript.streamingState = .awaitingInput
+        session.enqueue(blocks: [.text("now")])
+        _ = session.markQueueHeadSending()
+        session.enqueueScheduled(blocks: [.text("later")], scheduledAt: Date().addingTimeInterval(60))
+
+        #expect(
+            fixture.state.retainedACPSessionCleanupDelayForTesting(
+                manager: manager,
+                sessionId: session.id,
+                retainActivePrompt: true
+            ) == .seconds(3600)
+        )
+    }
+
+    @Test func closedACPSessionDirectAwaitingInputUsesParkedDelayForOverdueSchedule() async throws {
+        let fixture = makeFixture()
+        let manager = try #require(fixture.state.acpManager(for: fixture.first))
+        let session = manager.createSession(id: "direct-awaiting-input-close", agentId: "claude")
+        session.agentState = .ready
+        session.transcript.streamingState = .awaitingInput
+        session.enqueueScheduled(blocks: [.text("later")], scheduledAt: Date().addingTimeInterval(-1))
+
+        #expect(
+            fixture.state.retainedACPSessionCleanupDelayForTesting(
+                manager: manager,
+                sessionId: session.id
+            ) == .seconds(3600)
+        )
+    }
+
+    @Test func closedACPSessionDisconnectedSendingScheduleStaysRetained() async throws {
+        let fixture = makeFixture()
+        let manager = try #require(fixture.state.acpManager(for: fixture.first))
+        let session = manager.createSession(id: "disconnected-sending-schedule", agentId: "claude")
+        session.agentState = .disconnected
+        session.enqueueScheduled(blocks: [.text("later")], scheduledAt: Date().addingTimeInterval(60))
+        _ = session.markQueueHeadSending()
+
+        #expect(
+            fixture.state.retainedACPSessionCleanupDelayForTesting(
+                manager: manager,
+                sessionId: session.id
+            ) == .milliseconds(250)
+        )
+    }
+
+    @Test func closedACPSessionAuthBlockedScheduleDoesNotStayRetained() async throws {
+        let fixture = makeFixture()
+        let manager = try #require(fixture.state.acpManager(for: fixture.first))
+        let session = manager.createSession(id: "auth-blocked-schedule", agentId: "claude")
+        session.agentState = .failed("authentication required")
+        session.setupState = .needsAuth(methods: [], reason: "Sign in")
+        session.enqueueScheduled(blocks: [.text("later")], scheduledAt: Date().addingTimeInterval(60))
+
+        #expect(
+            fixture.state.retainedACPSessionCleanupDelayForTesting(
+                manager: manager,
+                sessionId: session.id
+            ) == nil
+        )
+    }
+
+    @Test func openExistingACPSessionCancelsRetainedCleanup() async throws {
+        let fixture = makeFixture()
+        fixture.state.selectWorktree(id: fixture.first.id)
+        let manager = try #require(fixture.state.acpManager(for: fixture.first))
+        let session = manager.createSession(id: "reopen-scheduled-close", agentId: "claude")
+        session.agentState = .ready
+        session.enqueueScheduled(blocks: [.text("later")], scheduledAt: Date().addingTimeInterval(60))
+        let tab = fixture.state.tabs.append(
+            acpSession: ACPSessionTabState(sessionId: session.id, title: "Closed chat"),
+            to: fixture.first.id
+        )
+        fixture.state.requestCloseTab(worktreeId: fixture.first.id, tabId: tab.id)
+        #expect(fixture.state.retainedACPSessionCleanupCountForTesting == 1)
+
+        await fixture.state.openExistingACPSession(sessionId: session.id)
+
+        #expect(fixture.state.retainedACPSessionCleanupCountForTesting == 0)
+    }
+
+    @Test func openExistingOwnedACPSessionCancelsRetainedCleanup() async throws {
+        let fixture = makeFixture()
+        let owner = SessionOwnerID.worktree(fixture.first.id)
+        _ = fixture.state.acpManager(for: fixture.first)
+        let manager = try #require(fixture.state.acpManager(for: owner))
+        let session = manager.createSession(id: "reopen-owned-scheduled-close", agentId: "claude")
+        session.agentState = .ready
+        session.enqueueScheduled(blocks: [.text("later")], scheduledAt: Date().addingTimeInterval(60))
+        let tab = fixture.state.tabs.append(
+            acpSession: ACPSessionTabState(sessionId: session.id, title: "Closed chat"),
+            to: owner
+        )
+        fixture.state.requestCloseTab(worktreeId: fixture.first.id, tabId: tab.id)
+        #expect(fixture.state.retainedACPSessionCleanupCountForTesting == 1)
+
+        await fixture.state.openExistingACPSession(sessionId: session.id, owner: owner)
+
+        #expect(fixture.state.retainedACPSessionCleanupCountForTesting == 0)
+    }
+
+    @Test func openExistingACPSessionWaitsForPendingDetach() async throws {
+        let gate = AsyncGate()
+        let state = AppState(
+            store: MemoryStore(),
+            acpDetachRunner: { _, _ in await gate.enterAndWait() }
+        )
+        let fixture = makeFixture(state: state)
+        fixture.state.selectWorktree(id: fixture.first.id)
+        let manager = try #require(fixture.state.acpManager(for: fixture.first))
+        let session = manager.createSession(id: "reopen-pending-detach", agentId: "claude")
+        let tab = fixture.state.tabs.append(
+            acpSession: ACPSessionTabState(sessionId: session.id, title: "Closed chat"),
+            to: fixture.first.id
+        )
+        fixture.state.requestCloseTab(worktreeId: fixture.first.id, tabId: tab.id)
+        await gate.waitUntilEntered()
+
+        let reopen = Task { @MainActor in
+            await fixture.state.openExistingACPSession(sessionId: session.id)
+        }
+        await Task.yield()
+        #expect(fixture.state.tabs.tabs(forWorktree: fixture.first.id).isEmpty)
+
+        await gate.release()
+        await reopen.value
+
+        #expect(fixture.state.pendingACPDetachCountForTesting == 0)
+        #expect(fixture.state.tabs.tabs(forWorktree: fixture.first.id).count == 1)
+    }
+
+    @Test func openExistingOwnedACPSessionWaitsForPendingDetach() async throws {
+        let gate = AsyncGate()
+        let state = AppState(
+            store: MemoryStore(),
+            acpDetachRunner: { _, _ in await gate.enterAndWait() }
+        )
+        let fixture = makeFixture(state: state)
+        let owner = SessionOwnerID.worktree(fixture.first.id)
+        _ = fixture.state.acpManager(for: fixture.first)
+        let manager = try #require(fixture.state.acpManager(for: owner))
+        let session = manager.createSession(id: "reopen-owned-pending-detach", agentId: "claude")
+        let tab = fixture.state.tabs.append(
+            acpSession: ACPSessionTabState(sessionId: session.id, title: "Closed chat"),
+            to: owner
+        )
+        fixture.state.requestCloseTab(worktreeId: fixture.first.id, tabId: tab.id)
+        await gate.waitUntilEntered()
+
+        let reopen = Task { @MainActor in
+            await fixture.state.openExistingACPSession(sessionId: session.id, owner: owner)
+        }
+        await Task.yield()
+        #expect(fixture.state.tabs.tabs(for: owner).isEmpty)
+
+        await gate.release()
+        await reopen.value
+
+        #expect(fixture.state.pendingACPDetachCountForTesting == 0)
+        #expect(fixture.state.tabs.tabs(for: owner).count == 1)
+    }
+
+    @Test func closedACPSessionWithFailedQueueHeadDetachesImmediately() async throws {
+        let gate = AsyncGate()
+        let state = AppState(
+            store: MemoryStore(),
+            acpDetachRunner: { _, sessionId in
+                #expect(sessionId == "failed-head-close")
+                await gate.enterAndWait()
+            }
+        )
+        let fixture = makeFixture(state: state)
+        let manager = try #require(fixture.state.acpManager(for: fixture.first))
+        let session = manager.createSession(id: "failed-head-close", agentId: "claude")
+        session.agentState = .ready
+        session.enqueueScheduled(blocks: [.text("failed")], scheduledAt: Date().addingTimeInterval(-1))
+        _ = session.markQueueHeadSending()
+        session.setQueueHeadError("failed")
+        session.enqueueScheduled(blocks: [.text("blocked later")], scheduledAt: Date().addingTimeInterval(60))
+        let tab = fixture.state.tabs.append(
+            acpSession: ACPSessionTabState(sessionId: session.id, title: "Closed chat"),
+            to: fixture.first.id
+        )
+
+        fixture.state.requestCloseTab(worktreeId: fixture.first.id, tabId: tab.id)
+        await gate.waitUntilEntered()
+
+        #expect(fixture.state.retainedACPSessionCleanupCountForTesting == 0)
+        #expect(fixture.state.pendingACPDetachCountForTesting == 1)
+
+        await gate.release()
+        for _ in 0 ..< 20 where fixture.state.pendingACPDetachCountForTesting != 0 {
+            await Task.yield()
+        }
+
+        #expect(fixture.state.pendingACPDetachCountForTesting == 0)
+    }
+
+    @Test func closedACPSessionWithDisconnectedScheduledPromptStaysRetained() async throws {
+        let fixture = makeFixture()
+        let manager = try #require(fixture.state.acpManager(for: fixture.first))
+        let session = manager.createSession(id: "disconnected-scheduled-close", agentId: "claude")
+        session.agentState = .disconnected
+        session.enqueueScheduled(blocks: [.text("later")], scheduledAt: Date().addingTimeInterval(60))
+        manager.retainSession(id: session.id)
+        let tab = fixture.state.tabs.append(
+            acpSession: ACPSessionTabState(sessionId: session.id, title: "Closed chat"),
+            to: fixture.first.id
+        )
+
+        fixture.state.requestCloseTab(worktreeId: fixture.first.id, tabId: tab.id)
+        manager.releaseSession(id: session.id)
+
+        #expect(fixture.state.retainedACPSessionCleanupCountForTesting == 1)
+        #expect(fixture.state.pendingACPDetachCountForTesting == 0)
+        #expect(manager.liveSession(for: session.id) != nil)
+    }
+
+    @Test func closedACPSessionWithIdleScheduledPromptStaysRetained() async throws {
+        let fixture = makeFixture()
+        let manager = try #require(fixture.state.acpManager(for: fixture.first))
+        let session = manager.createSession(id: "idle-scheduled-close", agentId: "claude")
+        session.agentState = .idle
+        session.enqueueScheduled(blocks: [.text("later")], scheduledAt: Date().addingTimeInterval(60))
+        manager.retainSession(id: session.id)
+        let tab = fixture.state.tabs.append(
+            acpSession: ACPSessionTabState(sessionId: session.id, title: "Closed chat"),
+            to: fixture.first.id
+        )
+
+        fixture.state.requestCloseTab(worktreeId: fixture.first.id, tabId: tab.id)
+        manager.releaseSession(id: session.id)
+
+        #expect(fixture.state.retainedACPSessionCleanupCountForTesting == 1)
+        #expect(fixture.state.pendingACPDetachCountForTesting == 0)
+        #expect(manager.liveSession(for: session.id) != nil)
+    }
+
+    @Test func retainedDisconnectedScheduleSurvivesQueueRestart() async throws {
+        let fixture = makeFixture()
+        let manager = try #require(fixture.state.acpManager(for: fixture.first))
+        let session = manager.createSession(id: "disconnected-scheduled-restart", agentId: "claude")
+        session.agentState = .disconnected
+        session.enqueueScheduled(blocks: [.text("later")], scheduledAt: Date().addingTimeInterval(60))
+        session.enqueueScheduled(blocks: [.text("later again")], scheduledAt: Date().addingTimeInterval(120))
+        let removedId = try #require(session.queue.first?.id)
+        manager.retainSession(id: session.id)
+        let tab = fixture.state.tabs.append(
+            acpSession: ACPSessionTabState(sessionId: session.id, title: "Closed chat"),
+            to: fixture.first.id
+        )
+
+        fixture.state.requestCloseTab(worktreeId: fixture.first.id, tabId: tab.id)
+        manager.releaseSession(id: session.id)
+        #expect(await manager.acquireWriterLease(sessionId: session.id))
+        await manager.queueRemove(for: session.id, itemId: removedId)
+
+        #expect(fixture.state.retainedACPSessionCleanupCountForTesting == 1)
+        #expect(manager.liveSession(for: session.id) != nil)
+        #expect(session.queue.count == 1)
+    }
+
     @Test func reopeningACPSessionDoesNotRestoreAfterWorktreeCleanupDuringDetach() async {
         let gate = AsyncGate()
         let state = AppState(

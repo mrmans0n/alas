@@ -59,6 +59,112 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(row.acpBrokerAcknowledgedCursor == 0)
     }
 
+    @Test("auth-required runner teardown notifies queue cleanup")
+    func authRequiredRunnerTeardownNotifiesQueueCleanup() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let client = ACPMockClient()
+        let method = terminalAuthMethod()
+        scriptInitialize(client, authMethods: [method])
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-auth")
+        client.script(method: "session/prompt") { _ in
+            throw JSONRPCError(
+                code: -32000,
+                message: "Internal error: authentication required",
+                data: nil
+            )
+        }
+        var queueChanges: [(ACPSession.ID, Bool)] = []
+        let manager = manager(store: store, client: client, onQueueChanged: { sessionId, retainActivePrompt in
+            queueChanges.append((sessionId, retainActivePrompt))
+        })
+        let session = manager.createSession(id: "auth-session", agentId: "claude")
+        await manager.attach(to: session.id, freshlyCreated: true)
+
+        await manager.sendPrompt(for: session.id, text: "hello", attachments: []) { _ in }
+        try await waitUntil {
+            queueChanges.contains { $0.0 == session.id && $0.1 == false }
+        }
+
+        #expect(session.agentState == .failed("authentication required"))
+        #expect(queueChanges.contains { $0.0 == session.id && $0.1 == false })
+    }
+
+    @Test("bootstrap attaches overdue persisted scheduled queues")
+    func bootstrapAttachesOverduePersistedScheduledQueues() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let seeded = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let seededSession = seeded.createSession(id: "scheduled-session", agentId: "claude")
+        seeded.enqueueWhileRecovering(
+            text: "overdue",
+            attachments: [],
+            scheduledAt: Date().addingTimeInterval(-1),
+            into: seededSession.id
+        )
+        await seeded.flushPersistence()
+
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-scheduled")
+        client.script(method: "session/prompt") { _ in Data("null".utf8) }
+        let manager = manager(store: store, client: client)
+
+        let bootstrapped = await manager.bootstrapScheduledQueueSessions()
+        try await waitUntilAsync {
+            await client.sent.contains { $0.method == "session/prompt" }
+        }
+
+        #expect(bootstrapped == [seededSession.id])
+        #expect(try store.loadQueue(sessionId: seededSession.id).isEmpty)
+    }
+
+    @Test("bootstrap defers future scheduled queues until deadline")
+    func bootstrapDefersFutureScheduledQueuesUntilDeadline() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: nil))
+        try store.upsertQueue(sessionId: "local", items: [
+            QueuedPrompt(blocks: [.text("later")], scheduledAt: Date().addingTimeInterval(60))
+        ])
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
+        let manager = manager(store: store, client: client)
+
+        let bootstrapped = await manager.bootstrapScheduledQueueSessions()
+
+        #expect(bootstrapped == ["local"])
+        #expect(client.sent.isEmpty)
+    }
+
+    @Test("bootstrapped scheduled mirror claims released lease at deadline")
+    func bootstrappedScheduledMirrorClaimsReleasedLeaseAtDeadline() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: "remote-existing"))
+        try store.upsertQueue(sessionId: "local", items: [
+            QueuedPrompt(blocks: [.text("due soon")], scheduledAt: Date().addingTimeInterval(0.3))
+        ])
+        try store.seizeLease(
+            sessionId: "local",
+            instanceId: "OTHER",
+            pid: Int64(getpid()),
+            now: Int64(Date().timeIntervalSince1970)
+        )
+        let lease = try #require(try store.loadLease(sessionId: "local"))
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/load", sessionId: "remote-existing")
+        client.script(method: "session/prompt") { _ in Data("null".utf8) }
+        let manager = manager(store: store, client: client)
+
+        let bootstrapped = await manager.bootstrapScheduledQueueSessions()
+        try store.releaseLease(sessionId: "local", instanceId: "OTHER", leaseToken: lease.token)
+        try await waitUntil(timeoutNanos: 2_000_000_000) {
+            client.sent.contains { $0.method == "session/prompt" }
+        }
+
+        #expect(bootstrapped == ["local"])
+        #expect(try store.loadQueue(sessionId: "local").isEmpty)
+    }
+
     @Test("reopened local broker session attaches from persisted cursor")
     func reopenedLocalBrokerSessionAttachesFromPersistedCursor() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
@@ -1517,6 +1623,65 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(!row.contextRecoveryPending)
     }
 
+    @Test("pending force send waits for transcript recovery")
+    func pendingForceSendWaitsForTranscriptRecovery() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: "remote-old"))
+        let priorPrompt: ACPMessage = .user(id: UUID(), text: "prior prompt", attachments: [])
+        try appendMessage(priorPrompt, to: store, seq: 0)
+        let forced = QueuedPrompt(blocks: [.text("forced prompt")])
+        try store.upsertQueue(sessionId: "local", items: [forced])
+        let newSessionGate = AttachPhaseGate()
+        let recoveryGate = PromptGate()
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            throw JSONRPCError(code: -32601, message: "Method not found", data: nil)
+        }
+        client.scriptAsync(method: "session/new") { _ in
+            await newSessionGate.enterAndWait()
+            return try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-new",
+                availableModels: [],
+                availableModes: [],
+                currentModel: nil,
+                currentMode: nil,
+                promptSuggestions: []
+            ))
+        }
+        client.scriptAsync(method: "session/prompt") { request in
+            let params = try #require(request.params as? ACPSessionPromptParams)
+            if params.prompt.contains(where: { block in
+                guard case .text(let text) = block else { return false }
+                return text.contains("prior prompt")
+            }) {
+                await recoveryGate.waitInPrompt()
+            }
+            return Data("null".utf8)
+        }
+        let manager = manager(store: store, client: client)
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+
+        let attachTask = Task { @MainActor in
+            await manager.attach(to: session.id, freshlyCreated: false)
+        }
+        for _ in 0 ..< 50 where !(await newSessionGate.hasEntered) {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(await newSessionGate.hasEntered)
+        await manager.queueForceSend(for: session.id, itemId: forced.id)
+        await newSessionGate.release()
+        try await waitUntil { client.sent.filter { $0.method == "session/prompt" }.count == 1 }
+        await recoveryGate.release()
+        await attachTask.value
+
+        try await waitUntil {
+            let prompts = client.sent.compactMap { $0.params as? ACPSessionPromptParams }
+            return prompts.count == 2 && prompts[1].prompt == [.text("forced prompt")]
+        }
+    }
+
     @Test("new auth failure enters needsAuth with initialized auth method")
     func newAuthFailureEntersNeedsAuthWithInitializedAuthMethod() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
@@ -2532,12 +2697,14 @@ struct ACPSessionManagerAttachRestoreTests {
     private func manager(
         store: ACPSessionStore,
         client: ACPMockClient,
-        mcpProjectContextProvider: ACPSessionManager.MCPProjectContextProvider? = nil
+        mcpProjectContextProvider: ACPSessionManager.MCPProjectContextProvider? = nil,
+        onQueueChanged: ((ACPSession.ID, Bool) -> Void)? = nil
     ) -> ACPSessionManager {
         ACPSessionManager(
             worktreeId: "wt",
             worktreePath: "/tmp/wt",
             store: store,
+            onQueueChanged: onQueueChanged,
             setupEvaluator: { _ in .ready },
             connectionFactory: { _, _, _ in ACPConnection(client: client) },
             mcpProjectContextProvider: mcpProjectContextProvider

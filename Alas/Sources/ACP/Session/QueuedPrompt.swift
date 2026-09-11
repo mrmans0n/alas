@@ -6,6 +6,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
     let id: UUID
     var blocks: [ACPContentBlock]
     let enqueuedAt: Date
+    var scheduledAt: Date?
     var status: Status
     var lastError: String?
     /// Set the first time `sendNow` dispatches this item: the user prompt
@@ -29,6 +30,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
     init(id: UUID = UUID(),
          blocks: [ACPContentBlock],
          enqueuedAt: Date = Date(),
+         scheduledAt: Date? = nil,
          status: Status = .pending,
          lastError: String? = nil,
          draft: ACPComposerDraft? = nil,
@@ -39,6 +41,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
         self.id = id
         self.blocks = blocks
         self.enqueuedAt = enqueuedAt
+        self.scheduledAt = scheduledAt
         self.status = status
         self.lastError = lastError
         self.draft = draft
@@ -48,7 +51,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, blocks, enqueuedAt, status, lastError, draft, delegatedSource, transcriptRecorded, brokerOperationAttempt
+        case id, blocks, enqueuedAt, scheduledAt, status, lastError, draft, delegatedSource, transcriptRecorded, brokerOperationAttempt
     }
 
     init(from decoder: Decoder) throws {
@@ -56,6 +59,7 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
         id = try c.decode(UUID.self, forKey: .id)
         blocks = try c.decode([ACPContentBlock].self, forKey: .blocks)
         enqueuedAt = try c.decode(Date.self, forKey: .enqueuedAt)
+        scheduledAt = try? c.decode(Date.self, forKey: .scheduledAt)
         status = try c.decode(Status.self, forKey: .status)
         lastError = try? c.decode(String.self, forKey: .lastError)
         draft = try? c.decode(ACPComposerDraft.self, forKey: .draft)
@@ -73,6 +77,10 @@ struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
         var copy = self
         copy.status = .pending
         return copy
+    }
+
+    func isReady(at date: Date = Date()) -> Bool {
+        scheduledAt.map { $0 <= date } ?? true
     }
 
     /// The draft to load back into the composer when this item is edited:

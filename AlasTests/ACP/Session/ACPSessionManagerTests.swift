@@ -5,6 +5,64 @@ import Testing
 @MainActor
 @Suite("ACPSessionManager")
 struct ACPSessionManagerTests {
+    private struct MemoryStore: PersistenceStoreProtocol {
+        func write<T: Encodable>(_: T, to _: URL) throws {}
+        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
+    }
+
+    private actor AsyncGate {
+        private var entered = false
+        private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+        private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+        func enterAndWait() async {
+            entered = true
+            let waiters = entryWaiters
+            entryWaiters.removeAll()
+            for waiter in waiters {
+                waiter.resume()
+            }
+            await withCheckedContinuation { continuation in
+                releaseContinuation = continuation
+            }
+        }
+
+        func waitUntilEntered() async {
+            if entered { return }
+            await withCheckedContinuation { continuation in
+                entryWaiters.append(continuation)
+            }
+        }
+
+        func release() {
+            releaseContinuation?.resume()
+            releaseContinuation = nil
+        }
+    }
+
+    private func scriptInitialize(_ client: ACPMockClient) {
+        client.script(method: "initialize") { _ in
+            try JSONEncoder().encode(ACPInitializeResult(
+                protocolVersion: 1,
+                agentCapabilities: nil,
+                authMethods: []
+            ))
+        }
+    }
+
+    private func scriptSessionResult(_ client: ACPMockClient, method: String, sessionId: String) {
+        client.script(method: method) { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: sessionId,
+                availableModels: [],
+                availableModes: [],
+                currentModel: nil,
+                currentMode: nil,
+                promptSuggestions: []
+            ))
+        }
+    }
+
     @Test("ordinary stable prompt is persisted only once")
     func ordinaryStablePromptIsPersistedOnlyOnce() async throws {
         let url = FileManager.default.temporaryDirectory
@@ -33,6 +91,92 @@ struct ACPSessionManagerTests {
             messageId: promptID.uuidString
         ))
         #expect(try store.loadQueue(sessionId: "session").map(\.id) == [promptID])
+    }
+
+    @Test("mission prompts stay ahead of scheduled prompts")
+    func missionPromptStaysAheadOfScheduledPrompt() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-mission-schedule-order-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let session = manager.createSession(id: "session", agentId: "codex", autoRunDefault: false)
+        session.enqueueScheduled(blocks: [.text("later")], scheduledAt: .distantFuture)
+        let promptID = UUID()
+
+        #expect(await manager.enqueuePrompt(id: promptID, text: "now", into: session.id))
+        #expect(session.queue.map(\.blocks) == [[.text("now")], [.text("later")]])
+        #expect(session.queue.map(\.scheduledAt) == [nil, .distantFuture])
+    }
+
+    @Test("remote queue clear notifies queue change")
+    func remoteQueueClearNotifiesQueueChange() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-remote-queue-change-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        var changedSessions: [ACPSession.ID] = []
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            onQueueChanged: { sessionId, _ in changedSessions.append(sessionId) }
+        )
+        let session = manager.createSession(id: "session", agentId: "codex", autoRunDefault: false)
+        session.enqueueScheduled(blocks: [.text("later")], scheduledAt: .distantFuture)
+
+        #expect(await manager.acquireWriterLease(sessionId: session.id))
+        await manager.queueClear(for: session.id)
+
+        #expect(changedSessions == [session.id])
+        #expect(session.queue.isEmpty)
+    }
+
+    @Test("remote queue remove ignores sending items without notifying")
+    func remoteQueueRemoveSendingItemDoesNotNotify() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-remote-queue-remove-sending-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        var changedSessions: [ACPSession.ID] = []
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            onQueueChanged: { sessionId, _ in changedSessions.append(sessionId) }
+        )
+        let session = manager.createSession(id: "session", agentId: "codex", autoRunDefault: false)
+        let itemId = UUID()
+        session.queue.append(QueuedPrompt(id: itemId, blocks: [.text("sending")], status: .sending))
+
+        #expect(await manager.acquireWriterLease(sessionId: session.id))
+        await manager.queueRemove(for: session.id, itemId: itemId)
+
+        #expect(changedSessions.isEmpty)
+        #expect(session.queue.map(\.id) == [itemId])
+    }
+
+    @Test("remote queue retry ignores stale retry requests")
+    func remoteQueueRetryIgnoresStaleRequests() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-remote-queue-retry-stale-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        var changedSessions: [ACPSession.ID] = []
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            onQueueChanged: { sessionId, _ in changedSessions.append(sessionId) }
+        )
+        let session = manager.createSession(id: "session", agentId: "codex", autoRunDefault: false)
+        let sendingId = UUID()
+        let pendingId = UUID()
+        session.queue.append(QueuedPrompt(id: sendingId, blocks: [.text("sending")], status: .sending))
+        session.queue.append(QueuedPrompt(id: pendingId, blocks: [.text("pending")], status: .pending))
+
+        #expect(await manager.acquireWriterLease(sessionId: session.id))
+        await manager.queueRetry(for: session.id, itemId: sendingId)
+        await manager.queueRetry(for: session.id, itemId: pendingId)
+
+        #expect(changedSessions.isEmpty)
+        #expect(session.queue.map(\.id) == [sendingId, pendingId])
     }
 
     @Test("delegated prompt already recorded in the transcript is not requeued")
@@ -351,6 +495,267 @@ struct ACPSessionManagerTests {
 
         await mgr.detach(sessionId: session.id)
         #expect(session.queue[0].status == .pending)
+    }
+
+    @Test("attach normalizes an in-flight scheduled row before flushing")
+    func attachNormalizesSendingScheduleBeforeFlush() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-attach-sending-schedule-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote")
+        client.script(method: "session/prompt") { _ in Data("null".utf8) }
+        let mgr = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) }
+        )
+        let session = mgr.createSession(id: "session", agentId: "claude")
+        session.enqueueScheduled(blocks: [.text("queued")], scheduledAt: Date().addingTimeInterval(-1))
+        session.markQueueHeadSending()
+
+        await mgr.attach(to: session.id, freshlyCreated: true)
+        for _ in 0 ..< 20 where !session.queue.isEmpty {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        #expect(client.sent.contains { $0.method == "session/prompt" })
+    }
+
+    @Test("disconnected forced sending row stays retained")
+    func disconnectedForcedSendingRowStaysRetained() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-disconnected-force-send-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote")
+        let mgr = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) }
+        )
+        let session = mgr.createSession(id: "session", agentId: "claude")
+        await mgr.attach(to: session.id, freshlyCreated: true)
+        session.queue.append(QueuedPrompt(blocks: [.text("forced")], status: .sending))
+        session.transcript.streamingState = .sending
+        session.agentState = .disconnected
+
+        #expect(
+            AppState(store: MemoryStore()).retainedACPSessionCleanupDelayForTesting(
+                manager: mgr,
+                sessionId: session.id
+            ) == .milliseconds(250)
+        )
+    }
+
+    @Test("queue force send reattaches disconnected sessions first")
+    func queueForceSendReattachesDisconnectedSession() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-force-send-reattach-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let session = mgr.createSession(id: "session", agentId: "no-such-agent-\(UUID().uuidString)")
+        session.agentState = .disconnected
+        session.enqueueScheduled(blocks: [.text("later")], scheduledAt: .distantFuture)
+        let itemId = try #require(session.queue.first?.id)
+
+        await mgr.queueForceSend(for: session.id, itemId: itemId)
+
+        #expect(session.agentState != .disconnected)
+    }
+
+    @Test("queue force send during attach sends after ready")
+    func queueForceSendDuringAttachSendsAfterReady() async throws {
+        let gate = AsyncGate()
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-force-send-spawning-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let client = ACPMockClient()
+        client.scriptAsync(method: "initialize") { _ in
+            await gate.enterAndWait()
+            return try JSONEncoder().encode(ACPInitializeResult(
+                protocolVersion: 1,
+                agentCapabilities: nil,
+                authMethods: []
+            ))
+        }
+        scriptSessionResult(client, method: "session/new", sessionId: "remote")
+        client.script(method: "session/prompt") { _ in Data("null".utf8) }
+        let mgr = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) }
+        )
+        let session = mgr.createSession(id: "session", agentId: "claude")
+        session.enqueueScheduled(blocks: [.text("later")], scheduledAt: .distantFuture)
+        let itemId = try #require(session.queue.first?.id)
+        let attachTask = Task { @MainActor in
+            await mgr.attach(to: session.id, freshlyCreated: true)
+        }
+        await gate.waitUntilEntered()
+
+        await mgr.queueForceSend(for: session.id, itemId: itemId)
+        #expect(client.sent.contains(where: { $0.method == "session/prompt" }) == false)
+        await gate.release()
+        await attachTask.value
+        for _ in 0 ..< 50 where !client.sent.contains(where: { $0.method == "session/prompt" }) {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        #expect(client.sent.contains(where: { $0.method == "session/prompt" }))
+    }
+
+    @Test("queue force send during attach preserves every requested item")
+    func queueForceSendDuringAttachPreservesEveryRequestedItem() async throws {
+        let gate = AsyncGate()
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-force-send-spawning-many-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let client = ACPMockClient()
+        client.scriptAsync(method: "initialize") { _ in
+            await gate.enterAndWait()
+            return try JSONEncoder().encode(ACPInitializeResult(
+                protocolVersion: 1,
+                agentCapabilities: nil,
+                authMethods: []
+            ))
+        }
+        scriptSessionResult(client, method: "session/new", sessionId: "remote")
+        client.script(method: "session/prompt") { _ in Data("null".utf8) }
+        let mgr = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) }
+        )
+        let session = mgr.createSession(id: "session", agentId: "claude")
+        session.enqueueScheduled(blocks: [.text("first")], scheduledAt: .distantFuture)
+        session.enqueueScheduled(blocks: [.text("second")], scheduledAt: .distantFuture)
+        let firstId = try #require(session.queue.first?.id)
+        let secondId = try #require(session.queue.dropFirst().first?.id)
+        let attachTask = Task { @MainActor in
+            await mgr.attach(to: session.id, freshlyCreated: true)
+        }
+        await gate.waitUntilEntered()
+
+        await mgr.queueForceSend(for: session.id, itemId: firstId)
+        await mgr.queueForceSend(for: session.id, itemId: secondId)
+        await gate.release()
+        await attachTask.value
+        for _ in 0 ..< 100 where client.sent.filter({ $0.method == "session/prompt" }).count < 2 {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        let prompts = try client.sent
+            .filter { $0.method == "session/prompt" }
+            .map { try #require($0.params as? ACPSessionPromptParams).prompt }
+        #expect(prompts == [[.text("first")], [.text("second")]])
+    }
+
+    @Test("queue force send during pre-lease spawn is retained")
+    func queueForceSendDuringPreLeaseSpawnIsRetained() async throws {
+        var queueChanged = false
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-force-send-prelease-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let mgr = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            onQueueChanged: { _, _ in queueChanged = true }
+        )
+        let session = mgr.createSession(id: "session", agentId: "claude")
+        session.agentState = .spawning
+        session.enqueueScheduled(blocks: [.text("later")], scheduledAt: .distantFuture)
+        let itemId = try #require(session.queue.first?.id)
+
+        await mgr.queueForceSend(for: session.id, itemId: itemId)
+        await mgr.flushPersistence()
+
+        #expect(queueChanged)
+        #expect(session.queue.first?.scheduledAt == nil)
+        #expect(try store.loadQueue(sessionId: session.id).first?.scheduledAt == nil)
+    }
+
+    @Test("queue force send during recovering persistence keeps schedule parked")
+    func queueForceSendDuringRecoveringPersistenceKeepsScheduleParked() async throws {
+        var queueChanged = false
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-force-send-recovering-persistence-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let mgr = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            onQueueChanged: { _, _ in queueChanged = true }
+        )
+        let session = mgr.createSession(id: "session", agentId: "claude")
+        session.agentState = .spawning
+        session.enqueueScheduled(blocks: [.text("later")], scheduledAt: .distantFuture)
+        let itemId = try #require(session.queue.first?.id)
+        session.pendingQueuePersistenceCount = 1
+
+        await mgr.queueForceSend(for: session.id, itemId: itemId)
+
+        #expect(queueChanged)
+        #expect(session.queue.first?.scheduledAt != nil)
+    }
+
+    @Test("stale force send during attach falls back to queue flush")
+    func staleForceSendDuringAttachFallsBackToQueueFlush() async throws {
+        let gate = AsyncGate()
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-stale-force-send-spawning-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let client = ACPMockClient()
+        client.scriptAsync(method: "initialize") { _ in
+            await gate.enterAndWait()
+            return try JSONEncoder().encode(ACPInitializeResult(
+                protocolVersion: 1,
+                agentCapabilities: nil,
+                authMethods: []
+            ))
+        }
+        scriptSessionResult(client, method: "session/new", sessionId: "remote")
+        client.script(method: "session/prompt") { request in
+            let params = try #require(request.params as? ACPSessionPromptParams)
+            #expect(params.prompt == [.text("fallback")])
+            return Data("null".utf8)
+        }
+        let mgr = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) }
+        )
+        let session = mgr.createSession(id: "session", agentId: "claude")
+        session.enqueue(blocks: [.text("removed")])
+        session.enqueue(blocks: [.text("fallback")])
+        let removedId = try #require(session.queue.first?.id)
+        let attachTask = Task { @MainActor in
+            await mgr.attach(to: session.id, freshlyCreated: true)
+        }
+        await gate.waitUntilEntered()
+
+        await mgr.queueForceSend(for: session.id, itemId: removedId)
+        await mgr.queueRemove(for: session.id, itemId: removedId)
+        await gate.release()
+        await attachTask.value
+        for _ in 0 ..< 50 where !client.sent.contains(where: { $0.method == "session/prompt" }) {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        #expect(client.sent.contains(where: { $0.method == "session/prompt" }))
     }
 
     @Test("persistQueue writes to SQLite without requiring a runner")

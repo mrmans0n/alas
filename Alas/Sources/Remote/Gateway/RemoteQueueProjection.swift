@@ -26,7 +26,8 @@ enum RemoteQueueProjection {
                 imageCount: imageCount,
                 resourceCount: resourceCount,
                 status: item.status.rawValue,
-                lastError: item.lastError)
+                lastError: item.lastError,
+                scheduledAt: item.scheduledAt.map { $0.timeIntervalSince1970 * 1_000 })
         }
     }
 

@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 
 /// Single state-driven button that replaces the composer's separate Send
@@ -8,9 +9,12 @@ struct ACPComposerActionButton: View {
     let action: ComposerAction
     let onPrimary: () -> Void
     let onMenu: (ComposerMenuItem) -> Void
+    let onSchedule: (Date) -> Void
     let queueBadgeCount: Int
 
     @Environment(\.theme) private var theme
+    @State private var customScheduleDate = Date()
+    @State private var showsCustomSchedule = false
 
     var body: some View {
         switch action {
@@ -25,26 +29,97 @@ struct ACPComposerActionButton: View {
         }
     }
 
-    // MARK: - Send (single capsule, accent-colored)
+    // MARK: - Send (split capsule, accent-colored)
 
     private var sendCapsule: some View {
-        Button(action: onPrimary) {
-            HStack(spacing: 5) {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 12, weight: .bold))
-                Text("Send")
-                    .font(.system(size: 11.5, weight: .semibold))
+        HStack(spacing: 1) {
+            Button(action: onPrimary) {
+                HStack(spacing: 5) {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 12, weight: .bold))
+                    Text("Send")
+                        .font(.system(size: 11.5, weight: .semibold))
+                }
+                .foregroundStyle(theme.color("bg-0"))
+                .padding(.horizontal, 11)
+                .frame(height: ACPComposerActionButtonMetrics.capsuleHeight)
+                .background(
+                    UnevenRoundedRectangle(
+                        cornerRadii: .init(
+                            topLeading: ACPComposerActionButtonMetrics.cornerRadius,
+                            bottomLeading: ACPComposerActionButtonMetrics.cornerRadius
+                        )
+                    )
+                    .fill(theme.color("accent"))
+                )
+                .overlay(alignment: .topTrailing) { badgeOverlay }
             }
-            .foregroundStyle(theme.color("bg-0"))
-            .padding(.horizontal, 11)
-            .frame(height: ACPComposerActionButtonMetrics.capsuleHeight)
-            .background(
-                RoundedRectangle(cornerRadius: ACPComposerActionButtonMetrics.cornerRadius).fill(theme.color("accent"))
-            )
-            .overlay(alignment: .topTrailing) { badgeOverlay }
+            .buttonStyle(.plain)
+            .help("Send (⏎)")
+
+            Menu {
+                let now = Date()
+                ForEach(ACPSchedulePreset.allCases) { preset in
+                    if preset.date(after: now) != nil {
+                        Button(preset.title) {
+                            if let date = preset.date(after: Date()) { onSchedule(date) }
+                        }
+                    }
+                }
+                Divider()
+                Button("Custom date and time…") {
+                    let now = Date()
+                    customScheduleDate = ACPSchedulePreset.laterToday.date(after: now)
+                        ?? ACPSchedulePreset.tomorrowMorning.date(after: now)!
+                    showsCustomSchedule = true
+                }
+            } label: {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(theme.color("bg-0"))
+                    .padding(.horizontal, 7)
+                    .frame(height: ACPComposerActionButtonMetrics.capsuleHeight)
+                    .background(
+                        UnevenRoundedRectangle(
+                            cornerRadii: .init(
+                                bottomTrailing: ACPComposerActionButtonMetrics.cornerRadius,
+                                topTrailing: ACPComposerActionButtonMetrics.cornerRadius
+                            )
+                        )
+                        .fill(theme.color("accent"))
+                    )
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Schedule send")
         }
-        .buttonStyle(.plain)
-        .help("Send (⏎)")
+        .popover(isPresented: $showsCustomSchedule) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Schedule message")
+                    .font(.headline)
+                DatePicker(
+                    "Send at",
+                    selection: $customScheduleDate,
+                    in: Date()...,
+                    displayedComponents: [.date, .hourAndMinute]
+                )
+                HStack {
+                    Spacer()
+                    Button("Cancel") { showsCustomSchedule = false }
+                    Button("Schedule") {
+                        if customScheduleDate > Date() {
+                            onSchedule(customScheduleDate)
+                            showsCustomSchedule = false
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(customScheduleDate <= Date())
+                }
+            }
+            .padding(16)
+            .frame(width: 320)
+        }
     }
 
     // MARK: - Stop (single capsule, destructive treatment)

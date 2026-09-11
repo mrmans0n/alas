@@ -580,6 +580,10 @@ actor ACPSessionPersistence {
         try openedStore().loadQueue(sessionId: sessionId)
     }
 
+    func scheduledQueueSessionIds() throws -> [String] {
+        try openedStore().scheduledQueueSessionIds()
+    }
+
     func loadLease(sessionId: String) throws -> ACPSessionLease? {
         try openedStore().loadLease(sessionId: sessionId)
     }

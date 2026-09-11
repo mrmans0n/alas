@@ -49,6 +49,7 @@ final class ACPSessionRunner {
     private let leaseFenceProvider: () -> ACPSessionLeaseFence?
     private let onAuthRequired: ((ACPSessionRunner, String) async -> Void)?
     private let onPersist: (() -> Void)?
+    private let onPromptWorkChanged: (() -> Void)?
     private let onSessionTitleUpdated: ((String) -> Void)?
     private var updatesTask: Task<Void, Never>?
     private var permissionsTask: Task<Void, Never>?
@@ -56,6 +57,7 @@ final class ACPSessionRunner {
     private var terminalsTask: Task<Void, Never>?
     private var seq: Int64 = 0
     private var steerUndoExpiryTask: Task<Void, Never>?
+    private var scheduledQueueWakeTask: Task<Void, Never>?
     /// Monotonic prompt counter + active/cancelled bookkeeping (inherited
     /// from main / PR #338). Reused by the queue's sendNow path:
     /// `activePromptID` identifies the task that currently owns
@@ -69,6 +71,8 @@ final class ACPSessionRunner {
     private var persistedMessageCount: Int
     private var persistenceTail: Task<Void, Never>?
     private var persistenceGeneration = 0
+    private var pendingQueueForceSendsAfterPersistence: [UUID] = []
+    private var stopped = false
     private var pendingCompletedOutputBoundaryUpdateCount: Int?
     private var pendingStreamingPersistIndices: Set<Int> = []
     /// Revisions distinguish a new streamed chunk from the payload currently
@@ -137,6 +141,7 @@ final class ACPSessionRunner {
          onUserCancel: (() -> Void)? = nil,
          onAuthRequired: ((ACPSessionRunner, String) async -> Void)? = nil,
          onPersist: (() -> Void)? = nil,
+         onPromptWorkChanged: (() -> Void)? = nil,
          onSessionTitleUpdated: ((String) -> Void)? = nil,
          onResumeTranscriptTail: (() -> Void)? = nil,
          streamingPersistDebounceNanos: UInt64 = 250_000_000,
@@ -161,6 +166,7 @@ final class ACPSessionRunner {
         self.ownerInstanceId = ownerInstanceId
         self.onAuthRequired = onAuthRequired
         self.onPersist = onPersist
+        self.onPromptWorkChanged = onPromptWorkChanged
         self.onSessionTitleUpdated = onSessionTitleUpdated
         self.streamingPersistDebounceNanos = streamingPersistDebounceNanos
         self.incomingUpdateCoalesceNanos = incomingUpdateCoalesceNanos
@@ -708,12 +714,15 @@ final class ACPSessionRunner {
     }
 
     func stop() {
+        stopped = true
         flushPendingIncomingUpdates(
             flushQueueWhenBoundaryReady: false,
             treatBufferedUpdatesAsPromptOwned: true
         )
         session.clearRetryStatus()
         flushStreamingPersistOnStop()
+        scheduledQueueWakeTask?.cancel()
+        scheduledQueueWakeTask = nil
         incomingUpdateFlushTask?.cancel()
         incomingUpdateFlushTask = nil
         updatesTask?.cancel()
@@ -1355,6 +1364,24 @@ extension ACPSessionRunner {
         draft: ACPComposerDraft? = nil,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
     ) {
+        if case .schedule(let date) = intent {
+            guard !blocks.isEmpty else {
+                Task { @MainActor in onPromptFinished?(false) }
+                return
+            }
+            let queuedId = session.enqueueScheduled(blocks: blocks, scheduledAt: date, draft: draft)
+            persistQueue(completion: { [weak self] persisted in
+                if persisted {
+                    self?.flushQueueIfIdle()
+                } else {
+                    if self?.session.removeFromQueue(id: queuedId) == true {
+                        self?.persistQueue()
+                    }
+                }
+                onPromptFinished?(persisted)
+            })
+            return
+        }
         if nativeForkBarrierActive {
             guard !blocks.isEmpty else {
                 Task { @MainActor in onPromptFinished?(false) }
@@ -1381,8 +1408,10 @@ extension ACPSessionRunner {
         case .sendNow:
             sendNow(blocks: blocks, queuedItemId: nil, draft: draft, onPromptFinished: onPromptFinished)
         case .enqueue:
+            let scheduledWasHead = session.queue.first?.scheduledAt != nil
             session.enqueue(blocks: blocks, draft: draft)
             persistQueue()
+            if scheduledWasHead { flushQueueIfIdle() }
             // The user's prompt was accepted into the queue — from the
             // composer's perspective this is a successful submission so
             // the persisted draft can be cleared. The actual RPC fires
@@ -1398,12 +1427,19 @@ extension ACPSessionRunner {
     /// swallowed — the same pattern as transcript persistence; surfacing
     /// would block the UI for a transient SQLite error and we'd rather
     /// lose a queue snapshot than the user's draft.
-    func persistQueue(acknowledging acknowledgement: ACPDurableConsumptionAcknowledgement? = nil) {
-        guard holdsLeaseForWrite() else { return }
+    func persistQueue(
+        acknowledging acknowledgement: ACPDurableConsumptionAcknowledgement? = nil,
+        completion: (@MainActor (_ persisted: Bool) -> Void)? = nil
+    ) {
+        guard holdsLeaseForWrite() else {
+            Task { @MainActor in completion?(false) }
+            return
+        }
         let items = session.queue
         let fence = leaseFenceProvider()
         let sessionId = sessionId
-        if let acknowledgement {
+        if acknowledgement != nil || completion != nil {
+            session.pendingQueuePersistenceCount += 1
             enqueuePersistence({ persistence in
                 try await persistence.upsertQueue(
                     sessionId: sessionId,
@@ -1411,9 +1447,15 @@ extension ACPSessionRunner {
                     fence: fence
                 )
             }, completion: { persisted in
-                if persisted == true {
-                    acknowledgement()
+                let didPersist = persisted == true
+                self.session.pendingQueuePersistenceCount -= 1
+                if didPersist {
+                    acknowledgement?()
+                    if !self.sendPendingQueueForceSendsAfterPersistence(), acknowledgement != nil {
+                        self.flushQueueIfIdle()
+                    }
                 }
+                completion?(didPersist)
             })
         } else {
             enqueuePersistence { persistence in
@@ -1506,10 +1548,12 @@ extension ACPSessionRunner {
     /// Chained drain is implicit: sendNow's completion sets state to
     /// `.idle` and calls back here.
     func flushQueueIfIdle() {
+        guard !stopped else { return }
         guard holdsLeaseForWrite() else { return }
         guard !nativeForkBarrierActive,
               !steerInProgress,
               session.agentState == .ready,
+              session.pendingQueuePersistenceCount == 0,
               activePromptID == nil,
               session.transcript.streamingState == .idle,
               session.transcript.pendingUserInputs.isEmpty,
@@ -1518,6 +1562,12 @@ extension ACPSessionRunner {
               head.lastError == nil
         else { return }
         if case .needsAuth = session.setupState { return }
+        guard head.isReady() else {
+            scheduleQueueWake(at: head.scheduledAt!)
+            return
+        }
+        scheduledQueueWakeTask?.cancel()
+        scheduledQueueWakeTask = nil
         let brokerOperationKey = session.markQueueHeadSending()
         persistQueue()
         sendNow(
@@ -1526,6 +1576,17 @@ extension ACPSessionRunner {
             delegatedSource: head.delegatedSource,
             brokerOperationKey: brokerOperationKey
         )
+    }
+
+    private func scheduleQueueWake(at date: Date) {
+        scheduledQueueWakeTask?.cancel()
+        let delay = max(0, date.timeIntervalSinceNow)
+        scheduledQueueWakeTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled else { return }
+            self?.scheduledQueueWakeTask = nil
+            self?.flushQueueIfIdle()
+        }
     }
 
     func beginNativeForkBarrier() async -> Bool {
@@ -1567,6 +1628,13 @@ extension ACPSessionRunner {
         guard let idx = session.queue.firstIndex(where: { $0.id == id }),
               session.queue[idx].status == .pending
         else { return }
+        guard session.agentState == .ready else { return }
+        guard session.pendingQueuePersistenceCount == 0 else {
+            if !pendingQueueForceSendsAfterPersistence.contains(id) {
+                pendingQueueForceSendsAfterPersistence.append(id)
+            }
+            return
+        }
 
         if steerInProgress {
             pendingForceSendQueuedItemID = id
@@ -1603,6 +1671,23 @@ extension ACPSessionRunner {
             recordUserPrompt: !item.transcriptRecorded,
             discardQueue: true
         )
+    }
+
+    @discardableResult
+    private func sendPendingQueueForceSendsAfterPersistence() -> Bool {
+        guard session.pendingQueuePersistenceCount == 0,
+              !pendingQueueForceSendsAfterPersistence.isEmpty
+        else { return false }
+        let itemIds = pendingQueueForceSendsAfterPersistence
+        pendingQueueForceSendsAfterPersistence.removeAll()
+        var forced = false
+        for itemId in itemIds.reversed() {
+            forced = session.forceQueueItem(id: itemId) || forced
+        }
+        guard forced else { return false }
+        persistQueue()
+        flushQueueIfIdle()
+        return true
     }
 
     /// Cancel the in-flight turn (if any), then send the new prompt as a
@@ -1697,6 +1782,21 @@ extension ACPSessionRunner {
 
     /// Exposed for tests + the toast view so it can show / hide.
     func steerUndoSnapshot() -> [QueuedPrompt]? { session.steerUndo?.snapshot }
+
+    var hasRetainedCleanupPromptWork: Bool {
+        steerInProgress
+            || activePromptID != nil
+            || session.transcript.streamingState != .idle
+            || (session.pendingQueuePersistenceCount > 0 && !session.queue.isEmpty)
+    }
+
+    var hasRetainedCleanupSteerWork: Bool {
+        steerInProgress
+    }
+
+    var hasRetainedCleanupForkBarrierWork: Bool {
+        nativeForkBarrierActive
+    }
 
     private func armSteerUndoExpiry() {
         steerUndoExpiryTask?.cancel()
@@ -1891,6 +1991,7 @@ extension ACPSessionRunner {
                         if self.deferCompletedOutputBoundaryUntilUpdatesDrain() {
                             self.flushQueueIfIdle()
                         }
+                        self.onPromptWorkChanged?()
                     }
                     self.cancelledPromptIDs.remove(promptID)
                     if !hasNewerActivePrompt {
@@ -1944,6 +2045,7 @@ extension ACPSessionRunner {
                         if self.deferCompletedOutputBoundaryUntilUpdatesDrain() {
                             self.flushQueueIfIdle()
                         }
+                        self.onPromptWorkChanged?()
                     }
                     if !hasNewerActivePrompt {
                         onPromptFinished?(wasCancelled)
@@ -1956,6 +2058,7 @@ extension ACPSessionRunner {
     @discardableResult
     func sendRecoveryContext(
         _ prompt: String,
+        flushQueueOnCompletion: Bool = true,
         onCompleted: (@MainActor (_ delivered: Bool) -> Void)? = nil
     ) -> Bool {
         guard !nativeForkBarrierActive else { return false }
@@ -1990,9 +2093,10 @@ extension ACPSessionRunner {
                     let isActivePrompt = self.activePromptID == promptID
                     if isActivePrompt {
                         self.activePromptID = nil
-                        if self.deferCompletedOutputBoundaryUntilUpdatesDrain() {
+                        if flushQueueOnCompletion && self.deferCompletedOutputBoundaryUntilUpdatesDrain() {
                             self.flushQueueIfIdle()
                         }
+                        self.onPromptWorkChanged?()
                     }
                     // Always resolve the recovery status, even when a newer
                     // prompt (e.g. the user steered) has taken over the
@@ -2010,6 +2114,7 @@ extension ACPSessionRunner {
                         self.flushStreamingPersist()
                         self.activePromptID = nil
                         self.session.transcript.streamingState = .idle
+                        self.onPromptWorkChanged?()
                     }
                     // See the success path above: the recovery status must
                     // resolve regardless of supersession or the spinner strands.

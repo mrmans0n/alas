@@ -369,6 +369,7 @@ struct ACPComposer: View {
                     action: currentAction,
                     onPrimary: handlePrimary,
                     onMenu: handleMenu,
+                    onSchedule: { actions.submitWithIntent?(.schedule($0)) },
                     queueBadgeCount: session.visibleQueueCount
                 )
             }

@@ -260,4 +260,47 @@ struct ACPSessionManagerSubmitTests {
             Issue.record("reattach from desync did not invoke attach(): setupState=\(session.setupState), agentState=\(session.agentState)")
         }
     }
+
+    @Test("future scheduled submit while disconnected does not attach immediately")
+    func futureScheduledSubmitWhileDisconnectedDoesNotAttachImmediately() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-submit-future-schedule-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let mgr = ACPSessionManager(
+            worktreeId: "/tmp/wt", worktreePath: "/tmp/wt", store: store)
+        let session = mgr.createSession(agentId: "no-such-agent-\(UUID().uuidString)")
+        session.agentState = .disconnected
+
+        let accepted = mgr.submit(
+            sessionId: session.id,
+            text: "later",
+            attachments: [],
+            intent: .schedule(Date().addingTimeInterval(60))
+        ) { _ in }
+
+        #expect(accepted)
+        #expect(session.queue.count == 1)
+        #expect(session.agentState == .disconnected)
+    }
+
+    @Test("scheduled submit is rejected while queue persistence is pending")
+    func scheduledSubmitRejectedWhileQueuePersistencePending() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-submit-pending-schedule-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let mgr = ACPSessionManager(
+            worktreeId: "/tmp/wt", worktreePath: "/tmp/wt", store: store)
+        let session = mgr.createSession(agentId: "claude")
+        session.pendingQueuePersistenceCount = 1
+
+        let accepted = mgr.submit(
+            sessionId: session.id,
+            text: "second schedule",
+            attachments: [],
+            intent: .schedule(Date().addingTimeInterval(60))
+        ) { _ in }
+
+        #expect(!accepted)
+        #expect(session.queue.isEmpty)
+    }
 }

@@ -103,6 +103,7 @@ final class ACPSessionManager: ObservableObject {
     private let onSessionTitleUpdated: ((ACPSession.ID, String) -> Void)?
     private let onInputAwaiting: ((ACPSession, ACPUserInputRequest) -> Void)?
     private let onDelegatedMessageAvailable: ((ACPSession.ID) -> Void)?
+    private let onQueueChanged: ((ACPSession.ID, Bool) -> Void)?
     private let mcpProjectContextProvider: MCPProjectContextProvider?
     private let frozenMCPAttachmentProvider: FrozenMCPAttachmentProvider?
     private let launchSpecTransformer: ACPLaunchSpecTransformer
@@ -154,6 +155,8 @@ final class ACPSessionManager: ObservableObject {
     private(set) var runners: [ACPSession.ID: ACPSessionRunner] = [:]
     private var elicitationCoordinators: [ACPSession.ID: ACPElicitationCoordinator] = [:]
     private var autoReconnectTasks: [ACPSession.ID: Task<Void, Never>] = [:]
+    private var scheduledReconnectTasks: [ACPSession.ID: (deadline: Date, task: Task<Void, Never>)] = [:]
+    private var managerQueuePersistenceCounts: [ACPSession.ID: Int] = [:]
     private var disposalTasks: [ACPSession.ID: Task<Void, Error>] = [:]
     /// Per-session attach counter. The built-in MCP registration grace timer
     /// captures the epoch at attach and only writes the row if it still matches,
@@ -167,6 +170,39 @@ final class ACPSessionManager: ObservableObject {
 
     /// Live session object if cached (does not trigger hydration).
     func liveSession(for id: ACPSession.ID) -> ACPSession? { sessions[id] }
+
+    func retainedCleanupHasActivePromptWork(for id: ACPSession.ID) -> Bool {
+        runners[id]?.hasRetainedCleanupPromptWork == true
+    }
+
+    func retainedCleanupHasSteerWork(for id: ACPSession.ID) -> Bool {
+        runners[id]?.hasRetainedCleanupSteerWork == true
+    }
+
+    func retainedCleanupHasForkBarrierWork(for id: ACPSession.ID) -> Bool {
+        runners[id]?.hasRetainedCleanupForkBarrierWork == true
+    }
+
+    private func beginManagerQueuePersistence(sessionId: ACPSession.ID) {
+        managerQueuePersistenceCounts[sessionId, default: 0] += 1
+    }
+
+    private func endManagerQueuePersistence(sessionId: ACPSession.ID) {
+        let remaining = (managerQueuePersistenceCounts[sessionId] ?? 1) - 1
+        if remaining > 0 {
+            managerQueuePersistenceCounts[sessionId] = remaining
+        } else {
+            managerQueuePersistenceCounts.removeValue(forKey: sessionId)
+        }
+    }
+
+    private func hasManagerQueuePersistence(sessionId: ACPSession.ID) -> Bool {
+        (managerQueuePersistenceCounts[sessionId] ?? 0) > 0
+    }
+
+    func retainedCleanupHasAutoReconnectWork(for id: ACPSession.ID) -> Bool {
+        autoReconnectTasks[id] != nil
+    }
 
     /// Permission policy for a session that currently has an attached runner.
     /// Returns nil if no runner is attached (session not actively connected).
@@ -281,24 +317,61 @@ final class ACPSessionManager: ObservableObject {
     /// Promote a queued item to the head (or steer to it when a turn is
     /// running) — the remote-web twin of the queued bubble's "send now".
     func queueForceSend(for id: ACPSession.ID, itemId: UUID) async {
+        guard let session = sessions[id] else { return }
+        guard !hasManagerQueuePersistence(sessionId: id) else {
+            deferQueueForceSend(session: session, itemId: itemId)
+            return
+        }
+        if case .spawning = session.agentState {
+            deferQueueForceSend(session: session, itemId: itemId)
+            return
+        }
+        if session.agentState != .ready {
+            await reattach(to: id)
+        }
+        if case .spawning = session.agentState {
+            deferQueueForceSend(session: session, itemId: itemId)
+            return
+        }
         guard await confirmedWriterLease(for: id) else { return }
-        runners[id]?.forceSendQueuedItem(id: itemId)
+        guard let runner = runners[id] else { return }
+        runner.forceSendQueuedItem(id: itemId)
+        onQueueChanged?(id, true)
+    }
+
+    private func deferQueueForceSend(session: ACPSession, itemId: UUID) {
+        pendingQueueForceSends[session.id, default: []].append(itemId)
+        guard session.pendingQueuePersistenceCount == 0 else {
+            onQueueChanged?(session.id, true)
+            return
+        }
+        var promoted = false
+        for pendingId in pendingQueueForceSends[session.id, default: []].reversed() {
+            promoted = session.forceQueueItem(id: pendingId) || promoted
+        }
+        if promoted {
+            persistQueue(for: session)
+        }
+        onQueueChanged?(session.id, true)
     }
 
     func queueRemove(for id: ACPSession.ID, itemId: UUID) async {
         guard await confirmedWriterLease(for: id), let session = sessions[id] else { return }
-        session.removeFromQueue(id: itemId)
+        guard session.removeFromQueue(id: itemId) else { return }
         persistQueue(for: session)
         runners[id]?.flushQueueIfIdle()
+        onQueueChanged?(id, retainedCleanupHasActivePromptWork(for: id))
     }
 
     /// Clear a failed item's error so the flusher re-attempts it.
     func queueRetry(for id: ACPSession.ID, itemId: UUID) async {
         guard await confirmedWriterLease(for: id), let session = sessions[id] else { return }
         guard let idx = session.queue.firstIndex(where: { $0.id == itemId }) else { return }
+        guard session.queue[idx].status == .pending, session.queue[idx].lastError != nil else { return }
         session.queue[idx].lastError = nil
         persistQueue(for: session)
         runners[id]?.flushQueueIfIdle()
+        onQueueChanged?(id, retainedCleanupHasActivePromptWork(for: id))
     }
 
     /// Pull a queued item out for editing and hand its text back. `nil` when
@@ -328,6 +401,7 @@ final class ACPSessionManager: ObservableObject {
         guard let draft = session.takeForEditing(id: itemId) else { return nil }
         persistQueue(for: session)
         runners[id]?.flushQueueIfIdle()
+        onQueueChanged?(id, retainedCleanupHasActivePromptWork(for: id))
         return RemoteQueueProjection.plainText(from: draft)
     }
 
@@ -336,11 +410,13 @@ final class ACPSessionManager: ObservableObject {
         session.clearPendingQueue()
         persistQueue(for: session)
         runners[id]?.flushQueueIfIdle()
+        onQueueChanged?(id, retainedCleanupHasActivePromptWork(for: id))
     }
 
     func queueSteerUndo(for id: ACPSession.ID) async {
         guard await confirmedWriterLease(for: id) else { return }
         runners[id]?.steerUndo()
+        onQueueChanged?(id, retainedCleanupHasActivePromptWork(for: id))
     }
 
     /// Steer from the remote client: same route the composer's ⌥⏎ takes.
@@ -353,6 +429,7 @@ final class ACPSessionManager: ObservableObject {
         }
         let accepted = submit(sessionId: id, text: text, attachments: attachments, intent: .steer,
                               onCompleted: { ok in onResult(ok) })
+        if accepted { onQueueChanged?(id, true) }
         if !accepted { onResult(false) }
     }
 
@@ -467,6 +544,7 @@ final class ACPSessionManager: ObservableObject {
         var sessionCapabilities: ACPInitializeResult.ACPAgentSessionCapabilities?
     }
     private var attachingConnections: [ACPSession.ID: AttachingConnection] = [:]
+    private var pendingQueueForceSends: [ACPSession.ID: [UUID]] = [:]
     private var delegatedMessageWatchTokens: [ACPSession.ID: Int32] = [:]
 
     init(worktreeId: String, worktreePath: String, owner: SessionOwnerID? = nil, store: ACPSessionStore? = nil,
@@ -481,6 +559,7 @@ final class ACPSessionManager: ObservableObject {
          onSessionTitleUpdated: ((ACPSession.ID, String) -> Void)? = nil,
          onInputAwaiting: ((ACPSession, ACPUserInputRequest) -> Void)? = nil,
          onDelegatedMessageAvailable: ((ACPSession.ID) -> Void)? = nil,
+         onQueueChanged: ((ACPSession.ID, Bool) -> Void)? = nil,
          changeNotifier: ACPChangeNotifier? = nil,
          delegatedMessageNotifier: ACPChangeNotifier? = nil,
          setupEvaluator: ACPSetupEvaluator? = nil,
@@ -514,6 +593,7 @@ final class ACPSessionManager: ObservableObject {
         self.onSessionTitleUpdated = onSessionTitleUpdated
         self.onInputAwaiting = onInputAwaiting
         self.onDelegatedMessageAvailable = onDelegatedMessageAvailable
+        self.onQueueChanged = onQueueChanged
         self.mcpProjectContextProvider = mcpProjectContextProvider
         self.frozenMCPAttachmentProvider = frozenMCPAttachmentProvider
         self.launchSpecTransformer = launchSpecTransformer ?? { $0 }
@@ -1098,6 +1178,7 @@ final class ACPSessionManager: ObservableObject {
 
     func closeSession(id: ACPSession.ID) {
         autoReconnectTasks.removeValue(forKey: id)?.cancel()
+        scheduledReconnectTasks.removeValue(forKey: id)?.task.cancel()
         // Flush any pending draft write before dropping the in-memory
         // session reference — otherwise a tab-switch-while-typing
         // window can lose the last ~300ms of input.
@@ -1158,6 +1239,7 @@ final class ACPSessionManager: ObservableObject {
         killRemoteHelperACPProcIfPossible(sessionId: id)
         onSessionEnded?(id)
         autoReconnectTasks.removeValue(forKey: id)?.cancel()
+        scheduledReconnectTasks.removeValue(forKey: id)?.task.cancel()
         cancelPendingDraftWrite(for: id)
         inFlightBackfills[id]?.cancel()
         inFlightBackfills[id] = nil
@@ -1169,6 +1251,7 @@ final class ACPSessionManager: ObservableObject {
         transcriptScrollMemory.removeValue(forKey: id)
         pendingModel.removeValue(forKey: id)
         pendingMode.removeValue(forKey: id)
+        pendingQueueForceSends.removeValue(forKey: id)
         persistedRows.removeValue(forKey: id)
         recent.removeAll { $0.id == id }
     }
@@ -1637,6 +1720,12 @@ final class ACPSessionManager: ObservableObject {
     func persistQueue(for session: ACPSession) {
         guard !isMirror(sessionId: session.id) else { return }
         let sessionId = session.id
+        scheduleScheduledQueueReconnect(sessionId: sessionId)
+        if !hasManagerQueuePersistence(sessionId: sessionId),
+           let runner = runners[sessionId] {
+            runner.persistQueue()
+            return
+        }
         let items = session.queue
         let fence = leaseFence(sessionId: sessionId)
         enqueuePersistence { persistence in
@@ -2918,6 +3007,7 @@ extension ACPSessionManager {
         // Always sync the queue — it can change (drain/clear) with no new
         // transcript rows, so this must run before any early-return below.
         session.restoreQueue(result.queue)
+        scheduleScheduledQueueReconnect(sessionId: sessionId)
         guard !result.wireMessages.isEmpty else { return }
         let tailStart = replaceTranscriptWithTail(
             result.messages,
@@ -3018,6 +3108,7 @@ extension ACPSessionManager {
                 // creation). Tear it down so it doesn't linger bound on
                 // localhost; a later reattach respawns it. No-op for stdio sessions.
                 onSessionEnded?(sessionId)
+                scheduleScheduledQueueReconnect(sessionId: sessionId)
             }
         }
         // The runner persists transcript mutations under `msg-<sid>-<index>`,
@@ -3402,6 +3493,9 @@ extension ACPSessionManager {
                                               )
                                           },
                                           onPersist: { [weak self] in self?.changeNotifier.post() },
+                                          onPromptWorkChanged: { [weak self] in
+                                              self?.onQueueChanged?(sessionId, self?.retainedCleanupHasActivePromptWork(for: sessionId) == true)
+                                          },
                                           onSessionTitleUpdated: { [weak self] title in
                                               self?.refreshRecent()
                                               self?.onSessionTitleUpdated?(sessionId, title)
@@ -3430,6 +3524,7 @@ extension ACPSessionManager {
             runner.onUnexpectedDisconnect = { [weak self] in
                 Task { @MainActor in
                     self?.scheduleAutoReconnect(sessionId: sessionId)
+                    self?.onQueueChanged?(sessionId, self?.retainedCleanupHasAutoReconnectWork(for: sessionId) == true)
                 }
             }
             var runnerStarted = false
@@ -3968,13 +4063,17 @@ extension ACPSessionManager {
                 return
             }
             session.agentState = .ready
+            scheduledReconnectTasks.removeValue(forKey: sessionId)?.task.cancel()
+            if session.queue.contains(where: { $0.status == .sending }) {
+                session.restoreQueue(session.queue)
+            }
             if let remoteMCPNotice {
                 runner.appendAndPersistSystemNotice(remoteMCPNotice)
             }
-            if shouldHoldQueueForRecovery {
-                sendTranscriptAsContext(sessionId: sessionId, agentName: nil)
-            } else {
-                runner.flushQueueIfIdle()
+            if !shouldHoldQueueForRecovery || !sendTranscriptAsContext(sessionId: sessionId, agentName: nil) {
+                if !sendPendingQueueForceSend(sessionId: sessionId) {
+                    runner.flushQueueIfIdle()
+                }
             }
             stderrTask.cancel()
         } catch {
@@ -4033,6 +4132,7 @@ extension ACPSessionManager {
                 await connection.shutdown()
             }
             await releaseWriterLease(sessionId: sessionId)
+            scheduleScheduledQueueReconnect(sessionId: sessionId)
         }
     }
 
@@ -4048,9 +4148,46 @@ extension ACPSessionManager {
         }
     }
 
+    func bootstrapScheduledQueueSessions(
+        onBootstrapped: (@MainActor (ACPSession.ID) -> Void)? = nil
+    ) async -> [ACPSession.ID] {
+        let ids: [ACPSession.ID]
+        do {
+            ids = try await persistence.scheduledQueueSessionIds()
+        } catch {
+            persistenceError = error.localizedDescription
+            return []
+        }
+        let tasks: [Task<ACPSession.ID?, Never>] = ids.map { id in
+            Task<ACPSession.ID?, Never> { @MainActor in
+                guard await persistedSessionRow(id: id) != nil,
+                      placeholderSession(id: id) != nil
+                else { return nil }
+                await hydrateIfNeeded(id: id)
+                guard let session = sessions[id],
+                      session.queue.contains(where: {
+                          $0.status == .pending && $0.lastError == nil && $0.scheduledAt != nil
+                      })
+                else { return nil }
+                if hasDueReconnectSchedule(in: session) {
+                    await reattach(to: id)
+                }
+                scheduleScheduledQueueReconnect(sessionId: id)
+                onBootstrapped?(id)
+                return id
+            }
+        }
+        var bootstrapped: [ACPSession.ID] = []
+        for task in tasks {
+            if let id = await task.value { bootstrapped.append(id) }
+        }
+        return bootstrapped
+    }
+
     /// Remote SSH channel drops are commonly transient. Reuse the regular
     /// reattach path so restoration and queued-prompt handling stay identical.
     func scheduleAutoReconnect(sessionId: ACPSession.ID) {
+        scheduleScheduledQueueReconnect(sessionId: sessionId)
         guard sessions[sessionId] != nil,
               effectiveRemoteHost() != nil
         else { return }
@@ -4060,6 +4197,8 @@ extension ACPSessionManager {
             defer {
                 self?.autoReconnectTasks.removeValue(forKey: sessionId)
                 self?.sessions[sessionId]?.autoReconnecting = false
+                self?.scheduleScheduledQueueReconnect(sessionId: sessionId)
+                self?.onQueueChanged?(sessionId, false)
             }
             self?.sessions[sessionId]?.autoReconnecting = true
             var attempt = 0
@@ -4084,6 +4223,76 @@ extension ACPSessionManager {
                 await self.reattach(to: sessionId)
                 if self.sessions[sessionId]?.agentState == .ready { return }
             }
+        }
+    }
+
+    private func scheduleScheduledQueueReconnect(sessionId: ACPSession.ID) {
+        guard let session = sessions[sessionId],
+              session.agentState != .ready,
+              let scheduledAt = earliestReconnectSchedule(in: session)
+        else {
+            scheduledReconnectTasks.removeValue(forKey: sessionId)?.task.cancel()
+            return
+        }
+        if case .needsAuth = session.setupState {
+            scheduledReconnectTasks.removeValue(forKey: sessionId)?.task.cancel()
+            return
+        }
+        if let existing = scheduledReconnectTasks[sessionId] {
+            guard existing.deadline != scheduledAt else { return }
+            existing.task.cancel()
+        }
+        retainSession(id: sessionId)
+        let task = Task { @MainActor [weak self] in
+            defer {
+                if self?.scheduledReconnectTasks[sessionId]?.deadline == scheduledAt {
+                    self?.scheduledReconnectTasks.removeValue(forKey: sessionId)
+                }
+                self?.releaseSession(id: sessionId)
+            }
+            try? await Task.sleep(for: .seconds(max(0, scheduledAt.timeIntervalSinceNow)))
+            while !Task.isCancelled {
+                guard let self else { return }
+                await self.refreshScheduledReconnectQueue(sessionId: sessionId)
+                guard !Task.isCancelled else { return }
+                guard let session = self.sessions[sessionId],
+                      self.hasDueReconnectSchedule(in: session)
+                else { return }
+                if case .needsAuth = session.setupState { return }
+                await self.reattach(to: sessionId)
+                if self.sessions[sessionId]?.agentState == .ready {
+                    self.runners[sessionId]?.flushQueueIfIdle()
+                    return
+                }
+                try? await Task.sleep(for: .seconds(30))
+            }
+        }
+        scheduledReconnectTasks[sessionId] = (scheduledAt, task)
+    }
+
+    private func refreshScheduledReconnectQueue(sessionId: ACPSession.ID) async {
+        guard let session = sessions[sessionId] else { return }
+        do {
+            session.restoreQueue(try await persistence.loadQueue(sessionId: sessionId))
+        } catch {
+            persistenceError = error.localizedDescription
+        }
+    }
+
+    private func earliestReconnectSchedule(in session: ACPSession) -> Date? {
+        session.queue.compactMap { item -> Date? in
+            guard item.lastError == nil,
+                  item.status == .pending || item.status == .sending
+            else { return nil }
+            return item.scheduledAt
+        }.min()
+    }
+
+    private func hasDueReconnectSchedule(in session: ACPSession) -> Bool {
+        session.queue.contains { item in
+            item.lastError == nil
+                && (item.status == .pending || item.status == .sending)
+                && (item.scheduledAt?.timeIntervalSinceNow ?? .greatestFiniteMagnitude) <= 0
         }
     }
 
@@ -4112,17 +4321,40 @@ extension ACPSessionManager {
               let prompt = transcriptContextPrompt(for: session, agentName: agentName)
         else { return false }
 
-        guard runner.sendRecoveryContext(prompt, onCompleted: { delivered in
+        guard runner.sendRecoveryContext(prompt, flushQueueOnCompletion: false, onCompleted: { delivered in
             if delivered {
                 self.persistContextRecoveryPending(sessionId: sessionId, pending: false)
                 session.contextRestoreWarning = nil
                 session.markContextRecoveryRestored()
+                if !self.sendPendingQueueForceSend(sessionId: sessionId) {
+                    self.runners[sessionId]?.flushQueueIfIdle()
+                }
             } else {
                 session.contextRecoveryStatus = .failed("Transcript recovery failed.")
             }
         }) else { return false }
         session.contextRecoveryStatus = .sendingTranscript
         return true
+    }
+
+    @discardableResult
+    private func sendPendingQueueForceSend(sessionId: ACPSession.ID) -> Bool {
+        guard let session = sessions[sessionId],
+              let runner = runners[sessionId]
+        else { return false }
+        guard let itemIds = pendingQueueForceSends.removeValue(forKey: sessionId) else { return false }
+        var sent = false
+        for itemId in itemIds.reversed() where session.queue.contains(where: { $0.id == itemId && $0.status == .pending }) {
+            sent = session.forceQueueItem(id: itemId) || sent
+        }
+        if sent {
+            runner.persistQueue()
+            runner.flushQueueIfIdle()
+        }
+        if sent {
+            onQueueChanged?(sessionId, true)
+        }
+        return sent
     }
 
     /// Enqueue a prompt into a session whose agent isn't `.ready` yet.
@@ -4134,19 +4366,66 @@ extension ACPSessionManager {
         text: String,
         attachments: [ACPMessage.Attachment],
         draft: ACPComposerDraft? = nil,
-        into sessionId: ACPSession.ID
+        scheduledAt: Date? = nil,
+        into sessionId: ACPSession.ID,
+        onPersisted: (@MainActor (_ persisted: Bool) -> Void)? = nil
     ) {
-        guard let session = sessions[sessionId] else { return }
+        guard let session = sessions[sessionId] else {
+            Task { @MainActor in onPersisted?(false) }
+            return
+        }
         let blocks = ACPSessionRunner.blocks(text: text, attachments: attachments)
-        session.enqueue(blocks: blocks, draft: draft)
+        let scheduledId: UUID?
+        if let scheduledAt {
+            scheduledId = session.enqueueScheduled(blocks: blocks, scheduledAt: scheduledAt, draft: draft)
+        } else {
+            session.enqueue(blocks: blocks, draft: draft)
+            scheduledId = nil
+        }
         let items = session.queue
         let fence = leaseFence(sessionId: sessionId)
-        enqueuePersistence { persistence in
-            _ = try await persistence.upsertQueue(
-                sessionId: sessionId,
-                items: items,
-                fence: fence
-            )
+        guard onPersisted != nil else {
+            enqueuePersistence { persistence in
+                _ = try await persistence.upsertQueue(
+                    sessionId: sessionId,
+                    items: items,
+                    fence: fence
+                )
+            }
+            return
+        }
+        let task = enqueuePersistenceResult { persistence in
+            try await persistence.upsertQueue(sessionId: sessionId, items: items, fence: fence)
+        }
+        beginManagerQueuePersistence(sessionId: sessionId)
+        session.pendingQueuePersistenceCount += 1
+        Task { @MainActor in
+            let persisted = await task.value == true
+            session.pendingQueuePersistenceCount -= 1
+            if !persisted, let scheduledId {
+                if session.removeFromQueue(id: scheduledId) {
+                    let items = session.queue
+                    let fence = leaseFence(sessionId: sessionId)
+                    let rollback = enqueuePersistence { persistence in
+                        _ = try await persistence.upsertQueue(
+                            sessionId: sessionId,
+                            items: items,
+                            fence: fence
+                        )
+                    }
+                    await rollback.value
+                }
+            }
+            endManagerQueuePersistence(sessionId: sessionId)
+            if persisted,
+               !sendPendingQueueForceSend(sessionId: sessionId) {
+                if pendingQueueForceSends[sessionId]?.isEmpty == false {
+                    Task { @MainActor in await reattach(to: sessionId) }
+                } else if session.contextRecoveryStatus == nil {
+                    runners[sessionId]?.flushQueueIfIdle()
+                }
+            }
+            onPersisted?(persisted)
         }
     }
 
@@ -4176,11 +4455,17 @@ extension ACPSessionManager {
         session.enqueue(blocks: blocks, delegatedSource: source)
         let fence = leaseFence(sessionId: sessionId)
         let items = session.queue
+        beginManagerQueuePersistence(sessionId: sessionId)
+        session.pendingQueuePersistenceCount += 1
         let task = enqueuePersistenceResult { persistence in
             try await persistence.upsertQueue(sessionId: sessionId, items: items, fence: fence)
         }
-        guard await task.value == true else {
+        let persisted = await task.value == true
+        session.pendingQueuePersistenceCount -= 1
+        endManagerQueuePersistence(sessionId: sessionId)
+        guard persisted else {
             session.queue.removeAll { $0.delegatedSource == source }
+            runners[sessionId]?.flushQueueIfIdle()
             return false
         }
         runners[sessionId]?.flushQueueIfIdle()
@@ -4212,21 +4497,26 @@ extension ACPSessionManager {
             return recordedSource == source
         }) else { return true }
 
-        let item = QueuedPrompt(
+        session.enqueue(
             id: id,
             blocks: ACPSessionRunner.blocks(text: text, attachments: []),
             delegatedSource: source
         )
-        session.queue.append(item)
         let fence = leaseFence(sessionId: sessionId)
         let items = session.queue
+        beginManagerQueuePersistence(sessionId: sessionId)
+        session.pendingQueuePersistenceCount += 1
         let task = enqueuePersistenceResult { persistence in
             try await persistence.upsertQueue(sessionId: sessionId, items: items, fence: fence)
         }
-        guard await task.value == true else {
-            if let index = session.queue.firstIndex(where: { $0.id == item.id }) {
+        let persisted = await task.value == true
+        session.pendingQueuePersistenceCount -= 1
+        endManagerQueuePersistence(sessionId: sessionId)
+        guard persisted else {
+            if let index = session.queue.firstIndex(where: { $0.id == id }) {
                 session.queue.remove(at: index)
             }
+            runners[sessionId]?.flushQueueIfIdle()
             return false
         }
         runners[sessionId]?.flushQueueIfIdle()
@@ -4258,6 +4548,26 @@ extension ACPSessionManager {
         if case .needsAuth = session.setupState {
             return false
         }
+        let scheduledAt: Date?
+        if case .schedule(let date) = intent {
+            scheduledAt = date
+        } else {
+            scheduledAt = nil
+        }
+        if scheduledAt != nil, session.pendingQueuePersistenceCount > 0 {
+            return false
+        }
+        let onScheduledPersisted: (@MainActor (Bool) -> Void)?
+        if scheduledAt == nil {
+            onScheduledPersisted = nil
+        } else {
+            onScheduledPersisted = { persisted in
+                onCompleted(persisted)
+                if persisted, let scheduledAt, scheduledAt > Date() {
+                    self.scheduleScheduledQueueReconnect(sessionId: sessionId)
+                }
+            }
+        }
 
         switch session.agentState {
         case .ready:
@@ -4271,9 +4581,20 @@ extension ACPSessionManager {
                 // closure returns and registers its pending id (without the
                 // hop the completion fires too early and gets ignored).
                 session.agentState = .disconnected
-                enqueueWhileRecovering(text: text, attachments: attachments, draft: draft, into: sessionId)
-                Task { @MainActor in onCompleted(true) }
-                Task { @MainActor in await reattach(to: sessionId) }
+                enqueueWhileRecovering(
+                    text: text,
+                    attachments: attachments,
+                    draft: draft,
+                    scheduledAt: scheduledAt,
+                    into: sessionId,
+                    onPersisted: onScheduledPersisted
+                )
+                if scheduledAt == nil {
+                    Task { @MainActor in onCompleted(true) }
+                }
+                if scheduledAt.map({ $0 <= Date() }) ?? true {
+                    Task { @MainActor in await reattach(to: sessionId) }
+                }
                 return true
             }
             runner.send(text: text, attachments: attachments, intent: intent, draft: draft) { succeeded in
@@ -4284,8 +4605,17 @@ extension ACPSessionManager {
         case .spawning:
             // An attach is in flight; the post-attach `flushQueueIfIdle()`
             // will pick up the freshly enqueued head.
-            enqueueWhileRecovering(text: text, attachments: attachments, draft: draft, into: sessionId)
-            Task { @MainActor in onCompleted(true) }
+            enqueueWhileRecovering(
+                text: text,
+                attachments: attachments,
+                draft: draft,
+                scheduledAt: scheduledAt,
+                into: sessionId,
+                onPersisted: onScheduledPersisted
+            )
+            if scheduledAt == nil {
+                Task { @MainActor in onCompleted(true) }
+            }
             return true
 
         case .idle, .disconnected, .failed:
@@ -4294,9 +4624,20 @@ extension ACPSessionManager {
             // submit closure returns and registers its pending id — firing
             // synchronously here would race the composer's bookkeeping and
             // get ignored, leaving the persisted draft uncleared.
-            enqueueWhileRecovering(text: text, attachments: attachments, draft: draft, into: sessionId)
-            Task { @MainActor in onCompleted(true) }
-            Task { @MainActor in await reattach(to: sessionId) }
+            enqueueWhileRecovering(
+                text: text,
+                attachments: attachments,
+                draft: draft,
+                scheduledAt: scheduledAt,
+                into: sessionId,
+                onPersisted: onScheduledPersisted
+            )
+            if scheduledAt == nil {
+                Task { @MainActor in onCompleted(true) }
+            }
+            if scheduledAt.map({ $0 <= Date() }) ?? true {
+                Task { @MainActor in await reattach(to: sessionId) }
+            }
             return true
         }
     }
@@ -4393,6 +4734,7 @@ extension ACPSessionManager {
         await runner.flushPersistence()
         runners[sessionId] = nil
         elicitationCoordinators.removeValue(forKey: sessionId)?.stop()
+        onQueueChanged?(sessionId, false)
         await runner.connection.shutdown()
     }
 

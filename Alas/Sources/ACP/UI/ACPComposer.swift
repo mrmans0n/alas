@@ -234,6 +234,7 @@ struct ACPInputField: NSViewRepresentable {
         func undoManager(for view: NSTextView) -> UndoManager? { editorUndoManager }
         private var nextSubmitID = 0
         private var pendingSubmitID: Int?
+        private var pendingScheduledSubmitIDs: Set<Int> = []
         private var pendingImageFileInsertions = 0
         private var imageFileInsertionGeneration = 0
         private var pendingRestyleWork: DispatchWorkItem?
@@ -417,6 +418,7 @@ struct ACPInputField: NSViewRepresentable {
 
         func submit(_ textView: NSTextView, intent: ACPSubmitIntent = .auto) {
             guard pendingImageFileInsertions == 0 else { return }
+            guard pendingScheduledSubmitIDs.isEmpty else { return }
             flushPendingRestyleNow()
             if let tv = textView as? ACPNSTextView {
                 tv.dismissSlashPanel()
@@ -440,6 +442,9 @@ struct ACPInputField: NSViewRepresentable {
                 // Durable draft finalization lives with the submit owner, so
                 // tab switches can outlive this coordinator.
             }) {
+                if case .schedule = intent {
+                    pendingScheduledSubmitIDs.insert(submitID)
+                }
                 pendingSubmitID = submitID
                 clearVisibleDraft(in: textView)
             }
@@ -555,14 +560,28 @@ struct ACPInputField: NSViewRepresentable {
             succeeded: Bool,
             textView: NSTextView?
         ) {
-            guard pendingSubmitID == id else { return }
-            pendingSubmitID = nil
+            let isCurrentSubmit = pendingSubmitID == id
+            let isPendingSchedule = pendingScheduledSubmitIDs.remove(id) != nil
+            guard isCurrentSubmit || isPendingSchedule else { return }
+            if isCurrentSubmit {
+                pendingSubmitID = nil
+            }
             if succeeded {
-                onDraftClear()
+                if isCurrentSubmit {
+                    onDraftClear()
+                }
             } else {
-                onDraftChange(draft)
+                let restoredDraft: ACPComposerDraft
+                if isCurrentSubmit {
+                    restoredDraft = draft
+                } else if let textView {
+                    restoredDraft = Self.draft(from: textView.attributedString()).appending(draft)
+                } else {
+                    restoredDraft = lastSyncedDraft.appending(draft)
+                }
+                onDraftChange(restoredDraft)
                 if let textView {
-                    restore(draft, into: textView)
+                    restore(restoredDraft, into: textView)
                 }
             }
         }

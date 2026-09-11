@@ -423,6 +423,13 @@ struct RemoteWebAssetTests {
         #expect(js.contains("let steerUndoAvailable = false;"))
     }
 
+    @Test func remoteWebDisplaysScheduledQueueDeadlines() throws {
+        let js = try asset("app.js")
+
+        #expect(js.contains("function queuedStatus(item)"))
+        #expect(js.contains("Scheduled for"))
+    }
+
     // Regression (review, task 6): pendingAttachments feeds hasText in
     // composerAction, but the mutation sites (attach picker, chip removal,
     // restoreRejectedPrompt) only ever called renderChips(), never
