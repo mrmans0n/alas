@@ -4217,7 +4217,10 @@ extension ACPSessionManager {
             scheduledReconnectTasks.removeValue(forKey: sessionId)?.task.cancel()
             return
         }
-        if case .needsAuth = session.setupState { return }
+        if case .needsAuth = session.setupState {
+            scheduledReconnectTasks.removeValue(forKey: sessionId)?.task.cancel()
+            return
+        }
         if let existing = scheduledReconnectTasks[sessionId] {
             guard existing.deadline != scheduledAt else { return }
             existing.task.cancel()
@@ -4426,12 +4429,14 @@ extension ACPSessionManager {
         session.enqueue(blocks: blocks, delegatedSource: source)
         let fence = leaseFence(sessionId: sessionId)
         let items = session.queue
+        managerQueuePersistenceSessionIds.insert(sessionId)
         session.pendingQueuePersistenceCount += 1
         let task = enqueuePersistenceResult { persistence in
             try await persistence.upsertQueue(sessionId: sessionId, items: items, fence: fence)
         }
         let persisted = await task.value == true
         session.pendingQueuePersistenceCount -= 1
+        managerQueuePersistenceSessionIds.remove(sessionId)
         guard persisted else {
             session.queue.removeAll { $0.delegatedSource == source }
             runners[sessionId]?.flushQueueIfIdle()
@@ -4473,12 +4478,14 @@ extension ACPSessionManager {
         )
         let fence = leaseFence(sessionId: sessionId)
         let items = session.queue
+        managerQueuePersistenceSessionIds.insert(sessionId)
         session.pendingQueuePersistenceCount += 1
         let task = enqueuePersistenceResult { persistence in
             try await persistence.upsertQueue(sessionId: sessionId, items: items, fence: fence)
         }
         let persisted = await task.value == true
         session.pendingQueuePersistenceCount -= 1
+        managerQueuePersistenceSessionIds.remove(sessionId)
         guard persisted else {
             if let index = session.queue.firstIndex(where: { $0.id == id }) {
                 session.queue.remove(at: index)
