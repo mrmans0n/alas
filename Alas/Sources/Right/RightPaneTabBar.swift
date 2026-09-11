@@ -23,8 +23,9 @@ struct RightPaneTabBar: View {
             // at the pane's 240pt minimum, so fall back to icon-only rather
             // than truncating every label to an ellipsis.
             ViewThatFits(in: .horizontal) {
-                segments(compact: false)
-                segments(compact: true)
+                segments(compact: false, includeCounts: true)
+                segments(compact: true, includeCounts: true)
+                segments(compact: true, includeCounts: false)
             }
 
             Spacer(minLength: 8)
@@ -36,9 +37,9 @@ struct RightPaneTabBar: View {
         .windowDragHandle()
     }
 
-    private func segments(compact: Bool) -> some View {
+    private func segments(compact: Bool, includeCounts: Bool) -> some View {
         HStack(spacing: 2) {
-            segment(.changes, icon: "diff", label: "Changes", count: changesCount, compact: compact)
+            segment(.changes, icon: "diff", label: "Changes", count: includeCounts ? changesCount : nil, compact: compact)
             segment(.files, icon: "folder", label: "Files", count: nil, compact: compact)
                 .contextMenu {
                     Toggle("Show ignored or excluded files", isOn: Binding(
@@ -51,7 +52,7 @@ struct RightPaneTabBar: View {
                     .agent,
                     icon: "person.crop.circle",
                     label: "Agent",
-                    count: activeAgentCount > 0 ? activeAgentCount : nil,
+                    count: includeCounts && activeAgentCount > 0 ? activeAgentCount : nil,
                     compact: compact
                 )
             }
@@ -60,7 +61,7 @@ struct RightPaneTabBar: View {
                     .run,
                     icon: "play",
                     label: "Run",
-                    count: activeRunCount > 0 ? activeRunCount : nil,
+                    count: includeCounts && activeRunCount > 0 ? activeRunCount : nil,
                     compact: compact
                 )
             }
