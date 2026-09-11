@@ -48,8 +48,19 @@ struct AttentionNavigationEnvironment {
                 return false
             },
             presentScriptFailure: { [weak appState] item, failureID in
-                guard let appState, let worktree = item.worktree,
-                      let failure = appState.runScriptFailures(in: worktree.id).first(where: { $0.id == failureID }) else { return false }
+                guard let appState, let worktree = item.worktree else { return false }
+                let failure = appState.runScriptFailures(in: worktree.id).first(where: { $0.id == failureID })
+                    ?? RunScriptFailure(
+                        id: failureID,
+                        runID: "attention:\(item.eventID.uuidString)",
+                        scriptKey: "attention-history",
+                        scriptName: item.title.replacingOccurrences(of: " failed with exit code \\(.*)$", with: "", options: .regularExpression),
+                        worktreeID: worktree.id,
+                        branch: item.display.branch,
+                        exitCode: Int32(item.title.split(separator: " ").last ?? "-1") ?? -1,
+                        completedAt: item.occurredAt,
+                        capturedOutput: item.body.map { .available(text: $0, truncated: false) } ?? .unavailable
+                    )
                 appState.presentRunScriptFailure(failure)
                 return true
             },

@@ -253,7 +253,7 @@ struct AttentionNavigationTests {
         #expect(!pane.revealAttentionTarget(.reviewRequest(number: 42)))
     }
 
-    @Test func liveScriptRouteRequiresTheMatchingQueuedFailure() async throws {
+    @Test func liveScriptRouteRestoresPersistedFailureWhenQueueNoLongerContainsIt() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
         let failure = RunScriptFailure(id: "failure2", runID: "run2", scriptKey: "test", scriptName: "Tests", worktreeID: "worktree", branch: "main", exitCode: 1, completedAt: Date(), capturedOutput: .unavailable)
@@ -262,8 +262,9 @@ struct AttentionNavigationTests {
         #expect(await fixture.state.openAttentionItem(item) == .opened)
         #expect(fixture.state.selectedRunScriptFailure?.id == "failure2")
         let missing = try fixture.record(.runScriptFailure(failureID: "missing"))
-        #expect(await fixture.state.openAttentionItem(missing) == .unavailable("The script failure is no longer available."))
-        #expect(fixture.state.attentionStore.acknowledgments[missing.eventID] == nil)
+        #expect(await fixture.state.openAttentionItem(missing) == .opened)
+        #expect(fixture.state.selectedRunScriptFailure?.id == "missing")
+        #expect(fixture.state.attentionStore.acknowledgments[missing.eventID] != nil)
     }
 
     @Test(arguments: [true, false])
