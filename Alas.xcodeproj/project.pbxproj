@@ -905,6 +905,7 @@
 		88A13347D0CB153554F00B24 /* WorktreeCleanupSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D5B56D03C0EDB3BA50D6E13 /* WorktreeCleanupSheet.swift */; };
 		88A139C7B3C3C9F20EF5945A /* ACPChangeNotifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 419EF533C4D29448483045DA /* ACPChangeNotifier.swift */; };
 		88C1A4EBC12F7F7BA7FE9B06 /* ACPMarkdownInlineTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84A01D6512394EF1C41782AD /* ACPMarkdownInlineTextView.swift */; };
+		89124893F33E6061C6A35FEB /* AttentionProducerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A8610E332E73953BFB7778F /* AttentionProducerTests.swift */; };
 		8915EF49F1031BD55C419625 /* GeminiInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F1CBD7C9E0119EC1656C1E2 /* GeminiInstallerTests.swift */; };
 		8927B4E929B4180F5B8984F1 /* ACPTranscript.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0317FF3C6E6D3F149FB4F5 /* ACPTranscript.swift */; };
 		8950201500394191D7D981D2 /* MarkdownRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EF52FE71B7FB41328859734 /* MarkdownRenderer.swift */; };
@@ -991,6 +992,7 @@
 		9654335704CB69BA7216DD63 /* ReviewLoopStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3939B27EA8D7A562048E5932 /* ReviewLoopStateTests.swift */; };
 		965621529CB4BD82DD646B76 /* ACPManagerAccessorsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B133843C0559BBD6E769ABB8 /* ACPManagerAccessorsTests.swift */; };
 		9666162EC5BE3445EEBCDEA1 /* RemoteWorktreeSummaryBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20A5D6E7C4527B459EFC2CBB /* RemoteWorktreeSummaryBuilderTests.swift */; };
+		96796789172B8CB0F83CDEC5 /* AttentionProducer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71EFA4A9A18BBF57AAA2B17A /* AttentionProducer.swift */; };
 		969E735EC4826E875A0862D5 /* GGRestackSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 152EB5D0C23CAEB13283C634 /* GGRestackSheet.swift */; };
 		96BE44DEEDA6FDF72BD51173 /* ACPReconnectPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = D020BC9CC6586ECAB8A38042 /* ACPReconnectPolicy.swift */; };
 		96EC9BEE1A4467683D0F6808 /* RunScriptPaletteModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC2A20311755AEE2EDD25815 /* RunScriptPaletteModel.swift */; };
@@ -2190,6 +2192,7 @@
 		4A0A451D5E0D66CB2F4121AD /* AppStateWorktreeCleanupBatchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateWorktreeCleanupBatchTests.swift; sourceTree = "<group>"; };
 		4A27D815CB567E3FEF2D3E6B /* InstallSourceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallSourceTests.swift; sourceTree = "<group>"; };
 		4A777C0D1DB412458D46A628 /* TerminalCLIInjectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalCLIInjectionTests.swift; sourceTree = "<group>"; };
+		4A8610E332E73953BFB7778F /* AttentionProducerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttentionProducerTests.swift; sourceTree = "<group>"; };
 		4AC5721A309B06845548B46B /* WorkspaceSpacePersistenceBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceSpacePersistenceBridge.swift; sourceTree = "<group>"; };
 		4AED8A6EE8EF0CC317D7A4C7 /* AgentBuiltinsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentBuiltinsTests.swift; sourceTree = "<group>"; };
 		4B05E0E44B026AE7E8EA3101 /* ReviewEvidenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewEvidenceTests.swift; sourceTree = "<group>"; };
@@ -2454,6 +2457,7 @@
 		71BFAD7D324EEAE4DA5D402E /* TerminalTabStateCodableTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalTabStateCodableTests.swift; sourceTree = "<group>"; };
 		71DEA04B12C341C540CCD54A /* AppKitDiffReviewFlingPerfTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppKitDiffReviewFlingPerfTests.swift; sourceTree = "<group>"; };
 		71E01A18A7215E3FEEB71B07 /* ACPBrokerClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPBrokerClientTests.swift; sourceTree = "<group>"; };
+		71EFA4A9A18BBF57AAA2B17A /* AttentionProducer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttentionProducer.swift; sourceTree = "<group>"; };
 		71F9CE2A0C76E75E95A641AE /* DraftAmendPrefill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftAmendPrefill.swift; sourceTree = "<group>"; };
 		723922E17A17CA9F7D382C48 /* WorkspaceCheckoutCreationModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceCheckoutCreationModel.swift; sourceTree = "<group>"; };
 		724A473AB9439DAA535B33F8 /* GGUndoMarkerStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGUndoMarkerStore.swift; sourceTree = "<group>"; };
@@ -3557,6 +3561,7 @@
 		0C47A6BD1EE4733CE9A2CA2A /* Attention */ = {
 			isa = PBXGroup;
 			children = (
+				4A8610E332E73953BFB7778F /* AttentionProducerTests.swift */,
 				77AAF9F6D5538D0B03188090 /* AttentionSignalAggregatorTests.swift */,
 				7ECD5701E054809D2CBB2539 /* AttentionStoreTests.swift */,
 			);
@@ -4346,6 +4351,7 @@
 			isa = PBXGroup;
 			children = (
 				870511370FA25B7E381C6DA6 /* AttentionModels.swift */,
+				71EFA4A9A18BBF57AAA2B17A /* AttentionProducer.swift */,
 				D1602559D20B8086D3D5EA6D /* AttentionSignalAggregator.swift */,
 				95F0A7DDF2B80D8CEAAD2D5D /* AttentionStore.swift */,
 			);
@@ -6717,6 +6723,7 @@
 				4DE075F8DA19958C4D55D671 /* AttachIssueDialogModel.swift in Sources */,
 				5015F89D084573BFC8A9E2C3 /* AttachedIssueDraft.swift in Sources */,
 				F4289D57A9E01AA926A2996B /* AttentionModels.swift in Sources */,
+				96796789172B8CB0F83CDEC5 /* AttentionProducer.swift in Sources */,
 				AC2D744E41F25F8B6D708544 /* AttentionSignalAggregator.swift in Sources */,
 				3C945DFC5C2CDE56B83EA4D1 /* AttentionStore.swift in Sources */,
 				4200B95D724A2433F50C1B7C /* BaseBranchSelector.swift in Sources */,
@@ -7605,6 +7612,7 @@
 				A5ED5D357F25C442E3B9F37F /* AppStateWorktreeArchiveBatchTests.swift in Sources */,
 				322ACA90D1ED6EDEA8B40D1D /* AppStateWorktreeCleanupBatchTests.swift in Sources */,
 				536F79023AAEDB205061DAA0 /* AttachIssueDialogModelTests.swift in Sources */,
+				89124893F33E6061C6A35FEB /* AttentionProducerTests.swift in Sources */,
 				766BFE0334B7146A76DDDB00 /* AttentionSignalAggregatorTests.swift in Sources */,
 				A1312EFBF7AB93FA954390A2 /* AttentionStoreTests.swift in Sources */,
 				A5742BE7348C02324B8119D0 /* BaseBranchSelectorTests.swift in Sources */,

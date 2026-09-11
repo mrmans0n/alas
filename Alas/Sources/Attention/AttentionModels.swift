@@ -35,6 +35,25 @@ enum AttentionKind: String, Codable, Sendable {
     case reviewSyncBlocked, hostDisconnected, agentFinished
 }
 
+extension AttentionKind {
+    func historicalTitle(from title: String) -> String {
+        switch self {
+        case .agentAwaiting:
+            title.replacingOccurrences(of: " is waiting for input", with: " waited for input")
+        case .agentPermission:
+            title.replacingOccurrences(of: " needs permission", with: " needed permission")
+        case .runScriptFailure:
+            title.replacingOccurrences(of: " failed", with: " failed")
+        case .gitOperation:
+            title.replacingOccurrences(of: " is in progress", with: " was in progress")
+        case .hostDisconnected:
+            title.replacingOccurrences(of: " is unreachable", with: " was unreachable")
+        case .conflicts, .reviewReply, .failedChecks, .actionableFeedback, .reviewSyncBlocked, .agentFinished:
+            title
+        }
+    }
+}
+
 enum AttentionJumpTarget: Codable, Equatable, Sendable {
     case session(sessionID: String)
     case runScriptFailure(failureID: String)

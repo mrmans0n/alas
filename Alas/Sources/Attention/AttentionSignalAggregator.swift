@@ -173,16 +173,7 @@ enum AttentionSignalAggregator {
     }
 
     private static func historicalTitle(for event: AttentionEvent) -> String {
-        switch event.kind {
-        case .agentAwaiting:
-            event.title.replacingOccurrences(of: " is waiting for input", with: " waited for input")
-        case .agentPermission:
-            event.title.replacingOccurrences(of: " needs permission", with: " needed permission")
-        case .gitOperation:
-            event.title.replacingOccurrences(of: " is in progress", with: " was in progress")
-        default:
-            event.title
-        }
+        event.kind.historicalTitle(from: event.title)
     }
 
     private static func newestFirst(_ lhs: AttentionItem, _ rhs: AttentionItem) -> Bool {
