@@ -4,6 +4,17 @@ import Testing
 
 @Suite("Attention signal aggregation")
 struct AttentionSignalAggregatorTests {
+    @Test(arguments: [
+        (AttentionKind.agentAwaiting, "Codex is waiting for input", "Codex waited for input"),
+        (AttentionKind.conflicts, "2 unresolved conflicts", "2 conflicts required resolution"),
+        (AttentionKind.actionableFeedback, "Review feedback needs action", "Review feedback required action")
+    ])
+    func historicalTitlesUsePastTenseWithoutClaimingLiveState(
+        kind: AttentionKind, title: String, expected: String
+    ) {
+        #expect(kind.historicalTitle(from: title) == expected)
+    }
+
     @Test func aggregationCountsItemsAndUsesHistoricalCopyAfterLiveStateDisappears() throws {
         let fixture = Fixture()
         let event = fixture.awaitingEvent(title: "Codex is waiting for input")

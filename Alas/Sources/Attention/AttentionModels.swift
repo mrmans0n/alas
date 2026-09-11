@@ -48,7 +48,13 @@ extension AttentionKind {
             title.replacingOccurrences(of: " is in progress", with: " was in progress")
         case .hostDisconnected:
             title.replacingOccurrences(of: " is unreachable", with: " was unreachable")
-        case .conflicts, .reviewReply, .failedChecks, .actionableFeedback, .reviewSyncBlocked, .agentFinished:
+        case .conflicts:
+            title
+                .replacingOccurrences(of: " unresolved conflicts", with: " conflicts required resolution")
+                .replacingOccurrences(of: " unresolved conflict", with: " conflict required resolution")
+        case .actionableFeedback:
+            title.replacingOccurrences(of: " needs action", with: " required action")
+        case .reviewReply, .failedChecks, .reviewSyncBlocked, .agentFinished:
             title
         }
     }
