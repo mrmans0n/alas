@@ -196,11 +196,11 @@ struct AgentSidebarRollupBuilder {
     }
 
     private static func planProgress(for plan: [ACPMessage.PlanItem]?) -> AgentSidebarPlanProgress? {
-        guard let plan, !plan.isEmpty else { return nil }
+        guard let state = ACPPlanPillState(items: plan) else { return nil }
         return AgentSidebarPlanProgress(
-            completed: plan.count { $0.status == "completed" },
-            total: plan.count,
-            currentStep: plan.first(where: { $0.status == "in_progress" })?.content
+            completed: state.done,
+            total: state.total,
+            currentStep: state.currentStep
         )
     }
 }

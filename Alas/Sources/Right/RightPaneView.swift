@@ -10,6 +10,7 @@ struct RightPaneView: View {
     let onReviewCommit: (CommitInfo) -> Void
     @Environment(\.theme) var theme
     @State private var rps: RightPaneState?
+    @State private var agentManager: ACPSessionManager?
 
     init(
         state: AppState,
@@ -70,7 +71,7 @@ struct RightPaneView: View {
                             .count { $0.status.isActive }
                     )
 
-                    if rps.hasLoadedSnapshot {
+                    if rps.hasLoadedSnapshot || rps.activeTab == .agent {
                         switch rps.activeTab {
                         case .changes:
                             ChangesTabView(
@@ -115,7 +116,18 @@ struct RightPaneView: View {
                                 worktreeRoot: rps.worktree.path
                             )
                         case .agent:
-                            EmptyView()
+                            Group {
+                                if let agentManager, agentManager.worktreeId == worktree.id {
+                                    AgentWorktreeTabView(state: state, worktree: worktree, manager: agentManager)
+                                        .id(worktree.id)
+                                } else {
+                                    ProgressView("Loading sessions…")
+                                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                }
+                            }
+                            .task(id: worktree.id) {
+                                agentManager = state.acpManager(for: worktree)
+                            }
                         case .run:
                             RunTabView(state: state, worktree: worktree)
                         }

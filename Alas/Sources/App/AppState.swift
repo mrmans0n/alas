@@ -8882,6 +8882,48 @@ final class AppState {
         acpManagers[.worktree(id)]
     }
 
+    /// The manager owns persisted history; center tabs only supply terminal rows.
+    func agentSidebarRollup(for worktree: Worktree) -> AgentSidebarRollup {
+        let manager = acpManager(forWorktreeId: worktree.id)
+        let terminalTabs = tabs.tabs(forWorktree: worktree.id).compactMap { tab -> TerminalTabState? in
+            guard case .terminal(let terminal) = tab else { return nil }
+            return terminal
+        }
+        let liveSessions = manager?.sessions.values.filter { session in
+            manager?.sessionRows.first(where: { $0.id == session.id })?.archived != true
+        } ?? []
+        return AgentSidebarRollupBuilder.build(.init(
+            worktreeID: worktree.id,
+            persistedACP: manager?.sessionRows.filter { !$0.archived } ?? [],
+            liveACP: liveSessions.sorted {
+                if $0.createdAt != $1.createdAt { return $0.createdAt > $1.createdAt }
+                return $0.id < $1.id
+            },
+            terminalTabs: terminalTabs,
+            harnessActivity: harness.activityBySession,
+            remoteHost: projectAndWorktree(withWorktreeId: worktree.id)?.project.host
+        ))
+    }
+
+    func focusAgentSidebarRow(_ rowID: AgentSidebarRowID, in worktree: Worktree) async {
+        switch rowID {
+        case .acp(let sessionID):
+            guard let manager = acpManager(forWorktreeId: worktree.id),
+                  manager.liveSession(for: sessionID) != nil
+                    || manager.sessionRows.contains(where: { $0.id == sessionID && !$0.archived })
+            else { return }
+            selectWorktree(id: worktree.id)
+            await openExistingACPSession(sessionId: sessionID, worktree: worktree)
+        case .terminal(let tabID, _):
+            guard tabs.tabs(forWorktree: worktree.id).contains(where: {
+                guard case .terminal = $0 else { return false }
+                return $0.id == tabID
+            }) else { return }
+            selectWorktree(id: worktree.id)
+            activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tabID)
+        }
+    }
+
     func acpManager(for owner: SessionOwnerID) -> ACPSessionManager? {
         acpManagers[owner]
     }
@@ -9810,6 +9852,11 @@ final class AppState {
     func openExistingACPSession(sessionId: ACPSession.ID) async {
         guard let worktreeId = selectedWorktreeId,
               let worktree = worktree(withId: worktreeId) else { return }
+        await openExistingACPSession(sessionId: sessionId, worktree: worktree)
+    }
+
+    /// Pins the owner before suspension, including when sidebar focus reopens history.
+    func openExistingACPSession(sessionId: ACPSession.ID, worktree: Worktree) async {
         await awaitPendingACPDetach(owner: .worktree(worktree.id), sessionId: sessionId)
         guard let mgr = acpManager(for: worktree) else { return }
         cancelRetainedACPSessionCleanup(owner: .worktree(worktree.id), sessionId: sessionId)
@@ -10959,6 +11006,21 @@ extension AppState: RemoteSessionsProvider {
         onResult(false)
     }
 
+    func sendPrompt(
+        for id: String,
+        worktreeID: String,
+        text: String,
+        attachments: [ACPMessage.Attachment],
+        onResult: @escaping @MainActor (Bool) -> Void
+    ) async {
+        guard let manager = acpManager(forWorktreeId: worktreeID),
+              manager.liveSession(for: id) != nil else {
+            onResult(false)
+            return
+        }
+        await manager.sendPrompt(for: id, text: text, attachments: attachments, onResult: onResult)
+    }
+
     func writeAttachment(_ data: Data, mimeType: String, name: String?, for id: String) -> URL? {
         guard let mgr = acpManagers.values.first(where: { $0.liveSession(for: id) != nil }),
               let session = mgr.liveSession(for: id) else { return nil }
@@ -10975,6 +11037,11 @@ extension AppState: RemoteSessionsProvider {
             await mgr.interruptBypassingLease(for: id)
             return
         }
+    }
+
+    func stop(for id: String, worktreeID: String) async {
+        guard let manager = acpManager(forWorktreeId: worktreeID) else { return }
+        await manager.interrupt(for: id)
     }
 
     func queueForceSend(for id: String, itemId: UUID) async {

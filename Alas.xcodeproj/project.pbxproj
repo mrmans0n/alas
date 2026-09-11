@@ -1390,6 +1390,7 @@
 		D2B345D1AEB1D5CEF48354C3 /* HoverHighlightFeatureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100091C8ABC3F3FA66C744E9 /* HoverHighlightFeatureTests.swift */; };
 		D2D5D79EE8DE82FC44C2D36A /* CompletionFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = D510DACCD80A328B2DFABDC0 /* CompletionFeature.swift */; };
 		D2DBD17549E31DAAF87EE4A9 /* ACPDictationServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF5F310D158323C328E56929 /* ACPDictationServiceTests.swift */; };
+		D2F62FD2AC838FFDC305206D /* AgentTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1AD121323EC19D333DC2556 /* AgentTabView.swift */; };
 		D36A33178D064DBD5DFD9B6D /* PairedAuthoredContentSurfaceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDBB557833D3939208D75FB7 /* PairedAuthoredContentSurfaceTests.swift */; };
 		D397C3E94E3F00F012CBE5AE /* Tab.swift in Sources */ = {isa = PBXBuildFile; fileRef = B27595490B7D883CF5D9FFD5 /* Tab.swift */; };
 		D3A67696B13E8F9E31B10DC0 /* DiffReviewRailThreadCountsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E933EFC52B5E3D12133B1306 /* DiffReviewRailThreadCountsTests.swift */; };
@@ -2734,6 +2735,7 @@
 		A107DA120039DD59C4F5CDD7 /* MermaidRenderServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MermaidRenderServiceTests.swift; sourceTree = "<group>"; };
 		A1503D1CB549B39E499EFAB8 /* DiffInlineAnnotationCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffInlineAnnotationCard.swift; sourceTree = "<group>"; };
 		A172B476A5BF7E4016431E6A /* DiffReviewModelsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffReviewModelsTests.swift; sourceTree = "<group>"; };
+		A1AD121323EC19D333DC2556 /* AgentTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentTabView.swift; sourceTree = "<group>"; };
 		A1BC298112812E38C99E0B71 /* ACPAdapterUpdateStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPAdapterUpdateStoreTests.swift; sourceTree = "<group>"; };
 		A203964F9055BEF3F6142684 /* CodexACPInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexACPInstallerTests.swift; sourceTree = "<group>"; };
 		A218B5125FC963339E40605E /* TabsManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabsManager.swift; sourceTree = "<group>"; };
@@ -4390,6 +4392,7 @@
 			isa = PBXGroup;
 			children = (
 				0440E0CF2FCB4EF89EF53DC2 /* AgentSidebarRollup.swift */,
+				A1AD121323EC19D333DC2556 /* AgentTabView.swift */,
 				002C8D5C52466955E0A90606 /* BaseBranchSelector.swift */,
 				FF68BCA1222E7C06DA4AC595 /* BaseResolutionMapping.swift */,
 				6BAD20759A17B6EFE3AC0C81 /* BranchOpsMenu.swift */,
@@ -6636,6 +6639,7 @@
 				2584552219DE6987E1E6AF36 /* AgentRunError.swift in Sources */,
 				0BA997A903C1DC2A41D64E22 /* AgentRunner.swift in Sources */,
 				2D428B399E48ED859E4D0797 /* AgentSidebarRollup.swift in Sources */,
+				D2F62FD2AC838FFDC305206D /* AgentTabView.swift in Sources */,
 				55C7881F382ACCEBCDB7D157 /* AgentsPane.swift in Sources */,
 				59EFDD354514B21BBA4206AD /* AiSplitButton.swift in Sources */,
 				E6426E94A57602E76D401D21 /* AlasActionService.swift in Sources */,

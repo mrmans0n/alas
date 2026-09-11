@@ -5,13 +5,36 @@ import Testing
 @Suite("Agent sidebar rollup")
 struct AgentSidebarRollupTests {
     @Test @MainActor
+    func actionsExposeTheRowIdentityAfterHistoryBecomesLive() {
+        var focused: [AgentSidebarRowID] = []
+        let actions = AgentSidebarActions(
+            onFocus: { focused.append($0) }, onInterrupt: { _ in },
+            onFollowUp: { _, _ in }, onDelegate: nil
+        )
+        let history = AgentSidebarRollupBuilder.build(.init(
+            worktreeID: "worktree-a", persistedACP: [makeRow(id: "acp-a")],
+            liveACP: [], terminalTabs: [], harnessActivity: [:], remoteHost: nil
+        ))
+        let live = AgentSidebarRollupBuilder.build(.init(
+            worktreeID: "worktree-a", persistedACP: [makeRow(id: "acp-a")],
+            liveACP: [makeLiveSession(id: "acp-a", worktreeID: "worktree-a")],
+            terminalTabs: [], harnessActivity: [:], remoteHost: nil
+        ))
+
+        actions.onFocus(history.rows[0].id)
+        actions.onFocus(live.rows[0].id)
+
+        #expect(focused == [.acp("acp-a"), .acp("acp-a")])
+    }
+
+    @Test @MainActor
     func liveACPRowOverridesPersistedHistoryAndBindsUsageAndPlan() {
         let session = makeLiveSession(id: "acp-a", worktreeID: "worktree-a")
         session.currentModel = "gpt-5"
         session.contextUsage = ACPUsageInfo(used: 45_000, size: 128_000, cost: nil)
         _ = session.apply(.plan([
-            .init(content: "Ship sidebar", status: "completed"),
-            .init(content: "Test isolation", status: "in_progress"),
+            .init(content: "Ship sidebar", priority: nil, status: "completed"),
+            .init(content: "Test isolation", priority: nil, status: "in_progress"),
         ]))
 
         let rollup = AgentSidebarRollupBuilder.build(.init(
@@ -78,5 +101,145 @@ struct AgentSidebarRollupTests {
 
     private func makeTerminal(id: TabID, sessionID: String) -> TerminalTabState {
         TerminalTabState(id: id, title: "Terminal \(id)", sessionId: sessionID)
+    }
+
+    @Test @MainActor
+    func snapshotKeepsPersistedRowsInTheirOwningWorktree() async throws {
+        let (state, first, second) = makeAppFixture()
+        let firstManager = try #require(state.acpManager(for: first))
+        let secondManager = try #require(state.acpManager(for: second))
+        let session = firstManager.createSession(id: "first-session", agentId: "sidebar-test-agent")
+        _ = secondManager.createSession(id: "second-session", agentId: "sidebar-test-agent")
+        await firstManager.flushAllPersistence()
+        firstManager.closeSession(id: session.id)
+        await firstManager.refreshRecentNow()
+        let terminal = state.tabs.appendTerminal(worktreeId: first.id, title: "First", sessionId: "shell-a")
+        state.tabs.appendTerminal(worktreeId: second.id, title: "Second", sessionId: "shell-b")
+
+        let rollup = state.agentSidebarRollup(for: first)
+
+        #expect(rollup.rows.map(\.id) == [.acp("first-session"), .terminal(tabID: terminal.id, sessionID: "shell-a")])
+        #expect(rollup.history.map(\.id) == [.acp("first-session")])
+    }
+
+    @Test @MainActor
+    func focusReopensHistoryInItsWorktreeAndReusesTheNewTab() async throws {
+        let (state, first, second) = makeAppFixture()
+        let manager = try #require(state.acpManager(for: first))
+        let session = manager.createSession(id: "reopened-session", agentId: "sidebar-test-agent")
+        await manager.flushAllPersistence()
+        manager.closeSession(id: session.id)
+        await manager.refreshRecentNow()
+        state.selectWorktree(id: second.id)
+
+        await state.focusAgentSidebarRow(.acp("reopened-session"), in: first)
+        let reopenedID = try #require(state.tabs.activeTabId(forWorktree: first.id))
+        await state.focusAgentSidebarRow(.acp("reopened-session"), in: first)
+
+        #expect(state.tabs.tabs(forWorktree: first.id).count == 1)
+        #expect(state.tabs.activeTabId(forWorktree: first.id) == reopenedID)
+        #expect(state.tabs.tabs(forWorktree: second.id).isEmpty)
+        #expect(state.selectedWorktreeId == first.id)
+    }
+
+    @Test @MainActor
+    func terminalFocusUsesExactTabAndRejectsOtherWorktreeRows() async {
+        let (state, first, second) = makeAppFixture()
+        let terminal = state.tabs.appendTerminal(worktreeId: first.id, title: "First", sessionId: "shell-a")
+        state.tabs.appendTerminal(worktreeId: first.id, title: "Second", sessionId: "shell-b")
+        state.selectWorktree(id: second.id)
+
+        await state.focusAgentSidebarRow(.terminal(tabID: terminal.id, sessionID: "shell-a"), in: first)
+        #expect(state.tabs.activeTabId(forWorktree: first.id) == terminal.id)
+        await state.focusAgentSidebarRow(.terminal(tabID: terminal.id, sessionID: "shell-a"), in: second)
+        #expect(state.tabs.activeTabId(forWorktree: second.id) == nil)
+        #expect(state.selectedWorktreeId == first.id)
+    }
+
+    @Test @MainActor
+    func sidebarPlanUsesExistingPendingAndCompletedStepSemantics() {
+        let session = makeLiveSession(id: "acp-a", worktreeID: "worktree-a")
+        _ = session.apply(.plan([.init(content: "Pending task", priority: nil, status: "pending")]))
+        let pending = AgentSidebarRollupBuilder.build(.init(
+            worktreeID: "worktree-a", persistedACP: [], liveACP: [session],
+            terminalTabs: [], harnessActivity: [:], remoteHost: nil
+        ))
+        #expect(pending.rows.first?.plan?.currentStep == "Pending task")
+        _ = session.apply(.plan([.init(content: "Pending task", priority: nil, status: "completed")]))
+        let completed = AgentSidebarRollupBuilder.build(.init(
+            worktreeID: "worktree-a", persistedACP: [], liveACP: [session],
+            terminalTabs: [], harnessActivity: [:], remoteHost: nil
+        ))
+        #expect(completed.rows.first?.plan?.currentStep == "All steps complete")
+    }
+
+    @Test @MainActor
+    func followUpTargetsItsWorktreeSessionWhenAnotherTabIsActive() async throws {
+        let (state, first, second) = makeAppFixture()
+        let firstManager = try #require(state.acpManager(for: first))
+        let secondManager = try #require(state.acpManager(for: second))
+        let target = firstManager.createSession(id: "shared-session-id", agentId: "sidebar-test-agent")
+        let other = secondManager.createSession(id: "shared-session-id", agentId: "sidebar-test-agent")
+        target.agentState = .spawning
+        other.agentState = .spawning
+        #expect(await firstManager.acquireWriterLease(sessionId: target.id))
+        #expect(await secondManager.acquireWriterLease(sessionId: other.id))
+        state.tabs.append(acpSession: ACPSessionTabState(sessionId: other.id, title: "Other"), to: second.id)
+        state.selectWorktree(id: second.id)
+
+        let accepted = await withCheckedContinuation { continuation in
+            Task { @MainActor in
+                await state.sendPrompt(for: target.id, worktreeID: first.id, text: "Continue here", attachments: []) {
+                    continuation.resume(returning: $0)
+                }
+            }
+        }
+
+        #expect(accepted)
+        #expect(target.queue.first?.blocks == [.text("Continue here")])
+        #expect(other.queue.isEmpty)
+        #expect(state.selectedWorktreeId == second.id)
+        await firstManager.releaseWriterLease(sessionId: target.id)
+        await secondManager.releaseWriterLease(sessionId: other.id)
+    }
+
+    @Test @MainActor
+    func followUpRefusalReportsFailureWithoutChangingTheQueue() async throws {
+        let (state, first, _) = makeAppFixture()
+        let manager = try #require(state.acpManager(for: first))
+        let target = manager.createSession(id: "read-only-session", agentId: "sidebar-test-agent")
+        var accepted: Bool?
+
+        await state.sendPrompt(for: target.id, worktreeID: first.id, text: "Keep this draft", attachments: []) {
+            accepted = $0
+        }
+
+        #expect(accepted == false)
+        #expect(target.queue.isEmpty)
+    }
+
+    private struct MemoryStore: PersistenceStoreProtocol {
+        func write<T: Encodable>(_: T, to _: URL) throws {}
+        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
+    }
+
+    @MainActor
+    private func makeAppFixture() -> (AppState, Worktree, Worktree) {
+        let state = AppState(store: MemoryStore())
+        let fixtureID = UUID().uuidString
+        let project = ProjectConfig(
+            id: fixtureID, name: "Agent Sidebar", path: "/tmp/\(fixtureID)",
+            color: "blue", addedAt: .distantPast
+        )
+        let worktrees = ["first", "second"].map { name in
+            Worktree(
+                id: "\(fixtureID)-\(name)", projectId: fixtureID, name: name, branch: name,
+                path: URL(fileURLWithPath: "/tmp/\(fixtureID)/\(name)"),
+                status: .clean, lastActivity: .distantPast
+            )
+        }
+        state.projectsManager = ProjectsManager(persistedProjects: [project])
+        for worktree in worktrees { state.projectsManager.insertOptimisticWorktree(worktree) }
+        return (state, worktrees[0], worktrees[1])
     }
 }
