@@ -16,6 +16,7 @@ struct HarnessDetectorTests {
         #expect(HarnessDetector.matchKind(processName: "gemini") == .gemini)
         #expect(HarnessDetector.matchKind(processName: "opencode") == .opencode)
         #expect(HarnessDetector.matchKind(processName: "pi") == .pi)
+        #expect(HarnessDetector.matchKind(processName: "omp") == .omp)
         #expect(HarnessDetector.matchKind(processName: "copilot") == .copilot)
     }
     @Test func unknownReturnsNil() {

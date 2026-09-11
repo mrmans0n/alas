@@ -69,6 +69,41 @@ struct RunTabPresentationTests {
 
     // MARK: - States
 
+    @Test func initialScriptScanShowsLoadingPlaceholder() {
+        #expect(RunTabLoadingPresentation.showsPlaceholder(scannedWorktreeID: nil, worktreeID: "wt-1"))
+        #expect(!RunTabLoadingPresentation.showsPlaceholder(scannedWorktreeID: "wt-1", worktreeID: "wt-1"))
+        #expect(RunTabLoadingPresentation.showsPlaceholder(scannedWorktreeID: "wt-1", worktreeID: "wt-2"))
+    }
+
+    @Test func startingScriptScanInvalidatesPreviousScanMarker() {
+        #expect(RunTabLoadingPresentation.scanMarkerAfterStartingRefresh(
+            scannedWorktreeID: "wt-1",
+            refreshingWorktreeID: "wt-1"
+        ) == nil)
+        #expect(RunTabLoadingPresentation.scanMarkerAfterStartingRefresh(
+            scannedWorktreeID: "wt-1",
+            refreshingWorktreeID: "wt-2"
+        ) == "wt-1")
+    }
+
+    @Test func staleScriptRefreshesCannotCommitAfterWorktreeSwitch() {
+        #expect(RunTabLoadingPresentation.acceptsRefreshCompletion(
+            startedWorktreeID: "wt-1",
+            activeWorktreeID: "wt-1",
+            isCancelled: false
+        ))
+        #expect(!RunTabLoadingPresentation.acceptsRefreshCompletion(
+            startedWorktreeID: "wt-1",
+            activeWorktreeID: "wt-2",
+            isCancelled: false
+        ))
+        #expect(!RunTabLoadingPresentation.acceptsRefreshCompletion(
+            startedWorktreeID: "wt-1",
+            activeWorktreeID: "wt-1",
+            isCancelled: true
+        ))
+    }
+
     @Test func neverRunScriptOffersRunOnly() {
         let row = row()
         #expect(row.statusLabel == "Not run")

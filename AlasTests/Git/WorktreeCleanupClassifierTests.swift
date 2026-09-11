@@ -35,7 +35,8 @@ struct WorktreeCleanupClassifierTests {
             lastActivity: now.addingTimeInterval(-Double(daysIdle) * 86_400),
             mergeState: .mergedOnForge(
                 identity: "GitHub #42",
-                url: URL(string: "https://github.com/o/r/pull/42")!
+                url: URL(string: "https://github.com/o/r/pull/42")!,
+                headSHA: "abc123"
             )
         )
     }

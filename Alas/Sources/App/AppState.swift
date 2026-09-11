@@ -87,6 +87,8 @@ final class AppState {
     /// separate from `tabs`: a run's outcome outlives its terminal shell, and a
     /// live shell never implies a live command.
     var runRecords = RunRecordStore()
+    /// Follow-up composers outlive the conditional Agent pane and worktree navigation.
+    var agentSidebarFollowUps: [String: [ACPSession.ID: AgentSidebarFollowUpDraft]] = [:]
     var selectedRunScriptFailure: RunScriptFailure?
     @ObservationIgnored var runScriptCompletionTasks: [String: (worktreeID: String, sessionID: String, location: RunScriptCaptureLocation, task: Task<Void, Never>)] = [:]
     @ObservationIgnored let runScriptCompletionWaiter: RunScriptCompletionWaiter
@@ -4430,6 +4432,35 @@ final class AppState {
         }
     }
 
+    /// The edit generation of every currently-dirty tab in a worktree, keyed
+    /// by tab id. Used to tell "still the same dirtiness the user already
+    /// discarded" apart from "re-edited since" — a tab id alone isn't enough,
+    /// since discarding a buffer doesn't clear it, and it can be typed into
+    /// again (from another window) while a batch is still running. A tab
+    /// with no live buffer instantiated (only a persisted hot-exit snapshot)
+    /// gets a fixed sentinel generation, since there is no live edit counter
+    /// to read until the tab is opened; a snapshot's content can't change on
+    /// its own, so this stays stable as long as the tab remains unopened.
+    private func dirtyTabGenerations(worktreeId: String) -> [TabID: Int] {
+        Dictionary(uniqueKeysWithValues: dirtyEditorTabIds(worktreeId: worktreeId).map {
+            ($0, tabs.peekBuffer(tabId: $0)?.editGeneration ?? -1)
+        })
+    }
+
+    /// True when every currently-dirty tab was already dirty, at the exact
+    /// same edit generation, when the batch confirmation snapshot was taken —
+    /// i.e. nothing new needs protecting. A tab present in `current` but
+    /// absent or at a different generation in `acknowledgedAtConfirmation` is
+    /// new or changed dirtiness the user never saw or acknowledged.
+    nonisolated static func hasOnlyAcknowledgedDirtiness(
+        current: [TabID: Int],
+        acknowledgedAtConfirmation: [TabID: Int]
+    ) -> Bool {
+        current.allSatisfy { tabId, generation in
+            acknowledgedAtConfirmation[tabId] == generation
+        }
+    }
+
     /// Archive several worktrees at once. Nothing on disk is touched — this
     /// only marks each path hidden in `ProjectConfig`, which is what persists
     /// across relaunch.
@@ -4447,9 +4478,11 @@ final class AppState {
         // discarding doesn't retroactively un-dirty anything — so the
         // per-item re-check below must compare against this snapshot rather
         // than against "is anything dirty right now", or the confirmed
-        // discard would skip every worktree it was meant to cover.
+        // discard would skip every worktree it was meant to cover. Recording
+        // each dirty tab's edit generation, not just its id, also catches a
+        // tab re-edited (from another window) after being acknowledged here.
         let dirtyTabsAtConfirmation = Dictionary(
-            uniqueKeysWithValues: worktrees.map { ($0.id, Set(dirtyEditorTabIds(worktreeId: $0.id))) }
+            uniqueKeysWithValues: worktrees.map { ($0.id, dirtyTabGenerations(worktreeId: $0.id)) }
         )
         let dirtyCount = dirtyTabsAtConfirmation.values.reduce(0) { $0 + $1.count }
         if dirtyCount > 0 {
@@ -4486,10 +4519,14 @@ final class AppState {
             // can be stale by the time this specific item is reached. Only
             // dirtiness the confirmation didn't already cover counts: a tab
             // dirty at confirmation time and discarded is expected here, but
-            // a tab that turned dirty (or newly opened dirty) since then must
-            // not be torn down.
-            let currentDirtyTabs = Set(dirtyEditorTabIds(worktreeId: worktree.id))
-            guard currentDirtyTabs.isSubset(of: dirtyTabsAtConfirmation[worktree.id] ?? []) else {
+            // a tab that turned dirty (or newly opened dirty), OR was edited
+            // again since being acknowledged, must not be torn down.
+            let currentDirtyGenerations = dirtyTabGenerations(worktreeId: worktree.id)
+            let knownDirtyGenerations = dirtyTabsAtConfirmation[worktree.id] ?? [:]
+            guard Self.hasOnlyAcknowledgedDirtiness(
+                current: currentDirtyGenerations,
+                acknowledgedAtConfirmation: knownDirtyGenerations
+            ) else {
                 results.append(WorktreeBatchResult(
                     worktreeId: worktree.id,
                     branch: worktree.branch,
@@ -7748,9 +7785,23 @@ final class AppState {
     /// `deleteWorktree`, above `beginDeleteWorktree`), so without this check a
     /// worktree that is clean on disk but has an unsaved buffer would be
     /// deleted and its buffer silently discarded by `cleanupWorktreeState`.
+    ///
+    /// `forgeConfirmedMergedBranchSHAs` maps a worktree id to the exact HEAD
+    /// SHA the cleanup scanner verified as merged via the code host (a
+    /// SHA-matched, confirmed-merged review request) rather than by git's own
+    /// local ancestry check. Git's `branch -d` cannot recognize a squash- or
+    /// rebase-merged branch as merged — the resulting commit on the base
+    /// branch isn't a descendant of the original tip by history alone — so it
+    /// silently leaves those branches behind. For worktrees in this map,
+    /// branch deletion uses `-D` instead, trusting the code host's stronger
+    /// evidence over git's blind spot — but only once the deletion path
+    /// re-confirms the branch's current tip still matches the recorded SHA,
+    /// since a new commit could have landed on it between this scan and now.
+    /// Empty by default, so existing callers are unaffected.
     func batchDeleteWorktrees(
         _ worktrees: [Worktree],
-        keepBranch: Bool
+        keepBranch: Bool,
+        forgeConfirmedMergedBranchSHAs: [String: String] = [:]
     ) async -> [WorktreeBatchResult] {
         guard !worktrees.isEmpty else { return [] }
 
@@ -7760,9 +7811,11 @@ final class AppState {
         // discarding doesn't retroactively un-dirty anything — so the
         // per-item re-check below must compare against this snapshot rather
         // than against "is anything dirty right now", or the confirmed
-        // discard would skip every worktree it was meant to cover.
+        // discard would skip every worktree it was meant to cover. Recording
+        // each dirty tab's edit generation, not just its id, also catches a
+        // tab re-edited (from another window) after being acknowledged here.
         let dirtyTabsAtConfirmation = Dictionary(
-            uniqueKeysWithValues: worktrees.map { ($0.id, Set(dirtyEditorTabIds(worktreeId: $0.id))) }
+            uniqueKeysWithValues: worktrees.map { ($0.id, dirtyTabGenerations(worktreeId: $0.id)) }
         )
         let dirtyCount = dirtyTabsAtConfirmation.values.reduce(0) { $0 + $1.count }
         if dirtyCount > 0 {
@@ -7805,9 +7858,14 @@ final class AppState {
             // while an *earlier* item was still being removed. Only
             // dirtiness the confirmation didn't already cover counts: a tab
             // dirty at confirmation time and discarded is expected here, but
-            // a tab that turned dirty since then must not be torn down.
-            let currentDirtyTabs = Set(dirtyEditorTabIds(worktreeId: worktree.id))
-            guard currentDirtyTabs.isSubset(of: dirtyTabsAtConfirmation[worktree.id] ?? []) else {
+            // a tab that turned dirty, or was edited again since being
+            // acknowledged, must not be torn down.
+            let currentDirtyGenerations = dirtyTabGenerations(worktreeId: worktree.id)
+            let knownDirtyGenerations = dirtyTabsAtConfirmation[worktree.id] ?? [:]
+            guard Self.hasOnlyAcknowledgedDirtiness(
+                current: currentDirtyGenerations,
+                acknowledgedAtConfirmation: knownDirtyGenerations
+            ) else {
                 results.append(WorktreeBatchResult(
                     worktreeId: worktree.id,
                     branch: worktree.branch,
@@ -7858,7 +7916,8 @@ final class AppState {
                 refreshAfter: false,
                 // No modal mid-batch: a worktree needing force is reported and
                 // left for the user to handle through the single-item flow.
-                promptsForForce: false
+                promptsForForce: false,
+                verifiedMergedBranchSHA: forgeConfirmedMergedBranchSHAs[worktree.id]
             )
 
             results.append(WorktreeBatchResult(
@@ -7963,9 +8022,13 @@ final class AppState {
                     onUpdate: onUpdate
                 ))
             },
-            deleteBatch: { [weak self] worktrees, keepBranch in
+            deleteBatch: { [weak self] worktrees, keepBranch, forgeConfirmedMergedBranchSHAs in
                 guard let self else { return [] }
-                return await self.batchDeleteWorktrees(worktrees, keepBranch: keepBranch)
+                return await self.batchDeleteWorktrees(
+                    worktrees,
+                    keepBranch: keepBranch,
+                    forgeConfirmedMergedBranchSHAs: forgeConfirmedMergedBranchSHAs
+                )
             },
             archiveBatch: { [weak self] worktrees in
                 self?.batchArchiveWorktrees(worktrees) ?? []
@@ -8010,9 +8073,22 @@ final class AppState {
             guard let provider = registry.provider(for: remote.kind) else {
                 return .failure(CodeHostProviderError.unsupportedProvider(remote.kind))
             }
+            // A fork's own pull/merge requests are almost never opened
+            // against itself — the classic contribution workflow opens them
+            // against the parent, and that's where a merge actually lands.
+            // Query the parent when this remote is a fork; if that lookup
+            // fails or the provider doesn't support it, fall back to the
+            // originally detected remote rather than failing the scan.
+            let queryRemote = (try? await provider.repositoryParent(remote: remote, cwd: repoPath)) ?? remote
+            // `gh pr list --limit` paginates internally to satisfy any count;
+            // `glab mr list` now does the same via GitLabCLIProvider's own
+            // paging loop. A repository with more merged reviews than this
+            // still won't see the oldest of them, but 1000 covers even a
+            // very active project's last year or two without every scan
+            // paying for an unbounded, open-ended history query.
             let refs = try await provider.mergedReviewRequests(
-                remote: remote,
-                limit: 200,
+                remote: queryRemote,
+                limit: 1000,
                 cwd: repoPath
             )
             return .success(WorktreeForgeMergeIndex(refs: refs))
@@ -8410,7 +8486,8 @@ final class AppState {
         force: Bool,
         removedIndex: Int,
         refreshAfter: Bool = true,
-        promptsForForce: Bool = true
+        promptsForForce: Bool = true,
+        verifiedMergedBranchSHA: String? = nil
     ) async -> WorktreeBatchOutcome {
         let outcome: WorktreeRemovalOutcome
         do {
@@ -8418,7 +8495,8 @@ final class AppState {
                 repoPath: repoPath,
                 worktree: worktree,
                 deleteBranchIfMerged: deleteBranchIfMerged,
-                force: force
+                force: force,
+                verifiedMergedBranchSHA: verifiedMergedBranchSHA
             )
         } catch let WorktreeService.WorktreeError.gitFailed(stderr) {
             if !force,
@@ -8538,7 +8616,8 @@ final class AppState {
         repoPath: URL,
         worktree: Worktree,
         deleteBranchIfMerged: Bool,
-        force: Bool
+        force: Bool,
+        verifiedMergedBranchSHA: String? = nil
     ) async throws -> WorktreeRemovalOutcome {
         try await ProjectMutationGate.shared.withMutation(projectID: worktree.projectId) {
             try await Task.detached {
@@ -8547,7 +8626,8 @@ final class AppState {
                         repoPath: repoPath,
                         worktree: worktree,
                         deleteBranchIfMerged: deleteBranchIfMerged,
-                        force: force
+                        force: force,
+                        verifiedMergedBranchSHA: verifiedMergedBranchSHA
                     )
                     return .synchronous
                 }
@@ -8555,7 +8635,8 @@ final class AppState {
                     repoPath: repoPath,
                     worktree: worktree,
                     deleteBranchIfMerged: deleteBranchIfMerged,
-                    force: force
+                    force: force,
+                    verifiedMergedBranchSHA: verifiedMergedBranchSHA
                 )
             }.value
         }
@@ -8883,6 +8964,78 @@ final class AppState {
     /// creation is acceptable.
     func acpManager(forWorktreeId id: String) -> ACPSessionManager? {
         acpManagers[.worktree(id)]
+    }
+
+    /// The manager owns persisted history; center tabs only supply terminal rows.
+    func agentSidebarRollup(for worktree: Worktree) -> AgentSidebarRollup {
+        let manager = acpManager(forWorktreeId: worktree.id)
+        let terminalTabs = tabs.tabs(forWorktree: worktree.id).compactMap { tab -> TerminalTabState? in
+            guard case .terminal(let terminal) = tab else { return nil }
+            return terminal
+        }
+        let liveSessions = manager?.sessions.values.filter { session in
+            manager?.sessionRows.first(where: { $0.id == session.id })?.archived != true
+        } ?? []
+        return AgentSidebarRollupBuilder.build(.init(
+            worktreeID: worktree.id,
+            persistedACP: manager?.sessionRows.filter { !$0.archived } ?? [],
+            liveACP: liveSessions.sorted {
+                if $0.createdAt != $1.createdAt { return $0.createdAt > $1.createdAt }
+                return $0.id < $1.id
+            },
+            terminalTabs: terminalTabs,
+            harnessActivity: harness.activityBySession,
+            remoteHost: projectAndWorktree(withWorktreeId: worktree.id)?.project.host
+        ))
+    }
+
+    func focusAgentSidebarRow(_ rowID: AgentSidebarRowID, in worktree: Worktree) async {
+        switch rowID {
+        case .acp(let sessionID):
+            guard let manager = acpManager(forWorktreeId: worktree.id),
+                  manager.liveSession(for: sessionID) != nil
+                    || manager.sessionRows.contains(where: { $0.id == sessionID && !$0.archived })
+            else { return }
+            selectWorktree(id: worktree.id)
+            await openExistingACPSession(sessionId: sessionID, worktree: worktree)
+        case .terminal(let tabID, let sessionID):
+            let matchingLeafID = tabs.tabs(forWorktree: worktree.id).compactMap { tab -> String? in
+                guard tab.id == tabID,
+                      case .terminal(let terminal) = tab,
+                      let leaf = terminal.root.leaves().first(where: { $0.sessionId == sessionID })
+                else { return nil }
+                return leaf.id
+            }.first
+            guard let matchingLeafID else { return }
+            selectWorktree(id: worktree.id)
+            _ = tabs.setFocusedLeaf(worktreeId: worktree.id, tabId: tabID, leafId: matchingLeafID)
+            activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tabID)
+        }
+    }
+
+    func sendAgentSidebarFollowUp(for sessionID: ACPSession.ID, worktreeID: String, text: String) {
+        guard let complete = beginAgentSidebarFollowUp(for: sessionID, worktreeID: worktreeID, text: text) else { return }
+        Task {
+            await sendPrompt(for: sessionID, worktreeID: worktreeID, text: text, attachments: [], onResult: complete)
+        }
+    }
+
+    /// Own completion in AppState so a hidden pane cannot lose a failed message.
+    func beginAgentSidebarFollowUp(
+        for sessionID: ACPSession.ID,
+        worktreeID: String,
+        text: String
+    ) -> (@MainActor (Bool) -> Void)? {
+        guard agentSidebarFollowUps[worktreeID]?[sessionID]?.delivery != .sending,
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        agentSidebarFollowUps[worktreeID, default: [:]][sessionID] = .init(text: text, delivery: .sending)
+        return { [weak self] succeeded in
+            guard let self else { return }
+            self.agentSidebarFollowUps[worktreeID, default: [:]][sessionID]?.delivery = succeeded ? .sent : .failed
+            if succeeded, self.agentSidebarFollowUps[worktreeID]?[sessionID]?.text == text {
+                self.agentSidebarFollowUps[worktreeID, default: [:]][sessionID]?.text = ""
+            }
+        }
     }
 
     func acpManager(for owner: SessionOwnerID) -> ACPSessionManager? {
@@ -9813,6 +9966,11 @@ final class AppState {
     func openExistingACPSession(sessionId: ACPSession.ID) async {
         guard let worktreeId = selectedWorktreeId,
               let worktree = worktree(withId: worktreeId) else { return }
+        await openExistingACPSession(sessionId: sessionId, worktree: worktree)
+    }
+
+    /// Pins the owner before suspension, including when sidebar focus reopens history.
+    func openExistingACPSession(sessionId: ACPSession.ID, worktree: Worktree) async {
         await awaitPendingACPDetach(owner: .worktree(worktree.id), sessionId: sessionId)
         guard let mgr = acpManager(for: worktree) else { return }
         cancelRetainedACPSessionCleanup(owner: .worktree(worktree.id), sessionId: sessionId)
@@ -10962,6 +11120,21 @@ extension AppState: RemoteSessionsProvider {
         onResult(false)
     }
 
+    func sendPrompt(
+        for id: String,
+        worktreeID: String,
+        text: String,
+        attachments: [ACPMessage.Attachment],
+        onResult: @escaping @MainActor (Bool) -> Void
+    ) async {
+        guard let manager = acpManager(forWorktreeId: worktreeID),
+              manager.liveSession(for: id) != nil else {
+            onResult(false)
+            return
+        }
+        await manager.sendPrompt(for: id, text: text, attachments: attachments, onResult: onResult)
+    }
+
     func writeAttachment(_ data: Data, mimeType: String, name: String?, for id: String) -> URL? {
         guard let mgr = acpManagers.values.first(where: { $0.liveSession(for: id) != nil }),
               let session = mgr.liveSession(for: id) else { return nil }
@@ -10978,6 +11151,11 @@ extension AppState: RemoteSessionsProvider {
             await mgr.interruptBypassingLease(for: id)
             return
         }
+    }
+
+    func stop(for id: String, worktreeID: String) async {
+        guard let manager = acpManager(forWorktreeId: worktreeID) else { return }
+        await manager.interrupt(for: id)
     }
 
     func queueForceSend(for id: String, itemId: UUID) async {

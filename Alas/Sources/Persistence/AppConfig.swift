@@ -47,6 +47,9 @@ struct AppConfig: Codable, Equatable {
     /// Preview gate for the worktree Run tab. This remains off until the
     /// command lifecycle UI has completed preview testing.
     var runTabEnabled: Bool = false
+    /// Preview gate for the worktree Agent tab. This remains off until the
+    /// per-worktree rollup has completed preview testing.
+    var agentTabEnabled: Bool = false
     var recentProjectIds: [String] = []
     var recentWorktreeIdsByProject: [String: [String]] = [:]
     var recentWorktreeRefs: [RepoSelectorRecents.RecentWorktreeRef] = []
@@ -509,6 +512,7 @@ struct AppConfig: Codable, Equatable {
         files: Files(showIgnored: true),
         workspacesEnabled: false,
         runTabEnabled: false,
+        agentTabEnabled: false,
         recentProjectIds: [],
         recentWorktreeIdsByProject: [:],
         recentWorktreeRefs: [],
@@ -602,6 +606,7 @@ extension AppConfig {
              remote,
              workspacesEnabled,
              runTabEnabled,
+             agentTabEnabled,
              recentProjectIds, recentWorktreeIdsByProject, recentWorktreeRefs,
              collapsedProjectIds,
              sidebarChromeOverrides,
@@ -840,6 +845,9 @@ extension AppConfig {
         // The Run tab preview is opt-in. Configs written before it existed
         // continue to load without exposing unfinished command controls.
         runTabEnabled = (try? c.decode(Bool.self, forKey: .runTabEnabled)) ?? false
+        // The Agent tab preview is opt-in. Configs written before it existed
+        // continue to load without exposing the sidebar rollup.
+        agentTabEnabled = (try? c.decode(Bool.self, forKey: .agentTabEnabled)) ?? false
         recentProjectIds = (try? c.decode([String].self, forKey: .recentProjectIds)) ?? []
         recentWorktreeIdsByProject =
             (try? c.decode([String: [String]].self, forKey: .recentWorktreeIdsByProject)) ?? [:]

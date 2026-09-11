@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 struct RightPaneView: View {
     @Bindable var state: AppState
@@ -10,6 +11,8 @@ struct RightPaneView: View {
     let onReviewCommit: (CommitInfo) -> Void
     @Environment(\.theme) var theme
     @State private var rps: RightPaneState?
+    @State private var agentManager: ACPSessionManager?
+    @State private var agentSidebarRevision = 0
 
     init(
         state: AppState,
@@ -33,12 +36,14 @@ struct RightPaneView: View {
         let initialState = state.rightPaneStore.activeState(worktreeId: worktree.id)
         initialState?.activeTab = RightPaneTab.visible(
             initialState?.activeTab ?? .changes,
+            agentTabEnabled: state.config.agentTabEnabled,
             runTabEnabled: state.config.runTabEnabled
         )
         _rps = State(initialValue: initialState)
     }
 
     var body: some View {
+        let _ = agentSidebarRevision
         let override = state.config.sidebarChromeOverride(forThemeId: state.themeStore.current.id)
         ZStack {
             SidebarMaterialBackground(
@@ -64,13 +69,15 @@ struct RightPaneView: View {
                             state.config.files.showIgnored.toggle()
                             state.saveConfig()
                         },
+                        showAgentTab: state.config.agentTabEnabled,
                         showRunTab: state.config.runTabEnabled,
                         activeRunCount: state.runRecords
                             .records(worktreeID: worktree.id)
-                            .count { $0.status.isActive }
+                            .count { $0.status.isActive },
+                        activeAgentCount: state.agentSidebarRollup(for: worktree).active.count
                     )
 
-                    if rps.hasLoadedSnapshot {
+                    if rps.hasLoadedSnapshot || (rps.activeTab == .agent && state.config.agentTabEnabled) {
                         switch rps.activeTab {
                         case .changes:
                             ChangesTabView(
@@ -114,6 +121,16 @@ struct RightPaneView: View {
                                 onClearReveal: { rps.clearReveal() },
                                 worktreeRoot: rps.worktree.path
                             )
+                        case .agent:
+                            Group {
+                                if let agentManager, agentManager.worktreeId == worktree.id {
+                                    AgentWorktreeTabView(state: state, worktree: worktree, manager: agentManager)
+                                        .id(worktree.id)
+                                } else {
+                                    ProgressView("Loading sessions…")
+                                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                }
+                            }
                         case .run:
                             RunTabView(state: state, worktree: worktree)
                         }
@@ -122,9 +139,27 @@ struct RightPaneView: View {
                     }
                 }
                 .sidebarChromeTheme(textContrast: override.textContrast)
+                .task(id: worktree.id) {
+                    agentManager = state.acpManager(for: worktree)
+                }
+                .background {
+                    if let agentManager, agentManager.worktreeId == worktree.id {
+                        AgentSidebarManagerObserver(manager: agentManager) {
+                            agentSidebarRevision &+= 1
+                        }
+                    }
+                }
                 .onChange(of: state.config.runTabEnabled) {
                     rps.activeTab = RightPaneTab.visible(
                         rps.activeTab,
+                        agentTabEnabled: state.config.agentTabEnabled,
+                        runTabEnabled: state.config.runTabEnabled
+                    )
+                }
+                .onChange(of: state.config.agentTabEnabled) {
+                    rps.activeTab = RightPaneTab.visible(
+                        rps.activeTab,
+                        agentTabEnabled: state.config.agentTabEnabled,
                         runTabEnabled: state.config.runTabEnabled
                     )
                 }
@@ -236,5 +271,23 @@ struct RightPaneView: View {
         .onDisappear {
             state.rightPaneStore.deactivate()
         }
+    }
+}
+
+private struct AgentSidebarManagerObserver: View {
+    @ObservedObject var manager: ACPSessionManager
+    let onChange: () -> Void
+
+    var body: some View {
+        let sessionChanges = Publishers.MergeMany(manager.sessions.values.map(\.objectWillChange))
+
+        Color.clear
+            .frame(width: 0, height: 0)
+            .onReceive(manager.objectWillChange) { _ in
+                onChange()
+            }
+            .onReceive(sessionChanges) { _ in
+                onChange()
+            }
     }
 }

@@ -195,7 +195,7 @@ struct WorktreeCleanupScanner: Sendable {
         case .success(let index):
             if let localHeadSHA,
                let ref = index.refs(forBranch: branch).first(where: { $0.headSHA == localHeadSHA }) {
-                return .mergedOnForge(identity: "#\(ref.number)", url: ref.url)
+                return .mergedOnForge(identity: "#\(ref.number)", url: ref.url, headSHA: localHeadSHA)
             }
             if isMergedLocally { return .mergedLocally(base: baseBranch) }
             return .notMerged

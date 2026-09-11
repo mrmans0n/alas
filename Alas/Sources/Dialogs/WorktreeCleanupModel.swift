@@ -34,7 +34,14 @@ final class WorktreeCleanupModel {
         [Worktree],
         @escaping @Sendable (WorktreeCleanupScanUpdate) async -> Void
     ) async -> Result<[WorktreeCleanupCandidate], Error>
-    private let deleteBatch: ([Worktree], Bool) async -> [WorktreeBatchResult]
+    /// `(targets, keepBranches, forgeConfirmedMergedBranchSHAs) -> results`.
+    /// The third parameter maps a worktree id to the exact HEAD SHA the scan
+    /// independently verified as merged via the code host, so the batch can
+    /// trust that evidence enough to force-delete the branch when git's own
+    /// local ancestry check can't recognize a squash/rebase merge — but only
+    /// once it re-confirms, immediately before deleting, that the branch's
+    /// tip still matches this SHA and no new commit has landed since the scan.
+    private let deleteBatch: ([Worktree], Bool, [String: String]) async -> [WorktreeBatchResult]
     private let archiveBatch: ([Worktree]) -> [WorktreeBatchResult]
     /// `(title, message, confirmButtonTitle) -> confirmed`. The button title is
     /// passed in because both destructive batch actions route through the same
@@ -54,7 +61,7 @@ final class WorktreeCleanupModel {
             [Worktree],
             @escaping @Sendable (WorktreeCleanupScanUpdate) async -> Void
         ) async -> Result<[WorktreeCleanupCandidate], Error>,
-        deleteBatch: @escaping ([Worktree], Bool) async -> [WorktreeBatchResult],
+        deleteBatch: @escaping ([Worktree], Bool, [String: String]) async -> [WorktreeBatchResult],
         archiveBatch: @escaping ([Worktree]) -> [WorktreeBatchResult],
         confirm: @escaping (String, String, String) -> Bool
     ) {
@@ -217,8 +224,32 @@ final class WorktreeCleanupModel {
             "Delete"
         ) else { return }
 
+        // A `.mergedOnForge` signal means the scan matched this worktree's
+        // exact HEAD SHA against a confirmed-merged review request on the
+        // code host — the strongest evidence the scanner produces, and the
+        // only case trusted enough to override git's own local-ancestry
+        // branch check. This is read straight off each *selected* row's own
+        // signals, not gated on the row's overall verdict: a clean,
+        // forge-merged worktree that is not yet idle carries this signal
+        // while its verdict is `.active` rather than `.candidate(.high)`,
+        // and remains manually selectable. Gating on the verdict would drop
+        // its SHA and silently fall back to `git branch -d`, which fails
+        // for a squash or rebase merge and leaves the branch behind despite
+        // the confirmation promising it will be deleted. The SHA itself
+        // travels along so the batch can re-verify, right before deleting,
+        // that the branch tip hasn't moved since this scan.
+        var forgeConfirmedMergedBranchSHAs: [String: String] = [:]
+        for candidate in candidates where selectedIds.contains(candidate.id) {
+            for signal in candidate.signals {
+                if case .mergedOnForge(_, _, let headSHA) = signal {
+                    forgeConfirmedMergedBranchSHAs[candidate.id] = headSHA
+                    break
+                }
+            }
+        }
+
         isRunning = true
-        results = await deleteBatch(targets, keepBranches)
+        results = await deleteBatch(targets, keepBranches, forgeConfirmedMergedBranchSHAs)
         isRunning = false
         await runScan()
     }
@@ -272,7 +303,7 @@ extension WorktreeCleanupModel {
             keepBranches: false,
             loadWorktrees: { worktrees },
             scan: { _, _ in .success(candidates) },
-            deleteBatch: { _, _ in [] },
+            deleteBatch: { (_: [Worktree], _: Bool, _: [String: String]) in [] },
             archiveBatch: { _ in [] },
             confirm: { _, _, _ in true }
         )
