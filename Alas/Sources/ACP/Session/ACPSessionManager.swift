@@ -299,8 +299,9 @@ final class ACPSessionManager: ObservableObject {
     /// Promote a queued item to the head (or steer to it when a turn is
     /// running) — the remote-web twin of the queued bubble's "send now".
     func queueForceSend(for id: ACPSession.ID, itemId: UUID) async {
-        guard await confirmedWriterLease(for: id), let session = sessions[id] else { return }
+        guard let session = sessions[id] else { return }
         if case .spawning = session.agentState {
+            guard await confirmedWriterLease(for: id) else { return }
             pendingQueueForceSends[id] = itemId
             onQueueChanged?(id, true)
             return
@@ -309,10 +310,12 @@ final class ACPSessionManager: ObservableObject {
             await reattach(to: id)
         }
         if case .spawning = session.agentState {
+            guard await confirmedWriterLease(for: id) else { return }
             pendingQueueForceSends[id] = itemId
             onQueueChanged?(id, true)
             return
         }
+        guard await confirmedWriterLease(for: id) else { return }
         guard let runner = runners[id] else { return }
         runner.forceSendQueuedItem(id: itemId)
         onQueueChanged?(id, true)
@@ -4193,11 +4196,13 @@ extension ACPSessionManager {
             guard existing.deadline != scheduledAt else { return }
             existing.task.cancel()
         }
+        retainSession(id: sessionId)
         let task = Task { @MainActor [weak self] in
             defer {
                 if self?.scheduledReconnectTasks[sessionId]?.deadline == scheduledAt {
                     self?.scheduledReconnectTasks.removeValue(forKey: sessionId)
                 }
+                self?.releaseSession(id: sessionId)
             }
             try? await Task.sleep(for: .seconds(max(0, scheduledAt.timeIntervalSinceNow)))
             while !Task.isCancelled {

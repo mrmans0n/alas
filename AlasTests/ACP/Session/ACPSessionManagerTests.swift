@@ -565,7 +565,6 @@ struct ACPSessionManagerTests {
         session.enqueueScheduled(blocks: [.text("later")], scheduledAt: .distantFuture)
         let itemId = try #require(session.queue.first?.id)
 
-        #expect(await mgr.acquireWriterLease(sessionId: session.id))
         await mgr.queueForceSend(for: session.id, itemId: itemId)
 
         #expect(session.agentState != .disconnected)

@@ -281,4 +281,20 @@ struct ACPSessionManagerReattachTests {
 
         #expect(session.agentState != .disconnected)
     }
+
+    @Test("scheduled reconnect retains disconnected session")
+    func scheduledReconnectRetainsDisconnectedSession() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-scheduled-retain-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let mgr = ACPSessionManager(worktreeId: "/tmp/wt", worktreePath: "/tmp/wt", store: store)
+        let session = mgr.createSession(agentId: "no-such-agent-\(UUID().uuidString)")
+        session.agentState = .disconnected
+        session.enqueueScheduled(blocks: [.text("later")], scheduledAt: Date().addingTimeInterval(60))
+
+        mgr.retainSession(id: session.id)
+        mgr.scheduleAutoReconnect(sessionId: session.id)
+        mgr.releaseSession(id: session.id)
+
+        #expect(mgr.liveSession(for: session.id) != nil)
+    }
 }
