@@ -5,6 +5,7 @@ struct HarnessActivityTransition: Equatable {
     let sessionID: String
     let owner: SessionOwnerID?
     let agent: AgentKind
+    let previousState: ActivityState?
     let state: ActivityState?
     let body: String?
     let occurredAt: Date
@@ -275,7 +276,7 @@ final class HarnessService {
         guard current?.state != previous?.state || current?.agent != previous?.agent || bodyChanged,
               let agent = current?.agent ?? previous?.agent else { return }
         onActivityTransition?(HarnessActivityTransition(
-            sessionID: sessionID, owner: owner, agent: agent, state: current?.state,
+            sessionID: sessionID, owner: owner, agent: agent, previousState: previous?.state, state: current?.state,
             body: current?.lastBody, occurredAt: current?.updatedAt ?? Date(), isSnapshot: isSnapshot
         ))
     }

@@ -1,6 +1,12 @@
 import Combine
 import Foundation
 
+enum RemoteHostReachability: Equatable {
+    case unknown
+    case online
+    case offline
+}
+
 /// Tracks per-host reachability from background poll results. Two
 /// consecutive connection failures flip a host offline (one can be a
 /// transient blip mid-roam); any success flips it back.
@@ -39,5 +45,11 @@ final class RemoteHostStatusStore: ObservableObject {
 
     func isOffline(_ host: String) -> Bool {
         offlineHosts.contains(host)
+    }
+
+    func reachability(for host: String) -> RemoteHostReachability {
+        if offlineHosts.contains(host) { return .offline }
+        if observedHosts.contains(host) { return .online }
+        return .unknown
     }
 }

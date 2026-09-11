@@ -88,22 +88,25 @@ struct AttentionNavigationEnvironment {
             focusReviewComment: { [weak appState] item, sessionID, commentID in
                 guard let appState, let worktree = item.worktree,
                       let draftID = ReviewDraftSessionID(rawValue: sessionID),
-                      let comment = try? reviewCommentStore.load(sessionID: draftID).first(where: { $0.id == commentID }),
-                      let records = try? reviewSessionStore.list(worktreeID: worktree.id),
-                      let record = records.first(where: { $0.target.draftSessionID == draftID }) else { return false }
+                      let records = try? reviewSessionStore.list(worktreeID: worktree.id) else { return false }
+                let storedComment = try? reviewCommentStore.load(sessionID: draftID).first(where: { $0.id == commentID })
+                let comment = storedComment ?? (try? reviewCommentStore.find(commentID: commentID))
+                guard let comment,
+                      let record = records.first(where: { $0.target.draftSessionID == comment.sessionID }) else { return false }
                 let focused = record.selectingFile(comment.fileID, now: Date()).focusingComment(commentID, now: Date())
                 do { try reviewSessionStore.save(focused) } catch { return false }
                 let tab = appState.tabs.openOrFocusReviewSession(worktreeId: worktree.id, record: focused)
                 appState.activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
                 guard case .reviewSession(let session) = tab, let command = session.commentScrollRequest else { return false }
                 appState.attentionPendingReviewReveal = AttentionPendingReviewReveal(
-                    worktreeID: worktree.id, tabID: tab.id, sessionID: sessionID,
+                    worktreeID: worktree.id, tabID: tab.id, sessionID: comment.sessionID.rawValue,
                     command: command, eventIDs: [item.eventID]
                 )
                 return true
             },
             focusRemoteWorktree: { item in
-                item.worktree?.display.host != nil
+                guard let host = item.worktree?.display.host else { return false }
+                return RemoteHostStatusStore.shared.reachability(for: host) == .offline
             }
         )
     }
@@ -118,7 +121,7 @@ extension AppState {
             attentionNavigationErrors[item.eventID] = message
             return .unavailable(message)
         }
-        guard let worktree = attentionWorktree(for: item.owner),
+        guard let worktree = attentionWorktree(forNavigationItem: item),
               let project = projects.first(where: { $0.id == worktree.projectId }) else {
             return unavailable("The worktree is no longer available.")
         }
@@ -127,7 +130,8 @@ extension AppState {
         }
         // The row may have been rendered before a rename, branch switch, or refresh.
         let current = AttentionWorktree(worktree: worktree, project: project).resolved
-        let resolved = AttentionItem(eventID: item.eventID, sourceKey: item.sourceKey, owner: item.owner,
+        let currentOwner = AttentionWorktreeIdentity.make(worktree: worktree, project: project)
+        let resolved = AttentionItem(eventID: item.eventID, sourceKey: item.sourceKey, owner: currentOwner,
                                      kind: item.kind, title: item.title, body: item.body, occurredAt: item.occurredAt,
                                      presentation: item.presentation, jumpTarget: item.jumpTarget, display: current.display,
                                      worktree: current, acknowledgedAt: item.acknowledgedAt)
@@ -157,7 +161,7 @@ extension AppState {
             opened = false
             failure = "This event has no destination."
         }
-        guard isAttentionNavigationCurrent(generation: navigationGeneration, owner: item.owner, worktreeID: worktree.id) else {
+        guard isAttentionNavigationCurrent(generation: navigationGeneration, owner: currentOwner, worktreeID: worktree.id) else {
             return unavailable("Navigation was canceled because the destination changed.")
         }
         guard opened else { return unavailable(failure) }
@@ -171,8 +175,12 @@ extension AppState {
 
     func beginReviewAttentionInteraction(worktreeID: String, tabID: TabID, sessionID: String, command: DiffReviewDraftCommentScrollCommand) {
         guard !isAttentionInboxOpen, selectedWorktreeId == worktreeID else { return }
-        let target = AttentionJumpTarget.reviewComment(sessionID: sessionID, commentID: command.commentID)
-        let eventIDs = attentionAggregation.items.filter { $0.worktree?.id == worktreeID && $0.jumpTarget == target }.map(\.eventID)
+        let eventIDs = attentionAggregation.items.filter { item in
+            guard item.worktree?.id == worktreeID,
+                  case .reviewComment(_, command.commentID) = item.jumpTarget
+            else { return false }
+            return true
+        }.map(\.eventID)
         attentionPendingReviewReveal = AttentionPendingReviewReveal(worktreeID: worktreeID, tabID: tabID,
             sessionID: sessionID, command: command, eventIDs: eventIDs)
     }
@@ -195,6 +203,16 @@ extension AppState {
         }
     }
 
+    func acknowledgeReviewCommentAttention(worktreeID: String, commentID: String) {
+        guard !isAttentionInboxOpen, attentionNavigationDepth == 0, selectedWorktreeId == worktreeID else { return }
+        for item in attentionAggregation.items where item.worktree?.id == worktreeID {
+            guard case .reviewComment(_, let itemCommentID) = item.jumpTarget,
+                  itemCommentID == commentID else { continue }
+            attentionStore.acknowledge(eventID: item.eventID, at: Date())
+            attentionNavigationErrors[item.eventID] = nil
+        }
+    }
+
     func isAttentionNavigationCurrent(generation: Int, owner: AttentionWorktreeIdentity, worktreeID: String) -> Bool {
         guard !Task.isCancelled, attentionNavigationGeneration == generation,
               selectedWorktreeId == worktreeID,
@@ -204,6 +222,7 @@ extension AppState {
 
     var attentionAggregation: AttentionAggregation {
         refreshAttentionAliases()
+        reconcileHostAttentionForCurrentTopology()
         let document = attentionStore.document
         let liveSignals = currentAttentionSignals.compactMap { signal -> AttentionLiveSignal? in
             guard let observation = document.observations[signal.sourceKey],
@@ -226,49 +245,96 @@ extension AppState {
 
     /// Read producer-owned state each time; persisted observations only identify occurrences.
     var currentAttentionSignals: [AttentionSignal] {
-        var signals = harness.activityBySession.flatMap { sessionID, activity -> [AttentionSignal] in
+        currentAttentionObservations.compactMap(\.activeSignal)
+    }
+
+    var currentAttentionObservations: [AttentionObservation] {
+        var observations = harness.activityBySession.flatMap { sessionID, activity -> [AttentionObservation] in
             guard let worktree = attentionWorktree(forSessionID: sessionID),
-                  let context = attentionContext(for: worktree) else { return [] }
+                  let context = attentionContext(for: worktree) else {
+                return [
+                    .inactive(sourceKey: .init(rawValue: "session:\(sessionID):awaiting")),
+                    .inactive(sourceKey: .init(rawValue: "session:\(sessionID):permission"))
+                ]
+            }
             return AttentionProducer.harness(
                 sessionID: sessionID, agent: activity.agent, state: activity.state,
                 body: activity.lastBody, owner: context.owner, display: context.display
-            ).compactMap(\.activeSignal)
+            )
         }
+        let knownHarnessSessionIDs = Set(harness.activityBySession.keys)
+        observations += restoredAttentionSessionIDs()
+            .subtracting(knownHarnessSessionIDs)
+            .flatMap { sessionID in
+                [
+                    .inactive(sourceKey: .init(rawValue: "session:\(sessionID):awaiting")),
+                    .inactive(sourceKey: .init(rawValue: "session:\(sessionID):permission"))
+                ]
+            }
         for entry in attentionWorktrees {
             let owner = AttentionWorktreeIdentity.make(worktree: entry.worktree, project: entry.project)
             if rightPaneStore.isActiveState(worktreeId: entry.worktree.id),
                let pane = rightPaneStore.activeState(worktreeId: entry.worktree.id),
                pane.hasCurrentAttentionSnapshot {
-                signals += rightPaneAttentionObservations(snapshot: pane.attentionSnapshot, owner: owner, display: entry.resolved.display).compactMap(\.activeSignal)
+                observations += rightPaneAttentionObservations(snapshot: pane.attentionSnapshot, owner: owner, display: entry.resolved.display)
             }
             if let host = entry.project.host {
-                signals += AttentionProducer.host(host: host, isDisconnected: RemoteHostStatusStore.shared.isOffline(host), owner: owner, display: entry.resolved.display).compactMap(\.activeSignal)
+                switch RemoteHostStatusStore.shared.reachability(for: host) {
+                case .offline where canRecordHostAttention(for: entry, host: host, isDisconnected: true):
+                    observations += AttentionProducer.host(host: host, isDisconnected: true, owner: owner, display: entry.resolved.display)
+                case .online:
+                    observations += AttentionProducer.host(host: host, isDisconnected: false, owner: owner, display: entry.resolved.display)
+                case .offline, .unknown:
+                    break
+                }
             }
             for failure in runScriptFailureQueue.failures(for: entry.worktree.id) {
-                signals += AttentionProducer.script(
+                observations += AttentionProducer.script(
                     failure: failure,
                     owner: .make(worktree: entry.worktree, project: entry.project),
                     display: entry.resolved.display
-                ).compactMap(\.activeSignal)
+                )
             }
         }
-        return signals
+        return observations
+    }
+
+    private func restoredAttentionSessionIDs() -> Set<String> {
+        var sessionIDs = Set<String>()
+        for entry in attentionWorktrees {
+            for tab in tabs.tabs(forWorktree: entry.worktree.id) {
+                sessionIDs.formUnion(tab.attentionSessionIDs)
+            }
+        }
+        for checkout in workspacesManager.checkouts where checkout.archivedAt == nil {
+            let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+            for tab in tabs.tabs(for: owner) {
+                sessionIDs.formUnion(tab.attentionSessionIDs)
+            }
+        }
+        return sessionIDs
     }
 
     func observeRightPaneAttention(worktreeID: String, snapshot: RightPaneAttentionSnapshot, at date: Date = Date()) {
+        refreshAttentionAliases()
         guard let entry = attentionWorktrees.first(where: { $0.worktree.id == worktreeID }),
               let context = attentionContext(for: entry.worktree) else { return }
         let observations = rightPaneAttentionObservations(snapshot: snapshot, owner: context.owner, display: context.display)
         let activeKeys = Set(observations.compactMap(\.activeSignal).map(\.sourceKey))
+        let deferredFeedbackKey = deferredReviewFeedbackKey(for: snapshot.review?.reviewRequest, owner: context.owner)
         // Only a successful provider snapshot can confirm that a request disappeared.
         // Missing/auth-failed snapshots leave occurrence identity and acknowledgments intact.
         if let review = snapshot.review,
            review.providerAvailable, review.providerAuthenticated, review.errorMessage == nil {
             for key in Array(attentionSuppressedStartupSignals.keys)
-                where key.rawValue.hasPrefix("review:\(context.owner.storageKey):") && !activeKeys.contains(key) {
+                where key.rawValue.hasPrefix("review:\(context.owner.storageKey):")
+                    && !activeKeys.contains(key)
+                    && shouldDeactivateMissingReviewKey(key, deferredFeedbackKey: deferredFeedbackKey) {
                 observeAttention(.inactive(sourceKey: key), at: date)
             }
-            for key in activeStoredReviewObservationKeys(owner: context.owner) where !activeKeys.contains(key) {
+            for key in activeStoredReviewObservationKeys(owner: context.owner)
+                where !activeKeys.contains(key)
+                    && shouldDeactivateMissingReviewKey(key, deferredFeedbackKey: deferredFeedbackKey) {
                 observeAttention(.inactive(sourceKey: key), at: date)
             }
         }
@@ -279,9 +345,31 @@ extension AppState {
            review.providerAvailable, review.providerAuthenticated, review.errorMessage == nil {
             let initialReviewSnapshot = attentionInitializedSnapshotSources.insert("review:\(context.owner.storageKey)").inserted
             let reviewSignals = observations.compactMap(\.activeSignal).filter { $0.kind != .gitOperation && $0.kind != .conflicts }
-            reconcileAttention(liveSignals: reviewSignals, isInitialSnapshot: initialReviewSnapshot, at: date)
+            let feedbackSignals = reviewSignals.filter { $0.kind == .actionableFeedback }
+            let otherReviewSignals = reviewSignals.filter { $0.kind != .actionableFeedback }
+            reconcileAttention(liveSignals: otherReviewSignals, isInitialSnapshot: initialReviewSnapshot, at: date)
+            if review.reviewRequest?.areThreadsComplete != false {
+                let initialFeedbackSnapshot = attentionInitializedSnapshotSources.insert("review-feedback:\(context.owner.storageKey)").inserted
+                reconcileAttention(liveSignals: feedbackSignals, isInitialSnapshot: initialFeedbackSnapshot, at: date)
+            }
         }
-        for observation in observations where observation.activeSignal == nil { observeAttention(observation, at: date) }
+        for observation in observations where observation.activeSignal == nil {
+            if case .inactive(let sourceKey) = observation,
+               !shouldDeactivateMissingReviewKey(sourceKey, deferredFeedbackKey: deferredFeedbackKey) {
+                continue
+            }
+            observeAttention(observation, at: date)
+        }
+    }
+
+    private func deferredReviewFeedbackKey(for request: ReviewRequest?, owner: AttentionWorktreeIdentity) -> AttentionSourceKey? {
+        guard let request, !request.areThreadsComplete else { return nil }
+        return AttentionSourceKey(rawValue: "review:\(owner.storageKey):\(request.remote.webURL.absoluteString):\(request.number):feedback")
+    }
+
+    private func shouldDeactivateMissingReviewKey(_ key: AttentionSourceKey, deferredFeedbackKey: AttentionSourceKey?) -> Bool {
+        guard key.rawValue.hasSuffix(":feedback"), let deferredFeedbackKey else { return true }
+        return key != deferredFeedbackKey
     }
 
     private func activeStoredReviewObservationKeys(owner: AttentionWorktreeIdentity) -> [AttentionSourceKey] {
@@ -293,16 +381,56 @@ extension AppState {
     }
 
     func observeHostAttention(host: String, isDisconnected: Bool, at date: Date = Date()) {
-        for entry in attentionWorktrees where entry.project.host == host {
+        for entry in attentionWorktrees where canRecordHostAttention(for: entry, host: host, isDisconnected: isDisconnected) {
             for observation in AttentionProducer.host(host: host, isDisconnected: isDisconnected, owner: .make(worktree: entry.worktree, project: entry.project), display: entry.resolved.display) {
                 observeAttention(observation, at: date)
             }
         }
     }
 
+    private func reconcileHostAttentionForCurrentTopology(at date: Date = Date()) {
+        let hosts = Set(attentionWorktrees.compactMap(\.project.host))
+        for host in hosts {
+            switch RemoteHostStatusStore.shared.reachability(for: host) {
+            case .offline:
+                observeHostAttentionIfChanged(host: host, isDisconnected: true, at: date)
+            case .online:
+                observeHostAttentionIfChanged(host: host, isDisconnected: false, at: date)
+            case .unknown:
+                continue
+            }
+        }
+    }
+
+    private func observeHostAttentionIfChanged(host: String, isDisconnected: Bool, at date: Date) {
+        for entry in attentionWorktrees where canRecordHostAttention(for: entry, host: host, isDisconnected: isDisconnected) {
+            for observation in AttentionProducer.host(host: host, isDisconnected: isDisconnected, owner: .make(worktree: entry.worktree, project: entry.project), display: entry.resolved.display) {
+                guard !attentionObservationMatchesStored(observation) else { continue }
+                observeAttention(observation, at: date)
+            }
+        }
+    }
+
+    private func canRecordHostAttention(for entry: AttentionWorktree, host: String, isDisconnected: Bool) -> Bool {
+        guard entry.project.host == host else { return false }
+        guard isDisconnected else { return true }
+        return !projectsManager.isWorktreeHidden(projectId: entry.project.id, path: entry.worktree.path)
+    }
+
+    private func attentionObservationMatchesStored(_ observation: AttentionObservation) -> Bool {
+        switch observation {
+        case .active(let signal):
+            guard let stored = attentionStore.document.observations[signal.sourceKey] else { return false }
+            return stored.isActive && stored.fingerprint == signal.fingerprint
+        case .inactive(let sourceKey):
+            guard let stored = attentionStore.document.observations[sourceKey] else { return true }
+            return !stored.isActive
+        }
+    }
+
     func observeReviewReplyAttention(worktree: Worktree, comment: ReviewDraftComment, reply: ReviewCommentReply) {
         guard let context = attentionContext(for: worktree) else { return }
-        for observation in AttentionProducer.reviewReply(comment: comment, owner: context.owner, display: context.display) {
+        for observation in AttentionProducer.reviewReply(comment: comment, observedReply: reply, owner: context.owner, display: context.display) {
             if let signal = observation.activeSignal,
                let latestAcknowledgment = attentionStore.events
                    .filter({ $0.sourceKey == signal.sourceKey })
@@ -369,7 +497,15 @@ extension AppState {
 
     /// Snapshot reconciliation cannot invent events when previous acknowledgments are unknown.
     func reconcileAttention(liveSignals: [AttentionSignal], isInitialSnapshot: Bool = true, at date: Date = Date()) {
-        for signal in liveSignals {
+        reconcileAttention(observations: liveSignals.map(AttentionObservation.active), isInitialSnapshot: isInitialSnapshot, at: date)
+    }
+
+    func reconcileAttention(observations: [AttentionObservation], isInitialSnapshot: Bool = true, at date: Date = Date()) {
+        for observation in observations {
+            guard let signal = observation.activeSignal else {
+                observeAttention(observation, at: date)
+                continue
+            }
             if isInitialSnapshot, attentionStore.loadError != nil,
                attentionStore.document.observations[signal.sourceKey] == nil {
                 if attentionSuppressedStartupSignals[signal.sourceKey] == nil {
@@ -384,38 +520,60 @@ extension AppState {
     func acknowledgeAttentionSurface(worktreeID: String, target: AttentionJumpTarget) {
         guard !isAttentionInboxOpen, attentionNavigationDepth == 0 else { return }
         for item in attentionAggregation.items where item.worktree?.id == worktreeID {
-            let matches: Bool
-            if case .conflicts = target, case .conflicts = item.jumpTarget {
-                matches = true
-            } else {
-                matches = item.jumpTarget == target
-            }
-            if matches { attentionStore.acknowledge(eventID: item.eventID, at: Date()) }
+            if attentionItem(item, matches: target) { attentionStore.acknowledge(eventID: item.eventID, at: Date()) }
         }
+    }
+
+    private func acknowledgeAttentionTarget(_ target: AttentionJumpTarget) {
+        guard !isAttentionInboxOpen, attentionNavigationDepth == 0 else { return }
+        for item in attentionAggregation.items where attentionItem(item, matches: target) {
+            attentionStore.acknowledge(eventID: item.eventID, at: Date())
+        }
+    }
+
+    private func attentionItem(_ item: AttentionItem, matches target: AttentionJumpTarget) -> Bool {
+        if case .conflicts = target, case .conflicts = item.jumpTarget {
+            return true
+        }
+        return item.jumpTarget == target
     }
 
     func acknowledgeFocusedSessionAttention(worktreeID: String, tabID: TabID) {
         guard selectedWorktreeId == worktreeID, tabs.activeTabId(forWorktree: worktreeID) == tabID,
               let tab = tabs.tabs(forWorktree: worktreeID).first(where: { $0.id == tabID }) else { return }
-        acknowledgeSessionAttention(worktreeID: worktreeID, tab: tab)
+        acknowledgeSessionAttention(worktreeID: worktreeID, owner: .worktree(worktreeID), tab: tab)
     }
 
     func acknowledgeFocusedSessionAttention(worktreeID: String, owner: SessionOwnerID, tabID: TabID) {
         guard selectedWorktreeId == worktreeID,
               tabs.activeTabId(for: owner) == tabID,
               let tab = tabs.tabs(for: owner).first(where: { $0.id == tabID }) else { return }
-        acknowledgeSessionAttention(worktreeID: worktreeID, tab: tab)
+        acknowledgeSessionAttention(worktreeID: worktreeID, owner: owner, tab: tab)
     }
 
-    private func acknowledgeSessionAttention(worktreeID: String, tab: Tab) {
+    private func acknowledgeSessionAttention(worktreeID: String, owner: SessionOwnerID, tab: Tab) {
         switch tab {
         case .acpSession(let session):
-            acknowledgeAttentionSurface(worktreeID: worktreeID, target: .session(sessionID: session.sessionId))
+            acknowledgeSessionTarget(worktreeID: worktreeID, owner: owner, sessionID: session.sessionId)
         case .terminal(let terminal):
             guard let leaf = terminal.root.find(leafId: terminal.focusedLeafId)?.leaf else { return }
-            acknowledgeAttentionSurface(worktreeID: worktreeID, target: .session(sessionID: leaf.sessionId ?? leaf.id))
+            acknowledgeSessionTarget(worktreeID: worktreeID, owner: owner, sessionID: leaf.sessionId ?? leaf.id)
         default: break
         }
+    }
+
+    private func acknowledgeSessionTarget(worktreeID: String, owner: SessionOwnerID, sessionID: String) {
+        let target = AttentionJumpTarget.session(sessionID: sessionID)
+        if case .workspaceCheckout = owner {
+            acknowledgeAttentionTarget(target)
+        } else {
+            acknowledgeAttentionSurface(worktreeID: worktreeID, target: target)
+        }
+    }
+
+    func acknowledgeACPResponseInteraction(owner: SessionOwnerID, sessionID: String) {
+        guard let resolution = attentionSessionResolution(for: sessionID, owner: owner) else { return }
+        acknowledgeSessionTarget(worktreeID: resolution.worktree.id, owner: resolution.owner, sessionID: sessionID)
     }
 
     func observeAttention(_ observation: AttentionObservation, at date: Date = Date()) {
@@ -448,6 +606,14 @@ extension AppState {
         let resolver = AttentionWorktreeResolver(worktrees: worktrees, aliases: attentionStore.document.aliases)
         guard let resolved = resolver.resolve(owner) else { return nil }
         return worktrees.first { $0.worktree.id == resolved.id && $0.project.id == resolved.projectID }?.worktree
+    }
+
+    private func attentionWorktree(forNavigationItem item: AttentionItem) -> Worktree? {
+        if case .session(let sessionID) = item.jumpTarget,
+           let worktree = attentionSessionResolution(for: sessionID, preferredWorktreeID: item.worktree?.id)?.worktree {
+            return worktree
+        }
+        return attentionWorktree(for: item.owner)
     }
 
     func attentionWorktree(forSessionID sessionID: String) -> Worktree? {
@@ -586,6 +752,11 @@ extension AppState {
         } else {
             for observation in observations { observeAttention(observation, at: transition.occurredAt) }
         }
+        if !transition.isSnapshot,
+           transition.previousState == .awaitingInput || transition.previousState == .permissionRequest,
+           state == .busy || state == .idle {
+            acknowledgeSessionTarget(worktreeID: resolution.worktree.id, owner: resolution.owner, sessionID: transition.sessionID)
+        }
         if state == .idle, !transition.isSnapshot {
             attentionStore.appendHistory(AttentionProducer.finished(
                 sessionID: transition.sessionID, agent: transition.agent,
@@ -598,17 +769,75 @@ extension AppState {
         registerAttentionAlias(owner: signal.owner, displayPath: signal.display.path)
     }
 
-    private func refreshAttentionAliases() {
-        let aliases: [(from: AttentionWorktreeIdentity, to: AttentionWorktreeIdentity)] = attentionWorktrees.compactMap { entry in
+    private var currentAttentionAliases: [(from: AttentionWorktreeIdentity, to: AttentionWorktreeIdentity)] {
+        attentionWorktrees.compactMap { entry in
             let owner = AttentionWorktreeIdentity.make(worktree: entry.worktree, project: entry.project)
             return attentionAlias(owner: owner, displayPath: entry.resolved.display.path)
         }
-        attentionStore.registerAliases(aliases)
+    }
+
+    private func refreshAttentionAliases() {
+        let aliases = currentAttentionAliases
+        attentionStore.registerAliases(aliases, retryExisting: false)
+        migrateSuppressedStartupSignals(aliases)
+        migrateInitializedSnapshotSources(aliases)
+        scheduleAttentionAliasRetryIfNeeded(aliases)
     }
 
     private func registerAttentionAlias(owner: AttentionWorktreeIdentity, displayPath: String) {
         guard let alias = attentionAlias(owner: owner, displayPath: displayPath) else { return }
         attentionStore.registerAlias(from: alias.from, to: alias.to)
+        migrateSuppressedStartupSignals([alias])
+        migrateInitializedSnapshotSources([alias])
+    }
+
+    private func scheduleAttentionAliasRetryIfNeeded(_ aliases: [(from: AttentionWorktreeIdentity, to: AttentionWorktreeIdentity)]) {
+        guard attentionStore.writeError != nil else {
+            attentionAliasRetryAttempts = 0
+            attentionAliasRetryNotBefore = nil
+            attentionAliasRetryTask?.cancel()
+            attentionAliasRetryTask = nil
+            return
+        }
+        guard !aliases.isEmpty, attentionAliasRetryTask == nil else { return }
+        let date = Date()
+        let delay = attentionAliasRetryNotBefore.map { max(0.0, $0.timeIntervalSince(date)) }
+            ?? attentionAliasRetryDelay(attempt: attentionAliasRetryAttempts)
+        scheduleAttentionAliasRetry(delay: delay)
+    }
+
+    private func scheduleAttentionAliasRetry(delay: TimeInterval) {
+        attentionAliasRetryTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard let self, !Task.isCancelled else { return }
+            guard self.attentionStore.writeError != nil else {
+                self.attentionAliasRetryAttempts = 0
+                self.attentionAliasRetryNotBefore = nil
+                self.attentionAliasRetryTask = nil
+                return
+            }
+            let aliases = self.currentAttentionAliases
+            guard !aliases.isEmpty else {
+                self.attentionAliasRetryNotBefore = nil
+                self.attentionAliasRetryTask = nil
+                return
+            }
+            self.attentionStore.registerAliases(aliases)
+            if self.attentionStore.writeError == nil {
+                self.attentionAliasRetryAttempts = 0
+                self.attentionAliasRetryNotBefore = nil
+                self.attentionAliasRetryTask = nil
+            } else {
+                self.attentionAliasRetryAttempts += 1
+                let nextDelay = self.attentionAliasRetryDelay(attempt: self.attentionAliasRetryAttempts)
+                self.attentionAliasRetryNotBefore = Date().addingTimeInterval(nextDelay)
+                self.scheduleAttentionAliasRetry(delay: nextDelay)
+            }
+        }
+    }
+
+    private func attentionAliasRetryDelay(attempt: Int) -> TimeInterval {
+        min(10.0, 0.2 * pow(2.0, Double(min(attempt, 6))))
     }
 
     private func attentionAlias(owner: AttentionWorktreeIdentity, displayPath: String) -> (from: AttentionWorktreeIdentity, to: AttentionWorktreeIdentity)? {
@@ -618,6 +847,51 @@ extension AppState {
             lineageID: nil, legacyPath: displayPath
         )
         return legacyOwner == owner ? nil : (legacyOwner, owner)
+    }
+
+    private func migrateSuppressedStartupSignals(_ aliases: [(from: AttentionWorktreeIdentity, to: AttentionWorktreeIdentity)]) {
+        for alias in aliases {
+            for (sourceKey, fingerprint) in Array(attentionSuppressedStartupSignals) {
+                guard let migratedKey = migratedAttentionSourceKey(sourceKey, from: alias.from, to: alias.to),
+                      migratedKey != sourceKey else { continue }
+                if attentionSuppressedStartupSignals[migratedKey] == nil {
+                    attentionSuppressedStartupSignals[migratedKey] = fingerprint
+                }
+                attentionSuppressedStartupSignals[sourceKey] = nil
+            }
+        }
+    }
+
+    private func migrateInitializedSnapshotSources(_ aliases: [(from: AttentionWorktreeIdentity, to: AttentionWorktreeIdentity)]) {
+        for alias in aliases {
+            for source in Array(attentionInitializedSnapshotSources) {
+                guard let migratedSource = migratedInitializedSnapshotSource(source, from: alias.from, to: alias.to),
+                      migratedSource != source else { continue }
+                attentionInitializedSnapshotSources.insert(migratedSource)
+                attentionInitializedSnapshotSources.remove(source)
+            }
+        }
+    }
+
+    private func migratedInitializedSnapshotSource(_ source: String, from legacyOwner: AttentionWorktreeIdentity, to lineageOwner: AttentionWorktreeIdentity) -> String? {
+        let legacyKey = legacyOwner.storageKey
+        let lineageKey = lineageOwner.storageKey
+        for prefix in ["git:", "review:", "review-feedback:"] {
+            guard source == "\(prefix)\(legacyKey)" else { continue }
+            return "\(prefix)\(lineageKey)"
+        }
+        return nil
+    }
+
+    private func migratedAttentionSourceKey(_ sourceKey: AttentionSourceKey, from legacyOwner: AttentionWorktreeIdentity, to lineageOwner: AttentionWorktreeIdentity) -> AttentionSourceKey? {
+        let legacyKey = legacyOwner.storageKey
+        let lineageKey = lineageOwner.storageKey
+        for prefix in ["git:", "review:", "host:"] {
+            let legacyPrefix = "\(prefix)\(legacyKey):"
+            guard sourceKey.rawValue.hasPrefix(legacyPrefix) else { continue }
+            return AttentionSourceKey(rawValue: "\(prefix)\(lineageKey):\(sourceKey.rawValue.dropFirst(legacyPrefix.count))")
+        }
+        return nil
     }
 
     private func canRestoreAttentionReturnDestination(_ destination: AttentionReturnDestination) -> Bool {
@@ -670,18 +944,36 @@ extension AppState {
         currentFingerprint: String
     ) -> Bool {
         if sourceKey.rawValue.hasSuffix(":conflicts") {
-            return isStrictNonEmptySubset(
-                Set(currentFingerprint.split(separator: "|").map(String.init)),
-                of: Set(suppressedFingerprint.split(separator: "|").map(String.init))
-            )
+            return isStrictNonEmptySubset(decodedFingerprintSet(currentFingerprint), of: decodedFingerprintSet(suppressedFingerprint))
         }
         if sourceKey.rawValue.hasSuffix(":checks") {
             return isHeadScopedFingerprintSetShrink(from: suppressedFingerprint, to: currentFingerprint, droppedPrefixCount: 1)
         }
         if sourceKey.rawValue.hasSuffix(":feedback") {
-            return isHeadScopedFingerprintSetShrink(from: suppressedFingerprint, to: currentFingerprint, droppedPrefixCount: 2)
+            return isHeadScopedThreadFingerprintSetShrink(from: suppressedFingerprint, to: currentFingerprint)
         }
         return false
+    }
+
+    private func isHeadScopedThreadFingerprintSetShrink(from previousFingerprint: String, to currentFingerprint: String) -> Bool {
+        let previousParts = previousFingerprint.split(separator: "|", omittingEmptySubsequences: false)
+        let currentParts = currentFingerprint.split(separator: "|", omittingEmptySubsequences: false)
+        guard previousParts.count >= 4,
+              currentParts.count >= 3,
+              previousParts[0] == currentParts[0],
+              previousParts[1] == "decision",
+              currentParts[1] == "decision",
+              previousParts[2] == currentParts[2],
+              previousParts[3] == "threads"
+        else { return false }
+        if currentParts.count == 3 {
+            return true
+        }
+        guard currentParts[3] == "threads" else { return false }
+        return isStrictNonEmptySubset(
+            Set(currentParts.dropFirst(4).map(String.init)),
+            of: Set(previousParts.dropFirst(4).map(String.init))
+        )
     }
 
     private func isHeadScopedFingerprintSetShrink(from previousFingerprint: String, to currentFingerprint: String, droppedPrefixCount: Int) -> Bool {
@@ -694,12 +986,46 @@ extension AppState {
         )
     }
 
+    private func decodedFingerprintSet(_ fingerprint: String) -> Set<String> {
+        if let values = decodeLengthPrefixedFingerprintSet(fingerprint) {
+            return Set(values)
+        }
+        return Set(fingerprint.split(separator: "|").map(String.init))
+    }
+
+    private func decodeLengthPrefixedFingerprintSet(_ fingerprint: String) -> [String]? {
+        var index = fingerprint.startIndex
+        var values: [String] = []
+        while index < fingerprint.endIndex {
+            guard let separator = fingerprint[index...].firstIndex(of: ":"),
+                  let count = Int(fingerprint[index ..< separator])
+            else { return nil }
+            let valueStart = fingerprint.index(after: separator)
+            guard let valueEnd = fingerprint.index(valueStart, offsetBy: count, limitedBy: fingerprint.endIndex)
+            else { return nil }
+            values.append(String(fingerprint[valueStart ..< valueEnd]))
+            index = valueEnd
+        }
+        return values
+    }
+
     private func isStrictNonEmptySubset(_ current: Set<String>, of previous: Set<String>) -> Bool {
         !current.isEmpty && current.isStrictSubset(of: previous)
     }
 }
 
 private extension Tab {
+    var attentionSessionIDs: Set<String> {
+        switch self {
+        case .terminal(let terminal):
+            Set(terminal.root.leaves().flatMap { [$0.id, $0.sessionId].compactMap(\.self) })
+        case .acpSession(let session):
+            [session.sessionId]
+        default:
+            []
+        }
+    }
+
     func hostsSession(_ sessionID: String) -> Bool {
         switch self {
         case .terminal(let terminal):

@@ -173,7 +173,11 @@ final class RightPaneState: GGSplitCommitServicing {
             rowID = "changes-operation"
         case .reviewRequest(let number):
             guard let snapshot = reviewLoop.snapshot,
-                  number == nil || snapshot.reviewRequest?.number == number else { return false }
+                  snapshot.providerAvailable,
+                  snapshot.providerAuthenticated,
+                  snapshot.errorMessage == nil,
+                  let request = snapshot.reviewRequest,
+                  number == nil || request.number == number else { return false }
             reviewLoop.setExpanded(true)
             rowID = nil
         default: return false

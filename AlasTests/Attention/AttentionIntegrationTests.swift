@@ -190,7 +190,8 @@ struct AttentionIntegrationTests {
         #expect(fixture.state.attentionAggregation.unresolvedCount == 0)
         _ = service.reviewResolve(origin: origin, commentID: comment.id, reply: "Resolved", reopen: false, projectWorktrees: worktrees)
         #expect(callbacks == 2)
-        #expect(fixture.state.attentionStore.events.count == 1)
+        #expect(fixture.state.attentionStore.events.count == 2)
+        #expect(fixture.state.attentionStore.events.last?.body == "Resolved")
         _ = service.reviewReply(origin: origin, commentID: "missing", body: "No", projectWorktrees: worktrees)
         #expect(callbacks == 2)
     }

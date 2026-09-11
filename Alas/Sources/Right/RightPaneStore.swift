@@ -41,9 +41,30 @@ final class RightPaneStore {
         guard await pane.refresh() else { return false }
         guard activeId == worktree.id,
               appState.isAttentionNavigationCurrent(generation: navigationGeneration, owner: context.owner, worktreeID: worktree.id) else { return false }
-        guard pane.revealAttentionTarget(target) else { return false }
+        let revealTarget = Self.refreshedAttentionTarget(for: target, pane: pane, owner: context.owner, display: context.display)
+        guard pane.revealAttentionTarget(revealTarget) else { return false }
         appState.config.rightPaneVisible = true
         return true
+    }
+
+    static func refreshedAttentionTarget(
+        for target: AttentionJumpTarget,
+        pane: RightPaneState,
+        owner: AttentionWorktreeIdentity,
+        display: AttentionWorktreeDisplaySnapshot
+    ) -> AttentionJumpTarget {
+        switch target {
+        case .conflicts:
+            let conflicts = pane.attentionSnapshot.conflictedPaths.map {
+                ChangedFile(path: $0, status: "U", stage: .unstaged, add: 0, del: 0, renameFrom: nil, conflict: .bothModified)
+            }
+            return AttentionProducer.git(operation: nil, changes: conflicts, owner: owner, display: display)
+                .compactMap(\.activeSignal)
+                .first { $0.kind == .conflicts }?
+                .jumpTarget ?? .conflicts(path: nil)
+        default:
+            return target
+        }
     }
 
     /// Returns the branch name the Commits section should compare HEAD against

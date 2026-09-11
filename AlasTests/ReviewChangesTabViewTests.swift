@@ -415,6 +415,50 @@ struct ReviewChangesTabViewTests {
         #expect(notifyCount == 1)
     }
 
+    @Test func draftWorkspaceActionsAcknowledgeCommentAttentionAfterAddressingActions() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let draftStore = ReviewDraftCommentStore(
+            store: PersistenceStore(),
+            url: directory.appendingPathComponent("review-draft-comments.json")
+        )
+        let target = ReviewSessionTarget.localChanges(
+            worktreeID: "wt-1",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            scope: .all
+        )
+        let controller = ReviewDraftCommentController(
+            sessionID: target.draftSessionID,
+            store: draftStore,
+            now: { Date(timeIntervalSince1970: 100) }
+        )
+        try controller.load()
+        for path in ["Resolve.swift", "Dismiss.swift", "Delete.swift"] {
+            try controller.add(
+                anchor: DiffReviewLineAnchor(path: path, side: .new, line: 4, rowIndex: 0, selectedText: ""),
+                fileID: DiffReviewFileID(namespace: "unstaged", path: path),
+                bodyMarkdown: "Please fix this."
+            )
+        }
+        let comments = controller.comments
+        let sender = ReviewFeedbackAgentSender(
+            availableTargets: { [] },
+            send: { _, _, _ in Issue.record("send should not be called") }
+        )
+        var acknowledgedCommentIDs: [String] = []
+        let actions = ReviewDraftWorkspaceActions.make(
+            controller: controller,
+            sender: sender,
+            acknowledgeCommentAttention: { acknowledgedCommentIDs.append($0.id) }
+        )
+
+        actions.resolve(comments[0])
+        actions.dismiss(comments[1])
+        actions.delete(comments[2])
+
+        #expect(acknowledgedCommentIDs == comments.map(\.id))
+    }
+
     @Test func draftWorkspaceActionsResolveWithoutWorktreeDoesNotNotify() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

@@ -107,21 +107,26 @@ final class AttentionStore {
         registerAliases([(from: legacyOwner, to: lineageOwner)])
     }
 
-    func registerAliases(_ aliases: [(from: AttentionWorktreeIdentity, to: AttentionWorktreeIdentity)]) {
+    func registerAliases(_ aliases: [(from: AttentionWorktreeIdentity, to: AttentionWorktreeIdentity)], retryExisting: Bool = true) {
         var changed = false
         var sawExistingAlias = false
         for alias in aliases {
             guard alias.from != alias.to else { continue }
             if document.aliases[alias.from] == alias.to {
                 sawExistingAlias = true
+                changed = migrateObservations(from: alias.from, to: alias.to) || changed
+                continue
+            }
+            if document.aliases[alias.from] != nil {
+                changed = migrateObservations(from: alias.from, to: alias.to) || changed
                 continue
             }
             document.aliases[alias.from] = alias.to
-            migrateObservations(from: alias.from, to: alias.to)
+            _ = migrateObservations(from: alias.from, to: alias.to)
             changed = true
         }
         guard changed else {
-            if sawExistingAlias { retryPersistingUnwrittenDocumentIfNeeded() }
+            if sawExistingAlias, retryExisting { retryPersistingUnwrittenDocumentIfNeeded() }
             return
         }
         retain(at: now())
@@ -141,6 +146,10 @@ final class AttentionStore {
 
         while document.events.count > maxEvents,
               let index = oldestEventIndex(where: { document.acknowledgments[$0.id] != nil }) {
+            document.events.remove(at: index)
+        }
+        while document.events.count > maxEvents,
+              let index = oldestEventIndex(where: { !$0.requiresAction }) {
             document.events.remove(at: index)
         }
         while document.events.count > maxEvents {
@@ -191,10 +200,14 @@ final class AttentionStore {
             }
     }
 
-    private func migrateObservations(from legacyOwner: AttentionWorktreeIdentity, to lineageOwner: AttentionWorktreeIdentity) {
+    @discardableResult
+    private func migrateObservations(from legacyOwner: AttentionWorktreeIdentity, to lineageOwner: AttentionWorktreeIdentity) -> Bool {
+        var changed = false
+        var migratedSourceKeys: [(from: AttentionSourceKey, to: AttentionSourceKey)] = []
         for (sourceKey, observation) in document.observations {
             guard let migratedKey = migratedSourceKey(sourceKey, from: legacyOwner, to: lineageOwner),
                   migratedKey != sourceKey else { continue }
+            migratedSourceKeys.append((from: sourceKey, to: migratedKey))
             if let existing = document.observations[migratedKey] {
                 if observation.isActive, !existing.isActive {
                     document.observations[migratedKey] = observation
@@ -203,7 +216,71 @@ final class AttentionStore {
                 document.observations[migratedKey] = observation
             }
             document.observations[sourceKey] = nil
+            changed = true
         }
+        for sourceKey in migratedSourceKeys {
+            changed = migrateEvents(from: sourceKey.from, to: sourceKey.to, legacyOwner: legacyOwner, lineageOwner: lineageOwner) || changed
+        }
+        changed = rebindOwnerIndependentEvents(from: legacyOwner, to: lineageOwner) || changed
+        return changed
+    }
+
+    @discardableResult
+    private func rebindOwnerIndependentEvents(from legacyOwner: AttentionWorktreeIdentity, to lineageOwner: AttentionWorktreeIdentity) -> Bool {
+        var changed = false
+        for (sourceKey, observation) in document.observations {
+            guard observation.isActive,
+                  observation.eventID != nil,
+                  migratedSourceKey(sourceKey, from: legacyOwner, to: lineageOwner) == nil
+            else { continue }
+            for index in document.events.indices {
+                let event = document.events[index]
+                guard event.owner == legacyOwner, event.sourceKey == sourceKey else { continue }
+                document.events[index] = AttentionEvent(
+                    id: event.id,
+                    sourceKey: event.sourceKey,
+                    fingerprint: event.fingerprint,
+                    owner: lineageOwner,
+                    kind: event.kind,
+                    title: event.title,
+                    body: event.body,
+                    jumpTarget: event.jumpTarget,
+                    display: event.display,
+                    occurredAt: event.occurredAt,
+                    requiresAction: event.requiresAction
+                )
+                changed = true
+            }
+        }
+        return changed
+    }
+
+    private func migrateEvents(
+        from legacySourceKey: AttentionSourceKey,
+        to lineageSourceKey: AttentionSourceKey,
+        legacyOwner: AttentionWorktreeIdentity,
+        lineageOwner: AttentionWorktreeIdentity
+    ) -> Bool {
+        var changed = false
+        for index in document.events.indices {
+            let event = document.events[index]
+            guard event.owner == legacyOwner, event.sourceKey == legacySourceKey else { continue }
+            document.events[index] = AttentionEvent(
+                id: event.id,
+                sourceKey: lineageSourceKey,
+                fingerprint: event.fingerprint,
+                owner: lineageOwner,
+                kind: event.kind,
+                title: event.title,
+                body: event.body,
+                jumpTarget: event.jumpTarget,
+                display: event.display,
+                occurredAt: event.occurredAt,
+                requiresAction: event.requiresAction
+            )
+            changed = true
+        }
+        return changed
     }
 
     private func migratedSourceKey(_ sourceKey: AttentionSourceKey, from legacyOwner: AttentionWorktreeIdentity, to lineageOwner: AttentionWorktreeIdentity) -> AttentionSourceKey? {
@@ -248,16 +325,49 @@ final class AttentionStore {
     private func isReviewFeedbackSetShrink(from previousFingerprint: String, to currentFingerprint: String) -> Bool {
         let previousParts = previousFingerprint.split(separator: "|", omittingEmptySubsequences: false)
         let currentParts = currentFingerprint.split(separator: "|", omittingEmptySubsequences: false)
-        guard previousParts.first == currentParts.first else { return false }
+        guard previousParts.count >= 4,
+              currentParts.count >= 3,
+              previousParts[0] == currentParts[0],
+              previousParts[1] == "decision",
+              currentParts[1] == "decision",
+              previousParts[2] == currentParts[2],
+              previousParts[3] == "threads"
+        else { return false }
+        if currentParts.count == 3 {
+            return true
+        }
+        guard currentParts[3] == "threads" else { return false }
         return isStrictNonEmptySubset(
-            Set(currentParts.dropFirst(2).map(String.init)),
-            of: Set(previousParts.dropFirst(2).map(String.init))
+            Set(currentParts.dropFirst(4).map(String.init)),
+            of: Set(previousParts.dropFirst(4).map(String.init))
         )
     }
 
     private func isNonEmptySetShrink(from previousFingerprint: String, to currentFingerprint: String) -> Bool {
-        isStrictNonEmptySubset(Set(currentFingerprint.split(separator: "|").map(String.init)),
-                               of: Set(previousFingerprint.split(separator: "|").map(String.init)))
+        isStrictNonEmptySubset(decodedFingerprintSet(currentFingerprint), of: decodedFingerprintSet(previousFingerprint))
+    }
+
+    private func decodedFingerprintSet(_ fingerprint: String) -> Set<String> {
+        if let values = decodeLengthPrefixedFingerprintSet(fingerprint) {
+            return Set(values)
+        }
+        return Set(fingerprint.split(separator: "|").map(String.init))
+    }
+
+    private func decodeLengthPrefixedFingerprintSet(_ fingerprint: String) -> [String]? {
+        var index = fingerprint.startIndex
+        var values: [String] = []
+        while index < fingerprint.endIndex {
+            guard let separator = fingerprint[index...].firstIndex(of: ":"),
+                  let count = Int(fingerprint[index ..< separator])
+            else { return nil }
+            let valueStart = fingerprint.index(after: separator)
+            guard let valueEnd = fingerprint.index(valueStart, offsetBy: count, limitedBy: fingerprint.endIndex)
+            else { return nil }
+            values.append(String(fingerprint[valueStart ..< valueEnd]))
+            index = valueEnd
+        }
+        return values
     }
 
     private func isStrictNonEmptySubset(_ current: Set<String>, of previous: Set<String>) -> Bool {

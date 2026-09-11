@@ -793,7 +793,11 @@ struct ReviewSessionTabView: View {
             },
             worktreeID: persistsState ? tabState.worktreeId : nil,
             now: now,
-            sessionStore: { sessionStore }
+            sessionStore: { sessionStore },
+            acknowledgeCommentAttention: { comment in
+                guard let worktree else { return }
+                appState?.acknowledgeReviewCommentAttention(worktreeID: worktree.id, commentID: comment.id)
+            }
         )
         let baseAvailability = actions.availability
         actions.availability = { comment in

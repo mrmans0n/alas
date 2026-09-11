@@ -107,6 +107,9 @@ final class AppState {
     @ObservationIgnored var attentionSuppressedStartupSignals: [AttentionSourceKey: String] = [:]
     @ObservationIgnored var attentionInitializedSnapshotSources: Set<String> = []
     @ObservationIgnored var attentionPendingReviewReveal: AttentionPendingReviewReveal?
+    @ObservationIgnored var attentionAliasRetryTask: Task<Void, Never>?
+    @ObservationIgnored var attentionAliasRetryAttempts = 0
+    @ObservationIgnored var attentionAliasRetryNotBefore: Date?
     @ObservationIgnored var runScriptCompletionTasks: [String: (worktreeID: String, sessionID: String, location: RunScriptCaptureLocation, task: Task<Void, Never>)] = [:]
     @ObservationIgnored let runScriptCompletionWaiter: RunScriptCompletionWaiter
     private(set) var isReopeningClosedTab = false
@@ -1088,13 +1091,7 @@ final class AppState {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 await self.setWorkspacesEnabled(true, persistConfig: false)
-                self.loadWorkspaceCheckoutSessionTabs(restoringActiveTabs: restoringActiveTabs)
-                await self.restoreLoadedWorkspaceCheckoutACPSessions()
-                if !self.config.terminal.keepSessionsAlive {
-                    self.pruneWorkspaceCheckoutTerminalTabs()
-                }
-                self.refreshPersistedHookSymlinks()
-                self.sweepOrphanWorkspaceCheckoutZmxSessions()
+                await self.restoreWorkspaceCheckoutSessionTabsAfterReload(restoringActiveTabs: restoringActiveTabs)
             }
         }
         let allWorktreeIds = projectsManager.projects.flatMap {
@@ -1128,13 +1125,25 @@ final class AppState {
         // TerminalTabView.task) to fire when the user opens the tab.
         refreshPersistedHookSymlinks()
         sweepOrphanZmxSessions(worktreeIds: allWorktreeIds)
-        reconcileAttention(liveSignals: currentAttentionSignals)
+        reconcileAttention(observations: currentAttentionObservations)
         Task { [weak self] in
             await self?.reconcileInterruptedDelegations()
         }
         Task { @MainActor [weak self] in
             await self?.bootstrapScheduledACPSessions(worktreeIds: allWorktreeIds)
         }
+    }
+
+    func restoreWorkspaceCheckoutSessionTabsAfterReload(restoringActiveTabs: Bool) async {
+        guard config.workspacesEnabled else { return }
+        loadWorkspaceCheckoutSessionTabs(restoringActiveTabs: restoringActiveTabs)
+        await restoreLoadedWorkspaceCheckoutACPSessions()
+        if !config.terminal.keepSessionsAlive {
+            pruneWorkspaceCheckoutTerminalTabs()
+        }
+        refreshPersistedHookSymlinks()
+        sweepOrphanWorkspaceCheckoutZmxSessions()
+        reconcileAttention(observations: currentAttentionObservations)
     }
 
     private func restoreLoadedWorkspaceCheckoutACPSessions() async {
@@ -1637,6 +1646,11 @@ final class AppState {
                 await self?.prepareRemoteAccelerationIfNeeded(for: resolved.project)
             }
         }
+    }
+
+    func selectWorktreeFromSidebar(id: String) {
+        selectWorktree(id: id)
+        acknowledgeAttentionSurface(worktreeID: id, target: .remoteWorktree)
     }
 
     func selectInitialWorktree(id: String?) {
@@ -2535,6 +2549,7 @@ final class AppState {
             acknowledgeFocusedSessionAttention(worktreeID: worktreeID, owner: sharedSessionOwner, tabID: tabID)
         } else {
             tabs.activate(worktreeId: worktreeID, tabId: tabID)
+            acknowledgeFocusedSessionAttention(worktreeID: worktreeID, tabID: tabID)
             if let sharedSessionOwner {
                 tabs.clearActiveTab(owner: sharedSessionOwner)
             }
@@ -8971,7 +8986,12 @@ final class AppState {
     /// so the sidebar work badge surfaces ACP activity. Attached for every
     /// manager created via `acpManager(for:)`; detached from `disposeACPManager(for:)`.
     @ObservationIgnored
-    private lazy var acpHarnessBridge = ACPHarnessBridge(harness: harness)
+    private lazy var acpHarnessBridge = ACPHarnessBridge(
+        harness: harness,
+        acknowledgeSessionInteraction: { [weak self] owner, sessionID in
+            self?.acknowledgeACPResponseInteraction(owner: owner, sessionID: sessionID)
+        }
+    )
 
     #if DEBUG
     @ObservationIgnored

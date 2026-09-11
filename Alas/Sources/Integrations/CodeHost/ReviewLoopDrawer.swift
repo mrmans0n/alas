@@ -92,6 +92,13 @@ struct ReviewLoopDrawer: View {
         }
     }
 
+    func performAction(_ action: ReviewReadinessActionKind) {
+        if let request = state.snapshot?.reviewRequest {
+            onRevealReviewRequest(request.number)
+        }
+        onAction(action)
+    }
+
     private func headerTitle(model: ReviewReadinessModel) -> some View {
         HStack(spacing: 3) {
             Text((model.providerTitle ?? model.identity).uppercased())
@@ -103,7 +110,7 @@ struct ReviewLoopDrawer: View {
 
             if let requestNumberTitle = model.requestNumberTitle {
                 Button {
-                    onAction(.openReviewRequest)
+                    performAction(.openReviewRequest)
                 } label: {
                     Text(requestNumberTitle.uppercased())
                         .font(.system(size: 10.5, weight: .semibold))
@@ -143,7 +150,7 @@ struct ReviewLoopDrawer: View {
                     HStack(spacing: 8) {
                         ForEach(model.actions) { action in
                             ReviewReadinessActionButton(action: action) {
-                                onAction(action.kind)
+                                performAction(action.kind)
                             }
                         }
                     }

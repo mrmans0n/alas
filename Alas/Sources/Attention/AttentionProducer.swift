@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 enum AttentionProducer {
     static func harness(
@@ -11,7 +12,7 @@ enum AttentionProducer {
     ) -> [AttentionObservation] {
         let awaitingKey = AttentionSourceKey(rawValue: "session:\(sessionID):awaiting")
         let permissionKey = AttentionSourceKey(rawValue: "session:\(sessionID):permission")
-        let fingerprint = body?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? state.rawValue
+        let fingerprint = body?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty.map(bodyFingerprint) ?? state.rawValue
 
         switch state {
         case .awaitingInput:
@@ -64,7 +65,7 @@ enum AttentionProducer {
 
         if let operation {
             observations.append(.active(signal(
-                sourceKey: operationKey, fingerprint: operation.fingerprint, owner: owner,
+                sourceKey: operationKey, fingerprint: operation.attentionFingerprint, owner: owner,
                 kind: .gitOperation, title: "\(operation.displayName) is in progress", body: nil,
                 jumpTarget: .gitOperation, display: display
             )))
@@ -78,7 +79,7 @@ enum AttentionProducer {
         } else {
             let count = paths.count
             observations.append(.active(signal(
-                sourceKey: conflictsKey, fingerprint: paths.joined(separator: "|"), owner: owner,
+                sourceKey: conflictsKey, fingerprint: pathSetFingerprint(paths), owner: owner,
                 kind: .conflicts, title: "\(count) unresolved conflict\(count == 1 ? "" : "s")", body: nil,
                 jumpTarget: .conflicts(path: paths.first), display: display
             )))
@@ -114,10 +115,17 @@ enum AttentionProducer {
             observations.append(.inactive(sourceKey: checkKey))
         }
 
-        if request.hasActionableFeedback {
-            let threads = request.threads.filter(\.isActionable).map(\.id).sorted().joined(separator: "|")
+        if !request.areThreadsComplete {
+            // An incomplete thread list cannot prove which feedback is still actionable.
+            // The AppState bridge preserves the current request's stored feedback state
+            // until a complete snapshot can confirm it changed.
+        } else if request.hasActionableFeedback {
+            let threads = request.threads.filter(\.isActionable).map(\.id).sorted()
+            let fingerprint = threads.isEmpty
+                ? "\(head)|decision|\(request.reviewDecision.rawValue)"
+                : ([head, "decision", request.reviewDecision.rawValue, "threads"] + threads).joined(separator: "|")
             observations.append(.active(signal(
-                sourceKey: feedbackKey, fingerprint: "\(head)|\(request.reviewDecision.rawValue)|\(threads)", owner: owner,
+                sourceKey: feedbackKey, fingerprint: fingerprint, owner: owner,
                 kind: .actionableFeedback, title: "Review feedback needs action", body: nil, jumpTarget: target, display: display
             )))
         } else {
@@ -128,7 +136,7 @@ enum AttentionProducer {
         case .diverged, .stale:
             let title = snapshot.local.pushState == .diverged ? "Remote branch diverged" : "Remote branch is ahead"
             observations.append(.active(signal(
-                sourceKey: syncKey, fingerprint: "\(head)|\(snapshot.local.pushState)", owner: owner,
+                sourceKey: syncKey, fingerprint: "sync-blocked", owner: owner,
                 kind: .reviewSyncBlocked, title: title, body: nil, jumpTarget: target, display: display
             )))
         case .inSync, .missingUpstream, .unpushed:
@@ -139,12 +147,14 @@ enum AttentionProducer {
 
     static func reviewReply(
         comment: ReviewDraftComment,
+        observedReply: ReviewCommentReply? = nil,
         owner: AttentionWorktreeIdentity,
         display: AttentionWorktreeDisplaySnapshot
     ) -> [AttentionObservation] {
         let sourceKey = AttentionSourceKey(rawValue: "review-comment:\(comment.sessionID.rawValue):\(comment.id)")
-        guard comment.isActive,
-              let reply = comment.allReplies.filter({ $0.author.isAgent }).max(by: { $0.createdAt < $1.createdAt })
+        guard let reply = observedReply ?? comment.allReplies.filter({ $0.author.isAgent }).max(by: { $0.createdAt < $1.createdAt }),
+              reply.author.isAgent,
+              comment.isActive || observedReply?.id == reply.id
         else { return [.inactive(sourceKey: sourceKey)] }
         let latestUserReply = comment.allReplies.filter { !$0.author.isAgent }.max { $0.createdAt < $1.createdAt }
         guard latestUserReply == nil || reply.createdAt > latestUserReply!.createdAt else {
@@ -202,6 +212,17 @@ enum AttentionProducer {
         let preview = String(decoding: cappedBytes, as: UTF8.self)
         return isTruncated ? "\(preview)\n\n[Output truncated]" : preview
     }
+
+    private static func pathSetFingerprint(_ paths: [String]) -> String {
+        paths.map { "\($0.count):\($0)" }.joined()
+    }
+
+    private static func bodyFingerprint(_ body: String) -> String {
+        let digest = SHA256.hash(data: Data(body.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return "body-sha256:\(digest)"
+    }
 }
 
 private extension String {
@@ -218,12 +239,12 @@ private extension MergeOperation {
         }
     }
 
-    var fingerprint: String {
+    var attentionFingerprint: String {
         switch self {
         case .merge(let sourceBranch): "merge:\(sourceBranch ?? "")"
-        case .rebase(let plan): "rebase:\(plan.ontoBranch ?? ""):\(plan.sourceBranch ?? ""):\(plan.currentIndex.map(String.init) ?? "")"
-        case .cherryPick(let sha, _): "cherry-pick:\(sha)"
-        case .revert(let sha, _): "revert:\(sha)"
+        case .rebase(let plan): "rebase:\(plan.ontoBranch ?? ""):\(plan.sourceBranch ?? "")"
+        case .cherryPick: "cherry-pick"
+        case .revert: "revert"
         }
     }
 }

@@ -18,6 +18,7 @@ struct SidebarView: View {
 
     var body: some View {
         let override = state.config.sidebarChromeOverride(forThemeId: state.themeStore.current.id)
+        let attentionAggregation = state.attentionAggregation
         ZStack {
             SidebarMaterialBackground(
                 choice: state.config.sidebarMaterial,
@@ -34,7 +35,7 @@ struct SidebarView: View {
                     },
                     onHideSidebar: onHideSidebar,
                     onNewWorkspace: state.config.workspacesEnabled ? { showingNewWorkspace = true } : nil,
-                    attentionCount: state.attentionAggregation.unresolvedCount,
+                    attentionCount: attentionAggregation.unresolvedCount,
                     attentionInboxOpen: state.isAttentionInboxOpen,
                     onOpenAttentionInbox: { state.openAttentionInbox() }
                 )
@@ -69,7 +70,7 @@ struct SidebarView: View {
                                 ggMenuModel: { wt in
                                     state.ggWorktreeMenuModel(project: project, worktree: wt)
                                 },
-                                onSelect: { wt in state.selectWorktree(id: wt.id) },
+                                onSelect: { wt in state.selectWorktreeFromSidebar(id: wt.id) },
                                 onNewWorktree: { onNewWorktree(project.id) },
                                 onEditProject: { onEditProject(project.id) },
                                 onRemoveProject: { onRemoveProject(project.id) },
@@ -178,7 +179,7 @@ struct SidebarView: View {
                                     )
                                     state.saveSpaces()
                                 },
-                                attentionCount: state.attentionAggregation.unresolvedCountByProject[project.id, default: 0]
+                                attentionCount: attentionAggregation.unresolvedCountByProject[project.id, default: 0]
                             )
                         }
                         Color.clear

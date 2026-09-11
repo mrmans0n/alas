@@ -19,7 +19,9 @@ struct AttentionProducerTests {
         let signal = try #require(observations.compactMap(\.activeSignal).first { $0.kind == kind })
         #expect(signal.title == title)
         #expect(signal.sourceKey == AttentionSourceKey(rawValue: sourceKey))
-        #expect(signal.fingerprint == "Need a choice")
+        #expect(signal.fingerprint.hasPrefix("body-sha256:"))
+        #expect(signal.fingerprint.count == "body-sha256:".count + 64)
+        #expect(!signal.fingerprint.contains("Need a choice"))
         #expect(signal.jumpTarget == .session(sessionID: "s1"))
         let inactiveKey = kind == .agentAwaiting
             ? AttentionSourceKey(rawValue: "session:s1:permission")
@@ -79,6 +81,67 @@ struct AttentionProducerTests {
         #expect(signal.jumpTarget == .gitOperation)
     }
 
+    @Test func rebaseOperationFingerprintIgnoresProgressIndex() throws {
+        let first = try #require(AttentionProducer.git(
+            operation: .rebase(plan: RebasePlan(
+                ontoBranch: "main",
+                sourceBranch: "feature",
+                commits: [
+                    .init(sha: "one", summary: "One", state: .current),
+                    .init(sha: "two", summary: "Two", state: .pending)
+                ]
+            )),
+            changes: [],
+            owner: Fixtures.owner,
+            display: Fixtures.display
+        ).compactMap(\.activeSignal).first)
+        let second = try #require(AttentionProducer.git(
+            operation: .rebase(plan: RebasePlan(
+                ontoBranch: "main",
+                sourceBranch: "feature",
+                commits: [
+                    .init(sha: "one", summary: "One", state: .done),
+                    .init(sha: "two", summary: "Two", state: .current)
+                ]
+            )),
+            changes: [],
+            owner: Fixtures.owner,
+            display: Fixtures.display
+        ).compactMap(\.activeSignal).first)
+
+        #expect(first.fingerprint == second.fingerprint)
+    }
+
+    @Test func sequencedCherryPickAndRevertFingerprintsIgnoreCurrentCommit() throws {
+        let firstPick = try #require(AttentionProducer.git(
+            operation: .cherryPick(sha: "one", summary: "One"),
+            changes: [],
+            owner: Fixtures.owner,
+            display: Fixtures.display
+        ).compactMap(\.activeSignal).first)
+        let secondPick = try #require(AttentionProducer.git(
+            operation: .cherryPick(sha: "two", summary: "Two"),
+            changes: [],
+            owner: Fixtures.owner,
+            display: Fixtures.display
+        ).compactMap(\.activeSignal).first)
+        let firstRevert = try #require(AttentionProducer.git(
+            operation: .revert(sha: "one", summary: "One"),
+            changes: [],
+            owner: Fixtures.owner,
+            display: Fixtures.display
+        ).compactMap(\.activeSignal).first)
+        let secondRevert = try #require(AttentionProducer.git(
+            operation: .revert(sha: "two", summary: "Two"),
+            changes: [],
+            owner: Fixtures.owner,
+            display: Fixtures.display
+        ).compactMap(\.activeSignal).first)
+
+        #expect(firstPick.fingerprint == secondPick.fingerprint)
+        #expect(firstRevert.fingerprint == secondRevert.fingerprint)
+    }
+
     @Test func unresolvedConflictFingerprintChangesWithConflictSet() throws {
         let first = try #require(AttentionProducer.git(operation: nil, changes: Fixtures.conflicts(["a.swift"]), owner: Fixtures.owner, display: Fixtures.display).compactMap(\.activeSignal).first)
         let second = try #require(AttentionProducer.git(operation: nil, changes: Fixtures.conflicts(["b.swift", "a.swift"]), owner: Fixtures.owner, display: Fixtures.display).compactMap(\.activeSignal).first)
@@ -87,8 +150,15 @@ struct AttentionProducerTests {
         #expect(first.title == "1 unresolved conflict")
         #expect(first.sourceKey == AttentionSourceKey(rawValue: "git:\(Fixtures.owner.storageKey):conflicts"))
         #expect(first.jumpTarget == .conflicts(path: "a.swift"))
-        #expect(second.fingerprint == "a.swift|b.swift")
+        #expect(second.fingerprint == "7:a.swift7:b.swift")
         #expect(first.fingerprint != second.fingerprint)
+    }
+
+    @Test func unresolvedConflictFingerprintDistinguishesDelimiterInPath() throws {
+        let singlePath = try #require(AttentionProducer.git(operation: nil, changes: Fixtures.conflicts(["a|b"]), owner: Fixtures.owner, display: Fixtures.display).compactMap(\.activeSignal).first)
+        let twoPaths = try #require(AttentionProducer.git(operation: nil, changes: Fixtures.conflicts(["a", "b"]), owner: Fixtures.owner, display: Fixtures.display).compactMap(\.activeSignal).first)
+
+        #expect(singlePath.fingerprint != twoPaths.fingerprint)
     }
 
     @Test func reviewMappingsExcludePendingChecksAndUnpushedCommits() {
@@ -106,7 +176,31 @@ struct AttentionProducerTests {
         let signal = try #require(AttentionProducer.review(snapshot: snapshot, owner: Fixtures.owner, display: Fixtures.display).compactMap(\.activeSignal).first { $0.kind == kind })
         #expect(signal.title == title)
         #expect(signal.jumpTarget == .reviewRequest(number: 42))
-        #expect(signal.fingerprint.contains("head-1"))
+        if kind != .reviewSyncBlocked {
+            #expect(signal.fingerprint.contains("head-1"))
+        }
+    }
+
+    @Test func reviewSyncBlockedFingerprintIgnoresHeadAndBlockedStateChurn() throws {
+        let diverged = try #require(AttentionProducer.review(
+            snapshot: Fixtures.review(headSHA: "head-1", needsPush: true, upstreamAhead: 1),
+            owner: Fixtures.owner,
+            display: Fixtures.display
+        ).compactMap(\.activeSignal).first { $0.kind == .reviewSyncBlocked })
+        let divergedAfterCommit = try #require(AttentionProducer.review(
+            snapshot: Fixtures.review(headSHA: "head-2", needsPush: true, upstreamAhead: 1),
+            owner: Fixtures.owner,
+            display: Fixtures.display
+        ).compactMap(\.activeSignal).first { $0.kind == .reviewSyncBlocked })
+        let staleAfterFetch = try #require(AttentionProducer.review(
+            snapshot: Fixtures.review(headSHA: "head-3", needsPush: false, upstreamAhead: 1),
+            owner: Fixtures.owner,
+            display: Fixtures.display
+        ).compactMap(\.activeSignal).first { $0.kind == .reviewSyncBlocked })
+
+        #expect(diverged.fingerprint == "sync-blocked")
+        #expect(divergedAfterCommit.fingerprint == diverged.fingerprint)
+        #expect(staleAfterFetch.fingerprint == diverged.fingerprint)
     }
 
     @Test func failedCheckFingerprintIgnoresNonFailingCheckChurn() throws {
@@ -126,6 +220,32 @@ struct AttentionProducerTests {
         #expect(pending.fingerprint == passing.fingerprint)
     }
 
+    @Test func actionableFeedbackFingerprintIncludesDecisionWhenThreadSetIsStable() throws {
+        let approved = try #require(AttentionProducer.review(
+            snapshot: Fixtures.review(decision: .approved, threads: [Fixtures.thread(id: "thread-a")]),
+            owner: Fixtures.owner,
+            display: Fixtures.display
+        ).compactMap(\.activeSignal).first { $0.kind == .actionableFeedback })
+        let changesRequested = try #require(AttentionProducer.review(
+            snapshot: Fixtures.review(decision: .changesRequested, threads: [Fixtures.thread(id: "thread-a")]),
+            owner: Fixtures.owner,
+            display: Fixtures.display
+        ).compactMap(\.activeSignal).first { $0.kind == .actionableFeedback })
+
+        #expect(approved.fingerprint == "head-1|decision|approved|threads|thread-a")
+        #expect(changesRequested.fingerprint == "head-1|decision|changesRequested|threads|thread-a")
+    }
+
+    @Test func incompleteThreadSnapshotDoesNotEmitFeedbackSignal() {
+        let observations = AttentionProducer.review(
+            snapshot: Fixtures.review(decision: .changesRequested, threads: [], areThreadsComplete: false),
+            owner: Fixtures.owner,
+            display: Fixtures.display
+        )
+
+        #expect(!observations.compactMap(\.activeSignal).contains { $0.kind == .actionableFeedback })
+    }
+
     @Test func agentReviewReplyUsesReplyIDAndCommentDestination() throws {
         let comment = Fixtures.comment(replyID: "reply-1", author: .agent(name: "Codex"))
         let signal = try #require(AttentionProducer.reviewReply(comment: comment, owner: Fixtures.owner, display: Fixtures.display).compactMap(\.activeSignal).first)
@@ -135,6 +255,17 @@ struct AttentionProducerTests {
         #expect(signal.sourceKey == AttentionSourceKey(rawValue: "review-comment:\(comment.sessionID.rawValue):comment-1"))
         #expect(signal.fingerprint == "reply-1")
         #expect(signal.jumpTarget == .reviewComment(sessionID: comment.sessionID.rawValue, commentID: "comment-1"))
+    }
+
+    @Test func observedAgentReviewReplyEmitsWhenCommentWasResolvedByTheSameCommand() throws {
+        let comment = Fixtures.comment(replyID: "reply-1", author: .agent(name: "Codex"), state: .resolved)
+        let reply = try #require(comment.allReplies.first)
+
+        let direct = AttentionProducer.reviewReply(comment: comment, owner: Fixtures.owner, display: Fixtures.display)
+        let observed = AttentionProducer.reviewReply(comment: comment, observedReply: reply, owner: Fixtures.owner, display: Fixtures.display)
+
+        #expect(direct.compactMap(\.activeSignal).isEmpty)
+        #expect(observed.compactMap(\.activeSignal).first?.fingerprint == "reply-1")
     }
 
     @Test func disconnectedHostMapsToRemoteWorktree() throws {
@@ -170,23 +301,60 @@ struct AttentionProducerTests {
             paths.map { ChangedFile(path: $0, status: "U", stage: .unstaged, add: 0, del: 0, renameFrom: nil, conflict: .bothModified) }
         }
 
-        static func review(check: ReviewCheckBucket? = nil, decision: ReviewDecision = .approved, needsPush: Bool = false, upstreamAhead: Int = 0) -> ReviewLoopSnapshot {
+        static func review(
+            check: ReviewCheckBucket? = nil,
+            decision: ReviewDecision = .approved,
+            headSHA: String = "head-1",
+            needsPush: Bool = false,
+            upstreamAhead: Int = 0,
+            threads: [ReviewThread] = [],
+            areThreadsComplete: Bool = true
+        ) -> ReviewLoopSnapshot {
             review(
                 checks: check.map { [ReviewCheck(id: "ci", name: "CI", workflow: nil, bucket: $0, detailURL: nil, completedAt: nil)] } ?? [],
                 decision: decision,
+                headSHA: headSHA,
                 needsPush: needsPush,
-                upstreamAhead: upstreamAhead
+                upstreamAhead: upstreamAhead,
+                threads: threads,
+                areThreadsComplete: areThreadsComplete
             )
         }
 
-        static func review(checks: [ReviewCheck], decision: ReviewDecision = .approved, needsPush: Bool = false, upstreamAhead: Int = 0) -> ReviewLoopSnapshot {
+        static func review(
+            checks: [ReviewCheck],
+            decision: ReviewDecision = .approved,
+            headSHA: String = "head-1",
+            needsPush: Bool = false,
+            upstreamAhead: Int = 0,
+            threads: [ReviewThread] = [],
+            areThreadsComplete: Bool = true
+        ) -> ReviewLoopSnapshot {
             let remote = CodeHostRemote(kind: .github, host: "github.com", owner: "owner", repository: "repo", remoteName: "origin", webURL: URL(string: "https://github.com/owner/repo")!)
-            let request = ReviewRequest(remote: remote, number: 42, title: "Review", url: remote.webURL, state: .open, isDraft: false, headRefName: "feature", baseRefName: "main", headSHA: "head-1", reviewDecision: decision, mergeState: .clean, checks: checks, threads: [])
-            return ReviewLoopSnapshot(local: ReviewLoopLocalState(branchName: "feature", headSHA: "head-1", baseBranch: "main", hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 0, hasUpstream: true, upstreamAheadCommitCount: upstreamAhead, needsPush: needsPush), remote: remote, reviewRequest: request, providerAvailable: true, providerAuthenticated: true, providerCapabilities: .githubCLI, errorMessage: nil)
+            let request = ReviewRequest(remote: remote, number: 42, title: "Review", url: remote.webURL, state: .open, isDraft: false, headRefName: "feature", baseRefName: "main", headSHA: headSHA, reviewDecision: decision, mergeState: .clean, checks: checks, threads: threads, areThreadsComplete: areThreadsComplete)
+            return ReviewLoopSnapshot(local: ReviewLoopLocalState(branchName: "feature", headSHA: headSHA, baseBranch: "main", hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 0, hasUpstream: true, upstreamAheadCommitCount: upstreamAhead, needsPush: needsPush), remote: remote, reviewRequest: request, providerAvailable: true, providerAuthenticated: true, providerCapabilities: .githubCLI, errorMessage: nil)
         }
 
-        static func comment(replyID: String, author: ReviewDraftCommentAuthor) -> ReviewDraftComment {
-            ReviewDraftComment(id: "comment-1", sessionID: .localChanges(worktreeID: "wt", worktreePath: URL(fileURLWithPath: "/repo"), scope: .all), fileID: DiffReviewFileID(namespace: "review", path: "a.swift"), path: "a.swift", originalPath: nil, side: .new, startLine: 1, endLine: nil, selectedText: nil, bodyMarkdown: "Fix", state: .active, createdAt: .distantPast, updatedAt: .distantPast, replies: [ReviewCommentReply(id: replyID, author: author, bodyMarkdown: "Done", createdAt: .distantPast)])
+        static func thread(id: String) -> ReviewThread {
+            ReviewThread(
+                id: id,
+                path: "a.swift",
+                line: 1,
+                startLine: nil,
+                originalLine: nil,
+                diffHunk: nil,
+                isResolved: false,
+                isOutdated: false,
+                isFileLevel: false,
+                comments: [],
+                viewerCanResolve: true,
+                viewerCanReply: true,
+                url: nil
+            )
+        }
+
+        static func comment(replyID: String, author: ReviewDraftCommentAuthor, state: ReviewDraftCommentState = .active) -> ReviewDraftComment {
+            ReviewDraftComment(id: "comment-1", sessionID: .localChanges(worktreeID: "wt", worktreePath: URL(fileURLWithPath: "/repo"), scope: .all), fileID: DiffReviewFileID(namespace: "review", path: "a.swift"), path: "a.swift", originalPath: nil, side: .new, startLine: 1, endLine: nil, selectedText: nil, bodyMarkdown: "Fix", state: state, createdAt: .distantPast, updatedAt: .distantPast, replies: [ReviewCommentReply(id: replyID, author: author, bodyMarkdown: "Done", createdAt: .distantPast)])
         }
     }
 }

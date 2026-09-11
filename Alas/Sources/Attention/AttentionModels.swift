@@ -159,6 +159,32 @@ struct AttentionEvent: Codable, Equatable, Sendable {
         requiresAction = history.requiresAction
     }
 
+    init(
+        id: UUID,
+        sourceKey: AttentionSourceKey,
+        fingerprint: String,
+        owner: AttentionWorktreeIdentity,
+        kind: AttentionKind,
+        title: String,
+        body: String?,
+        jumpTarget: AttentionJumpTarget,
+        display: AttentionWorktreeDisplaySnapshot,
+        occurredAt: Date,
+        requiresAction: Bool
+    ) {
+        self.id = id
+        self.sourceKey = sourceKey
+        self.fingerprint = fingerprint
+        self.owner = owner
+        self.kind = kind
+        self.title = title
+        self.body = Self.persistedBody(body)
+        self.jumpTarget = jumpTarget
+        self.display = display
+        self.occurredAt = occurredAt
+        self.requiresAction = requiresAction
+    }
+
     private static func persistedBody(_ body: String?) -> String? {
         guard let body else { return nil }
         let cappedBytes = body.utf8.prefix(8_192)

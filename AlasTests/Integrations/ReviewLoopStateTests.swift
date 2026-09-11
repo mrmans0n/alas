@@ -32,6 +32,27 @@ struct ReviewLoopStateTests {
         #expect(revealedNumbers == [42])
     }
 
+    @Test func drawerActionAcknowledgesLoadedRequestWhenAlreadyExpanded() async throws {
+        let provider = FakeCodeHostProvider(kind: .github)
+        provider.request = Self.makeReviewRequest(remote: Self.makeRemote(), checks: [])
+        let state = ReviewLoopState(worktreePath: URL(fileURLWithPath: "/tmp/review-action-attention"), baseBranch: "main",
+            providerRegistry: CodeHostProviderRegistry(providers: [.github: provider]))
+        await state.refresh(local: Self.makeLocal(), remotes: [Self.makeGitHubRemote()])
+        state.setExpanded(true)
+        var actions: [ReviewReadinessActionKind] = []
+        var revealedNumbers: [Int] = []
+        let drawer = ReviewLoopDrawer(state: state, canOpenAgentHandoff: false, onAction: { action in
+            actions.append(action)
+        }, onRevealReviewRequest: { number in
+            revealedNumbers.append(number)
+        })
+
+        drawer.performAction(.openReviewRequest)
+
+        #expect(revealedNumbers == [42])
+        #expect(actions == [.openReviewRequest])
+    }
+
     @Test func explicitTargetLookupAndCreationUseCapturedProviderAndArguments() async throws {
         let remote = CodeHostRemote(
             kind: .gitlab, host: "gitlab.com", owner: "captured", repository: "project",

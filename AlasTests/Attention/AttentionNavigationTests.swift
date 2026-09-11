@@ -253,6 +253,38 @@ struct AttentionNavigationTests {
         #expect(!pane.revealAttentionTarget(.reviewRequest(number: 42)))
     }
 
+    @Test func reviewRequestRevealRejectsErroredProviderSnapshot() async throws {
+        let fixture = try Fixture()
+        defer { fixture.state.rightPaneStore.deactivate()
+        fixture.cleanup() }
+        fixture.state.selectedWorktreeId = fixture.worktree.id
+        let pane = fixture.state.rightPaneStore.state(for: fixture.worktree, baseBranch: "", comparisonMode: fixture.state.config.changes.comparisonMode)
+        pane.reviewLoop.setSnapshotForTests(Self.reviewSnapshot(errorMessage: "Could not fetch review"))
+        let item = try fixture.record(.reviewRequest(number: 42))
+
+        #expect(await fixture.state.openAttentionItem(item) == .unavailable("The requested changes or review are no longer available."))
+        #expect(fixture.state.attentionStore.acknowledgments[item.eventID] == nil)
+        #expect(!pane.reviewLoop.isExpanded)
+    }
+
+    @Test func refreshedConflictTargetUsesCurrentConflictedPath() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let context = try #require(fixture.state.attentionContext(for: fixture.worktree))
+        let pane = RightPaneState(worktree: fixture.worktree, baseBranch: "main")
+        pane.changes = [ChangedFile(path: "b.swift", status: "U", stage: .unstaged, add: 0, del: 0, renameFrom: nil, conflict: .bothModified)]
+
+        let refreshed = RightPaneStore.refreshedAttentionTarget(
+            for: .conflicts(path: "a.swift"),
+            pane: pane,
+            owner: context.owner,
+            display: context.display
+        )
+
+        #expect(refreshed == .conflicts(path: "b.swift"))
+        #expect(pane.revealAttentionTarget(refreshed))
+    }
+
     @Test func liveScriptRouteRestoresPersistedFailureWhenQueueNoLongerContainsIt() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
@@ -299,6 +331,46 @@ struct AttentionNavigationTests {
         #expect(fixture.state.attentionStore.acknowledgments[missing.eventID] == nil)
     }
 
+    @Test func liveReviewRouteResolvesCommentAfterDraftSessionRetargeting() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let sessions = ReviewSessionStore(url: fixture.directory.appendingPathComponent("reviews.json"))
+        let comments = ReviewDraftCommentStore(url: fixture.directory.appendingPathComponent("comments.json"))
+        let oldTarget = ReviewSessionTarget.commit(
+            worktreeID: "worktree",
+            repositoryPath: fixture.worktree.path,
+            sha: "old",
+            title: "Old commit"
+        )
+        let newTarget = ReviewSessionTarget.commit(
+            worktreeID: "worktree",
+            repositoryPath: fixture.worktree.path,
+            sha: "new",
+            title: "New commit"
+        )
+        let record = ReviewSessionRecord(id: .init(rawValue: "review-record"), target: newTarget, createdAt: Date(), updatedAt: Date())
+        try sessions.save(record)
+        let fileID = DiffReviewFileID(namespace: "tracked", path: "file.swift")
+        let comment = ReviewDraftComment(id: "comment2", sessionID: newTarget.draftSessionID, fileID: fileID, path: "file.swift", anchor: .file, bodyMarkdown: "Feedback", state: .active, createdAt: Date(), updatedAt: Date())
+        try comments.save(comment)
+        fixture.state.attentionNavigationEnvironment = .live(appState: fixture.state, reviewSessionStore: sessions, reviewCommentStore: comments)
+
+        let item = try fixture.record(.reviewComment(sessionID: oldTarget.draftSessionID.rawValue, commentID: "comment2"))
+        #expect(await fixture.state.openAttentionItem(item) != .opened)
+
+        let tab = try #require(fixture.state.tabs.tabs(forWorktree: "worktree").first)
+        guard case .reviewSession(let session) = tab else {
+            Issue.record("Expected review tab")
+            return
+        }
+        #expect(session.sessionID.rawValue == "review-record")
+        #expect(session.focusedCommentID == "comment2")
+        #expect(session.selectedFileID == fileID)
+        let pending = try #require(fixture.state.attentionPendingReviewReveal)
+        #expect(pending.sessionID == newTarget.draftSessionID.rawValue)
+        #expect(pending.eventIDs == [item.eventID])
+    }
+
     @Test func reviewRevealDoesNotAcknowledgeReplyArrivingDuringScroll() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
@@ -314,9 +386,68 @@ struct AttentionNavigationTests {
         #expect(fixture.state.attentionStore.acknowledgments[newer.eventID] == nil)
     }
 
+    @Test func retargetedReviewRevealAcknowledgesByCommentID() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        fixture.state.selectedWorktreeId = "worktree"
+        let tab = fixture.state.tabs.appendACP(owner: .worktree("worktree"), sessionId: "placeholder", title: "Review")
+        let oldTarget = AttentionJumpTarget.reviewComment(sessionID: "old-review", commentID: "comment")
+        let item = try fixture.record(oldTarget)
+        let command = DiffReviewDraftCommentScrollCommand(commentID: "comment", fileID: .init(namespace: "tracked", path: "file.swift"), generation: 1)
+        fixture.state.beginReviewAttentionInteraction(worktreeID: "worktree", tabID: tab.id, sessionID: "new-review", command: command)
+        fixture.state.completeReviewAttentionReveal(worktreeID: "worktree", tabID: tab.id, sessionID: "new-review", command: command, succeeded: true)
+
+        #expect(fixture.state.attentionStore.acknowledgments[item.eventID] != nil)
+    }
+
     private struct MemoryStore: PersistenceStoreProtocol {
         func write<T: Encodable>(_: T, to _: URL) throws {}
         func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
+    }
+
+    private static func reviewSnapshot(errorMessage: String? = nil) -> ReviewLoopSnapshot {
+        let remote = CodeHostRemote(
+            kind: .github,
+            host: "github.com",
+            owner: "owner",
+            repository: "repo",
+            remoteName: "origin",
+            webURL: URL(string: "https://github.com/owner/repo")!
+        )
+        let request = ReviewRequest(
+            remote: remote,
+            number: 42,
+            title: "Review",
+            url: remote.webURL,
+            state: .open,
+            isDraft: false,
+            headRefName: "feature",
+            baseRefName: "main",
+            headSHA: "head",
+            reviewDecision: .approved,
+            mergeState: .clean,
+            checks: [],
+            threads: []
+        )
+        return ReviewLoopSnapshot(
+            local: ReviewLoopLocalState(
+                branchName: "feature",
+                headSHA: "head",
+                baseBranch: "main",
+                hasWorkingTreeChanges: false,
+                hasStagedChanges: false,
+                aheadCommitCount: 0,
+                hasUpstream: true,
+                upstreamAheadCommitCount: 0,
+                needsPush: false
+            ),
+            remote: remote,
+            reviewRequest: request,
+            providerAvailable: true,
+            providerAuthenticated: true,
+            providerCapabilities: .githubCLI,
+            errorMessage: errorMessage
+        )
     }
 
     @MainActor private struct Fixture {

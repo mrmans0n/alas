@@ -69,14 +69,14 @@ struct AttentionStoreTests {
         let fixture = try Fixture()
         let sourceKey = AttentionSourceKey(rawValue: "git:\(fixture.lineageOwner.storageKey):conflicts")
 
-        fixture.store.observe(.active(fixture.signal(sourceKey: sourceKey, fingerprint: "a.swift|b.swift", kind: .conflicts, jumpTarget: .conflicts(path: "a.swift"))), at: fixture.now)
-        fixture.store.observe(.active(fixture.signal(sourceKey: sourceKey, fingerprint: "b.swift", kind: .conflicts, jumpTarget: .conflicts(path: "b.swift"))), at: fixture.now.addingTimeInterval(1))
+        fixture.store.observe(.active(fixture.signal(sourceKey: sourceKey, fingerprint: "7:a.swift7:b.swift", kind: .conflicts, jumpTarget: .conflicts(path: "a.swift"))), at: fixture.now)
+        fixture.store.observe(.active(fixture.signal(sourceKey: sourceKey, fingerprint: "7:b.swift", kind: .conflicts, jumpTarget: .conflicts(path: "b.swift"))), at: fixture.now.addingTimeInterval(1))
 
         #expect(fixture.store.events.count == 1)
-        #expect(fixture.store.document.observations[sourceKey]?.fingerprint == "b.swift")
+        #expect(fixture.store.document.observations[sourceKey]?.fingerprint == "7:b.swift")
         #expect(fixture.store.events.first?.jumpTarget == .conflicts(path: "b.swift"))
 
-        fixture.store.observe(.active(fixture.signal(sourceKey: sourceKey, fingerprint: "b.swift|c.swift", kind: .conflicts)), at: fixture.now.addingTimeInterval(2))
+        fixture.store.observe(.active(fixture.signal(sourceKey: sourceKey, fingerprint: "7:b.swift7:c.swift", kind: .conflicts)), at: fixture.now.addingTimeInterval(2))
 
         #expect(fixture.store.events.count == 2)
     }
@@ -100,15 +100,37 @@ struct AttentionStoreTests {
         let fixture = try Fixture()
         let sourceKey = AttentionSourceKey(rawValue: "review:\(fixture.lineageOwner.storageKey):https://github.com/owner/repo:42:feedback")
 
-        fixture.store.observe(.active(fixture.signal(sourceKey: sourceKey, fingerprint: "head|CHANGES_REQUESTED|thread-a|thread-b", kind: .actionableFeedback)), at: fixture.now)
-        fixture.store.observe(.active(fixture.signal(sourceKey: sourceKey, fingerprint: "head|CHANGES_REQUESTED|thread-b", kind: .actionableFeedback)), at: fixture.now.addingTimeInterval(1))
+        fixture.store.observe(.active(fixture.signal(sourceKey: sourceKey, fingerprint: "head|decision|APPROVED|threads|thread-a|thread-b", kind: .actionableFeedback)), at: fixture.now)
+        fixture.store.observe(.active(fixture.signal(sourceKey: sourceKey, fingerprint: "head|decision|APPROVED|threads|thread-b", kind: .actionableFeedback)), at: fixture.now.addingTimeInterval(1))
 
         #expect(fixture.store.events.count == 1)
-        #expect(fixture.store.document.observations[sourceKey]?.fingerprint == "head|CHANGES_REQUESTED|thread-b")
+        #expect(fixture.store.document.observations[sourceKey]?.fingerprint == "head|decision|APPROVED|threads|thread-b")
 
-        fixture.store.observe(.active(fixture.signal(sourceKey: sourceKey, fingerprint: "head|CHANGES_REQUESTED|thread-b|thread-c", kind: .actionableFeedback)), at: fixture.now.addingTimeInterval(2))
+        fixture.store.observe(.active(fixture.signal(sourceKey: sourceKey, fingerprint: "head|decision|APPROVED|threads|thread-b|thread-c", kind: .actionableFeedback)), at: fixture.now.addingTimeInterval(2))
 
         #expect(fixture.store.events.count == 2)
+    }
+
+    @Test func feedbackFinalThreadResolutionUpdatesObservationWithoutNewEvent() throws {
+        let fixture = try Fixture()
+        let sourceKey = AttentionSourceKey(rawValue: "review:\(fixture.lineageOwner.storageKey):https://github.com/owner/repo:42:feedback")
+
+        fixture.store.observe(.active(fixture.signal(sourceKey: sourceKey, fingerprint: "head|decision|CHANGES_REQUESTED|threads|thread-a", kind: .actionableFeedback)), at: fixture.now)
+        fixture.store.observe(.active(fixture.signal(sourceKey: sourceKey, fingerprint: "head|decision|CHANGES_REQUESTED", kind: .actionableFeedback)), at: fixture.now.addingTimeInterval(1))
+
+        #expect(fixture.store.events.count == 1)
+        #expect(fixture.store.document.observations[sourceKey]?.fingerprint == "head|decision|CHANGES_REQUESTED")
+    }
+
+    @Test func feedbackDecisionChangeCreatesNewEventAfterFinalThreadResolution() throws {
+        let fixture = try Fixture()
+        let sourceKey = AttentionSourceKey(rawValue: "review:\(fixture.lineageOwner.storageKey):https://github.com/owner/repo:42:feedback")
+
+        fixture.store.observe(.active(fixture.signal(sourceKey: sourceKey, fingerprint: "head|decision|APPROVED|threads|thread-a", kind: .actionableFeedback)), at: fixture.now)
+        fixture.store.observe(.active(fixture.signal(sourceKey: sourceKey, fingerprint: "head|decision|CHANGES_REQUESTED", kind: .actionableFeedback)), at: fixture.now.addingTimeInterval(1))
+
+        #expect(fixture.store.events.count == 2)
+        #expect(fixture.store.document.observations[sourceKey]?.fingerprint == "head|decision|CHANGES_REQUESTED")
     }
 
     @Test func inactiveObservationWithoutPriorActiveStateIsANoop() throws {
@@ -167,6 +189,148 @@ struct AttentionStoreTests {
 
         #expect(fixture.store.writeError == nil)
         #expect(fixture.store.document.aliases[fixture.legacyOwner] == fixture.lineageOwner)
+    }
+
+    @Test func existingAliasCanSkipFailedWriteRetry() throws {
+        let persistence = FailingThenSucceedingPersistenceStore()
+        let fixture = try Fixture(persistence: persistence)
+
+        fixture.store.registerAlias(from: fixture.legacyOwner, to: fixture.lineageOwner)
+        fixture.store.registerAliases([(from: fixture.legacyOwner, to: fixture.lineageOwner)], retryExisting: false)
+
+        #expect(fixture.store.writeError != nil)
+        #expect(persistence.writeCount == 1)
+    }
+
+    @Test func existingLegacyAliasIsNotRetargetedToReplacementLineage() throws {
+        let fixture = try Fixture()
+        let replacementOwner = AttentionWorktreeIdentity(
+            projectID: "project",
+            location: .local,
+            lineageID: "replacement-lineage",
+            legacyPath: nil
+        )
+
+        fixture.store.registerAlias(from: fixture.legacyOwner, to: fixture.lineageOwner)
+        fixture.store.registerAlias(from: fixture.legacyOwner, to: replacementOwner)
+
+        #expect(fixture.store.document.aliases[fixture.legacyOwner] == fixture.lineageOwner)
+    }
+
+    @Test func existingLegacyAliasDoesNotPreventReplacementObservationMigration() throws {
+        let fixture = try Fixture()
+        let replacementOwner = AttentionWorktreeIdentity(
+            projectID: "project",
+            location: .local,
+            lineageID: "replacement-lineage",
+            legacyPath: nil
+        )
+        let legacyKey = AttentionSourceKey(rawValue: "git:\(fixture.legacyOwner.storageKey):conflicts")
+        let replacementKey = AttentionSourceKey(rawValue: "git:\(replacementOwner.storageKey):conflicts")
+        let legacySignal = AttentionSignal(
+            sourceKey: legacyKey,
+            fingerprint: "conflicts:file.swift",
+            owner: fixture.legacyOwner,
+            kind: .conflicts,
+            title: "1 unresolved conflict",
+            body: nil,
+            jumpTarget: .conflicts(path: nil),
+            display: fixture.signal(fingerprint: "").display
+        )
+        let changedLegacySignal = AttentionSignal(
+            sourceKey: legacyKey,
+            fingerprint: "conflicts:other.swift",
+            owner: fixture.legacyOwner,
+            kind: .conflicts,
+            title: "1 unresolved conflict",
+            body: nil,
+            jumpTarget: .conflicts(path: nil),
+            display: fixture.signal(fingerprint: "").display
+        )
+
+        fixture.store.registerAlias(from: fixture.legacyOwner, to: fixture.lineageOwner)
+        fixture.store.observe(.active(legacySignal), at: fixture.now)
+        fixture.store.observe(.active(changedLegacySignal), at: fixture.now.addingTimeInterval(1))
+        fixture.store.registerAlias(from: fixture.legacyOwner, to: replacementOwner)
+
+        #expect(fixture.store.document.aliases[fixture.legacyOwner] == fixture.lineageOwner)
+        #expect(fixture.store.document.observations[legacyKey] == nil)
+        #expect(fixture.store.document.observations[replacementKey]?.isActive == true)
+        #expect(fixture.store.document.events.count == 2)
+        #expect(fixture.store.document.events.allSatisfy { $0.owner == replacementOwner })
+        #expect(fixture.store.document.events.allSatisfy { $0.sourceKey == replacementKey })
+    }
+
+    @Test func existingLegacyAliasDoesNotPreventReplacementOwnerRebinding() throws {
+        let fixture = try Fixture()
+        let replacementOwner = AttentionWorktreeIdentity(
+            projectID: "project",
+            location: .local,
+            lineageID: "replacement-lineage",
+            legacyPath: nil
+        )
+        let sourceKey = AttentionSourceKey(rawValue: "session:replacement:awaiting")
+        let signal = AttentionSignal(
+            sourceKey: sourceKey,
+            fingerprint: "awaitingInput",
+            owner: fixture.legacyOwner,
+            kind: .agentAwaiting,
+            title: "Agent is waiting for input",
+            body: nil,
+            jumpTarget: .session(sessionID: "replacement"),
+            display: fixture.signal(fingerprint: "").display
+        )
+
+        fixture.store.registerAlias(from: fixture.legacyOwner, to: fixture.lineageOwner)
+        fixture.store.observe(.active(signal), at: fixture.now)
+        fixture.store.registerAlias(from: fixture.legacyOwner, to: replacementOwner)
+
+        let event = try #require(fixture.store.document.events.first)
+        #expect(fixture.store.document.aliases[fixture.legacyOwner] == fixture.lineageOwner)
+        #expect(fixture.store.document.observations[sourceKey]?.isActive == true)
+        #expect(event.sourceKey == sourceKey)
+        #expect(event.owner == replacementOwner)
+    }
+
+    @Test func existingLegacyAliasDoesNotPreventReplacementOwnerRebindingForEverySameSourceOccurrence() throws {
+        let fixture = try Fixture()
+        let replacementOwner = AttentionWorktreeIdentity(
+            projectID: "project",
+            location: .local,
+            lineageID: "replacement-lineage",
+            legacyPath: nil
+        )
+        let sourceKey = AttentionSourceKey(rawValue: "session:replacement:awaiting")
+        let firstSignal = AttentionSignal(
+            sourceKey: sourceKey,
+            fingerprint: "awaitingInput",
+            owner: fixture.legacyOwner,
+            kind: .agentAwaiting,
+            title: "Agent is waiting for input",
+            body: nil,
+            jumpTarget: .session(sessionID: "replacement"),
+            display: fixture.signal(fingerprint: "").display
+        )
+        let secondSignal = AttentionSignal(
+            sourceKey: sourceKey,
+            fingerprint: "permissionRequest",
+            owner: fixture.legacyOwner,
+            kind: .agentAwaiting,
+            title: "Agent needs permission",
+            body: nil,
+            jumpTarget: .session(sessionID: "replacement"),
+            display: fixture.signal(fingerprint: "").display
+        )
+
+        fixture.store.registerAlias(from: fixture.legacyOwner, to: fixture.lineageOwner)
+        fixture.store.observe(.active(firstSignal), at: fixture.now)
+        fixture.store.observe(.active(secondSignal), at: fixture.now.addingTimeInterval(1))
+        fixture.store.registerAlias(from: fixture.legacyOwner, to: replacementOwner)
+
+        #expect(fixture.store.document.aliases[fixture.legacyOwner] == fixture.lineageOwner)
+        #expect(fixture.store.document.events.count == 2)
+        #expect(fixture.store.document.events.allSatisfy { $0.sourceKey == sourceKey })
+        #expect(fixture.store.document.events.allSatisfy { $0.owner == replacementOwner })
     }
 
     @Test func registeringAliasesPersistsBatchOnce() throws {
@@ -302,6 +466,17 @@ struct AttentionStoreTests {
         #expect(fixture.store.document.events.map(\.fingerprint) == ["newest", "unresolved"])
     }
 
+    @Test func hardCapPrunesInformationalHistoryBeforeUnresolvedActionableEvents() throws {
+        let fixture = try Fixture(maxEvents: 2)
+        let unresolved = fixture.signal(fingerprint: "unresolved")
+        fixture.store.observe(.active(unresolved), at: fixture.now)
+        fixture.store.appendHistory(fixture.history(fingerprint: "finished-1"), at: fixture.now.addingTimeInterval(1))
+        fixture.store.appendHistory(fixture.history(fingerprint: "finished-2"), at: fixture.now.addingTimeInterval(2))
+
+        #expect(fixture.store.document.events.map(\.fingerprint) == ["unresolved", "finished-2"])
+        #expect(fixture.store.document.observations[unresolved.sourceKey]?.eventID == fixture.store.document.events.first?.id)
+    }
+
     @MainActor
     private struct Fixture {
         let now = Date(timeIntervalSince1970: 1_000_000)
@@ -387,12 +562,14 @@ struct AttentionStoreTests {
 
 private final class FailingThenSucceedingPersistenceStore: PersistenceStoreProtocol {
     private var remainingFailures: Int
+    private(set) var writeCount = 0
 
     init(failOnWrite: Int = 1) {
         remainingFailures = failOnWrite
     }
 
     func write<T: Encodable>(_ value: T, to url: URL) throws {
+        writeCount += 1
         if remainingFailures > 0 {
             remainingFailures -= 1
             throw TestError.writeFailed
