@@ -1698,9 +1698,13 @@ final class ACPSessionManager: ObservableObject {
     func persistQueue(for session: ACPSession) {
         guard !isMirror(sessionId: session.id) else { return }
         let sessionId = session.id
+        scheduleScheduledQueueReconnect(sessionId: sessionId)
+        if let runner = runners[sessionId] {
+            runner.persistQueue()
+            return
+        }
         let items = session.queue
         let fence = leaseFence(sessionId: sessionId)
-        scheduleScheduledQueueReconnect(sessionId: sessionId)
         enqueuePersistence { persistence in
             _ = try await persistence.upsertQueue(
                 sessionId: sessionId,

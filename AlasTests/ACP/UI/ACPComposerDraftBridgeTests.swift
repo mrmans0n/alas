@@ -367,6 +367,47 @@ struct ACPComposerDraftBridgeTests {
         #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()) == newerDraft)
     }
 
+    @Test("failed scheduled completion restores submitted draft after intervening edit")
+    func failedScheduledCompletionRestoresSubmittedDraftAfterInterveningEdit() {
+        let submittedDraft = ACPComposerDraft(segments: [.text("hello")])
+        let newerDraft = ACPComposerDraft(segments: [.text("new")])
+        let restoredDraft = ACPComposerDraft(segments: [.text("new\nhello")])
+        let textView = NSTextView()
+        textView.textStorage?.setAttributedString(ACPInputField.Coordinator.attributedString(from: submittedDraft))
+        var changedDrafts: [ACPComposerDraft] = []
+        var clearCount = 0
+        var submitCount = 0
+        var completion: (@MainActor (Bool) -> Void)?
+
+        let coordinator = ACPInputField.Coordinator(
+            worktreeRoot: URL(fileURLWithPath: "/tmp"),
+            initialDraft: .empty,
+            focusRequest: 0,
+            sendOnEnter: true,
+            onDraftChange: { changedDrafts.append($0) },
+            onDraftClear: { clearCount += 1 },
+            onSubmit: { _, _, intent, draft, onFinished in
+                #expect(intent == .schedule(.distantFuture))
+                #expect(draft == submittedDraft)
+                submitCount += 1
+                completion = onFinished
+                return true
+            }
+        )
+        coordinator.textView = textView
+
+        coordinator.submit(textView, intent: .schedule(.distantFuture))
+        textView.textStorage?.setAttributedString(ACPInputField.Coordinator.attributedString(from: newerDraft))
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        coordinator.submit(textView, intent: .schedule(.distantFuture))
+        completion?(false)
+
+        #expect(submitCount == 1)
+        #expect(changedDrafts == [newerDraft, newerDraft.appending(submittedDraft)])
+        #expect(clearCount == 0)
+        #expect(ACPInputField.Coordinator.draft(from: textView.attributedString()) == restoredDraft)
+    }
+
     @Test("persisted draft sync clears a remounted submitted draft")
     func persistedDraftSyncClearsRemountedSubmittedDraft() {
         let submittedDraft = ACPComposerDraft(segments: [.text("already sent")])
