@@ -66,6 +66,8 @@ struct RunScriptFailureBanner: View {
                     Text(presentation.title)
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(theme.color("fg"))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                     if let overflowText = presentation.overflowText {
                         Text(overflowText)
                             .font(.system(size: 12))
