@@ -5,6 +5,19 @@ import Testing
 @Suite("Attention navigation", .serialized)
 @MainActor
 struct AttentionNavigationTests {
+    @Test func unrelatedPreparationNavigationDoesNotAcknowledgeReviewAttention() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        fixture.state.selectedWorktreeId = "worktree"
+        let item = try fixture.record(.reviewRequest(number: 42))
+        let draft = fixture.state.tabs.openOrFocusDraftCommit(worktreeId: "worktree", preferredAction: .commit)
+        fixture.state.activateWorktreeCenterTab(worktreeId: "worktree", tabId: draft.id)
+        #expect(fixture.state.attentionStore.acknowledgments[item.eventID] == nil)
+        let changes = fixture.state.tabs.openOrFocusReviewChanges(worktreeId: "worktree")
+        fixture.state.activateWorktreeCenterTab(worktreeId: "worktree", tabId: changes.id)
+        #expect(fixture.state.attentionStore.acknowledgments[item.eventID] == nil)
+    }
+
     @Test func ordinarySessionFocusAcknowledgesOnlyTheExactSession() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }

@@ -117,7 +117,10 @@ struct ChangesTabView: View {
                 ReviewLoopDrawer(
                     state: rps.reviewLoop,
                     canOpenAgentHandoff: rps.canOpenReviewLoopHandoff(appState: appState),
-                    onAction: { action in rps.handleReviewReadinessAction(action, appState: appState) }
+                    onAction: { action in rps.handleReviewReadinessAction(action, appState: appState) },
+                    onRevealReviewRequest: { number in
+                        appState.acknowledgeAttentionSurface(worktreeID: rps.worktree.id, target: .reviewRequest(number: number))
+                    }
                 )
             }
         }
@@ -370,11 +373,6 @@ struct ChangesTabView: View {
                     onDismissSyncFailure: { rps.ggActionState.dismissCompletedSyncFailure() },
                     onOpenGGLanding: { appState.openGGLanding(projectId: rps.worktree.projectId) }
                 )
-                .simultaneousGesture(TapGesture().onEnded {
-                    if let request = rps.reviewLoop.snapshot?.reviewRequest {
-                        appState.acknowledgeAttentionSurface(worktreeID: rps.worktree.id, target: .reviewRequest(number: request.number))
-                    }
-                })
             })
         }
 

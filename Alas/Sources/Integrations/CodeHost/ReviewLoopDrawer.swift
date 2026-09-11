@@ -4,6 +4,7 @@ struct ReviewLoopDrawer: View {
     @Bindable var state: ReviewLoopState
     let canOpenAgentHandoff: Bool
     let onAction: (ReviewReadinessActionKind) -> Void
+    var onRevealReviewRequest: (Int) -> Void = { _ in }
 
     @Environment(\.theme) private var theme
 
@@ -84,8 +85,11 @@ struct ReviewLoopDrawer: View {
         }
     }
 
-    private func toggleExpanded() {
+    func toggleExpanded() {
         state.setExpanded(!state.isExpanded)
+        if state.isExpanded, let request = state.snapshot?.reviewRequest {
+            onRevealReviewRequest(request.number)
+        }
     }
 
     private func headerTitle(model: ReviewReadinessModel) -> some View {
