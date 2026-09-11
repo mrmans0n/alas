@@ -300,6 +300,10 @@ final class ACPSessionManager: ObservableObject {
     /// running) — the remote-web twin of the queued bubble's "send now".
     func queueForceSend(for id: ACPSession.ID, itemId: UUID) async {
         guard let session = sessions[id] else { return }
+        guard session.pendingQueuePersistenceCount == 0 else {
+            deferQueueForceSend(session: session, itemId: itemId)
+            return
+        }
         if case .spawning = session.agentState {
             deferQueueForceSend(session: session, itemId: itemId)
             return
@@ -1699,7 +1703,7 @@ final class ACPSessionManager: ObservableObject {
         guard !isMirror(sessionId: session.id) else { return }
         let sessionId = session.id
         scheduleScheduledQueueReconnect(sessionId: sessionId)
-        if let runner = runners[sessionId] {
+        if session.pendingQueuePersistenceCount == 0, let runner = runners[sessionId] {
             runner.persistQueue()
             return
         }
@@ -4313,10 +4317,10 @@ extension ACPSessionManager {
 
     @discardableResult
     private func sendPendingQueueForceSend(sessionId: ACPSession.ID) -> Bool {
-        guard let itemIds = pendingQueueForceSends.removeValue(forKey: sessionId),
-              let session = sessions[sessionId],
+        guard let session = sessions[sessionId],
               let runner = runners[sessionId]
         else { return false }
+        guard let itemIds = pendingQueueForceSends.removeValue(forKey: sessionId) else { return false }
         var sent = false
         for itemId in itemIds.reversed() where session.queue.contains(where: { $0.id == itemId && $0.status == .pending }) {
             sent = session.forceQueueItem(id: itemId) || sent
@@ -4381,9 +4385,12 @@ extension ACPSessionManager {
                 }
             }
             if persisted,
-               !sendPendingQueueForceSend(sessionId: sessionId),
-               session.contextRecoveryStatus == nil {
-                runners[sessionId]?.flushQueueIfIdle()
+               !sendPendingQueueForceSend(sessionId: sessionId) {
+                if pendingQueueForceSends[sessionId]?.isEmpty == false {
+                    Task { @MainActor in await reattach(to: sessionId) }
+                } else if session.contextRecoveryStatus == nil {
+                    runners[sessionId]?.flushQueueIfIdle()
+                }
             }
             onPersisted?(persisted)
         }
