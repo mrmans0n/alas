@@ -53,7 +53,7 @@ struct CheckpointRestorePreviewTests {
             blockers.remove(expected)
         }
         #expect(CheckpointRestoreBlocker.remoteTarget.description == "Checkpoints are not available for remote worktrees yet.")
-        #expect(CheckpointCoordinationSnapshot.scopeDescription(repositoryName: "Alas", workspaceName: "Development") == "Only Alas's selected worktree is in scope")
+        #expect(CheckpointCoordinationSnapshot.scopeDescription(repositoryName: "Alas", workspaceName: "Development") == "Only Alas's selected worktree in Development is in scope")
         #expect(CheckpointCoordinationSnapshot.clear.scopeDescription == "This repository only")
         #expect(CheckpointRestoreBlocker.allCases.map(\.description) == [
             "Checkpoints are not available for remote worktrees yet.",

@@ -74,6 +74,7 @@
 		0A2377A64E08F89400F08E68 /* AppStateRunRecordTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89441B078E6782A1395A34CB /* AppStateRunRecordTests.swift */; };
 		0A480D9D7CE5BB837D7BCA13 /* GitService+Staging.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2F90D03073708AA01531533 /* GitService+Staging.swift */; };
 		0A98E7EDC11BF68EAEEFED29 /* ReviewTargetPaletteEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0D0F48B60A75972D3A8DBED /* ReviewTargetPaletteEnvironment.swift */; };
+		0AAF4AA7F8D4C777AA3005B6 /* CheckpointCoordinationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEA93A40C5E1FAC4E569B7DA /* CheckpointCoordinationTests.swift */; };
 		0AF3143BA962E031E6A21657 /* GGFollowEntrySheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F28FA9BC3F5FC98D0A64747 /* GGFollowEntrySheet.swift */; };
 		0B11B8038CBA3A6F05E34895 /* GatekeeperAssessorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 137E9C84D7F32E747F0AF4C0 /* GatekeeperAssessorTests.swift */; };
 		0B6ADBF320E6130E5888CAA7 /* RemoteSessionGatewayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37011506F459800FFF6D12A9 /* RemoteSessionGatewayTests.swift */; };
@@ -1104,6 +1105,7 @@
 		A2B0E4C1D80EB12F7BECE7FC /* RepoSelectorDialog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 541A75BBAF1CFF3EF89383C7 /* RepoSelectorDialog.swift */; };
 		A2BB622FA93936FAE9A3719A /* ClosedTabHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15CE3FADE2353C1214143336 /* ClosedTabHistory.swift */; };
 		A2E0A755C2854FE489530FE3 /* ImageDiffDifferenceComputer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 881B46F8FCAF830239357372 /* ImageDiffDifferenceComputer.swift */; };
+		A2E1FD8035E30CF785E9CF44 /* RightPaneCheckpointStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A99D2B248B372F47870C5AE /* RightPaneCheckpointStateTests.swift */; };
 		A3655FEDF6C5E3C128401DA7 /* AppKitDiffScrollerReconciler.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC2967A37F842D09F43063F3 /* AppKitDiffScrollerReconciler.swift */; };
 		A383F1C9B0B00B2805576209 /* ACPScrollDirectionClassifierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D0190EE078ADB537982F7DC /* ACPScrollDirectionClassifierTests.swift */; };
 		A39D44E69D8BEF98C8934DF7 /* AppStateCLIRoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08F7B16F39935718801DAA95 /* AppStateCLIRoutingTests.swift */; };
@@ -2164,6 +2166,7 @@
 		3A110966FCF7EA47C18BE71A /* ACPAgentProfilesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPAgentProfilesTests.swift; sourceTree = "<group>"; };
 		3A5B23293901A7A228E55BCE /* SessionOwnerID.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionOwnerID.swift; sourceTree = "<group>"; };
 		3A8A5932B664C88F20BF00CA /* AppStateCreateWorktreeLaunchSurfaceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStateCreateWorktreeLaunchSurfaceTests.swift; sourceTree = "<group>"; };
+		3A99D2B248B372F47870C5AE /* RightPaneCheckpointStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RightPaneCheckpointStateTests.swift; sourceTree = "<group>"; };
 		3ABD3A575FAEC381A5744BFA /* FileTreeBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileTreeBuilderTests.swift; sourceTree = "<group>"; };
 		3ACA7839782B71490BFD3A6F /* RemoteLSPLauncher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteLSPLauncher.swift; sourceTree = "<group>"; };
 		3B2FEDAAF927CDC9E4D19551 /* StagedDiffLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StagedDiffLoader.swift; sourceTree = "<group>"; };
@@ -3378,6 +3381,7 @@
 		EE607EE1ACDE73C1DB0FCA00 /* SettingsRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsRow.swift; sourceTree = "<group>"; };
 		EE6F36C31DB1C13D86416B4B /* PiACPInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiACPInstaller.swift; sourceTree = "<group>"; };
 		EE91017BB71AB08265C7B56E /* ACPComposerControlPresentationDictationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPComposerControlPresentationDictationTests.swift; sourceTree = "<group>"; };
+		EEA93A40C5E1FAC4E569B7DA /* CheckpointCoordinationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckpointCoordinationTests.swift; sourceTree = "<group>"; };
 		EEB33BFC223CB0A5C6CBC4AF /* WorktreeCleanupConfigTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeCleanupConfigTests.swift; sourceTree = "<group>"; };
 		EECB91379591DA21D216A894 /* RelativeTime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelativeTime.swift; sourceTree = "<group>"; };
 		EECD5B53A23694EF60F63041 /* MergeConflictAgentProposalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergeConflictAgentProposalView.swift; sourceTree = "<group>"; };
@@ -6019,6 +6023,7 @@
 		D3CEE8E1525713E800AED873 /* Checkpoints */ = {
 			isa = PBXGroup;
 			children = (
+				EEA93A40C5E1FAC4E569B7DA /* CheckpointCoordinationTests.swift */,
 				38CB485BA93482126CCAA211 /* CheckpointDiffLoaderTests.swift */,
 				2342E857ED037E8FF8024BAE /* CheckpointFileSystemTests.swift */,
 				BDCDFEB92EF701A089548A02 /* CheckpointModelTests.swift */,
@@ -6027,6 +6032,7 @@
 				7418FC4CE7EBD544B58108EE /* CheckpointRestorePreparationTests.swift */,
 				7B5260A5CDFBC249F1C17D2C /* CheckpointRestorePreviewTests.swift */,
 				87A4D51E84CA952506A66F9B /* CheckpointTestRepository.swift */,
+				3A99D2B248B372F47870C5AE /* RightPaneCheckpointStateTests.swift */,
 				13F66EC4AF2B62C3637A6282 /* WorktreeCheckpointCaptureTests.swift */,
 				4AA4014F03AFB7CB1DDA8048 /* WorktreeCheckpointStoreTests.swift */,
 				18CCEBB9570EAC8EFDDF5BB9 /* WorktreeStateSnapshotterTests.swift */,
@@ -7849,6 +7855,7 @@
 				59765FD789179C1BDC3F1BB9 /* ChangesTreeBuilderTests.swift in Sources */,
 				57C5E087A453B384485B4EE2 /* ChatFontCatalogTests.swift in Sources */,
 				981730A24BE369F4AE9012F3 /* ChatPaneTests.swift in Sources */,
+				0AAF4AA7F8D4C777AA3005B6 /* CheckpointCoordinationTests.swift in Sources */,
 				CFC115C9F16F0ADF90034C4F /* CheckpointDiffLoaderTests.swift in Sources */,
 				F9B7BD2F0A73C31B97E712CB /* CheckpointFileSystemTests.swift in Sources */,
 				E48489F352E8AD513310DF2B /* CheckpointModelTests.swift in Sources */,
@@ -8231,6 +8238,7 @@
 				1ACB56B9AA0EC3C1C2AF5E18 /* ReviewThreadWriteTests.swift in Sources */,
 				2A2388EC5DA3A5B6E26D533C /* RevisionFollowCapabilityTests.swift in Sources */,
 				652C66E1DA5C28C6FD1B5132 /* RevisionSnapshotCacheTests.swift in Sources */,
+				A2E1FD8035E30CF785E9CF44 /* RightPaneCheckpointStateTests.swift in Sources */,
 				D4E6BD88D38563AF45E79C83 /* RightPaneGGLandTests.swift in Sources */,
 				4F6DAC87A8E1730770319BBB /* RightPaneGGStackTests.swift in Sources */,
 				D4C9B03A011D0692D6C97CB8 /* RightPaneOptimisticStageTests.swift in Sources */,

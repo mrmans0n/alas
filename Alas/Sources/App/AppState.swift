@@ -9064,6 +9064,64 @@ final class AppState {
         return tabs.dirtyBufferText(worktreeId: worktreeId, relativePath: relativePath)
     }
 
+    /// Read-only facts used by checkpoint preview and restore preflight. A
+    /// Workspace checkout remains a shared session owner, but its active
+    /// writers only affect the currently focused member worktree.
+    func checkpointCoordination(
+        for worktree: Worktree,
+        selectedPaths: Set<String>
+    ) -> CheckpointCoordinationSnapshot {
+        var terminalCount = terminal.registry.sessions(forWorktree: worktree.id).count
+        var acpCount = acpManager(forWorktreeId: worktree.id)?.hasActiveCheckpointWriter == true ? 1 : 0
+        var workspaceName: String?
+        var repositoryName = projects.first(where: { $0.id == worktree.projectId })?.name ?? worktree.name
+
+        if let checkout = selectedWorkspaceCheckout,
+           workspaceNavigationState.repositoryFocusWorktreeID == worktree.id,
+           let memberID = workspaceNavigationState.focusedCheckoutMemberID,
+           let member = checkout.members.first(where: { $0.id == memberID && $0.projectID == worktree.projectId }) {
+            let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+            terminalCount += terminal.registry.sessions(forWorktree: owner.storageKey).count
+            if acpManager(for: owner)?.hasActiveCheckpointWriter == true { acpCount += 1 }
+            workspaceName = checkout.fallbackWorkspaceName
+            repositoryName = projects.first(where: { $0.id == member.projectID })?.name ?? member.fallbackProjectName
+        }
+
+        let pane = rightPaneStore.activeState(worktreeId: worktree.id)
+        return .init(
+            dirtyEditorPaths: tabs.unsavedRelativePaths(forWorktree: worktree.id).intersection(selectedPaths),
+            activeTerminalCount: terminalCount,
+            activeACPCount: acpCount,
+            otherGitMutationActive: pane?.hasOtherGitMutationInFlight ?? false,
+            scopeDescription: CheckpointCoordinationSnapshot.scopeDescription(
+                repositoryName: repositoryName,
+                workspaceName: workspaceName
+            )
+        )
+    }
+
+    func checkpointTarget(for worktree: Worktree) -> CheckpointWorktreeTarget? {
+        guard !worktree.path.isRemoteAlasPath,
+              let lineageID = worktree.lineageID ?? WorktreeService.existingLocalLineageID(forWorktreeAt: worktree.path)
+        else { return nil }
+        let project = projects.first(where: { $0.id == worktree.projectId })
+        let workspaceName: String?
+        if workspaceNavigationState.repositoryFocusWorktreeID == worktree.id {
+            workspaceName = selectedWorkspaceCheckout?.fallbackWorkspaceName
+        } else {
+            workspaceName = nil
+        }
+        return .init(
+            worktreeID: worktree.id,
+            projectID: worktree.projectId,
+            path: worktree.path,
+            lineageID: lineageID,
+            branch: worktree.branch,
+            repositoryName: project?.name ?? worktree.name,
+            workspaceName: workspaceName
+        )
+    }
+
     private func relativePath(for absolutePath: String, in worktreeId: String) -> String? {
         guard let worktree = worktree(withId: worktreeId) else { return nil }
         let root = worktree.path.standardizedFileURL.path

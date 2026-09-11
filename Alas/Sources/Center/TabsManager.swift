@@ -2213,6 +2213,21 @@ final class TabsManager {
         return buffers[key]?.dirty == true
     }
 
+    /// Relative paths with unsaved editor state for one worktree. Includes
+    /// unloaded hot-exit snapshots because a restore would otherwise replace
+    /// the on-disk file behind an unsaved editor draft.
+    func unsavedRelativePaths(forWorktree worktreeId: String) -> Set<String> {
+        guard let file = byWorktree[worktreeId] else { return [] }
+        return Set(file.tabs.compactMap { tab in
+            guard case let .editor(state) = tab, !state.isExternal else { return nil }
+            if let buffer = peekBuffer(tabId: state.id) {
+                return buffer.saveDisposition == .clean ? nil : buffer.relativePath
+            }
+            guard (try? bufferStore.read(worktreeId: worktreeId, tabId: state.id)) != nil else { return nil }
+            return state.relativePath
+        })
+    }
+
     /// Live in-memory contents of the editor buffer at
     /// `relativePath`, when one is open AND dirty. Returns `nil` when
     /// the file isn't open in the editor or has no unsaved changes,

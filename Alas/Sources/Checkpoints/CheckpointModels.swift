@@ -14,7 +14,9 @@ struct CheckpointCoordinationSnapshot: Equatable, Sendable {
                             otherGitMutationActive: false, scopeDescription: "This repository only")
 
     static func scopeDescription(repositoryName: String, workspaceName: String?) -> String {
-        workspaceName == nil ? "This repository only" : "Only \(repositoryName)'s selected worktree is in scope"
+        workspaceName == nil
+            ? "This repository only"
+            : "Only \(repositoryName)'s selected worktree in \(workspaceName) is in scope"
     }
 }
 

@@ -547,6 +547,13 @@ final class ACPSessionManager: ObservableObject {
     private var pendingQueueForceSends: [ACPSession.ID: [UUID]] = [:]
     private var delegatedMessageWatchTokens: [ACPSession.ID: Int32] = [:]
 
+    /// A runner is the only ACP state that can write a worktree. Persisted
+    /// history alone must not block a checkpoint restore, while an attach in
+    /// progress must block it before its runner has been registered.
+    var hasActiveCheckpointWriter: Bool {
+        !runners.isEmpty || !attachingSessions.isEmpty
+    }
+
     init(worktreeId: String, worktreePath: String, owner: SessionOwnerID? = nil, store: ACPSessionStore? = nil,
          persistence: ACPSessionPersistence? = nil,
          instanceId: String = UUID().uuidString,

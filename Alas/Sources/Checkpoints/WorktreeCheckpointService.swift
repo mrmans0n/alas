@@ -3,6 +3,7 @@ import Foundation
 
 protocol WorktreeCheckpointServicing: Sendable {
     func summaries(target: CheckpointWorktreeTarget) async throws -> CheckpointCatalogSnapshot
+    func nonterminalJournals(target: CheckpointWorktreeTarget) async throws -> [CheckpointRestoreJournal]
     func createManual(target: CheckpointWorktreeTarget, label: String) async throws -> WorktreeCheckpointSummary
     func manifest(target: CheckpointWorktreeTarget, id: CheckpointID) async throws -> WorktreeCheckpointManifest
     func delete(target: CheckpointWorktreeTarget, id: CheckpointID) async throws -> CheckpointCatalogSnapshot
@@ -42,6 +43,10 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
 
     func summaries(target: CheckpointWorktreeTarget) async throws -> CheckpointCatalogSnapshot {
         try await store.catalog(lineageID: target.lineageID)
+    }
+
+    func nonterminalJournals(target: CheckpointWorktreeTarget) async throws -> [CheckpointRestoreJournal] {
+        try await store.recoverableJournals(lineageID: target.lineageID)
     }
 
     func manifest(target: CheckpointWorktreeTarget, id: CheckpointID) async throws -> WorktreeCheckpointManifest {
