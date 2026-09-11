@@ -17,7 +17,7 @@ struct CheckpointRestorePreparationTests {
                                                                     selectedGroupIDs: preview.selectedGroupIDs, coordination: .clear)
 
         #expect(try await fixture.state() == before)
-        #expect(preparation.stagingRoot.deletingLastPathComponent() == fixture.repo.root)
+        #expect(preparation.stagingRoot.deletingLastPathComponent().standardizedFileURL.path == fixture.repo.root.standardizedFileURL.path)
         #expect(preparation.stagingRoot.lastPathComponent == ".alas-checkpoint-restore-\(preparation.operationID.uuidString.lowercased())")
         #expect(FileManager.default.fileExists(atPath: preparation.replacementsRoot.path))
         #expect(FileManager.default.fileExists(atPath: preparation.backupsRoot.path))
