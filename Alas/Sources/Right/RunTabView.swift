@@ -1,5 +1,23 @@
 import SwiftUI
 
+enum RunTabLoadingPresentation {
+    static func showsPlaceholder(scannedWorktreeID: String?, worktreeID: String) -> Bool {
+        scannedWorktreeID != worktreeID
+    }
+
+    static func scanMarkerAfterStartingRefresh(scannedWorktreeID: String?, refreshingWorktreeID: String) -> String? {
+        scannedWorktreeID == refreshingWorktreeID ? nil : scannedWorktreeID
+    }
+
+    static func acceptsRefreshCompletion(
+        startedWorktreeID: String,
+        activeWorktreeID: String?,
+        isCancelled: Bool
+    ) -> Bool {
+        !isCancelled && activeWorktreeID == startedWorktreeID
+    }
+}
+
 /// Commands, their observed state, and their endpoints for one worktree.
 ///
 /// Scripts are rescanned on appear (the palette does the same — the directory
@@ -13,8 +31,9 @@ struct RunTabView: View {
     @Environment(\.theme) private var theme
     @State private var scripts: [RunScript] = []
     @State private var scriptCatalogError: String?
+    @State private var activeWorktreeID: String?
     /// Keeps the "no scripts yet" copy from flashing before the first scan.
-    @State private var hasScanned = false
+    @State private var scannedWorktreeID: String?
     /// Drives the relative timestamps ("3m ago") without re-scanning anything.
     @State private var now = Date()
     /// Held in `@State` so `onReceive` keeps one stable subscription instead
@@ -24,8 +43,11 @@ struct RunTabView: View {
     var body: some View {
         Group {
             let displayedScripts = activeOrAllScripts
-            if !hasScanned {
-                Color.clear
+            if RunTabLoadingPresentation.showsPlaceholder(
+                scannedWorktreeID: scannedWorktreeID,
+                worktreeID: worktree.id
+            ) {
+                RunTabLoadingView()
             } else if displayedScripts.isEmpty, let scriptCatalogError {
                 errorState(scriptCatalogError)
             } else if displayedScripts.isEmpty {
@@ -55,8 +77,21 @@ struct RunTabView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .task(id: worktree.id) {
-            await refreshScripts()
-            hasScanned = true
+            let startedWorktreeID = worktree.id
+            activeWorktreeID = startedWorktreeID
+            scripts = []
+            scriptCatalogError = nil
+            scannedWorktreeID = RunTabLoadingPresentation.scanMarkerAfterStartingRefresh(
+                scannedWorktreeID: scannedWorktreeID,
+                refreshingWorktreeID: startedWorktreeID
+            )
+            await refreshScripts(startedWorktreeID: startedWorktreeID)
+            guard RunTabLoadingPresentation.acceptsRefreshCompletion(
+                startedWorktreeID: startedWorktreeID,
+                activeWorktreeID: activeWorktreeID,
+                isCancelled: Task.isCancelled
+            ) else { return }
+            scannedWorktreeID = startedWorktreeID
             // Reconnecting to a worktree is the moment to settle runs whose
             // terminal disappeared while nothing was watching them.
             state.reconcileRunRecords(worktreeID: worktree.id)
@@ -64,10 +99,7 @@ struct RunTabView: View {
         }
         .onReceive(ticker) { now = $0 }
         .onChange(of: state.runScriptCatalogGeneration) {
-            Task {
-                await refreshScripts()
-                hasScanned = true
-            }
+            refreshScriptsFromControl()
         }
     }
 
@@ -177,10 +209,16 @@ struct RunTabView: View {
     }
 
     @discardableResult
-    private func refreshScripts() async -> [RunScript]? {
-        let host = RemoteHostRegistry.shared.host(forPath: worktree.path.path)
-        let result = await RunScriptStore.discoverScripts(worktreeRoot: worktree.path, remoteHost: host)
-        guard !Task.isCancelled else { return nil }
+    private func refreshScripts(startedWorktreeID: String? = nil) async -> [RunScript]? {
+        let refreshWorktreeID = startedWorktreeID ?? worktree.id
+        let worktreePath = worktree.path
+        let host = RemoteHostRegistry.shared.host(forPath: worktreePath.path)
+        let result = await RunScriptStore.discoverScripts(worktreeRoot: worktreePath, remoteHost: host)
+        guard RunTabLoadingPresentation.acceptsRefreshCompletion(
+            startedWorktreeID: refreshWorktreeID,
+            activeWorktreeID: activeWorktreeID,
+            isCancelled: Task.isCancelled
+        ) else { return nil }
         switch result {
         case .scripts(let fresh):
             scriptCatalogError = nil
@@ -189,6 +227,19 @@ struct RunTabView: View {
         case .failed(let message):
             scriptCatalogError = message
             return nil
+        }
+    }
+
+    private func refreshScriptsFromControl() {
+        let startedWorktreeID = worktree.id
+        Task {
+            await refreshScripts(startedWorktreeID: startedWorktreeID)
+            guard RunTabLoadingPresentation.acceptsRefreshCompletion(
+                startedWorktreeID: startedWorktreeID,
+                activeWorktreeID: activeWorktreeID,
+                isCancelled: Task.isCancelled
+            ) else { return }
+            scannedWorktreeID = startedWorktreeID
         }
     }
 
@@ -232,12 +283,7 @@ struct RunTabView: View {
                     .lineLimit(2)
             }
             Spacer(minLength: 8)
-            Button("Retry") {
-                Task {
-                    await refreshScripts()
-                    hasScanned = true
-                }
-            }
+            Button("Retry") { refreshScriptsFromControl() }
             .controlSize(.small)
         }
         .padding(10)
@@ -260,12 +306,7 @@ struct RunTabView: View {
                 .font(.system(size: 11))
                 .foregroundColor(theme.color("fg-faint"))
                 .multilineTextAlignment(.center)
-            Button("Retry") {
-                Task {
-                    await refreshScripts()
-                    hasScanned = true
-                }
-            }
+            Button("Retry") { refreshScriptsFromControl() }
             .controlSize(.small)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -282,6 +323,66 @@ struct RunTabView: View {
         .controlSize(.small)
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
+    }
+}
+
+private struct RunTabLoadingView: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            RunLoadingSection(rowWidths: [0.58, 0.72, 0.46])
+            RunLoadingSection(rowWidths: [0.64, 0.50])
+            HStack(spacing: 8) {
+                RunLoadingBar(width: 88, height: 18)
+                RunLoadingBar(width: 96, height: 18)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Loading run scripts")
+    }
+}
+
+private struct RunLoadingSection: View {
+    let rowWidths: [CGFloat]
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                RunLoadingBar(width: 66, height: 9)
+                RunLoadingBar(width: 16, height: 12)
+                Spacer(minLength: 8)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(theme.color("section-head-bg"))
+
+            ForEach(rowWidths.indices, id: \.self) { index in
+                HStack(spacing: 6) {
+                    Circle().fill(theme.color("fg-faint").opacity(0.3)).frame(width: 8, height: 8)
+                    RunLoadingBar(width: 140 * rowWidths[index], height: 8)
+                    Spacer(minLength: 8)
+                    RunLoadingBar(width: 36, height: 8)
+                }
+            }
+        }
+        .padding(.bottom, 10)
+    }
+}
+
+private struct RunLoadingBar: View {
+    let width: CGFloat
+    let height: CGFloat
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        Capsule()
+            .fill(theme.color("fg-faint").opacity(0.3))
+            .frame(width: width, height: height)
     }
 }
 
