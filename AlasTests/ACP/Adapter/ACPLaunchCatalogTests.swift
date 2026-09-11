@@ -12,7 +12,7 @@ struct ACPLaunchCatalogTests {
         }
     }
 
-    @Test("claude, gemini, opencode, cursor-agent, codex, copilot, pi are configured")
+    @Test("built-in ACP agents are configured")
     func catalogCoverage() {
         let ids = Set(ACPLaunchCatalog.specs.map(\.agentID))
         #expect(ids.contains("claude"))
@@ -22,6 +22,16 @@ struct ACPLaunchCatalogTests {
         #expect(ids.contains("codex"))
         #expect(ids.contains("copilot"))
         #expect(ids.contains("pi"))
+        #expect(ids.contains("omp"))
+    }
+
+    @Test("omp launches its native ACP server")
+    func ompUsesNativeACP() throws {
+        let omp = try #require(ACPLaunchCatalog.spec(for: "omp"))
+        #expect(omp.command == "omp")
+        #expect(omp.arguments == ["acp"])
+        #expect(omp.setupCheck == .binaryOnPath(name: "omp"))
+        #expect(omp.mcpInjection == .sessionNew)
     }
 
     @Test("pi is the only external MCP-injection adapter")

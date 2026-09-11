@@ -83,6 +83,17 @@ struct ACPHarnessBridgeTests {
         #expect(harness.activityBySession["s1"]?.agent == .cursor)
     }
 
+    @Test("omp agentId maps to .omp AgentKind")
+    func ompAgentMaps() async {
+        let harness = makeHarness()
+        let bridge = ACPHarnessBridge(harness: harness)
+        let session = ACPSession(id: "s1", agentId: "omp", worktreeId: "wt", title: "t")
+        bridge.observe(session: session)
+        session.transcript.streamingState = .streaming
+        await Task.yield()
+        #expect(harness.activityBySession["s1"]?.agent == .omp)
+    }
+
     @Test("unknown agentId falls back to .claude")
     func unknownAgentFallsBack() async {
         let harness = makeHarness()

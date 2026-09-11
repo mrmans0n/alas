@@ -487,6 +487,35 @@ struct EditorBufferTests {
         #expect(buffer.dirty == true)
     }
 
+    /// An edit typed while the initial async load is still pending is
+    /// captured into `pending.userEdits` and replayed once the load
+    /// completes, but `handleEdit`'s own generation bump is short-circuited
+    /// for it (it returns before reaching that line) and the later replay
+    /// applies through a programmatic path that also skips it. Without a
+    /// dedicated bump at the point the edit is captured, a snapshot of
+    /// `editGeneration` taken before this edit and one taken after would
+    /// read identically — silently defeating any staleness check (e.g. a
+    /// batch worktree action's dirty-buffer recheck) built on the
+    /// assumption that the generation moves whenever content genuinely does.
+    @Test func editBeforeAsyncLoadFinishesBumpsEditGeneration() async throws {
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.txt", "disk\n")
+        let gate = AsyncLoadGate()
+        EditorBuffer.loadGateForTesting = { await gate.wait() }
+        defer { EditorBuffer.loadGateForTesting = nil }
+
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+        let generationBeforeEdit = buffer.editGeneration
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "typed")
+        let generationAfterEdit = buffer.editGeneration
+
+        await gate.open()
+        await buffer.awaitLoadForTesting()
+
+        #expect(generationAfterEdit != generationBeforeEdit)
+        #expect(buffer.storage.string == "typeddisk\n")
+    }
+
     @Test func editBeforeAsyncLoadFinishesKeepsDiskBaselineAndSaveBlocked() async throws {
         let root = tempWorktree()
         _ = try writeFile(root, "a.txt", "disk\n")

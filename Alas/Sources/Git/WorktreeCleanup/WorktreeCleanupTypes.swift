@@ -7,7 +7,14 @@ import Foundation
 /// not conflate them.
 enum WorktreeMergeState: Equatable, Sendable {
     /// The code host reports the branch's review request as merged.
-    case mergedOnForge(identity: String, url: URL)
+    /// `headSHA` is the worktree's own HEAD at the moment this was verified —
+    /// the exact commit whose SHA matched the review request's recorded head.
+    /// A consumer that wants to trust this enough to override git's own
+    /// safety checks (e.g. force-deleting the branch) must re-read the
+    /// branch's current tip immediately before acting and compare it against
+    /// this value: the branch can gain new commits between this scan and
+    /// that later action, and this state does not know about them.
+    case mergedOnForge(identity: String, url: URL, headSHA: String)
     /// `git merge-base --is-ancestor HEAD <base>` succeeded locally.
     case mergedLocally(base: String)
     /// Checked, and the branch is genuinely not merged.
@@ -37,7 +44,11 @@ struct WorktreeCleanupProbe: Equatable, Sendable {
 /// than logic buried in a view.
 enum WorktreeCleanupSignal: Equatable, Hashable, Sendable {
     // Qualifying
-    case mergedOnForge(identity: String, url: URL)
+    /// `headSHA` mirrors `WorktreeMergeState.mergedOnForge`'s — carried here
+    /// so a caller that only has candidates/signals (not the raw probe) can
+    /// still recover the exact SHA that was verified merged, to re-check
+    /// immediately before trusting it for something destructive.
+    case mergedOnForge(identity: String, url: URL, headSHA: String)
     case mergedLocally(base: String)
     case noUncommittedChanges
     case fullyPushed
@@ -85,7 +96,7 @@ enum WorktreeCleanupSignal: Equatable, Hashable, Sendable {
 
     var label: String {
         switch self {
-        case .mergedOnForge(let identity, _):
+        case .mergedOnForge(let identity, _, _):
             return "Merged on the code host (\(identity))"
         case .mergedLocally(let base):
             return "Merged locally into \(base)"

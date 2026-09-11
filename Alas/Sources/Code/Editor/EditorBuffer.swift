@@ -620,6 +620,17 @@ final class EditorBuffer {
         pending.userEdits.append(edit)
         pending.preloadText = storage.string
         loadState = .loading(pending)
+        // `handleEdit` returns immediately after this call without reaching
+        // its own `editGeneration &+= 1` below, and the eventual replay of
+        // `pending.userEdits` once loading finishes applies through
+        // `withLoadEditTrackingSuppressed` (programmatic, so it also skips
+        // that increment). Without bumping it here, a real user edit typed
+        // while the buffer is still loading would leave `editGeneration`
+        // completely unchanged — a snapshot taken before this edit and one
+        // taken after would read identically, defeating any staleness check
+        // (e.g. a batch worktree action's dirty-buffer recheck) that relies
+        // on the generation actually moving whenever content genuinely does.
+        editGeneration &+= 1
         return true
     }
 

@@ -252,6 +252,14 @@ protocol CodeHostProvider: Sendable {
         limit: Int,
         cwd: URL
     ) async throws -> [MergedReviewRequestRef]
+
+    /// The repository `remote` was forked from, if any. A fork's own pull/
+    /// merge requests are almost never opened against itself — the classic
+    /// contribution workflow opens them against the parent, and that is
+    /// where a merge actually lands — so worktree cleanup queries the parent
+    /// for merged review requests instead of the fork when one exists.
+    /// Returns `nil` for a repository that is not a fork.
+    func repositoryParent(remote: CodeHostRemote, cwd: URL) async throws -> CodeHostRemote?
 }
 
 extension CodeHostProvider {
@@ -453,6 +461,15 @@ extension CodeHostProvider {
         cwd: URL
     ) async throws -> [MergedReviewRequestRef] {
         throw CodeHostProviderError.unsupportedProvider(remote.kind)
+    }
+
+    /// Unlike `mergedReviewRequests`, a provider that can't determine fork
+    /// status degrades to "not a fork" rather than throwing: the caller
+    /// falls back to the original remote either way, so failing loudly here
+    /// would gain nothing and would risk failing the whole scan over what is
+    /// only ever used as an enhancement to it.
+    func repositoryParent(remote: CodeHostRemote, cwd: URL) async throws -> CodeHostRemote? {
+        nil
     }
 }
 

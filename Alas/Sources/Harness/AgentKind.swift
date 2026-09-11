@@ -8,6 +8,7 @@ enum AgentKind: String, CaseIterable, Sendable, Codable, Identifiable {
     case gemini
     case opencode
     case pi
+    case omp
     case copilot
 
     var id: String { rawValue }
@@ -20,6 +21,7 @@ enum AgentKind: String, CaseIterable, Sendable, Codable, Identifiable {
         case .gemini: return "Gemini CLI"
         case .opencode: return "opencode"
         case .pi: return "Pi"
+        case .omp: return "OMP"
         case .copilot: return "Copilot"
         }
     }
@@ -32,6 +34,7 @@ enum AgentKind: String, CaseIterable, Sendable, Codable, Identifiable {
         case .gemini:   return "agent-gemini"
         case .opencode: return "agent-opencode"
         case .pi:       return "agent-pi"
+        case .omp:      return "agent-omp"
         case .copilot:  return "agent-copilot"
         }
     }

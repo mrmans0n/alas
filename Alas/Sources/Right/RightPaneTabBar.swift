@@ -1,5 +1,26 @@
 import SwiftUI
 
+enum RightPaneTabBarLayout {
+    case regular
+    case compact
+    case iconOnly
+
+    func showsLabel(for tab: RightPaneTab, activeTab: RightPaneTab) -> Bool {
+        self == .regular || (self == .compact && tab == activeTab)
+    }
+
+    func showsCount(for tab: RightPaneTab, activeTab: RightPaneTab) -> Bool {
+        self == .regular || (self == .compact && tab == activeTab)
+    }
+
+    func accessibilityLabel(_ label: String, count: Int?, for tab: RightPaneTab, activeTab: RightPaneTab) -> String {
+        guard let count, showsCount(for: tab, activeTab: activeTab) else {
+            return label
+        }
+        return "\(label), \(count)"
+    }
+}
+
 struct RightPaneTabBar: View {
     @Binding var activeTab: RightPaneTab
     let changesCount: Int
@@ -18,51 +39,52 @@ struct RightPaneTabBar: View {
     @Environment(\.theme) private var theme
 
     var body: some View {
+        header
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .overlay(Divider().opacity(0.5), alignment: .bottom)
+        .windowDragHandle()
+    }
+
+    private var header: some View {
         HStack(spacing: 8) {
-            // Three segments no longer fit beside the summary and hide button
-            // at the pane's 240pt minimum, so fall back to icon-only rather
-            // than truncating every label to an ellipsis.
             ViewThatFits(in: .horizontal) {
-                segments(compact: false, includeCounts: true)
-                segments(compact: true, includeCounts: true)
-                segments(compact: true, includeCounts: false)
+                segments(layout: .regular)
+                segments(layout: .compact)
+                segments(layout: .iconOnly)
             }
 
             Spacer(minLength: 8)
             trailing
             ToolbarBtn(icon: "sidebar.right", tooltip: "Hide changes pane", action: onHidePane)
         }
-        .padding(.horizontal, 10).padding(.vertical, 6)
-        .overlay(Divider().opacity(0.5), alignment: .bottom)
-        .windowDragHandle()
     }
 
-    private func segments(compact: Bool, includeCounts: Bool) -> some View {
+    private func segments(layout: RightPaneTabBarLayout) -> some View {
         HStack(spacing: 2) {
-            segment(.changes, icon: "diff", label: "Changes", count: includeCounts ? changesCount : nil, compact: compact)
-            segment(.files, icon: "folder", label: "Files", count: nil, compact: compact)
+            segment(.changes, icon: "diff", label: "Changes", count: changesCount, layout: layout)
+            segment(.files, icon: "folder", label: "Files", count: nil, layout: layout)
                 .contextMenu {
                     Toggle("Show ignored or excluded files", isOn: Binding(
                         get: { showIgnored },
                         set: { _ in onToggleShowIgnored() }
                     ))
                 }
-            if showAgentTab {
+            if RightPaneTab.available(agentTabEnabled: showAgentTab, runTabEnabled: showRunTab).contains(.agent) {
                 segment(
                     .agent,
                     icon: "person.crop.circle",
                     label: "Agent",
-                    count: includeCounts && activeAgentCount > 0 ? activeAgentCount : nil,
-                    compact: compact
+                    count: activeAgentCount > 0 ? activeAgentCount : nil,
+                    layout: layout
                 )
             }
-            if showRunTab {
+            if RightPaneTab.available(agentTabEnabled: showAgentTab, runTabEnabled: showRunTab).contains(.run) {
                 segment(
                     .run,
                     icon: "play",
                     label: "Run",
-                    count: includeCounts && activeRunCount > 0 ? activeRunCount : nil,
-                    compact: compact
+                    count: activeRunCount > 0 ? activeRunCount : nil,
+                    layout: layout
                 )
             }
         }
@@ -80,7 +102,7 @@ struct RightPaneTabBar: View {
         icon: String,
         label: String,
         count: Int?,
-        compact: Bool = false
+        layout: RightPaneTabBarLayout
     ) -> some View {
         RightPaneSegmentButton(
             activeTab: $activeTab,
@@ -88,7 +110,7 @@ struct RightPaneTabBar: View {
             icon: icon,
             label: label,
             count: count,
-            compact: compact
+            layout: layout
         )
     }
 
@@ -116,7 +138,7 @@ private struct RightPaneSegmentButton: View {
     let icon: String
     let label: String
     let count: Int?
-    let compact: Bool
+    let layout: RightPaneTabBarLayout
 
     @Environment(\.theme) private var theme
 
@@ -128,12 +150,12 @@ private struct RightPaneSegmentButton: View {
         } label: {
             HStack(spacing: 5) {
                 Icon(name: icon, size: 11, color: isOn ? theme.color("fg") : theme.color("fg-muted"))
-                if !compact {
+                if layout.showsLabel(for: tab, activeTab: activeTab) {
                     Text(label)
                         .font(.system(size: 11.5, weight: isOn ? .semibold : .medium))
                         .foregroundColor(isOn ? theme.color("fg") : theme.color("fg-muted"))
                 }
-                if let count {
+                if let count, layout.showsCount(for: tab, activeTab: activeTab) {
                     Text("\(count)")
                         .font(.system(size: 10, weight: .semibold))
                         .frame(minWidth: 16, minHeight: 14)
@@ -151,8 +173,9 @@ private struct RightPaneSegmentButton: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(layout.accessibilityLabel(label, count: count, for: tab, activeTab: activeTab))
+        .accessibilityAddTraits(isOn ? .isSelected : [])
         .help(label)
-        .accessibilityLabel(label)
     }
 
     @ViewBuilder
