@@ -27,7 +27,7 @@ actor WorktreeCheckpointStore {
     private let limits: Limits
 
     init(root: URL = Paths.checkpointsRoot, fileSystem: any CheckpointFileSystem = LiveCheckpointFileSystem(), limits: Limits = .init()) {
-        self.root = root.standardizedFileURL
+        self.root = root
         self.fileSystem = fileSystem
         self.limits = limits
     }
