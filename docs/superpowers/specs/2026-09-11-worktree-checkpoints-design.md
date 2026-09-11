@@ -175,6 +175,7 @@ V1 excludes these untracked candidates and records a reason for each:
 
 - any component named `.git`, `.build`, `build`, `DerivedData`,
   `node_modules`, `.swiftpm`, `.gradle`, `Pods`, or `Carthage`;
+- an Alas-owned restore directory named `.alas-checkpoint-restore-<UUID>`;
 - basenames `.env`, `.env.*`, `.netrc`, `credentials`, or
   `credentials.json`;
 - filename extensions `key`, `pem`, `p12`, `pfx`, `mobileprovision`, or
@@ -283,12 +284,17 @@ the exact preview fingerprint. It then:
 6. Builds the complete replacement index in an operation directory by copying
    the current index and applying only selected path states through a temporary
    `GIT_INDEX_FILE`.
-7. Materializes every replacement regular file and symlink under the operation
-   directory and verifies its hash, kind, and mode.
+7. Creates an exclusively owned `.alas-checkpoint-restore-<UUID>` directory at
+   the worktree root, materializes every replacement regular file and symlink
+   there, and verifies its hash, kind, and mode. Keeping replacements and
+   backups on the worktree volume makes later renames atomic even when
+   Application Support or the repository Git directory is on another volume.
 8. Writes a journal containing the recovery checkpoint ID, selected paths,
    expected current fingerprint, prepared index checksum, and phase.
 
-No live worktree or index bytes have changed at this point.
+No user path or index byte has changed at this point. The owned restore
+directory is an internal, policy-excluded untracked path. The service removes
+it after completion or successful recovery.
 
 ### Apply
 
