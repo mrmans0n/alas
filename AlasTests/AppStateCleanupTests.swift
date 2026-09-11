@@ -2,6 +2,14 @@ import Testing
 import Foundation
 @testable import Alas
 
+@MainActor
+private final class WorktreeCleanupProbe {
+    weak var state: AppState?
+    var worktreeID = ""
+    var launchedTickets: [WorktreeTrashCleanupTicket] = []
+    var tabsWereEmptyAtLaunch = false
+}
+
 @Suite(.serialized)
 @MainActor
 struct AppStateCleanupTests {
@@ -892,6 +900,93 @@ struct AppStateCleanupTests {
 
         state.projectsManager.setOperationState(id: wt.id, state: .deleting)
         #expect(state.projectsManager.operationState(for: wt.id) == .deleting)
+    }
+
+    @Test func deleteWorktreeCleansAppStateBeforeLaunchingFileCleanup() async throws {
+        let repo = try await makeRepo(name: "delete-staged")
+        let linked = repo.deletingLastPathComponent()
+            .appendingPathComponent("delete-staged-linked-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: linked)
+            try? FileManager.default.removeItem(at: repo)
+        }
+        let probe = WorktreeCleanupProbe()
+        let state = AppState(
+            worktreeCleanupLauncher: { ticket in
+                probe.launchedTickets.append(ticket)
+                probe.tabsWereEmptyAtLaunch = probe.state?.tabs
+                    .tabs(forWorktree: probe.worktreeID)
+                    .isEmpty == true
+            }
+        )
+        probe.state = state
+        let project = try await state.projectsManager.addProject(
+            path: repo,
+            displayName: "delete-staged",
+            color: "#5fb7c4"
+        )
+        let worktree = try await WorktreeService().add(
+            repoPath: repo,
+            base: "main",
+            branch: "feature/staged",
+            destination: linked,
+            projectId: project.id
+        )
+        probe.worktreeID = worktree.id
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        state.tabs.appendTerminal(worktreeId: worktree.id, title: "term", sessionId: "session")
+        state.selectWorktree(id: worktree.id)
+
+        #expect(await state.cliDeleteWorktree(worktree, force: true, keepBranch: true) == .ok)
+        try await waitForOperationState(state.projectsManager, id: worktree.id, equals: nil)
+
+        let ticket = try #require(probe.launchedTickets.first)
+        defer { try? FileManager.default.removeItem(at: ticket.trashRoot) }
+        #expect(probe.launchedTickets.count == 1)
+        #expect(probe.tabsWereEmptyAtLaunch)
+        #expect(FileManager.default.fileExists(atPath: ticket.stagedPath.path))
+        #expect(!state.projectsManager.worktrees(projectId: project.id).contains { $0.id == worktree.id })
+        #expect(state.selectedWorktreeId == Worktree.makeId(path: repo))
+    }
+
+    @Test func cleanupLaunchFailureLeavesWorktreeDeletedForStaleRecovery() async throws {
+        let repo = try await makeRepo(name: "delete-cleanup-launch-failure")
+        let linked = repo.deletingLastPathComponent()
+            .appendingPathComponent("delete-cleanup-launch-failure-linked-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: linked)
+            try? FileManager.default.removeItem(at: repo)
+        }
+        let probe = WorktreeCleanupProbe()
+        let state = AppState(
+            worktreeCleanupLauncher: { ticket in
+                probe.launchedTickets.append(ticket)
+                throw CocoaError(.fileWriteUnknown)
+            }
+        )
+        let project = try await state.projectsManager.addProject(
+            path: repo,
+            displayName: "delete-cleanup-launch-failure",
+            color: "#5fb7c4"
+        )
+        let worktree = try await WorktreeService().add(
+            repoPath: repo,
+            base: "main",
+            branch: "feature/cleanup-launch-failure",
+            destination: linked,
+            projectId: project.id
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+
+        #expect(await state.cliDeleteWorktree(worktree, force: true, keepBranch: true) == .ok)
+        try await waitForOperationState(state.projectsManager, id: worktree.id, equals: nil)
+
+        let ticket = try #require(probe.launchedTickets.first)
+        defer { try? FileManager.default.removeItem(at: ticket.trashRoot) }
+        #expect(probe.launchedTickets.count == 1)
+        #expect(FileManager.default.fileExists(atPath: ticket.stagedPath.path))
+        #expect(!state.projectsManager.worktrees(projectId: project.id).contains { $0.id == worktree.id })
+        #expect(state.projectsManager.operationState(for: worktree.id) == nil)
     }
 
     // MARK: - Dirty-worktree force-delete state

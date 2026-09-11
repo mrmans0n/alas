@@ -19,6 +19,42 @@ const view = globalThis.RemoteChangesView;
 }
 
 {
+  // Removing directory rows or leaving full paths on file rows would make
+  // filenames hard to find again on a narrow Changes tab.
+  const rows = view.fileRows([
+    { path: "README.md" },
+    { path: "Alas/Resources/RemoteWeb/app.js" },
+    { path: "Alas/Resources/RemoteWeb/index.html" },
+    { path: "Alas/Sources/ACP/Session/ACPSession.swift" }
+  ]);
+  assert.deepEqual(rows.map((row) => ({ type: row.type, path: row.path, dir: row.dir, name: row.name })), [
+    { type: "file", path: "README.md", dir: "", name: "README.md" },
+    { type: "directory", path: undefined, dir: "Alas/Resources/RemoteWeb", name: undefined },
+    { type: "file", path: "Alas/Resources/RemoteWeb/app.js", dir: "Alas/Resources/RemoteWeb/", name: "app.js" },
+    { type: "file", path: "Alas/Resources/RemoteWeb/index.html", dir: "Alas/Resources/RemoteWeb/", name: "index.html" },
+    { type: "directory", path: undefined, dir: "Alas/Sources/ACP/Session", name: undefined },
+    { type: "file", path: "Alas/Sources/ACP/Session/ACPSession.swift", dir: "Alas/Sources/ACP/Session/", name: "ACPSession.swift" }
+  ]);
+}
+
+{
+  // Sorting only by full path would split src's direct children around
+  // src/sub, emitting the src heading twice.
+  const rows = view.fileRows([
+    { path: "src/z.swift" },
+    { path: "src/sub/b.swift" },
+    { path: "src/a.swift" }
+  ]);
+  assert.deepEqual(rows.map((row) => row.type === "directory" ? row.dir : row.path), [
+    "src",
+    "src/a.swift",
+    "src/z.swift",
+    "src/sub",
+    "src/sub/b.swift"
+  ]);
+}
+
+{
   const summary = view.formatSummary({
     comparisonRef: "origin/main",
     files: [

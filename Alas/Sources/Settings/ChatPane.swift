@@ -88,7 +88,7 @@ struct ChatPane: View {
 
                 SettingsGroup(title: GroupTitles.composer) {
                     SettingsRow(name: RowLabels.sendOnEnter,
-                                desc: "Turn off to swap — ⏎ steers and ⌥⏎ queues. Steering cancels the running turn and discards any pending queue items.") {
+                                desc: "Turn off to swap — ⏎ steers and ⌥⏎ queues. Steering cancels the running turn while preserving pending queue items.") {
                         AlasToggle(on: Binding(
                             get: { state.config.harness.acpSendOnEnter },
                             set: {

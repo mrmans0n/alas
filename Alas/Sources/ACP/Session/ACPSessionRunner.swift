@@ -72,6 +72,7 @@ final class ACPSessionRunner {
     private var persistenceTail: Task<Void, Never>?
     private var persistenceGeneration = 0
     private var pendingQueueForceSendsAfterPersistence: [UUID] = []
+    private var stopped = false
     private var pendingCompletedOutputBoundaryUpdateCount: Int?
     private var pendingStreamingPersistIndices: Set<Int> = []
     /// Revisions distinguish a new streamed chunk from the payload currently
@@ -110,6 +111,7 @@ final class ACPSessionRunner {
     /// restored snapshot ahead of the steer's replacement prompt. Once
     /// the redirect is in flight, normal drain semantics resume.
     private var steerInProgress: Bool = false
+    private var pendingForceSendQueuedItemID: UUID?
     /// Holds an idle source session at its persisted remote head while
     /// `session/fork` is in flight. New prompts remain queued until the
     /// target adapter has created the branch.
@@ -712,6 +714,7 @@ final class ACPSessionRunner {
     }
 
     func stop() {
+        stopped = true
         flushPendingIncomingUpdates(
             flushQueueWhenBoundaryReady: false,
             treatBufferedUpdatesAsPromptOwned: true
@@ -1350,7 +1353,7 @@ extension ACPSessionRunner {
     /// Primary entry. Resolves the routing then dispatches to one of:
     ///   - sendNow  → records the user prompt, awaits prompt RPC
     ///   - enqueue  → appends to queue + persists
-    ///   - steer    → cancels in-flight + clears queue + sends (Task 8)
+    ///   - steer    → cancels in-flight + preserves queue + sends
     ///   - noOp     → empty composer, ignore
     /// `draft` is the structured composer state for lossless edit-restore;
     /// it's consumed only on the `enqueue` route and ignored on the others
@@ -1545,6 +1548,7 @@ extension ACPSessionRunner {
     /// Chained drain is implicit: sendNow's completion sets state to
     /// `.idle` and calls back here.
     func flushQueueIfIdle() {
+        guard !stopped else { return }
         guard holdsLeaseForWrite() else { return }
         guard !nativeForkBarrierActive,
               !steerInProgress,
@@ -1632,6 +1636,11 @@ extension ACPSessionRunner {
             return
         }
 
+        if steerInProgress {
+            pendingForceSendQueuedItemID = id
+            return
+        }
+
         if nativeForkBarrierActive {
             guard session.forceQueueItem(id: id) else { return }
             persistQueue()
@@ -1659,7 +1668,8 @@ extension ACPSessionRunner {
         steer(
             blocks: item.blocks,
             delegatedSource: item.delegatedSource,
-            recordUserPrompt: !item.transcriptRecorded
+            recordUserPrompt: !item.transcriptRecorded,
+            discardQueue: true
         )
     }
 
@@ -1680,28 +1690,29 @@ extension ACPSessionRunner {
         return true
     }
 
-    /// Cancel the in-flight turn (if any), discard the ENTIRE queue
-    /// (including any `.sending` head whose `sendNow` task is mid-RPC),
-    /// then send the new prompt as a fresh turn. Only the `.pending`
-    /// items are snapshotted for undo — restoring a previously-`.sending`
-    /// item would just re-fire the prompt the user just redirected away
-    /// from. The stale in-flight task gets neutralised because `sendNow`
-    /// guards every completion-side mutation on `queue.first?.id ==
-    /// queuedItemId`; once we've emptied the queue, the orphan task
-    /// resolves to a no-op.
+    /// Cancel the in-flight turn (if any), then send the new prompt as a
+    /// fresh turn without disturbing pending queued prompts. A `.sending`
+    /// queue head is still removed because it is the prompt being cancelled.
+    /// `forceSendQueuedItem` opts into discarding the remaining queue and
+    /// snapshots its pending items for undo.
     func steer(
         blocks: [ACPContentBlock],
         delegatedSource: ACPDelegatedPromptSource? = nil,
         recordUserPrompt: Bool = true,
+        discardQueue: Bool = false,
         draft: ACPComposerDraft? = nil,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
     ) {
         flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
-        let snapshot = session.queue.filter { $0.status == .pending }
-        session.queue.removeAll()
-        if !snapshot.isEmpty {
-            session.steerUndo = .init(id: UUID(), snapshot: snapshot)
-            armSteerUndoExpiry()
+        if discardQueue {
+            let snapshot = session.queue.filter { $0.status == .pending }
+            session.queue.removeAll()
+            if !snapshot.isEmpty {
+                session.steerUndo = .init(id: UUID(), snapshot: snapshot)
+                armSteerUndoExpiry()
+            }
+        } else {
+            session.queue.removeAll { $0.status == .sending }
         }
         persistQueue()
         // Invalidate the in-flight prompt NOW (before awaiting userCancel)
@@ -1726,7 +1737,6 @@ extension ACPSessionRunner {
             guard let self else { return }
             await self.userCancel()
             await MainActor.run {
-                self.steerInProgress = false
                 // If the session was detached while we were awaiting
                 // `userCancel` (tab closed, worktree torn down), the
                 // runner has been removed from `ACPSessionManager` and
@@ -1736,6 +1746,8 @@ extension ACPSessionRunner {
                 // and tell the composer the submit didn't land so its
                 // draft stays put.
                 guard self.session.agentState == .ready else {
+                    self.steerInProgress = false
+                    self.pendingForceSendQueuedItemID = nil
                     onPromptFinished?(false)
                     return
                 }
@@ -1747,6 +1759,11 @@ extension ACPSessionRunner {
                     draft: draft,
                     onPromptFinished: onPromptFinished
                 )
+                self.steerInProgress = false
+                if let queuedID = self.pendingForceSendQueuedItemID {
+                    self.pendingForceSendQueuedItemID = nil
+                    self.forceSendQueuedItem(id: queuedID)
+                }
             }
         }
     }

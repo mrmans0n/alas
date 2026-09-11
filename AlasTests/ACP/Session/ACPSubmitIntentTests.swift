@@ -73,7 +73,7 @@ struct ACPSubmitRouteTests {
         #expect(r == .sendNow)
     }
 
-    @Test(".steer + idle + non-empty queue → steer (clears queue, sends now)")
+    @Test(".steer + idle + non-empty queue → steer (preserves queue, sends now)")
     func steerIdleNonEmpty() {
         let r = ACPSubmitRoute.resolve(intent: .steer, state: .idle, queueEmpty: false, blocksEmpty: false)
         #expect(r == .steer)

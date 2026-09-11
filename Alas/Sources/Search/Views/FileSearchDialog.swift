@@ -59,7 +59,10 @@ struct FileSearchDialog: View {
         } else {
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
+                    // Results are capped at 50 files or 200 content hits. Eager
+                    // layout avoids LazyVStack's placement loop when scrolling
+                    // content groups of different heights on macOS 26.
+                    VStack(alignment: .leading, spacing: 0) {
                         switch model.kind {
                         case .files:
                             ForEach(Array(model.results.fileResults.enumerated()), id: \.element.id) { idx, r in
@@ -71,13 +74,8 @@ struct FileSearchDialog: View {
                                     onTap: { open(r) },
                                     onHover: { model.selectedIndex = idx }
                                 )
-                                // Identity/scroll anchor is the file id, not the
-                                // row position. A stable position id (`.id(idx)`)
-                                // let LazyVStack cache the row and never rebuild
-                                // it when the file at that position changed,
-                                // freezing stale results; a data-based id changes
-                                // with the file and still gives `scrollTo` an
-                                // explicit target for keyboard navigation.
+                                // Keep identity and keyboard scroll targets tied
+                                // to the result, not its position in the list.
                                 .id(r.id)
                             }
                         case .content:

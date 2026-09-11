@@ -184,7 +184,7 @@ private struct ACPMCPStatusPopover: View {
             }
 
             if status.hasBuiltInWarning, let onReconnect {
-                AlasButton(title: "Reconnect session", style: .subtle) {
+                AlasButton(title: "Reconnect session", icon: "arrow.clockwise", style: .normal) {
                     onReconnect()
                 }
                 .padding(.horizontal, 12)

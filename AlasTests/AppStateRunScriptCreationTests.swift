@@ -55,6 +55,7 @@ struct AppStateRunScriptCreationTests {
         try state.createPendingRunScript(name: " Dev Server ", onExit: .close)
 
         #expect(state.pendingRunScriptCreation == nil)
+        #expect(state.runScriptCatalogGeneration == 1)
         let tab = try #require(state.tabs.activeTab(forWorktree: worktree.id))
         guard case .editor(let editor) = tab else {
             Issue.record("expected repo editor tab")
