@@ -6701,6 +6701,8 @@ final class AppState {
         retainActivePrompt: Bool = false
     ) {
         guard retainedACPSessionCleanupTasks[owner.storageKey]?[sessionId] != nil else { return }
+        acpManagers[owner]?.retainSession(id: sessionId)
+        defer { acpManagers[owner]?.releaseSession(id: sessionId) }
         cancelRetainedACPSessionCleanup(owner: owner, sessionId: sessionId)
         guard retainActivePrompt else {
             cleanupACPSession(owner: owner, sessionId: sessionId)
