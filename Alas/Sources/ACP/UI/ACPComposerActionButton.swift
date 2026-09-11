@@ -175,9 +175,9 @@ struct ACPComposerActionButton: View {
                 )
                 .overlay(alignment: .topTrailing) { badgeOverlay }
                 .overlay(alignment: .trailing) {
-                    Divider()
-                        .background(theme.color("line"))
-                        .frame(height: 16)
+                    Rectangle()
+                        .fill(theme.color("line"))
+                        .frame(width: 1, height: 16)
                 }
             }
             .buttonStyle(.plain)
