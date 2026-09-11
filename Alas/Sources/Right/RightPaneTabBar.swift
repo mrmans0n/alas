@@ -11,6 +11,8 @@ struct RightPaneTabBar: View {
     var showRunTab: Bool = false
     /// Number of commands currently starting or running in this worktree.
     var activeRunCount: Int = 0
+    /// Number of non-detached Agent sidebar rows in this worktree.
+    var activeAgentCount: Int = 0
 
     @Environment(\.theme) private var theme
 
@@ -43,6 +45,13 @@ struct RightPaneTabBar: View {
                         set: { _ in onToggleShowIgnored() }
                     ))
                 }
+            segment(
+                .agent,
+                icon: "person.crop.circle",
+                label: "Agent",
+                count: activeAgentCount > 0 ? activeAgentCount : nil,
+                compact: compact
+            )
             if RightPaneTab.available(runTabEnabled: showRunTab).contains(.run) {
                 segment(
                     .run,
@@ -124,7 +133,7 @@ struct RightPaneTabBar: View {
                 .font(.system(size: 11, design: .monospaced))
                 .padding(.trailing, 4)
             }
-        case .files, .run:
+        case .files, .agent, .run:
             EmptyView()
         }
     }

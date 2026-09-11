@@ -114,6 +114,8 @@ struct RightPaneView: View {
                                 onClearReveal: { rps.clearReveal() },
                                 worktreeRoot: rps.worktree.path
                             )
+                        case .agent:
+                            EmptyView()
                         case .run:
                             RunTabView(state: state, worktree: worktree)
                         }
