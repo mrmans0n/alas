@@ -107,6 +107,7 @@ final class RightPaneState: GGSplitCommitServicing {
     var pendingStashChanges: Bool = false
     var pendingStashDrop: PendingStashDrop? = nil
     private(set) var stashOperationInFlight: Bool = false
+    private(set) var discardOperationInFlight: Bool = false
 
     // MARK: Checkpoints
 
@@ -129,7 +130,8 @@ final class RightPaneState: GGSplitCommitServicing {
 
     var checkpointMutationsDisabled: Bool { checkpointOperationInFlight != nil }
     var hasOtherGitMutationInFlight: Bool {
-        mergeOp.current != nil || stageMutationWorker != nil || stashOperationInFlight || pullInFlight || ggActionState.inFlightAction != nil
+        mergeOp.current != nil || stageMutationWorker != nil || stashOperationInFlight || discardOperationInFlight
+            || pullInFlight || ggActionState.inFlightAction != nil
     }
     private(set) var hasLoadedSnapshot: Bool = false
     private(set) var latestSnapshotRefreshSucceeded: Bool = false
@@ -764,6 +766,7 @@ final class RightPaneState: GGSplitCommitServicing {
             await refresh()
         } catch {
             lastCheckpointError = error.localizedDescription
+            await refresh()
         }
     }
 
@@ -803,11 +806,24 @@ final class RightPaneState: GGSplitCommitServicing {
         lastCheckpointError = nil
         defer { checkpointOperationInFlight = nil }
         do {
-            checkpointRestorePreview = try await checkpointService.restorePreview(
+            // The service resolves current-only paths as well as checkpoint paths.
+            // Probe first, then pass the selected concrete group paths into the
+            // fresh coordination snapshot used for the preview that is shown.
+            let resolved = try await checkpointService.restorePreview(
                 target: target,
                 id: id,
                 coordination: checkpointCoordination(selectedPaths: []),
                 selectedGroupIDs: selectedGroupIDs
+            )
+            let selected = selectedGroupIDs ?? resolved.selectedGroupIDs
+            let selectedPaths = Set(resolved.groups
+                .filter { selected.contains($0.id) }
+                .flatMap(\.memberPaths))
+            checkpointRestorePreview = try await checkpointService.restorePreview(
+                target: target,
+                id: id,
+                coordination: checkpointCoordination(selectedPaths: selectedPaths),
+                selectedGroupIDs: selected
             )
         } catch {
             lastCheckpointError = error.localizedDescription
@@ -822,19 +838,22 @@ final class RightPaneState: GGSplitCommitServicing {
         guard checkpointOperationInFlight == nil else { return }
         checkpointOperationInFlight = .restore
         lastCheckpointError = nil
+        let selectedPaths = Set(preview.groups.filter { selectedGroupIDs.contains($0.id) }.flatMap(\.memberPaths))
+        // Coordinate before clearing any local mutation state. In particular,
+        // an active stash or discard must remain visible to the service.
+        let coordination = checkpointCoordination(selectedPaths: selectedPaths)
         watcher.stop()
         markSnapshotUnknown()
         defer {
             watcher.start()
             checkpointOperationInFlight = nil
         }
-        let selectedPaths = Set(preview.groups.filter { selectedGroupIDs.contains($0.id) }.flatMap(\.memberPaths))
         do {
             _ = try await checkpointService.restore(
                 target: target,
                 preview: preview,
                 selectedGroupIDs: selectedGroupIDs,
-                coordination: checkpointCoordination(selectedPaths: selectedPaths)
+                coordination: coordination
             )
             checkpointRestorePreview = nil
             await refresh()
@@ -868,6 +887,7 @@ final class RightPaneState: GGSplitCommitServicing {
             await refresh()
         } catch {
             lastCheckpointError = error.localizedDescription
+            await refresh()
         }
     }
 
@@ -879,17 +899,23 @@ final class RightPaneState: GGSplitCommitServicing {
         guard checkpointOperationInFlight == nil else { return }
         checkpointOperationInFlight = .recovery
         lastCheckpointError = nil
-        watcher.stop()
-        markSnapshotUnknown()
-        defer {
-            watcher.start()
-            checkpointOperationInFlight = nil
-        }
+        defer { checkpointOperationInFlight = nil }
         do {
+            let journals = try await checkpointService.nonterminalJournals(target: target)
+            guard let journal = journals.first(where: { $0.id == operationID }) else {
+                lastCheckpointError = "The interrupted checkpoint restore is no longer available."
+                return
+            }
+            let coordination = checkpointCoordination(selectedPaths: Set(journal.selectedPaths))
+            watcher.stop()
+            markSnapshotUnknown()
+            defer {
+                watcher.start()
+            }
             _ = try await checkpointService.recoverInterruptedRestore(
                 target: target,
                 operationID: operationID,
-                coordination: checkpointCoordination(selectedPaths: [])
+                coordination: coordination
             )
             await refresh()
         } catch {
@@ -1830,6 +1856,7 @@ final class RightPaneState: GGSplitCommitServicing {
         guard let pending = pendingGGReorder,
               model.hasChanges
         else { throw GGMutationError.staleConfirmation }
+        guard !checkpointMutationsDisabled else { throw GGMutationError.operationInFlight }
         guard mergeOp.current == nil else { throw GGMutationError.blockingGitOperation }
         try await ggMutationCoordinator.apply(
             .reorder(order: model.orderedIDs),
@@ -1858,6 +1885,7 @@ final class RightPaneState: GGSplitCommitServicing {
         guard let pending = pendingGGRestack, pending.hasWork else {
             throw GGMutationError.staleConfirmation
         }
+        guard !checkpointMutationsDisabled else { throw GGMutationError.operationInFlight }
         guard mergeOp.current == nil else { throw GGMutationError.blockingGitOperation }
         // The stack identity only carries the base name + head SHA, so a base
         // ref that advanced since the preview was built would still match.
@@ -1868,6 +1896,7 @@ final class RightPaneState: GGSplitCommitServicing {
             pendingGGRestack = GGRestackPresentation(prepared: revalidated)
             throw GGMutationError.staleConfirmation
         }
+        guard !checkpointMutationsDisabled else { throw GGMutationError.operationInFlight }
         try await ggMutationCoordinator.apply(.restack, confirmedAgainst: revalidated.snapshot)
         pendingGGRestack = nil
     }
@@ -1966,6 +1995,7 @@ final class RightPaneState: GGSplitCommitServicing {
         planToken: String,
         confirmedAgainst identity: GGStackIdentity
     ) async throws {
+        guard !checkpointMutationsDisabled else { throw GGMutationError.operationInFlight }
         try await ggMutationCoordinator.apply(
             .applySplit(planURL: planURL, target: target, planToken: planToken),
             confirmedAgainst: identity
@@ -2001,6 +2031,7 @@ final class RightPaneState: GGSplitCommitServicing {
     }
 
     func performGGDrop() {
+        guard !checkpointMutationsDisabled else { return }
         guard let prepared = pendingGGDropPrepared else { return }
         pendingGGDrop = nil
         pendingGGDropPrepared = nil
@@ -2066,6 +2097,7 @@ final class RightPaneState: GGSplitCommitServicing {
         else {
             throw GGMutationError.staleConfirmation
         }
+        guard !checkpointMutationsDisabled else { throw GGMutationError.operationInFlight }
         let request = GGMutationRequest.unstack(
             target: model.targetID,
             name: name,
@@ -2087,6 +2119,7 @@ final class RightPaneState: GGSplitCommitServicing {
         }
 
         pendingGGUnstackPrepared = freshPrepared
+        guard !checkpointMutationsDisabled else { throw GGMutationError.operationInFlight }
         try await ggMutationCoordinator.apply(freshPrepared)
         pendingGGUnstack = nil
         pendingGGUnstackPrepared = nil
@@ -2224,6 +2257,7 @@ final class RightPaneState: GGSplitCommitServicing {
 
     @MainActor
     func performGGLand(appState: AppState) {
+        guard !checkpointMutationsDisabled else { return }
         guard pendingGGLand != nil, let prepared = pendingGGLandPrepared else { return }
         pendingGGLand = nil
         pendingGGLandPrepared = nil
@@ -2339,6 +2373,13 @@ final class RightPaneState: GGSplitCommitServicing {
     }
 
     private func startGGLanding(_ prepared: GGPreparedMutation) {
+        guard !checkpointMutationsDisabled else {
+            ggLandingStore.fail(
+                projectId: worktree.projectId,
+                message: GGErrorPresentation.message(for: GGMutationError.operationInFlight)
+            )
+            return
+        }
         guard let operation = ggMutationCoordinator.startApplying(prepared) else {
             ggLandingStore.fail(
                 projectId: worktree.projectId,
@@ -2424,6 +2465,7 @@ final class RightPaneState: GGSplitCommitServicing {
         target: GGStackTargetIdentity? = nil,
         markExecutionStarted: @escaping @MainActor () -> Void = {}
     ) async throws {
+        guard !checkpointMutationsDisabled else { throw GGMutationError.operationInFlight }
         guard let operation = ggMutationCoordinator.startApplying(
             .sync,
             confirmedAgainst: nil,
@@ -2482,7 +2524,6 @@ final class RightPaneState: GGSplitCommitServicing {
         loadingStashRefs = []
         pendingStashChanges = false
         pendingStashDrop = nil
-        stashOperationInFlight = false
         indexFingerprint = ""
         fileTree = []
         commits = []
@@ -3375,6 +3416,8 @@ final class RightPaneState: GGSplitCommitServicing {
     @MainActor
     private func runDiscard(_ pending: PendingDiscard) async {
         guard !checkpointMutationsDisabled else { return }
+        discardOperationInFlight = true
+        defer { discardOperationInFlight = false }
         let paths = pending.paths
         sidebarError = nil
         do {

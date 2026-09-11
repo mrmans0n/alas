@@ -8,8 +8,13 @@ private actor RecordingCheckpointService: WorktreeCheckpointServicing {
     private let target: CheckpointWorktreeTarget
     private let summary: WorktreeCheckpointSummary
     private let manifestValue: WorktreeCheckpointManifest
+    private let restoreGroupID = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
     private var created = false
     private var callCount = 0
+    private var journals: [CheckpointRestoreJournal] = []
+    private var previewCoordinations: [CheckpointCoordinationSnapshot] = []
+    private var restoreCoordinations: [CheckpointCoordinationSnapshot] = []
+    private var recoveryCoordinations: [CheckpointCoordinationSnapshot] = []
 
     init(target: CheckpointWorktreeTarget) throws {
         self.target = target
@@ -47,7 +52,7 @@ private actor RecordingCheckpointService: WorktreeCheckpointServicing {
 
     func nonterminalJournals(target: CheckpointWorktreeTarget) async throws -> [CheckpointRestoreJournal] {
         callCount += 1
-        return []
+        return journals
     }
 
     func createManual(target: CheckpointWorktreeTarget, label: String) async throws -> WorktreeCheckpointSummary {
@@ -71,7 +76,24 @@ private actor RecordingCheckpointService: WorktreeCheckpointServicing {
     func restorePreview(target: CheckpointWorktreeTarget, id: CheckpointID, coordination: CheckpointCoordinationSnapshot,
                         selectedGroupIDs: Set<UUID>?) async throws -> CheckpointRestorePreview {
         callCount += 1
-        throw RecordingCheckpointServiceError.unsupported
+        previewCoordinations.append(coordination)
+        let selected = selectedGroupIDs ?? [restoreGroupID]
+        return .init(
+            id: UUID(),
+            checkpointID: id,
+            checkpointLabel: summary.label,
+            currentFingerprint: "current",
+            groups: [.init(
+                id: restoreGroupID,
+                primaryPath: "selected.swift",
+                memberPaths: ["related.swift", "selected.swift"],
+                renameSource: "related.swift",
+                effects: []
+            )],
+            blocker: coordination.dirtyEditorPaths.isEmpty ? nil : .dirtyEditorBuffer,
+            scopeDescription: coordination.scopeDescription,
+            selectedGroupIDs: selected
+        )
     }
 
     func diffContent(target: CheckpointWorktreeTarget, id: CheckpointID, path: String) async -> CheckpointDiffContent {
@@ -82,16 +104,22 @@ private actor RecordingCheckpointService: WorktreeCheckpointServicing {
     func restore(target: CheckpointWorktreeTarget, preview: CheckpointRestorePreview, selectedGroupIDs: Set<UUID>,
                  coordination: CheckpointCoordinationSnapshot) async throws -> CheckpointRestoreResult {
         callCount += 1
-        throw RecordingCheckpointServiceError.unsupported
+        restoreCoordinations.append(coordination)
+        return .init(recoveryCheckpointID: summary.id, restoredPaths: [])
     }
 
     func recoverInterruptedRestore(target: CheckpointWorktreeTarget, operationID: UUID,
                                    coordination: CheckpointCoordinationSnapshot) async throws -> CheckpointRestoreResult {
         callCount += 1
-        throw RecordingCheckpointServiceError.unsupported
+        recoveryCoordinations.append(coordination)
+        return .init(recoveryCheckpointID: summary.id, restoredPaths: [])
     }
 
     func calls() -> Int { callCount }
+    func installJournal(_ journal: CheckpointRestoreJournal) { journals = [journal] }
+    func previewCoordinationHistory() -> [CheckpointCoordinationSnapshot] { previewCoordinations }
+    func restoreCoordinationHistory() -> [CheckpointCoordinationSnapshot] { restoreCoordinations }
+    func recoveryCoordinationHistory() -> [CheckpointCoordinationSnapshot] { recoveryCoordinations }
 }
 
 @MainActor
@@ -146,5 +174,77 @@ struct RightPaneCheckpointStateTests {
         #expect(state.checkpointSummaries.isEmpty)
         let calls = await service.calls()
         #expect(calls == 0)
+    }
+
+    @Test func previewRestoreAndRecoveryCoordinateUsingConcreteAffectedPaths() async throws {
+        let repository = try await CheckpointTestRepository.make()
+        defer { repository.remove() }
+        let service = try RecordingCheckpointService(target: repository.target)
+        let state = makeState(repository: repository, service: service)
+        var coordinatedPaths: [Set<String>] = []
+        state.checkpointCoordinationProvider = { paths in
+            coordinatedPaths.append(paths)
+            return .init(
+                dirtyEditorPaths: paths,
+                activeTerminalCount: 0,
+                activeACPCount: 0,
+                otherGitMutationActive: false,
+                scopeDescription: "This repository only"
+            )
+        }
+
+        let checkpointID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+        await state.previewCheckpointRestore(id: checkpointID)
+        let preview = try #require(state.checkpointRestorePreview)
+        #expect(coordinatedPaths.last == Set(["related.swift", "selected.swift"]))
+        #expect((await service.previewCoordinationHistory()).last?.dirtyEditorPaths == Set(["related.swift", "selected.swift"]))
+
+        await state.restoreCheckpoint(preview: preview, selectedGroupIDs: preview.selectedGroupIDs)
+        #expect((await service.restoreCoordinationHistory()).last?.dirtyEditorPaths == Set(["related.swift", "selected.swift"]))
+
+        let operationID = UUID(uuidString: "33333333-3333-3333-3333-333333333333")!
+        await service.installJournal(.init(
+            id: operationID,
+            lineageID: repository.target.lineageID,
+            checkpointID: checkpointID,
+            recoveryCheckpointID: checkpointID,
+            phase: .applyingFiles,
+            stagingRoot: "staging",
+            selectedPaths: ["journal-a.swift", "journal-b.swift"],
+            expectedFingerprint: "fingerprint",
+            expectedIndexChecksum: "checksum"
+        ))
+        await state.recoverCheckpointRestore(operationID: operationID)
+        #expect((await service.recoveryCoordinationHistory()).last?.dirtyEditorPaths == Set(["journal-a.swift", "journal-b.swift"]))
+    }
+
+    @Test func failedCheckpointDeleteRefreshesTheChangesSnapshot() async throws {
+        let repository = try await CheckpointTestRepository.make()
+        defer { repository.remove() }
+        let service = try RecordingCheckpointService(target: repository.target)
+        let state = makeState(repository: repository, service: service)
+        await state.refresh()
+        #expect(state.hasLoadedSnapshot)
+
+        await state.deleteCheckpoint(id: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!)
+
+        #expect(state.hasLoadedSnapshot)
+        #expect(state.lastCheckpointError != nil)
+    }
+
+    private func makeState(repository: CheckpointTestRepository, service: RecordingCheckpointService) -> RightPaneState {
+        let worktree = Worktree(
+            id: repository.target.worktreeID,
+            projectId: repository.target.projectID,
+            name: repository.target.repositoryName,
+            branch: repository.target.branch,
+            path: repository.root,
+            status: .clean,
+            lastActivity: .now,
+            lineageID: repository.target.lineageID
+        )
+        let state = RightPaneState(worktree: worktree, baseBranch: "main", checkpointService: service)
+        state.checkpointTargetProvider = { repository.target }
+        return state
     }
 }
