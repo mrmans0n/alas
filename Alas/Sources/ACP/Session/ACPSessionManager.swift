@@ -4340,7 +4340,9 @@ extension ACPSessionManager {
         Task { @MainActor in
             let persisted = await task.value == true
             if !persisted, let scheduledId {
-                _ = session.removeFromQueue(id: scheduledId)
+                if session.removeFromQueue(id: scheduledId) {
+                    persistQueue(for: session)
+                }
             }
             onPersisted?(persisted)
         }

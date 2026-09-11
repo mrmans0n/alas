@@ -65,6 +65,42 @@ struct ACPSessionRunnerQueueTests {
         #expect(try store.loadQueue(sessionId: "s") == session.queue)
     }
 
+    @Test("failed scheduled persist rollback wins over later snapshots")
+    func failedScheduledPersistRollbackWinsOverLaterSnapshots() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-scheduled-rollback-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(
+            id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let mock = ACPMockClient()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.agentState = .ready
+        var fenceCalls = 0
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            ownerInstanceId: "ME",
+            canWrite: { true },
+            leaseFenceProvider: {
+                fenceCalls += 1
+                return fenceCalls == 1
+                    ? ACPSessionLeaseFence(sessionId: "s", ownerInstance: "ME", token: "stale")
+                    : nil
+            })
+
+        runner.send(blocks: [.text("failed")], intent: .schedule(Date().addingTimeInterval(60)))
+        runner.send(blocks: [.text("kept")], intent: .schedule(Date().addingTimeInterval(120)))
+        await runner.flushPersistence()
+
+        #expect(session.queue.map(\.blocks) == [[.text("kept")]])
+        #expect(try store.loadQueue(sessionId: "s").map(\.blocks) == [[.text("kept")]])
+    }
+
     @Test("force send preserves schedules while disconnected")
     func forceSendPreservesScheduleWhileDisconnected() async throws {
         let (runner, mock, session, _) = try mkRunner()

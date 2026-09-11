@@ -1370,7 +1370,9 @@ extension ACPSessionRunner {
                 if persisted {
                     self?.flushQueueIfIdle()
                 } else {
-                    _ = self?.session.removeFromQueue(id: queuedId)
+                    if self?.session.removeFromQueue(id: queuedId) == true {
+                        self?.persistQueue()
+                    }
                 }
                 onPromptFinished?(persisted)
             })
@@ -1439,7 +1441,6 @@ extension ACPSessionRunner {
                     items: items,
                     fence: fence
                 )
-                return true
             }, completion: { persisted in
                 if persisted == true {
                     acknowledgement?()
