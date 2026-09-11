@@ -100,6 +100,16 @@ enum ACPLaunchCatalog {
             supportsModelSelection: false,
             supportsModeSelection: false,
             mcpInjection: .external(hint: "Pi ignores ACP MCP config. Alas tools work via the alas CLI; other MCP servers need the pi-mcp-adapter extension.")),
+
+        // OMP ships a native ACP server.
+        ACPLaunchSpec(
+            agentID: "omp",
+            command: "omp",
+            arguments: ["acp"],
+            extraEnv: [:],
+            setupCheck: .binaryOnPath(name: "omp"),
+            supportsModelSelection: true,
+            supportsModeSelection: true),
     ]
 
     static func spec(for agentID: String) -> ACPLaunchSpec? {

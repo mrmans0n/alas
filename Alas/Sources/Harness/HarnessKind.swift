@@ -7,6 +7,7 @@ enum HarnessKind: String, Codable, CaseIterable, Identifiable, Sendable {
     case gemini     = "gemini"
     case opencode   = "opencode"
     case pi         = "pi"
+    case omp        = "omp"
     case copilot    = "copilot"
 
     var id: String { rawValue }
@@ -19,6 +20,7 @@ enum HarnessKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .gemini:     return "Gemini CLI"
         case .opencode:   return "opencode"
         case .pi:         return "Pi"
+        case .omp:        return "OMP"
         case .copilot:    return "Copilot"
         }
     }
@@ -31,6 +33,7 @@ enum HarnessKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .gemini:     return ["gemini"]
         case .opencode:   return ["opencode"]
         case .pi:         return ["pi"]
+        case .omp:        return ["omp"]
         case .copilot:    return ["copilot"]
         }
     }
@@ -46,6 +49,7 @@ enum HarnessKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .gemini:     return .gemini
         case .opencode:   return .opencode
         case .pi:         return .pi
+        case .omp:        return .omp
         case .copilot:    return .copilot
         }
     }
@@ -60,6 +64,7 @@ extension AgentKind {
         case .gemini:   return .gemini
         case .opencode: return .opencode
         case .pi:       return .pi
+        case .omp:      return .omp
         case .copilot:  return .copilot
         }
     }

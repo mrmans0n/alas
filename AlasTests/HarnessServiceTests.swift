@@ -266,6 +266,7 @@ struct HarnessServiceTests {
         #expect(AgentKind.gemini.asHarnessKind == .gemini)
         #expect(AgentKind.opencode.asHarnessKind == .opencode)
         #expect(AgentKind.pi.asHarnessKind == .pi)
+        #expect(AgentKind.omp.asHarnessKind == .omp)
         #expect(AgentKind.copilot.asHarnessKind == .copilot)
     }
 
@@ -276,6 +277,7 @@ struct HarnessServiceTests {
         #expect(HarnessKind.gemini.asAgentKind == .gemini)
         #expect(HarnessKind.opencode.asAgentKind == .opencode)
         #expect(HarnessKind.pi.asAgentKind == .pi)
+        #expect(HarnessKind.omp.asAgentKind == .omp)
         #expect(HarnessKind.copilot.asAgentKind == .copilot)
     }
 

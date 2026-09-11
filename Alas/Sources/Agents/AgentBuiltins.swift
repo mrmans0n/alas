@@ -66,6 +66,19 @@ enum AgentBuiltins {
             isEnabled: true,
             builtinLogoAssetName: "agent-pi"
         ),
+        // Verified against `omp --help` v18.1.17 (2026-09-11).
+        AgentDefinition(
+            id: "omp",
+            displayName: "OMP",
+            binary: "omp",
+            binaryOverride: nil,
+            promptModeArgs: ["-p"],
+            bypassPermissionsFlag: "--auto-approve",
+            extraTerminalArgs: nil,
+            isBuiltin: true,
+            isEnabled: true,
+            builtinLogoAssetName: "agent-omp"
+        ),
         // Verified against `opencode run --help` v1.15.1 (2026-05-16). The
         // `run` subcommand is the non-interactive entry point. There is
         // NO top-level "skip permissions" flag — `--dangerously-skip-permissions`
