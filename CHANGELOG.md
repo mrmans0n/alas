@@ -6,6 +6,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-09-11
+
+### ✨ Features
+
+- Add an Agent tab with worktree-scoped session status, history, context usage, plans, and controls (#1176).
+- Add OMP as a native terminal and ACP provider (#1177).
+- Use compact right-pane tab labels when space is limited (#1175).
+
+### 🐛 Fixes
+
+- Improve merged-worktree cleanup for forks, GitLab pagination, forge-verified branch deletion, and buffers edited during cleanup (#1174).
+
+### 🏗️ Internal
+
+- Make run-script failure notifications clearer and easier to dismiss (#1178).
+
 ## [0.16.0] - 2026-09-11
 
 ### ✨ Features
