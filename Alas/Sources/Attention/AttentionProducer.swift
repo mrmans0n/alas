@@ -92,7 +92,7 @@ enum AttentionProducer {
         display: AttentionWorktreeDisplaySnapshot
     ) -> [AttentionObservation] {
         guard let request = snapshot.reviewRequest else { return [] }
-        let prefix = "review:\(request.provider.rawValue):\(request.number)"
+        let prefix = "review:\(owner.storageKey):\(request.remote.webURL.absoluteString):\(request.number)"
         let head = request.headSHA ?? snapshot.local.headSHA
         let target = AttentionJumpTarget.reviewRequest(number: request.number)
         let checkKey = AttentionSourceKey(rawValue: "\(prefix):checks")
@@ -160,7 +160,7 @@ enum AttentionProducer {
         owner: AttentionWorktreeIdentity,
         display: AttentionWorktreeDisplaySnapshot
     ) -> [AttentionObservation] {
-        let sourceKey = AttentionSourceKey(rawValue: "host:\(host):disconnected")
+        let sourceKey = AttentionSourceKey(rawValue: "host:\(owner.storageKey):\(host):disconnected")
         guard isDisconnected else { return [.inactive(sourceKey: sourceKey)] }
         return [.active(signal(
             sourceKey: sourceKey, fingerprint: host, owner: owner,

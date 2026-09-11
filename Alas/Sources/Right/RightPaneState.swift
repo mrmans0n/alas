@@ -18,6 +18,12 @@ enum RightPaneTab: String {
     }
 }
 
+struct RightPaneAttentionSnapshot: Equatable {
+    let mergeOperation: MergeOperation?
+    let conflictedPaths: [String]
+    let review: ReviewLoopSnapshot?
+}
+
 enum GGStackLoadState: Equatable {
     case inactive
     case loading
@@ -66,6 +72,16 @@ final class RightPaneState: GGSplitCommitServicing {
     let reviewLoop: ReviewLoopState
     @ObservationIgnored
     var reviewSnapshotDidChange: ((ReviewLoopSnapshot) -> Void)?
+    @ObservationIgnored
+    var attentionSnapshotDidChange: ((RightPaneAttentionSnapshot) -> Void)?
+
+    var attentionSnapshot: RightPaneAttentionSnapshot {
+        RightPaneAttentionSnapshot(
+            mergeOperation: mergeOp.current,
+            conflictedPaths: changes.filter { $0.conflict != nil }.map(\.path).sorted(),
+            review: reviewLoop.snapshot
+        )
+    }
     var changes: [ChangedFile] = []
     var stashes: [GitStash] = []
     var stashesExpanded: Bool = false
@@ -1015,6 +1031,8 @@ final class RightPaneState: GGSplitCommitServicing {
             if previousReviewRequestFingerprint != currentReviewRequestFingerprint {
                 changesGeneration += 1
             }
+            guard snapshotGeneration == snapshotInvalidationGeneration else { return false }
+            attentionSnapshotDidChange?(attentionSnapshot)
             return true
         } catch {
             reviewLoop.failLocalRefresh(reviewLoopInspection, error: error)

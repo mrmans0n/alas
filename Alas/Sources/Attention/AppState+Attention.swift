@@ -38,6 +38,13 @@ extension AppState {
             ).compactMap(\.activeSignal)
         }
         for entry in attentionWorktrees {
+            let owner = AttentionWorktreeIdentity.make(worktree: entry.worktree, project: entry.project)
+            if let pane = rightPaneStore.activeState(worktreeId: entry.worktree.id), pane.hasLoadedSnapshot {
+                signals += rightPaneAttentionObservations(snapshot: pane.attentionSnapshot, owner: owner, display: entry.resolved.display).compactMap(\.activeSignal)
+            }
+            if let host = entry.project.host {
+                signals += AttentionProducer.host(host: host, isDisconnected: RemoteHostStatusStore.shared.isOffline(host), owner: owner, display: entry.resolved.display).compactMap(\.activeSignal)
+            }
             for failure in runScriptFailureQueue.failures(for: entry.worktree.id) {
                 signals += AttentionProducer.script(
                     failure: failure,
@@ -47,6 +54,54 @@ extension AppState {
             }
         }
         return signals
+    }
+
+    func observeRightPaneAttention(worktreeID: String, snapshot: RightPaneAttentionSnapshot, at date: Date = Date()) {
+        guard let entry = attentionWorktrees.first(where: { $0.worktree.id == worktreeID }),
+              let context = attentionContext(for: entry.worktree) else { return }
+        let observations = rightPaneAttentionObservations(snapshot: snapshot, owner: context.owner, display: context.display)
+        let activeKeys = Set(observations.compactMap(\.activeSignal).map(\.sourceKey))
+        // A branch switch or detached review request ends the previous request's live occurrence.
+        for event in attentionStore.events where event.owner == context.owner && [.failedChecks, .actionableFeedback, .reviewSyncBlocked].contains(event.kind) {
+            if !activeKeys.contains(event.sourceKey) {
+                observeAttention(.inactive(sourceKey: event.sourceKey), at: date)
+            }
+        }
+        reconcileAttention(liveSignals: observations.compactMap(\.activeSignal), at: date)
+        for observation in observations where observation.activeSignal == nil { observeAttention(observation, at: date) }
+    }
+
+    func observeHostAttention(host: String, isDisconnected: Bool, at date: Date = Date()) {
+        for entry in attentionWorktrees where entry.project.host == host {
+            for observation in AttentionProducer.host(host: host, isDisconnected: isDisconnected, owner: .make(worktree: entry.worktree, project: entry.project), display: entry.resolved.display) {
+                observeAttention(observation, at: date)
+            }
+        }
+    }
+
+    func observeReviewReplyAttention(worktree: Worktree, comment: ReviewDraftComment, reply: ReviewCommentReply) {
+        guard let context = attentionContext(for: worktree) else { return }
+        for observation in AttentionProducer.reviewReply(comment: comment, owner: context.owner, display: context.display) {
+            if let signal = observation.activeSignal,
+               let latestAcknowledgment = attentionStore.events
+                   .filter({ $0.sourceKey == signal.sourceKey })
+                   .compactMap({ attentionStore.acknowledgments[$0.id]?.acknowledgedAt }).max(),
+               reply.createdAt <= latestAcknowledgment {
+                continue
+            }
+            observeAttention(observation, at: reply.createdAt)
+        }
+    }
+
+    private func rightPaneAttentionObservations(snapshot: RightPaneAttentionSnapshot, owner: AttentionWorktreeIdentity, display: AttentionWorktreeDisplaySnapshot) -> [AttentionObservation] {
+        let conflicts = snapshot.conflictedPaths.map {
+            ChangedFile(path: $0, status: "U", stage: .unstaged, add: 0, del: 0, renameFrom: nil, conflict: .bothModified)
+        }
+        var observations = AttentionProducer.git(operation: snapshot.mergeOperation, changes: conflicts, owner: owner, display: display)
+        if let review = snapshot.review {
+            observations += AttentionProducer.review(snapshot: review, owner: owner, display: display)
+        }
+        return observations
     }
 
     func openAttentionInbox() {

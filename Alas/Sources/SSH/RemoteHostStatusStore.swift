@@ -10,18 +10,26 @@ final class RemoteHostStatusStore: ObservableObject {
 
     @Published private(set) var offlineHosts: Set<String> = []
     private var consecutiveFailures: [String: Int] = [:]
+    var onStatusTransition: ((String, Bool, Date) -> Void)?
+    private let now: () -> Date
+
+    init(now: @escaping () -> Date = Date.init) {
+        self.now = now
+    }
 
     func reportConnectionFailure(host: String) {
         let count = (consecutiveFailures[host] ?? 0) + 1
         consecutiveFailures[host] = count
-        if count >= 2 {
-            offlineHosts.insert(host)
+        if count >= 2, offlineHosts.insert(host).inserted {
+            onStatusTransition?(host, true, now())
         }
     }
 
     func reportSuccess(host: String) {
         consecutiveFailures[host] = nil
-        offlineHosts.remove(host)
+        if offlineHosts.remove(host) != nil {
+            onStatusTransition?(host, false, now())
+        }
     }
 
     func isOffline(_ host: String) -> Bool {

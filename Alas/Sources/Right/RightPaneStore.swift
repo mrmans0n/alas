@@ -24,6 +24,8 @@ final class RightPaneStore {
 
     @ObservationIgnored
     var reviewSnapshotDidChange: ((String, String, ReviewLoopSnapshot) -> Void)?
+    @ObservationIgnored
+    var attentionSnapshotDidChange: ((String, RightPaneAttentionSnapshot) -> Void)?
 
     private let git: GitService
 
@@ -196,6 +198,9 @@ final class RightPaneStore {
                     worktreeId: worktree.id,
                     snapshot: snapshot
                 )
+            }
+            new.attentionSnapshotDidChange = { [weak self] snapshot in
+                self?.attentionSnapshotDidChange?(worktree.id, snapshot)
             }
 
             if shouldDeferInitialRefresh {

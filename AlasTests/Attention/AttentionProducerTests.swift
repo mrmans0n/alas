@@ -100,7 +100,7 @@ struct AttentionProducerTests {
         let signal = try #require(AttentionProducer.host(host: "buildbox", isDisconnected: true, owner: Fixtures.owner, display: Fixtures.display).compactMap(\.activeSignal).first)
         #expect(signal.kind == .hostDisconnected)
         #expect(signal.title == "buildbox is unreachable")
-        #expect(signal.sourceKey == AttentionSourceKey(rawValue: "host:buildbox:disconnected"))
+        #expect(signal.sourceKey == AttentionSourceKey(rawValue: "host:\(Fixtures.owner.storageKey):buildbox:disconnected"))
         #expect(signal.jumpTarget == .remoteWorktree)
     }
 

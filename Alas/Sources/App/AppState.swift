@@ -765,6 +765,12 @@ final class AppState {
         // we'd resolve to a 0-element id list. RootView calls reloadTabs() after
         // refreshAll() returns.
         rightPaneStore.appState = self
+        rightPaneStore.attentionSnapshotDidChange = { [weak self] worktreeID, snapshot in
+            self?.observeRightPaneAttention(worktreeID: worktreeID, snapshot: snapshot)
+        }
+        RemoteHostStatusStore.shared.onStatusTransition = { [weak self] host, isDisconnected, date in
+            self?.observeHostAttention(host: host, isDisconnected: isDisconnected, at: date)
+        }
         harness.onActivityTransition = { [weak self] transition in
             self?.observeHarnessAttention(transition)
         }
@@ -4959,6 +4965,9 @@ final class AppState {
             openReview: { [weak self] worktree, target in
                 guard let self else { return .error("Alas is not available.") }
                 return await self.cliOpenReview(worktree: worktree, target: target)
+            },
+            notifyReviewReplyAdded: { [weak self] worktree, comment, reply in
+                self?.observeReviewReplyAttention(worktree: worktree, comment: comment, reply: reply)
             },
             providerReviewOriginalPath: { [weak self] sessionID, relativePath in
                 await self?.reviewRequestOriginalPath(forDraftSessionID: sessionID, relativePath: relativePath) ?? nil

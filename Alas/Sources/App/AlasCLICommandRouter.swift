@@ -28,6 +28,7 @@ struct AlasCLICommandRouter {
     var notifyReviewCommentsChanged: () -> Void = {
         NotificationCenter.default.post(name: .alasReviewDraftCommentsDidChangeExternally, object: nil)
     }
+    var notifyReviewReplyAdded: (Worktree, ReviewDraftComment, ReviewCommentReply) -> Void = { _, _, _ in }
     var now: () -> Date = Date.init
     var gitStatus: (URL) async throws -> [ChangedFile] = { try await GitService().status(worktreePath: $0) }
     var providerReviewOriginalPath: (ReviewDraftSessionID, String) async -> String? = { _, _ in nil }
@@ -66,6 +67,7 @@ struct AlasCLICommandRouter {
             draftCommentStore: draftCommentStore,
             reviewSessionStore: reviewSessionStore,
             notifyReviewCommentsChanged: notifyReviewCommentsChanged,
+            notifyReviewReplyAdded: notifyReviewReplyAdded,
             now: now,
             gitStatus: gitStatus,
             providerReviewOriginalPath: providerReviewOriginalPath,
