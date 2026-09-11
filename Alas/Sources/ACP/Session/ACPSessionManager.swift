@@ -300,8 +300,18 @@ final class ACPSessionManager: ObservableObject {
     /// running) — the remote-web twin of the queued bubble's "send now".
     func queueForceSend(for id: ACPSession.ID, itemId: UUID) async {
         guard await confirmedWriterLease(for: id), let session = sessions[id] else { return }
+        if case .spawning = session.agentState {
+            pendingQueueForceSends[id] = itemId
+            onQueueChanged?(id, true)
+            return
+        }
         if session.agentState != .ready {
             await reattach(to: id)
+        }
+        if case .spawning = session.agentState {
+            pendingQueueForceSends[id] = itemId
+            onQueueChanged?(id, true)
+            return
         }
         guard let runner = runners[id] else { return }
         runner.forceSendQueuedItem(id: itemId)
@@ -497,6 +507,7 @@ final class ACPSessionManager: ObservableObject {
         var sessionCapabilities: ACPInitializeResult.ACPAgentSessionCapabilities?
     }
     private var attachingConnections: [ACPSession.ID: AttachingConnection] = [:]
+    private var pendingQueueForceSends: [ACPSession.ID: UUID] = [:]
     private var delegatedMessageWatchTokens: [ACPSession.ID: Int32] = [:]
 
     init(worktreeId: String, worktreePath: String, owner: SessionOwnerID? = nil, store: ACPSessionStore? = nil,
@@ -1203,6 +1214,7 @@ final class ACPSessionManager: ObservableObject {
         transcriptScrollMemory.removeValue(forKey: id)
         pendingModel.removeValue(forKey: id)
         pendingMode.removeValue(forKey: id)
+        pendingQueueForceSends.removeValue(forKey: id)
         persistedRows.removeValue(forKey: id)
         recent.removeAll { $0.id == id }
     }
@@ -4011,6 +4023,9 @@ extension ACPSessionManager {
             scheduledReconnectTasks.removeValue(forKey: sessionId)?.task.cancel()
             if session.queue.contains(where: { $0.status == .sending }) {
                 session.restoreQueue(session.queue)
+            }
+            if let itemId = pendingQueueForceSends.removeValue(forKey: sessionId) {
+                runner.forceSendQueuedItem(id: itemId)
             }
             if let remoteMCPNotice {
                 runner.appendAndPersistSystemNotice(remoteMCPNotice)
