@@ -44,7 +44,14 @@ struct WorktreeCheckpointStoreTests {
         _ = try await store.publish(first)
         let tooLarge = try publication(lineageID: lineageA, label: "Large", bytes: Data([1, 2, 3, 4]))
 
-        #expect(throws: CheckpointStoreError.self) { try await store.publish(tooLarge) }
+        do {
+            _ = try await store.publish(tooLarge)
+            Issue.record("Expected the byte limit to reject publication")
+        } catch let error as CheckpointStoreError {
+            #expect(error == .byteLimitExceeded)
+        } catch {
+            throw error
+        }
         #expect(try await store.catalog(lineageID: lineageA).summaries.map(\.label) == ["Small"])
     }
 
@@ -59,8 +66,13 @@ struct WorktreeCheckpointStoreTests {
         let journal = CheckpointRestoreJournal(lineageID: lineageA, checkpointID: checkpoint.manifest.id, recoveryCheckpointID: recovery.manifest.id, phase: .prepared, stagingRoot: "/tmp/staging", selectedPaths: [], expectedFingerprint: "fingerprint", expectedIndexChecksum: "checksum")
         try await store.writeJournal(journal)
 
-        #expect(throws: CheckpointStoreError.operationReferencesCheckpoint) {
-            try await store.delete(id: checkpoint.manifest.id, lineageID: lineageA)
+        do {
+            _ = try await store.delete(id: checkpoint.manifest.id, lineageID: lineageA)
+            Issue.record("Expected the active journal to protect its checkpoint")
+        } catch let error as CheckpointStoreError {
+            #expect(error == .operationReferencesCheckpoint)
+        } catch {
+            throw error
         }
         #expect(try await store.recoverableJournals(lineageID: lineageA) == [journal])
     }
