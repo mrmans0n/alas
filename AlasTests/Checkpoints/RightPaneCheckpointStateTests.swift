@@ -16,6 +16,7 @@ private actor RecordingCheckpointService: WorktreeCheckpointServicing {
     private var restoreCoordinations: [CheckpointCoordinationSnapshot] = []
     private var recoveryCoordinations: [CheckpointCoordinationSnapshot] = []
     private var createShouldFail = false
+    private var summaryUnavailable = false
 
     init(target: CheckpointWorktreeTarget) throws {
         self.target = target
@@ -48,7 +49,20 @@ private actor RecordingCheckpointService: WorktreeCheckpointServicing {
 
     func summaries(target: CheckpointWorktreeTarget) async throws -> CheckpointCatalogSnapshot {
         callCount += 1
-        return .init(lineageID: target.lineageID, summaries: created ? [summary] : [], byteCount: created ? 12 : 0)
+        let currentSummary = summaryUnavailable
+            ? WorktreeCheckpointSummary(
+                id: summary.id,
+                kind: summary.kind,
+                label: summary.label,
+                createdAt: summary.createdAt,
+                byteCount: summary.byteCount,
+                stagedFileCount: summary.stagedFileCount,
+                unstagedFileCount: summary.unstagedFileCount,
+                untrackedFileCount: summary.untrackedFileCount,
+                unavailableReason: "blob missing"
+            )
+            : summary
+        return .init(lineageID: target.lineageID, summaries: created ? [currentSummary] : [], byteCount: created ? 12 : 0)
     }
 
     func nonterminalJournals(target: CheckpointWorktreeTarget) async throws -> [CheckpointRestoreJournal] {
@@ -120,6 +134,10 @@ private actor RecordingCheckpointService: WorktreeCheckpointServicing {
 
     func calls() -> Int { callCount }
     func failNextCreate() { createShouldFail = true }
+    func markSummaryUnavailable() {
+        created = true
+        summaryUnavailable = true
+    }
     func installJournal(_ journal: CheckpointRestoreJournal) { journals = [journal] }
     func previewCoordinationHistory() -> [CheckpointCoordinationSnapshot] { previewCoordinations }
     func restoreCoordinationHistory() -> [CheckpointCoordinationSnapshot] { restoreCoordinations }
@@ -250,6 +268,26 @@ struct RightPaneCheckpointStateTests {
         #expect(state.hasLoadedSnapshot)
         #expect(state.lastCheckpointError != nil)
         #expect(state.checkpointSummaries.isEmpty)
+    }
+
+    @Test func unavailableCheckpointSummaryEvictsExpandedManifestCache() async throws {
+        let repository = try await CheckpointTestRepository.make()
+        defer { repository.remove() }
+        let service = try RecordingCheckpointService(target: repository.target)
+        let state = makeState(repository: repository, service: service)
+        await state.createCheckpoint(label: "Before edit")
+        let checkpointID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+
+        state.toggleCheckpointExpanded(checkpointID)
+        #expect(state.expandedCheckpointIDs == [checkpointID])
+        #expect(state.checkpointManifests[checkpointID] != nil)
+
+        await service.markSummaryUnavailable()
+        await state.refresh()
+
+        #expect(state.checkpointSummaries.first?.unavailableReason == "blob missing")
+        #expect(state.expandedCheckpointIDs.isEmpty)
+        #expect(state.checkpointManifests[checkpointID] == nil)
     }
 
     @Test func interruptedRestoreDisablesNewCheckpointMutationsButAllowsRecovery() async throws {

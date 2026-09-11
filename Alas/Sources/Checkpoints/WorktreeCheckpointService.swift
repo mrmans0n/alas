@@ -42,11 +42,15 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
     }
 
     func summaries(target: CheckpointWorktreeTarget) async throws -> CheckpointCatalogSnapshot {
-        try await store.catalog(lineageID: target.lineageID)
+        let journals = try await store.recoverableJournals(lineageID: target.lineageID)
+        try scavengeUnjournaledRestoreStaging(target: target, preserving: Set(journals.map(\.id)))
+        return try await store.catalog(lineageID: target.lineageID)
     }
 
     func nonterminalJournals(target: CheckpointWorktreeTarget) async throws -> [CheckpointRestoreJournal] {
-        try await store.recoverableJournals(lineageID: target.lineageID)
+        let journals = try await store.recoverableJournals(lineageID: target.lineageID)
+        try scavengeUnjournaledRestoreStaging(target: target, preserving: Set(journals.map(\.id)))
+        return journals
     }
 
     func manifest(target: CheckpointWorktreeTarget, id: CheckpointID) async throws -> WorktreeCheckpointManifest {
@@ -272,5 +276,17 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
             throw CheckpointStoreError.checkpointNotFound
         }
         return summary
+    }
+
+    private func scavengeUnjournaledRestoreStaging(target: CheckpointWorktreeTarget, preserving operationIDs: Set<UUID>) throws {
+        guard !target.path.isRemoteAlasPath else { return }
+        let prefix = ".alas-checkpoint-restore-"
+        for url in try FileManager.default.contentsOfDirectory(at: target.path, includingPropertiesForKeys: [.isDirectoryKey]) where url.lastPathComponent.hasPrefix(prefix) {
+            let resourceValues = try url.resourceValues(forKeys: [.isDirectoryKey])
+            guard resourceValues.isDirectory == true else { continue }
+            let suffix = String(url.lastPathComponent.dropFirst(prefix.count))
+            guard let operationID = UUID(uuidString: suffix), !operationIDs.contains(operationID) else { continue }
+            try FileManager.default.removeItem(at: url)
+        }
     }
 }

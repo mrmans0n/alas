@@ -726,9 +726,10 @@ final class RightPaneState: GGSplitCommitServicing {
             checkpointStorageUsage = catalog.byteCount
             nonterminalCheckpointJournals = journals
             checkpointLoadError = nil
-            expandedCheckpointIDs.formIntersection(Set(catalog.summaries.map(\.id)))
+            let availableCheckpointIDs = Set(catalog.summaries.filter { $0.unavailableReason == nil }.map(\.id))
+            expandedCheckpointIDs.formIntersection(availableCheckpointIDs)
             checkpointManifests = checkpointManifests.filter { id, _ in
-                checkpointSummaries.contains(where: { $0.id == id })
+                availableCheckpointIDs.contains(id)
             }
         case let .failure(error):
             checkpointLoadError = error.message

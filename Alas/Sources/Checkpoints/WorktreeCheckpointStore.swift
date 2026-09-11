@@ -114,7 +114,13 @@ actor WorktreeCheckpointStore {
         try fileSystem.move(temporary, to: entry)
 
         let next = snapshot(lineageID: manifest.lineageID, manifests: candidates, unavailable: currentCatalog.summaries.filter { $0.unavailableReason != nil }, byteCount: bytes)
-        try writeCatalog(next, layout: layout)
+        do {
+            try writeCatalog(next, layout: layout)
+        } catch {
+            try? removeEntry(manifest.id, layout: layout)
+            try? garbageCollect(layout: layout, manifests: existingManifests, journals: activeJournals(lineageID: manifest.lineageID))
+            throw error
+        }
         for victim in victims { try removeEntry(victim.id, layout: layout) }
         try garbageCollect(layout: layout, manifests: candidates, journals: try activeJournals(lineageID: manifest.lineageID))
         return next

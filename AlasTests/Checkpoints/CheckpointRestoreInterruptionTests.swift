@@ -248,4 +248,17 @@ struct CheckpointRestoreInterruptionTests {
         let name = try #require(journal.stagingNames["selected.bin"])
         #expect(try Data(contentsOf: URL(fileURLWithPath: journal.stagingRoot + "/backups/" + name)) == Data("later disk".utf8))
     }
+
+    @Test func checkpointRefreshScavengesUnjournaledRestoreStaging() async throws {
+        let fixture = try await CheckpointRestoreFixture.make()
+        defer { fixture.remove() }
+        let orphanID = UUID()
+        let orphan = fixture.repo.root.appendingPathComponent(".alas-checkpoint-restore-\(orphanID.uuidString.lowercased())", isDirectory: true)
+        try FileManager.default.createDirectory(at: orphan, withIntermediateDirectories: true)
+        try Data("orphan".utf8).write(to: orphan.appendingPathComponent("payload"))
+
+        _ = try await fixture.service.nonterminalJournals(target: fixture.repo.target)
+
+        #expect(!FileManager.default.fileExists(atPath: orphan.path))
+    }
 }

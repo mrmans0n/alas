@@ -182,6 +182,23 @@ struct WorktreeCheckpointStoreTests {
         #expect(try await store.publish(second).byteCount == 3)
     }
 
+    @Test func failedCatalogPublicationRemovesPromotedEntry() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fileSystem = CatalogWriteFailingFileSystem(failOnCatalogWriteNumber: 2)
+        let store = WorktreeCheckpointStore(root: root, fileSystem: fileSystem)
+        let checkpoint = try publication(lineageID: lineageA, label: "Reported failed", bytes: Data([1, 2, 3]))
+
+        await #expect(throws: CatalogWriteFailingFileSystem.Failure.catalogWrite) {
+            try await store.publish(checkpoint)
+        }
+
+        let reloaded = WorktreeCheckpointStore(root: root)
+        #expect(try await reloaded.catalog(lineageID: lineageA).summaries.isEmpty)
+        let entries = try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent(lineageA).appendingPathComponent("entries").path)
+        #expect(entries.isEmpty)
+    }
+
     @Test func recoverableJournalsCleanTerminalJournalStaging() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -233,5 +250,73 @@ struct WorktreeCheckpointStoreTests {
 
     private func blobURL(root: URL, lineageID: String, blob: CheckpointBlobReference) -> URL {
         root.appendingPathComponent(lineageID).appendingPathComponent("blobs").appendingPathComponent(blob.sha256)
+    }
+}
+
+private final class CatalogWriteFailingFileSystem: CheckpointFileSystem, @unchecked Sendable {
+    enum Failure: Error, Equatable { case catalogWrite }
+
+    private let live = LiveCheckpointFileSystem()
+    private let lock = NSLock()
+    private let failOnCatalogWriteNumber: Int
+    private var catalogWriteCount = 0
+
+    init(failOnCatalogWriteNumber: Int) {
+        self.failOnCatalogWriteNumber = failOnCatalogWriteNumber
+    }
+
+    func readLeaf(root: URL, relativePath: String) throws -> CheckpointLeafRead {
+        try live.readLeaf(root: root, relativePath: relativePath)
+    }
+
+    func metadata(root: URL, relativePath: String) throws -> CheckpointLeafMetadata? {
+        try live.metadata(root: root, relativePath: relativePath)
+    }
+
+    func validateRelativePath(_ relativePath: String, under root: URL) throws -> URL {
+        try live.validateRelativePath(relativePath, under: root)
+    }
+
+    func createDirectoryExclusively(_ url: URL, mode: mode_t) throws {
+        try live.createDirectoryExclusively(url, mode: mode)
+    }
+
+    func writeDurable(_ data: Data, to url: URL, mode: mode_t) throws {
+        if url.lastPathComponent == "catalog.json" {
+            lock.lock()
+            catalogWriteCount += 1
+            let shouldFail = catalogWriteCount == failOnCatalogWriteNumber
+            lock.unlock()
+            if shouldFail { throw Failure.catalogWrite }
+        }
+        try live.writeDurable(data, to: url, mode: mode)
+    }
+
+    func createSymlink(target: Data, at url: URL) throws {
+        try live.createSymlink(target: target, at: url)
+    }
+
+    func move(_ source: URL, to destination: URL) throws {
+        try live.move(source, to: destination)
+    }
+
+    func moveExclusively(_ source: URL, to destination: URL) throws {
+        try live.moveExclusively(source, to: destination)
+    }
+
+    func removeIfPresent(_ url: URL) throws {
+        try live.removeIfPresent(url)
+    }
+
+    func list(_ url: URL) throws -> [URL] {
+        try live.list(url)
+    }
+
+    func fileData(_ url: URL) throws -> Data {
+        try live.fileData(url)
+    }
+
+    func synchronizeDirectory(_ url: URL) throws {
+        try live.synchronizeDirectory(url)
     }
 }
