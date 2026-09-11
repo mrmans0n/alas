@@ -109,6 +109,13 @@ final class ReviewLoopState {
         }
     }
 
+    func cancelLocalRefresh(_ attempt: ReviewLoopRefreshAttempt) {
+        guard isCurrentRefresh(attempt.generation) else { return }
+
+        refreshGeneration += 1
+        isRefreshing = false
+    }
+
     func finishLocalRefresh(
         _ attempt: ReviewLoopRefreshAttempt,
         preservingRemoteWith local: ReviewLoopLocalState

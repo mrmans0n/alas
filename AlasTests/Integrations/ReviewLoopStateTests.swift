@@ -933,6 +933,21 @@ struct ReviewLoopStateTests {
         #expect(state.lastError?.contains("git status failed") == true)
     }
 
+    @Test func localInspectionCancellationClearsRefreshingWithoutError() async throws {
+        let state = ReviewLoopState(
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-review-loop"),
+            baseBranch: "main",
+            providerRegistry: CodeHostProviderRegistry(providers: [:])
+        )
+
+        let attempt = state.beginLocalInspection()
+        state.cancelLocalRefresh(attempt)
+
+        #expect(state.isRefreshing == false)
+        #expect(state.snapshot == nil)
+        #expect(state.lastError == nil)
+    }
+
     @Test func localRefreshFailureClearsInFlightRefreshingFlag() async throws {
         let remote = Self.makeRemote()
         let local = Self.makeLocal(branchName: "feature/slow", needsPush: false)

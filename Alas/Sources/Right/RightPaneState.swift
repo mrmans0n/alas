@@ -1016,6 +1016,9 @@ final class RightPaneState: GGSplitCommitServicing {
                 changesGeneration += 1
             }
             return true
+        } catch is CancellationError {
+            reviewLoop.cancelLocalRefresh(reviewLoopInspection)
+            return false
         } catch {
             reviewLoop.failLocalRefresh(reviewLoopInspection, error: error)
             guard snapshotGeneration == snapshotInvalidationGeneration else {
