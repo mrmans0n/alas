@@ -180,11 +180,14 @@ struct WorktreeCleanupModelTests {
         #expect(!model.rows[0].isScanning)
         #expect(model.rows[1].candidate == nil)
         #expect(model.rows[1].isScanning)
+        model.toggle(a.id)
+        #expect(model.selectedIds.isEmpty)
 
         await gate.resume()
         await scanTask.value
         #expect(!model.isScanning)
         #expect(model.candidates == [a, b])
+        #expect(model.selectedIds == [a.id])
     }
 
     /// Drives a rescan through `runScan()` itself, not `applyScanResult`

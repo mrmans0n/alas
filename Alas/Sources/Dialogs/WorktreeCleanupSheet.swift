@@ -82,6 +82,7 @@ struct WorktreeCleanupSheet: View {
                         WorktreeCleanupRow(
                             row: row,
                             isSelected: model.selectedIds.contains(row.id),
+                            isSelectionDisabled: model.isScanning,
                             result: model.results.first { $0.worktreeId == row.id },
                             onToggle: { model.toggle(row.id) }
                         )
@@ -120,6 +121,7 @@ struct WorktreeCleanupSheet: View {
 private struct WorktreeCleanupRow: View {
     let row: WorktreeCleanupRowState
     let isSelected: Bool
+    let isSelectionDisabled: Bool
     let result: WorktreeBatchResult?
     let onToggle: () -> Void
 
@@ -130,7 +132,7 @@ private struct WorktreeCleanupRow: View {
             Toggle("", isOn: Binding(get: { isSelected }, set: { _ in onToggle() }))
                 .labelsHidden()
                 .toggleStyle(.checkbox)
-                .disabled(row.isScanning || row.candidate?.isSelectable != true)
+                .disabled(isSelectionDisabled || row.candidate?.isSelectable != true)
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {

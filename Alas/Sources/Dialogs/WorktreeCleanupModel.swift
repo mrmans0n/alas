@@ -166,7 +166,8 @@ final class WorktreeCleanupModel {
     /// Per-item override. Excluded rows never become selectable, which is what
     /// keeps a main or remote worktree out of any batch.
     func toggle(_ id: String) {
-        guard let candidate = candidates.first(where: { $0.id == id }),
+        guard !isScanning,
+              let candidate = candidates.first(where: { $0.id == id }),
               candidate.isSelectable
         else { return }
         if selectedIds.contains(id) {
