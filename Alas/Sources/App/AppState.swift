@@ -6594,15 +6594,20 @@ final class AppState {
         let hasScheduledQueueWork = nextScheduledAt != nil || session.queue.contains {
             $0.status == .sending && $0.scheduledAt != nil
         }
+        let hasForcedQueueWork = session.queue.contains {
+            $0.scheduledAt == nil && (
+                $0.status == .sending || ($0.status == .pending && session.pendingQueuePersistenceCount > 0)
+            )
+        }
         switch session.agentState {
         case .ready, .spawning:
             break
         case .disconnected:
-            guard hasScheduledQueueWork else { return nil }
+            guard hasScheduledQueueWork || hasForcedQueueWork else { return nil }
         case .idle:
             return nil
         case .failed:
-            guard hasScheduledQueueWork else { return nil }
+            guard hasScheduledQueueWork || hasForcedQueueWork else { return nil }
         }
         if session.queue.first?.lastError != nil { return nil }
         let activePromptCleanupDelay: Duration = switch session.transcript.streamingState {
@@ -6616,11 +6621,6 @@ final class AppState {
             $0.status == .sending && ($0.scheduledAt != nil || nextScheduledAt != nil)
         }) {
             return activePromptCleanupDelay
-        }
-        let hasForcedQueueWork = session.queue.contains {
-            $0.scheduledAt == nil && (
-                $0.status == .sending || ($0.status == .pending && session.pendingQueuePersistenceCount > 0)
-            )
         }
         if hasForcedQueueWork, manager.retainedCleanupHasActivePromptWork(for: sessionId) {
             return activePromptCleanupDelay

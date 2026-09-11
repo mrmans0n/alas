@@ -5,6 +5,11 @@ import Testing
 @MainActor
 @Suite("ACPSessionManager")
 struct ACPSessionManagerTests {
+    private struct MemoryStore: PersistenceStoreProtocol {
+        func write<T: Encodable>(_: T, to _: URL) throws {}
+        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
+    }
+
     private func scriptInitialize(_ client: ACPMockClient) {
         client.script(method: "initialize") { _ in
             try JSONEncoder().encode(ACPInitializeResult(
@@ -488,6 +493,35 @@ struct ACPSessionManagerTests {
         }
 
         #expect(client.sent.contains { $0.method == "session/prompt" })
+    }
+
+    @Test("disconnected forced sending row stays retained")
+    func disconnectedForcedSendingRowStaysRetained() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-disconnected-force-send-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote")
+        let mgr = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) }
+        )
+        let session = mgr.createSession(id: "session", agentId: "claude")
+        await mgr.attach(to: session.id, freshlyCreated: true)
+        session.queue.append(QueuedPrompt(blocks: [.text("forced")], status: .sending))
+        session.transcript.streamingState = .sending
+        session.agentState = .disconnected
+
+        #expect(
+            AppState(store: MemoryStore()).retainedACPSessionCleanupDelayForTesting(
+                manager: mgr,
+                sessionId: session.id
+            ) == .milliseconds(250)
+        )
     }
 
     @Test("persistQueue writes to SQLite without requiring a runner")
