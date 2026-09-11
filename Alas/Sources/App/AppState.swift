@@ -4430,6 +4430,35 @@ final class AppState {
         }
     }
 
+    /// The edit generation of every currently-dirty tab in a worktree, keyed
+    /// by tab id. Used to tell "still the same dirtiness the user already
+    /// discarded" apart from "re-edited since" — a tab id alone isn't enough,
+    /// since discarding a buffer doesn't clear it, and it can be typed into
+    /// again (from another window) while a batch is still running. A tab
+    /// with no live buffer instantiated (only a persisted hot-exit snapshot)
+    /// gets a fixed sentinel generation, since there is no live edit counter
+    /// to read until the tab is opened; a snapshot's content can't change on
+    /// its own, so this stays stable as long as the tab remains unopened.
+    private func dirtyTabGenerations(worktreeId: String) -> [TabID: Int] {
+        Dictionary(uniqueKeysWithValues: dirtyEditorTabIds(worktreeId: worktreeId).map {
+            ($0, tabs.peekBuffer(tabId: $0)?.editGeneration ?? -1)
+        })
+    }
+
+    /// True when every currently-dirty tab was already dirty, at the exact
+    /// same edit generation, when the batch confirmation snapshot was taken —
+    /// i.e. nothing new needs protecting. A tab present in `current` but
+    /// absent or at a different generation in `acknowledgedAtConfirmation` is
+    /// new or changed dirtiness the user never saw or acknowledged.
+    nonisolated static func hasOnlyAcknowledgedDirtiness(
+        current: [TabID: Int],
+        acknowledgedAtConfirmation: [TabID: Int]
+    ) -> Bool {
+        current.allSatisfy { tabId, generation in
+            acknowledgedAtConfirmation[tabId] == generation
+        }
+    }
+
     /// Archive several worktrees at once. Nothing on disk is touched — this
     /// only marks each path hidden in `ProjectConfig`, which is what persists
     /// across relaunch.
@@ -4447,9 +4476,11 @@ final class AppState {
         // discarding doesn't retroactively un-dirty anything — so the
         // per-item re-check below must compare against this snapshot rather
         // than against "is anything dirty right now", or the confirmed
-        // discard would skip every worktree it was meant to cover.
+        // discard would skip every worktree it was meant to cover. Recording
+        // each dirty tab's edit generation, not just its id, also catches a
+        // tab re-edited (from another window) after being acknowledged here.
         let dirtyTabsAtConfirmation = Dictionary(
-            uniqueKeysWithValues: worktrees.map { ($0.id, Set(dirtyEditorTabIds(worktreeId: $0.id))) }
+            uniqueKeysWithValues: worktrees.map { ($0.id, dirtyTabGenerations(worktreeId: $0.id)) }
         )
         let dirtyCount = dirtyTabsAtConfirmation.values.reduce(0) { $0 + $1.count }
         if dirtyCount > 0 {
@@ -4486,10 +4517,14 @@ final class AppState {
             // can be stale by the time this specific item is reached. Only
             // dirtiness the confirmation didn't already cover counts: a tab
             // dirty at confirmation time and discarded is expected here, but
-            // a tab that turned dirty (or newly opened dirty) since then must
-            // not be torn down.
-            let currentDirtyTabs = Set(dirtyEditorTabIds(worktreeId: worktree.id))
-            guard currentDirtyTabs.isSubset(of: dirtyTabsAtConfirmation[worktree.id] ?? []) else {
+            // a tab that turned dirty (or newly opened dirty), OR was edited
+            // again since being acknowledged, must not be torn down.
+            let currentDirtyGenerations = dirtyTabGenerations(worktreeId: worktree.id)
+            let knownDirtyGenerations = dirtyTabsAtConfirmation[worktree.id] ?? [:]
+            guard Self.hasOnlyAcknowledgedDirtiness(
+                current: currentDirtyGenerations,
+                acknowledgedAtConfirmation: knownDirtyGenerations
+            ) else {
                 results.append(WorktreeBatchResult(
                     worktreeId: worktree.id,
                     branch: worktree.branch,
@@ -7771,9 +7806,11 @@ final class AppState {
         // discarding doesn't retroactively un-dirty anything — so the
         // per-item re-check below must compare against this snapshot rather
         // than against "is anything dirty right now", or the confirmed
-        // discard would skip every worktree it was meant to cover.
+        // discard would skip every worktree it was meant to cover. Recording
+        // each dirty tab's edit generation, not just its id, also catches a
+        // tab re-edited (from another window) after being acknowledged here.
         let dirtyTabsAtConfirmation = Dictionary(
-            uniqueKeysWithValues: worktrees.map { ($0.id, Set(dirtyEditorTabIds(worktreeId: $0.id))) }
+            uniqueKeysWithValues: worktrees.map { ($0.id, dirtyTabGenerations(worktreeId: $0.id)) }
         )
         let dirtyCount = dirtyTabsAtConfirmation.values.reduce(0) { $0 + $1.count }
         if dirtyCount > 0 {
@@ -7816,9 +7853,14 @@ final class AppState {
             // while an *earlier* item was still being removed. Only
             // dirtiness the confirmation didn't already cover counts: a tab
             // dirty at confirmation time and discarded is expected here, but
-            // a tab that turned dirty since then must not be torn down.
-            let currentDirtyTabs = Set(dirtyEditorTabIds(worktreeId: worktree.id))
-            guard currentDirtyTabs.isSubset(of: dirtyTabsAtConfirmation[worktree.id] ?? []) else {
+            // a tab that turned dirty, or was edited again since being
+            // acknowledged, must not be torn down.
+            let currentDirtyGenerations = dirtyTabGenerations(worktreeId: worktree.id)
+            let knownDirtyGenerations = dirtyTabsAtConfirmation[worktree.id] ?? [:]
+            guard Self.hasOnlyAcknowledgedDirtiness(
+                current: currentDirtyGenerations,
+                acknowledgedAtConfirmation: knownDirtyGenerations
+            ) else {
                 results.append(WorktreeBatchResult(
                     worktreeId: worktree.id,
                     branch: worktree.branch,

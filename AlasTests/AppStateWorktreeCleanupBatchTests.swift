@@ -126,4 +126,56 @@ struct AppStateWorktreeCleanupBatchTests {
         #expect(fixture.state.projectsManager
             .worktrees(projectId: fixture.project.id).count == before)
     }
+
+    // MARK: - hasOnlyAcknowledgedDirtiness
+
+    @Test func identicalGenerationsAreAcknowledged() {
+        #expect(AppState.hasOnlyAcknowledgedDirtiness(
+            current: ["tab-a": 3],
+            acknowledgedAtConfirmation: ["tab-a": 3]
+        ))
+    }
+
+    @Test func emptyCurrentDirtinessIsAlwaysAcknowledged() {
+        #expect(AppState.hasOnlyAcknowledgedDirtiness(
+            current: [:],
+            acknowledgedAtConfirmation: ["tab-a": 3]
+        ))
+    }
+
+    /// The exact regression this mechanism exists to close: a tab already
+    /// dirty (and discarded) at confirmation time, then re-edited since — its
+    /// id is unchanged, but its generation has moved on.
+    @Test func sameTabAtALaterGenerationIsNotAcknowledged() {
+        #expect(!AppState.hasOnlyAcknowledgedDirtiness(
+            current: ["tab-a": 4],
+            acknowledgedAtConfirmation: ["tab-a": 3]
+        ))
+    }
+
+    @Test func aNewlyDirtiedTabIsNotAcknowledged() {
+        #expect(!AppState.hasOnlyAcknowledgedDirtiness(
+            current: ["tab-a": 3, "tab-b": 0],
+            acknowledgedAtConfirmation: ["tab-a": 3]
+        ))
+    }
+
+    @Test func aTabThatBecameCleanDoesNotBlockTheOthers() {
+        // "tab-b" was dirty at confirmation and is clean now — its absence
+        // from `current` is fine; only what's dirty *now* is checked.
+        #expect(AppState.hasOnlyAcknowledgedDirtiness(
+            current: ["tab-a": 3],
+            acknowledgedAtConfirmation: ["tab-a": 3, "tab-b": 1]
+        ))
+    }
+
+    @Test func unopenedSnapshotOnlyTabsMatchOnTheSentinelGeneration() {
+        // A tab with only a persisted hot-exit snapshot (no live buffer) is
+        // recorded at the -1 sentinel; as long as it's never opened, that
+        // stays stable across the snapshot and the recheck.
+        #expect(AppState.hasOnlyAcknowledgedDirtiness(
+            current: ["tab-a": -1],
+            acknowledgedAtConfirmation: ["tab-a": -1]
+        ))
+    }
 }
