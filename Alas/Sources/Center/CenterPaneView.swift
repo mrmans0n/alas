@@ -693,8 +693,8 @@ struct CenterPaneView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .overlay(alignment: .bottomTrailing) {
-                if !runScriptFailures.isEmpty {
-                    VStack(alignment: .trailing, spacing: 8) {
+                VStack(alignment: .trailing, spacing: 8) {
+                    if !runScriptFailures.isEmpty {
                         ForEach(runScriptFailures, id: \.id) { failure in
                             RunScriptFailureBanner(
                                 presentation: RunScriptFailureBannerPresentation(failure: failure),
@@ -705,9 +705,9 @@ struct CenterPaneView: View {
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                         }
                     }
-                    .padding(12)
-                    .animation(.easeOut(duration: 0.2), value: runScriptFailures.map(\.id))
                 }
+                .padding(12)
+                .animation(.easeOut(duration: 0.2), value: runScriptFailures.map(\.id))
             }
         }
         .onAppear {
