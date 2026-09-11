@@ -20,6 +20,25 @@ struct AppStateAttentionTests {
         #expect(state.attentionStore.events.count == 1)
     }
 
+    @Test func recoveredHistoryKeepsShrinkingStartupConflictsSuppressed() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        try Data("broken history".utf8).write(to: fixture.url)
+        let state = fixture.makeStateWithWorktree()
+        let first = RightPaneAttentionSnapshot(mergeOperation: nil, conflictedPaths: ["a.swift", "b.swift"], review: nil)
+        let shrunk = RightPaneAttentionSnapshot(mergeOperation: nil, conflictedPaths: ["b.swift"], review: nil)
+        let expanded = RightPaneAttentionSnapshot(mergeOperation: nil, conflictedPaths: ["b.swift", "c.swift"], review: nil)
+
+        state.observeRightPaneAttention(worktreeID: "worktree", snapshot: first)
+        state.observeRightPaneAttention(worktreeID: "worktree", snapshot: shrunk)
+        #expect(state.attentionStore.events.isEmpty)
+
+        state.observeRightPaneAttention(worktreeID: "worktree", snapshot: expanded)
+
+        #expect(state.attentionStore.events.count == 1)
+        #expect(state.attentionStore.events.first?.fingerprint == "b.swift|c.swift")
+    }
+
     @Test func acpCompletionRecordsFinishedHistoryButRemovalDoesNot() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }

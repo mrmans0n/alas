@@ -415,8 +415,16 @@ extension AppState {
     func observeAttention(_ observation: AttentionObservation, at date: Date = Date()) {
         switch observation {
         case .active(let signal):
-            guard attentionSuppressedStartupSignals[signal.sourceKey] != signal.fingerprint else { return }
-            attentionSuppressedStartupSignals[signal.sourceKey] = nil
+            if let suppressedFingerprint = attentionSuppressedStartupSignals[signal.sourceKey] {
+                if suppressedFingerprint == signal.fingerprint {
+                    return
+                }
+                if isSuppressedAttentionFingerprintShrink(sourceKey: signal.sourceKey, suppressedFingerprint: suppressedFingerprint, currentFingerprint: signal.fingerprint) {
+                    attentionSuppressedStartupSignals[signal.sourceKey] = signal.fingerprint
+                    return
+                }
+                attentionSuppressedStartupSignals[signal.sourceKey] = nil
+            }
             registerAttentionAlias(for: signal)
         case .inactive(let sourceKey):
             attentionSuppressedStartupSignals[sourceKey] = nil
@@ -641,6 +649,40 @@ extension AppState {
         guard let worktree = attentionWorktrees.first(where: { $0.worktree.id == id })?.worktree,
               let project = projects.first(where: { $0.id == worktree.projectId }) else { return false }
         return !projectsManager.isWorktreeHidden(projectId: project.id, path: worktree.path)
+    }
+
+    private func isSuppressedAttentionFingerprintShrink(
+        sourceKey: AttentionSourceKey,
+        suppressedFingerprint: String,
+        currentFingerprint: String
+    ) -> Bool {
+        if sourceKey.rawValue.hasSuffix(":conflicts") {
+            return isStrictNonEmptySubset(
+                Set(currentFingerprint.split(separator: "|").map(String.init)),
+                of: Set(suppressedFingerprint.split(separator: "|").map(String.init))
+            )
+        }
+        if sourceKey.rawValue.hasSuffix(":checks") {
+            return isHeadScopedFingerprintSetShrink(from: suppressedFingerprint, to: currentFingerprint, droppedPrefixCount: 1)
+        }
+        if sourceKey.rawValue.hasSuffix(":feedback") {
+            return isHeadScopedFingerprintSetShrink(from: suppressedFingerprint, to: currentFingerprint, droppedPrefixCount: 2)
+        }
+        return false
+    }
+
+    private func isHeadScopedFingerprintSetShrink(from previousFingerprint: String, to currentFingerprint: String, droppedPrefixCount: Int) -> Bool {
+        let previousParts = previousFingerprint.split(separator: "|", omittingEmptySubsequences: false)
+        let currentParts = currentFingerprint.split(separator: "|", omittingEmptySubsequences: false)
+        guard previousParts.first == currentParts.first else { return false }
+        return isStrictNonEmptySubset(
+            Set(currentParts.dropFirst(droppedPrefixCount).map(String.init)),
+            of: Set(previousParts.dropFirst(droppedPrefixCount).map(String.init))
+        )
+    }
+
+    private func isStrictNonEmptySubset(_ current: Set<String>, of previous: Set<String>) -> Bool {
+        !current.isEmpty && current.isStrictSubset(of: previous)
     }
 }
 
