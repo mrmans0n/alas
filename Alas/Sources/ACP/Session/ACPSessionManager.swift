@@ -4307,23 +4307,42 @@ extension ACPSessionManager {
         attachments: [ACPMessage.Attachment],
         draft: ACPComposerDraft? = nil,
         scheduledAt: Date? = nil,
-        into sessionId: ACPSession.ID
+        into sessionId: ACPSession.ID,
+        onPersisted: (@MainActor (_ persisted: Bool) -> Void)? = nil
     ) {
-        guard let session = sessions[sessionId] else { return }
+        guard let session = sessions[sessionId] else {
+            Task { @MainActor in onPersisted?(false) }
+            return
+        }
         let blocks = ACPSessionRunner.blocks(text: text, attachments: attachments)
+        let scheduledId: UUID?
         if let scheduledAt {
-            session.enqueueScheduled(blocks: blocks, scheduledAt: scheduledAt, draft: draft)
+            scheduledId = session.enqueueScheduled(blocks: blocks, scheduledAt: scheduledAt, draft: draft)
         } else {
             session.enqueue(blocks: blocks, draft: draft)
+            scheduledId = nil
         }
         let items = session.queue
         let fence = leaseFence(sessionId: sessionId)
-        enqueuePersistence { persistence in
-            _ = try await persistence.upsertQueue(
-                sessionId: sessionId,
-                items: items,
-                fence: fence
-            )
+        guard onPersisted != nil else {
+            enqueuePersistence { persistence in
+                _ = try await persistence.upsertQueue(
+                    sessionId: sessionId,
+                    items: items,
+                    fence: fence
+                )
+            }
+            return
+        }
+        let task = enqueuePersistenceResult { persistence in
+            try await persistence.upsertQueue(sessionId: sessionId, items: items, fence: fence)
+        }
+        Task { @MainActor in
+            let persisted = await task.value == true
+            if !persisted, let scheduledId {
+                _ = session.removeFromQueue(id: scheduledId)
+            }
+            onPersisted?(persisted)
         }
     }
 
@@ -4448,6 +4467,12 @@ extension ACPSessionManager {
         } else {
             scheduledAt = nil
         }
+        let onScheduledPersisted: (@MainActor (Bool) -> Void)?
+        if scheduledAt == nil {
+            onScheduledPersisted = nil
+        } else {
+            onScheduledPersisted = { persisted in onCompleted(persisted) }
+        }
 
         switch session.agentState {
         case .ready:
@@ -4466,9 +4491,12 @@ extension ACPSessionManager {
                     attachments: attachments,
                     draft: draft,
                     scheduledAt: scheduledAt,
-                    into: sessionId
+                    into: sessionId,
+                    onPersisted: onScheduledPersisted
                 )
-                Task { @MainActor in onCompleted(true) }
+                if scheduledAt == nil {
+                    Task { @MainActor in onCompleted(true) }
+                }
                 Task { @MainActor in await reattach(to: sessionId) }
                 return true
             }
@@ -4485,9 +4513,12 @@ extension ACPSessionManager {
                 attachments: attachments,
                 draft: draft,
                 scheduledAt: scheduledAt,
-                into: sessionId
+                into: sessionId,
+                onPersisted: onScheduledPersisted
             )
-            Task { @MainActor in onCompleted(true) }
+            if scheduledAt == nil {
+                Task { @MainActor in onCompleted(true) }
+            }
             return true
 
         case .idle, .disconnected, .failed:
@@ -4501,9 +4532,12 @@ extension ACPSessionManager {
                 attachments: attachments,
                 draft: draft,
                 scheduledAt: scheduledAt,
-                into: sessionId
+                into: sessionId,
+                onPersisted: onScheduledPersisted
             )
-            Task { @MainActor in onCompleted(true) }
+            if scheduledAt == nil {
+                Task { @MainActor in onCompleted(true) }
+            }
             Task { @MainActor in await reattach(to: sessionId) }
             return true
         }

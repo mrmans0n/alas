@@ -1365,10 +1365,12 @@ extension ACPSessionRunner {
                 Task { @MainActor in onPromptFinished?(false) }
                 return
             }
-            session.enqueueScheduled(blocks: blocks, scheduledAt: date, draft: draft)
+            let queuedId = session.enqueueScheduled(blocks: blocks, scheduledAt: date, draft: draft)
             persistQueue(completion: { [weak self] persisted in
                 if persisted {
                     self?.flushQueueIfIdle()
+                } else {
+                    _ = self?.session.removeFromQueue(id: queuedId)
                 }
                 onPromptFinished?(persisted)
             })

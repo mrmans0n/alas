@@ -1444,16 +1444,18 @@ final class ACPSession: ObservableObject, Identifiable {
         queue.insert(item, at: insertAt)
     }
 
+    @discardableResult
     func enqueueScheduled(
         blocks: [ACPContentBlock],
         scheduledAt: Date,
         draft: ACPComposerDraft? = nil
-    ) {
+    ) -> UUID {
         let item = QueuedPrompt(blocks: blocks, scheduledAt: scheduledAt, draft: draft)
         let insertAt = queue.firstIndex {
             $0.status == .pending && ($0.scheduledAt.map { $0 > scheduledAt } ?? false)
         } ?? queue.endIndex
         queue.insert(item, at: insertAt)
+        return item.id
     }
 
     /// Remove a specific item by id. The drag-handle X on the bubble
