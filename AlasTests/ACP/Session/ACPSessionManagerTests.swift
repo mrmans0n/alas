@@ -613,6 +613,54 @@ struct ACPSessionManagerTests {
         #expect(client.sent.contains(where: { $0.method == "session/prompt" }))
     }
 
+    @Test("stale force send during attach falls back to queue flush")
+    func staleForceSendDuringAttachFallsBackToQueueFlush() async throws {
+        let gate = AsyncGate()
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-stale-force-send-spawning-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let client = ACPMockClient()
+        client.scriptAsync(method: "initialize") { _ in
+            await gate.enterAndWait()
+            return try JSONEncoder().encode(ACPInitializeResult(
+                protocolVersion: 1,
+                agentCapabilities: nil,
+                authMethods: []
+            ))
+        }
+        scriptSessionResult(client, method: "session/new", sessionId: "remote")
+        client.script(method: "session/prompt") { request in
+            let params = try #require(request.params as? ACPSessionPromptParams)
+            #expect(params.prompt == [.text("fallback")])
+            return Data("null".utf8)
+        }
+        let mgr = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) }
+        )
+        let session = mgr.createSession(id: "session", agentId: "claude")
+        session.enqueue(blocks: [.text("removed")])
+        session.enqueue(blocks: [.text("fallback")])
+        let removedId = try #require(session.queue.first?.id)
+        let attachTask = Task { @MainActor in
+            await mgr.attach(to: session.id, freshlyCreated: true)
+        }
+        await gate.waitUntilEntered()
+
+        await mgr.queueForceSend(for: session.id, itemId: removedId)
+        await mgr.queueRemove(for: session.id, itemId: removedId)
+        await gate.release()
+        await attachTask.value
+        for _ in 0 ..< 50 where !client.sent.contains(where: { $0.method == "session/prompt" }) {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        #expect(client.sent.contains(where: { $0.method == "session/prompt" }))
+    }
+
     @Test("persistQueue writes to SQLite without requiring a runner")
     func persistQueueWithoutRunner() async throws {
         // Regression: ACPTabView's queue actions used to call

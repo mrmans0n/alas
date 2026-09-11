@@ -4280,6 +4280,8 @@ extension ACPSessionManager {
     @discardableResult
     private func sendPendingQueueForceSend(sessionId: ACPSession.ID) -> Bool {
         guard let itemId = pendingQueueForceSends.removeValue(forKey: sessionId),
+              let session = sessions[sessionId],
+              session.queue.contains(where: { $0.id == itemId && $0.status == .pending }),
               let runner = runners[sessionId]
         else { return false }
         runner.forceSendQueuedItem(id: itemId)
