@@ -353,6 +353,109 @@ struct WorktreeCleanupScannerTests {
                 == ["feature/a", "feature/b", "feature/c"])
     }
 
+    @Test func scanPublishesProgressForEveryWorktree() async {
+        let scanner = Self.scanner()
+        let worktrees = ["a", "b", "c"].map { Self.worktree(branch: "feature/\($0)") }
+        let recorder = WorktreeCleanupUpdateRecorder()
+
+        let results = await scanner.scan(
+            project: Self.project(),
+            worktrees: worktrees,
+            baseBranch: "main",
+            now: Self.now,
+            idleThresholdDays: 14,
+            onUpdate: { update in await recorder.append(update) }
+        )
+        let updates = await recorder.updates
+
+        #expect(results.map(\.worktree.branch) == ["feature/a", "feature/b", "feature/c"])
+        #expect(updates.map(\.completed) == [1, 2, 3])
+        #expect(updates.allSatisfy { $0.total == 3 })
+        #expect(Set(updates.map(\.candidate.id)) == Set(worktrees.map(\.id)))
+    }
+
+    @Test func localProbesContinueWhileForgeLookupIsPending() async {
+        let forgeGate = WorktreeCleanupForgeGate()
+        let recorder = WorktreeCleanupProbeStartRecorder()
+        let scanner = Self.scanner(
+            facts: { _ in
+                await recorder.recordStart()
+                return Self.cleanFacts
+            },
+            mergeIndex: { _ in
+                await forgeGate.pause()
+                return .success(WorktreeForgeMergeIndex(refsByHeadBranch: [:]))
+            }
+        )
+        let worktrees = (0..<8).map {
+            Self.worktree(branch: "feature/\($0)")
+        }
+        let scanTask = Task {
+            await Self.scan(scanner, worktrees: worktrees)
+        }
+        await forgeGate.waitUntilPaused()
+        try? await Task.sleep(nanoseconds: 500_000_000)
+        let probesStartedBeforeForgeCompleted = await recorder.count
+
+        await forgeGate.resume()
+        _ = await scanTask.value
+
+        #expect(probesStartedBeforeForgeCompleted == worktrees.count)
+    }
+
+    @Test func cancellingScanCancelsMergeIndexLookup() async {
+        let probe = WorktreeCleanupCancellationProbe()
+        let scanner = Self.scanner(mergeIndex: { _ in
+            await probe.markStarted()
+            do {
+                try await Task.sleep(nanoseconds: 1_000_000_000)
+            } catch is CancellationError {
+                await probe.markCancelled()
+            } catch {}
+            return .failure(CancellationError())
+        })
+        let scanTask = Task {
+            await Self.scan(
+                scanner,
+                worktrees: [Self.worktree(branch: "feature/a")]
+            )
+        }
+        await probe.waitUntilStarted()
+
+        scanTask.cancel()
+        _ = await scanTask.value
+
+        #expect(await probe.didObserveCancellation)
+    }
+
+    @Test func cancellingScanDoesNotStartQueuedWorktreeProbes() async {
+        let concurrencyLimit = 4
+        let recorder = WorktreeCleanupProbeStartRecorder()
+        let scanner = Self.scanner(
+            facts: { _ in
+                await recorder.recordStart()
+                try? await Task.sleep(nanoseconds: 10_000_000_000)
+                return Self.cleanFacts
+            },
+            mergeIndex: { _ in
+                try? await Task.sleep(nanoseconds: 10_000_000_000)
+                return .failure(CancellationError())
+            }
+        )
+        let worktrees = (0..<8).map {
+            Self.worktree(branch: "feature/\($0)")
+        }
+        let scanTask = Task {
+            await Self.scan(scanner, worktrees: worktrees)
+        }
+        await recorder.waitUntilStarted(concurrencyLimit)
+
+        scanTask.cancel()
+        _ = await scanTask.value
+
+        #expect(await recorder.count == concurrencyLimit)
+    }
+
     @Test func statusPorcelainDistinguishesUntrackedFromModified() {
         let modified = WorktreeCleanupScanner.parseStatusPorcelain(" M Sources/A.swift\n")
         #expect(modified.hasUncommittedChanges)
@@ -397,4 +500,84 @@ struct WorktreeCleanupScannerTests {
 private actor ProbeCounter {
     private(set) var value = 0
     func increment() { value += 1 }
+}
+
+private actor WorktreeCleanupUpdateRecorder {
+    private(set) var updates: [WorktreeCleanupScanUpdate] = []
+
+    func append(_ update: WorktreeCleanupScanUpdate) {
+        updates.append(update)
+    }
+}
+
+private actor WorktreeCleanupCancellationProbe {
+    private(set) var didObserveCancellation = false
+    private var started = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func markStarted() {
+        started = true
+        startWaiters.forEach { $0.resume() }
+        startWaiters.removeAll()
+    }
+
+    func waitUntilStarted() async {
+        if started { return }
+        await withCheckedContinuation { continuation in
+            startWaiters.append(continuation)
+        }
+    }
+
+    func markCancelled() {
+        didObserveCancellation = true
+    }
+}
+
+private actor WorktreeCleanupProbeStartRecorder {
+    private(set) var count = 0
+    private var waitTarget: Int?
+    private var waitContinuation: CheckedContinuation<Void, Never>?
+
+    func recordStart() {
+        count += 1
+        guard let waitTarget, count >= waitTarget else { return }
+        self.waitTarget = nil
+        waitContinuation?.resume()
+        waitContinuation = nil
+    }
+
+    func waitUntilStarted(_ target: Int) async {
+        if count >= target { return }
+        waitTarget = target
+        await withCheckedContinuation { continuation in
+            waitContinuation = continuation
+        }
+    }
+}
+
+private actor WorktreeCleanupForgeGate {
+    private var isPaused = false
+    private var pauseWaiters: [CheckedContinuation<Void, Never>] = []
+    private var resumeContinuation: CheckedContinuation<Void, Never>?
+
+    func pause() async {
+        isPaused = true
+        pauseWaiters.forEach { $0.resume() }
+        pauseWaiters.removeAll()
+        await withCheckedContinuation { continuation in
+            resumeContinuation = continuation
+        }
+    }
+
+    func waitUntilPaused() async {
+        if isPaused { return }
+        await withCheckedContinuation { continuation in
+            pauseWaiters.append(continuation)
+        }
+    }
+
+    func resume() {
+        resumeContinuation?.resume()
+        resumeContinuation = nil
+    }
 }

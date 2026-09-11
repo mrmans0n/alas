@@ -1,15 +1,16 @@
 import Foundation
 
-enum WorktreeCleanupScanState: Equatable {
-    case idle
-    case scanning
-    case loaded([WorktreeCleanupCandidate])
-    case failed(message: String)
+struct WorktreeCleanupScanProgress: Equatable {
+    let completed: Int
+    let total: Int
+}
 
-    var candidates: [WorktreeCleanupCandidate] {
-        if case .loaded(let candidates) = self { return candidates }
-        return []
-    }
+struct WorktreeCleanupRowState: Identifiable, Equatable {
+    let worktree: Worktree
+    var candidate: WorktreeCleanupCandidate?
+    var isScanning: Bool
+
+    var id: String { worktree.id }
 }
 
 /// Drives the cleanup sheet: runs scans, tracks selection and per-item results.
@@ -19,13 +20,20 @@ enum WorktreeCleanupScanState: Equatable {
 @Observable
 final class WorktreeCleanupModel {
     let projectId: String
-    private(set) var scanState: WorktreeCleanupScanState = .idle
+    private(set) var rows: [WorktreeCleanupRowState]
     private(set) var selectedIds: Set<String> = []
     private(set) var results: [WorktreeBatchResult] = []
     private(set) var isRunning = false
+    private(set) var isScanning = false
+    private(set) var scanProgress: WorktreeCleanupScanProgress?
+    private(set) var scanError: String?
     var keepBranches: Bool
 
-    private let scan: @Sendable () async -> Result<[WorktreeCleanupCandidate], Error>
+    private let loadWorktrees: () -> [Worktree]
+    private let scan: @Sendable (
+        [Worktree],
+        @escaping @Sendable (WorktreeCleanupScanUpdate) async -> Void
+    ) async -> Result<[WorktreeCleanupCandidate], Error>
     /// `(targets, keepBranches, forgeConfirmedMergedBranchSHAs) -> results`.
     /// The third parameter maps a worktree id to the exact HEAD SHA the scan
     /// independently verified as merged via the code host, so the batch can
@@ -40,39 +48,71 @@ final class WorktreeCleanupModel {
     /// prompt, and an archive confirmation must not offer a "Delete" button.
     private let confirm: (String, String, String) -> Bool
     /// Tracks whether a scan has ever completed, independent of the transient
-    /// `.scanning` state — `applyScanResult` uses this, not `scanState`, to
-    /// decide whether to reconcile against a manual selection or seed the
-    /// default one, since `scanState` is already `.scanning` by the time a
-    /// rescan's result comes back.
+    /// loading state, so rescans preserve manual selection while the first
+    /// successful scan seeds the default selection.
     private var hasCompletedAScan = false
 
     init(
         projectId: String,
+        worktrees: [Worktree],
         keepBranches: Bool,
-        scan: @escaping @Sendable () async -> Result<[WorktreeCleanupCandidate], Error>,
+        loadWorktrees: @escaping () -> [Worktree],
+        scan: @escaping @Sendable (
+            [Worktree],
+            @escaping @Sendable (WorktreeCleanupScanUpdate) async -> Void
+        ) async -> Result<[WorktreeCleanupCandidate], Error>,
         deleteBatch: @escaping ([Worktree], Bool, [String: String]) async -> [WorktreeBatchResult],
         archiveBatch: @escaping ([Worktree]) -> [WorktreeBatchResult],
         confirm: @escaping (String, String, String) -> Bool
     ) {
         self.projectId = projectId
+        self.rows = worktrees.map {
+            WorktreeCleanupRowState(worktree: $0, candidate: nil, isScanning: false)
+        }
         self.keepBranches = keepBranches
+        self.loadWorktrees = loadWorktrees
         self.scan = scan
         self.deleteBatch = deleteBatch
         self.archiveBatch = archiveBatch
         self.confirm = confirm
     }
 
-    var candidates: [WorktreeCleanupCandidate] { scanState.candidates }
+    var candidates: [WorktreeCleanupCandidate] {
+        rows.compactMap(\.candidate)
+    }
 
     func runScan() async {
-        scanState = .scanning
-        switch await scan() {
+        guard !isScanning else { return }
+
+        let worktrees = loadWorktrees()
+        let previousCandidates = Dictionary(
+            uniqueKeysWithValues: rows.compactMap { row in
+                row.candidate.map { (row.id, $0) }
+            }
+        )
+        rows = worktrees.map { worktree in
+            WorktreeCleanupRowState(
+                worktree: worktree,
+                candidate: previousCandidates[worktree.id],
+                isScanning: true
+            )
+        }
+        isScanning = true
+        scanProgress = .init(completed: 0, total: worktrees.count)
+        scanError = nil
+
+        switch await scan(worktrees, { [weak self] update in
+            await self?.applyScanUpdate(update)
+        }) {
         case .success(let candidates):
             applyScanResult(candidates)
         case .failure(let error):
-            scanState = .failed(
-                message: (error as? LocalizedError)?.errorDescription ?? "\(error)"
-            )
+            isScanning = false
+            scanProgress = nil
+            scanError = (error as? LocalizedError)?.errorDescription ?? "\(error)"
+            for index in rows.indices {
+                rows[index].isScanning = false
+            }
         }
     }
 
@@ -80,8 +120,18 @@ final class WorktreeCleanupModel {
     /// load. Clears any results from a prior batch action, since starting a
     /// fresh manual scan means the user is done reviewing that outcome.
     func refresh() async {
+        guard !isScanning else { return }
         results = []
         await runScan()
+    }
+
+    private func applyScanUpdate(_ update: WorktreeCleanupScanUpdate) {
+        guard isScanning,
+              let index = rows.firstIndex(where: { $0.id == update.candidate.id })
+        else { return }
+        rows[index].candidate = update.candidate
+        rows[index].isScanning = false
+        scanProgress = .init(completed: update.completed, total: update.total)
     }
 
     /// Applies a fresh scan. If a scan has completed before, keeps any manual
@@ -92,7 +142,12 @@ final class WorktreeCleanupModel {
     func applyScanResult(_ candidates: [WorktreeCleanupCandidate]) {
         let previousSelection = selectedIds
         let hadResults = hasCompletedAScan
-        scanState = .loaded(candidates)
+        rows = candidates.map {
+            WorktreeCleanupRowState(worktree: $0.worktree, candidate: $0, isScanning: false)
+        }
+        isScanning = false
+        scanProgress = nil
+        scanError = nil
         hasCompletedAScan = true
         if hadResults {
             let selectable = Set(candidates.filter(\.isSelectable).map(\.id))
@@ -111,7 +166,8 @@ final class WorktreeCleanupModel {
     /// Per-item override. Excluded rows never become selectable, which is what
     /// keeps a main or remote worktree out of any batch.
     func toggle(_ id: String) {
-        guard let candidate = candidates.first(where: { $0.id == id }),
+        guard !isScanning,
+              let candidate = candidates.first(where: { $0.id == id }),
               candidate.isSelectable
         else { return }
         if selectedIds.contains(id) {
@@ -162,7 +218,11 @@ final class WorktreeCleanupModel {
 
     func deleteSelected() async {
         let targets = selectedWorktrees()
-        guard !targets.isEmpty, !isRunning else { return }
+        guard !targets.isEmpty,
+              !isRunning,
+              !isScanning,
+              scanError == nil
+        else { return }
         guard confirm(
             "Delete \(targets.count) \(targets.count == 1 ? "worktree" : "worktrees")?",
             confirmationMessage(),
@@ -201,7 +261,11 @@ final class WorktreeCleanupModel {
 
     func archiveSelected() async {
         let targets = selectedWorktrees()
-        guard !targets.isEmpty, !isRunning else { return }
+        guard !targets.isEmpty,
+              !isRunning,
+              !isScanning,
+              scanError == nil
+        else { return }
         guard confirm(
             "Archive \(targets.count) \(targets.count == 1 ? "worktree" : "worktrees")?",
             archiveConfirmationMessage(),
@@ -241,10 +305,13 @@ extension WorktreeCleanupModel {
     static func forTesting(
         candidates: [WorktreeCleanupCandidate]
     ) -> WorktreeCleanupModel {
+        let worktrees = candidates.map(\.worktree)
         let model = WorktreeCleanupModel(
             projectId: "p",
+            worktrees: worktrees,
             keepBranches: false,
-            scan: { .success(candidates) },
+            loadWorktrees: { worktrees },
+            scan: { _, _ in .success(candidates) },
             deleteBatch: { (_: [Worktree], _: Bool, _: [String: String]) in [] },
             archiveBatch: { _ in [] },
             confirm: { _, _, _ in true }

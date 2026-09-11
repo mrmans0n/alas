@@ -19,6 +19,19 @@ struct WorktreeCleanupGitFacts: Equatable, Sendable {
     var lastActivity: Date?
 }
 
+struct WorktreeCleanupScanUpdate: Equatable, Sendable {
+    let candidate: WorktreeCleanupCandidate
+    let completed: Int
+    let total: Int
+}
+
+private struct WorktreeCleanupProbeResult: Sendable {
+    let index: Int
+    let facts: WorktreeCleanupGitFacts
+    let activeSessionCount: Int
+    let operationInFlight: Bool
+}
+
 /// Merged review requests for one repository, keyed by head branch. A branch
 /// name can have multiple entries: it may have been reused across several
 /// merged reviews over time, and the caller must be able to check the local
@@ -72,12 +85,13 @@ struct WorktreeCleanupScanner: Sendable {
         worktrees: [Worktree],
         baseBranch: String,
         now: Date,
-        idleThresholdDays: Int
+        idleThresholdDays: Int,
+        onUpdate: @escaping @Sendable (WorktreeCleanupScanUpdate) async -> Void = { _ in }
     ) async -> [WorktreeCleanupCandidate] {
         // Remote/SSH projects are out of scope for cleanup: excluded up front,
         // with no probes run at all.
         if project.host != nil {
-            return worktrees.map { worktree in
+            let candidates = worktrees.map { worktree in
                 WorktreeCleanupClassifier.classify(
                     worktree: worktree,
                     probe: Self.remoteProbe(for: worktree),
@@ -85,67 +99,116 @@ struct WorktreeCleanupScanner: Sendable {
                     idleThresholdDays: idleThresholdDays
                 )
             }
-        }
-
-        let indexResult = await dependencies.mergeIndex(project)
-        let facts = await collectGitFacts(for: worktrees)
-
-        var candidates: [WorktreeCleanupCandidate] = []
-        candidates.reserveCapacity(worktrees.count)
-        for (offset, worktree) in worktrees.enumerated() {
-            let mergeState = Self.mergeState(
-                branch: worktree.branch,
-                baseBranch: baseBranch,
-                isMergedLocally: facts[offset].isMergedLocally,
-                localHeadSHA: facts[offset].headSHA,
-                indexResult: indexResult
-            )
-            // A branch the code host confirms is merged has its commits on the
-            // remote by definition. `unpushedCount` reports 1 whenever `@{u}`
-            // does not resolve, which is also what happens once the upstream
-            // has been pruned after a "delete branch on merge" — a stale
-            // local-tracking artifact, not unpublished work. It must not drive
-            // the dirty verdict the way a genuinely unpublished branch does.
-            let unpushedCommitCount: Int
-            if case .mergedOnForge = mergeState {
-                unpushedCommitCount = 0
-            } else {
-                unpushedCommitCount = facts[offset].unpushedCommitCount
+            for (offset, candidate) in candidates.enumerated() {
+                await onUpdate(.init(
+                    candidate: candidate,
+                    completed: offset + 1,
+                    total: candidates.count
+                ))
             }
-            let probe = WorktreeCleanupProbe(
-                isMainWorktree: worktree.isMainWorktree == true,
-                isRemote: false,
-                hasUncommittedChanges: facts[offset].hasUncommittedChanges,
-                hasUntrackedFiles: facts[offset].hasUntrackedFiles,
-                unpushedCommitCount: unpushedCommitCount,
-                stashCount: facts[offset].stashCount,
-                activeSessionCount: await dependencies.activeSessionCount(worktree.id),
-                operationInFlight: await dependencies.operationInFlight(worktree.id),
-                // `worktree.lastActivity` is cached from the last topology
-                // refresh — ordinary commit activity while the app is open
-                // does not update it. Prefer a freshly-read value so a
-                // worktree just touched and merged since that last refresh
-                // does not read as long-idle and get default-selected.
-                //
-                // A freshly-read value can itself predate the checkout: it is
-                // derived from the branch ref's own history, so a worktree
-                // just created from an old merged branch would otherwise
-                // inherit that branch's age and read as idle immediately.
-                // The worktree cannot be idle before it existed.
-                lastActivity: max(
-                    facts[offset].lastActivity ?? worktree.lastActivity,
-                    worktree.createdAt
-                ),
-                mergeState: mergeState
-            )
-            candidates.append(WorktreeCleanupClassifier.classify(
-                worktree: worktree,
-                probe: probe,
-                now: now,
-                idleThresholdDays: idleThresholdDays
-            ))
+            return candidates
         }
-        return candidates
+
+        guard !worktrees.isEmpty else { return [] }
+
+        // Local probes and the forge query are independent. Stream bounded
+        // probe results into a buffer while the network request runs, then
+        // publish buffered and future rows as soon as forge evidence exists.
+        let (probeResults, probeTask) = localProbeResults(for: worktrees)
+        let mergeIndexTask = Task {
+            await dependencies.mergeIndex(project)
+        }
+        defer {
+            probeTask.cancel()
+            mergeIndexTask.cancel()
+        }
+
+        return await withTaskCancellationHandler {
+            let indexResult = await mergeIndexTask.value
+            var results = [WorktreeCleanupCandidate?](
+                repeating: nil,
+                count: worktrees.count
+            )
+            var completed = 0
+
+            for await probe in probeResults {
+                guard !Task.isCancelled else { break }
+                let worktree = worktrees[probe.index]
+                let candidate = Self.candidate(
+                    worktree: worktree,
+                    facts: probe.facts,
+                    activeSessionCount: probe.activeSessionCount,
+                    operationInFlight: probe.operationInFlight,
+                    baseBranch: baseBranch,
+                    indexResult: indexResult,
+                    now: now,
+                    idleThresholdDays: idleThresholdDays
+                )
+                results[probe.index] = candidate
+                completed += 1
+                await onUpdate(.init(
+                    candidate: candidate,
+                    completed: completed,
+                    total: worktrees.count
+                ))
+            }
+
+            return results.compactMap { $0 }
+        } onCancel: {
+            probeTask.cancel()
+            mergeIndexTask.cancel()
+        }
+    }
+
+    private func localProbeResults(
+        for worktrees: [Worktree]
+    ) -> (
+        stream: AsyncStream<WorktreeCleanupProbeResult>,
+        task: Task<Void, Never>
+    ) {
+        let (stream, continuation) = AsyncStream<WorktreeCleanupProbeResult>.makeStream()
+        let task = Task {
+            await withTaskGroup(of: WorktreeCleanupProbeResult.self) { group in
+                var next = 0
+
+                func addTask(_ index: Int) {
+                    let worktree = worktrees[index]
+                    _ = group.addTaskUnlessCancelled {
+                        async let facts = dependencies.gitFacts(worktree)
+                        async let activeSessionCount =
+                            dependencies.activeSessionCount(worktree.id)
+                        async let operationInFlight =
+                            dependencies.operationInFlight(worktree.id)
+
+                        let inputs = await (
+                            facts,
+                            activeSessionCount,
+                            operationInFlight
+                        )
+                        return WorktreeCleanupProbeResult(
+                            index: index,
+                            facts: inputs.0,
+                            activeSessionCount: inputs.1,
+                            operationInFlight: inputs.2
+                        )
+                    }
+                }
+
+                while next < worktrees.count && next < Self.probeConcurrency {
+                    addTask(next)
+                    next += 1
+                }
+                while let result = await group.next() {
+                    continuation.yield(result)
+                    if next < worktrees.count {
+                        addTask(next)
+                        next += 1
+                    }
+                }
+            }
+            continuation.finish()
+        }
+        return (stream, task)
     }
 
     /// Resolves merge state, preserving the distinction the acceptance criteria
@@ -201,50 +264,56 @@ struct WorktreeCleanupScanner: Sendable {
         )
     }
 
-    /// Probes run concurrently, bounded, and results are re-ordered to match
-    /// the input so callers can zip by index.
-    private func collectGitFacts(
-        for worktrees: [Worktree]
-    ) async -> [WorktreeCleanupGitFacts] {
-        await withTaskGroup(
-            of: (Int, WorktreeCleanupGitFacts).self
-        ) { group in
-            var results = [WorktreeCleanupGitFacts?](
-                repeating: nil,
-                count: worktrees.count
-            )
-            var next = 0
-
-            func addTask(_ index: Int) {
-                let worktree = worktrees[index]
-                let probe = dependencies.gitFacts
-                group.addTask { (index, await probe(worktree)) }
-            }
-
-            while next < worktrees.count && next < Self.probeConcurrency {
-                addTask(next)
-                next += 1
-            }
-            while let (index, facts) = await group.next() {
-                results[index] = facts
-                if next < worktrees.count {
-                    addTask(next)
-                    next += 1
-                }
-            }
-
-            return results.map {
-                $0 ?? WorktreeCleanupGitFacts(
-                    hasUncommittedChanges: true,
-                    hasUntrackedFiles: false,
-                    unpushedCommitCount: 0,
-                    stashCount: 0,
-                    isMergedLocally: false,
-                    headSHA: nil,
-                    lastActivity: nil
-                )
-            }
+    private static func candidate(
+        worktree: Worktree,
+        facts: WorktreeCleanupGitFacts,
+        activeSessionCount: Int,
+        operationInFlight: Bool,
+        baseBranch: String,
+        indexResult: Result<WorktreeForgeMergeIndex, Error>,
+        now: Date,
+        idleThresholdDays: Int
+    ) -> WorktreeCleanupCandidate {
+        let mergeState = mergeState(
+            branch: worktree.branch,
+            baseBranch: baseBranch,
+            isMergedLocally: facts.isMergedLocally,
+            localHeadSHA: facts.headSHA,
+            indexResult: indexResult
+        )
+        // A branch the code host confirms is merged has its commits on the
+        // remote by definition. A missing upstream after branch pruning is
+        // not unpublished work.
+        let unpushedCommitCount: Int
+        if case .mergedOnForge = mergeState {
+            unpushedCommitCount = 0
+        } else {
+            unpushedCommitCount = facts.unpushedCommitCount
         }
+        let probe = WorktreeCleanupProbe(
+            isMainWorktree: worktree.isMainWorktree == true,
+            isRemote: false,
+            hasUncommittedChanges: facts.hasUncommittedChanges,
+            hasUntrackedFiles: facts.hasUntrackedFiles,
+            unpushedCommitCount: unpushedCommitCount,
+            stashCount: facts.stashCount,
+            activeSessionCount: activeSessionCount,
+            operationInFlight: operationInFlight,
+            // The cached activity can be stale, while branch history can
+            // predate the checkout. The worktree cannot be idle before it
+            // existed.
+            lastActivity: max(
+                facts.lastActivity ?? worktree.lastActivity,
+                worktree.createdAt
+            ),
+            mergeState: mergeState
+        )
+        return WorktreeCleanupClassifier.classify(
+            worktree: worktree,
+            probe: probe,
+            now: now,
+            idleThresholdDays: idleThresholdDays
+        )
     }
 }
 

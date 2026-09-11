@@ -19,6 +19,7 @@ struct WorktreeCleanupSheet: View {
                 ) {
                     Task { await model.refresh() }
                 }
+                .disabled(model.isScanning || model.isRunning)
             },
             content: { content },
             cancelTitle: "Close",
@@ -26,82 +27,91 @@ struct WorktreeCleanupSheet: View {
             confirmStyle: .primary,
             onCancel: onClose,
             onConfirm: { Task { await model.deleteSelected() } },
-            confirmEnabled: !model.selectedIds.isEmpty && !model.isRunning
+            confirmEnabled: !model.selectedIds.isEmpty
+                && !model.isRunning
+                && !model.isScanning
+                && model.scanError == nil
         )
     }
 
     private var subtitle: String? {
-        switch model.scanState {
-        case .idle, .scanning:
-            return "Checking merge state, local changes, and activity…"
-        case .failed(let message):
-            return message
-        case .loaded(let candidates):
-            let count = candidates.filter(\.isSelectedByDefault).count
-            return count == 0
-                ? "Nothing looks ready to clean up."
-                : "\(count) of \(candidates.count) look ready to clean up."
+        if model.isScanning {
+            guard let progress = model.scanProgress, progress.total > 0 else {
+                return "Checking worktrees…"
+            }
+            return "Checking \(progress.completed) of \(progress.total) worktrees…"
         }
+        if let error = model.scanError {
+            return error
+        }
+        let candidates = model.candidates
+        let count = candidates.filter(\.isSelectedByDefault).count
+        return count == 0
+            ? "Nothing looks ready to clean up."
+            : "\(count) of \(candidates.count) look ready to clean up."
     }
 
-    @ViewBuilder
     private var content: some View {
-        switch model.scanState {
-        case .idle, .scanning:
-            HStack(spacing: 8) {
-                ProgressView().controlSize(.small)
-                Text("Scanning…")
-                    .font(.system(size: 12))
-                    .foregroundColor(theme.color("fg-dim"))
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .frame(height: 220)
-
-        case .failed(let message):
-            VStack(alignment: .leading, spacing: 10) {
-                Text(message)
-                    .font(.system(size: 12))
-                    .foregroundColor(theme.color("fg-dim"))
-                AlasButton(title: "Retry", style: .normal) {
-                    Task { await model.refresh() }
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .frame(height: 220, alignment: .top)
-
-        case .loaded(let candidates):
-            VStack(alignment: .leading, spacing: 10) {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 6) {
-                        ForEach(candidates) { candidate in
-                            WorktreeCleanupRow(
-                                candidate: candidate,
-                                isSelected: model.selectedIds.contains(candidate.id),
-                                result: model.results.first { $0.worktreeId == candidate.id },
-                                onToggle: { model.toggle(candidate.id) }
-                            )
-                        }
-                    }
-                }
-                .frame(height: 320)
-
-                if showKeepBranchOption {
-                    Toggle("Keep local branches", isOn: $model.keepBranches)
-                        .font(.system(size: 12))
-                        .toggleStyle(.checkbox)
-                }
-
+        VStack(alignment: .leading, spacing: 10) {
+            if let error = model.scanError {
                 HStack(spacing: 8) {
-                    AlasButton(title: "Archive Selected", style: .normal) {
-                        Task { await model.archiveSelected() }
+                    Text(error)
+                        .font(.system(size: 11))
+                        .foregroundColor(theme.color("fg-dim"))
+                    Spacer()
+                    AlasButton(title: "Retry", style: .normal) {
+                        Task { await model.refresh() }
                     }
-                    .disabled(model.selectedIds.isEmpty || model.isRunning)
+                }
+                .padding(8)
+                .background(
+                    RoundedRectangle(cornerRadius: 6).fill(theme.color("bg-2"))
+                )
+            }
 
-                    if !model.results.isEmpty {
-                        Text(WorktreeCleanupModel.summary(for: model.results))
-                            .font(.system(size: 11.5))
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 6) {
+                    if model.rows.isEmpty {
+                        Text(model.isScanning ? "Looking for worktrees…" : "No worktrees found.")
+                            .font(.system(size: 12))
                             .foregroundColor(theme.color("fg-dim"))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 8)
                     }
+                    ForEach(model.rows) { row in
+                        WorktreeCleanupRow(
+                            row: row,
+                            isSelected: model.selectedIds.contains(row.id),
+                            isSelectionDisabled: model.isScanning,
+                            result: model.results.first { $0.worktreeId == row.id },
+                            onToggle: { model.toggle(row.id) }
+                        )
+                    }
+                }
+            }
+            .frame(height: 320)
+
+            if showKeepBranchOption {
+                Toggle("Keep local branches", isOn: $model.keepBranches)
+                    .font(.system(size: 12))
+                    .toggleStyle(.checkbox)
+            }
+
+            HStack(spacing: 8) {
+                AlasButton(title: "Archive Selected", style: .normal) {
+                    Task { await model.archiveSelected() }
+                }
+                .disabled(
+                    model.selectedIds.isEmpty
+                        || model.isRunning
+                        || model.isScanning
+                        || model.scanError != nil
+                )
+
+                if !model.results.isEmpty {
+                    Text(WorktreeCleanupModel.summary(for: model.results))
+                        .font(.system(size: 11.5))
+                        .foregroundColor(theme.color("fg-dim"))
                 }
             }
         }
@@ -109,8 +119,9 @@ struct WorktreeCleanupSheet: View {
 }
 
 private struct WorktreeCleanupRow: View {
-    let candidate: WorktreeCleanupCandidate
+    let row: WorktreeCleanupRowState
     let isSelected: Bool
+    let isSelectionDisabled: Bool
     let result: WorktreeBatchResult?
     let onToggle: () -> Void
 
@@ -121,34 +132,53 @@ private struct WorktreeCleanupRow: View {
             Toggle("", isOn: Binding(get: { isSelected }, set: { _ in onToggle() }))
                 .labelsHidden()
                 .toggleStyle(.checkbox)
-                .disabled(!candidate.isSelectable)
+                .disabled(isSelectionDisabled || row.candidate?.isSelectable != true)
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
-                    Text(candidate.worktree.branch)
+                    Text(row.worktree.branch)
                         .font(.system(size: 12.5, weight: .medium))
                         .foregroundColor(theme.color("fg"))
-                    Text(verdictLabel)
-                        .font(.system(size: 10.5, weight: .medium))
-                        .padding(.horizontal, 6).padding(.vertical, 1)
-                        .background(
-                            RoundedRectangle(cornerRadius: 4)
-                                .fill(theme.color(verdictColor).opacity(0.18))
-                        )
-                        .foregroundColor(theme.color(verdictColor))
-                }
-                ForEach(candidate.signals, id: \.self) { signal in
-                    HStack(spacing: 5) {
-                        Icon(
-                            name: signal.isBlocking ? "x" : "check",
-                            size: 9,
-                            color: theme.color(signal.isBlocking ? "fg-muted" : "add")
-                        )
-                        Text(signal.label)
-                            .font(.system(size: 11))
-                            .foregroundColor(theme.color("fg-dim"))
+                    if let candidate = row.candidate {
+                        Text(verdictLabel(candidate.verdict))
+                            .font(.system(size: 10.5, weight: .medium))
+                            .padding(.horizontal, 6).padding(.vertical, 1)
+                            .background(
+                                RoundedRectangle(cornerRadius: 4)
+                                    .fill(theme.color(verdictColor(candidate.verdict)).opacity(0.18))
+                            )
+                            .foregroundColor(theme.color(verdictColor(candidate.verdict)))
+                    }
+                    if row.isScanning {
+                        Spinner(lineWidth: 1.4, duration: 0.8)
+                            .frame(width: 11, height: 11)
                     }
                 }
+                Text(row.worktree.path.path)
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .foregroundColor(theme.color("fg-faint"))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                if let candidate = row.candidate {
+                    ForEach(candidate.signals, id: \.self) { signal in
+                        HStack(spacing: 5) {
+                            Icon(
+                                name: signal.isBlocking ? "x" : "check",
+                                size: 9,
+                                color: theme.color(signal.isBlocking ? "fg-muted" : "add")
+                            )
+                            Text(signal.label)
+                                .font(.system(size: 11))
+                                .foregroundColor(theme.color("fg-dim"))
+                        }
+                    }
+                } else {
+                    Text(row.isScanning ? "Checking merge state, changes, and activity…" : "Details unavailable")
+                        .font(.system(size: 11))
+                        .foregroundColor(theme.color("fg-dim"))
+                }
+
                 if let result, let text = resultLabel(result) {
                     Text(text)
                         .font(.system(size: 11, weight: .medium))
@@ -161,11 +191,11 @@ private struct WorktreeCleanupRow: View {
         .background(
             RoundedRectangle(cornerRadius: 6).fill(theme.color("bg-2"))
         )
-        .opacity(candidate.isSelectable ? 1 : 0.6)
+        .opacity(row.candidate?.isSelectable == false ? 0.6 : 1)
     }
 
-    private var verdictLabel: String {
-        switch candidate.verdict {
+    private func verdictLabel(_ verdict: WorktreeCleanupVerdict) -> String {
+        switch verdict {
         case .candidate(.high):   return "Merged"
         case .candidate(.medium): return "Merged locally"
         case .candidate(.low):    return "Stale"
@@ -176,8 +206,8 @@ private struct WorktreeCleanupRow: View {
         }
     }
 
-    private var verdictColor: String {
-        switch candidate.verdict {
+    private func verdictColor(_ verdict: WorktreeCleanupVerdict) -> String {
+        switch verdict {
         case .candidate: return "add"
         case .busy:      return "mod"
         case .dirty:     return "del"
