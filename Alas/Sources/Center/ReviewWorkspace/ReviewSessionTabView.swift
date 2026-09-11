@@ -102,6 +102,7 @@ struct ReviewSessionTabView: View {
     @State private var draftCommentScrollCommand: DiffReviewDraftCommentScrollCommand?
     @State private var draftCommentScrollController = DiffReviewDraftCommentScrollController()
     @State private var commentJumpConsumer = ReviewSessionCommentJumpConsumer()
+    @State private var attentionCommentCommand: (submitted: DiffReviewDraftCommentScrollCommand, requested: DiffReviewDraftCommentScrollCommand)?
     @State private var focusedFeedbackID: String?
     @State private var inlineFeedbackScrollCommand: DiffReviewInlineFeedbackScrollCommand?
     @State private var inlineFeedbackScrollController = DiffReviewInlineFeedbackScrollController()
@@ -415,7 +416,11 @@ struct ReviewSessionTabView: View {
                 draftCommentScrollCommand: draftCommentScrollCommand,
                 draftCommentActions: draftCommentActions(for: loaded),
                 onSelectDraftComment: selectDraftComment,
-                onSaveDraftComment: saveDraftComment
+                onSaveDraftComment: saveDraftComment,
+                onDraftCommentReveal: { command, succeeded in
+                    let requested = attentionCommentCommand?.submitted == command ? attentionCommentCommand?.requested : nil
+                    completeAttentionCommentReveal(requested ?? command, succeeded: succeeded)
+                }
             )
             .environment(\.reviewDraftSummaryRailStatus, ReviewDraftSummaryRailStatus(record: record))
         }
@@ -647,6 +652,7 @@ struct ReviewSessionTabView: View {
             loadError = error.localizedDescription
             isLoading = false
             loadCoordinator.finish(token)
+            if let request = tabState.commentScrollRequest { completeAttentionCommentReveal(request, succeeded: false) }
             return true
         }
     }
@@ -1200,12 +1206,19 @@ struct ReviewSessionTabView: View {
     }
 
     private func selectDraftComment(_ comment: ReviewDraftComment) {
+        guard loaded?.session.files.contains(where: { $0.id == comment.fileID }) == true else { return }
         setFocusedDraftCommentID(comment.id, persist: true)
         setSelectedFileID(comment.fileID, persist: true)
-        draftCommentScrollCommand = draftCommentScrollController.command(
+        let command = draftCommentScrollController.command(
             commentID: comment.id,
             fileID: comment.fileID
         )
+        attentionCommentCommand = nil
+        if let worktree {
+            appState?.beginReviewAttentionInteraction(worktreeID: worktree.id, tabID: tabState.id,
+                sessionID: comment.sessionID.rawValue, command: command)
+        }
+        draftCommentScrollCommand = command
     }
 
     private func revealRequestedComment(_ request: DiffReviewDraftCommentScrollCommand?) {
@@ -1213,9 +1226,23 @@ struct ReviewSessionTabView: View {
             request, sessionID: tabState.sessionID,
             isLoaded: loaded != nil && loadCoordinator.activeToken == nil && loadedDraftSessionID == record?.target.draftSessionID
         ) else { return }
+        guard loaded?.session.files.contains(where: { $0.id == request.fileID }) == true,
+              draftCommentController?.comments.contains(where: { $0.id == request.commentID && $0.fileID == request.fileID }) == true else {
+            completeAttentionCommentReveal(request, succeeded: false)
+            return
+        }
         setSelectedFileID(request.fileID, persist: false)
         setFocusedDraftCommentID(request.commentID, persist: false)
-        draftCommentScrollCommand = draftCommentScrollController.command(commentID: request.commentID, fileID: request.fileID)
+        let command = draftCommentScrollController.command(commentID: request.commentID, fileID: request.fileID)
+        attentionCommentCommand = (command, request)
+        draftCommentScrollCommand = command
+    }
+
+    private func completeAttentionCommentReveal(_ command: DiffReviewDraftCommentScrollCommand, succeeded: Bool) {
+        guard let worktree,
+              let sessionID = record?.target.draftSessionID.rawValue ?? appState?.attentionPendingReviewReveal?.sessionID else { return }
+        appState?.completeReviewAttentionReveal(worktreeID: worktree.id, tabID: tabState.id,
+            sessionID: sessionID, command: command, succeeded: succeeded)
     }
 
     private func selectInlineFeedback(_ item: DiffReviewInlineFeedback) {

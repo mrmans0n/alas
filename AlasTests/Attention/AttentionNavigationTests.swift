@@ -5,6 +5,47 @@ import Testing
 @Suite("Attention navigation", .serialized)
 @MainActor
 struct AttentionNavigationTests {
+    @Test func ordinarySessionFocusAcknowledgesOnlyTheExactSession() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        fixture.state.selectedWorktreeId = "worktree"
+        let first = fixture.state.tabs.appendACP(owner: .worktree("worktree"), sessionId: "s1", title: "First")
+        _ = fixture.state.tabs.appendACP(owner: .worktree("worktree"), sessionId: "s2", title: "Second")
+        let item = try fixture.record(.session(sessionID: "s1"))
+        let other = try fixture.record(.session(sessionID: "s2"))
+        fixture.state.activateWorktreeCenterTab(worktreeId: "worktree", tabId: first.id)
+        #expect(fixture.state.attentionStore.acknowledgments[item.eventID] != nil)
+        #expect(fixture.state.attentionStore.acknowledgments[other.eventID] == nil)
+    }
+
+    @Test func ordinaryFailureDetailsAcknowledgeMatchingFailure() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let failure = RunScriptFailure(id: "failure", runID: "run", scriptKey: "test", scriptName: "Tests", worktreeID: "worktree", branch: "main", exitCode: 1, completedAt: Date(), capturedOutput: .unavailable)
+        fixture.state.runScriptFailureQueue.append(failure)
+        let item = try fixture.record(.runScriptFailure(failureID: failure.id))
+        fixture.state.presentRunScriptFailure(failure)
+        #expect(fixture.state.attentionStore.acknowledgments[item.eventID] != nil)
+    }
+
+    @Test func ordinaryConflictFocusAcknowledgesOnlyAfterOpeningAnExistingConflict() throws {
+        let fixture = try Fixture()
+        defer { fixture.state.rightPaneStore.deactivate()
+        fixture.cleanup() }
+        fixture.state.selectedWorktreeId = "worktree"
+        let pane = fixture.state.rightPaneStore.state(for: fixture.worktree, baseBranch: "", comparisonMode: fixture.state.config.changes.comparisonMode)
+        let item = try fixture.record(.conflicts(path: "file.swift"))
+        pane.openConflict?("missing.swift")
+        #expect(fixture.state.attentionStore.acknowledgments[item.eventID] == nil)
+        pane.changes = [ChangedFile(path: "file.swift", status: "U", stage: .unstaged, add: 0, del: 0, renameFrom: nil, conflict: .bothModified)]
+        pane.openConflict?("file.swift")
+        #expect(fixture.state.attentionStore.acknowledgments[item.eventID] != nil)
+    }
+
+    @Test func staleSyncBlockageDoesNotClaimTheRemoteIsStillAhead() {
+        #expect(AttentionKind.reviewSyncBlocked.historicalTitle(from: "Remote branch is ahead") == "Remote branch was ahead")
+    }
+
     @Test func refreshingLoadedReviewDoesNotReplayConsumedCommentJump() {
         var consumer = ReviewSessionCommentJumpConsumer()
         let file = DiffReviewFileID(namespace: "unstaged", path: "file.swift")
@@ -212,7 +253,8 @@ struct AttentionNavigationTests {
         #expect(fixture.state.attentionStore.acknowledgments[missing.eventID] == nil)
     }
 
-    @Test func liveReviewRouteResolvesDraftSessionAndFocusesExactComment() async throws {
+    @Test(arguments: [true, false])
+    func liveReviewRouteWaitsForConfirmedCommentReveal(succeeds: Bool) async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
         let sessions = ReviewSessionStore(url: fixture.directory.appendingPathComponent("reviews.json"))
@@ -225,16 +267,37 @@ struct AttentionNavigationTests {
         try comments.save(comment)
         fixture.state.attentionNavigationEnvironment = .live(appState: fixture.state, reviewSessionStore: sessions, reviewCommentStore: comments)
         let item = try fixture.record(.reviewComment(sessionID: target.draftSessionID.rawValue, commentID: "comment2"))
-        #expect(await fixture.state.openAttentionItem(item) == .opened)
+        #expect(await fixture.state.openAttentionItem(item) != .opened)
+        #expect(fixture.state.attentionStore.acknowledgments[item.eventID] == nil)
         let tab = try #require(fixture.state.tabs.tabs(forWorktree: "worktree").first)
         guard case .reviewSession(let session) = tab else { Issue.record("Expected review tab")
         return }
         #expect(session.sessionID.rawValue == "review-record")
         #expect(session.focusedCommentID == "comment2")
         #expect(session.selectedFileID == fileID)
+        let command = try #require(session.commentScrollRequest)
+        fixture.state.completeReviewAttentionReveal(worktreeID: "worktree", tabID: tab.id,
+            sessionID: target.draftSessionID.rawValue, command: command, succeeded: succeeds)
+        #expect((fixture.state.attentionStore.acknowledgments[item.eventID] != nil) == succeeds)
+        #expect((fixture.state.attentionNavigationErrors[item.eventID] != nil) == !succeeds)
         let missing = try fixture.record(.reviewComment(sessionID: target.draftSessionID.rawValue, commentID: "missing"))
         #expect(await fixture.state.openAttentionItem(missing) == .unavailable("The review comment is no longer available."))
         #expect(fixture.state.attentionStore.acknowledgments[missing.eventID] == nil)
+    }
+
+    @Test func reviewRevealDoesNotAcknowledgeReplyArrivingDuringScroll() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        fixture.state.selectedWorktreeId = "worktree"
+        let tab = fixture.state.tabs.appendACP(owner: .worktree("worktree"), sessionId: "placeholder", title: "Review")
+        let target = AttentionJumpTarget.reviewComment(sessionID: "review", commentID: "comment")
+        let first = try fixture.record(target)
+        let command = DiffReviewDraftCommentScrollCommand(commentID: "comment", fileID: .init(namespace: "unstaged", path: "file.swift"), generation: 1)
+        fixture.state.beginReviewAttentionInteraction(worktreeID: "worktree", tabID: tab.id, sessionID: "review", command: command)
+        let newer = try fixture.record(target)
+        fixture.state.completeReviewAttentionReveal(worktreeID: "worktree", tabID: tab.id, sessionID: "review", command: command, succeeded: true)
+        #expect(fixture.state.attentionStore.acknowledgments[first.eventID] != nil)
+        #expect(fixture.state.attentionStore.acknowledgments[newer.eventID] == nil)
     }
 
     private struct MemoryStore: PersistenceStoreProtocol {

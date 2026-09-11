@@ -516,6 +516,7 @@ extension AppState {
 
     func presentRunScriptFailure(_ failure: RunScriptFailure) {
         selectedRunScriptFailure = failure
+        acknowledgeAttentionSurface(worktreeID: failure.worktreeID, target: .runScriptFailure(failureID: failure.id))
     }
 
     func waitForRunScriptCompletionTasksForTesting() async {

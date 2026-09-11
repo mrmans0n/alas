@@ -72,6 +72,7 @@ struct DiffReviewSurface: View {
     var draftCommentsByFileID: [DiffReviewFileID: [ReviewDraftComment]] = [:]
     var focusedDraftCommentID: String? = nil
     var draftCommentScrollCommand: DiffReviewDraftCommentScrollCommand? = nil
+    var onDraftCommentReveal: (DiffReviewDraftCommentScrollCommand, Bool) -> Void = { _, _ in }
     var draftCommentActions = ReviewDraftCommentActions()
     var onSelectDraftComment: (ReviewDraftComment) -> Void = { _ in }
     var onSaveDraftComment: (DiffReviewFileID, String, String?, ReviewDraftCommentAnchor, String) -> Void = { _, _, _, _, _ in }
@@ -140,7 +141,8 @@ struct DiffReviewSurface: View {
         canReply: Bool = false,
         canResolve: Bool = false,
         onStageReply: @escaping (DiffInlineCommentThread, String) -> Void = { _, _ in },
-        canAddToReview: Bool = false
+        canAddToReview: Bool = false,
+        onDraftCommentReveal: @escaping (DiffReviewDraftCommentScrollCommand, Bool) -> Void = { _, _ in }
     ) {
         self.session = session
         self._selectedFileID = selectedFileID
@@ -166,6 +168,7 @@ struct DiffReviewSurface: View {
         self.draftCommentsByFileID = draftCommentsByFileID
         self.focusedDraftCommentID = focusedDraftCommentID
         self.draftCommentScrollCommand = draftCommentScrollCommand
+        self.onDraftCommentReveal = onDraftCommentReveal
         self.draftCommentActions = draftCommentActions
         self.onSelectDraftComment = onSelectDraftComment
         self.onSaveDraftComment = onSaveDraftComment
@@ -294,7 +297,8 @@ struct DiffReviewSurface: View {
             draftCommentCommand: draftCommentScrollCommand,
             onNavigationFile: selectAppKitNavigationFile,
             onActiveFileChange: updateSelectedFileFromAppKitViewport,
-            onProgrammaticScrollCompletion: finishAppKitProgrammaticScroll
+            onProgrammaticScrollCompletion: finishAppKitProgrammaticScroll,
+            onDraftCommentReveal: onDraftCommentReveal
         )
         .background(theme.color("bg-1"))
     }

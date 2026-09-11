@@ -165,7 +165,8 @@ final class RightPaneStore {
                 app.tabs.closeDiffTabs(worktreeId: id, relativePaths: paths)
             }
             new.openConflict = { [weak self] path in
-                guard let app = self?.appState else { return }
+                guard let app = self?.appState,
+                      self?.states[id]?.changes.contains(where: { $0.path == path && $0.conflict != nil }) == true else { return }
                 let title = (path as NSString).lastPathComponent
                 let tab = app.tabs.openMergeConflict(
                     worktreeId: id,
@@ -173,6 +174,7 @@ final class RightPaneStore {
                     title: title
                 )
                 app.tabs.activate(worktreeId: id, tabId: tab.id)
+                app.acknowledgeAttentionSurface(worktreeID: id, target: .conflicts(path: path))
             }
             new.ggContextProvider = { [weak self] branch in
                 guard let app = self?.appState,

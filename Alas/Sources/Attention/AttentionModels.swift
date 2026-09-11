@@ -54,7 +54,9 @@ extension AttentionKind {
                 .replacingOccurrences(of: " unresolved conflict", with: " conflict required resolution")
         case .actionableFeedback:
             title.replacingOccurrences(of: " needs action", with: " required action")
-        case .reviewReply, .failedChecks, .reviewSyncBlocked, .agentFinished:
+        case .reviewSyncBlocked:
+            title.replacingOccurrences(of: " is ahead", with: " was ahead")
+        case .reviewReply, .failedChecks, .agentFinished:
             title
         }
     }

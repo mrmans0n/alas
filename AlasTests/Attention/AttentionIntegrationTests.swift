@@ -5,6 +5,27 @@ import Testing
 @Suite("Attention integration", .serialized)
 @MainActor
 struct AttentionIntegrationTests {
+    @Test(arguments: [true, false])
+    func corruptHistoryAcceptsLaterReviewFailures(initiallyFailed: Bool) throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let url = fixture.directory.appendingPathComponent("events.json")
+        try Data("broken history".utf8).write(to: url)
+        let state = AppState(store: MemoryStore(), attentionStore: AttentionStore(url: url))
+        state.projectsManager = fixture.state.projectsManager
+        let failed = review()
+        let initial = ReviewLoopSnapshot(local: failed.local, remote: failed.remote, reviewRequest: nil,
+            providerAvailable: true, providerAuthenticated: true, providerCapabilities: .githubCLI, errorMessage: nil)
+        if initiallyFailed {
+            state.observeRightPaneAttention(worktreeID: "one", snapshot: .init(mergeOperation: nil, conflictedPaths: [], review: failed))
+            #expect(state.attentionStore.events.isEmpty)
+        }
+        state.observeRightPaneAttention(worktreeID: "one", snapshot: .init(mergeOperation: nil, conflictedPaths: [], review: initial))
+        state.observeRightPaneAttention(worktreeID: "one", snapshot: .init(mergeOperation: nil, conflictedPaths: [], review: failed))
+        state.observeRightPaneAttention(worktreeID: "one", snapshot: .init(mergeOperation: nil, conflictedPaths: [], review: failed))
+        #expect(state.attentionStore.events.map(\.kind) == [.failedChecks])
+    }
+
     @Test func repeatedSnapshotsPreserveAcknowledgmentsAndChangedConflictsCreateNewOccurrence() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }

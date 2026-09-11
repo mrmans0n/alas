@@ -7,7 +7,16 @@ struct AttentionReturnDestination {
 
 enum AttentionNavigationResult: Equatable {
     case opened
+    case opening
     case unavailable(String)
+}
+
+struct AttentionPendingReviewReveal {
+    let worktreeID: String
+    let tabID: TabID
+    let sessionID: String
+    let command: DiffReviewDraftCommentScrollCommand
+    let eventIDs: [UUID]
 }
 
 struct AttentionNavigationEnvironment {
@@ -59,6 +68,11 @@ struct AttentionNavigationEnvironment {
                 do { try reviewSessionStore.save(focused) } catch { return false }
                 let tab = appState.tabs.openOrFocusReviewSession(worktreeId: worktree.id, record: focused)
                 appState.activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
+                guard case .reviewSession(let session) = tab, let command = session.commentScrollRequest else { return false }
+                appState.attentionPendingReviewReveal = AttentionPendingReviewReveal(
+                    worktreeID: worktree.id, tabID: tab.id, sessionID: sessionID,
+                    command: command, eventIDs: [item.eventID]
+                )
                 return true
             },
             focusRemoteWorktree: { item in
@@ -72,6 +86,8 @@ struct AttentionNavigationEnvironment {
 extension AppState {
     @discardableResult
     func openAttentionItem(_ item: AttentionItem) async -> AttentionNavigationResult {
+        attentionNavigationDepth += 1
+        defer { attentionNavigationDepth -= 1 }
         func unavailable(_ message: String) -> AttentionNavigationResult {
             attentionNavigationErrors[item.eventID] = message
             return .unavailable(message)
@@ -122,8 +138,35 @@ extension AppState {
         attentionNavigationErrors[item.eventID] = nil
         isAttentionInboxOpen = false
         attentionReturnDestination = nil
+        if attentionPendingReviewReveal?.eventIDs == [item.eventID] { return .opening }
         attentionStore.acknowledge(eventID: item.eventID, at: Date())
         return .opened
+    }
+
+    func beginReviewAttentionInteraction(worktreeID: String, tabID: TabID, sessionID: String, command: DiffReviewDraftCommentScrollCommand) {
+        guard !isAttentionInboxOpen, selectedWorktreeId == worktreeID else { return }
+        let target = AttentionJumpTarget.reviewComment(sessionID: sessionID, commentID: command.commentID)
+        let eventIDs = attentionAggregation.items.filter { $0.worktree?.id == worktreeID && $0.jumpTarget == target }.map(\.eventID)
+        attentionPendingReviewReveal = AttentionPendingReviewReveal(worktreeID: worktreeID, tabID: tabID,
+            sessionID: sessionID, command: command, eventIDs: eventIDs)
+    }
+
+    func completeReviewAttentionReveal(worktreeID: String, tabID: TabID, sessionID: String,
+                                      command: DiffReviewDraftCommentScrollCommand, succeeded: Bool) {
+        guard let pending = attentionPendingReviewReveal,
+              pending.worktreeID == worktreeID, pending.tabID == tabID,
+              pending.sessionID == sessionID, pending.command == command else { return }
+        attentionPendingReviewReveal = nil
+        guard !isAttentionInboxOpen, selectedWorktreeId == worktreeID,
+              tabs.activeTabId(forWorktree: worktreeID) == tabID else { return }
+        for eventID in pending.eventIDs {
+            if succeeded {
+                attentionStore.acknowledge(eventID: eventID, at: Date())
+                attentionNavigationErrors[eventID] = nil
+            } else {
+                attentionNavigationErrors[eventID] = "The review comment could not be revealed."
+            }
+        }
     }
 
     func isAttentionNavigationCurrent(generation: Int, owner: AttentionWorktreeIdentity, worktreeID: String) -> Bool {
@@ -192,13 +235,25 @@ extension AppState {
         // Missing/auth-failed snapshots leave occurrence identity and acknowledgments intact.
         if let review = snapshot.review,
            review.providerAvailable, review.providerAuthenticated, review.errorMessage == nil {
+            for key in Array(attentionSuppressedStartupSignals.keys)
+                where key.rawValue.hasPrefix("review:\(context.owner.storageKey):") && !activeKeys.contains(key) {
+                observeAttention(.inactive(sourceKey: key), at: date)
+            }
             for event in attentionStore.events where event.owner == context.owner && [.failedChecks, .actionableFeedback, .reviewSyncBlocked].contains(event.kind) {
                 if !activeKeys.contains(event.sourceKey) {
                     observeAttention(.inactive(sourceKey: event.sourceKey), at: date)
                 }
             }
         }
-        reconcileAttention(liveSignals: observations.compactMap(\.activeSignal), at: date)
+        let initialGitSnapshot = attentionInitializedSnapshotSources.insert("git:\(context.owner.storageKey)").inserted
+        let gitSignals = observations.compactMap(\.activeSignal).filter { $0.kind == .gitOperation || $0.kind == .conflicts }
+        reconcileAttention(liveSignals: gitSignals, isInitialSnapshot: initialGitSnapshot, at: date)
+        if let review = snapshot.review,
+           review.providerAvailable, review.providerAuthenticated, review.errorMessage == nil {
+            let initialReviewSnapshot = attentionInitializedSnapshotSources.insert("review:\(context.owner.storageKey)").inserted
+            let reviewSignals = observations.compactMap(\.activeSignal).filter { $0.kind != .gitOperation && $0.kind != .conflicts }
+            reconcileAttention(liveSignals: reviewSignals, isInitialSnapshot: initialReviewSnapshot, at: date)
+        }
         for observation in observations where observation.activeSignal == nil { observeAttention(observation, at: date) }
     }
 
@@ -263,15 +318,42 @@ extension AppState {
     }
 
     /// Snapshot reconciliation cannot invent events when previous acknowledgments are unknown.
-    func reconcileAttention(liveSignals: [AttentionSignal], at date: Date = Date()) {
+    func reconcileAttention(liveSignals: [AttentionSignal], isInitialSnapshot: Bool = true, at date: Date = Date()) {
         for signal in liveSignals {
-            if attentionStore.loadError != nil,
+            if isInitialSnapshot, attentionStore.loadError != nil,
                attentionStore.document.observations[signal.sourceKey] == nil {
                 if attentionSuppressedStartupSignals[signal.sourceKey] == nil {
                     attentionSuppressedStartupSignals[signal.sourceKey] = signal.fingerprint
                 }
             }
             observeAttention(.active(signal), at: date)
+        }
+    }
+
+    /// Called by explicit surface interactions, never by producer refreshes.
+    func acknowledgeAttentionSurface(worktreeID: String, target: AttentionJumpTarget) {
+        guard !isAttentionInboxOpen, attentionNavigationDepth == 0 else { return }
+        for item in attentionAggregation.items where item.worktree?.id == worktreeID {
+            let matches: Bool
+            if case .conflicts = target, case .conflicts = item.jumpTarget {
+                matches = true
+            } else {
+                matches = item.jumpTarget == target
+            }
+            if matches { attentionStore.acknowledge(eventID: item.eventID, at: Date()) }
+        }
+    }
+
+    func acknowledgeFocusedSessionAttention(worktreeID: String, tabID: TabID) {
+        guard selectedWorktreeId == worktreeID, tabs.activeTabId(forWorktree: worktreeID) == tabID,
+              let tab = tabs.tabs(forWorktree: worktreeID).first(where: { $0.id == tabID }) else { return }
+        switch tab {
+        case .acpSession(let session):
+            acknowledgeAttentionSurface(worktreeID: worktreeID, target: .session(sessionID: session.sessionId))
+        case .terminal(let terminal):
+            guard let leaf = terminal.root.find(leafId: terminal.focusedLeafId)?.leaf else { return }
+            acknowledgeAttentionSurface(worktreeID: worktreeID, target: .session(sessionID: leaf.sessionId ?? leaf.id))
+        default: break
         }
     }
 

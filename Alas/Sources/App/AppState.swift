@@ -93,14 +93,20 @@ final class AppState {
     let attentionStore: AttentionStore
     var isAttentionInboxOpen = false {
         didSet {
-            if oldValue != isAttentionInboxOpen { attentionNavigationGeneration += 1 }
+            if oldValue != isAttentionInboxOpen {
+                attentionNavigationGeneration += 1
+                if isAttentionInboxOpen { attentionPendingReviewReveal = nil }
+            }
         }
     }
     @ObservationIgnored var attentionNavigationGeneration = 0
+    @ObservationIgnored var attentionNavigationDepth = 0
     var attentionNavigationErrors: [UUID: String] = [:]
     @ObservationIgnored var attentionNavigationEnvironment: AttentionNavigationEnvironment?
     @ObservationIgnored var attentionReturnDestination: AttentionReturnDestination?
     @ObservationIgnored var attentionSuppressedStartupSignals: [AttentionSourceKey: String] = [:]
+    @ObservationIgnored var attentionInitializedSnapshotSources: Set<String> = []
+    @ObservationIgnored var attentionPendingReviewReveal: AttentionPendingReviewReveal?
     @ObservationIgnored var runScriptCompletionTasks: [String: (worktreeID: String, sessionID: String, location: RunScriptCaptureLocation, task: Task<Void, Never>)] = [:]
     @ObservationIgnored let runScriptCompletionWaiter: RunScriptCompletionWaiter
     private(set) var isReopeningClosedTab = false
@@ -121,6 +127,7 @@ final class AppState {
         didSet {
             guard oldValue != selectedWorktreeId else { return }
             attentionNavigationGeneration += 1
+            attentionPendingReviewReveal = nil
             if let oldValue { rightPaneStore.activeState(worktreeId: oldValue)?.endAttentionReveal() }
         }
     }
@@ -1637,7 +1644,12 @@ final class AppState {
     }
 
     func activateWorktreeCenterTab(worktreeId: String, tabId: TabID) {
+        if let pending = attentionPendingReviewReveal,
+           pending.worktreeID != worktreeId || pending.tabID != tabId {
+            attentionPendingReviewReveal = nil
+        }
         tabs.activate(worktreeId: worktreeId, tabId: tabId)
+        acknowledgeFocusedSessionAttention(worktreeID: worktreeId, tabID: tabId)
         if let checkout = selectedWorkspaceCheckout,
            workspaceMemberWorktreeIDs(checkout).values.contains(worktreeId) {
             tabs.clearActiveTab(owner: .workspaceCheckout(checkout.id, checkout.executionLocation))
@@ -5741,6 +5753,7 @@ final class AppState {
                 from: state.focusedLeafId, direction: direction, frames: frames
               ) else { return }
         _ = tabs.setFocusedLeaf(worktreeId: worktreeId, tabId: activeId, leafId: next)
+        acknowledgeFocusedSessionAttention(worktreeID: worktreeId, tabID: activeId)
     }
 
     func focusPane(worktreeId: String, sharedSessionOwner: SessionOwnerID?, direction: PaneFocusDirection) {

@@ -5,6 +5,21 @@ import Testing
 @Suite("AppState attention", .serialized)
 @MainActor
 struct AppStateAttentionTests {
+    @Test func recoveredHistorySuppressesOnlyInitialRightPaneSnapshot() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        try Data("broken history".utf8).write(to: fixture.url)
+        let state = fixture.makeStateWithWorktree()
+        let conflicts = RightPaneAttentionSnapshot(mergeOperation: nil, conflictedPaths: ["file.swift"], review: nil)
+        state.observeRightPaneAttention(worktreeID: "worktree", snapshot: conflicts)
+        #expect(state.attentionStore.events.isEmpty)
+        state.observeRightPaneAttention(worktreeID: "worktree", snapshot: .init(mergeOperation: nil, conflictedPaths: [], review: nil))
+        state.observeRightPaneAttention(worktreeID: "worktree", snapshot: conflicts)
+        #expect(state.attentionStore.events.count == 1)
+        state.observeRightPaneAttention(worktreeID: "worktree", snapshot: conflicts)
+        #expect(state.attentionStore.events.count == 1)
+    }
+
     @Test func acpCompletionRecordsFinishedHistoryButRemovalDoesNot() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }

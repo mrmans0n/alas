@@ -5,6 +5,29 @@ import Testing
 @Suite("Attention store", .serialized)
 @MainActor
 struct AttentionStoreTests {
+    @Test func distinctSourcesAndAliasesRemainBoundedAfterEventsExpire() throws {
+        let fixture = try Fixture(maxEvents: 3)
+        for index in 0..<30 {
+            let signal = AttentionSignal(sourceKey: .init(rawValue: "script:\(index):failure"), fingerprint: "failure",
+                owner: fixture.lineageOwner, kind: .runScriptFailure, title: "Tests failed", body: nil,
+                jumpTarget: .runScriptFailure(failureID: "\(index)"), display: fixture.signal(fingerprint: "").display)
+            fixture.store.observe(.active(signal), at: fixture.now.addingTimeInterval(Double(index)))
+            fixture.store.registerAlias(from: .init(projectID: "project", location: .local, lineageID: nil, legacyPath: "/old/\(index)"), to: fixture.lineageOwner)
+        }
+        #expect(fixture.store.events.count == 3)
+        #expect(fixture.store.document.observations.count <= 6)
+        #expect(fixture.store.document.aliases.count <= 3)
+        let latest = try #require(fixture.store.events.last)
+        fixture.store.acknowledge(eventID: latest.id, at: fixture.now.addingTimeInterval(40))
+        let reloaded = AttentionStore(url: fixture.url, now: { fixture.now }, maxEvents: 3)
+        let signal = AttentionSignal(sourceKey: latest.sourceKey, fingerprint: latest.fingerprint,
+            owner: latest.owner, kind: latest.kind, title: latest.title, body: latest.body,
+            jumpTarget: latest.jumpTarget, display: latest.display)
+        reloaded.observe(.active(signal), at: fixture.now.addingTimeInterval(50))
+        #expect(reloaded.events.count == 3)
+        #expect(reloaded.acknowledgments[latest.id] != nil)
+    }
+
     @Test func repeatedActiveObservationCreatesOneEventAndRecurrenceCreatesAnother() throws {
         let fixture = try Fixture()
         let signal = fixture.signal(fingerprint: "request-1")

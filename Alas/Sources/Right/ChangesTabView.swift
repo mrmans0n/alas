@@ -311,6 +311,9 @@ struct ChangesTabView: View {
                     onSkip: { rps.skipOperation() },
                     onAbort: { rps.abortOperation() }
                 )
+                .simultaneousGesture(TapGesture().onEnded {
+                    appState.acknowledgeAttentionSurface(worktreeID: rps.worktree.id, target: .gitOperation)
+                })
             })
         }
 
@@ -344,6 +347,9 @@ struct ChangesTabView: View {
                         .workingTreeFile(worktreePath: rps.worktree.path, relativePath: file.path)
                     }
                 )
+                .simultaneousGesture(TapGesture().onEnded {
+                    appState.acknowledgeAttentionSurface(worktreeID: rps.worktree.id, target: .conflicts(path: nil))
+                })
             })
         }
 
@@ -364,6 +370,11 @@ struct ChangesTabView: View {
                     onDismissSyncFailure: { rps.ggActionState.dismissCompletedSyncFailure() },
                     onOpenGGLanding: { appState.openGGLanding(projectId: rps.worktree.projectId) }
                 )
+                .simultaneousGesture(TapGesture().onEnded {
+                    if let request = rps.reviewLoop.snapshot?.reviewRequest {
+                        appState.acknowledgeAttentionSurface(worktreeID: rps.worktree.id, target: .reviewRequest(number: request.number))
+                    }
+                })
             })
         }
 

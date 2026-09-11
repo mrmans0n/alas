@@ -132,6 +132,7 @@ private struct PaneLeafView: View {
             } else {
                 _ = state.tabs.setFocusedLeaf(worktreeId: worktreeId, tabId: tabId, leafId: leaf.id)
             }
+            state.acknowledgeFocusedSessionAttention(worktreeID: worktreeId, tabID: tabId)
         }
         .background(
             GeometryReader { geo in

@@ -35,6 +35,7 @@ final class AttentionStore {
             loadError = error
         }
         writeError = nil
+        retain(at: now())
     }
 
     var events: [AttentionEvent] { document.events }
@@ -81,6 +82,7 @@ final class AttentionStore {
     func registerAlias(from legacyOwner: AttentionWorktreeIdentity, to lineageOwner: AttentionWorktreeIdentity) {
         guard legacyOwner != lineageOwner, document.aliases[legacyOwner] != lineageOwner else { return }
         document.aliases[legacyOwner] = lineageOwner
+        retain(at: now())
         persist()
     }
 
@@ -109,6 +111,29 @@ final class AttentionStore {
         document.observations = document.observations.filter { _, observation in
             observation.isActive || observation.eventID.map(retainedIDs.contains) ?? false
         }
+        // Keep a bounded set of active tombstones after event pruning so an
+        // unchanged, acknowledged occurrence can remain deduplicated on reload.
+        let orphanKeys = document.observations.keys.filter {
+            document.observations[$0]?.eventID.map(retainedIDs.contains) != true
+        }.sorted { $0.rawValue < $1.rawValue }
+        for key in orphanKeys.dropLast(maxEvents) { document.observations[key] = nil }
+
+        // Resolve alias chains before trimming them: a retained event needs at
+        // most one alias, regardless of how often its worktree was renamed.
+        let referencedOwners = Set(document.events.map(\.owner))
+        for owner in Array(document.aliases.keys) {
+            var destination = document.aliases[owner]!
+            var visited: Set<AttentionWorktreeIdentity> = [owner]
+            while visited.insert(destination).inserted, let next = document.aliases[destination] {
+                destination = next
+            }
+            document.aliases[owner] = destination
+        }
+        let aliasKeys = document.aliases.keys.sorted {
+            if referencedOwners.contains($0) != referencedOwners.contains($1) { return referencedOwners.contains($0) }
+            return $0.storageKey < $1.storageKey
+        }
+        for key in aliasKeys.dropFirst(maxEvents) { document.aliases[key] = nil }
     }
 
     private func oldestEventIndex(where predicate: (AttentionEvent) -> Bool) -> Int? {
