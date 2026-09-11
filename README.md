@@ -33,7 +33,7 @@ that loop end to end: every agent, every worktree, one window.
   over [ACP](https://agentclientprotocol.com) — same worktree, your call. Tool
   calls, plans, and permission prompts render inline, and past sessions can be
   browsed and resumed. Works with Claude Code, Codex, Cursor, Gemini, OpenCode,
-  Pi, and Copilot.
+  Pi, OMP, and Copilot.
 
 - **Parallel worktrees, one window.** Every repo lives in the sidebar with its
   linked worktrees underneath. Switching is instant; terminal sessions, tabs, and

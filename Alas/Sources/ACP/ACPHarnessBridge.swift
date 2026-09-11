@@ -104,6 +104,7 @@ final class ACPHarnessBridge {
         case "gemini":       return .gemini
         case "opencode":     return .opencode
         case "pi":           return .pi
+        case "omp":          return .omp
         case "copilot":      return .copilot
         default:             return .claude
         }

@@ -58,7 +58,7 @@ struct AgentRegistryTests {
         let r = AgentRegistry(builtinState: [:], customs: [custom], installedIds: [])
         let ids = r.agents.map(\.id)
         #expect(ids.last == "custom-uuid")
-        #expect(ids.count == 8)
+        #expect(ids.count == AgentBuiltins.catalog.count + 1)
     }
 
     @Test func installedFiltersToDetectedAgentsAcrossBuiltinsAndCustoms() {
