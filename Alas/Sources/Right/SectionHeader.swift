@@ -7,6 +7,7 @@ enum SectionHeaderRole: Equatable {
     }
 
     case workingTree
+    case checkpoints
     case commits
     case stack
     case stashes
@@ -14,6 +15,7 @@ enum SectionHeaderRole: Equatable {
     var iconKind: IconKind {
         switch self {
         case .workingTree: return .standard("diff")
+        case .checkpoints: return .standard("clock.arrow.circlepath")
         case .commits: return .standard("commit")
         case .stack: return .stack
         case .stashes: return .standard("archivebox")
@@ -55,7 +57,7 @@ struct SectionHeader<Trailing: View>: View {
     @Environment(\.theme) private var theme
 
     var body: some View {
-        Button(action: onToggle) {
+        HStack(spacing: 6) {
             HStack(spacing: 6) {
                 // This is a stable section-identity icon, not an expansion
                 // indicator. Expansion state is conveyed by visible content
@@ -89,15 +91,16 @@ struct SectionHeader<Trailing: View>: View {
                     }
                     .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
                 }
-                trailing()
             }
-            .padding(.horizontal, 12).padding(.vertical, 7)
-            .background(theme.color("section-head-bg"))
             .contentShape(Rectangle())
+            .onTapGesture(perform: onToggle)
+            trailing()
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 12).padding(.vertical, 7)
+        .background(theme.color("section-head-bg"))
         .accessibilityLabel(title)
         .accessibilityValue(SectionHeaderRole.accessibilityValue(expanded: expanded))
+        .accessibilityAddTraits(.isButton)
     }
 }
 

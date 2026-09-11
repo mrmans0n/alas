@@ -113,6 +113,7 @@ final class RightPaneState: GGSplitCommitServicing {
 
     var checkpointSummaries: [WorktreeCheckpointSummary] = []
     var checkpointStorageUsage: Int64 = 0
+    var checkpointsExpanded: Bool = true
     var expandedCheckpointIDs: Set<CheckpointID> = []
     var checkpointManifests: [CheckpointID: WorktreeCheckpointManifest] = [:]
     var loadingCheckpointManifestIDs: Set<CheckpointID> = []
@@ -762,7 +763,6 @@ final class RightPaneState: GGSplitCommitServicing {
             let summary = try await checkpointService.createManual(target: target, label: normalized)
             let manifest = try await checkpointService.manifest(target: target, id: summary.id)
             checkpointManifests[summary.id] = manifest
-            pendingCheckpointCreation = nil
             await refresh()
         } catch {
             lastCheckpointError = error.localizedDescription

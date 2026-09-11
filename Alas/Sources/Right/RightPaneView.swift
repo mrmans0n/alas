@@ -141,6 +141,29 @@ struct RightPaneView: View {
                         onCancel: { rps.cancelStashChanges() }
                     )
                 }
+                .sheet(item: Binding(
+                    get: { rps.pendingCheckpointCreation },
+                    set: { if $0 == nil { rps.cancelCheckpointCreation() } }
+                )) { _ in
+                    CreateCheckpointSheet(rps: rps)
+                }
+                .alert(
+                    "Delete checkpoint \(rps.pendingCheckpointDeletion?.label ?? "")?",
+                    isPresented: Binding(
+                        get: { rps.pendingCheckpointDeletion != nil },
+                        set: { if !$0 { rps.pendingCheckpointDeletion = nil } }
+                    ),
+                    presenting: rps.pendingCheckpointDeletion,
+                    actions: { checkpoint in
+                        Button("Delete", role: .destructive) {
+                            Task { await rps.deleteCheckpoint(id: checkpoint.id) }
+                        }
+                        Button("Cancel", role: .cancel) { rps.pendingCheckpointDeletion = nil }
+                    },
+                    message: { _ in
+                        Text("This removes the checkpoint only. Your worktree is unchanged.")
+                    }
+                )
                 .alert(
                     PendingStashDrop.alertTitle(for: rps.pendingStashDrop ?? .placeholder),
                     isPresented: Binding(
