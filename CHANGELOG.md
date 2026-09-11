@@ -6,6 +6,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-09-11
+
+### ✨ Features
+
+- Detect merged, idle worktrees and clean up or archive them in bulk (#1173).
+- Schedule ACP chat messages for later delivery (#1170).
+- Add an optional Run tab with per-worktree command history and controls (#1167).
+- Move local worktrees to repository trash before cleaning them up in the background (#1169).
+- Group changed files by directory in the remote web interface (#1172).
+
+### 🐛 Fixes
+
+- Stop Cmd-P content search from hanging while scrolling (#1154).
+- Prevent a black viewport gap when launching the remote web interface on Mobile Safari (#1155).
+- Keep GitGud's Prepare state stable while mutations rewrite refs (#1156).
+- Stabilize ACP transcript scrolling during row resizing, rebound, and tail following (#1165).
+- Preserve queued ACP prompts when steering an active turn (#1166).
+- Retry MCP registration throughout the existing grace period (#1168).
+
+### 🏗️ Internal
+
+- Increase repository logo size in the workspace overview (#1153).
+- Make workspace checkout creation match the repository add control (#1171).
+
 ## [0.15.5] - 2026-09-09
 
 ### ✨ Features
