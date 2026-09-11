@@ -203,6 +203,7 @@ extension AppState {
     }
 
     var attentionAggregation: AttentionAggregation {
+        refreshAttentionAliases()
         let document = attentionStore.document
         let liveSignals = currentAttentionSignals.compactMap { signal -> AttentionLiveSignal? in
             guard let observation = document.observations[signal.sourceKey],
@@ -579,12 +580,23 @@ extension AppState {
     }
 
     private func registerAttentionAlias(for signal: AttentionSignal) {
-        guard signal.owner.lineageID != nil else { return }
+        registerAttentionAlias(owner: signal.owner, displayPath: signal.display.path)
+    }
+
+    private func refreshAttentionAliases() {
+        for entry in attentionWorktrees {
+            let owner = AttentionWorktreeIdentity.make(worktree: entry.worktree, project: entry.project)
+            registerAttentionAlias(owner: owner, displayPath: entry.resolved.display.path)
+        }
+    }
+
+    private func registerAttentionAlias(owner: AttentionWorktreeIdentity, displayPath: String) {
+        guard owner.lineageID != nil else { return }
         let legacyOwner = AttentionWorktreeIdentity(
-            projectID: signal.owner.projectID, location: signal.owner.location,
-            lineageID: nil, legacyPath: signal.display.path
+            projectID: owner.projectID, location: owner.location,
+            lineageID: nil, legacyPath: displayPath
         )
-        attentionStore.registerAlias(from: legacyOwner, to: signal.owner)
+        attentionStore.registerAlias(from: legacyOwner, to: owner)
     }
 }
 

@@ -161,6 +161,35 @@ struct AppStateAttentionTests {
         #expect(state.attentionStore.document.observations[.init(rawValue: "session:session:permission")] == nil)
     }
 
+    @Test func historyOnlyLegacyOwnerResolvesAfterLineageAppears() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeState()
+        let project = ProjectConfig(id: "project", name: "Project", path: "/repo", color: "blue", addedAt: fixture.now)
+        let worktree = Worktree(id: "worktree", projectId: project.id, name: "main", branch: "main",
+                                path: URL(fileURLWithPath: "/repo"), status: .clean, lastActivity: fixture.now, lineageID: "lineage")
+        state.projectsManager = ProjectsManager(persistedProjects: [project])
+        state.projectsManager.insertOptimisticWorktree(worktree)
+        let legacyOwner = AttentionWorktreeIdentity(projectID: project.id, location: .local, lineageID: nil, legacyPath: "/repo")
+        let signal = AttentionSignal(
+            sourceKey: .init(rawValue: "session:old:awaiting"),
+            fingerprint: "question",
+            owner: legacyOwner,
+            kind: .agentAwaiting,
+            title: "Agent is waiting for input",
+            body: nil,
+            jumpTarget: .session(sessionID: "old"),
+            display: .init(projectName: project.name, branch: "main", path: "/repo", host: nil)
+        )
+        state.attentionStore.observe(.active(signal), at: fixture.now)
+        state.attentionStore.observe(.inactive(sourceKey: signal.sourceKey), at: fixture.now.addingTimeInterval(1))
+
+        let item = try #require(state.attentionAggregation.items.first)
+
+        #expect(item.worktree?.id == worktree.id)
+        #expect(state.attentionStore.document.aliases[legacyOwner]?.lineageID == "lineage")
+    }
+
     @Test func inboxRestoresOriginalTabAfterRepeatedOpen() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
