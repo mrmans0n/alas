@@ -415,7 +415,7 @@ private struct ACPSessionView: View {
             },
             onQueueForceSend: { id in
                 guard ACPTranscriptQueuePolicy.allowsQueueMutation(isMirror: isMirror) else { return }
-                manager.runners[sessionId]?.forceSendQueuedItem(id: id)
+                Task { await manager.queueForceSend(for: sessionId, itemId: id) }
             },
             onQueueRemove: { id in
                 guard ACPTranscriptQueuePolicy.allowsQueueMutation(isMirror: isMirror) else { return }

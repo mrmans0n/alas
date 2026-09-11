@@ -524,6 +524,23 @@ struct ACPSessionManagerTests {
         )
     }
 
+    @Test("queue force send reattaches disconnected sessions first")
+    func queueForceSendReattachesDisconnectedSession() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-force-send-reattach-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let session = mgr.createSession(id: "session", agentId: "no-such-agent-\(UUID().uuidString)")
+        session.agentState = .disconnected
+        session.enqueueScheduled(blocks: [.text("later")], scheduledAt: .distantFuture)
+        let itemId = try #require(session.queue.first?.id)
+
+        #expect(await mgr.acquireWriterLease(sessionId: session.id))
+        await mgr.queueForceSend(for: session.id, itemId: itemId)
+
+        #expect(session.agentState != .disconnected)
+    }
+
     @Test("persistQueue writes to SQLite without requiring a runner")
     func persistQueueWithoutRunner() async throws {
         // Regression: ACPTabView's queue actions used to call
