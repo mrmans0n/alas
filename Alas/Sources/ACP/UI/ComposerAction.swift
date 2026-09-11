@@ -9,7 +9,8 @@ enum ComposerAction: Equatable {
     /// Idle agent + non-empty composer. Tapping submits the prompt.
     case send
     /// Busy agent + non-empty composer. Primary action enqueues the prompt;
-    /// the menu exposes steer and stop.
+    /// the menu exposes steer and stop. Scheduling stays on the idle Send
+    /// affordance so the busy Queue button keeps its existing shape.
     case queue(menu: [ComposerMenuItem])
     /// Busy agent + empty composer. Tapping cancels the in-flight turn.
     case stop
