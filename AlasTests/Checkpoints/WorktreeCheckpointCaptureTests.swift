@@ -76,6 +76,7 @@ struct WorktreeCheckpointCaptureTests {
         let service = fixture.service()
         let summary = try await service.createRecovery(target: fixture.target, current: current, selectedPaths: ["file.swift"])
         #expect(summary.kind == .recovery)
+        #expect(summary.label == "Before checkpoint restore")
         let manifest = try await service.manifest(target: fixture.target, id: summary.id)
         #expect(manifest.paths == [try #require(current.paths["file.swift"])])
         #expect(manifest.groups.flatMap(\.memberPaths) == ["file.swift"])

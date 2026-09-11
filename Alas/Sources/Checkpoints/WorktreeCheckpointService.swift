@@ -62,10 +62,10 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
     // Restore preflight supplies the selected current states, including clean
     // and absent paths which a dirty-worktree snapshot may not contain.
     func createRecovery(target: CheckpointWorktreeTarget, current: WorktreeStateSnapshot,
-                        selectedPaths: Set<String>, label: String = "Before checkpoint restore") async throws -> WorktreeCheckpointSummary {
+                        selectedPaths: Set<String>) async throws -> WorktreeCheckpointSummary {
         guard current.lineageID == target.lineageID else { throw CheckpointSnapshotError.lineageChanged }
         return try await publish(target: target, attempt: .init(snapshot: current, capturedAt: .now),
-                                 paths: selectedPaths, kind: .recovery, label: normalizedLabel(label))
+                                 paths: selectedPaths, kind: .recovery, label: "Before checkpoint restore")
     }
 
     private func normalizedLabel(_ label: String) throws -> String {
