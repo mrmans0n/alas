@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 
 enum CheckpointStoreError: Error, Equatable, Sendable {
@@ -82,8 +83,16 @@ actor WorktreeCheckpointStore {
         let bytes = try byteCount(reachable, layout: layout, incoming: publication.blobs)
         guard bytes <= limits.bytes else { throw CheckpointStoreError.byteLimitExceeded }
 
-        for (reference, data) in publication.blobs where !exists(blobURL(reference, layout: layout)) {
-            try fileSystem.writeDurable(data, to: blobURL(reference, layout: layout), mode: 0o600)
+        for (reference, data) in publication.blobs {
+            let blob = blobURL(reference, layout: layout)
+            guard !exists(blob) else { continue }
+            let temporaryBlob = layout.blobs.appendingPathComponent(".\(reference.sha256).tmp")
+            try fileSystem.writeDurable(data, to: temporaryBlob, mode: 0o600)
+            do {
+                try fileSystem.moveExclusively(temporaryBlob, to: blob)
+            } catch CheckpointFileSystemError.posix(operation: "link", code: EEXIST) {
+                try fileSystem.removeIfPresent(temporaryBlob)
+            }
         }
         let entry = layout.entries.appendingPathComponent(manifest.id.uuidString.lowercased(), isDirectory: true)
         guard !exists(entry) else { throw CheckpointStoreError.checkpointNotFound }
@@ -178,7 +187,7 @@ actor WorktreeCheckpointStore {
 
     private func prepare(_ lineageID: String) throws {
         let layout = paths(lineageID)
-        if !exists(root) { try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true) }
+        if !exists(root) { try fileSystem.createDirectoryExclusively(root, mode: 0o700) }
         for directory in [layout.root, layout.blobs, layout.entries, layout.journals, layout.quarantine] where !exists(directory) {
             try fileSystem.createDirectoryExclusively(directory, mode: 0o700)
         }
@@ -193,6 +202,12 @@ actor WorktreeCheckpointStore {
     private func validate(manifest: WorktreeCheckpointManifest, layout: Layout) throws {
         try manifest.validate()
         for path in manifest.paths { _ = try fileSystem.validateRelativePath(path.relativePath, under: layout.root) }
+        for exclusion in manifest.exclusions { _ = try fileSystem.validateRelativePath(exclusion.relativePath, under: layout.root) }
+        for group in manifest.groups {
+            _ = try fileSystem.validateRelativePath(group.primaryPath, under: layout.root)
+            if let renameSource = group.renameSource { _ = try fileSystem.validateRelativePath(renameSource, under: layout.root) }
+            for memberPath in group.memberPaths { _ = try fileSystem.validateRelativePath(memberPath, under: layout.root) }
+        }
         for reference in references(in: manifest) { _ = try readBlob(reference, lineageID: manifest.lineageID) }
     }
 
@@ -290,7 +305,10 @@ actor WorktreeCheckpointStore {
     }
 
     private func garbageCollect(layout: Layout, manifests: [WorktreeCheckpointManifest], journals: [CheckpointRestoreJournal]) throws {
-        let protected = Set(manifests.flatMap { references(in: $0) })
+        let journalManifests = journals.flatMap { journal in
+            [journal.checkpointID, journal.recoveryCheckpointID].compactMap { try? readManifest(id: $0, lineageID: journal.lineageID) }
+        }
+        let protected = Set((manifests + journalManifests).flatMap { references(in: $0) })
         for url in try fileSystem.list(layout.blobs) where !protected.contains(where: { $0.sha256 == url.lastPathComponent }) { try fileSystem.removeIfPresent(url) }
     }
 

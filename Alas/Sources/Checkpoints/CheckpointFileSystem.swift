@@ -28,6 +28,7 @@ protocol CheckpointFileSystem: Sendable {
     func writeDurable(_ data: Data, to url: URL, mode: mode_t) throws
     func createSymlink(target: Data, at url: URL) throws
     func move(_ source: URL, to destination: URL) throws
+    func moveExclusively(_ source: URL, to destination: URL) throws
     func removeIfPresent(_ url: URL) throws
     func list(_ url: URL) throws -> [URL]
     func fileData(_ url: URL) throws -> Data
@@ -148,6 +149,17 @@ struct LiveCheckpointFileSystem: CheckpointFileSystem, Sendable {
             throw CheckpointFileSystemError.unsafePath
         }
         guard Darwin.rename(source.path, destination.path) == 0 else { throw posixError("rename") }
+        try synchronizeDirectory(destination.deletingLastPathComponent())
+    }
+
+    func moveExclusively(_ source: URL, to destination: URL) throws {
+        try requireSafeParent(of: source)
+        try requireSafeParent(of: destination)
+        let sourceDirectory = try lstat(at: source.deletingLastPathComponent())
+        let destinationDirectory = try lstat(at: destination.deletingLastPathComponent())
+        guard sourceDirectory.st_dev == destinationDirectory.st_dev else { throw CheckpointFileSystemError.unsafePath }
+        guard Darwin.link(source.path, destination.path) == 0 else { throw posixError("link") }
+        guard Darwin.unlink(source.path) == 0 else { throw posixError("unlink") }
         try synchronizeDirectory(destination.deletingLastPathComponent())
     }
 
