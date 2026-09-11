@@ -5,6 +5,22 @@ import Testing
 @Suite("Attention navigation", .serialized)
 @MainActor
 struct AttentionNavigationTests {
+    @Test func refreshingLoadedReviewDoesNotReplayConsumedCommentJump() {
+        var consumer = ReviewSessionCommentJumpConsumer()
+        let file = DiffReviewFileID(namespace: "unstaged", path: "file.swift")
+        let session = ReviewSessionID(rawValue: "review")
+        let request = DiffReviewDraftCommentScrollCommand(commentID: "comment", fileID: file, generation: 1)
+        #expect(consumer.consume(request, sessionID: session, isLoaded: false) == nil)
+        #expect(consumer.consume(request, sessionID: session, isLoaded: true) == request)
+        // A refresh must not emit another scroll command after the user moves elsewhere.
+        #expect(consumer.consume(request, sessionID: session, isLoaded: false) == nil)
+        #expect(consumer.consume(request, sessionID: session, isLoaded: true) == nil)
+        let repeated = DiffReviewDraftCommentScrollCommand(commentID: "comment", fileID: file, generation: 2)
+        #expect(consumer.consume(repeated, sessionID: session, isLoaded: true) == repeated)
+        #expect(consumer.consume(repeated, sessionID: session, isLoaded: true) == nil)
+        #expect(consumer.consume(request, sessionID: .init(rawValue: "another-review"), isLoaded: true) == request)
+    }
+
     @Test(arguments: ["selection", "close", "delete", "overlap"])
     func suspendedNavigationDoesNotAcknowledgeAnAbandonedDestination(change: String) async throws {
         let fixture = try Fixture()
@@ -78,6 +94,11 @@ struct AttentionNavigationTests {
         #expect(initial.commentScrollRequest?.fileID == fileID)
         #expect(repeated.commentScrollRequest?.commentID == "comment2")
         #expect(initial.commentScrollRequest != repeated.commentScrollRequest)
+        var refreshed = repeated
+        refreshed.retarget(to: record)
+        #expect(refreshed.commentScrollRequest == nil)
+        refreshed.requestCommentScroll()
+        #expect(refreshed.commentScrollRequest != repeated.commentScrollRequest)
     }
 
     @Test(arguments: [true, false])

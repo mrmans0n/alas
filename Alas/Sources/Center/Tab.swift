@@ -263,15 +263,17 @@ struct ReviewSessionTabState: Codable, Equatable, Identifiable {
     var focusedCommentID: String?
     /// Transient command identity makes repeated jumps to the same comment observable.
     var commentScrollRequest: DiffReviewDraftCommentScrollCommand?
+    private var commentScrollGeneration = 0
 
     mutating func requestCommentScroll() {
         guard let focusedCommentID, let selectedFileID else {
             commentScrollRequest = nil
             return
         }
+        commentScrollGeneration += 1
         commentScrollRequest = DiffReviewDraftCommentScrollCommand(
             commentID: focusedCommentID, fileID: selectedFileID,
-            generation: (commentScrollRequest?.generation ?? 0) + 1
+            generation: commentScrollGeneration
         )
     }
 
@@ -314,7 +316,7 @@ struct ReviewSessionTabState: Codable, Equatable, Identifiable {
         title = record.target.title
         selectedFileID = record.selectedFileID
         focusedCommentID = record.focusedCommentID
-        requestCommentScroll()
+        commentScrollRequest = nil
     }
 }
 

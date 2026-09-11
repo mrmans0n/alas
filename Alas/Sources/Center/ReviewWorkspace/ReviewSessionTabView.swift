@@ -23,6 +23,19 @@ struct ReviewSessionTabLoadCoordinator {
     }
 }
 
+struct ReviewSessionCommentJumpConsumer {
+    private var consumedSessionID: ReviewSessionID?
+    private var consumedRequest: DiffReviewDraftCommentScrollCommand?
+
+    mutating func consume(_ request: DiffReviewDraftCommentScrollCommand?, sessionID: ReviewSessionID, isLoaded: Bool) -> DiffReviewDraftCommentScrollCommand? {
+        guard isLoaded, let request,
+              consumedSessionID != sessionID || consumedRequest != request else { return nil }
+        consumedSessionID = sessionID
+        consumedRequest = request
+        return request
+    }
+}
+
 struct ReviewSessionTabLoadPublication {
     let record: ReviewSessionRecord
     let loaded: ReviewSessionLoadedContext
@@ -88,6 +101,7 @@ struct ReviewSessionTabView: View {
     @State private var focusedDraftCommentID: String?
     @State private var draftCommentScrollCommand: DiffReviewDraftCommentScrollCommand?
     @State private var draftCommentScrollController = DiffReviewDraftCommentScrollController()
+    @State private var commentJumpConsumer = ReviewSessionCommentJumpConsumer()
     @State private var focusedFeedbackID: String?
     @State private var inlineFeedbackScrollCommand: DiffReviewInlineFeedbackScrollCommand?
     @State private var inlineFeedbackScrollController = DiffReviewInlineFeedbackScrollController()
@@ -597,6 +611,7 @@ struct ReviewSessionTabView: View {
                 loadDraftCommentController(for: refreshedRecord)
                 isLoading = false
                 loadCoordinator.finish(token)
+                revealRequestedComment(tabState.commentScrollRequest)
                 return true
             }
             if resolvedRecord.paused, refreshedRecord.target != storedRecord.target {
@@ -620,6 +635,7 @@ struct ReviewSessionTabView: View {
             loadDraftCommentController(for: refreshedRecord)
             isLoading = false
             loadCoordinator.finish(token)
+            revealRequestedComment(tabState.commentScrollRequest)
             return true
         } catch is CancellationError {
             guard loadCoordinator.canPublish(token) else { return false }
@@ -1193,7 +1209,10 @@ struct ReviewSessionTabView: View {
     }
 
     private func revealRequestedComment(_ request: DiffReviewDraftCommentScrollCommand?) {
-        guard let request else { return }
+        guard let request = commentJumpConsumer.consume(
+            request, sessionID: tabState.sessionID,
+            isLoaded: loaded != nil && loadCoordinator.activeToken == nil && loadedDraftSessionID == record?.target.draftSessionID
+        ) else { return }
         setSelectedFileID(request.fileID, persist: false)
         setFocusedDraftCommentID(request.commentID, persist: false)
         draftCommentScrollCommand = draftCommentScrollController.command(commentID: request.commentID, fileID: request.fileID)
