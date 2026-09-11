@@ -4,6 +4,9 @@ struct AttentionReturnDestination {
     let spaceID: String
     let worktreeID: String?
     let activeTabID: TabID?
+    let workspaceNavigationState: WorkspaceNavigationState
+    let sharedSessionOwner: SessionOwnerID?
+    let sharedActiveTabID: TabID?
 }
 
 enum AttentionNavigationResult: Equatable {
@@ -44,6 +47,7 @@ struct AttentionNavigationEnvironment {
                     }
                     appState.activateWorktreeCenterTab(worktreeId: worktreeID, tabId: destination.tabID)
                 case .workspaceCheckout:
+                    appState.selectWorkspaceCheckout(owner: destination.owner, focusedWorktreeID: worktree.id)
                     if let leafID = destination.leafID {
                         _ = appState.tabs.setFocusedLeaf(owner: destination.owner, tabId: destination.tabID, leafId: leafID)
                     }
@@ -321,7 +325,10 @@ extension AppState {
         attentionReturnDestination = AttentionReturnDestination(
             spaceID: spacesManager.activeSpaceId,
             worktreeID: selectedWorktreeId,
-            activeTabID: selectedWorktreeId.flatMap { tabs.activeTabId(forWorktree: $0) }
+            activeTabID: selectedWorktreeId.flatMap { tabs.activeTabId(forWorktree: $0) },
+            workspaceNavigationState: workspaceNavigationState,
+            sharedSessionOwner: selectedWorkspaceCheckout.map { .workspaceCheckout($0.id, $0.executionLocation) },
+            sharedActiveTabID: selectedWorkspaceCheckout.map { .workspaceCheckout($0.id, $0.executionLocation) }.flatMap { tabs.activeTabId(for: $0) }
         )
         isAttentionInboxOpen = true
     }
@@ -332,6 +339,7 @@ extension AppState {
         guard let destination = attentionReturnDestination else { return }
         attentionReturnDestination = nil
         _ = switchToSpace(id: destination.spaceID)
+        workspaceNavigationState = destination.workspaceNavigationState
         selectedWorktreeId = destination.worktreeID
         if let worktreeID = destination.worktreeID {
             if let tabID = destination.activeTabID,
@@ -339,6 +347,14 @@ extension AppState {
                 tabs.activate(worktreeId: worktreeID, tabId: tabID)
             } else if destination.activeTabID == nil {
                 tabs.clearActiveTab(worktreeId: worktreeID)
+            }
+        }
+        if let owner = destination.sharedSessionOwner {
+            if let tabID = destination.sharedActiveTabID,
+               tabs.tabs(for: owner).contains(where: { $0.id == tabID }) {
+                tabs.activate(owner: owner, tabId: tabID)
+            } else if destination.sharedActiveTabID == nil {
+                tabs.clearActiveTab(owner: owner)
             }
         }
     }
@@ -477,6 +493,15 @@ extension AppState {
             }
         }
         return nil
+    }
+
+    private func selectWorkspaceCheckout(owner: SessionOwnerID, focusedWorktreeID: String) {
+        guard case .workspaceCheckout(let checkoutID, _) = owner,
+              let checkout = workspacesManager.checkout(id: checkoutID) else { return }
+        selectWorkspaceCheckout(id: checkoutID)
+        let memberWorktreeIDs = workspaceMemberWorktreeIDs(checkout)
+        guard let memberID = memberWorktreeIDs.first(where: { $0.value == focusedWorktreeID })?.key else { return }
+        focusWorkspaceCheckoutMember(id: memberID)
     }
 
     fileprivate func attentionSessionDestination(for sessionID: String, preferredWorktreeID: String?) -> (owner: SessionOwnerID, tabID: TabID, leafID: String?)? {

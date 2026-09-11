@@ -56,6 +56,7 @@ final class AttentionStore {
                     fingerprint: signal.fingerprint,
                     eventID: previous.eventID
                 )
+                updateEvent(for: previous.eventID, with: signal)
                 retain(at: date)
                 persist()
                 return
@@ -211,6 +212,9 @@ final class AttentionStore {
         if sourceKey.rawValue.hasSuffix(":checks") {
             return isCheckFailureSetShrink(from: previousFingerprint, to: currentFingerprint)
         }
+        if sourceKey.rawValue.hasSuffix(":feedback") {
+            return isReviewFeedbackSetShrink(from: previousFingerprint, to: currentFingerprint)
+        }
         return false
     }
 
@@ -221,6 +225,16 @@ final class AttentionStore {
         return isStrictNonEmptySubset(
             Set(currentParts.dropFirst().map(String.init)),
             of: Set(previousParts.dropFirst().map(String.init))
+        )
+    }
+
+    private func isReviewFeedbackSetShrink(from previousFingerprint: String, to currentFingerprint: String) -> Bool {
+        let previousParts = previousFingerprint.split(separator: "|", omittingEmptySubsequences: false)
+        let currentParts = currentFingerprint.split(separator: "|", omittingEmptySubsequences: false)
+        guard previousParts.first == currentParts.first else { return false }
+        return isStrictNonEmptySubset(
+            Set(currentParts.dropFirst(2).map(String.init)),
+            of: Set(previousParts.dropFirst(2).map(String.init))
         )
     }
 
@@ -245,5 +259,15 @@ final class AttentionStore {
     private func retryPersistingUnwrittenDocumentIfNeeded() {
         guard writeError != nil else { return }
         persist()
+    }
+
+    private func updateEvent(for eventID: UUID?, with signal: AttentionSignal) {
+        guard let eventID,
+              let index = document.events.firstIndex(where: { $0.id == eventID }) else { return }
+        document.events[index] = AttentionEvent(
+            id: eventID,
+            signal: signal,
+            occurredAt: document.events[index].occurredAt
+        )
     }
 }

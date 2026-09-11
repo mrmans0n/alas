@@ -247,9 +247,66 @@ struct AppStateAttentionTests {
         let result = await state.openAttentionItem(item)
 
         #expect(result == .opened)
+        #expect(state.selectedWorkspaceCheckout?.id == checkout.id)
+        #expect(state.workspaceNavigationState.repositoryFocusWorktreeID == worktree.id)
         #expect(state.tabs.activeTabId(for: owner) == tab.id)
         #expect(state.tabs.activeTabId(forWorktree: worktree.id) == nil)
         #expect(state.attentionAggregation.unresolvedCount == 0)
+    }
+
+    @Test func closingInboxRestoresWorkspaceCheckoutNavigation() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let workspaceURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
+        defer { try? FileManager.default.removeItem(at: workspaceURL) }
+        let workspaceStore = WorkspaceStore(url: workspaceURL)
+        let workspacesManager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
+        let workspaceID = UUID()
+        let project = ProjectConfig(id: "project", name: "Project", path: "/repo", color: "blue", addedAt: fixture.now)
+        let worktree = Worktree(id: "worktree", projectId: project.id, name: "main", branch: "main",
+                                path: URL(fileURLWithPath: "/repo"), status: .clean, lastActivity: fixture.now)
+        let memberID = UUID()
+        let checkout = WorkspaceCheckout(
+            workspaceID: workspaceID,
+            fallbackWorkspaceName: "Shared",
+            executionLocation: .local,
+            branch: "topic",
+            rootPath: "/repo",
+            members: [
+                WorkspaceCheckoutMember(
+                    workspaceMemberID: memberID,
+                    projectID: project.id,
+                    fallbackProjectName: project.name,
+                    fallbackRepositoryRoot: project.path,
+                    worktreePath: worktree.path.path,
+                    availability: .available
+                )
+            ]
+        )
+        try await workspaceStore.checkpoint(WorkspaceStateFile(checkouts: [checkout]))
+        _ = await workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
+        let state = AppState(
+            store: MemoryStore(),
+            attentionStore: AttentionStore(url: fixture.url),
+            workspacesManager: workspacesManager,
+            workspaceStore: workspaceStore
+        )
+        state.projectsManager = ProjectsManager(persistedProjects: [project])
+        state.projectsManager.insertOptimisticWorktree(worktree)
+        state.selectWorkspaceCheckout(id: checkout.id)
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+        let sharedTab = state.tabs.appendACP(owner: owner, sessionId: "shared-acp", title: "Shared agent")
+        state.tabs.activate(owner: owner, tabId: sharedTab.id)
+
+        state.openAttentionInbox()
+        state.selectWorktree(id: nil)
+        state.closeAttentionInbox()
+
+        #expect(state.selectedWorkspaceCheckout?.id == checkout.id)
+        #expect(state.workspaceNavigationState.focusedCheckoutMemberID == memberID)
+        #expect(state.workspaceNavigationState.repositoryFocusWorktreeID == worktree.id)
+        #expect(state.selectedWorktreeId == worktree.id)
+        #expect(state.tabs.activeTabId(for: owner) == sharedTab.id)
     }
 
     @Test func recoveredHostEventOpensWorktreeAndClearsAfterHostRecovers() async throws {

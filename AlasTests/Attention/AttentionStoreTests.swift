@@ -69,11 +69,12 @@ struct AttentionStoreTests {
         let fixture = try Fixture()
         let sourceKey = AttentionSourceKey(rawValue: "git:\(fixture.lineageOwner.storageKey):conflicts")
 
-        fixture.store.observe(.active(fixture.signal(sourceKey: sourceKey, fingerprint: "a.swift|b.swift", kind: .conflicts)), at: fixture.now)
-        fixture.store.observe(.active(fixture.signal(sourceKey: sourceKey, fingerprint: "b.swift", kind: .conflicts)), at: fixture.now.addingTimeInterval(1))
+        fixture.store.observe(.active(fixture.signal(sourceKey: sourceKey, fingerprint: "a.swift|b.swift", kind: .conflicts, jumpTarget: .conflicts(path: "a.swift"))), at: fixture.now)
+        fixture.store.observe(.active(fixture.signal(sourceKey: sourceKey, fingerprint: "b.swift", kind: .conflicts, jumpTarget: .conflicts(path: "b.swift"))), at: fixture.now.addingTimeInterval(1))
 
         #expect(fixture.store.events.count == 1)
         #expect(fixture.store.document.observations[sourceKey]?.fingerprint == "b.swift")
+        #expect(fixture.store.events.first?.jumpTarget == .conflicts(path: "b.swift"))
 
         fixture.store.observe(.active(fixture.signal(sourceKey: sourceKey, fingerprint: "b.swift|c.swift", kind: .conflicts)), at: fixture.now.addingTimeInterval(2))
 
@@ -91,6 +92,21 @@ struct AttentionStoreTests {
         #expect(fixture.store.document.observations[sourceKey]?.fingerprint == "head|build:fail")
 
         fixture.store.observe(.active(fixture.signal(sourceKey: sourceKey, fingerprint: "head|build:fail|test:fail", kind: .failedChecks)), at: fixture.now.addingTimeInterval(2))
+
+        #expect(fixture.store.events.count == 2)
+    }
+
+    @Test func feedbackShrinkUpdatesObservationWithoutNewEvent() throws {
+        let fixture = try Fixture()
+        let sourceKey = AttentionSourceKey(rawValue: "review:\(fixture.lineageOwner.storageKey):https://github.com/owner/repo:42:feedback")
+
+        fixture.store.observe(.active(fixture.signal(sourceKey: sourceKey, fingerprint: "head|CHANGES_REQUESTED|thread-a|thread-b", kind: .actionableFeedback)), at: fixture.now)
+        fixture.store.observe(.active(fixture.signal(sourceKey: sourceKey, fingerprint: "head|CHANGES_REQUESTED|thread-b", kind: .actionableFeedback)), at: fixture.now.addingTimeInterval(1))
+
+        #expect(fixture.store.events.count == 1)
+        #expect(fixture.store.document.observations[sourceKey]?.fingerprint == "head|CHANGES_REQUESTED|thread-b")
+
+        fixture.store.observe(.active(fixture.signal(sourceKey: sourceKey, fingerprint: "head|CHANGES_REQUESTED|thread-b|thread-c", kind: .actionableFeedback)), at: fixture.now.addingTimeInterval(2))
 
         #expect(fixture.store.events.count == 2)
     }
@@ -294,7 +310,12 @@ struct AttentionStoreTests {
             signal(sourceKey: AttentionSourceKey(rawValue: "session:1"), fingerprint: fingerprint, kind: .agentAwaiting)
         }
 
-        func signal(sourceKey: AttentionSourceKey, fingerprint: String, kind: AttentionKind) -> AttentionSignal {
+        func signal(
+            sourceKey: AttentionSourceKey,
+            fingerprint: String,
+            kind: AttentionKind,
+            jumpTarget: AttentionJumpTarget = .session(sessionID: "session-1")
+        ) -> AttentionSignal {
             AttentionSignal(
                 sourceKey: sourceKey,
                 fingerprint: fingerprint,
@@ -302,7 +323,7 @@ struct AttentionStoreTests {
                 kind: kind,
                 title: "Agent is waiting for input",
                 body: nil,
-                jumpTarget: .session(sessionID: "session-1"),
+                jumpTarget: jumpTarget,
                 display: AttentionWorktreeDisplaySnapshot(
                     projectName: "Project",
                     branch: "main",
