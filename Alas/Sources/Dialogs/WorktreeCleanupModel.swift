@@ -169,15 +169,22 @@ final class WorktreeCleanupModel {
             "Delete"
         ) else { return }
 
-        // High confidence means the scan matched this worktree's exact HEAD
-        // SHA against a confirmed-merged review request on the code host —
-        // the strongest evidence the scanner produces, and the only case
-        // trusted enough to override git's own local-ancestry branch check.
-        // The SHA itself travels along so the batch can re-verify, right
-        // before deleting, that the branch tip hasn't moved since this scan.
+        // A `.mergedOnForge` signal means the scan matched this worktree's
+        // exact HEAD SHA against a confirmed-merged review request on the
+        // code host — the strongest evidence the scanner produces, and the
+        // only case trusted enough to override git's own local-ancestry
+        // branch check. This is read straight off each *selected* row's own
+        // signals, not gated on the row's overall verdict: a clean,
+        // forge-merged worktree that is not yet idle carries this signal
+        // while its verdict is `.active` rather than `.candidate(.high)`,
+        // and remains manually selectable. Gating on the verdict would drop
+        // its SHA and silently fall back to `git branch -d`, which fails
+        // for a squash or rebase merge and leaves the branch behind despite
+        // the confirmation promising it will be deleted. The SHA itself
+        // travels along so the batch can re-verify, right before deleting,
+        // that the branch tip hasn't moved since this scan.
         var forgeConfirmedMergedBranchSHAs: [String: String] = [:]
-        for candidate in candidates
-        where selectedIds.contains(candidate.id) && candidate.verdict == .candidate(confidence: .high) {
+        for candidate in candidates where selectedIds.contains(candidate.id) {
             for signal in candidate.signals {
                 if case .mergedOnForge(_, _, let headSHA) = signal {
                     forgeConfirmedMergedBranchSHAs[candidate.id] = headSHA

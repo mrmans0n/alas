@@ -239,13 +239,13 @@ struct WorktreeCleanupModelTests {
         #expect(deleteBatchCalls == 0)
     }
 
-    /// Only a high-confidence candidate — the scan matched its exact HEAD SHA
-    /// against a confirmed-merged review request — is trusted enough to
-    /// force-delete its branch. A selected dirty row overridden by the user,
-    /// or a medium/low-confidence match, must not be swept into that map even
-    /// though both are part of the same batch. The SHA that travels along is
-    /// the exact one carried by the candidate's `.mergedOnForge` signal.
-    @Test func deleteSelectedNamesOnlyHighConfidenceCandidatesAsForgeConfirmed() async {
+    /// A row carrying a `.mergedOnForge` signal — the scan matched its exact
+    /// HEAD SHA against a confirmed-merged review request — is trusted
+    /// enough to force-delete its branch, regardless of that row's overall
+    /// verdict. A selected dirty row with no such signal must not be swept
+    /// into that map even though it is part of the same batch. The SHA that
+    /// travels along is the exact one carried by the signal.
+    @Test func deleteSelectedNamesOnlyForgeConfirmedSelectedCandidates() async {
         let highConfidence = candidate(
             branch: "a",
             verdict: .candidate(confidence: .high),
@@ -271,6 +271,39 @@ struct WorktreeCleanupModelTests {
         await model.deleteSelected()
 
         #expect(passedForgeConfirmedSHAs == ["/tmp/wt-a": "abc123"])
+    }
+
+    /// The regression this fix closes: a clean, forge-merged worktree that
+    /// is not yet idle carries the same `.mergedOnForge` signal but an
+    /// `.active` verdict (not `.candidate(.high)`), and remains manually
+    /// selectable. Gating the SHA map on the verdict would drop it here and
+    /// fall back to `git branch -d`, which silently fails for a squash or
+    /// rebase merge — deriving from each selected row's own signals instead
+    /// must still pick it up.
+    @Test func deleteSelectedIncludesAManuallySelectedActiveForgeMergedRow() async {
+        let activeButForgeMerged = candidate(
+            branch: "a",
+            verdict: .active,
+            signals: [.mergedOnForge(identity: "#7", url: URL(string: "https://example.com/7")!, headSHA: "def456")]
+        )
+        var passedForgeConfirmedSHAs: [String: String] = [:]
+        let model = WorktreeCleanupModel(
+            projectId: "p",
+            keepBranches: false,
+            scan: { .success([activeButForgeMerged]) },
+            deleteBatch: { _, _, forgeConfirmedMergedBranchSHAs in
+                passedForgeConfirmedSHAs = forgeConfirmedMergedBranchSHAs
+                return []
+            },
+            archiveBatch: { _ in [] },
+            confirm: { _, _, _ in true }
+        )
+        model.applyScanResult([activeButForgeMerged])
+        model.toggle("/tmp/wt-a")   // manual override — .active is not selected by default
+
+        await model.deleteSelected()
+
+        #expect(passedForgeConfirmedSHAs == ["/tmp/wt-a": "def456"])
     }
 
     @Test func selectedWorktreesFollowsDisplayOrder() {
