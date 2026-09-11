@@ -121,6 +121,37 @@ struct CheckpointRestoreInterruptionTests {
         #expect(try fixture.repo.disk(".git/index.lock").isEmpty)
     }
 
+    @Test func recoveryAcceptsPendingEmptyIndexLockCandidateName() async throws {
+        let fixture = try await CheckpointRestoreFixture.make(faultInjector: .init {
+            if $0 == .beforeIndexInstall { throw CheckpointRestoreFixture.Fault.injected }
+            if case .duringRollback = $0 { throw CheckpointRestoreFixture.Fault.injected }
+        })
+        defer { fixture.remove() }
+        let checkpoint = try await fixture.service.createManual(target: fixture.repo.target, label: "Saved")
+        try await fixture.later()
+        let preview = try await fixture.preview(checkpoint.id)
+        let before = try await fixture.snapshot()
+
+        await #expect(throws: (any Error).self) {
+            try await fixture.service.restore(target: fixture.repo.target, preview: preview,
+                                               selectedGroupIDs: preview.selectedGroupIDs, coordination: .clear)
+        }
+        var journal = try #require(try await fixture.store.recoverableJournals(lineageID: fixture.repo.target.lineageID).first)
+        let candidate = fixture.repo.root
+            .appendingPathComponent(".git/.alas-checkpoint-index-lock-\(journal.id.uuidString.lowercased())-\(UUID().uuidString.lowercased())")
+        journal.pendingIndexLock = .init(path: candidate.path, checksum: CheckpointBlobReference.make(for: Data()).sha256, device: 0, inode: 0)
+        try await fixture.store.writeJournal(journal)
+
+        let service = WorktreeCheckpointService(store: fixture.store)
+        let result = try await service.recoverInterruptedRestore(target: fixture.repo.target, operationID: journal.id, coordination: .clear)
+
+        #expect(result.recoveryCheckpointID == journal.recoveryCheckpointID)
+        let after = try await fixture.snapshot()
+        #expect(after.paths == before.paths)
+        #expect(after.indexChecksum == before.indexChecksum)
+        #expect(try await fixture.store.recoverableJournals(lineageID: fixture.repo.target.lineageID).isEmpty)
+    }
+
     @Test(arguments: [CheckpointRestoreFaultPoint.afterFileMove(path: "added"), .afterFileMove(path: "selected.bin"),
                       .beforeIndexInstall, .afterIndexInstall, .beforeVerification])
     func failuresRollBackBothLayers(point: CheckpointRestoreFaultPoint) async throws {

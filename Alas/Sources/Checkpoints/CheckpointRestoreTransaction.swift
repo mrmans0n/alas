@@ -323,10 +323,15 @@ struct CheckpointRestoreTransaction: Sendable {
         if let pending = journal.pendingIndexLock {
             let candidate = URL(fileURLWithPath: pending.path)
             let index = try await gitPath("index", target: target)
-            let prefix = ".alas-checkpoint-index-\(journal.id.uuidString.lowercased())-"
+            let prefixes = [
+                ".alas-checkpoint-index-\(journal.id.uuidString.lowercased())-",
+                ".alas-checkpoint-index-lock-\(journal.id.uuidString.lowercased())-",
+            ]
+            let suffix = prefixes.first { candidate.lastPathComponent.hasPrefix($0) }.map { prefix in
+                String(candidate.lastPathComponent.dropFirst(prefix.count))
+            }
             guard candidate.deletingLastPathComponent().path == index.deletingLastPathComponent().path,
-                  candidate.lastPathComponent.hasPrefix(prefix),
-                  UUID(uuidString: String(candidate.lastPathComponent.dropFirst(prefix.count))) != nil else {
+                  suffix.flatMap(UUID.init(uuidString:)) != nil else {
                 throw CheckpointRestoreError.invalidJournal
             }
         }
