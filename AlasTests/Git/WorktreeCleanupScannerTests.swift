@@ -41,7 +41,8 @@ struct WorktreeCleanupScannerTests {
         unpushedCommitCount: 0,
         stashCount: 0,
         isMergedLocally: false,
-        headSHA: localHeadSHA
+        headSHA: localHeadSHA,
+        lastActivity: nil
     )
 
     private static func scanner(
@@ -300,6 +301,24 @@ struct WorktreeCleanupScannerTests {
         )
         #expect(results[0].verdict == .busy)
         #expect(results[0].signals.contains(.activeSessions(count: 2)))
+    }
+
+    /// `Worktree.lastActivity` is cached from the last topology refresh, not
+    /// updated by ordinary commit activity while the app is open. A merged,
+    /// freshly-touched worktree must not read as long-idle just because the
+    /// cache is stale.
+    @Test func freshActivityOverridesStaleCachedTimestamp() async {
+        var facts = Self.cleanFacts
+        facts.isMergedLocally = true
+        facts.lastActivity = Self.now   // fresh: touched right now
+        let scanner = Self.scanner(facts: { _ in facts })
+        // The cached worktree looks idle (30 days old by the fixture default).
+        let results = await Self.scan(
+            scanner,
+            worktrees: [Self.worktree(branch: "feature/a")]
+        )
+        #expect(results[0].verdict == .active)
+        #expect(results[0].signals.contains(.recentActivity(days: 0)))
     }
 
     @Test func resultsPreserveInputOrder() async {

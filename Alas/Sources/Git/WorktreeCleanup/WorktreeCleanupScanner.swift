@@ -13,6 +13,10 @@ struct WorktreeCleanupGitFacts: Equatable, Sendable {
     /// applies to what is checked out here — a branch-name match alone is
     /// not enough, since names get reused. `nil` when it could not be read.
     var headSHA: String?
+    /// Freshly-read activity timestamp, independent of the possibly-stale
+    /// `Worktree.lastActivity` the topology cache carries. `nil` when it
+    /// could not be read, in which case the cached value is used instead.
+    var lastActivity: Date?
 }
 
 /// Merged review requests for one repository, keyed by head branch. A branch
@@ -117,7 +121,12 @@ struct WorktreeCleanupScanner: Sendable {
                 stashCount: facts[offset].stashCount,
                 activeSessionCount: await dependencies.activeSessionCount(worktree.id),
                 operationInFlight: await dependencies.operationInFlight(worktree.id),
-                lastActivity: worktree.lastActivity,
+                // `worktree.lastActivity` is cached from the last topology
+                // refresh — ordinary commit activity while the app is open
+                // does not update it. Prefer a freshly-read value so a
+                // worktree just touched and merged since that last refresh
+                // does not read as long-idle and get default-selected.
+                lastActivity: facts[offset].lastActivity ?? worktree.lastActivity,
                 mergeState: mergeState
             )
             candidates.append(WorktreeCleanupClassifier.classify(
@@ -222,7 +231,8 @@ struct WorktreeCleanupScanner: Sendable {
                     unpushedCommitCount: 0,
                     stashCount: 0,
                     isMergedLocally: false,
-                    headSHA: nil
+                    headSHA: nil,
+                    lastActivity: nil
                 )
             }
         }
@@ -249,13 +259,20 @@ extension WorktreeCleanupScanner {
         let (statusFacts, unpushedCount, stashCount, mergedLocally, headSHA) =
             await (status, unpushed, stashes, merged, head)
 
+        // Synchronous file-attribute read, same mechanism that populates
+        // `Worktree.lastActivity` in the first place — reading it fresh here
+        // (rather than trusting that possibly-stale cached value) needs no
+        // subprocess and no extra concurrency.
+        let freshActivity = WorktreeService.lastActivity(forWorktreeAt: worktreePath)
+
         return WorktreeCleanupGitFacts(
             hasUncommittedChanges: statusFacts.hasUncommittedChanges,
             hasUntrackedFiles: statusFacts.hasUntrackedFiles,
             unpushedCommitCount: unpushedCount,
             stashCount: stashCount,
             isMergedLocally: mergedLocally,
-            headSHA: headSHA
+            headSHA: headSHA,
+            lastActivity: freshActivity
         )
     }
 
