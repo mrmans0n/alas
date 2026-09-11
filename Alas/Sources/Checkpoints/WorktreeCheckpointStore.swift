@@ -61,7 +61,7 @@ actor WorktreeCheckpointStore {
         }
     }
 
-    func publish(_ publication: CheckpointPublication) throws -> CheckpointCatalogSnapshot {
+    func publish(_ publication: CheckpointPublication, protecting additionalProtectedIDs: Set<CheckpointID> = []) throws -> CheckpointCatalogSnapshot {
         let manifest = publication.manifest
         try validate(manifest.lineageID)
         try manifest.validate()
@@ -76,7 +76,7 @@ actor WorktreeCheckpointStore {
 
         let existingManifests = try validManifests(lineageID: manifest.lineageID).valid
         var candidates = existingManifests + [manifest]
-        let protected = try protectedIDs(lineageID: manifest.lineageID)
+        let protected = try protectedIDs(lineageID: manifest.lineageID).union(additionalProtectedIDs)
         let victims = retentionVictims(from: candidates, protected: protected)
         candidates.removeAll { candidate in victims.contains(where: { $0.id == candidate.id }) }
         let reachable = Set(candidates.flatMap { references(in: $0) })
@@ -174,6 +174,11 @@ actor WorktreeCheckpointStore {
 
     func finishJournal(id: UUID, lineageID: String) throws {
         guard let value = try journal(id: id, lineageID: lineageID), value.phase.isTerminal else { return }
+        try fileSystem.removeIfPresent(paths(lineageID).journals.appendingPathComponent("\(id.uuidString.lowercased()).json"))
+    }
+
+    func discardPreparedJournal(id: UUID, lineageID: String) throws {
+        guard let value = try journal(id: id, lineageID: lineageID), value.phase == .prepared else { return }
         try fileSystem.removeIfPresent(paths(lineageID).journals.appendingPathComponent("\(id.uuidString.lowercased()).json"))
     }
 

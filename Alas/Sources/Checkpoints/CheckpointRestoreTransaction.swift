@@ -63,6 +63,7 @@ struct CheckpointRestoreTransaction: Sendable {
         let backupsRoot = stagingRoot.appendingPathComponent("backups", isDirectory: true)
         let preparedIndex = stagingRoot.appendingPathComponent("index")
         var createdStaging = false
+        var journalWritten = false
 
         do {
             try fileSystem.createDirectoryExclusively(stagingRoot, mode: 0o700)
@@ -89,6 +90,7 @@ struct CheckpointRestoreTransaction: Sendable {
                                                     expectedIndexChecksum: current.indexChecksum,
                                                     stagingNames: stagingNames)
             try await store.writeJournal(journal)
+            journalWritten = true
             guard try await store.journal(id: operationID, lineageID: target.lineageID) == journal else {
                 throw CheckpointRestoreError.invalidGitOutput
             }
@@ -99,6 +101,7 @@ struct CheckpointRestoreTransaction: Sendable {
                          preparedIndex: preparedIndex, stagingRoot: stagingRoot,
                          replacementsRoot: replacementsRoot, backupsRoot: backupsRoot)
         } catch {
+            if journalWritten { try? await store.discardPreparedJournal(id: operationID, lineageID: target.lineageID) }
             if createdStaging { try? FileManager.default.removeItem(at: stagingRoot) }
             throw error
         }

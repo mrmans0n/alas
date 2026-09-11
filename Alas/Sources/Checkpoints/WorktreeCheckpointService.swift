@@ -173,23 +173,29 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
     // Restore preflight supplies the selected current states, including clean
     // and absent paths which a dirty-worktree snapshot may not contain.
     func createRecovery(target: CheckpointWorktreeTarget, current: WorktreeStateSnapshot,
-                        selectedPaths: Set<String>) async throws -> WorktreeCheckpointSummary {
+                        selectedPaths: Set<String>, protecting checkpointID: CheckpointID? = nil) async throws -> WorktreeCheckpointSummary {
         guard current.lineageID == target.lineageID else { throw CheckpointSnapshotError.lineageChanged }
         return try await publish(target: target, attempt: .init(snapshot: current, capturedAt: .now),
-                                 paths: selectedPaths, kind: .recovery, label: "Before checkpoint restore")
+                                 paths: selectedPaths, kind: .recovery, label: "Before checkpoint restore",
+                                 protecting: checkpointID.map { [$0] } ?? [])
     }
 
     func prepareRestore(target: CheckpointWorktreeTarget, preview: CheckpointRestorePreview,
-                        selectedGroupIDs: Set<UUID>, faultInjector: CheckpointRestoreFaultInjector = .none) async throws -> CheckpointRestorePreparation {
-        if let blocker = preview.blocker { throw CheckpointRestoreError.blocked(blocker) }
-        let manifest = try await store.load(id: preview.checkpointID, lineageID: target.lineageID)
+                        selectedGroupIDs: Set<UUID>, coordination: CheckpointCoordinationSnapshot = .clear,
+                        faultInjector: CheckpointRestoreFaultInjector = .none) async throws -> CheckpointRestorePreparation {
+        let refreshed = try await restorePreview(target: target, id: preview.checkpointID, coordination: coordination,
+                                                 selectedGroupIDs: selectedGroupIDs)
+        if let blocker = refreshed.blocker { throw CheckpointRestoreError.blocked(blocker) }
+        guard refreshed.currentFingerprint == preview.currentFingerprint else { throw CheckpointRestoreError.stalePreview }
+        let manifest = try await store.load(id: refreshed.checkpointID, lineageID: target.lineageID)
         let selected = selectedGroupIDs.isEmpty ? preview.selectedGroupIDs : selectedGroupIDs
         let groups = Dictionary(uniqueKeysWithValues: preview.groups.map { ($0.id, $0) })
         for id in selected where groups[id] == nil { throw CheckpointRestoreError.missingPreviewGroup(id) }
         let selectedPaths = Set(selected.compactMap { groups[$0] }.flatMap(\.memberPaths))
         let current = try await snapshotter.snapshot(target: target, includingPaths: Set(manifest.paths.map(\.relativePath)))
         guard current.fingerprint == preview.currentFingerprint else { throw CheckpointRestoreError.stalePreview }
-        let recovery = try await createRecovery(target: target, current: current, selectedPaths: selectedPaths)
+        let recovery = try await createRecovery(target: target, current: current, selectedPaths: selectedPaths,
+                                                protecting: manifest.id)
         _ = try await store.load(id: recovery.id, lineageID: target.lineageID)
         try faultInjector.hit(.afterRecoveryPublication)
         return try await CheckpointRestoreTransaction(store: store, git: snapshotter.git, fileSystem: snapshotter.fileSystem,
@@ -205,7 +211,8 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
     }
 
     private func publish(target: CheckpointWorktreeTarget, attempt: CheckpointCaptureAttempt,
-                         paths selectedPaths: Set<String>, kind: CheckpointKind, label: String) async throws -> WorktreeCheckpointSummary {
+                         paths selectedPaths: Set<String>, kind: CheckpointKind, label: String,
+                         protecting: Set<CheckpointID> = []) async throws -> WorktreeCheckpointSummary {
         let snapshot = attempt.snapshot
         let paths = try selectedPaths.sorted().map { path in
             guard let state = snapshot.paths[path] else { throw CheckpointCaptureError.missingSelectedPath(path) }
@@ -232,7 +239,7 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
             branch: snapshot.branch, headOID: snapshot.headOID,
             exclusions: kind == .manual ? snapshot.exclusions : [], groups: groups, paths: paths
         )
-        let catalog = try await store.publish(.init(manifest: manifest, blobs: blobs))
+        let catalog = try await store.publish(.init(manifest: manifest, blobs: blobs), protecting: protecting)
         guard let summary = catalog.summaries.first(where: { $0.id == manifest.id }) else {
             throw CheckpointStoreError.checkpointNotFound
         }
