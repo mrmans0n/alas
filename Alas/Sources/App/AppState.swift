@@ -9065,8 +9065,9 @@ final class AppState {
     }
 
     /// Read-only facts used by checkpoint preview and restore preflight. A
-    /// Workspace checkout remains a shared session owner, but its active
-    /// writers only affect the currently focused member worktree.
+    /// Workspace checkout remains a shared session owner. Count checkout-owned
+    /// writers for every checkout that contains this member worktree, even
+    /// when the user has navigated away from that checkout.
     func checkpointCoordination(
         for worktree: Worktree,
         selectedPaths: Set<String>
@@ -9076,14 +9077,23 @@ final class AppState {
         var workspaceName: String?
         var repositoryName = projects.first(where: { $0.id == worktree.projectId })?.name ?? worktree.name
 
-        if let checkout = selectedWorkspaceCheckout,
-           workspaceNavigationState.repositoryFocusWorktreeID == worktree.id,
-           let memberID = workspaceNavigationState.focusedCheckoutMemberID,
-           let member = checkout.members.first(where: { $0.id == memberID && $0.projectID == worktree.projectId }) {
+        let worktreePath = worktree.path.standardizedFileURL.path
+        let matchingCheckouts = workspacesManager.checkouts.compactMap { checkout -> (WorkspaceCheckout, WorkspaceCheckoutMember)? in
+            guard checkout.archivedAt == nil,
+                  let member = checkout.members.first(where: {
+                      $0.projectID == worktree.projectId &&
+                          URL(fileURLWithPath: $0.worktreePath).standardizedFileURL.path == worktreePath
+                  })
+            else { return nil }
+            return (checkout, member)
+        }
+        for (checkout, member) in matchingCheckouts {
             let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
             terminalCount += terminal.registry.sessions(forWorktree: owner.storageKey).count
             if acpManager(for: owner)?.hasActiveCheckpointWriter == true { acpCount += 1 }
-            workspaceName = checkout.fallbackWorkspaceName
+            if checkout.id == selectedWorkspaceCheckout?.id {
+                workspaceName = checkout.fallbackWorkspaceName
+            }
             repositoryName = projects.first(where: { $0.id == member.projectID })?.name ?? member.fallbackProjectName
         }
 

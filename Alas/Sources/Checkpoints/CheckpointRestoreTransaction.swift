@@ -352,8 +352,8 @@ struct CheckpointRestoreTransaction: Sendable {
         guard WorktreeService.existingLocalLineageID(forWorktreeAt: target.path) == target.lineageID else {
             throw CheckpointRestoreError.blocked(.lineageMismatch)
         }
-        let result = try await git.run(["rev-parse", "--verify", "HEAD"], cwd: target.path, environment: [:])
-        guard result.exitCode == 0, result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == head else {
+        let currentHead = try await headOID(target)
+        guard currentHead == head else {
             throw CheckpointRestoreError.blocked(.changedHEAD)
         }
         let index = try await gitPath("index", target: target)
@@ -622,6 +622,14 @@ struct CheckpointRestoreTransaction: Sendable {
         let result = try await git.run(["rev-parse", "--path-format=absolute", "--git-path", name], cwd: target.path, environment: [:])
         guard result.exitCode == 0 else { throw ProcessError.nonZeroExit(result.exitCode, result.stderr) }
         return URL(fileURLWithPath: result.stdout.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    private func headOID(_ target: CheckpointWorktreeTarget) async throws -> String {
+        let result = try await git.run(["rev-parse", "--verify", "HEAD"], cwd: target.path, environment: [:])
+        if result.exitCode == 0 { return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) }
+        let unborn = try await git.run(["rev-parse", "--verify", "--quiet", "HEAD"], cwd: target.path, environment: [:])
+        guard unborn.exitCode == 1 else { throw CheckpointRestoreError.invalidGitOutput }
+        return WorktreeStateSnapshotter.emptyTreeOID
     }
 
     private func runGit(_ args: [String], target: CheckpointWorktreeTarget, index: URL) async throws {

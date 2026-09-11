@@ -31,6 +31,7 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
     private let snapshotter: WorktreeStateSnapshotter
     private let hooks: CheckpointCaptureHooks
     private let restoreFaultInjector: CheckpointRestoreFaultInjector
+    private var cachedCatalogs: [String: CheckpointCatalogSnapshot] = [:]
 
     init(store: WorktreeCheckpointStore = .init(),
          snapshotter: WorktreeStateSnapshotter = .live,
@@ -44,7 +45,10 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
     func summaries(target: CheckpointWorktreeTarget) async throws -> CheckpointCatalogSnapshot {
         let journals = try await store.recoverableJournals(lineageID: target.lineageID)
         try scavengeUnjournaledRestoreStaging(target: target, preserving: Set(journals.map(\.id)))
-        return try await store.catalog(lineageID: target.lineageID)
+        if let cached = cachedCatalogs[target.lineageID] { return cached }
+        let catalog = try await store.catalog(lineageID: target.lineageID)
+        cachedCatalogs[target.lineageID] = catalog
+        return catalog
     }
 
     func nonterminalJournals(target: CheckpointWorktreeTarget) async throws -> [CheckpointRestoreJournal] {
@@ -58,7 +62,9 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
     }
 
     func delete(target: CheckpointWorktreeTarget, id: CheckpointID) async throws -> CheckpointCatalogSnapshot {
-        try await store.delete(id: id, lineageID: target.lineageID)
+        let catalog = try await store.delete(id: id, lineageID: target.lineageID)
+        cachedCatalogs[target.lineageID] = catalog
+        return catalog
     }
 
     func restorePreview(target: CheckpointWorktreeTarget, id: CheckpointID,
@@ -75,8 +81,8 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
         let saved: WorktreeCheckpointManifest?
         do { saved = try await store.loadMetadata(id: id, lineageID: target.lineageID) }
         catch { saved = nil }
-        let head = try await previewGit(["rev-parse", "--verify", "HEAD"], target: target)
-        if let saved, saved.headOID != head.trimmingCharacters(in: .whitespacesAndNewlines) {
+        let head = try await previewHeadOID(target: target)
+        if let saved, saved.headOID != head {
             return blocked(.changedHEAD, label: saved.label)
         }
         for marker in ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer"] {
@@ -236,6 +242,14 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
         .init(store: store, git: snapshotter.git, fileSystem: snapshotter.fileSystem, faultInjector: restoreFaultInjector)
     }
 
+    private func previewHeadOID(target: CheckpointWorktreeTarget) async throws -> String {
+        let result = try await LiveCheckpointGitRunner().run(["rev-parse", "--verify", "HEAD"], cwd: target.path, environment: [:])
+        if result.exitCode == 0 { return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) }
+        let unborn = try await LiveCheckpointGitRunner().run(["rev-parse", "--verify", "--quiet", "HEAD"], cwd: target.path, environment: [:])
+        guard unborn.exitCode == 1 else { throw CheckpointRestoreError.invalidGitOutput }
+        return WorktreeStateSnapshotter.emptyTreeOID
+    }
+
     private func normalizedLabel(_ label: String) throws -> String {
         let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw CheckpointModelError.invalidLabel }
@@ -272,6 +286,7 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
             exclusions: kind == .manual ? snapshot.exclusions : [], groups: groups, paths: paths
         )
         let catalog = try await store.publish(.init(manifest: manifest, blobs: blobs), protecting: protecting)
+        cachedCatalogs[target.lineageID] = catalog
         guard let summary = catalog.summaries.first(where: { $0.id == manifest.id }) else {
             throw CheckpointStoreError.checkpointNotFound
         }

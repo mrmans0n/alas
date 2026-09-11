@@ -34,6 +34,7 @@ struct CheckpointCaptureAttempt: Equatable, Sendable {
 
 struct WorktreeStateSnapshotter: Sendable {
     static let live = Self()
+    static let emptyTreeOID = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
     let git: any CheckpointGitRunning
     let fileSystem: any CheckpointFileSystem
 
@@ -47,7 +48,7 @@ struct WorktreeStateSnapshotter: Sendable {
                   ignoringRestoreOperation: UUID? = nil, onlyIncludedPaths: Bool = false) async throws -> WorktreeStateSnapshot {
         guard !target.path.isRemoteAlasPath else { throw CheckpointSnapshotError.remoteTarget }
         try validateLineage(target)
-        let head = try await text(["rev-parse", "--verify", "HEAD"], target)
+        let head = try await headOID(target)
         let branchResult = try await git.runData(["symbolic-ref", "--short", "-q", "HEAD"], cwd: target.path, environment: [:])
         guard branchResult.exitCode == 0 || branchResult.exitCode == 1 else {
             throw ProcessError.nonZeroExit(branchResult.exitCode, branchResult.stderr)
@@ -62,7 +63,8 @@ struct WorktreeStateSnapshotter: Sendable {
         let hidden = try records(try await data(["ls-files", "-v", "-z"], target))
             .filter { $0.hasPrefix("S ") || $0.first?.isLowercase == true }
             .map { String($0.dropFirst(2)) }
-        let unsupported = Set(hidden + index.unsupported + headEntries.unsupported)
+        let intentToAdd = try await intentToAddPaths(target)
+        let unsupported = Set(hidden + intentToAdd + index.unsupported + headEntries.unsupported)
         guard unsupported.isEmpty else { throw CheckpointSnapshotError.unsupportedPaths(unsupported.sorted()) }
 
         var candidates = try statusPaths(status)
@@ -107,7 +109,7 @@ struct WorktreeStateSnapshotter: Sendable {
             states[path] = .init(relativePath: path, head: headState, index: indexState, worktree: diskState)
         }
         try validateLineage(target)
-        guard try await text(["rev-parse", "--verify", "HEAD"], target) == head,
+        guard try await headOID(target) == head,
               try await checksum(target) == indexChecksum else { throw CheckpointSnapshotError.stateChanged }
         let groups = makeGroups(paths: Set(states.keys), renames: renames)
         // JSON encodes path delimiters unambiguously, including tabs and newlines.
@@ -258,6 +260,33 @@ struct WorktreeStateSnapshotter: Sendable {
         let url = URL(fileURLWithPath: path)
         if !FileManager.default.fileExists(atPath: url.path) { return CheckpointBlobReference.make(for: Data()).sha256 }
         return CheckpointBlobReference.make(for: try fileSystem.fileData(url)).sha256
+    }
+
+    private func headOID(_ target: CheckpointWorktreeTarget) async throws -> String {
+        let result = try await git.run(["rev-parse", "--verify", "HEAD"], cwd: target.path, environment: [:])
+        if result.exitCode == 0 { return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) }
+        let unborn = try await git.run(["rev-parse", "--verify", "--quiet", "HEAD"], cwd: target.path, environment: [:])
+        guard unborn.exitCode == 1 else { throw ProcessError.nonZeroExit(result.exitCode, result.stderr) }
+        return Self.emptyTreeOID
+    }
+
+    private func intentToAddPaths(_ target: CheckpointWorktreeTarget) async throws -> [String] {
+        let output = try await data(["ls-files", "--debug"], target)
+        guard let text = String(data: output, encoding: .utf8) else { throw CheckpointSnapshotError.invalidGitOutput }
+        var result: [String] = []
+        var currentPath: String?
+        for line in text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
+            if line.first?.isWhitespace != true {
+                currentPath = line
+                continue
+            }
+            guard let path = currentPath else { continue }
+            if line.trimmingCharacters(in: .whitespaces).contains("flags: 2000") {
+                result.append(path)
+                currentPath = nil
+            }
+        }
+        return result
     }
 
     private func validateLineage(_ target: CheckpointWorktreeTarget) throws {

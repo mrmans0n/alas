@@ -124,6 +124,26 @@ struct WorktreeCheckpointStoreTests {
         #expect(try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent(lineageA).appendingPathComponent("quarantine").path).contains { $0.hasPrefix(checkpoint.manifest.id.uuidString.lowercased()) })
     }
 
+    @Test func undecodableManifestRetainsUnavailableSummaryFromPreviousCatalog() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let checkpoint = try publication(lineageID: lineageA, label: "Unreadable manifest", bytes: Data([1, 2, 3]))
+        let store = WorktreeCheckpointStore(root: root)
+        _ = try await store.publish(checkpoint)
+        let manifest = root
+            .appendingPathComponent(lineageA)
+            .appendingPathComponent("entries")
+            .appendingPathComponent(checkpoint.manifest.id.uuidString.lowercased())
+            .appendingPathComponent("manifest.json")
+        try Data("not json".utf8).write(to: manifest)
+
+        let catalog = try await store.catalog(lineageID: lineageA)
+
+        #expect(catalog.summaries.map(\.label) == ["Unreadable manifest"])
+        #expect(catalog.summaries.first?.unavailableReason != nil)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent(lineageA).appendingPathComponent("quarantine").path).contains { $0.hasPrefix(checkpoint.manifest.id.uuidString.lowercased()) })
+    }
+
     @Test func deletingUnavailableCheckpointRemovesCatalogSummaryAndQuarantine() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

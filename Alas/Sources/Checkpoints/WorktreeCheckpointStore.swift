@@ -43,7 +43,7 @@ actor WorktreeCheckpointStore {
             guard catalog.schemaVersion == CheckpointCatalogSnapshot.currentSchemaVersion, catalog.lineageID == lineageID else {
                 throw CheckpointStoreError.invalidLineageID
             }
-            let reconciliation = try validManifests(lineageID: lineageID)
+            let reconciliation = try validManifests(lineageID: lineageID, previousSummaries: catalog.summaries)
             let unavailable = reconciliation.unavailable + catalog.summaries.filter { existing in
                 existing.unavailableReason != nil && !reconciliation.unavailable.contains(where: { candidate in candidate.id == existing.id })
             }
@@ -262,7 +262,7 @@ actor WorktreeCheckpointStore {
         var unavailable: [WorktreeCheckpointSummary]
     }
 
-    private func validManifests(lineageID: String) throws -> ManifestReconciliation {
+    private func validManifests(lineageID: String, previousSummaries: [WorktreeCheckpointSummary] = []) throws -> ManifestReconciliation {
         try prepare(lineageID)
         let layout = paths(lineageID)
         var result = ManifestReconciliation(valid: [], unavailable: [])
@@ -278,6 +278,9 @@ actor WorktreeCheckpointStore {
                     try quarantine(entry, in: layout.quarantine, name: id.uuidString.lowercased())
                 }
             } catch {
+                if let previous = previousSummaries.first(where: { $0.id == id }) {
+                    result.unavailable.append(unavailableSummary(from: previous, error: error))
+                }
                 try quarantine(entry, in: layout.quarantine, name: id.uuidString.lowercased())
             }
         }
@@ -301,6 +304,20 @@ actor WorktreeCheckpointStore {
 
     private func unavailableSummary(for manifest: WorktreeCheckpointManifest, error: Error) -> WorktreeCheckpointSummary {
         WorktreeCheckpointSummary(id: manifest.id, kind: manifest.kind, label: manifest.label, createdAt: manifest.createdAt, byteCount: manifest.byteCount, stagedFileCount: 0, unstagedFileCount: 0, untrackedFileCount: 0, unavailableReason: String(describing: error))
+    }
+
+    private func unavailableSummary(from summary: WorktreeCheckpointSummary, error: Error) -> WorktreeCheckpointSummary {
+        WorktreeCheckpointSummary(
+            id: summary.id,
+            kind: summary.kind,
+            label: summary.label,
+            createdAt: summary.createdAt,
+            byteCount: summary.byteCount,
+            stagedFileCount: summary.stagedFileCount,
+            unstagedFileCount: summary.unstagedFileCount,
+            untrackedFileCount: summary.untrackedFileCount,
+            unavailableReason: String(describing: error)
+        )
     }
 
     private func writeCatalog(_ catalog: CheckpointCatalogSnapshot, layout: Layout) throws {
