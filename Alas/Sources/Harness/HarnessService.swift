@@ -258,11 +258,11 @@ final class HarnessService {
     /// (currently the ACP bridge) report activity for sessions they own.
     /// No notification side effects — those remain socket-driven so we don't
     /// double-fire when both hooks and ACP cover the same session.
-    func setExternalActivity(sessionId: String, agent: AgentKind, state: ActivityState, isSnapshot: Bool = false) {
+    func setExternalActivity(sessionId: String, agent: AgentKind, state: ActivityState, body: String? = nil, isSnapshot: Bool = false) {
         let previous = activityBySession[sessionId]
         activityBySession[sessionId] = HarnessActivityState(
             agent: agent, state: state, pid: nil,
-            lastBody: nil, updatedAt: Date()
+            lastBody: body, updatedAt: Date()
         )
         emitActivityTransition(sessionID: sessionId, previous: previous, isSnapshot: isSnapshot)
     }

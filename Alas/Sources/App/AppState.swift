@@ -5117,7 +5117,7 @@ final class AppState {
             owner: owner
         )
         if level == .attention, let sessionId {
-            harness.setExternalActivity(sessionId: sessionId, agent: agent, state: .awaitingInput)
+            harness.setExternalActivity(sessionId: sessionId, agent: agent, state: .awaitingInput, body: body)
         }
         return .ok
     }
@@ -5138,7 +5138,7 @@ final class AppState {
             owner: owner
         )
         if level == .attention {
-            harness.setExternalActivity(sessionId: sessionId, agent: agent, state: .awaitingInput)
+            harness.setExternalActivity(sessionId: sessionId, agent: agent, state: .awaitingInput, body: body)
         }
         return .ok
     }
