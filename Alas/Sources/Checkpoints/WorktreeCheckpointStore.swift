@@ -77,7 +77,7 @@ actor WorktreeCheckpointStore {
         var candidates = existingManifests + [manifest]
         let protected = try protectedIDs(lineageID: manifest.lineageID)
         let victims = retentionVictims(from: candidates, protected: protected)
-        candidates.removeAll { victims.contains($0.id) }
+        candidates.removeAll { candidate in victims.contains(where: { $0.id == candidate.id }) }
         let reachable = Set(candidates.flatMap { references(in: $0) })
         let bytes = try byteCount(reachable, layout: layout, incoming: publication.blobs)
         guard bytes <= limits.bytes else { throw CheckpointStoreError.byteLimitExceeded }
