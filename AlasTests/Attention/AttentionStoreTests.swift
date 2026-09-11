@@ -59,6 +59,43 @@ struct AttentionStoreTests {
         #expect(fixture.store.document.events.isEmpty)
     }
 
+    @Test func registeringAliasMigratesProducerObservationKeys() throws {
+        let fixture = try Fixture()
+        let legacyKey = AttentionSourceKey(rawValue: "git:\(fixture.legacyOwner.storageKey):conflicts")
+        let lineageKey = AttentionSourceKey(rawValue: "git:\(fixture.lineageOwner.storageKey):conflicts")
+        let legacySignal = AttentionSignal(
+            sourceKey: legacyKey,
+            fingerprint: "conflicts:file.swift",
+            owner: fixture.legacyOwner,
+            kind: .conflicts,
+            title: "1 unresolved conflict",
+            body: nil,
+            jumpTarget: .conflicts(path: nil),
+            display: fixture.signal(fingerprint: "").display
+        )
+        fixture.store.observe(.active(legacySignal), at: fixture.now)
+
+        fixture.store.registerAlias(from: fixture.legacyOwner, to: fixture.lineageOwner)
+
+        #expect(fixture.store.document.observations[legacyKey] == nil)
+        #expect(fixture.store.document.observations[lineageKey]?.isActive == true)
+        #expect(fixture.store.document.events.count == 1)
+
+        let lineageSignal = AttentionSignal(
+            sourceKey: lineageKey,
+            fingerprint: legacySignal.fingerprint,
+            owner: fixture.lineageOwner,
+            kind: legacySignal.kind,
+            title: legacySignal.title,
+            body: legacySignal.body,
+            jumpTarget: legacySignal.jumpTarget,
+            display: legacySignal.display
+        )
+        fixture.store.observe(.active(lineageSignal), at: fixture.now.addingTimeInterval(1))
+
+        #expect(fixture.store.document.events.count == 1)
+    }
+
     @Test func acknowledgmentAndAliasSurviveRelaunch() throws {
         let fixture = try Fixture()
         fixture.store.observe(.active(fixture.signal(fingerprint: "request-1")), at: fixture.now)

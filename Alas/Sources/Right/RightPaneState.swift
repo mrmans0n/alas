@@ -92,6 +92,10 @@ final class RightPaneState: GGSplitCommitServicing {
     var pendingStashDrop: PendingStashDrop? = nil
     private(set) var stashOperationInFlight: Bool = false
     private(set) var hasLoadedSnapshot: Bool = false
+    private(set) var latestSnapshotRefreshSucceeded: Bool = false
+    var hasCurrentAttentionSnapshot: Bool {
+        hasLoadedSnapshot && latestSnapshotRefreshSucceeded
+    }
     var displayChanges: [ChangedFile] {
         guard hasLoadedSnapshot else { return [] }
         return Self.applyingStageMutations(
@@ -1053,6 +1057,7 @@ final class RightPaneState: GGSplitCommitServicing {
                 didInitDefaultTab = true
             }
             self.hasLoadedSnapshot = true
+            self.latestSnapshotRefreshSucceeded = true
             let previousReviewRequestFingerprint = Self.reviewRequestReloadFingerprint(reviewLoop.snapshot?.reviewRequest)
             let upstreamBranchName = resolvedUpstream.map {
                 String($0.ref.dropFirst($0.remote.count + 1))
@@ -1082,6 +1087,7 @@ final class RightPaneState: GGSplitCommitServicing {
             }
             sidebarError = error.localizedDescription
             hasLoadedSnapshot = true
+            latestSnapshotRefreshSucceeded = false
             changesGeneration += 1
             // Surface failures via os.Logger so they're visible in Console.app
             // and the unified log. The previous `print` here silently kept
@@ -2176,6 +2182,7 @@ final class RightPaneState: GGSplitCommitServicing {
     func markSnapshotUnknown() {
         snapshotInvalidationGeneration += 1
         hasLoadedSnapshot = false
+        latestSnapshotRefreshSucceeded = false
         changes = []
         stashes = []
         expandedStashRefs = []

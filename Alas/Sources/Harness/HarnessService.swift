@@ -3,6 +3,7 @@ import Observation
 
 struct HarnessActivityTransition: Equatable {
     let sessionID: String
+    let owner: SessionOwnerID?
     let agent: AgentKind
     let state: ActivityState?
     let body: String?
@@ -117,7 +118,7 @@ final class HarnessService {
         // Idle commits separately because Cursor may defer the authoritative change.
         defer {
             if event.event != .idle {
-                emitActivityTransition(sessionID: event.sessionId, previous: previous)
+                emitActivityTransition(sessionID: event.sessionId, previous: previous, owner: ownerLookup(event.sessionId))
             }
         }
 
@@ -233,7 +234,7 @@ final class HarnessService {
                 owner: ownerLookup(event.sessionId)
             )
         }
-        emitActivityTransition(sessionID: event.sessionId, previous: previous)
+        emitActivityTransition(sessionID: event.sessionId, previous: previous, owner: ownerLookup(event.sessionId))
     }
 
     func stop() {
@@ -251,30 +252,30 @@ final class HarnessService {
         activityBySession.removeValue(forKey: sessionId)
         cursorIdleDebouncers.removeValue(forKey: sessionId)?.cancel()
         pendingCursorIdleEvents.removeValue(forKey: sessionId)
-        emitActivityTransition(sessionID: sessionId, previous: previous)
+        emitActivityTransition(sessionID: sessionId, previous: previous, owner: nil)
     }
 
     /// Peer-write entry point alongside socket events. Lets non-hook sources
     /// (currently the ACP bridge) report activity for sessions they own.
     /// No notification side effects — those remain socket-driven so we don't
     /// double-fire when both hooks and ACP cover the same session.
-    func setExternalActivity(sessionId: String, agent: AgentKind, state: ActivityState, body: String? = nil, isSnapshot: Bool = false) {
+    func setExternalActivity(sessionId: String, owner: SessionOwnerID? = nil, agent: AgentKind, state: ActivityState, body: String? = nil, isSnapshot: Bool = false) {
         let previous = activityBySession[sessionId]
         activityBySession[sessionId] = HarnessActivityState(
             agent: agent, state: state, pid: nil,
             lastBody: body, updatedAt: Date()
         )
-        emitActivityTransition(sessionID: sessionId, previous: previous, isSnapshot: isSnapshot)
+        emitActivityTransition(sessionID: sessionId, previous: previous, owner: owner, isSnapshot: isSnapshot)
     }
 
-    private func emitActivityTransition(sessionID: String, previous: HarnessActivityState?, isSnapshot: Bool = false) {
+    private func emitActivityTransition(sessionID: String, previous: HarnessActivityState?, owner: SessionOwnerID?, isSnapshot: Bool = false) {
         let current = activityBySession[sessionID]
         let bodyChanged = current?.lastBody != previous?.lastBody
             && (current?.state == .awaitingInput || current?.state == .permissionRequest)
         guard current?.state != previous?.state || current?.agent != previous?.agent || bodyChanged,
               let agent = current?.agent ?? previous?.agent else { return }
         onActivityTransition?(HarnessActivityTransition(
-            sessionID: sessionID, agent: agent, state: current?.state,
+            sessionID: sessionID, owner: owner, agent: agent, state: current?.state,
             body: current?.lastBody, occurredAt: current?.updatedAt ?? Date(), isSnapshot: isSnapshot
         ))
     }

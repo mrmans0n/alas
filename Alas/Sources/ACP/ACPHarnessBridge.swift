@@ -86,15 +86,15 @@ final class ACPHarnessBridge {
             // A completed turn and removal both clear the badge, but only a
             // real transition to idle contributes completion history.
             if !isSnapshot, session.agentState == .ready, harness.activityBySession[session.id] != nil {
-                harness.setExternalActivity(sessionId: session.id, agent: agent, state: .idle)
+                harness.setExternalActivity(sessionId: session.id, owner: session.owner, agent: agent, state: .idle)
             }
             harness.forgetSession(session.id)
         case .sending, .streaming:
-            harness.setExternalActivity(sessionId: session.id, agent: agent, state: .busy, isSnapshot: isSnapshot)
+            harness.setExternalActivity(sessionId: session.id, owner: session.owner, agent: agent, state: .busy, isSnapshot: isSnapshot)
         case .awaitingPermission:
-            harness.setExternalActivity(sessionId: session.id, agent: agent, state: .permissionRequest, isSnapshot: isSnapshot)
+            harness.setExternalActivity(sessionId: session.id, owner: session.owner, agent: agent, state: .permissionRequest, isSnapshot: isSnapshot)
         case .awaitingInput:
-            harness.setExternalActivity(sessionId: session.id, agent: agent, state: .awaitingInput, isSnapshot: isSnapshot)
+            harness.setExternalActivity(sessionId: session.id, owner: session.owner, agent: agent, state: .awaitingInput, isSnapshot: isSnapshot)
         }
     }
 

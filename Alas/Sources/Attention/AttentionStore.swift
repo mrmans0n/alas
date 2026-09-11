@@ -84,6 +84,7 @@ final class AttentionStore {
     func registerAlias(from legacyOwner: AttentionWorktreeIdentity, to lineageOwner: AttentionWorktreeIdentity) {
         guard legacyOwner != lineageOwner, document.aliases[legacyOwner] != lineageOwner else { return }
         document.aliases[legacyOwner] = lineageOwner
+        migrateObservations(from: legacyOwner, to: lineageOwner)
         retain(at: now())
         persist()
     }
@@ -149,6 +150,32 @@ final class AttentionStore {
                 }
                 return lhs < rhs
             }
+    }
+
+    private func migrateObservations(from legacyOwner: AttentionWorktreeIdentity, to lineageOwner: AttentionWorktreeIdentity) {
+        for (sourceKey, observation) in document.observations {
+            guard let migratedKey = migratedSourceKey(sourceKey, from: legacyOwner, to: lineageOwner),
+                  migratedKey != sourceKey else { continue }
+            if let existing = document.observations[migratedKey] {
+                if observation.isActive, !existing.isActive {
+                    document.observations[migratedKey] = observation
+                }
+            } else {
+                document.observations[migratedKey] = observation
+            }
+            document.observations[sourceKey] = nil
+        }
+    }
+
+    private func migratedSourceKey(_ sourceKey: AttentionSourceKey, from legacyOwner: AttentionWorktreeIdentity, to lineageOwner: AttentionWorktreeIdentity) -> AttentionSourceKey? {
+        let legacyKey = legacyOwner.storageKey
+        let lineageKey = lineageOwner.storageKey
+        for prefix in ["git:", "review:", "host:"] {
+            let legacyPrefix = "\(prefix)\(legacyKey):"
+            guard sourceKey.rawValue.hasPrefix(legacyPrefix) else { continue }
+            return AttentionSourceKey(rawValue: "\(prefix)\(lineageKey):\(sourceKey.rawValue.dropFirst(legacyPrefix.count))")
+        }
+        return nil
     }
 
     private func persist() {

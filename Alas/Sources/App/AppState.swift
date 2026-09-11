@@ -2532,6 +2532,7 @@ final class AppState {
            tabs.tabs(for: sharedSessionOwner).contains(where: { $0.id == tabID }) {
             tabs.activate(owner: sharedSessionOwner, tabId: tabID)
             tabs.clearActiveTab(worktreeId: worktreeID)
+            acknowledgeFocusedSessionAttention(worktreeID: worktreeID, owner: sharedSessionOwner, tabID: tabID)
         } else {
             tabs.activate(worktreeId: worktreeID, tabId: tabID)
             if let sharedSessionOwner {
@@ -5117,7 +5118,7 @@ final class AppState {
             owner: owner
         )
         if level == .attention, let sessionId {
-            harness.setExternalActivity(sessionId: sessionId, agent: agent, state: .awaitingInput, body: body)
+            harness.setExternalActivity(sessionId: sessionId, owner: owner, agent: agent, state: .awaitingInput, body: body)
         }
         return .ok
     }
@@ -5138,7 +5139,7 @@ final class AppState {
             owner: owner
         )
         if level == .attention {
-            harness.setExternalActivity(sessionId: sessionId, agent: agent, state: .awaitingInput, body: body)
+            harness.setExternalActivity(sessionId: sessionId, owner: owner, agent: agent, state: .awaitingInput, body: body)
         }
         return .ok
     }
@@ -5221,6 +5222,7 @@ final class AppState {
             tabs.activate(owner: owner, tabId: tabId)
             if let selectedWorktreeId {
                 tabs.clearActiveTab(worktreeId: selectedWorktreeId)
+                acknowledgeFocusedSessionAttention(worktreeID: selectedWorktreeId, owner: owner, tabID: tabId)
             }
         }
         NSApp.activate(ignoringOtherApps: true)
@@ -5774,6 +5776,7 @@ final class AppState {
             return
         }
         _ = tabs.setFocusedLeaf(owner: owner, tabId: activeId, leafId: next)
+        acknowledgeFocusedSessionAttention(worktreeID: worktreeId, owner: owner, tabID: activeId)
     }
 
     /// Resize the focused leaf's enclosing split by ±0.05 toward `direction`.

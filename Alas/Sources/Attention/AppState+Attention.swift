@@ -34,19 +34,24 @@ struct AttentionNavigationEnvironment {
         Self(
             focusSession: { [weak appState] item, sessionID in
                 guard let appState, let worktree = item.worktree else { return false }
-                for tab in appState.tabs.tabs(forWorktree: worktree.id) {
-                    switch tab {
-                    case .terminal(let terminal):
-                        guard let leaf = terminal.root.leaves().first(where: { $0.sessionId == sessionID || $0.id == sessionID }) else { continue }
-                        _ = appState.tabs.setFocusedLeaf(worktreeId: worktree.id, tabId: tab.id, leafId: leaf.id)
-                    case .acpSession(let session):
-                        guard session.sessionId == sessionID else { continue }
-                    default: continue
-                    }
-                    appState.activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
-                    return true
+                guard let destination = appState.attentionSessionDestination(for: sessionID, preferredWorktreeID: worktree.id) else {
+                    return false
                 }
-                return false
+                switch destination.owner {
+                case .worktree(let worktreeID):
+                    if let leafID = destination.leafID {
+                        _ = appState.tabs.setFocusedLeaf(worktreeId: worktreeID, tabId: destination.tabID, leafId: leafID)
+                    }
+                    appState.activateWorktreeCenterTab(worktreeId: worktreeID, tabId: destination.tabID)
+                case .workspaceCheckout:
+                    if let leafID = destination.leafID {
+                        _ = appState.tabs.setFocusedLeaf(owner: destination.owner, tabId: destination.tabID, leafId: leafID)
+                    }
+                    appState.tabs.activate(owner: destination.owner, tabId: destination.tabID)
+                    appState.tabs.clearActiveTab(worktreeId: worktree.id)
+                    appState.acknowledgeFocusedSessionAttention(worktreeID: worktree.id, owner: destination.owner, tabID: destination.tabID)
+                }
+                return true
             },
             presentScriptFailure: { [weak appState] item, failureID in
                 guard let appState, let worktree = item.worktree else { return false }
@@ -229,7 +234,7 @@ extension AppState {
             let owner = AttentionWorktreeIdentity.make(worktree: entry.worktree, project: entry.project)
             if rightPaneStore.isActiveState(worktreeId: entry.worktree.id),
                let pane = rightPaneStore.activeState(worktreeId: entry.worktree.id),
-               pane.hasLoadedSnapshot {
+               pane.hasCurrentAttentionSnapshot {
                 signals += rightPaneAttentionObservations(snapshot: pane.attentionSnapshot, owner: owner, display: entry.resolved.display).compactMap(\.activeSignal)
             }
             if let host = entry.project.host {
@@ -369,6 +374,17 @@ extension AppState {
     func acknowledgeFocusedSessionAttention(worktreeID: String, tabID: TabID) {
         guard selectedWorktreeId == worktreeID, tabs.activeTabId(forWorktree: worktreeID) == tabID,
               let tab = tabs.tabs(forWorktree: worktreeID).first(where: { $0.id == tabID }) else { return }
+        acknowledgeSessionAttention(worktreeID: worktreeID, tab: tab)
+    }
+
+    func acknowledgeFocusedSessionAttention(worktreeID: String, owner: SessionOwnerID, tabID: TabID) {
+        guard selectedWorktreeId == worktreeID,
+              tabs.activeTabId(for: owner) == tabID,
+              let tab = tabs.tabs(for: owner).first(where: { $0.id == tabID }) else { return }
+        acknowledgeSessionAttention(worktreeID: worktreeID, tab: tab)
+    }
+
+    private func acknowledgeSessionAttention(worktreeID: String, tab: Tab) {
         switch tab {
         case .acpSession(let session):
             acknowledgeAttentionSurface(worktreeID: worktreeID, target: .session(sessionID: session.sessionId))
@@ -404,23 +420,108 @@ extension AppState {
     }
 
     func attentionWorktree(forSessionID sessionID: String) -> Worktree? {
+        attentionSessionResolution(for: sessionID)?.worktree
+    }
+
+    private func attentionSessionResolution(for sessionID: String, owner explicitOwner: SessionOwnerID? = nil, preferredWorktreeID: String? = nil) -> (worktree: Worktree, owner: SessionOwnerID)? {
         let worktrees = attentionWorktrees
+        if let explicitOwner,
+           let resolved = attentionWorktree(forSessionOwner: explicitOwner, preferredWorktreeID: preferredWorktreeID) {
+            return resolved
+        }
         if let session = terminal.registry.session(for: sessionID),
-           let worktree = worktrees.first(where: { $0.worktree.id == session.worktreeId })?.worktree {
+           let resolved = attentionWorktree(forSessionOwner: session.owner, preferredWorktreeID: preferredWorktreeID) {
+            return resolved
+        }
+        if let entry = worktrees.first(where: { entry in
+            tabs.tabs(forWorktree: entry.worktree.id).contains { tab in tab.hostsSession(sessionID) }
+        }) {
+            return (entry.worktree, .worktree(entry.worktree.id))
+        }
+        for checkout in workspacesManager.checkouts where checkout.archivedAt == nil {
+            let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+            guard tabs.tabs(for: owner).contains(where: { $0.hostsSession(sessionID) }),
+                  let worktree = attentionWorktree(for: checkout, preferredWorktreeID: preferredWorktreeID) else { continue }
+            return (worktree, owner)
+        }
+        return nil
+    }
+
+    private func attentionWorktree(forSessionOwner owner: SessionOwnerID, preferredWorktreeID: String?) -> (worktree: Worktree, owner: SessionOwnerID)? {
+        switch owner {
+        case .worktree(let worktreeID):
+            guard let worktree = attentionWorktrees.first(where: { $0.worktree.id == worktreeID })?.worktree else { return nil }
+            return (worktree, owner)
+        case .workspaceCheckout(let checkoutID, let location):
+            guard let checkout = workspacesManager.checkout(id: checkoutID),
+                  checkout.archivedAt == nil,
+                  checkout.executionLocation.normalized == location.normalized,
+                  let worktree = attentionWorktree(for: checkout, preferredWorktreeID: preferredWorktreeID) else { return nil }
+            return (worktree, owner)
+        }
+    }
+
+    private func attentionWorktree(for checkout: WorkspaceCheckout, preferredWorktreeID: String?) -> Worktree? {
+        let worktrees = projects.flatMap { projectsManager.worktrees(projectId: $0.id) }
+        let memberWorktreeIDs = WorkspaceMemberWorktreeResolver.resolvedWorktreeIDs(checkout: checkout, worktrees: worktrees)
+        if let preferredWorktreeID, memberWorktreeIDs.values.contains(preferredWorktreeID),
+           let worktree = worktrees.first(where: { $0.id == preferredWorktreeID }) {
             return worktree
         }
-        return worktrees.first { entry in
-            tabs.tabs(forWorktree: entry.worktree.id).contains { tab in
-                switch tab {
-                case .terminal(let state):
-                    state.root.leaves().contains { $0.id == sessionID || $0.sessionId == sessionID }
-                case .acpSession(let state):
-                    state.sessionId == sessionID
-                default:
-                    false
-                }
+        if let selectedWorktreeId, memberWorktreeIDs.values.contains(selectedWorktreeId),
+           let worktree = worktrees.first(where: { $0.id == selectedWorktreeId }) {
+            return worktree
+        }
+        for worktreeID in memberWorktreeIDs.values.sorted() {
+            if let worktree = worktrees.first(where: { $0.id == worktreeID }) {
+                return worktree
             }
-        }?.worktree
+        }
+        return nil
+    }
+
+    fileprivate func attentionSessionDestination(for sessionID: String, preferredWorktreeID: String?) -> (owner: SessionOwnerID, tabID: TabID, leafID: String?)? {
+        let candidateOwners: [SessionOwnerID] = {
+            if let owner = terminal.registry.session(for: sessionID)?.owner {
+                return [owner]
+            }
+            return []
+        }()
+        for owner in candidateOwners {
+            if let destination = attentionSessionDestination(for: sessionID, owner: owner) { return destination }
+        }
+        if let preferredWorktreeID,
+           let destination = attentionSessionDestination(for: sessionID, owner: .worktree(preferredWorktreeID)) {
+            return destination
+        }
+        for entry in attentionWorktrees {
+            if let destination = attentionSessionDestination(for: sessionID, owner: .worktree(entry.worktree.id)) {
+                return destination
+            }
+        }
+        for checkout in workspacesManager.checkouts where checkout.archivedAt == nil {
+            let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+            if let destination = attentionSessionDestination(for: sessionID, owner: owner) {
+                return destination
+            }
+        }
+        return nil
+    }
+
+    private func attentionSessionDestination(for sessionID: String, owner: SessionOwnerID) -> (owner: SessionOwnerID, tabID: TabID, leafID: String?)? {
+        for tab in tabs.tabs(for: owner) {
+            switch tab {
+            case .terminal(let terminal):
+                guard let leaf = terminal.root.leaves().first(where: { $0.sessionId == sessionID || $0.id == sessionID }) else { continue }
+                return (owner, tab.id, leaf.id)
+            case .acpSession(let session):
+                guard session.sessionId == sessionID else { continue }
+                return (owner, tab.id, nil)
+            default:
+                continue
+            }
+        }
+        return nil
     }
 
     func observeHarnessAttention(_ transition: HarnessActivityTransition) {
@@ -431,8 +532,8 @@ extension AppState {
             }
             return
         }
-        guard let worktree = attentionWorktree(forSessionID: transition.sessionID),
-              let context = attentionContext(for: worktree) else { return }
+        guard let resolution = attentionSessionResolution(for: transition.sessionID, owner: transition.owner),
+              let context = attentionContext(for: resolution.worktree) else { return }
         let observations = AttentionProducer.harness(
             sessionID: transition.sessionID, agent: transition.agent, state: state,
             body: transition.body, owner: context.owner, display: context.display
@@ -457,5 +558,18 @@ extension AppState {
             lineageID: nil, legacyPath: signal.display.path
         )
         attentionStore.registerAlias(from: legacyOwner, to: signal.owner)
+    }
+}
+
+private extension Tab {
+    func hostsSession(_ sessionID: String) -> Bool {
+        switch self {
+        case .terminal(let terminal):
+            terminal.root.leaves().contains { $0.id == sessionID || $0.sessionId == sessionID }
+        case .acpSession(let session):
+            session.sessionId == sessionID
+        default:
+            false
+        }
     }
 }
