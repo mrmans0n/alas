@@ -58,6 +58,33 @@ struct AttentionIntegrationTests {
         #expect(fixture.state.attentionStore.events.count == 2)
     }
 
+    @Test func disconnectedHostDoesNotAffectSamePathOnAnotherHost() throws {
+        let fixture = try Fixture(host: "mini")
+        defer { fixture.cleanup() }
+        let firstProject = try #require(fixture.state.projects.first)
+        let otherProject = ProjectConfig(id: "other", name: "Other", path: "/repo", color: "blue", addedAt: Date(), host: "studio")
+        fixture.state.projectsManager = ProjectsManager(persistedProjects: [firstProject, otherProject])
+        for (id, projectID) in [("mini-worktree", firstProject.id), ("studio-worktree", otherProject.id)] {
+            fixture.state.projectsManager.insertOptimisticWorktree(Worktree(
+                id: id, projectId: projectID, name: "main", branch: "main",
+                path: URL(fileURLWithPath: "/repo/shared"), status: .clean, lastActivity: Date(), lineageID: "shared-lineage"
+            ))
+        }
+
+        fixture.state.observeHostAttention(host: "mini", isDisconnected: true)
+        fixture.state.observeHostAttention(host: "studio", isDisconnected: true)
+        let miniEvent = try #require(fixture.state.attentionStore.events.first { $0.display.host == "mini" })
+        fixture.state.attentionStore.acknowledge(eventID: miniEvent.id, at: Date())
+        fixture.state.observeHostAttention(host: "mini", isDisconnected: false)
+
+        let remaining = try #require(fixture.state.attentionAggregation.items.first)
+        #expect(fixture.state.attentionAggregation.unresolvedCount == 1)
+        #expect(remaining.worktree?.id == "studio-worktree")
+        #expect(remaining.display.host == "studio")
+        #expect(remaining.kind == .hostDisconnected)
+        #expect(fixture.state.attentionAggregation.unresolvedCountByProject == ["other": 1])
+    }
+
     @Test func unavailableProviderDoesNotResurrectAcknowledgedReviewFailure() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }

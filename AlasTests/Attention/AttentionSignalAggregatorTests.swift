@@ -65,6 +65,34 @@ struct AttentionSignalAggregatorTests {
         #expect(aggregation.history.map(\.eventID) == [informational.id, acknowledged.id])
     }
 
+    @Test func projectBadgesCountUnresolvedItemsAcrossWorktreesAndProjects() {
+        let fixture = Fixture()
+        let first = fixture.awaitingEvent()
+        let second = fixture.awaitingEvent()
+        let acknowledged = fixture.awaitingEvent()
+        let otherProject = AttentionEvent(
+            signal: AttentionSignal(
+                sourceKey: .init(rawValue: "other-project:session"), fingerprint: "request",
+                owner: .init(projectID: "other-project", location: .local, lineageID: nil, legacyPath: "/other"),
+                kind: .agentAwaiting, title: "Codex is waiting for input", body: nil,
+                jumpTarget: .session(sessionID: "other-session"),
+                display: .init(projectName: "Other", branch: "main", path: "/other", host: nil)
+            ),
+            occurredAt: fixture.now
+        )
+        let document = AttentionDocument(
+            events: [first, second, acknowledged, otherProject, fixture.finishedEvent(id: UUID())],
+            acknowledgments: [acknowledged.id: .init(eventID: acknowledged.id, acknowledgedAt: fixture.now)]
+        )
+
+        let result = AttentionSignalAggregator.aggregate(liveSignals: [], document: document, worktrees: fixture.worktrees)
+
+        #expect(result.unresolvedCount == 3)
+        #expect(result.unresolvedCountByProject == ["project": 2, "other-project": 1])
+        #expect(Set(result.items.map(\.eventID)) == [first.id, second.id, otherProject.id])
+        #expect(result.history.count == 2)
+    }
+
     @Test func resolverUsesAliasToFindRenamedLineageWorktree() {
         let fixture = Fixture()
         let legacy = AttentionWorktreeIdentity(
@@ -94,6 +122,17 @@ struct AttentionSignalAggregatorTests {
             AttentionWorktreeIdentity.make(worktree: before, project: fixture.localProject)
                 == AttentionWorktreeIdentity.make(worktree: after, project: fixture.localProject)
         )
+
+        let event = fixture.awaitingEvent()
+        let result = AttentionSignalAggregator.aggregate(
+            liveSignals: [], document: fixture.document(events: [event]),
+            worktrees: [AttentionWorktree(worktree: after, project: fixture.localProject)]
+        )
+        #expect(result.items.first?.worktree?.id == "/tmp/new")
+        #expect(result.items.first?.display.path == "/tmp/new")
+        #expect(result.items.first?.display.branch == "main")
+        #expect(result.items.first?.occurredAt == fixture.now)
+        #expect(result.items.first?.jumpTarget == .session(sessionID: "session-1"))
     }
 
     @Test func equalRemotePathsOnDifferentHostsDoNotCollide() {
