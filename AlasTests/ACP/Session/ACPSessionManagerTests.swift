@@ -686,6 +686,30 @@ struct ACPSessionManagerTests {
         #expect(try store.loadQueue(sessionId: session.id).first?.scheduledAt == nil)
     }
 
+    @Test("queue force send during recovering persistence keeps schedule parked")
+    func queueForceSendDuringRecoveringPersistenceKeepsScheduleParked() async throws {
+        var queueChanged = false
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-force-send-recovering-persistence-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let mgr = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            onQueueChanged: { _, _ in queueChanged = true }
+        )
+        let session = mgr.createSession(id: "session", agentId: "claude")
+        session.agentState = .spawning
+        session.enqueueScheduled(blocks: [.text("later")], scheduledAt: .distantFuture)
+        let itemId = try #require(session.queue.first?.id)
+        session.pendingQueuePersistenceCount = 1
+
+        await mgr.queueForceSend(for: session.id, itemId: itemId)
+
+        #expect(queueChanged)
+        #expect(session.queue.first?.scheduledAt != nil)
+    }
+
     @Test("stale force send during attach falls back to queue flush")
     func staleForceSendDuringAttachFallsBackToQueueFlush() async throws {
         let gate = AsyncGate()

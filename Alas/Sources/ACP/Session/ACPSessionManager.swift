@@ -4363,12 +4363,17 @@ extension ACPSessionManager {
         let task = enqueuePersistenceResult { persistence in
             try await persistence.upsertQueue(sessionId: sessionId, items: items, fence: fence)
         }
+        session.pendingQueuePersistenceCount += 1
         Task { @MainActor in
             let persisted = await task.value == true
+            session.pendingQueuePersistenceCount -= 1
             if !persisted, let scheduledId {
                 if session.removeFromQueue(id: scheduledId) {
                     persistQueue(for: session)
                 }
+            }
+            if persisted {
+                _ = sendPendingQueueForceSend(sessionId: sessionId)
             }
             onPersisted?(persisted)
         }
