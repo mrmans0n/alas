@@ -252,6 +252,7 @@ extension WorktreeCleanupScanner {
         async let stashes = stashCount(worktreePath: worktreePath, branch: branch)
         async let merged = isMergedLocally(
             worktreePath: worktreePath,
+            branch: branch,
             baseBranch: baseBranch
         )
         async let head = headSHA(worktreePath: worktreePath)
@@ -344,8 +345,17 @@ extension WorktreeCleanupScanner {
 
     private static func isMergedLocally(
         worktreePath: URL,
+        branch: String,
         baseBranch: String
     ) async -> Bool {
+        // A base-branch resolution that falls back past the configured
+        // default and past main/master/trunk can, in an unconventional repo,
+        // land on one of the very branches being scanned. Comparing a branch
+        // against itself as the base trivially "succeeds" (HEAD is always its
+        // own ancestor), which would misreport a genuinely unmerged worktree
+        // as merged locally. Guard the degenerate case directly rather than
+        // trusting the resolved base branch is never a scanned worktree.
+        guard branch != baseBranch else { return false }
         guard let result = try? await Process.git(
             ["merge-base", "--is-ancestor", "HEAD", baseBranch],
             cwd: worktreePath
