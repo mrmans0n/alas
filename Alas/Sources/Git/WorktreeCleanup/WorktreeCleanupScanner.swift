@@ -126,7 +126,16 @@ struct WorktreeCleanupScanner: Sendable {
                 // does not update it. Prefer a freshly-read value so a
                 // worktree just touched and merged since that last refresh
                 // does not read as long-idle and get default-selected.
-                lastActivity: facts[offset].lastActivity ?? worktree.lastActivity,
+                //
+                // A freshly-read value can itself predate the checkout: it is
+                // derived from the branch ref's own history, so a worktree
+                // just created from an old merged branch would otherwise
+                // inherit that branch's age and read as idle immediately.
+                // The worktree cannot be idle before it existed.
+                lastActivity: max(
+                    facts[offset].lastActivity ?? worktree.lastActivity,
+                    worktree.createdAt
+                ),
                 mergeState: mergeState
             )
             candidates.append(WorktreeCleanupClassifier.classify(

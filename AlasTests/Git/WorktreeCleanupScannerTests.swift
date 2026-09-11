@@ -321,6 +321,30 @@ struct WorktreeCleanupScannerTests {
         #expect(results[0].signals.contains(.recentActivity(days: 0)))
     }
 
+    /// A worktree checked out today from an old, already-merged branch must
+    /// not read as idle for the branch's own age — the worktree itself did
+    /// not exist before it was created, regardless of what its branch's ref
+    /// history says.
+    @Test func idleClockNeverStartsBeforeTheWorktreeWasCreated() async {
+        var facts = Self.cleanFacts
+        facts.isMergedLocally = true
+        facts.lastActivity = Self.now.addingTimeInterval(-60 * 86_400)   // an old branch
+        let scanner = Self.scanner(facts: { _ in facts })
+        let freshWorktree = Worktree(
+            id: "/tmp/wt-feature-a",
+            projectId: "p",
+            name: "feature/a",
+            branch: "feature/a",
+            path: URL(fileURLWithPath: "/tmp/wt-feature-a"),
+            status: .clean,
+            lastActivity: Self.now.addingTimeInterval(-60 * 86_400),
+            createdAt: Self.now   // created just now
+        )
+        let results = await Self.scan(scanner, worktrees: [freshWorktree])
+        #expect(results[0].verdict == .active)
+        #expect(results[0].signals.contains(.recentActivity(days: 0)))
+    }
+
     @Test func resultsPreserveInputOrder() async {
         let scanner = Self.scanner()
         let worktrees = ["a", "b", "c"].map { Self.worktree(branch: "feature/\($0)") }
