@@ -15,6 +15,21 @@ struct AttentionStoreTests {
         #expect(fixture.store.acknowledgments[event.id]?.acknowledgedAt == first)
     }
 
+    @Test func existingAcknowledgmentRetriesFailedWriteWithoutChangingTimestamp() throws {
+        let persistence = FailingThenSucceedingPersistenceStore(failOnWrite: 2)
+        let fixture = try Fixture(persistence: persistence)
+        fixture.store.observe(.active(fixture.signal(fingerprint: "failure")), at: fixture.now)
+        let event = try #require(fixture.store.events.first)
+        let first = fixture.now.addingTimeInterval(10)
+
+        fixture.store.acknowledge(eventID: event.id, at: first)
+        #expect(fixture.store.writeError != nil)
+        fixture.store.acknowledge(eventID: event.id, at: fixture.now.addingTimeInterval(20))
+
+        #expect(fixture.store.writeError == nil)
+        #expect(fixture.store.acknowledgments[event.id]?.acknowledgedAt == first)
+    }
+
     @Test func distinctSourcesAndAliasesRemainBoundedAfterEventsExpire() throws {
         let fixture = try Fixture(maxEvents: 3)
         for index in 0..<30 {
@@ -284,11 +299,15 @@ struct AttentionStoreTests {
 }
 
 private final class FailingThenSucceedingPersistenceStore: PersistenceStoreProtocol {
-    private var shouldFail = true
+    private var remainingFailures: Int
+
+    init(failOnWrite: Int = 1) {
+        remainingFailures = failOnWrite
+    }
 
     func write<T: Encodable>(_ value: T, to url: URL) throws {
-        if shouldFail {
-            shouldFail = false
+        if remainingFailures > 0 {
+            remainingFailures -= 1
             throw TestError.writeFailed
         }
     }
