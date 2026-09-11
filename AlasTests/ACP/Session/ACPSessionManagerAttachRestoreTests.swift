@@ -1575,6 +1575,65 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(!row.contextRecoveryPending)
     }
 
+    @Test("pending force send waits for transcript recovery")
+    func pendingForceSendWaitsForTranscriptRecovery() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: "remote-old"))
+        let priorPrompt: ACPMessage = .user(id: UUID(), text: "prior prompt", attachments: [])
+        try appendMessage(priorPrompt, to: store, seq: 0)
+        let forced = QueuedPrompt(blocks: [.text("forced prompt")])
+        try store.upsertQueue(sessionId: "local", items: [forced])
+        let newSessionGate = AttachPhaseGate()
+        let recoveryGate = PromptGate()
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            throw JSONRPCError(code: -32601, message: "Method not found", data: nil)
+        }
+        client.scriptAsync(method: "session/new") { _ in
+            await newSessionGate.enterAndWait()
+            return try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-new",
+                availableModels: [],
+                availableModes: [],
+                currentModel: nil,
+                currentMode: nil,
+                promptSuggestions: []
+            ))
+        }
+        client.scriptAsync(method: "session/prompt") { request in
+            let params = try #require(request.params as? ACPSessionPromptParams)
+            if params.prompt.contains(where: { block in
+                guard case .text(let text) = block else { return false }
+                return text.contains("prior prompt")
+            }) {
+                await recoveryGate.waitInPrompt()
+            }
+            return Data("null".utf8)
+        }
+        let manager = manager(store: store, client: client)
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+
+        let attachTask = Task { @MainActor in
+            await manager.attach(to: session.id, freshlyCreated: false)
+        }
+        for _ in 0 ..< 50 where !(await newSessionGate.hasEntered) {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(await newSessionGate.hasEntered)
+        await manager.queueForceSend(for: session.id, itemId: forced.id)
+        await newSessionGate.release()
+        try await waitUntil { client.sent.filter { $0.method == "session/prompt" }.count == 1 }
+        await recoveryGate.release()
+        await attachTask.value
+
+        try await waitUntil {
+            let prompts = client.sent.compactMap { $0.params as? ACPSessionPromptParams }
+            return prompts.count == 2 && prompts[1].prompt == [.text("forced prompt")]
+        }
+    }
+
     @Test("new auth failure enters needsAuth with initialized auth method")
     func newAuthFailureEntersNeedsAuthWithInitializedAuthMethod() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())

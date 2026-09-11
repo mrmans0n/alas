@@ -1997,6 +1997,7 @@ extension ACPSessionRunner {
     @discardableResult
     func sendRecoveryContext(
         _ prompt: String,
+        flushQueueOnCompletion: Bool = true,
         onCompleted: (@MainActor (_ delivered: Bool) -> Void)? = nil
     ) -> Bool {
         guard !nativeForkBarrierActive else { return false }
@@ -2031,7 +2032,7 @@ extension ACPSessionRunner {
                     let isActivePrompt = self.activePromptID == promptID
                     if isActivePrompt {
                         self.activePromptID = nil
-                        if self.deferCompletedOutputBoundaryUntilUpdatesDrain() {
+                        if flushQueueOnCompletion && self.deferCompletedOutputBoundaryUntilUpdatesDrain() {
                             self.flushQueueIfIdle()
                         }
                         self.onPromptWorkChanged?()

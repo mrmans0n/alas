@@ -4027,16 +4027,13 @@ extension ACPSessionManager {
             if session.queue.contains(where: { $0.status == .sending }) {
                 session.restoreQueue(session.queue)
             }
-            if let itemId = pendingQueueForceSends.removeValue(forKey: sessionId) {
-                runner.forceSendQueuedItem(id: itemId)
-            }
             if let remoteMCPNotice {
                 runner.appendAndPersistSystemNotice(remoteMCPNotice)
             }
-            if shouldHoldQueueForRecovery {
-                sendTranscriptAsContext(sessionId: sessionId, agentName: nil)
-            } else {
-                runner.flushQueueIfIdle()
+            if !shouldHoldQueueForRecovery || !sendTranscriptAsContext(sessionId: sessionId, agentName: nil) {
+                if !sendPendingQueueForceSend(sessionId: sessionId) {
+                    runner.flushQueueIfIdle()
+                }
             }
             stderrTask.cancel()
         } catch {
@@ -4264,7 +4261,7 @@ extension ACPSessionManager {
               let prompt = transcriptContextPrompt(for: session, agentName: agentName)
         else { return false }
 
-        guard runner.sendRecoveryContext(prompt, onCompleted: { delivered in
+        guard runner.sendRecoveryContext(prompt, flushQueueOnCompletion: false, onCompleted: { delivered in
             if delivered {
                 self.persistContextRecoveryPending(sessionId: sessionId, pending: false)
                 session.contextRestoreWarning = nil
@@ -4272,8 +4269,21 @@ extension ACPSessionManager {
             } else {
                 session.contextRecoveryStatus = .failed("Transcript recovery failed.")
             }
+            if !self.sendPendingQueueForceSend(sessionId: sessionId) {
+                self.runners[sessionId]?.flushQueueIfIdle()
+            }
         }) else { return false }
         session.contextRecoveryStatus = .sendingTranscript
+        return true
+    }
+
+    @discardableResult
+    private func sendPendingQueueForceSend(sessionId: ACPSession.ID) -> Bool {
+        guard let itemId = pendingQueueForceSends.removeValue(forKey: sessionId),
+              let runner = runners[sessionId]
+        else { return false }
+        runner.forceSendQueuedItem(id: itemId)
+        onQueueChanged?(sessionId, true)
         return true
     }
 
