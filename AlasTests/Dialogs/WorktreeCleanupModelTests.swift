@@ -130,18 +130,77 @@ struct WorktreeCleanupModelTests {
         #expect(model.selectedIds == ["/tmp/wt-a"])
     }
 
+    @Test func worktreeRowsAreAvailableBeforeTheScanStarts() {
+        let a = candidate(branch: "a", verdict: .candidate(confidence: .high))
+        let b = candidate(branch: "b", verdict: .dirty)
+        let worktrees = [a.worktree, b.worktree]
+        let model = WorktreeCleanupModel(
+            projectId: "p",
+            worktrees: worktrees,
+            keepBranches: false,
+            loadWorktrees: { worktrees },
+            scan: { _, _ in .success([a, b]) },
+            deleteBatch: { _, _ in [] },
+            archiveBatch: { _ in [] },
+            confirm: { _, _, _ in true }
+        )
+
+        #expect(model.rows.map(\.worktree.branch) == ["a", "b"])
+        #expect(model.rows.allSatisfy { $0.candidate == nil })
+        #expect(!model.isScanning)
+    }
+
+    @Test func scanPublishesCompletedRowsWhileOtherRowsAreStillLoading() async {
+        let a = candidate(branch: "a", verdict: .candidate(confidence: .high))
+        let b = candidate(branch: "b", verdict: .dirty)
+        let worktrees = [a.worktree, b.worktree]
+        let gate = WorktreeCleanupScanGate()
+        let model = WorktreeCleanupModel(
+            projectId: "p",
+            worktrees: worktrees,
+            keepBranches: false,
+            loadWorktrees: { worktrees },
+            scan: { _, onUpdate in
+                await onUpdate(.init(candidate: a, completed: 1, total: 2))
+                await gate.pause()
+                await onUpdate(.init(candidate: b, completed: 2, total: 2))
+                return .success([a, b])
+            },
+            deleteBatch: { _, _ in [] },
+            archiveBatch: { _ in [] },
+            confirm: { _, _, _ in true }
+        )
+
+        let scanTask = Task { await model.runScan() }
+        await gate.waitUntilPaused()
+
+        #expect(model.isScanning)
+        #expect(model.scanProgress == .init(completed: 1, total: 2))
+        #expect(model.rows[0].candidate == a)
+        #expect(!model.rows[0].isScanning)
+        #expect(model.rows[1].candidate == nil)
+        #expect(model.rows[1].isScanning)
+
+        await gate.resume()
+        await scanTask.value
+        #expect(!model.isScanning)
+        #expect(model.candidates == [a, b])
+    }
+
     /// Drives a rescan through `runScan()` itself, not `applyScanResult`
     /// directly — this is the entry point the Refresh button and any
-    /// production rescan actually use, and `scanState` is `.scanning` for
-    /// the duration of the call, which is exactly what broke a prior
-    /// implementation that read `scanState` to decide whether to reconcile.
+    /// production rescan actually use. The model is already marked as scanning
+    /// while results arrive, so selection reconciliation must use the durable
+    /// completed-scan flag rather than transient loading state.
     @Test func runScanThroughItsPublicEntryPointKeepsManualSelection() async {
         let a = candidate(branch: "a", verdict: .candidate(confidence: .high))
         let b = candidate(branch: "b", verdict: .candidate(confidence: .high))
         let model = WorktreeCleanupModel(
             projectId: "p",
+            worktrees: [a.worktree, b.worktree],
             keepBranches: false,
-            scan: { .success([a, b]) },
+            loadWorktrees: { [a.worktree, b.worktree] },
+            scan: { _, _ in .success([a, b]) },
             deleteBatch: { _, _ in [] },
             archiveBatch: { _ in [] },
             confirm: { _, _, _ in true }
@@ -164,8 +223,10 @@ struct WorktreeCleanupModelTests {
         var archiveBatchCalls = 0
         let model = WorktreeCleanupModel(
             projectId: "p",
+            worktrees: [a.worktree],
             keepBranches: false,
-            scan: { .success([a]) },
+            loadWorktrees: { [a.worktree] },
+            scan: { _, _ in .success([a]) },
             deleteBatch: { _, _ in [] },
             archiveBatch: { worktrees in
                 archiveBatchCalls += 1
@@ -195,8 +256,10 @@ struct WorktreeCleanupModelTests {
         var archiveBatchCalls = 0
         let model = WorktreeCleanupModel(
             projectId: "p",
+            worktrees: [a.worktree],
             keepBranches: false,
-            scan: { .success([a]) },
+            loadWorktrees: { [a.worktree] },
+            scan: { _, _ in .success([a]) },
             deleteBatch: { _, _ in [] },
             archiveBatch: { worktrees in
                 archiveBatchCalls += 1
@@ -219,8 +282,10 @@ struct WorktreeCleanupModelTests {
         var confirmButtons: [String] = []
         let model = WorktreeCleanupModel(
             projectId: "p",
+            worktrees: [a.worktree],
             keepBranches: false,
-            scan: { .success([a]) },
+            loadWorktrees: { [a.worktree] },
+            scan: { _, _ in .success([a]) },
             deleteBatch: { _, _ in
                 deleteBatchCalls += 1
                 return []
@@ -246,5 +311,32 @@ struct WorktreeCleanupModelTests {
             candidate(branch: "c", verdict: .candidate(confidence: .high)),
         ])
         #expect(model.selectedWorktrees().map(\.branch) == ["a", "b", "c"])
+    }
+}
+
+private actor WorktreeCleanupScanGate {
+    private var isPaused = false
+    private var pauseWaiters: [CheckedContinuation<Void, Never>] = []
+    private var resumeContinuation: CheckedContinuation<Void, Never>?
+
+    func pause() async {
+        isPaused = true
+        pauseWaiters.forEach { $0.resume() }
+        pauseWaiters.removeAll()
+        await withCheckedContinuation { continuation in
+            resumeContinuation = continuation
+        }
+    }
+
+    func waitUntilPaused() async {
+        if isPaused { return }
+        await withCheckedContinuation { continuation in
+            pauseWaiters.append(continuation)
+        }
+    }
+
+    func resume() {
+        resumeContinuation?.resume()
+        resumeContinuation = nil
     }
 }

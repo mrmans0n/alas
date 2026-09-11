@@ -353,6 +353,27 @@ struct WorktreeCleanupScannerTests {
                 == ["feature/a", "feature/b", "feature/c"])
     }
 
+    @Test func scanPublishesProgressForEveryWorktree() async {
+        let scanner = Self.scanner()
+        let worktrees = ["a", "b", "c"].map { Self.worktree(branch: "feature/\($0)") }
+        let recorder = WorktreeCleanupUpdateRecorder()
+
+        let results = await scanner.scan(
+            project: Self.project(),
+            worktrees: worktrees,
+            baseBranch: "main",
+            now: Self.now,
+            idleThresholdDays: 14,
+            onUpdate: { update in await recorder.append(update) }
+        )
+        let updates = await recorder.updates
+
+        #expect(results.map(\.worktree.branch) == ["feature/a", "feature/b", "feature/c"])
+        #expect(updates.map(\.completed) == [1, 2, 3])
+        #expect(updates.allSatisfy { $0.total == 3 })
+        #expect(Set(updates.map(\.candidate.id)) == Set(worktrees.map(\.id)))
+    }
+
     @Test func statusPorcelainDistinguishesUntrackedFromModified() {
         let modified = WorktreeCleanupScanner.parseStatusPorcelain(" M Sources/A.swift\n")
         #expect(modified.hasUncommittedChanges)
@@ -397,4 +418,12 @@ struct WorktreeCleanupScannerTests {
 private actor ProbeCounter {
     private(set) var value = 0
     func increment() { value += 1 }
+}
+
+private actor WorktreeCleanupUpdateRecorder {
+    private(set) var updates: [WorktreeCleanupScanUpdate] = []
+
+    func append(_ update: WorktreeCleanupScanUpdate) {
+        updates.append(update)
+    }
 }

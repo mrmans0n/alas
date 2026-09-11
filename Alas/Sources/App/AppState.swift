@@ -7885,6 +7885,7 @@ final class AppState {
     /// Returns nil when the project no longer exists.
     func makeWorktreeCleanupModel(projectId: String) -> WorktreeCleanupModel? {
         guard let project = projects.first(where: { $0.id == projectId }) else { return nil }
+        let initialWorktrees = projectsManager.visibleWorktrees(projectId: projectId)
         let idleThresholdDays = config.worktrees.cleanupIdleDays
         let repoPath = URL(fileURLWithPath: project.path)
         // `config.worktrees.baseBranch` is a global default across every
@@ -7896,12 +7897,13 @@ final class AppState {
 
         return WorktreeCleanupModel(
             projectId: projectId,
+            worktrees: initialWorktrees,
             keepBranches: !config.worktrees.deleteBranchOnRemove,
-            scan: { [weak self] in
+            loadWorktrees: { [weak self] in
+                self?.projectsManager.visibleWorktrees(projectId: projectId) ?? []
+            },
+            scan: { [weak self] worktrees, onUpdate in
                 guard let self else { return .success([]) }
-                let worktrees = await MainActor.run {
-                    self.projectsManager.visibleWorktrees(projectId: projectId)
-                }
                 let availableBranches = (try? await GitService().branches(at: repoPath)) ?? []
                 let baseBranch = NewWorktreeDialog.preferredBaseBranch(
                     availableBranches: availableBranches,
@@ -7957,7 +7959,8 @@ final class AppState {
                     worktrees: worktrees,
                     baseBranch: baseBranch,
                     now: Date(),
-                    idleThresholdDays: idleThresholdDays
+                    idleThresholdDays: idleThresholdDays,
+                    onUpdate: onUpdate
                 ))
             },
             deleteBatch: { [weak self] worktrees, keepBranch in
