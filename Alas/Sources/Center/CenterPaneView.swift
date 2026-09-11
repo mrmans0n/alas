@@ -702,9 +702,11 @@ struct CenterPaneView: View {
                                 onDismiss: { state.dismissRunScriptFailure(id: failure.id, worktreeID: worktree.id) }
                             )
                             .frame(width: 360)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
                         }
                     }
                     .padding(12)
+                    .animation(.easeOut(duration: 0.2), value: runScriptFailures.map(\.id))
                 }
             }
         }
