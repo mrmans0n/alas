@@ -8007,8 +8007,15 @@ final class AppState {
             guard let provider = registry.provider(for: remote.kind) else {
                 return .failure(CodeHostProviderError.unsupportedProvider(remote.kind))
             }
+            // A fork's own pull/merge requests are almost never opened
+            // against itself — the classic contribution workflow opens them
+            // against the parent, and that's where a merge actually lands.
+            // Query the parent when this remote is a fork; if that lookup
+            // fails or the provider doesn't support it, fall back to the
+            // originally detected remote rather than failing the scan.
+            let queryRemote = (try? await provider.repositoryParent(remote: remote, cwd: repoPath)) ?? remote
             let refs = try await provider.mergedReviewRequests(
-                remote: remote,
+                remote: queryRemote,
                 limit: 200,
                 cwd: repoPath
             )

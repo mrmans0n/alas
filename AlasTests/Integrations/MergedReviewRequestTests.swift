@@ -55,6 +55,80 @@ struct MergedReviewRequestTests {
         #expect(refs[0].headSHA == "abc123")
     }
 
+    @Test func parsesGitHubForkParent() throws {
+        let json = """
+        {"isFork": true, "parent": {"name": "alas", "owner": {"login": "mrmans0n"}}}
+        """
+        let parent = try GitHubCLIProvider.parseRepoParent(json, remote: Self.remote)
+        #expect(parent?.owner == "mrmans0n")
+        #expect(parent?.repository == "alas")
+        #expect(parent?.host == "github.com")
+        #expect(parent?.kind == .github)
+        #expect(parent?.remoteName == "origin")
+        #expect(parent?.webURL == URL(string: "https://github.com/mrmans0n/alas")!)
+    }
+
+    @Test func gitHubNonForkHasNoParent() throws {
+        let json = """
+        {"isFork": false, "parent": null}
+        """
+        let parent = try GitHubCLIProvider.parseRepoParent(json, remote: Self.remote)
+        #expect(parent == nil)
+    }
+
+    @Test func rejectsMalformedGitHubRepoViewOutput() {
+        #expect(throws: CodeHostProviderError.self) {
+            _ = try GitHubCLIProvider.parseRepoParent("not json", remote: Self.remote)
+        }
+    }
+
+    @Test func parsesGitLabForkParent() throws {
+        let json = """
+        {"forked_from_project": {"path_with_namespace": "upstream-group/upstream-project"}}
+        """
+        let parent = try GitLabCLIProvider.parseRepoParent(json, remote: Self.remote)
+        #expect(parent?.owner == "upstream-group")
+        #expect(parent?.repository == "upstream-project")
+        #expect(parent?.webURL == URL(string: "https://github.com/upstream-group/upstream-project")!)
+    }
+
+    @Test func gitLabNonForkHasNoParent() throws {
+        let json = """
+        {"forked_from_project": null}
+        """
+        let parent = try GitLabCLIProvider.parseRepoParent(json, remote: Self.remote)
+        #expect(parent == nil)
+    }
+
+    @Test func gitHubProviderRepositoryParentIssuesOneQuery() async throws {
+        let runner = RecordingRunner(stdout: """
+        {"isFork": true, "parent": {"name": "alas", "owner": {"login": "mrmans0n"}}}
+        """)
+        let provider = GitHubCLIProvider(runner: runner)
+        let parent = try await provider.repositoryParent(
+            remote: Self.remote,
+            cwd: URL(fileURLWithPath: "/tmp")
+        )
+        #expect(parent?.repository == "alas")
+        let invocations = await runner.invocations
+        #expect(invocations.count == 1)
+        #expect(invocations[0].args.contains("view"))
+        #expect(invocations[0].args.contains { $0.contains("parent") })
+    }
+
+    /// A provider that can't determine fork status degrades to "not a fork"
+    /// rather than throwing — the caller falls back to the original remote
+    /// either way, and failing loudly here would only risk breaking the scan
+    /// over what is purely an enhancement to it.
+    @Test func protocolDefaultRepositoryParentReturnsNil() async throws {
+        let provider = MergeQueryUnsupportedProvider()
+        let parent = try await provider.repositoryParent(
+            remote: Self.remote,
+            cwd: URL(fileURLWithPath: "/tmp")
+        )
+        #expect(parent == nil)
+    }
+
     @Test func gitHubProviderIssuesOneBatchedQuery() async throws {
         let runner = RecordingRunner(stdout: """
         [{"number": 42, "headRefName": "feature/a", "url": "https://github.com/mrmans0n/alas/pull/42", "headRefOid": "abc123"}]

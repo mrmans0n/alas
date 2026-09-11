@@ -302,6 +302,59 @@ struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         }
     }
 
+    func repositoryParent(remote: CodeHostRemote, cwd: URL) async throws -> CodeHostRemote? {
+        let result = try await runner.run(
+            "gh",
+            args: [
+                "repo", "view",
+                Self.highLevelRepositorySelector(remote: remote),
+                "--json", "isFork,parent",
+            ],
+            cwd: cwd
+        )
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(
+                command: "gh repo view",
+                stderr: result.stderr
+            )
+        }
+        return try Self.parseRepoParent(result.stdout, remote: remote)
+    }
+
+    static func parseRepoParent(_ json: String, remote: CodeHostRemote) throws -> CodeHostRemote? {
+        struct ParentOwner: Decodable {
+            let login: String
+        }
+        struct Parent: Decodable {
+            let name: String
+            let owner: ParentOwner
+        }
+        struct Item: Decodable {
+            let isFork: Bool
+            let parent: Parent?
+        }
+        let item: Item
+        do {
+            item = try JSONDecoder().decode(Item.self, from: Data(json.utf8))
+        } catch {
+            throw CodeHostProviderError.malformedOutput(
+                "Unable to parse gh repo view output"
+            )
+        }
+        guard item.isFork, let parent = item.parent else { return nil }
+        guard let webURL = URL(string: "https://\(remote.host)/\(parent.owner.login)/\(parent.name)") else {
+            return nil
+        }
+        return CodeHostRemote(
+            kind: remote.kind,
+            host: remote.host,
+            owner: parent.owner.login,
+            repository: parent.name,
+            remoteName: remote.remoteName,
+            webURL: webURL
+        )
+    }
+
     func isAvailable(cwd: URL) async -> Bool {
         do {
             let result = try await runner.run("gh", args: ["--version"], cwd: cwd)

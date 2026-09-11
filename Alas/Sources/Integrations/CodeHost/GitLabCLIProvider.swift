@@ -80,6 +80,67 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         }
     }
 
+    func repositoryParent(remote: CodeHostRemote, cwd: URL) async throws -> CodeHostRemote? {
+        // `glab repo view`'s own JSON shape for fork ancestry isn't
+        // documented; the raw REST passthrough is, and this codebase already
+        // uses it elsewhere (see the issues endpoints above). GitLab's
+        // project resource carries `forked_from_project` with a stable,
+        // documented shape.
+        let result = try await runner.run(
+            "glab",
+            args: ["api", "projects/\(Self.encodedProjectPath(remote.repositorySlug))"],
+            cwd: cwd
+        )
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(
+                command: "glab api projects",
+                stderr: result.stderr
+            )
+        }
+        return try Self.parseRepoParent(result.stdout, remote: remote)
+    }
+
+    static func parseRepoParent(_ json: String, remote: CodeHostRemote) throws -> CodeHostRemote? {
+        struct ForkedFromProject: Decodable {
+            let pathWithNamespace: String
+
+            enum CodingKeys: String, CodingKey {
+                case pathWithNamespace = "path_with_namespace"
+            }
+        }
+        struct Item: Decodable {
+            let forkedFromProject: ForkedFromProject?
+
+            enum CodingKeys: String, CodingKey {
+                case forkedFromProject = "forked_from_project"
+            }
+        }
+        let item: Item
+        do {
+            item = try JSONDecoder().decode(Item.self, from: Data(json.utf8))
+        } catch {
+            throw CodeHostProviderError.malformedOutput(
+                "Unable to parse glab api projects output"
+            )
+        }
+        guard let parent = item.forkedFromProject else { return nil }
+        guard let webURL = URL(string: "https://\(remote.host)/\(parent.pathWithNamespace)") else {
+            return nil
+        }
+        let parts = parent.pathWithNamespace.split(separator: "/")
+        guard let repository = parts.last else { return nil }
+        let owner = parts.dropLast().joined(separator: "/")
+        guard !owner.isEmpty else { return nil }
+        return CodeHostRemote(
+            kind: remote.kind,
+            host: remote.host,
+            owner: owner,
+            repository: String(repository),
+            remoteName: remote.remoteName,
+            webURL: webURL
+        )
+    }
+
     func isAvailable(cwd: URL) async -> Bool {
         do {
             let result = try await runner.run("glab", args: ["--version"], cwd: cwd)
