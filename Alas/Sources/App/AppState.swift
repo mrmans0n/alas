@@ -4422,8 +4422,18 @@ final class AppState {
                 continue
             }
             // Re-check right before archiving: the scan that selected this
-            // worktree can be stale by the time the user confirms, and a
-            // session opened since then must not be torn down.
+            // worktree — and even the whole-batch dirty-buffer prompt above —
+            // can be stale by the time this specific item is reached. A
+            // buffer edited, or a session opened, in that gap must not be
+            // torn down.
+            guard dirtyEditorTabIds(worktreeId: worktree.id).isEmpty else {
+                results.append(WorktreeBatchResult(
+                    worktreeId: worktree.id,
+                    branch: worktree.branch,
+                    outcome: .skipped(reason: "Has unsaved changes since this list was scanned")
+                ))
+                continue
+            }
             guard !hasLiveSessions(worktreeId: worktree.id),
                   projectsManager.operationState(for: worktree.id) == nil
             else {
@@ -7532,9 +7542,21 @@ final class AppState {
                 ))
                 continue
             }
-            // Re-check right before deleting: the scan that selected this
-            // worktree can be stale by the time the user confirms, and a
-            // session opened since then must not be torn down.
+            // Re-check right before deleting. This closes two gaps at once:
+            // the scan that selected this worktree (or even the whole-batch
+            // dirty-buffer prompt above) can be stale by the time the user
+            // confirms, and — because each `await performDeleteWorktree`
+            // below suspends and yields the main actor — a *later* item in
+            // this very loop can pick up a buffer edited or a session opened
+            // while an *earlier* item was still being removed.
+            guard dirtyEditorTabIds(worktreeId: worktree.id).isEmpty else {
+                results.append(WorktreeBatchResult(
+                    worktreeId: worktree.id,
+                    branch: worktree.branch,
+                    outcome: .skipped(reason: "Has unsaved changes since this list was scanned")
+                ))
+                continue
+            }
             guard !hasLiveSessions(worktreeId: worktree.id),
                   projectsManager.operationState(for: worktree.id) == nil
             else {

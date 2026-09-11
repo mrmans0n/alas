@@ -28,6 +28,19 @@ enum WorktreeCleanupClassifier {
                 signals: [.remoteWorktree]
             )
         }
+        // A detached HEAD's commits are reachable only via that worktree's
+        // own HEAD. Removing it — even with git's own dirty-tree protections
+        // satisfied — makes those commits unreachable and eventually
+        // GC-eligible, unlike a branch's commits, which stay reachable via
+        // the branch ref regardless of unpushed status. Never offered, and
+        // never selectable via the per-item override.
+        if worktree.branch == "(detached)" {
+            return WorktreeCleanupCandidate(
+                worktree: worktree,
+                verdict: .excluded,
+                signals: [.detachedHead]
+            )
+        }
 
         var blocking: [WorktreeCleanupSignal] = []
         var qualifying: [WorktreeCleanupSignal] = []

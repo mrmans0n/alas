@@ -59,6 +59,7 @@ enum WorktreeCleanupSignal: Equatable, Hashable, Sendable {
     case mainWorktree
     case remoteWorktree
     case operationInFlight
+    case detachedHead
 
     /// True when this signal counts *against* cleanup. Drives both the row's
     /// icon and its sort position — blocking signals render first so the user
@@ -77,7 +78,7 @@ enum WorktreeCleanupSignal: Equatable, Hashable, Sendable {
         case .uncommittedChanges, .untrackedFiles, .unpushedCommits,
              .stashes, .activeSessions, .recentActivity, .notMerged,
              .mergeStateUnknown, .mainWorktree, .remoteWorktree,
-             .operationInFlight:
+             .operationInFlight, .detachedHead:
             return true
         }
     }
@@ -122,6 +123,8 @@ enum WorktreeCleanupSignal: Equatable, Hashable, Sendable {
             return "Remote worktree — cleanup is not supported yet"
         case .operationInFlight:
             return "Another operation is in progress"
+        case .detachedHead:
+            return "Detached HEAD — its commits could become unreachable if removed"
         }
     }
 }
@@ -163,10 +166,15 @@ struct WorktreeCleanupCandidate: Identifiable, Equatable, Sendable {
         return false
     }
 
-    /// Whether the user may override and select this row anyway. Dirty and
-    /// busy rows are selectable — that is the per-item override. Excluded
-    /// rows never are, which is what keeps bulk delete off a main worktree.
+    /// Whether the user may override and select this row anyway. Dirty rows
+    /// are selectable — that is the per-item override, for files the user
+    /// might not care about. Busy rows are not: a live session or process
+    /// might belong to someone else entirely (another window), and both
+    /// batch actions unconditionally skip busy worktrees regardless of
+    /// selection — offering the checkbox anyway would promise an override
+    /// that never happens. Excluded rows never are either, which is what
+    /// keeps bulk delete off a main worktree.
     var isSelectable: Bool {
-        verdict != .excluded
+        verdict != .excluded && verdict != .busy
     }
 }

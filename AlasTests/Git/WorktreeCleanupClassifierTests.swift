@@ -154,6 +154,18 @@ struct WorktreeCleanupClassifierTests {
         #expect(Self.classify(probe).verdict == .busy)
     }
 
+    /// A busy row is never selectable — unlike dirty, which the user may
+    /// override. Both batch actions unconditionally skip busy worktrees
+    /// regardless of selection, so offering the checkbox would promise an
+    /// override that never actually happens.
+    @Test func busyWorktreeIsNotSelectable() {
+        var probe = Self.idealProbe()
+        probe.activeSessionCount = 1
+        let result = Self.classify(probe)
+        #expect(result.verdict == .busy)
+        #expect(!result.isSelectable)
+    }
+
     @Test func recentlyTouchedMergedWorktreeIsActiveNotACandidate() {
         let probe = Self.idealProbe(daysIdle: 2)
         let result = Self.classify(probe, idleThresholdDays: 14)
@@ -199,6 +211,34 @@ struct WorktreeCleanupClassifierTests {
         #expect(!result.isSelectable)
         #expect(WorktreeCleanupSignal.remoteWorktree.label
                 == "Remote worktree — cleanup is not supported yet")
+    }
+
+    /// A detached-HEAD worktree's commits are reachable only via that
+    /// worktree's own HEAD. Removing it — even a clean one, even with git's
+    /// own dirty-tree protections satisfied — makes those commits
+    /// unreachable and eventually GC-eligible, unlike a branch's commits,
+    /// which stay reachable via the branch ref. Never a candidate, and never
+    /// selectable via the per-item override that a merely-dirty row gets.
+    @Test func detachedHeadWorktreeIsExcludedAndUnselectable() {
+        let result = Self.classify(
+            Self.idealProbe(),
+            worktree: Self.worktree(branch: "(detached)")
+        )
+        #expect(result.verdict == .excluded)
+        #expect(result.signals.contains(.detachedHead))
+        #expect(!result.isSelectable)
+    }
+
+    @Test func detachedHeadExclusionOutranksBusyAndDirty() {
+        var probe = Self.idealProbe()
+        probe.activeSessionCount = 4
+        probe.hasUncommittedChanges = true
+        let result = Self.classify(
+            probe,
+            worktree: Self.worktree(branch: "(detached)")
+        )
+        #expect(result.verdict == .excluded)
+        #expect(!result.isSelectable)
     }
 
     @Test func blockingSignalsSortBeforeQualifyingOnes() {
