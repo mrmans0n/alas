@@ -232,6 +232,7 @@ actor WorktreeCheckpointStore {
         for directory in [layout.root, layout.blobs, layout.entries, layout.journals, layout.quarantine] where !exists(directory) {
             try fileSystem.createDirectoryExclusively(directory, mode: 0o700)
         }
+        try removeAbandonedBlobTemporaries(layout: layout)
     }
 
     private func exists(_ url: URL) -> Bool { FileManager.default.fileExists(atPath: url.path) }
@@ -382,7 +383,25 @@ actor WorktreeCheckpointStore {
             [journal.checkpointID, journal.recoveryCheckpointID].compactMap { try? readManifest(id: $0, lineageID: journal.lineageID) }
         }
         let protected = Set((manifests + journalManifests).flatMap { references(in: $0) })
-        for url in try fileSystem.list(layout.blobs) where !protected.contains(where: { $0.sha256 == url.lastPathComponent }) { try fileSystem.removeIfPresent(url) }
+        for url in try fileSystem.list(layout.blobs) where shouldRemoveBlob(url, protected: protected) { try fileSystem.removeIfPresent(url) }
+    }
+
+    private func removeAbandonedBlobTemporaries(layout: Layout) throws {
+        for url in try fileSystem.list(layout.blobs) where isBlobTemporary(url.lastPathComponent) {
+            try fileSystem.removeIfPresent(url)
+        }
+    }
+
+    private func shouldRemoveBlob(_ url: URL, protected: Set<CheckpointBlobReference>) -> Bool {
+        isBlobTemporary(url.lastPathComponent) || !protected.contains { $0.sha256 == url.lastPathComponent }
+    }
+
+    private func isBlobTemporary(_ name: String) -> Bool {
+        guard name.hasPrefix("."), name.hasSuffix(".tmp") else { return false }
+        let digest = name.dropFirst().dropLast(4)
+        return digest.count == 64 && digest.allSatisfy { character in
+            character.isNumber || ("a" ... "f").contains(character)
+        }
     }
 
     private func removeEntry(_ id: CheckpointID, layout: Layout) throws {

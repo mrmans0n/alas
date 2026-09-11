@@ -263,6 +263,24 @@ struct WorktreeCheckpointStoreTests {
         #expect(journalNames.isEmpty)
     }
 
+    @Test func catalogReconciliationRemovesAbandonedBlobTemporaries() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let blobs = root.appendingPathComponent(lineageA).appendingPathComponent("blobs", isDirectory: true)
+        try FileManager.default.createDirectory(at: blobs, withIntermediateDirectories: true)
+        let digest = String(repeating: "a", count: 64)
+        let temporary = blobs.appendingPathComponent(".\(digest).tmp")
+        let unrelated = blobs.appendingPathComponent(".not-a-checkpoint-blob.tmp")
+        try Data("abandoned".utf8).write(to: temporary)
+        try Data("unrelated".utf8).write(to: unrelated)
+
+        let store = WorktreeCheckpointStore(root: root)
+        _ = try await store.catalog(lineageID: lineageA)
+
+        #expect(!FileManager.default.fileExists(atPath: temporary.path))
+        #expect(FileManager.default.fileExists(atPath: unrelated.path))
+    }
+
     @Test func stagedAdditionIsNotCountedAsUntracked() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

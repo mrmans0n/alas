@@ -3401,6 +3401,7 @@ final class RightPaneState: GGSplitCommitServicing {
         "Merge is no longer available — the branch or review state changed."
 
     func requestCherryPick(sha: String) {
+        guard !checkpointMutationsDisabled else { return }
         pendingCherryPickSHA = sha
     }
 
@@ -3409,6 +3410,7 @@ final class RightPaneState: GGSplitCommitServicing {
     }
 
     func confirmCherryPick() {
+        guard !checkpointMutationsDisabled else { return }
         guard let sha = pendingCherryPickSHA else { return }
         pendingCherryPickSHA = nil
         runCherryPick(sha: sha)
@@ -3858,6 +3860,7 @@ final class RightPaneState: GGSplitCommitServicing {
     /// conflicted file (via `openConflict`) when the result is a conflict.
     @MainActor
     func runMerge(branch: String) {
+        guard !checkpointMutationsDisabled else { return }
         Task { @MainActor in
             do {
                 let result = try await git.merge(worktreePath: worktree.path, branch: branch)
@@ -3871,6 +3874,7 @@ final class RightPaneState: GGSplitCommitServicing {
 
     @MainActor
     func runRebase(onto: String) {
+        guard !checkpointMutationsDisabled else { return }
         Task { @MainActor in
             do {
                 let result = try await git.rebase(worktreePath: worktree.path, onto: onto)
@@ -3884,6 +3888,7 @@ final class RightPaneState: GGSplitCommitServicing {
 
     @MainActor
     func runCherryPick(sha: String) {
+        guard !checkpointMutationsDisabled else { return }
         Task { @MainActor in
             do {
                 let result = try await git.cherryPick(worktreePath: worktree.path, sha: sha)
@@ -3930,6 +3935,7 @@ final class RightPaneState: GGSplitCommitServicing {
 
     @MainActor
     func runRevert(sha: String) {
+        guard !checkpointMutationsDisabled else { return }
         Task { @MainActor in
             do {
                 let result = try await git.revert(worktreePath: worktree.path, sha: sha)
@@ -3943,6 +3949,7 @@ final class RightPaneState: GGSplitCommitServicing {
 
     @MainActor
     func continueOperation() {
+        guard !checkpointMutationsDisabled else { return }
         Task { @MainActor in
             guard let op = mergeOp.current else { return }
             do {
@@ -3957,6 +3964,7 @@ final class RightPaneState: GGSplitCommitServicing {
 
     @MainActor
     func abortOperation() {
+        guard !checkpointMutationsDisabled else { return }
         Task { @MainActor in
             guard let op = mergeOp.current else { return }
             do {
@@ -3970,6 +3978,7 @@ final class RightPaneState: GGSplitCommitServicing {
 
     @MainActor
     func skipOperation() {
+        guard !checkpointMutationsDisabled else { return }
         Task { @MainActor in
             guard let op = mergeOp.current else { return }
             do {
@@ -3984,6 +3993,7 @@ final class RightPaneState: GGSplitCommitServicing {
 
     @MainActor
     func useOurs(file: ChangedFile) {
+        guard !checkpointMutationsDisabled else { return }
         Task { @MainActor in
             do {
                 try await git.useOurs(worktreePath: worktree.path, relativePath: file.path)
@@ -4041,6 +4051,7 @@ final class RightPaneState: GGSplitCommitServicing {
     /// avoids paying CLI startup cost per file.
     @MainActor
     func resolveAllConflicts(using agent: AgentDefinition, prompt: String) {
+        guard !checkpointMutationsDisabled else { return }
         guard bulkResolveTask == nil else { return }
         guard changes.contains(where: { $0.conflict != nil }) else { return }
         bulkResolveReport = nil

@@ -333,6 +333,34 @@ struct RightPaneCheckpointStateTests {
         #expect(state.lastCheckpointStatus == "Recovered pre-restore state from interrupted checkpoint restore.")
     }
 
+    @Test func interruptedRestoreBlocksQueuedHeadChangingGitActions() async throws {
+        let repository = try await CheckpointTestRepository.make()
+        defer { repository.remove() }
+        let service = try RecordingCheckpointService(target: repository.target)
+        let state = makeState(repository: repository, service: service)
+        let operationID = UUID(uuidString: "44444444-4444-4444-4444-444444444444")!
+        let checkpointID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+        await service.installJournal(.init(
+            id: operationID,
+            lineageID: repository.target.lineageID,
+            checkpointID: checkpointID,
+            recoveryCheckpointID: checkpointID,
+            phase: .prepared,
+            stagingRoot: "staging",
+            selectedPaths: ["selected.swift"],
+            expectedFingerprint: "fingerprint",
+            expectedIndexChecksum: "checksum"
+        ))
+        await state.refresh()
+
+        state.requestCherryPick(sha: "abc123")
+        #expect(state.pendingCherryPickSHA == nil)
+
+        state.pendingCherryPickSHA = "abc123"
+        state.confirmCherryPick()
+        #expect(state.pendingCherryPickSHA == "abc123")
+    }
+
     private func makeState(repository: CheckpointTestRepository, service: RecordingCheckpointService) -> RightPaneState {
         let worktree = Worktree(
             id: repository.target.worktreeID,
