@@ -301,7 +301,7 @@ final class ACPSessionManager: ObservableObject {
     func queueForceSend(for id: ACPSession.ID, itemId: UUID) async {
         guard let session = sessions[id] else { return }
         if case .spawning = session.agentState {
-            pendingQueueForceSends[id] = itemId
+            pendingQueueForceSends[id, default: []].append(itemId)
             onQueueChanged?(id, true)
             return
         }
@@ -309,7 +309,7 @@ final class ACPSessionManager: ObservableObject {
             await reattach(to: id)
         }
         if case .spawning = session.agentState {
-            pendingQueueForceSends[id] = itemId
+            pendingQueueForceSends[id, default: []].append(itemId)
             onQueueChanged?(id, true)
             return
         }
@@ -508,7 +508,7 @@ final class ACPSessionManager: ObservableObject {
         var sessionCapabilities: ACPInitializeResult.ACPAgentSessionCapabilities?
     }
     private var attachingConnections: [ACPSession.ID: AttachingConnection] = [:]
-    private var pendingQueueForceSends: [ACPSession.ID: UUID] = [:]
+    private var pendingQueueForceSends: [ACPSession.ID: [UUID]] = [:]
     private var delegatedMessageWatchTokens: [ACPSession.ID: Int32] = [:]
 
     init(worktreeId: String, worktreePath: String, owner: SessionOwnerID? = nil, store: ACPSessionStore? = nil,
@@ -2966,6 +2966,7 @@ extension ACPSessionManager {
         // Always sync the queue — it can change (drain/clear) with no new
         // transcript rows, so this must run before any early-return below.
         session.restoreQueue(result.queue)
+        scheduleScheduledQueueReconnect(sessionId: sessionId)
         guard !result.wireMessages.isEmpty else { return }
         let tailStart = replaceTranscriptWithTail(
             result.messages,
@@ -4128,6 +4129,7 @@ extension ACPSessionManager {
                       })
                 else { return nil }
                 await reattach(to: id)
+                scheduleScheduledQueueReconnect(sessionId: id)
                 onBootstrapped?(id)
                 return id
             }
@@ -4287,14 +4289,22 @@ extension ACPSessionManager {
 
     @discardableResult
     private func sendPendingQueueForceSend(sessionId: ACPSession.ID) -> Bool {
-        guard let itemId = pendingQueueForceSends.removeValue(forKey: sessionId),
+        guard let itemIds = pendingQueueForceSends.removeValue(forKey: sessionId),
               let session = sessions[sessionId],
-              session.queue.contains(where: { $0.id == itemId && $0.status == .pending }),
               let runner = runners[sessionId]
         else { return false }
-        runner.forceSendQueuedItem(id: itemId)
-        onQueueChanged?(sessionId, true)
-        return true
+        var sent = false
+        for itemId in itemIds.reversed() where session.queue.contains(where: { $0.id == itemId && $0.status == .pending }) {
+            sent = session.forceQueueItem(id: itemId) || sent
+        }
+        if sent {
+            runner.persistQueue()
+            runner.flushQueueIfIdle()
+        }
+        if sent {
+            onQueueChanged?(sessionId, true)
+        }
+        return sent
     }
 
     /// Enqueue a prompt into a session whose agent isn't `.ready` yet.

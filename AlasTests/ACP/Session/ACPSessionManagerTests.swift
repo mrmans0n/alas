@@ -613,6 +613,54 @@ struct ACPSessionManagerTests {
         #expect(client.sent.contains(where: { $0.method == "session/prompt" }))
     }
 
+    @Test("queue force send during attach preserves every requested item")
+    func queueForceSendDuringAttachPreservesEveryRequestedItem() async throws {
+        let gate = AsyncGate()
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-force-send-spawning-many-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let client = ACPMockClient()
+        client.scriptAsync(method: "initialize") { _ in
+            await gate.enterAndWait()
+            return try JSONEncoder().encode(ACPInitializeResult(
+                protocolVersion: 1,
+                agentCapabilities: nil,
+                authMethods: []
+            ))
+        }
+        scriptSessionResult(client, method: "session/new", sessionId: "remote")
+        client.script(method: "session/prompt") { _ in Data("null".utf8) }
+        let mgr = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) }
+        )
+        let session = mgr.createSession(id: "session", agentId: "claude")
+        session.enqueueScheduled(blocks: [.text("first")], scheduledAt: .distantFuture)
+        session.enqueueScheduled(blocks: [.text("second")], scheduledAt: .distantFuture)
+        let firstId = try #require(session.queue.first?.id)
+        let secondId = try #require(session.queue.dropFirst().first?.id)
+        let attachTask = Task { @MainActor in
+            await mgr.attach(to: session.id, freshlyCreated: true)
+        }
+        await gate.waitUntilEntered()
+
+        await mgr.queueForceSend(for: session.id, itemId: firstId)
+        await mgr.queueForceSend(for: session.id, itemId: secondId)
+        await gate.release()
+        await attachTask.value
+        for _ in 0 ..< 100 where client.sent.filter({ $0.method == "session/prompt" }).count < 2 {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        let prompts = try client.sent
+            .filter { $0.method == "session/prompt" }
+            .map { try #require($0.params as? ACPSessionPromptParams).prompt }
+        #expect(prompts == [[.text("first")], [.text("second")]])
+    }
+
     @Test("queue force send during pre-lease spawn is retained")
     func queueForceSendDuringPreLeaseSpawnIsRetained() async throws {
         var queueChanged = false

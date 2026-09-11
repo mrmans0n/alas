@@ -117,6 +117,36 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(try store.loadQueue(sessionId: seededSession.id).isEmpty)
     }
 
+    @Test("bootstrapped scheduled mirror claims released lease at deadline")
+    func bootstrappedScheduledMirrorClaimsReleasedLeaseAtDeadline() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: "remote-existing"))
+        try store.upsertQueue(sessionId: "local", items: [
+            QueuedPrompt(blocks: [.text("due soon")], scheduledAt: Date().addingTimeInterval(0.3))
+        ])
+        try store.seizeLease(
+            sessionId: "local",
+            instanceId: "OTHER",
+            pid: Int64(getpid()),
+            now: Int64(Date().timeIntervalSince1970)
+        )
+        let lease = try #require(try store.loadLease(sessionId: "local"))
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/load", sessionId: "remote-existing")
+        client.script(method: "session/prompt") { _ in Data("null".utf8) }
+        let manager = manager(store: store, client: client)
+
+        let bootstrapped = await manager.bootstrapScheduledQueueSessions()
+        try store.releaseLease(sessionId: "local", instanceId: "OTHER", leaseToken: lease.token)
+        try await waitUntil(timeoutNanos: 2_000_000_000) {
+            client.sent.contains { $0.method == "session/prompt" }
+        }
+
+        #expect(bootstrapped == ["local"])
+        #expect(try store.loadQueue(sessionId: "local").isEmpty)
+    }
+
     @Test("reopened local broker session attaches from persisted cursor")
     func reopenedLocalBrokerSessionAttachesFromPersistedCursor() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
