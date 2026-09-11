@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 protocol WorktreeCheckpointServicing: Sendable {
@@ -5,6 +6,9 @@ protocol WorktreeCheckpointServicing: Sendable {
     func createManual(target: CheckpointWorktreeTarget, label: String) async throws -> WorktreeCheckpointSummary
     func manifest(target: CheckpointWorktreeTarget, id: CheckpointID) async throws -> WorktreeCheckpointManifest
     func delete(target: CheckpointWorktreeTarget, id: CheckpointID) async throws -> CheckpointCatalogSnapshot
+    func restorePreview(target: CheckpointWorktreeTarget, id: CheckpointID, coordination: CheckpointCoordinationSnapshot,
+                        selectedGroupIDs: Set<UUID>?) async throws -> CheckpointRestorePreview
+    func diffContent(target: CheckpointWorktreeTarget, id: CheckpointID, path: String) async -> CheckpointDiffContent
 }
 
 enum CheckpointCaptureError: Error, Equatable, Sendable {
@@ -40,6 +44,113 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
 
     func delete(target: CheckpointWorktreeTarget, id: CheckpointID) async throws -> CheckpointCatalogSnapshot {
         try await store.delete(id: id, lineageID: target.lineageID)
+    }
+
+    func restorePreview(target: CheckpointWorktreeTarget, id: CheckpointID,
+                        coordination: CheckpointCoordinationSnapshot, selectedGroupIDs: Set<UUID>? = nil) async throws -> CheckpointRestorePreview {
+        func blocked(_ blocker: CheckpointRestoreBlocker, label: String = "Checkpoint") -> CheckpointRestorePreview {
+            .init(id: UUID(), checkpointID: id, checkpointLabel: label, currentFingerprint: "", groups: [],
+                  blocker: blocker, scopeDescription: coordination.scopeDescription, selectedGroupIDs: [])
+        }
+        guard !target.path.isRemoteAlasPath else { return blocked(.remoteTarget) }
+        if try await !store.recoverableJournals(lineageID: target.lineageID).isEmpty { return blocked(.interruptedRestore) }
+        guard WorktreeService.existingLocalLineageID(forWorktreeAt: target.path) == target.lineageID else {
+            return blocked(.lineageMismatch)
+        }
+        let saved: WorktreeCheckpointManifest?
+        do { saved = try await store.loadMetadata(id: id, lineageID: target.lineageID) }
+        catch { saved = nil }
+        let head = try await previewGit(["rev-parse", "--verify", "HEAD"], target: target)
+        if let saved, saved.headOID != head.trimmingCharacters(in: .whitespacesAndNewlines) {
+            return blocked(.changedHEAD, label: saved.label)
+        }
+        for marker in ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer"] {
+            let path = try await previewGit(["rev-parse", "--path-format=absolute", "--git-path", marker], target: target)
+            if FileManager.default.fileExists(atPath: path.trimmingCharacters(in: .newlines)) {
+                return blocked(.gitOperation, label: saved?.label ?? "Checkpoint")
+            }
+        }
+        if try await !previewGit(["ls-files", "--unmerged", "-z"], target: target).isEmpty {
+            return blocked(.gitOperation, label: saved?.label ?? "Checkpoint")
+        }
+        let lockPath = try await previewGit(["rev-parse", "--path-format=absolute", "--git-path", "index.lock"], target: target)
+        if FileManager.default.fileExists(atPath: lockPath.trimmingCharacters(in: .newlines)) {
+            return blocked(.indexLock, label: saved?.label ?? "Checkpoint")
+        }
+        guard let saved else {
+            var blockers: Set<CheckpointRestoreBlocker> = [.corruptCheckpoint]
+            if coordination.otherGitMutationActive { blockers.insert(.otherGitMutation) }
+            if coordination.activeTerminalCount > 0 || coordination.activeACPCount > 0 { blockers.insert(.activeSession) }
+            return blocked(CheckpointRestoreBlocker.highestPriority(in: blockers) ?? .corruptCheckpoint)
+        }
+        var blockers: Set<CheckpointRestoreBlocker> = []
+        do { _ = try await store.load(id: id, lineageID: target.lineageID) }
+        catch { blockers.insert(.corruptCheckpoint) }
+        let current = try await snapshotter.snapshot(target: target, includingPaths: Set(saved.paths.map(\.relativePath)))
+        return try .make(manifest: saved, current: current, coordination: coordination, selectedGroupIDs: selectedGroupIDs, blockers: blockers)
+    }
+
+    func diffContent(target: CheckpointWorktreeTarget, id: CheckpointID, path: String) async -> CheckpointDiffContent {
+        do {
+            guard !target.path.isRemoteAlasPath else { return .unavailable(CheckpointRestoreBlocker.remoteTarget.description) }
+            guard WorktreeService.existingLocalLineageID(forWorktreeAt: target.path) == target.lineageID else {
+                return .unavailable(CheckpointRestoreBlocker.lineageMismatch.description)
+            }
+            let saved = try await store.load(id: id, lineageID: target.lineageID)
+            _ = try snapshotter.fileSystem.validateRelativePath(path, under: target.path)
+            let before: Data?
+            if let state = saved.paths.first(where: { $0.relativePath == path })?.worktree {
+                if let blob = state.blob { before = try await store.readBlob(blob, lineageID: target.lineageID) }
+                else { before = nil }
+            } else {
+                let current = try await snapshotter.snapshot(target: target, includingPaths: [path])
+                guard current.headOID == saved.headOID, let state = current.paths[path] else {
+                    return .unavailable("The checkpoint baseline is unavailable for this path.")
+                }
+                before = try current.payload(state.head)
+            }
+            let after: Data?
+            if try snapshotter.fileSystem.metadata(root: target.path, relativePath: path) == nil { after = nil }
+            else {
+                switch try snapshotter.fileSystem.readLeaf(root: target.path, relativePath: path) {
+                case .regular(let data, _), .symlink(let data): after = data
+                }
+            }
+            if ImageFileType.isSupported(relativePath: path) {
+                func side(_ data: Data?) -> ImageDiffSide {
+                    guard let data else { return .missing }
+                    guard let image = NSImage(data: data) else { return .failed(.init(message: "Image could not be decoded.")) }
+                    return GitService.imageSide(forDecodedImage: image)
+                }
+                return .image(.init(before: side(before), after: side(after), oldPath: nil,
+                                    kind: before == nil ? .added : after == nil ? .deleted : .modified))
+            }
+            let binary = [before, after].compactMap { $0 }.contains { $0.contains(0) || String(data: $0, encoding: .utf8) == nil }
+            if binary { return .binary(beforeByteCount: before.map { Int64($0.count) }, afterByteCount: after.map { Int64($0.count) }) }
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("checkpoint-diff-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false,
+                                                    attributes: [.posixPermissions: 0o700])
+            defer { try? FileManager.default.removeItem(at: directory) }
+            try (before ?? Data()).write(to: directory.appendingPathComponent("before"))
+            try (after ?? Data()).write(to: directory.appendingPathComponent("after"))
+            let result = try await snapshotter.git.run(["diff", "--no-index", "--no-ext-diff", "--no-textconv", "--no-color",
+                                                       "--src-prefix=checkpoint/", "--dst-prefix=current/", "--", "before", "after"],
+                                                      cwd: directory, environment: [:])
+            guard result.exitCode == 0 || result.exitCode == 1 else {
+                throw ProcessError.nonZeroExit(result.exitCode, result.stderr)
+            }
+            let diff = DiffParser.parse(result.stdout)
+            if diff.isBinary { return .binary(beforeByteCount: before.map { Int64($0.count) }, afterByteCount: after.map { Int64($0.count) }) }
+            return .text(diff)
+        } catch {
+            return .unavailable("The checkpoint diff could not be loaded.")
+        }
+    }
+
+    private func previewGit(_ args: [String], target: CheckpointWorktreeTarget) async throws -> String {
+        let result = try await snapshotter.git.run(args, cwd: target.path, environment: [:])
+        guard result.exitCode == 0 else { throw ProcessError.nonZeroExit(result.exitCode, result.stderr) }
+        return result.stdout
     }
 
     func createManual(target: CheckpointWorktreeTarget, label: String) async throws -> WorktreeCheckpointSummary {

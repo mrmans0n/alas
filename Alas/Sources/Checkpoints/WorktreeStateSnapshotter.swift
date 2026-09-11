@@ -43,7 +43,7 @@ struct WorktreeStateSnapshotter: Sendable {
         self.fileSystem = fileSystem
     }
 
-    func snapshot(target: CheckpointWorktreeTarget) async throws -> WorktreeStateSnapshot {
+    func snapshot(target: CheckpointWorktreeTarget, includingPaths: Set<String> = []) async throws -> WorktreeStateSnapshot {
         guard !target.path.isRemoteAlasPath else { throw CheckpointSnapshotError.remoteTarget }
         try validateLineage(target)
         let head = try await text(["rev-parse", "--verify", "HEAD"], target)
@@ -65,6 +65,7 @@ struct WorktreeStateSnapshotter: Sendable {
         guard unsupported.isEmpty else { throw CheckpointSnapshotError.unsupportedPaths(unsupported.sorted()) }
 
         var candidates = try statusPaths(status)
+        candidates.formUnion(includingPaths)
         var renames: [(String, String)] = []
         for args in [["diff", "--cached", "--name-status", "-z", "--find-renames", "--no-ext-diff", head, "--"],
                      ["diff", "--name-status", "-z", "--find-renames", "--no-ext-diff", "--"]] {
@@ -79,7 +80,7 @@ struct WorktreeStateSnapshotter: Sendable {
         var exclusions: [CheckpointExclusion] = []
         for path in candidates.sorted() {
             let isUntracked = untracked.contains(path) && index.values[path] == nil && headEntries.values[path] == nil
-            if isUntracked, let reason = try exclusion(path, root: target.path) {
+            if isUntracked, !includingPaths.contains(path), let reason = try exclusion(path, root: target.path) {
                 exclusions.append(.init(relativePath: path, reason: reason))
                 continue
             }

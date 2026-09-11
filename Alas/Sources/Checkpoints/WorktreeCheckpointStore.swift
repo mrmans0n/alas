@@ -117,6 +117,16 @@ actor WorktreeCheckpointStore {
         return manifest
     }
 
+    // Preview can display states and higher-priority blockers even when a
+    // payload is unavailable. Mutation and diff callers must use load instead.
+    func loadMetadata(id: CheckpointID, lineageID: String) throws -> WorktreeCheckpointManifest {
+        try validate(lineageID)
+        try prepare(lineageID)
+        let manifest = try readManifest(id: id, lineageID: lineageID)
+        try validate(manifest: manifest, layout: paths(lineageID), verifyBlobs: false)
+        return manifest
+    }
+
     func readBlob(_ reference: CheckpointBlobReference, lineageID: String) throws -> Data {
         try validate(lineageID)
         try reference.validate()
@@ -199,7 +209,7 @@ actor WorktreeCheckpointStore {
         Set(manifest.paths.flatMap { [$0.head.blob, $0.index.blob, $0.worktree.blob].compactMap { $0 } })
     }
 
-    private func validate(manifest: WorktreeCheckpointManifest, layout: Layout) throws {
+    private func validate(manifest: WorktreeCheckpointManifest, layout: Layout, verifyBlobs: Bool = true) throws {
         try manifest.validate()
         for path in manifest.paths { _ = try fileSystem.validateRelativePath(path.relativePath, under: layout.root) }
         for exclusion in manifest.exclusions { _ = try fileSystem.validateRelativePath(exclusion.relativePath, under: layout.root) }
@@ -208,7 +218,9 @@ actor WorktreeCheckpointStore {
             if let renameSource = group.renameSource { _ = try fileSystem.validateRelativePath(renameSource, under: layout.root) }
             for memberPath in group.memberPaths { _ = try fileSystem.validateRelativePath(memberPath, under: layout.root) }
         }
-        for reference in references(in: manifest) { _ = try readBlob(reference, lineageID: manifest.lineageID) }
+        if verifyBlobs {
+            for reference in references(in: manifest) { _ = try readBlob(reference, lineageID: manifest.lineageID) }
+        }
     }
 
     private func readManifest(id: CheckpointID, lineageID: String) throws -> WorktreeCheckpointManifest {
