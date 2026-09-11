@@ -174,13 +174,14 @@ struct ACPComposerActionButton: View {
                     .fill(theme.color("bg-3"))
                 )
                 .overlay(alignment: .topTrailing) { badgeOverlay }
+                .overlay(alignment: .trailing) {
+                    Divider()
+                        .background(theme.color("line"))
+                        .frame(height: 16)
+                }
             }
             .buttonStyle(.plain)
             .help("Queue (⏎). Hold ⌥ to steer.")
-
-            Divider()
-                .background(theme.color("line"))
-                .frame(height: 16)
 
             Menu {
                 ForEach(menu, id: \.self) { item in
