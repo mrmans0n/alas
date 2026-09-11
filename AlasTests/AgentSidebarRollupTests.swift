@@ -218,6 +218,81 @@ struct AgentSidebarRollupTests {
         #expect(target.queue.isEmpty)
     }
 
+    @Test @MainActor
+    func unsentFollowUpSurvivesWorktreeNavigationWithoutLeakingToMatchingSessionID() {
+        let (state, first, second) = makeAppFixture()
+        state.selectWorktree(id: first.id)
+        state.agentSidebarFollowUps[first.id, default: [:]]["same-id"] = .init(text: "Unsent draft")
+        state.selectWorktree(id: second.id)
+        state.agentSidebarFollowUps[second.id, default: [:]]["same-id"] = .init(text: "Other worktree")
+        state.selectWorktree(id: first.id)
+
+        #expect(state.agentSidebarFollowUps[first.id]?["same-id"]?.text == "Unsent draft")
+        #expect(state.agentSidebarFollowUps[first.id]?["same-id"]?.delivery == nil)
+        #expect(state.agentSidebarFollowUps[second.id]?["same-id"]?.text == "Other worktree")
+    }
+
+    @Test @MainActor
+    func pendingAndFailedFollowUpSurviveNavigationUntilDeliverySucceeds() throws {
+        let (state, first, second) = makeAppFixture()
+        state.selectWorktree(id: first.id)
+        let complete = try #require(state.beginAgentSidebarFollowUp(
+            for: "same-id", worktreeID: first.id, text: "Keep this after failure"
+        ))
+        state.selectWorktree(id: second.id)
+        #expect(state.agentSidebarFollowUps[first.id]?["same-id"]?.text == "Keep this after failure")
+        #expect(state.agentSidebarFollowUps[first.id]?["same-id"]?.delivery == .sending)
+        #expect(state.agentSidebarFollowUps[second.id]?["same-id"] == nil)
+
+        complete(false)
+        state.selectWorktree(id: first.id)
+        #expect(state.agentSidebarFollowUps[first.id]?["same-id"]?.text == "Keep this after failure")
+        #expect(state.agentSidebarFollowUps[first.id]?["same-id"]?.delivery == .failed)
+
+        let completeRetry = try #require(state.beginAgentSidebarFollowUp(
+            for: "same-id", worktreeID: first.id, text: "Keep this after failure"
+        ))
+        state.selectWorktree(id: second.id)
+        completeRetry(true)
+        state.selectWorktree(id: first.id)
+        #expect(state.agentSidebarFollowUps[first.id]?["same-id"]?.text == "")
+        #expect(state.agentSidebarFollowUps[first.id]?["same-id"]?.delivery == .sent)
+    }
+
+    @Test @MainActor
+    func pendingFollowUpRejectsDuplicateSubmissionAndPreservesItsDraft() throws {
+        let (state, first, _) = makeAppFixture()
+        _ = try #require(state.beginAgentSidebarFollowUp(for: "session", worktreeID: first.id, text: "Original"))
+
+        let duplicate = state.beginAgentSidebarFollowUp(for: "session", worktreeID: first.id, text: "Replacement")
+
+        #expect(duplicate == nil)
+        #expect(state.agentSidebarFollowUps[first.id]?["session"]?.text == "Original")
+        #expect(state.agentSidebarFollowUps[first.id]?["session"]?.delivery == .sending)
+    }
+
+    @Test @MainActor
+    func recreatingAgentPaneRestoresPendingDraftAndLaterFailure() throws {
+        let (state, worktree, _) = makeAppFixture()
+        let manager = try #require(state.acpManager(for: worktree))
+        var pane: AgentWorktreeTabView? = AgentWorktreeTabView(state: state, worktree: worktree, manager: manager)
+        pane?.followUps.wrappedValue["session"] = .init(text: "Draft from the row")
+        let complete = try #require(state.beginAgentSidebarFollowUp(
+            for: "session", worktreeID: worktree.id, text: "Draft from the row"
+        ))
+
+        pane = nil
+        pane = AgentWorktreeTabView(state: state, worktree: worktree, manager: manager)
+        #expect(pane?.followUps.wrappedValue["session"]?.text == "Draft from the row")
+        #expect(pane?.followUps.wrappedValue["session"]?.delivery == .sending)
+
+        pane = nil
+        complete(false)
+        pane = AgentWorktreeTabView(state: state, worktree: worktree, manager: manager)
+        #expect(pane?.followUps.wrappedValue["session"]?.text == "Draft from the row")
+        #expect(pane?.followUps.wrappedValue["session"]?.delivery == .failed)
+    }
+
     private struct MemoryStore: PersistenceStoreProtocol {
         func write<T: Encodable>(_: T, to _: URL) throws {}
         func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }

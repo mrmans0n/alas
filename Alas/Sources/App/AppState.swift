@@ -87,6 +87,8 @@ final class AppState {
     /// separate from `tabs`: a run's outcome outlives its terminal shell, and a
     /// live shell never implies a live command.
     var runRecords = RunRecordStore()
+    /// Follow-up composers outlive the conditional Agent pane and worktree navigation.
+    var agentSidebarFollowUps: [String: [ACPSession.ID: AgentSidebarFollowUpDraft]] = [:]
     var selectedRunScriptFailure: RunScriptFailure?
     @ObservationIgnored var runScriptCompletionTasks: [String: (worktreeID: String, sessionID: String, location: RunScriptCaptureLocation, task: Task<Void, Never>)] = [:]
     @ObservationIgnored let runScriptCompletionWaiter: RunScriptCompletionWaiter
@@ -8921,6 +8923,31 @@ final class AppState {
             }) else { return }
             selectWorktree(id: worktree.id)
             activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tabID)
+        }
+    }
+
+    func sendAgentSidebarFollowUp(for sessionID: ACPSession.ID, worktreeID: String, text: String) {
+        guard let complete = beginAgentSidebarFollowUp(for: sessionID, worktreeID: worktreeID, text: text) else { return }
+        Task {
+            await sendPrompt(for: sessionID, worktreeID: worktreeID, text: text, attachments: [], onResult: complete)
+        }
+    }
+
+    /// Own completion in AppState so a hidden pane cannot lose a failed message.
+    func beginAgentSidebarFollowUp(
+        for sessionID: ACPSession.ID,
+        worktreeID: String,
+        text: String
+    ) -> (@MainActor (Bool) -> Void)? {
+        guard agentSidebarFollowUps[worktreeID]?[sessionID]?.delivery != .sending,
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        agentSidebarFollowUps[worktreeID, default: [:]][sessionID] = .init(text: text, delivery: .sending)
+        return { [weak self] succeeded in
+            guard let self else { return }
+            self.agentSidebarFollowUps[worktreeID, default: [:]][sessionID]?.delivery = succeeded ? .sent : .failed
+            if succeeded, self.agentSidebarFollowUps[worktreeID]?[sessionID]?.text == text {
+                self.agentSidebarFollowUps[worktreeID, default: [:]][sessionID]?.text = ""
+            }
         }
     }
 

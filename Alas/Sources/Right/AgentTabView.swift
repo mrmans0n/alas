@@ -14,13 +14,24 @@ enum AgentSidebarFollowUpDelivery: Equatable {
     case failed
 }
 
+struct AgentSidebarFollowUpDraft: Equatable {
+    var text = ""
+    var delivery: AgentSidebarFollowUpDelivery?
+}
+
 /// Observes the manager and its nested Combine models for this worktree only.
 struct AgentWorktreeTabView: View {
     let state: AppState
     let worktree: Worktree
     @ObservedObject var manager: ACPSessionManager
     @State private var sessionRevision = 0
-    @State private var deliveries: [ACPSession.ID: AgentSidebarFollowUpDelivery] = [:]
+
+    var followUps: Binding<[ACPSession.ID: AgentSidebarFollowUpDraft]> {
+        Binding(
+            get: { state.agentSidebarFollowUps[worktree.id, default: [:]] },
+            set: { state.agentSidebarFollowUps[worktree.id] = $0 }
+        )
+    }
 
     var body: some View {
         let _ = sessionRevision
@@ -34,20 +45,12 @@ struct AgentWorktreeTabView: View {
                     Task { await state.stop(for: sessionID, worktreeID: worktree.id) }
                 },
                 onFollowUp: { sessionID, text in
-                    deliveries[sessionID] = .sending
-                    Task {
-                        await state.sendPrompt(
-                            for: sessionID, worktreeID: worktree.id,
-                            text: text, attachments: []
-                        ) { succeeded in
-                            deliveries[sessionID] = succeeded ? .sent : .failed
-                        }
-                    }
+                    state.sendAgentSidebarFollowUp(for: sessionID, worktreeID: worktree.id, text: text)
                 },
                 onDelegate: nil
             ),
             controllableSessionIDs: Set(manager.sessions.keys.filter { manager.isWriter(for: $0) }),
-            followUpDelivery: deliveries
+            followUps: followUps
         )
         .onReceive(sessionUpdates) { _ in sessionRevision &+= 1 }
         .task { await manager.refreshRecentNow() }
@@ -70,8 +73,7 @@ struct AgentTabView: View {
     let rollup: AgentSidebarRollup
     let actions: AgentSidebarActions
     var controllableSessionIDs: Set<ACPSession.ID> = []
-    var followUpDelivery: [ACPSession.ID: AgentSidebarFollowUpDelivery] = [:]
-    @State private var drafts: [AgentSidebarRowID: String] = [:]
+    @Binding var followUps: [ACPSession.ID: AgentSidebarFollowUpDraft]
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -89,12 +91,6 @@ struct AgentTabView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .onChange(of: followUpDelivery) { previous, current in
-            // Handle completion even when the lazy stack has unloaded the row.
-            for (sessionID, delivery) in current where delivery == .sent && previous[sessionID] != .sent {
-                drafts[.acp(sessionID)] = nil
-            }
-        }
     }
 
     @ViewBuilder
@@ -114,10 +110,14 @@ struct AgentTabView: View {
                     row: row,
                     actions: actions,
                     canControl: row.sessionID.map { controllableSessionIDs.contains($0) } ?? false,
-                    delivery: row.sessionID.flatMap { followUpDelivery[$0] },
+                    delivery: row.sessionID.flatMap { followUps[$0]?.delivery },
                     draft: Binding(
-                        get: { drafts[row.id, default: ""] },
-                        set: { drafts[row.id] = $0 }
+                        get: { row.sessionID.flatMap { followUps[$0]?.text } ?? "" },
+                        set: { text in
+                            if let sessionID = row.sessionID {
+                                followUps[sessionID, default: .init()].text = text
+                            }
+                        }
                     )
                 )
             }
