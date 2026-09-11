@@ -279,6 +279,22 @@ struct WorktreeStateSnapshotterTests {
         #expect(snapshot.groups.contains { $0.primaryPath == "Foo" && $0.renameSource == "foo" && $0.memberPaths == ["Foo"] })
     }
 
+    @Test func trackedFileReplacedByDirectoryIsCapturedAsAbsentLeaf() async throws {
+        let repo = try await CheckpointTestRepository.make()
+        defer { repo.remove() }
+        try repo.write("tracked", to: "config")
+        try await repo.commitAll("tracked file")
+        try FileManager.default.removeItem(at: repo.root.appendingPathComponent("config"))
+        try repo.write("local", to: "config/local.json")
+
+        let snapshot = try await WorktreeStateSnapshotter.live.snapshot(target: repo.target)
+
+        let config = try #require(snapshot.paths["config"])
+        #expect(config.head.kind == .regular)
+        #expect(config.worktree == .absent)
+        #expect(snapshot.paths["config/local.json"]?.worktree.kind == .regular)
+    }
+
     @Test func lineageReplacementFailsCapture() async throws {
         let repo = try await CheckpointTestRepository.make()
         defer { repo.remove() }

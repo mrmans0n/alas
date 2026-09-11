@@ -105,17 +105,13 @@ struct WorktreeStateSnapshotter: Sendable {
                                                retainingPayloads: retainingPayloads)
             let indexState = try await gitState(index.values[indexPath], target, payloads: &payloads,
                                                 retainingPayloads: retainingPayloads)
-            let diskState: CheckpointFileState
-            if try fileSystem.metadata(root: target.path, relativePath: path) == nil {
-                diskState = .absent
-            } else {
-                switch try fileSystem.readLeaf(root: target.path, relativePath: path) {
-                case .regular(let bytes, let executable):
-                    diskState = .regular(blob: add(bytes, to: &payloads, retainingPayload: retainingPayloads), executable: executable)
-                case .symlink(let bytes):
-                    diskState = .symlink(blob: add(bytes, to: &payloads, retainingPayload: retainingPayloads))
-                }
-            }
+            let diskState = try diskState(
+                path: path,
+                root: target.path,
+                tracked: headState.kind != .absent || indexState.kind != .absent,
+                payloads: &payloads,
+                retainingPayloads: retainingPayloads
+            )
             states[path] = .init(relativePath: path, head: headState, index: indexState, worktree: diskState)
         }
         try validateLineage(target)
@@ -258,6 +254,26 @@ struct WorktreeStateSnapshotter: Sendable {
         let blob = add(try await data(["cat-file", "blob", entry.oid], target), to: &payloads,
                        retainingPayload: retainingPayloads)
         return entry.mode == "120000" ? .symlink(blob: blob) : .regular(blob: blob, executable: entry.mode == "100755")
+    }
+
+    private func diskState(path: String, root: URL, tracked: Bool, payloads: inout [String: Data],
+                           retainingPayloads: Bool) throws -> CheckpointFileState {
+        do {
+            guard try fileSystem.metadata(root: root, relativePath: path) != nil else { return .absent }
+            switch try fileSystem.readLeaf(root: root, relativePath: path) {
+            case .regular(let bytes, let executable):
+                return .regular(blob: add(bytes, to: &payloads, retainingPayload: retainingPayloads), executable: executable)
+            case .symlink(let bytes):
+                return .symlink(blob: add(bytes, to: &payloads, retainingPayload: retainingPayloads))
+            }
+        } catch CheckpointFileSystemError.unsupportedLeaf where tracked {
+            var isDirectory: ObjCBool = false
+            let url = try fileSystem.validateRelativePath(path, under: root)
+            if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue {
+                return .absent
+            }
+            throw CheckpointFileSystemError.unsupportedLeaf
+        }
     }
 
     private func add(_ data: Data, to payloads: inout [String: Data], retainingPayload: Bool = true) -> CheckpointBlobReference {

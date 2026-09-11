@@ -100,6 +100,27 @@ struct CheckpointRestoreInterruptionTests {
         #expect(!FileManager.default.fileExists(atPath: fixture.repo.root.appendingPathComponent(".git/index.lock").path))
     }
 
+    @Test func competingEmptyIndexLockIsNotRemoved() async throws {
+        let fixture = try await CheckpointRestoreFixture.make()
+        defer { fixture.remove() }
+        let checkpoint = try await fixture.service.createManual(target: fixture.repo.target, label: "Saved")
+        try await fixture.later()
+        let preview = try await fixture.preview(checkpoint.id)
+        let service = WorktreeCheckpointService(store: fixture.store, restoreFaultInjector: .init {
+            if $0 == .afterIndexLockIntentJournaled {
+                try Data().write(to: fixture.repo.root.appendingPathComponent(".git/index.lock"))
+            }
+        })
+
+        await #expect(throws: (any Error).self) {
+            try await service.restore(target: fixture.repo.target, preview: preview,
+                                      selectedGroupIDs: preview.selectedGroupIDs, coordination: .clear)
+        }
+
+        #expect(FileManager.default.fileExists(atPath: fixture.repo.root.appendingPathComponent(".git/index.lock").path))
+        #expect(try fixture.repo.disk(".git/index.lock").isEmpty)
+    }
+
     @Test(arguments: [CheckpointRestoreFaultPoint.afterFileMove(path: "added"), .afterFileMove(path: "selected.bin"),
                       .beforeIndexInstall, .afterIndexInstall, .beforeVerification])
     func failuresRollBackBothLayers(point: CheckpointRestoreFaultPoint) async throws {
