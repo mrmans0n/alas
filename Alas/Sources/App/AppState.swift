@@ -8014,9 +8014,15 @@ final class AppState {
             // fails or the provider doesn't support it, fall back to the
             // originally detected remote rather than failing the scan.
             let queryRemote = (try? await provider.repositoryParent(remote: remote, cwd: repoPath)) ?? remote
+            // `gh pr list --limit` paginates internally to satisfy any count;
+            // `glab mr list` now does the same via GitLabCLIProvider's own
+            // paging loop. A repository with more merged reviews than this
+            // still won't see the oldest of them, but 1000 covers even a
+            // very active project's last year or two without every scan
+            // paying for an unbounded, open-ended history query.
             let refs = try await provider.mergedReviewRequests(
                 remote: queryRemote,
-                limit: 200,
+                limit: 1000,
                 cwd: repoPath
             )
             return .success(WorktreeForgeMergeIndex(refs: refs))

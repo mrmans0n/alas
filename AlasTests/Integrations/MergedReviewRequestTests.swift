@@ -174,6 +174,101 @@ struct MergedReviewRequestTests {
             )
         }
     }
+
+    private static let gitlabRemote = CodeHostRemote(
+        kind: .gitlab,
+        host: "gitlab.com",
+        owner: "o",
+        repository: "r",
+        remoteName: "origin",
+        webURL: URL(string: "https://gitlab.com/o/r")!
+    )
+
+    private static func mrPageJSON(count: Int, startingAt: Int) -> String {
+        let items = (0..<count).map { offset -> String in
+            let number = startingAt + offset
+            return """
+            {"iid": \(number), "source_branch": "feature/\(number)", "web_url": "https://gitlab.com/o/r/-/merge_requests/\(number)", "sha": "sha\(number)"}
+            """
+        }
+        return "[\(items.joined(separator: ","))]"
+    }
+
+    /// `glab mr list` fetches exactly one page per invocation — unlike `gh
+    /// pr list --limit`, it has no built-in concept of "keep fetching until
+    /// N items." A repository with more merged MRs than one page (100, the
+    /// API's own cap) must be paginated manually.
+    @Test func gitLabProviderPaginatesBeyondOnePage() async throws {
+        let runner = PagedRunner { page in
+            switch page {
+            case 1: return Self.mrPageJSON(count: 100, startingAt: 1)
+            case 2: return Self.mrPageJSON(count: 5, startingAt: 101)
+            default: return "[]"
+            }
+        }
+        let provider = GitLabCLIProvider(runner: runner)
+        let refs = try await provider.mergedReviewRequests(
+            remote: Self.gitlabRemote,
+            limit: 1000,
+            cwd: URL(fileURLWithPath: "/tmp")
+        )
+        #expect(refs.count == 105)
+        #expect(refs.last?.number == 105)
+        let invocations = await runner.invocations
+        #expect(invocations.count == 2)   // stops at the short second page
+    }
+
+    @Test func gitLabProviderStopsAtTheRequestedLimitAcrossPages() async throws {
+        let runner = PagedRunner { page in
+            Self.mrPageJSON(count: 100, startingAt: (page - 1) * 100 + 1)
+        }
+        let provider = GitLabCLIProvider(runner: runner)
+        let refs = try await provider.mergedReviewRequests(
+            remote: Self.gitlabRemote,
+            limit: 150,
+            cwd: URL(fileURLWithPath: "/tmp")
+        )
+        #expect(refs.count == 150)
+        let invocations = await runner.invocations
+        #expect(invocations.count == 2)   // two full pages reach 200 >= 150
+    }
+}
+
+/// Returns a page of canned JSON keyed off the `--page` argument, so tests
+/// can exercise `GitLabCLIProvider`'s own pagination loop without a network.
+private actor PagedRunner: CodeHostCommandRunning {
+    struct Invocation: Sendable {
+        let executable: String
+        let args: [String]
+    }
+
+    private(set) var invocations: [Invocation] = []
+    private let responseForPage: @Sendable (Int) -> String
+
+    init(responseForPage: @escaping @Sendable (Int) -> String) {
+        self.responseForPage = responseForPage
+    }
+
+    func run(
+        _ executable: String,
+        args: [String],
+        cwd: URL?,
+        stdin: String?
+    ) async throws -> ProcessResult {
+        invocations.append(Invocation(executable: executable, args: args))
+        let page: Int
+        if let pageIndex = args.firstIndex(of: "--page"), args.indices.contains(pageIndex + 1) {
+            page = Int(args[pageIndex + 1]) ?? 1
+        } else {
+            page = 1
+        }
+        return ProcessResult(exitCode: 0, stdout: responseForPage(page), stderr: "")
+    }
+
+    func runData(_ executable: String, args: [String], cwd: URL?) async throws -> ProcessResultData {
+        invocations.append(Invocation(executable: executable, args: args))
+        return ProcessResultData(exitCode: 0, stdout: Data(), stderr: "")
+    }
 }
 
 private actor RecordingRunner: CodeHostCommandRunning {

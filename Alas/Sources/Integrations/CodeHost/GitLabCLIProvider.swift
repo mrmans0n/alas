@@ -22,26 +22,43 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         limit: Int,
         cwd: URL
     ) async throws -> [MergedReviewRequestRef] {
-        let result = try await runner.run(
-            "glab",
-            args: [
-                // glab spells this `--merged`; there is no `--state` flag on
-                // `mr list` (verified against `glab mr list --help`).
-                "mr", "list",
-                "--merged",
-                "--per-page", "\(limit)",
-                "--output", "json",
-                "-R", remote.repositorySlug,
-            ],
-            cwd: cwd
-        )
-        guard result.exitCode == 0 else {
-            throw CodeHostProviderError.commandFailed(
-                command: "glab mr list",
-                stderr: result.stderr
+        // Unlike `gh pr list --limit`, which fetches as many pages as needed
+        // to satisfy any requested count, `glab mr list` fetches exactly one
+        // page — bounded by `--per-page`, which GitLab's REST API caps at
+        // 100 regardless of what's requested (verified against `glab mr
+        // list --help`: `-p --page` and `-P --per-page` are independent,
+        // there is no total-count flag). Page manually until a short page
+        // signals the end, or `limit` is reached.
+        let perPage = 100
+        var refs: [MergedReviewRequestRef] = []
+        var page = 1
+        while refs.count < limit {
+            let result = try await runner.run(
+                "glab",
+                args: [
+                    // glab spells this `--merged`; there is no `--state` flag
+                    // on `mr list` (verified against `glab mr list --help`).
+                    "mr", "list",
+                    "--merged",
+                    "--per-page", "\(perPage)",
+                    "--page", "\(page)",
+                    "--output", "json",
+                    "-R", remote.repositorySlug,
+                ],
+                cwd: cwd
             )
+            guard result.exitCode == 0 else {
+                throw CodeHostProviderError.commandFailed(
+                    command: "glab mr list",
+                    stderr: result.stderr
+                )
+            }
+            let pageRefs = try Self.parseMergedMRList(result.stdout)
+            refs.append(contentsOf: pageRefs)
+            guard pageRefs.count == perPage else { break }
+            page += 1
         }
-        return try Self.parseMergedMRList(result.stdout)
+        return Array(refs.prefix(limit))
     }
 
     static func parseMergedMRList(_ json: String) throws -> [MergedReviewRequestRef] {
