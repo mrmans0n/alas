@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 struct RightPaneView: View {
     @Bindable var state: AppState
@@ -11,6 +12,7 @@ struct RightPaneView: View {
     @Environment(\.theme) var theme
     @State private var rps: RightPaneState?
     @State private var agentManager: ACPSessionManager?
+    @State private var agentSidebarRevision = 0
 
     init(
         state: AppState,
@@ -40,6 +42,7 @@ struct RightPaneView: View {
     }
 
     var body: some View {
+        let _ = agentSidebarRevision
         let override = state.config.sidebarChromeOverride(forThemeId: state.themeStore.current.id)
         ZStack {
             SidebarMaterialBackground(
@@ -126,9 +129,6 @@ struct RightPaneView: View {
                                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                                 }
                             }
-                            .task(id: worktree.id) {
-                                agentManager = state.acpManager(for: worktree)
-                            }
                         case .run:
                             RunTabView(state: state, worktree: worktree)
                         }
@@ -137,6 +137,16 @@ struct RightPaneView: View {
                     }
                 }
                 .sidebarChromeTheme(textContrast: override.textContrast)
+                .task(id: worktree.id) {
+                    agentManager = state.acpManager(for: worktree)
+                }
+                .background {
+                    if let agentManager, agentManager.worktreeId == worktree.id {
+                        AgentSidebarManagerObserver(manager: agentManager) {
+                            agentSidebarRevision &+= 1
+                        }
+                    }
+                }
                 .onChange(of: state.config.runTabEnabled) {
                     rps.activeTab = RightPaneTab.visible(
                         rps.activeTab,
@@ -251,5 +261,18 @@ struct RightPaneView: View {
         .onDisappear {
             state.rightPaneStore.deactivate()
         }
+    }
+}
+
+private struct AgentSidebarManagerObserver: View {
+    @ObservedObject var manager: ACPSessionManager
+    let onChange: () -> Void
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .onReceive(manager.objectWillChange) { _ in
+                onChange()
+            }
     }
 }
