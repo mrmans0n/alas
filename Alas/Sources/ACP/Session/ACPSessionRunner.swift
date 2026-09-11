@@ -1366,9 +1366,12 @@ extension ACPSessionRunner {
                 return
             }
             session.enqueueScheduled(blocks: blocks, scheduledAt: date, draft: draft)
-            persistQueue()
-            flushQueueIfIdle()
-            Task { @MainActor in onPromptFinished?(true) }
+            persistQueue(completion: { [weak self] persisted in
+                if persisted {
+                    self?.flushQueueIfIdle()
+                }
+                onPromptFinished?(persisted)
+            })
             return
         }
         if nativeForkBarrierActive {
@@ -1416,22 +1419,30 @@ extension ACPSessionRunner {
     /// swallowed — the same pattern as transcript persistence; surfacing
     /// would block the UI for a transient SQLite error and we'd rather
     /// lose a queue snapshot than the user's draft.
-    func persistQueue(acknowledging acknowledgement: ACPDurableConsumptionAcknowledgement? = nil) {
-        guard holdsLeaseForWrite() else { return }
+    func persistQueue(
+        acknowledging acknowledgement: ACPDurableConsumptionAcknowledgement? = nil,
+        completion: (@MainActor (_ persisted: Bool) -> Void)? = nil
+    ) {
+        guard holdsLeaseForWrite() else {
+            Task { @MainActor in completion?(false) }
+            return
+        }
         let items = session.queue
         let fence = leaseFenceProvider()
         let sessionId = sessionId
-        if let acknowledgement {
+        if acknowledgement != nil || completion != nil {
             enqueuePersistence({ persistence in
                 try await persistence.upsertQueue(
                     sessionId: sessionId,
                     items: items,
                     fence: fence
                 )
+                return true
             }, completion: { persisted in
                 if persisted == true {
-                    acknowledgement()
+                    acknowledgement?()
                 }
+                completion?(persisted == true)
             })
         } else {
             enqueuePersistence { persistence in
