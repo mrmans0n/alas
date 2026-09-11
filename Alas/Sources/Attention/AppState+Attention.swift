@@ -5,7 +5,122 @@ struct AttentionReturnDestination {
     let activeTabID: TabID?
 }
 
+enum AttentionNavigationResult: Equatable {
+    case opened
+    case unavailable(String)
+}
+
+struct AttentionNavigationEnvironment {
+    var focusSession: @MainActor (AttentionItem, String) -> Bool
+    var presentScriptFailure: @MainActor (AttentionItem, String) -> Bool
+    var revealRightPane: @MainActor (AttentionItem, AttentionJumpTarget) async -> Bool
+    var focusReviewComment: @MainActor (AttentionItem, String, String) -> Bool
+    var focusRemoteWorktree: @MainActor (AttentionItem) -> Bool
+
+    @MainActor
+    static func live(appState: AppState,
+                     reviewSessionStore: ReviewSessionStore = ReviewSessionStore(),
+                     reviewCommentStore: ReviewDraftCommentStore = ReviewDraftCommentStore()) -> Self {
+        Self(
+            focusSession: { [weak appState] item, sessionID in
+                guard let appState, let worktree = item.worktree else { return false }
+                for tab in appState.tabs.tabs(forWorktree: worktree.id) {
+                    switch tab {
+                    case .terminal(let terminal):
+                        guard let leaf = terminal.root.leaves().first(where: { $0.sessionId == sessionID || $0.id == sessionID }) else { continue }
+                        _ = appState.tabs.setFocusedLeaf(worktreeId: worktree.id, tabId: tab.id, leafId: leaf.id)
+                    case .acpSession(let session):
+                        guard session.sessionId == sessionID else { continue }
+                    default: continue
+                    }
+                    appState.activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
+                    return true
+                }
+                return false
+            },
+            presentScriptFailure: { [weak appState] item, failureID in
+                guard let appState, let worktree = item.worktree,
+                      let failure = appState.runScriptFailures(in: worktree.id).first(where: { $0.id == failureID }) else { return false }
+                appState.presentRunScriptFailure(failure)
+                return true
+            },
+            revealRightPane: { [weak appState] item, target in
+                guard let appState, let worktree = appState.attentionWorktree(for: item.owner) else { return false }
+                if let host = item.worktree?.display.host, RemoteHostStatusStore.shared.isOffline(host) { return false }
+                return await appState.rightPaneStore.revealAttentionTarget(target, for: worktree)
+            },
+            focusReviewComment: { [weak appState] item, sessionID, commentID in
+                guard let appState, let worktree = item.worktree,
+                      let draftID = ReviewDraftSessionID(rawValue: sessionID),
+                      let comment = try? reviewCommentStore.load(sessionID: draftID).first(where: { $0.id == commentID }),
+                      let records = try? reviewSessionStore.list(worktreeID: worktree.id),
+                      let record = records.first(where: { $0.target.draftSessionID == draftID }) else { return false }
+                let focused = record.selectingFile(comment.fileID, now: Date()).focusingComment(commentID, now: Date())
+                do { try reviewSessionStore.save(focused) } catch { return false }
+                let tab = appState.tabs.openOrFocusReviewSession(worktreeId: worktree.id, record: focused)
+                appState.activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
+                return true
+            },
+            focusRemoteWorktree: { item in
+                guard let host = item.worktree?.display.host else { return false }
+                return RemoteHostStatusStore.shared.isOffline(host)
+            }
+        )
+    }
+}
+
 extension AppState {
+    @discardableResult
+    func openAttentionItem(_ item: AttentionItem) async -> AttentionNavigationResult {
+        func unavailable(_ message: String) -> AttentionNavigationResult {
+            attentionNavigationErrors[item.eventID] = message
+            return .unavailable(message)
+        }
+        guard let worktree = attentionWorktree(for: item.owner),
+              let project = projects.first(where: { $0.id == worktree.projectId }) else {
+            return unavailable("The worktree is no longer available.")
+        }
+        guard !projectsManager.isWorktreeHidden(projectId: project.id, path: worktree.path) else {
+            return unavailable("The worktree is archived. Restore it to open this item.")
+        }
+        // The row may have been rendered before a rename, branch switch, or refresh.
+        let current = AttentionWorktree(worktree: worktree, project: project).resolved
+        let resolved = AttentionItem(eventID: item.eventID, sourceKey: item.sourceKey, owner: item.owner,
+                                     kind: item.kind, title: item.title, body: item.body, occurredAt: item.occurredAt,
+                                     presentation: item.presentation, jumpTarget: item.jumpTarget, display: current.display,
+                                     worktree: current, acknowledgedAt: item.acknowledgedAt)
+        focusGlobalWorktree(id: worktree.id, projectId: project.id)
+        let environment = attentionNavigationEnvironment ?? .live(appState: self)
+        let opened: Bool
+        let failure: String
+        switch item.jumpTarget {
+        case .session(let sessionID):
+            opened = environment.focusSession(resolved, sessionID)
+            failure = "The session is no longer available."
+        case .runScriptFailure(let failureID):
+            opened = environment.presentScriptFailure(resolved, failureID)
+            failure = "The script failure is no longer available."
+        case .conflicts, .gitOperation, .reviewRequest:
+            opened = await environment.revealRightPane(resolved, item.jumpTarget)
+            failure = "The requested changes or review are no longer available."
+        case .reviewComment(let sessionID, let commentID):
+            opened = environment.focusReviewComment(resolved, sessionID, commentID)
+            failure = "The review comment is no longer available."
+        case .remoteWorktree:
+            opened = environment.focusRemoteWorktree(resolved)
+            failure = "The host is no longer disconnected."
+        case .none:
+            opened = false
+            failure = "This event has no destination."
+        }
+        guard opened else { return unavailable(failure) }
+        attentionNavigationErrors[item.eventID] = nil
+        isAttentionInboxOpen = false
+        attentionReturnDestination = nil
+        attentionStore.acknowledge(eventID: item.eventID, at: Date())
+        return .opened
+    }
+
     var attentionAggregation: AttentionAggregation {
         let document = attentionStore.document
         let liveSignals = currentAttentionSignals.compactMap { signal -> AttentionLiveSignal? in

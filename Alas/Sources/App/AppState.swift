@@ -92,6 +92,8 @@ final class AppState {
     var selectedRunScriptFailure: RunScriptFailure?
     let attentionStore: AttentionStore
     var isAttentionInboxOpen = false
+    var attentionNavigationErrors: [UUID: String] = [:]
+    @ObservationIgnored var attentionNavigationEnvironment: AttentionNavigationEnvironment?
     @ObservationIgnored var attentionReturnDestination: AttentionReturnDestination?
     @ObservationIgnored var attentionSuppressedStartupSignals: [AttentionSourceKey: String] = [:]
     @ObservationIgnored var runScriptCompletionTasks: [String: (worktreeID: String, sessionID: String, location: RunScriptCaptureLocation, task: Task<Void, Never>)] = [:]
@@ -688,12 +690,14 @@ final class AppState {
         worktreeCleanupLauncher: @escaping WorktreeCleanupLauncher = {
             try WorktreeTrashCleaner.launch($0)
         },
-        attentionStore: AttentionStore? = nil
+        attentionStore: AttentionStore? = nil,
+        attentionNavigationEnvironment: AttentionNavigationEnvironment? = nil
     ) {
         self.store = store
         self.workspaceStore = workspaceStore
         self.workspaceRemoteTransport = workspaceRemoteTransport
         self.attentionStore = attentionStore ?? AttentionStore()
+        self.attentionNavigationEnvironment = attentionNavigationEnvironment
         restoreActiveTabsOnNextReload = restoreActiveTabsOnStartup
         suppressesRestoredRightPaneAfterAbandonedStartup = !restoreActiveTabsOnStartup
         _tabs = tabsManager

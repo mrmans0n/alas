@@ -33,6 +33,16 @@ final class RightPaneStore {
         self.git = git
     }
 
+    func revealAttentionTarget(_ target: AttentionJumpTarget, for worktree: Worktree) async -> Bool {
+        guard let appState else { return false }
+        let pane = state(for: worktree, baseBranch: appState.config.worktrees.baseBranch,
+                         comparisonMode: appState.config.changes.comparisonMode)
+        guard await pane.refresh() else { return false }
+        guard pane.revealAttentionTarget(target) else { return false }
+        appState.config.rightPaneVisible = true
+        return true
+    }
+
     /// Returns the branch name the Commits section should compare HEAD against
     /// when no user override has been set. If the worktree is checked out on the
     /// configured base branch itself, prefer `origin/<baseBranch>` so the

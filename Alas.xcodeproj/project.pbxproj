@@ -1105,6 +1105,7 @@
 		A770A357750B4713AF21C0E0 /* RemoteSessionsProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33EBE6A3E0CA30D8910E68F8 /* RemoteSessionsProvider.swift */; };
 		A77E7290FD589BC3227ADE27 /* ContentSearcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE7AEB9E8D83B610E291BAE1 /* ContentSearcher.swift */; };
 		A7B9BDE0F2EB1D1769EC81B5 /* RemoteProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C02B44D8CC0AE48BFA9CD88E /* RemoteProtocolTests.swift */; };
+		A841973EDB1E757B1C27AF9C /* AttentionNavigationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E66D42CC183484DCB15ADF4 /* AttentionNavigationTests.swift */; };
 		A8A433243C4567927739F249 /* ContentResultGroup.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAE286A9D5A0032AE582B5C6 /* ContentResultGroup.swift */; };
 		A955D8E9871CA023ED98A095 /* GGCommitMenuModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98EE59978053FA18629BC280 /* GGCommitMenuModelTests.swift */; };
 		A95EC5D1544C32B61DE0B2C9 /* GGProjectMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C53EA4D34091E3711B0ED54 /* GGProjectMode.swift */; };
@@ -1904,6 +1905,7 @@
 		1DC1B975662D135B148443BC /* ACPSessionHydrationStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSessionHydrationStateTests.swift; sourceTree = "<group>"; };
 		1E40B5F193E3CB5EB5BA945A /* CommitPromptStatusTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitPromptStatusTests.swift; sourceTree = "<group>"; };
 		1E410585102A601ACED1E8B5 /* AppKitDiffScrollerStressTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppKitDiffScrollerStressTests.swift; sourceTree = "<group>"; };
+		1E66D42CC183484DCB15ADF4 /* AttentionNavigationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttentionNavigationTests.swift; sourceTree = "<group>"; };
 		1E717BE5BA723ADB74DB856C /* WorkspaceCheckoutLocalIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceCheckoutLocalIntegrationTests.swift; sourceTree = "<group>"; };
 		1EC659A56A08A30F7784428D /* ACPClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPClient.swift; sourceTree = "<group>"; };
 		1F28FA9BC3F5FC98D0A64747 /* GGFollowEntrySheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GGFollowEntrySheet.swift; sourceTree = "<group>"; };
@@ -3569,6 +3571,7 @@
 			children = (
 				B91A41EAF672B0160FF4D275 /* AppStateAttentionTests.swift */,
 				DCFF5B8A4148D1592A207C57 /* AttentionIntegrationTests.swift */,
+				1E66D42CC183484DCB15ADF4 /* AttentionNavigationTests.swift */,
 				4A8610E332E73953BFB7778F /* AttentionProducerTests.swift */,
 				77AAF9F6D5538D0B03188090 /* AttentionSignalAggregatorTests.swift */,
 				7ECD5701E054809D2CBB2539 /* AttentionStoreTests.swift */,
@@ -7624,6 +7627,7 @@
 				322ACA90D1ED6EDEA8B40D1D /* AppStateWorktreeCleanupBatchTests.swift in Sources */,
 				536F79023AAEDB205061DAA0 /* AttachIssueDialogModelTests.swift in Sources */,
 				ED9A3EE716A5060EC949BC01 /* AttentionIntegrationTests.swift in Sources */,
+				A841973EDB1E757B1C27AF9C /* AttentionNavigationTests.swift in Sources */,
 				89124893F33E6061C6A35FEB /* AttentionProducerTests.swift in Sources */,
 				766BFE0334B7146A76DDDB00 /* AttentionSignalAggregatorTests.swift in Sources */,
 				A1312EFBF7AB93FA954390A2 /* AttentionStoreTests.swift in Sources */,

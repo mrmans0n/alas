@@ -142,6 +142,38 @@ final class RightPaneState: GGSplitCommitServicing {
 
     // New in right-sidebar-refactor:
     var activeTab: RightPaneTab = .changes
+    var attentionScrollRequest: AppKitDiffScrollRequest?
+    private(set) var attentionRevealedTarget: AttentionJumpTarget?
+    private var attentionRevealGeneration = 0
+
+    /// Validate the destination before switching the visible Changes surface.
+    func revealAttentionTarget(_ target: AttentionJumpTarget) -> Bool {
+        let rowID: String?
+        switch target {
+        case .conflicts(let path):
+            let conflicts = changes.filter { $0.conflict != nil }
+            guard !conflicts.isEmpty, path == nil || conflicts.contains(where: { $0.path == path }) else { return false }
+            workingTreeExpanded = true
+            rowID = "changes-conflicts"
+        case .gitOperation:
+            guard mergeOp.current != nil else { return false }
+            rowID = "changes-operation"
+        case .reviewRequest(let number):
+            guard let snapshot = reviewLoop.snapshot,
+                  number == nil || snapshot.reviewRequest?.number == number else { return false }
+            reviewLoop.setExpanded(true)
+            rowID = nil
+        default: return false
+        }
+        activeTab = .changes
+        attentionRevealedTarget = target
+        attentionRevealGeneration += 1
+        attentionScrollRequest = rowID.map {
+            AppKitDiffScrollRequest(targetID: $0, fallbackID: nil, alignment: .top, animated: false, generation: attentionRevealGeneration)
+        }
+        return true
+    }
+
     var commits: [CommitInfo] = []
     var comparisonRef: String? = nil
     var workingTreeExpanded: Bool = true

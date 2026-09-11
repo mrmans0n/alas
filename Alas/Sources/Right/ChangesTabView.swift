@@ -97,11 +97,13 @@ struct ChangesTabView: View {
         VStack(spacing: 0) {
             AppKitDiffScroller(
                 plan: appKitScrollPlan,
-                scrollRequest: nil,
+                scrollRequest: rps.attentionScrollRequest,
                 onActiveOwnerChange: { _ in },
-                onScrollRequestCompletion: { _ in }
+                onScrollRequestCompletion: { generation in
+                    if rps.attentionScrollRequest?.generation == generation { rps.attentionScrollRequest = nil }
+                }
             )
-            if isGGDrawerActive {
+            if isGGDrawerActive, !isRevealingAttentionReview {
                 GGStackDrawer(rps: rps, appState: appState)
             } else {
                 ReviewLoopDrawer(
@@ -118,6 +120,11 @@ struct ChangesTabView: View {
                 try await GitService().headPublicationState(worktreePath: rps.worktree.path)
             }
         }
+    }
+
+    private var isRevealingAttentionReview: Bool {
+        if case .reviewRequest = rps.attentionRevealedTarget { return true }
+        return false
     }
 
     private var publishMutationDisabledReason: String? {
@@ -279,10 +286,10 @@ struct ChangesTabView: View {
         }
 
         if let operation = rps.mergeOp.current,
-           Self.shouldShowGenericOperationCard(
+           (rps.attentionRevealedTarget == .gitOperation || Self.shouldShowGenericOperationCard(
             mergeOperation: operation,
             pausedGGOperation: rps.ggActionState.pausedOperation
-           ) {
+           )) {
             rows.append(appKitRow(
                 id: "changes-operation",
                 token: String(reflecting: operation) + String(!conflicts.isEmpty),

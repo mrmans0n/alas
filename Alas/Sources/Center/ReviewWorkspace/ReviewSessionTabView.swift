@@ -219,6 +219,10 @@ struct ReviewSessionTabView: View {
         .onChange(of: tabState.sessionID) { _, _ in
             rekeyDraftControllerForCurrentSession()
         }
+        .onChange(of: tabState.focusedCommentID) { _, commentID in
+            setSelectedFileID(tabState.selectedFileID, persist: false)
+            setFocusedDraftCommentID(commentID, persist: false)
+        }
         .onDisappear {
             selectionPersister.flush()
         }
