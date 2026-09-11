@@ -268,10 +268,8 @@ extension AppState {
                 where key.rawValue.hasPrefix("review:\(context.owner.storageKey):") && !activeKeys.contains(key) {
                 observeAttention(.inactive(sourceKey: key), at: date)
             }
-            for event in attentionStore.events where event.owner == context.owner && [.failedChecks, .actionableFeedback, .reviewSyncBlocked].contains(event.kind) {
-                if !activeKeys.contains(event.sourceKey) {
-                    observeAttention(.inactive(sourceKey: event.sourceKey), at: date)
-                }
+            for key in activeStoredReviewObservationKeys(owner: context.owner) where !activeKeys.contains(key) {
+                observeAttention(.inactive(sourceKey: key), at: date)
             }
         }
         let initialGitSnapshot = attentionInitializedSnapshotSources.insert("git:\(context.owner.storageKey)").inserted
@@ -284,6 +282,14 @@ extension AppState {
             reconcileAttention(liveSignals: reviewSignals, isInitialSnapshot: initialReviewSnapshot, at: date)
         }
         for observation in observations where observation.activeSignal == nil { observeAttention(observation, at: date) }
+    }
+
+    private func activeStoredReviewObservationKeys(owner: AttentionWorktreeIdentity) -> [AttentionSourceKey] {
+        let prefix = "review:\(owner.storageKey):"
+        return attentionStore.document.observations.compactMap { key, observation in
+            guard observation.isActive, key.rawValue.hasPrefix(prefix) else { return nil }
+            return key
+        }
     }
 
     func observeHostAttention(host: String, isDisconnected: Bool, at date: Date = Date()) {
@@ -505,11 +511,11 @@ extension AppState {
         return nil
     }
 
-    private func selectWorkspaceCheckout(owner: SessionOwnerID, focusedWorktreeID: String) {
+    fileprivate func selectWorkspaceCheckout(owner: SessionOwnerID, focusedWorktreeID: String) {
         guard case .workspaceCheckout(let checkoutID, _) = owner,
               let checkout = workspacesManager.checkout(id: checkoutID) else { return }
         selectWorkspaceCheckout(id: checkoutID)
-        let memberWorktreeIDs = workspaceMemberWorktreeIDs(checkout)
+        let memberWorktreeIDs = attentionWorkspaceMemberWorktreeIDs(checkout)
         guard let memberID = memberWorktreeIDs.first(where: { $0.value == focusedWorktreeID })?.key else { return }
         focusWorkspaceCheckoutMember(id: memberID)
     }
@@ -627,7 +633,7 @@ extension AppState {
             guard let checkout = workspacesManager.checkout(id: checkoutID),
                   checkout.archivedAt == nil else { return false }
             if let memberID = destination.workspaceNavigationState.focusedCheckoutMemberID {
-                let memberWorktreeIDs = workspaceMemberWorktreeIDs(checkout)
+                let memberWorktreeIDs = attentionWorkspaceMemberWorktreeIDs(checkout)
                 guard let worktreeID = memberWorktreeIDs[memberID],
                       isRestorableAttentionWorktree(id: worktreeID),
                       destination.worktreeID == nil || destination.worktreeID == worktreeID else { return false }
@@ -643,6 +649,13 @@ extension AppState {
             return false
         }
         return true
+    }
+
+    private func attentionWorkspaceMemberWorktreeIDs(_ checkout: WorkspaceCheckout) -> [UUID: String] {
+        WorkspaceMemberWorktreeResolver.resolvedWorktreeIDs(
+            checkout: checkout,
+            worktrees: projects.flatMap { projectsManager.worktrees(projectId: $0.id) }
+        )
     }
 
     private func isRestorableAttentionWorktree(id: String) -> Bool {

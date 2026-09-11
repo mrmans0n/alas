@@ -39,6 +39,49 @@ struct AppStateAttentionTests {
         #expect(state.attentionStore.events.first?.fingerprint == "b.swift|c.swift")
     }
 
+    @Test func successfulReviewSnapshotClosesPrunedActiveObservation() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeStateWithWorktree(maxEvents: 0)
+        let clean = RightPaneAttentionSnapshot(mergeOperation: nil, conflictedPaths: [], review: fixture.review(hasRequest: false))
+        let failed = RightPaneAttentionSnapshot(mergeOperation: nil, conflictedPaths: [], review: fixture.review())
+
+        state.observeRightPaneAttention(worktreeID: "worktree", snapshot: clean)
+        state.observeRightPaneAttention(worktreeID: "worktree", snapshot: failed)
+        #expect(state.attentionStore.events.isEmpty)
+        #expect(state.attentionStore.document.observations.values.contains { $0.isActive })
+
+        state.observeRightPaneAttention(worktreeID: "worktree", snapshot: clean)
+
+        #expect(state.attentionStore.events.isEmpty)
+        #expect(state.attentionStore.document.observations.values.allSatisfy { !$0.isActive })
+    }
+
+    @Test func successfulReviewSnapshotClosesAliasMigratedObservationAfterEventPrune() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeStateWithWorktree(lineageID: "lineage", maxEvents: 0)
+        let project = try #require(state.projects.first)
+        let worktree = try #require(state.attentionWorktrees.first?.worktree)
+        let legacyOwner = AttentionWorktreeIdentity(projectID: project.id, location: .local, lineageID: nil, legacyPath: worktree.path.path)
+        let currentOwner = AttentionWorktreeIdentity.make(worktree: worktree, project: project)
+        let display = AttentionWorktree(worktree: worktree, project: project).resolved.display
+        let signal = try #require(AttentionProducer.review(snapshot: fixture.review(), owner: legacyOwner, display: display).compactMap(\.activeSignal).first)
+        state.attentionStore.observe(.active(signal), at: fixture.now)
+
+        _ = state.attentionAggregation
+        let migratedKey = AttentionSourceKey(rawValue: signal.sourceKey.rawValue.replacingOccurrences(of: legacyOwner.storageKey, with: currentOwner.storageKey))
+        #expect(state.attentionStore.events.isEmpty)
+        #expect(state.attentionStore.document.observations[migratedKey]?.isActive == true)
+
+        state.observeRightPaneAttention(
+            worktreeID: "worktree",
+            snapshot: RightPaneAttentionSnapshot(mergeOperation: nil, conflictedPaths: [], review: fixture.review(hasRequest: false))
+        )
+
+        #expect(state.attentionStore.document.observations[migratedKey]?.isActive == false)
+    }
+
     @Test func acpCompletionRecordsFinishedHistoryButRemovalDoesNot() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
@@ -294,9 +337,9 @@ struct AppStateAttentionTests {
         _ = await workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
         let state = AppState(
             store: MemoryStore(),
-            attentionStore: AttentionStore(url: fixture.url),
             workspacesManager: workspacesManager,
-            workspaceStore: workspaceStore
+            workspaceStore: workspaceStore,
+            attentionStore: AttentionStore(url: fixture.url)
         )
         state.projectsManager = ProjectsManager(persistedProjects: [project])
         state.projectsManager.insertOptimisticWorktree(worktree)
@@ -304,7 +347,7 @@ struct AppStateAttentionTests {
         let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
         let tab = state.tabs.appendACP(owner: owner, sessionId: "shared-acp", title: "Shared agent")
 
-        state.harness.setExternalActivity(sessionId: "shared-acp", owner: owner, agent: .claude, state: .awaitingInput)
+        state.harness.setExternalActivity(sessionId: "shared-acp", owner: owner, agent: AgentKind.claude, state: ActivityState.awaitingInput)
         let item = try #require(state.attentionAggregation.items.first)
 
         let result = await state.openAttentionItem(item)
@@ -350,9 +393,9 @@ struct AppStateAttentionTests {
         _ = await workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
         let state = AppState(
             store: MemoryStore(),
-            attentionStore: AttentionStore(url: fixture.url),
             workspacesManager: workspacesManager,
-            workspaceStore: workspaceStore
+            workspaceStore: workspaceStore,
+            attentionStore: AttentionStore(url: fixture.url)
         )
         state.projectsManager = ProjectsManager(persistedProjects: [project])
         state.projectsManager.insertOptimisticWorktree(worktree)
@@ -362,7 +405,7 @@ struct AppStateAttentionTests {
         state.tabs.activate(owner: owner, tabId: sharedTab.id)
 
         state.openAttentionInbox()
-        state.selectWorktree(id: nil)
+        state.selectWorktree(id: Optional<String>.none)
         state.closeAttentionInbox()
 
         #expect(state.selectedWorkspaceCheckout?.id == checkout.id)
@@ -428,14 +471,60 @@ struct AppStateAttentionTests {
             AppState(store: MemoryStore(), attentionStore: AttentionStore(url: url))
         }
 
-        func makeStateWithWorktree() -> AppState {
-            let state = makeState()
+        func makeStateWithWorktree(lineageID: String? = nil, maxEvents: Int = 2_000) -> AppState {
+            let state = AppState(store: MemoryStore(), attentionStore: AttentionStore(url: url, maxEvents: maxEvents))
             let project = ProjectConfig(id: "project", name: "Project", path: "/repo", color: "blue", addedAt: now)
             let worktree = Worktree(id: "worktree", projectId: project.id, name: "main", branch: "main",
-                                    path: URL(fileURLWithPath: "/repo"), status: .clean, lastActivity: now)
+                                    path: URL(fileURLWithPath: "/repo"), status: .clean, lastActivity: now, lineageID: lineageID)
             state.projectsManager = ProjectsManager(persistedProjects: [project])
             state.projectsManager.insertOptimisticWorktree(worktree)
             return state
+        }
+
+        fileprivate func review(hasRequest: Bool = true) -> ReviewLoopSnapshot {
+            let remote = CodeHostRemote(
+                kind: .github,
+                host: "github.com",
+                owner: "owner",
+                repository: "repo",
+                remoteName: "origin",
+                webURL: URL(string: "https://github.com/owner/repo")!
+            )
+            let reviewRequest = hasRequest ? ReviewRequest(
+                    remote: remote,
+                    number: 42,
+                    title: "Review",
+                    url: remote.webURL,
+                    state: .open,
+                    isDraft: false,
+                    headRefName: "feature",
+                    baseRefName: "main",
+                    headSHA: "head",
+                    reviewDecision: .approved,
+                    mergeState: .clean,
+                    checks: [ReviewCheck(id: "ci", name: "CI", workflow: nil, bucket: .fail, detailURL: nil, completedAt: nil)],
+                    threads: []
+                )
+                : nil
+            return ReviewLoopSnapshot(
+                local: ReviewLoopLocalState(
+                    branchName: "feature",
+                    headSHA: "head",
+                    baseBranch: "main",
+                    hasWorkingTreeChanges: false,
+                    hasStagedChanges: false,
+                    aheadCommitCount: 0,
+                    hasUpstream: true,
+                    upstreamAheadCommitCount: 0,
+                    needsPush: false
+                ),
+                remote: remote,
+                reviewRequest: reviewRequest,
+                providerAvailable: true,
+                providerAuthenticated: true,
+                providerCapabilities: .githubCLI,
+                errorMessage: nil
+            )
         }
 
         func cleanup() {
