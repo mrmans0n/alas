@@ -37,6 +37,9 @@ struct AgentWorktreeTabView: View {
         let _ = sessionRevision
         AgentTabView(
             rollup: state.agentSidebarRollup(for: worktree),
+            agentLookup: { agentID in
+                state.agent(id: agentID == AgentKind.cursor.rawValue ? "cursor-agent" : agentID)
+            },
             actions: AgentSidebarActions(
                 onFocus: { rowID in
                     Task { await state.focusAgentSidebarRow(rowID, in: worktree) }
@@ -71,24 +74,23 @@ struct AgentWorktreeTabView: View {
 
 struct AgentTabView: View {
     let rollup: AgentSidebarRollup
+    let agentLookup: (String) -> AgentDefinition?
     let actions: AgentSidebarActions
     var controllableSessionIDs: Set<ACPSession.ID> = []
     @Binding var followUps: [ACPSession.ID: AgentSidebarFollowUpDraft]
-    @Environment(\.theme) private var theme
 
     var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
+            LazyVStack(alignment: .leading, spacing: 8) {
                 if rollup.rows.isEmpty {
-                    Text("No agent sessions or terminals in this worktree.")
-                        .font(.system(size: 12))
-                        .foregroundStyle(theme.color("fg-muted"))
-                        .padding(16)
+                    AgentSidebarEmptyState()
                 } else {
                     section(title: "Active", rows: rollup.active)
                     section(title: "History", rows: rollup.history)
                 }
             }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 12)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
@@ -96,18 +98,11 @@ struct AgentTabView: View {
     @ViewBuilder
     private func section(title: String, rows: [AgentSidebarRow]) -> some View {
         if !rows.isEmpty {
-            HStack {
-                Text(title)
-                Spacer()
-                Text("\(rows.count)").monospacedDigit()
-            }
-            .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(theme.color("fg-muted"))
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            AgentSidebarSectionHeader(title: title, count: rows.count)
             ForEach(rows) { row in
                 AgentSidebarRowView(
                     row: row,
+                    agent: agentLookup(row.agentID),
                     actions: actions,
                     canControl: row.sessionID.map { controllableSessionIDs.contains($0) } ?? false,
                     delivery: row.sessionID.flatMap { followUps[$0]?.delivery },
@@ -121,130 +116,6 @@ struct AgentTabView: View {
                     )
                 )
             }
-        }
-    }
-}
-
-private struct AgentSidebarRowView: View {
-    let row: AgentSidebarRow
-    let actions: AgentSidebarActions
-    let canControl: Bool
-    let delivery: AgentSidebarFollowUpDelivery?
-    @Binding var draft: String
-    @State private var isEditing = false
-    @Environment(\.theme) private var theme
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Button { actions.onFocus(row.id) } label: {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(alignment: .firstTextBaseline) {
-                        Text(row.title).font(.system(size: 12, weight: .medium)).lineLimit(2)
-                        Spacer(minLength: 4)
-                        Text(row.state.label)
-                            .font(.system(size: 10))
-                            .foregroundStyle(theme.color("fg-muted"))
-                    }
-                    HStack(spacing: 5) {
-                        Text(row.agentID)
-                        if let model = row.model { Text("· \(model)") }
-                        if row.createdAt != .distantPast {
-                            Text("·")
-                            Text(row.createdAt, style: .relative)
-                        }
-                    }
-                    .font(.system(size: 10))
-                    .foregroundStyle(theme.color("fg-muted"))
-                    .lineLimit(1)
-                    if let host = row.host {
-                        Label(host, systemImage: "network")
-                            .font(.system(size: 10))
-                            .foregroundStyle(theme.color("fg-muted"))
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help("Focus \(row.title)")
-
-            if let plan = row.plan {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Tasks \(plan.completed)/\(plan.total)")
-                        .font(.system(size: 10, weight: .medium))
-                    if let step = plan.currentStep {
-                        Text(step).font(.system(size: 10)).lineLimit(2)
-                    }
-                    ProgressView(value: Double(plan.completed), total: Double(plan.total))
-                }
-                .foregroundStyle(theme.color("fg-muted"))
-            }
-            if row.contextUsage != nil || canControl {
-                HStack(spacing: 8) {
-                    ACPContextUsageButton(usage: row.contextUsage, modelName: row.model)
-                    Spacer(minLength: 0)
-                    if let sessionID = row.sessionID, row.isLiveACP, canControl {
-                        if row.state == .running || row.state == .awaitingInput || row.state == .permissionRequest {
-                            Button("Interrupt") { actions.onInterrupt(sessionID) }
-                        }
-                        Button("Follow up") { isEditing.toggle() }
-                        if let onDelegate = actions.onDelegate {
-                            Button("Delegate") { onDelegate(sessionID) }
-                        }
-                    }
-                }
-                .controlSize(.small)
-            }
-            if let sessionID = row.sessionID,
-               isEditing || !draft.isEmpty || delivery == .failed {
-                VStack(alignment: .leading, spacing: 5) {
-                    TextField("Follow-up message", text: $draft, axis: .vertical)
-                        .lineLimit(2...5)
-                        .textFieldStyle(.roundedBorder)
-                        .disabled(delivery == .sending)
-                    HStack {
-                        if delivery == .failed {
-                            Text("Could not send. Your message is kept here.")
-                                .font(.system(size: 10))
-                                .foregroundStyle(theme.color("fg-muted"))
-                        }
-                        Spacer(minLength: 0)
-                        Button(delivery == .sending ? "Sending…" : "Send") {
-                            actions.onFollowUp(sessionID, draft)
-                        }
-                        .disabled(!canControl || delivery == .sending || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                        .controlSize(.small)
-                    }
-                }
-            }
-        }
-        .foregroundStyle(theme.color("fg"))
-        .padding(12)
-        .overlay(alignment: .bottom) { Divider() }
-        .onChange(of: delivery) {
-            if delivery == .sent {
-                isEditing = false
-            }
-        }
-    }
-}
-
-private extension AgentSidebarRow {
-    var sessionID: ACPSession.ID? {
-        guard case .acp(let sessionID) = id else { return nil }
-        return sessionID
-    }
-}
-
-private extension AgentSidebarState {
-    var label: String {
-        switch self {
-        case .running: "Running"
-        case .awaitingInput: "Awaiting input"
-        case .permissionRequest: "Permission requested"
-        case .idle: "Idle"
-        case .detached: "Detached"
-        case .unknown: "Unknown"
         }
     }
 }

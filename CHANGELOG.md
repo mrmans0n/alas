@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### 🎨 Changed
+
+- Polish the Agent tab with provider logos, status colors, compact cards, and clearer controls.
+
 ## [0.16.1] - 2026-09-11
 
 ### ✨ Features
