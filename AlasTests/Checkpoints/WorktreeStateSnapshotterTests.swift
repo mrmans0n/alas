@@ -126,6 +126,22 @@ struct WorktreeStateSnapshotterTests {
         await #expect(throws: (any Error).self) { try await WorktreeStateSnapshotter.live.snapshot(target: repo.target) }
     }
 
+    @Test func assumeUnchangedDiskEditFailsCapture() async throws {
+        let repo = try await CheckpointTestRepository.make()
+        defer { repo.remove() }
+        try repo.write("original", to: "hidden.swift")
+        try await repo.commitAll("file")
+        try await repo.git(["update-index", "--assume-unchanged", "hidden.swift"])
+        try repo.write("hidden disk edit", to: "hidden.swift")
+        #expect(try await repo.status().isEmpty)
+        #expect(try await repo.git(["diff", "--name-only"]).isEmpty)
+        await #expect(throws: CheckpointSnapshotError.unsupportedPaths(["hidden.swift"])) {
+            try await WorktreeStateSnapshotter.live.snapshot(target: repo.target)
+        }
+        #expect(try repo.disk("hidden.swift") == Data("hidden disk edit".utf8))
+        #expect(try await repo.index("hidden.swift") == Data("original".utf8))
+    }
+
     @Test func untrackedPolicyUsesExactNamesAndCaseInsensitiveExtensions() async throws {
         let repo = try await CheckpointTestRepository.make()
         defer { repo.remove() }

@@ -56,9 +56,12 @@ struct WorktreeStateSnapshotter: Sendable {
         let status = try await data(["status", "--porcelain=v2", "-z", "--untracked-files=all"], target)
         let index = try entries(try await data(["ls-files", "--stage", "-z"], target), tree: false)
         let headEntries = try entries(try await data(["ls-tree", "-r", "-z", head], target), tree: true)
-        let sparse = try records(try await data(["ls-files", "-t", "-z"], target))
-            .filter { $0.hasPrefix("S ") }.map { String($0.dropFirst(2)) }
-        let unsupported = Set(sparse + index.unsupported + headEntries.unsupported)
+        // Lowercase tags identify assume-unchanged entries, whose disk edits
+        // can be hidden from both status and diff. S marks skip-worktree.
+        let hidden = try records(try await data(["ls-files", "-v", "-z"], target))
+            .filter { $0.hasPrefix("S ") || $0.first?.isLowercase == true }
+            .map { String($0.dropFirst(2)) }
+        let unsupported = Set(hidden + index.unsupported + headEntries.unsupported)
         guard unsupported.isEmpty else { throw CheckpointSnapshotError.unsupportedPaths(unsupported.sorted()) }
 
         var candidates = try statusPaths(status)
