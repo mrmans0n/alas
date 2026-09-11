@@ -4201,8 +4201,9 @@ extension ACPSessionManager {
             }
             try? await Task.sleep(for: .seconds(max(0, scheduledAt.timeIntervalSinceNow)))
             while !Task.isCancelled {
-                guard let self,
-                      let session = self.sessions[sessionId],
+                guard let self else { return }
+                await self.refreshScheduledReconnectQueue(sessionId: sessionId)
+                guard let session = self.sessions[sessionId],
                       self.hasDueReconnectSchedule(in: session)
                 else { return }
                 if case .needsAuth = session.setupState { return }
@@ -4215,6 +4216,15 @@ extension ACPSessionManager {
             }
         }
         scheduledReconnectTasks[sessionId] = (scheduledAt, task)
+    }
+
+    private func refreshScheduledReconnectQueue(sessionId: ACPSession.ID) async {
+        guard let session = sessions[sessionId] else { return }
+        do {
+            session.restoreQueue(try await persistence.loadQueue(sessionId: sessionId))
+        } catch {
+            persistenceError = error.localizedDescription
+        }
     }
 
     private func earliestReconnectSchedule(in session: ACPSession) -> Date? {

@@ -297,4 +297,22 @@ struct ACPSessionManagerReattachTests {
 
         #expect(mgr.liveSession(for: session.id) != nil)
     }
+
+    @Test("scheduled reconnect refreshes stale mirror queue")
+    func scheduledReconnectRefreshesStaleMirrorQueue() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-scheduled-refresh-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let mgr = ACPSessionManager(worktreeId: "/tmp/wt", worktreePath: "/tmp/wt", store: store)
+        let session = mgr.createSession(agentId: "no-such-agent-\(UUID().uuidString)")
+        session.agentState = .disconnected
+        session.enqueueScheduled(blocks: [.text("removed elsewhere")], scheduledAt: Date().addingTimeInterval(-1))
+
+        mgr.scheduleAutoReconnect(sessionId: session.id)
+        for _ in 0 ..< 50 where !session.queue.isEmpty {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        #expect(session.queue.isEmpty)
+        #expect(session.agentState == .disconnected)
+    }
 }
