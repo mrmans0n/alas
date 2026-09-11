@@ -25,5 +25,13 @@
 
 ## Unresolved concerns
 
-- The focused presentation suite and `AppKitDiffScrollerTests` have not completed; rerun them using a healthy Xcode test runner before merge.
 - The partial result bundle at `/private/tmp/alas-task9-presentation.xcresult` is invalid because the stalled process was stopped before finalization.
+- `AppKitDiffScrollerTests` was not part of the follow-up focused rerun.
+
+## Follow-up fix
+
+- Root cause: `CreateCheckpointSheetModel.label` assigned to itself from `didSet` while it was observed by `@Observable`. A label assignment re-entered the observed property path and crashed `createModelNormalizesAndCapsLabels()` with signal bus.
+- Fix: replaced the observer with private `storedLabel` storage and a computed `label` setter that applies the 120-character cap before assigning storage. The existing regression test exercises whitespace, a trimmed valid label, and a 121-character label.
+- `swiftformat Alas/Sources/Right/Checkpoints/CreateCheckpointSheet.swift AlasTests/Checkpoints/CheckpointPresentationTests.swift` completed with no changes.
+- `git diff --check` passed.
+- `ALAS_FFF_TARGET_ARCH=arm64 xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS,arch=arm64' -derivedDataPath /private/tmp/alas-task9-single-dd -resultBundlePath /private/tmp/alas-task9-presentation-fixed.xcresult -only-testing:AlasTests/CheckpointPresentationTests test` passed: 7 tests, 0 failures.

@@ -3,8 +3,11 @@ import SwiftUI
 
 @Observable
 final class CreateCheckpointSheetModel {
-    var label = "" {
-        didSet { label = String(label.prefix(120)) }
+    private var storedLabel = ""
+
+    var label: String {
+        get { storedLabel }
+        set { storedLabel = String(newValue.prefix(120)) }
     }
 
     var canSubmit: Bool { !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
