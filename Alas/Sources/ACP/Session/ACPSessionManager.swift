@@ -4228,6 +4228,7 @@ extension ACPSessionManager {
             while !Task.isCancelled {
                 guard let self else { return }
                 await self.refreshScheduledReconnectQueue(sessionId: sessionId)
+                guard !Task.isCancelled else { return }
                 guard let session = self.sessions[sessionId],
                       self.hasDueReconnectSchedule(in: session)
                 else { return }
@@ -4509,6 +4510,9 @@ extension ACPSessionManager {
         } else {
             scheduledAt = nil
         }
+        if scheduledAt != nil, session.pendingQueuePersistenceCount > 0 {
+            return false
+        }
         let onScheduledPersisted: (@MainActor (Bool) -> Void)?
         if scheduledAt == nil {
             onScheduledPersisted = nil
@@ -4580,7 +4584,11 @@ extension ACPSessionManager {
             if scheduledAt == nil {
                 Task { @MainActor in onCompleted(true) }
             }
-            Task { @MainActor in await reattach(to: sessionId) }
+            if scheduledAt.map({ $0 <= Date() }) ?? true {
+                Task { @MainActor in await reattach(to: sessionId) }
+            } else {
+                scheduleScheduledQueueReconnect(sessionId: sessionId)
+            }
             return true
         }
     }
