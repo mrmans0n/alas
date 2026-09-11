@@ -138,7 +138,7 @@ struct AttentionEvent: Codable, Equatable, Sendable {
         owner = signal.owner
         kind = signal.kind
         title = signal.title
-        body = signal.body
+        body = Self.persistedBody(signal.body)
         jumpTarget = signal.jumpTarget
         display = signal.display
         self.occurredAt = occurredAt
@@ -152,11 +152,19 @@ struct AttentionEvent: Codable, Equatable, Sendable {
         owner = history.owner
         kind = history.kind
         title = history.title
-        body = history.body
+        body = Self.persistedBody(history.body)
         jumpTarget = history.jumpTarget
         display = history.display
         self.occurredAt = occurredAt
         requiresAction = history.requiresAction
+    }
+
+    private static func persistedBody(_ body: String?) -> String? {
+        guard let body else { return nil }
+        let cappedBytes = body.utf8.prefix(8_192)
+        let isTruncated = body.utf8.count > cappedBytes.count
+        let preview = String(decoding: cappedBytes, as: UTF8.self)
+        return isTruncated ? "\(preview)\n\n[Output truncated]" : preview
     }
 }
 

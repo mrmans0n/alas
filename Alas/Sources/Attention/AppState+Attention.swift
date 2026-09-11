@@ -539,6 +539,9 @@ extension AppState {
         )
         if transition.isSnapshot {
             reconcileAttention(liveSignals: observations.compactMap(\.activeSignal), at: transition.occurredAt)
+            for observation in observations where observation.activeSignal == nil {
+                observeAttention(observation, at: transition.occurredAt)
+            }
         } else {
             for observation in observations { observeAttention(observation, at: transition.occurredAt) }
         }

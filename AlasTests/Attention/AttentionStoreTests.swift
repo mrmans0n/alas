@@ -65,6 +65,36 @@ struct AttentionStoreTests {
         #expect(fixture.store.document.events.map(\.fingerprint) == ["request-1", "request-2"])
     }
 
+    @Test func conflictShrinkUpdatesObservationWithoutNewEvent() throws {
+        let fixture = try Fixture()
+        let sourceKey = AttentionSourceKey(rawValue: "git:\(fixture.lineageOwner.storageKey):conflicts")
+
+        fixture.store.observe(.active(fixture.signal(sourceKey: sourceKey, fingerprint: "a.swift|b.swift", kind: .conflicts)), at: fixture.now)
+        fixture.store.observe(.active(fixture.signal(sourceKey: sourceKey, fingerprint: "b.swift", kind: .conflicts)), at: fixture.now.addingTimeInterval(1))
+
+        #expect(fixture.store.events.count == 1)
+        #expect(fixture.store.document.observations[sourceKey]?.fingerprint == "b.swift")
+
+        fixture.store.observe(.active(fixture.signal(sourceKey: sourceKey, fingerprint: "b.swift|c.swift", kind: .conflicts)), at: fixture.now.addingTimeInterval(2))
+
+        #expect(fixture.store.events.count == 2)
+    }
+
+    @Test func failedCheckShrinkUpdatesObservationWithoutNewEvent() throws {
+        let fixture = try Fixture()
+        let sourceKey = AttentionSourceKey(rawValue: "review:\(fixture.lineageOwner.storageKey):https://github.com/owner/repo:42:checks")
+
+        fixture.store.observe(.active(fixture.signal(sourceKey: sourceKey, fingerprint: "head|build:fail|lint:fail", kind: .failedChecks)), at: fixture.now)
+        fixture.store.observe(.active(fixture.signal(sourceKey: sourceKey, fingerprint: "head|build:fail", kind: .failedChecks)), at: fixture.now.addingTimeInterval(1))
+
+        #expect(fixture.store.events.count == 1)
+        #expect(fixture.store.document.observations[sourceKey]?.fingerprint == "head|build:fail")
+
+        fixture.store.observe(.active(fixture.signal(sourceKey: sourceKey, fingerprint: "head|build:fail|test:fail", kind: .failedChecks)), at: fixture.now.addingTimeInterval(2))
+
+        #expect(fixture.store.events.count == 2)
+    }
+
     @Test func inactiveObservationWithoutPriorActiveStateIsANoop() throws {
         let fixture = try Fixture()
 
@@ -261,11 +291,15 @@ struct AttentionStoreTests {
         }
 
         func signal(fingerprint: String) -> AttentionSignal {
+            signal(sourceKey: AttentionSourceKey(rawValue: "session:1"), fingerprint: fingerprint, kind: .agentAwaiting)
+        }
+
+        func signal(sourceKey: AttentionSourceKey, fingerprint: String, kind: AttentionKind) -> AttentionSignal {
             AttentionSignal(
-                sourceKey: AttentionSourceKey(rawValue: "session:1"),
+                sourceKey: sourceKey,
                 fingerprint: fingerprint,
                 owner: lineageOwner,
-                kind: .agentAwaiting,
+                kind: kind,
                 title: "Agent is waiting for input",
                 body: nil,
                 jumpTarget: .session(sessionID: "session-1"),

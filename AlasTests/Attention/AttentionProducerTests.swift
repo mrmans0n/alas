@@ -30,6 +30,20 @@ struct AttentionProducerTests {
         })
     }
 
+    @Test func attentionEventsCapPersistedBodiesWithoutMutatingLiveSignal() throws {
+        let body = String(repeating: "a", count: 8_193)
+        let signal = try #require(AttentionProducer.harness(
+            sessionID: "s1", agent: .codex, state: .awaitingInput, body: body,
+            owner: Fixtures.owner, display: Fixtures.display
+        ).compactMap(\.activeSignal).first)
+
+        let event = AttentionEvent(signal: signal, occurredAt: Date())
+
+        #expect(signal.body == body)
+        #expect(event.body?.hasSuffix("\n\n[Output truncated]") == true)
+        #expect(event.body != body)
+    }
+
     @Test func scriptFailureMapsExitCodeAndFailureDestination() throws {
         let failure = Fixtures.failure(runID: "run-1", id: "failure-1", exitCode: 23)
         let signal = try #require(AttentionProducer.script(failure: failure, owner: Fixtures.owner, display: Fixtures.display).compactMap(\.activeSignal).first)

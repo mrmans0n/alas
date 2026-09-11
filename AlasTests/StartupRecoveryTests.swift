@@ -211,6 +211,12 @@ struct StartupRecoveryTests {
             hasAttentionHistory: true
         ))
         #expect(RootWorkspaceVisibilityPolicy.showsWorkspace(
+            hasProjects: false,
+            workspacesEnabled: false,
+            hasWorkspaceContent: false,
+            hasAttentionHistoryLoadError: true
+        ))
+        #expect(RootWorkspaceVisibilityPolicy.showsWorkspace(
             hasProjects: true,
             workspacesEnabled: false,
             hasWorkspaceContent: false

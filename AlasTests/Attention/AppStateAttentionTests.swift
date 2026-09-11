@@ -147,6 +147,20 @@ struct AppStateAttentionTests {
         #expect(state.attentionAggregation.unresolvedCount == 1)
     }
 
+    @Test func restoredHarnessSnapshotAppliesInactiveObservations() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeStateWithWorktree()
+        _ = state.tabs.appendACP(owner: .worktree("worktree"), sessionId: "session", title: "Agent")
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput)
+        #expect(state.attentionStore.document.observations[.init(rawValue: "session:session:awaiting")]?.isActive == true)
+
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .busy, isSnapshot: true)
+
+        #expect(state.attentionStore.document.observations[.init(rawValue: "session:session:awaiting")]?.isActive == false)
+        #expect(state.attentionStore.document.observations[.init(rawValue: "session:session:permission")] == nil)
+    }
+
     @Test func inboxRestoresOriginalTabAfterRepeatedOpen() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }

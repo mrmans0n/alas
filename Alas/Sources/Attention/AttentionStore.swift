@@ -49,6 +49,17 @@ final class AttentionStore {
                 retryPersistingUnwrittenDocumentIfNeeded()
                 return
             }
+            if let previous,
+               shouldUpdateActiveObservationWithoutNewEvent(sourceKey: signal.sourceKey, previousFingerprint: previous.fingerprint, currentFingerprint: signal.fingerprint) {
+                document.observations[signal.sourceKey] = AttentionStoredObservation(
+                    isActive: true,
+                    fingerprint: signal.fingerprint,
+                    eventID: previous.eventID
+                )
+                retain(at: date)
+                persist()
+                return
+            }
             let event = AttentionEvent(signal: signal, occurredAt: date)
             document.events.append(event)
             document.observations[signal.sourceKey] = AttentionStoredObservation(
@@ -186,6 +197,40 @@ final class AttentionStore {
             return AttentionSourceKey(rawValue: "\(prefix)\(lineageKey):\(sourceKey.rawValue.dropFirst(legacyPrefix.count))")
         }
         return nil
+    }
+
+    private func shouldUpdateActiveObservationWithoutNewEvent(
+        sourceKey: AttentionSourceKey,
+        previousFingerprint: String?,
+        currentFingerprint: String
+    ) -> Bool {
+        guard let previousFingerprint else { return false }
+        if sourceKey.rawValue.hasSuffix(":conflicts") {
+            return isNonEmptySetShrink(from: previousFingerprint, to: currentFingerprint)
+        }
+        if sourceKey.rawValue.hasSuffix(":checks") {
+            return isCheckFailureSetShrink(from: previousFingerprint, to: currentFingerprint)
+        }
+        return false
+    }
+
+    private func isCheckFailureSetShrink(from previousFingerprint: String, to currentFingerprint: String) -> Bool {
+        let previousParts = previousFingerprint.split(separator: "|", omittingEmptySubsequences: false)
+        let currentParts = currentFingerprint.split(separator: "|", omittingEmptySubsequences: false)
+        guard previousParts.first == currentParts.first else { return false }
+        return isStrictNonEmptySubset(
+            Set(currentParts.dropFirst().map(String.init)),
+            of: Set(previousParts.dropFirst().map(String.init))
+        )
+    }
+
+    private func isNonEmptySetShrink(from previousFingerprint: String, to currentFingerprint: String) -> Bool {
+        isStrictNonEmptySubset(Set(currentFingerprint.split(separator: "|").map(String.init)),
+                               of: Set(previousFingerprint.split(separator: "|").map(String.init)))
+    }
+
+    private func isStrictNonEmptySubset(_ current: Set<String>, of previous: Set<String>) -> Bool {
+        !current.isEmpty && current.isStrictSubset(of: previous)
     }
 
     private func persist() {

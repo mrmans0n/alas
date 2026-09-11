@@ -21,9 +21,10 @@ enum RootWorkspaceVisibilityPolicy {
         hasProjects: Bool,
         workspacesEnabled: Bool = false,
         hasWorkspaceContent: Bool = false,
-        hasAttentionHistory: Bool = false
+        hasAttentionHistory: Bool = false,
+        hasAttentionHistoryLoadError: Bool = false
     ) -> Bool {
-        hasProjects || hasAttentionHistory || (workspacesEnabled && hasWorkspaceContent)
+        hasProjects || hasAttentionHistory || hasAttentionHistoryLoadError || (workspacesEnabled && hasWorkspaceContent)
     }
 }
 
@@ -158,7 +159,8 @@ struct RootView: View {
             hasProjects: !state.projects.isEmpty,
             workspacesEnabled: state.config.workspacesEnabled,
             hasWorkspaceContent: !state.workspacesManager.workspaces.isEmpty || !state.workspacesManager.checkouts.isEmpty,
-            hasAttentionHistory: !state.attentionStore.events.isEmpty
+            hasAttentionHistory: !state.attentionStore.events.isEmpty,
+            hasAttentionHistoryLoadError: state.attentionStore.loadError != nil
         ) {
             EmptyState(
                 canCreateWorktree: false,
