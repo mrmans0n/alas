@@ -151,7 +151,7 @@ struct ACPComposerActionButton: View {
     // MARK: - Queue (split capsule, primary + chevron menu)
 
     private func queueSplitCapsule(menu: [ComposerMenuItem]) -> some View {
-        HStack(spacing: 1) {
+        HStack(spacing: 0) {
             Button(action: onPrimary) {
                 HStack(spacing: 5) {
                     Image(systemName: "arrow.up")
@@ -177,6 +177,10 @@ struct ACPComposerActionButton: View {
             }
             .buttonStyle(.plain)
             .help("Queue (⏎). Hold ⌥ to steer.")
+
+            Divider()
+                .background(theme.color("line"))
+                .frame(height: 16)
 
             Menu {
                 ForEach(menu, id: \.self) { item in
