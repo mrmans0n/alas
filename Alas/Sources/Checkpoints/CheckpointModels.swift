@@ -442,15 +442,18 @@ struct CheckpointRestoreJournal: Codable, Equatable, Sendable, Identifiable {
     let lineageID: String
     let checkpointID: CheckpointID
     let recoveryCheckpointID: CheckpointID
-    let phase: Phase
+    var phase: Phase
     let stagingRoot: String
     let selectedPaths: [String]
-    let completedPaths: [String]
+    var completedPaths: [String]
+    var pendingPath: String?
     let expectedFingerprint: String
     let expectedIndexChecksum: String
     let preparedIndexChecksum: String?
-    let ownedIndexLockPath: String?
-    let ownedIndexLockChecksum: String?
+    var ownedIndexLockPath: String?
+    var ownedIndexLockChecksum: String?
+    var ownedIndexLockDevice: UInt64?
+    var ownedIndexLockInode: UInt64?
     let stagingNames: [String: String]
 
     init(

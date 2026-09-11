@@ -43,7 +43,8 @@ struct WorktreeStateSnapshotter: Sendable {
         self.fileSystem = fileSystem
     }
 
-    func snapshot(target: CheckpointWorktreeTarget, includingPaths: Set<String> = []) async throws -> WorktreeStateSnapshot {
+    func snapshot(target: CheckpointWorktreeTarget, includingPaths: Set<String> = [],
+                  ignoringRestoreOperation: UUID? = nil) async throws -> WorktreeStateSnapshot {
         guard !target.path.isRemoteAlasPath else { throw CheckpointSnapshotError.remoteTarget }
         try validateLineage(target)
         let head = try await text(["rev-parse", "--verify", "HEAD"], target)
@@ -69,7 +70,9 @@ struct WorktreeStateSnapshotter: Sendable {
         var renames: [(String, String)] = []
         for args in [["diff", "--cached", "--name-status", "-z", "--find-renames", "--no-ext-diff", head, "--"],
                      ["diff", "--name-status", "-z", "--find-renames", "--no-ext-diff", "--"]] {
-            let changes = try parseDiff(try await data(args, target))
+            // Git diff can refresh stat entries even with GIT_OPTIONAL_LOCKS=0.
+            // Snapshot reads must preserve the exact index bytes being verified.
+            let changes = try parseDiff(try await data(["-c", "diff.autoRefreshIndex=false"] + args, target))
             candidates.formUnion(changes.paths)
             renames += changes.renames
         }
@@ -79,6 +82,8 @@ struct WorktreeStateSnapshotter: Sendable {
         var states: [String: CheckpointPathState] = [:]
         var exclusions: [CheckpointExclusion] = []
         for path in candidates.sorted() {
+            if let operation = ignoringRestoreOperation,
+               path.hasPrefix(".alas-checkpoint-restore-\(operation.uuidString.lowercased())/") { continue }
             let isUntracked = untracked.contains(path) && index.values[path] == nil && headEntries.values[path] == nil
             if isUntracked, !includingPaths.contains(path), let reason = try exclusion(path, root: target.path) {
                 exclusions.append(.init(relativePath: path, reason: reason))

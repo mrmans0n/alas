@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 enum CheckpointRestoreError: Error, Equatable, Sendable {
@@ -7,6 +8,15 @@ enum CheckpointRestoreError: Error, Equatable, Sendable {
     case missingCurrentPath(String)
     case missingDesiredPath(String)
     case invalidGitOutput
+    case emptySelection
+    case invalidJournal
+    case restoreFailedButRecovered
+    case recoveryRequired(operationID: UUID, paths: [String], phase: CheckpointRestoreJournal.Phase)
+}
+
+struct CheckpointRestoreResult: Equatable, Sendable {
+    let recoveryCheckpointID: CheckpointID
+    let restoredPaths: [String]
 }
 
 struct CheckpointRestorePreparation: Equatable, Sendable {
@@ -71,6 +81,10 @@ struct CheckpointRestoreTransaction: Sendable {
             createdStaging = true
             try fileSystem.createDirectoryExclusively(replacementsRoot, mode: 0o700)
             try fileSystem.createDirectoryExclusively(backupsRoot, mode: 0o700)
+            let originalIndex = try await gitPath("index", target: target)
+            let originalBytes = FileManager.default.fileExists(atPath: originalIndex.path) ? try fileSystem.fileData(originalIndex) : Data()
+            guard digest(originalBytes) == current.indexChecksum else { throw CheckpointRestoreError.stalePreview }
+            try fileSystem.writeDurable(originalBytes, to: stagingRoot.appendingPathComponent("original-index"), mode: 0o600)
             try await makePreparedIndex(at: preparedIndex, target: target, manifest: manifest, current: current,
                                         selectedPaths: selectedPaths)
             let preparedIndexChecksum = CheckpointBlobReference.make(for: try fileSystem.fileData(preparedIndex)).sha256
@@ -109,6 +123,364 @@ struct CheckpointRestoreTransaction: Sendable {
             if createdStaging { try? FileManager.default.removeItem(at: stagingRoot) }
             throw error
         }
+    }
+
+    func apply(_ preparation: CheckpointRestorePreparation) async throws -> CheckpointRestoreResult {
+        let target = preparation.target
+        guard var journal = try await store.journal(id: preparation.operationID, lineageID: target.lineageID),
+              journal.id == preparation.operationID else {
+            throw CheckpointRestoreError.invalidJournal
+        }
+        var beganWrites = false
+        do {
+            try await validateJournal(journal, target: target)
+            try await acquireLock(journal: &journal, target: target)
+            let desired = try await store.load(id: journal.checkpointID, lineageID: target.lineageID)
+            let recovery = try await store.load(id: journal.recoveryCheckpointID, lineageID: target.lineageID)
+            let current = try await snapshot(target, journal: journal, including: Set(desired.paths.map(\.relativePath)))
+            guard current.fingerprint == journal.expectedFingerprint,
+                  current.indexChecksum == journal.expectedIndexChecksum,
+                  current.headOID == desired.headOID else { throw CheckpointRestoreError.stalePreview }
+            for state in recovery.paths {
+                guard current.paths[state.relativePath] == state else { throw CheckpointRestoreError.stalePreview }
+            }
+            for path in journal.selectedPaths {
+                try validateLock(journal)
+                let before = try requiredState(path, in: recovery)
+                guard try leafState(path, root: target.path) == before.worktree else { throw CheckpointRestoreError.stalePreview }
+                let destination = try ensureParent(path, root: target.path)
+                let name = try stagingName(path, journal: journal)
+                journal.phase = .applyingFiles
+                journal.pendingPath = path
+                try await store.writeJournal(journal)
+                beganWrites = true
+                if before.worktree.kind != .absent {
+                    try moveLeaf(destination, to: preparation.backupsRoot.appendingPathComponent(name))
+                    guard try leafState(name, root: preparation.backupsRoot) == before.worktree else {
+                        throw CheckpointRestoreError.stalePreview
+                    }
+                    try faultInjector.hit(.afterFileMove(path: path))
+                }
+                let replacement = preparation.replacementsRoot.appendingPathComponent(name)
+                if try fileSystem.metadata(root: preparation.replacementsRoot, relativePath: name) != nil {
+                    try moveLeaf(replacement, to: destination)
+                }
+                journal.completedPaths.append(path)
+                journal.pendingPath = nil
+                try await store.writeJournal(journal)
+                try faultInjector.hit(.afterFileMove(path: path))
+            }
+            try faultInjector.hit(.beforeIndexInstall)
+            try await revalidateIndexAndHead(journal, target: target, head: desired.headOID,
+                                            allowedChecksums: [journal.expectedIndexChecksum])
+            let bytes = try fileSystem.fileData(preparation.preparedIndex)
+            guard digest(bytes) == journal.preparedIndexChecksum else { throw CheckpointRestoreError.invalidJournal }
+            try await installIndex(bytes, journal: &journal, target: target)
+            try faultInjector.hit(.afterIndexInstall)
+            journal.phase = .verifying
+            try await store.writeJournal(journal)
+            try faultInjector.hit(.beforeVerification)
+            let after = try await snapshot(target, journal: journal, including: Set(journal.selectedPaths))
+            guard after.headOID == desired.headOID else { throw CheckpointRestoreError.stalePreview }
+            for path in journal.selectedPaths {
+                let expected = desired.paths.first { $0.relativePath == path }
+                guard let actual = after.paths[path],
+                      actual.index == (expected?.index ?? actual.head),
+                      actual.worktree == (expected?.worktree ?? actual.head) else { throw CheckpointRestoreError.invalidGitOutput }
+            }
+            try await finish(&journal, target: target, phase: .completed)
+            return .init(recoveryCheckpointID: journal.recoveryCheckpointID, restoredPaths: journal.selectedPaths)
+        } catch {
+            let originalError = error
+            if beganWrites {
+                do { try await rollback(&journal, target: target) }
+                catch { throw recoveryRequired(journal) }
+                throw CheckpointRestoreError.restoreFailedButRecovered
+            }
+            do {
+                try removeOwnedLock(journal)
+                try await finish(&journal, target: target, phase: .recovered)
+            } catch { throw recoveryRequired(journal) }
+            throw originalError
+        }
+    }
+
+    func recover(target: CheckpointWorktreeTarget, operationID: UUID,
+                 coordination: CheckpointCoordinationSnapshot) async throws -> CheckpointRestoreResult {
+        guard !target.path.isRemoteAlasPath else { throw CheckpointRestoreError.blocked(.remoteTarget) }
+        guard WorktreeService.existingLocalLineageID(forWorktreeAt: target.path) == target.lineageID else {
+            throw CheckpointRestoreError.blocked(.lineageMismatch)
+        }
+        guard var journal = try await store.journal(id: operationID, lineageID: target.lineageID),
+              journal.id == operationID, !journal.phase.isTerminal else {
+            throw CheckpointRestoreError.invalidJournal
+        }
+        try await validateJournal(journal, target: target)
+        if coordination.otherGitMutationActive { throw CheckpointRestoreError.blocked(.otherGitMutation) }
+        if coordination.activeTerminalCount > 0 || coordination.activeACPCount > 0 { throw CheckpointRestoreError.blocked(.activeSession) }
+        if !coordination.dirtyEditorPaths.isDisjoint(with: journal.selectedPaths) { throw CheckpointRestoreError.blocked(.dirtyEditorBuffer) }
+        do { try await rollback(&journal, target: target) }
+        catch { throw recoveryRequired(journal) }
+        return .init(recoveryCheckpointID: journal.recoveryCheckpointID, restoredPaths: journal.selectedPaths)
+    }
+
+    private func rollback(_ journal: inout CheckpointRestoreJournal, target: CheckpointWorktreeTarget) async throws {
+        try await validateJournal(journal, target: target)
+        let recovery = try await store.load(id: journal.recoveryCheckpointID, lineageID: target.lineageID)
+        let desired = try await store.load(id: journal.checkpointID, lineageID: target.lineageID)
+        guard recovery.kind == .recovery, recovery.headOID == desired.headOID,
+              Set(recovery.paths.map(\.relativePath)) == Set(journal.selectedPaths) else { throw CheckpointRestoreError.invalidJournal }
+        let index = try await gitPath("index", target: target)
+        let lock = try await gitPath("index.lock", target: target)
+        if try exists(lock) { try validateLock(journal) }
+        else { try await acquireLock(journal: &journal, target: target) }
+        let indexBytes = try exists(index) ? try fileSystem.fileData(index) : Data()
+        guard [journal.expectedIndexChecksum, journal.preparedIndexChecksum].contains(digest(indexBytes)) else {
+            throw CheckpointRestoreError.stalePreview
+        }
+        let current = try await snapshot(target, journal: journal, including: Set(journal.selectedPaths))
+        guard current.headOID == recovery.headOID else { throw CheckpointRestoreError.blocked(.changedHEAD) }
+        let root = URL(fileURLWithPath: journal.stagingRoot)
+        let originalIndex = try fileSystem.fileData(root.appendingPathComponent("original-index"))
+        guard digest(originalIndex) == journal.expectedIndexChecksum else { throw CheckpointRestoreError.invalidJournal }
+        journal.phase = .rollingBack
+        try await store.writeJournal(journal)
+        var touched = journal.completedPaths
+        if let pending = journal.pendingPath, !touched.contains(pending) { touched.append(pending) }
+        // Backups are retained until every path and the index have verified.
+        // Repeated recovery therefore remains possible after another interruption.
+        for path in touched.reversed() {
+            try faultInjector.hit(.duringRollback(path: path))
+            try validateLock(journal)
+            let before = try requiredState(path, in: recovery)
+            let expected = desired.paths.first { $0.relativePath == path }?.worktree ?? before.head
+            let actual = try leafState(path, root: target.path)
+            if actual == before.worktree { continue }
+            let name = try stagingName(path, journal: journal)
+            let backupRoot = root.appendingPathComponent("backups")
+            let backup = try leafState(name, root: backupRoot)
+            guard actual == expected || (actual.kind == .absent && backup == before.worktree) else {
+                throw CheckpointRestoreError.stalePreview
+            }
+            if before.worktree.kind != .absent {
+                guard backup == before.worktree else { throw CheckpointRestoreError.invalidJournal }
+            }
+            let destination = try ensureParent(path, root: target.path)
+            let replacement = root.appendingPathComponent("rollback-\(UUID().uuidString.lowercased())")
+            try await materialize(before.worktree, at: replacement, target: target)
+            if actual.kind != .absent {
+                let displaced = root.appendingPathComponent("displaced-\(UUID().uuidString.lowercased())")
+                try moveLeaf(destination, to: displaced)
+                guard try leafState(displaced.lastPathComponent, root: root) == actual else { throw CheckpointRestoreError.stalePreview }
+            }
+            if before.worktree.kind != .absent {
+                try moveLeaf(replacement, to: destination)
+            }
+            try await store.writeJournal(journal)
+        }
+        try await revalidateIndexAndHead(journal, target: target, head: recovery.headOID,
+                                        allowedChecksums: [digest(indexBytes)])
+        // Preserve the exact original index bytes, including extensions and stat
+        // entries. The recovery manifest independently verifies its selected states.
+        try await installIndex(originalIndex, journal: &journal, target: target)
+        let after = try await snapshot(target, journal: journal, including: Set(desired.paths.map(\.relativePath)))
+        for state in recovery.paths {
+            guard after.paths[state.relativePath] == state else { throw CheckpointRestoreError.invalidGitOutput }
+        }
+        guard after.fingerprint == journal.expectedFingerprint else { throw CheckpointRestoreError.stalePreview }
+        try await finish(&journal, target: target, phase: .recovered)
+    }
+
+    private func validateJournal(_ journal: CheckpointRestoreJournal, target: CheckpointWorktreeTarget) async throws {
+        guard journal.lineageID == target.lineageID, !journal.phase.isTerminal,
+              WorktreeService.existingLocalLineageID(forWorktreeAt: target.path) == target.lineageID,
+              journal.stagingRoot == target.path.appendingPathComponent(".alas-checkpoint-restore-\(journal.id.uuidString.lowercased())").path,
+              Set(journal.selectedPaths).count == journal.selectedPaths.count,
+              Set(journal.completedPaths).isSubset(of: Set(journal.selectedPaths)),
+              journal.pendingPath.map({ journal.selectedPaths.contains($0) }) ?? true else { throw CheckpointRestoreError.invalidJournal }
+        let root = URL(fileURLWithPath: journal.stagingRoot)
+        _ = try fileSystem.list(root)
+        _ = try fileSystem.list(root.appendingPathComponent("backups"))
+        _ = try fileSystem.list(root.appendingPathComponent("replacements"))
+        guard Set(journal.stagingNames.values).count == journal.selectedPaths.count else { throw CheckpointRestoreError.invalidJournal }
+        for path in journal.selectedPaths {
+            _ = try fileSystem.validateRelativePath(path, under: target.path)
+            guard !path.split(separator: "/").contains(".git"), !path.hasPrefix(".alas-checkpoint-restore-") else {
+                throw CheckpointRestoreError.invalidJournal
+            }
+            _ = try stagingName(path, journal: journal)
+        }
+        if let lock = journal.ownedIndexLockPath {
+            guard lock == (try await gitPath("index.lock", target: target)).path else { throw CheckpointRestoreError.invalidJournal }
+        }
+        for marker in ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer"] {
+            let path = try await gitPath(marker, target: target)
+            if FileManager.default.fileExists(atPath: path.path) { throw CheckpointRestoreError.blocked(.gitOperation) }
+        }
+    }
+
+    private func snapshot(_ target: CheckpointWorktreeTarget, journal: CheckpointRestoreJournal,
+                          including paths: Set<String>) async throws -> WorktreeStateSnapshot {
+        try await WorktreeStateSnapshotter(git: git, fileSystem: fileSystem)
+            .snapshot(target: target, includingPaths: paths, ignoringRestoreOperation: journal.id)
+    }
+
+    private func revalidateIndexAndHead(_ journal: CheckpointRestoreJournal, target: CheckpointWorktreeTarget,
+                                       head: String, allowedChecksums: Set<String>) async throws {
+        try validateLock(journal)
+        guard WorktreeService.existingLocalLineageID(forWorktreeAt: target.path) == target.lineageID else {
+            throw CheckpointRestoreError.blocked(.lineageMismatch)
+        }
+        let result = try await git.run(["rev-parse", "--verify", "HEAD"], cwd: target.path, environment: [:])
+        guard result.exitCode == 0, result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == head else {
+            throw CheckpointRestoreError.blocked(.changedHEAD)
+        }
+        let index = try await gitPath("index", target: target)
+        let bytes = try exists(index) ? try fileSystem.fileData(index) : Data()
+        guard allowedChecksums.contains(digest(bytes)) else { throw CheckpointRestoreError.stalePreview }
+    }
+
+    private func acquireLock(journal: inout CheckpointRestoreJournal, target: CheckpointWorktreeTarget) async throws {
+        let lock = try await gitPath("index.lock", target: target)
+        _ = try fileSystem.list(lock.deletingLastPathComponent())
+        let descriptor = Darwin.open(lock.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
+        guard descriptor >= 0 else { throw CheckpointRestoreError.blocked(.indexLock) }
+        defer { _ = Darwin.close(descriptor) }
+        var attributes = stat()
+        guard Darwin.fstat(descriptor, &attributes) == 0 else { throw posix("stat lock") }
+        journal.ownedIndexLockPath = lock.path
+        journal.ownedIndexLockChecksum = digest(Data())
+        journal.ownedIndexLockDevice = UInt64(attributes.st_dev)
+        journal.ownedIndexLockInode = UInt64(attributes.st_ino)
+        guard Darwin.fsync(descriptor) == 0 else { throw posix("fsync lock") }
+        try fileSystem.synchronizeDirectory(lock.deletingLastPathComponent())
+        try await store.writeJournal(journal)
+    }
+
+    private func validateLock(_ journal: CheckpointRestoreJournal) throws {
+        guard let path = journal.ownedIndexLockPath, let checksum = journal.ownedIndexLockChecksum,
+              let device = journal.ownedIndexLockDevice, let inode = journal.ownedIndexLockInode else {
+            throw CheckpointRestoreError.blocked(.indexLock)
+        }
+        var attributes = stat()
+        guard Darwin.lstat(path, &attributes) == 0, attributes.st_mode & S_IFMT == S_IFREG,
+              UInt64(attributes.st_dev) == device, UInt64(attributes.st_ino) == inode,
+              digest(try fileSystem.fileData(URL(fileURLWithPath: path))) == checksum else {
+            throw CheckpointRestoreError.blocked(.indexLock)
+        }
+    }
+
+    private func installIndex(_ bytes: Data, journal: inout CheckpointRestoreJournal, target: CheckpointWorktreeTarget) async throws {
+        try validateLock(journal)
+        let index = try await gitPath("index", target: target)
+        guard let path = journal.ownedIndexLockPath else { throw CheckpointRestoreError.invalidJournal }
+        let descriptor = Darwin.open(path, O_WRONLY | O_NOFOLLOW)
+        guard descriptor >= 0 else { throw posix("open lock") }
+        defer { _ = Darwin.close(descriptor) }
+        var attributes = stat()
+        guard Darwin.fstat(descriptor, &attributes) == 0,
+              UInt64(attributes.st_dev) == journal.ownedIndexLockDevice,
+              UInt64(attributes.st_ino) == journal.ownedIndexLockInode else { throw CheckpointRestoreError.blocked(.indexLock) }
+        guard Darwin.ftruncate(descriptor, 0) == 0 else { throw posix("truncate lock") }
+        try bytes.withUnsafeBytes { buffer in
+            var offset = 0
+            while offset < buffer.count {
+                let count = Darwin.write(descriptor, buffer.baseAddress!.advanced(by: offset), buffer.count - offset)
+                if count < 0 && errno == EINTR { continue }
+                guard count > 0 else { throw posix("write lock") }
+                offset += count
+            }
+        }
+        guard Darwin.fsync(descriptor) == 0 else { throw posix("fsync lock") }
+        journal.ownedIndexLockChecksum = digest(bytes)
+        if journal.phase != .rollingBack { journal.phase = .installingIndex }
+        try await store.writeJournal(journal)
+        try validateLock(journal)
+        if bytes.isEmpty {
+            try fileSystem.removeIfPresent(index)
+            try removeOwnedLock(journal)
+        } else {
+            try fileSystem.move(URL(fileURLWithPath: path), to: index)
+        }
+    }
+
+    private func removeOwnedLock(_ journal: CheckpointRestoreJournal) throws {
+        guard let path = journal.ownedIndexLockPath, try exists(URL(fileURLWithPath: path)) else { return }
+        try validateLock(journal)
+        try fileSystem.removeIfPresent(URL(fileURLWithPath: path))
+    }
+
+    private func finish(_ journal: inout CheckpointRestoreJournal, target: CheckpointWorktreeTarget,
+                        phase: CheckpointRestoreJournal.Phase) async throws {
+        try removeOwnedLock(journal)
+        var terminal = journal
+        terminal.phase = phase
+        try await store.writeJournal(terminal)
+        journal = terminal
+        // Verification and the durable terminal record make the transaction
+        // complete. A cleanup failure must not attempt another restore.
+        do {
+            try FileManager.default.removeItem(at: URL(fileURLWithPath: journal.stagingRoot))
+            try fileSystem.synchronizeDirectory(target.path)
+            try await store.finishJournal(id: journal.id, lineageID: target.lineageID)
+        } catch { return }
+    }
+
+    private func leafState(_ path: String, root: URL) throws -> CheckpointFileState {
+        guard try fileSystem.metadata(root: root, relativePath: path) != nil else { return .absent }
+        switch try fileSystem.readLeaf(root: root, relativePath: path) {
+        case .regular(let bytes, let executable): return .regular(blob: .make(for: bytes), executable: executable)
+        case .symlink(let bytes): return .symlink(blob: .make(for: bytes))
+        }
+    }
+
+    private func ensureParent(_ path: String, root: URL) throws -> URL {
+        _ = try fileSystem.validateRelativePath(path, under: root)
+        // Foundation can standardize /private/tmp to its /tmp symlink alias.
+        // Keep the validated root spelling for strict no-symlink filesystem I/O.
+        let destination = root.appendingPathComponent(path, isDirectory: false)
+        var parent = root
+        for component in path.split(separator: "/").dropLast() {
+            parent.appendPathComponent(String(component))
+            if !FileManager.default.fileExists(atPath: parent.path) { try fileSystem.createDirectoryExclusively(parent, mode: 0o755) }
+        }
+        _ = try fileSystem.validateRelativePath(path, under: root)
+        return destination
+    }
+
+    private func moveLeaf(_ source: URL, to destination: URL) throws {
+        _ = try fileSystem.list(source.deletingLastPathComponent())
+        _ = try fileSystem.list(destination.deletingLastPathComponent())
+        // Exclusive rename also refuses a new file that appeared after the last
+        // fingerprint check. Both leaves remain recoverable on failure.
+        guard Darwin.renamex_np(source.path, destination.path, UInt32(RENAME_EXCL)) == 0 else { throw posix("rename leaf") }
+        try fileSystem.synchronizeDirectory(source.deletingLastPathComponent())
+        try fileSystem.synchronizeDirectory(destination.deletingLastPathComponent())
+    }
+
+    private func stagingName(_ path: String, journal: CheckpointRestoreJournal) throws -> String {
+        guard let name = journal.stagingNames[path], UUID(uuidString: name) != nil, !name.contains("/") else {
+            throw CheckpointRestoreError.invalidJournal
+        }
+        return name
+    }
+
+    private func requiredState(_ path: String, in manifest: WorktreeCheckpointManifest) throws -> CheckpointPathState {
+        guard let state = manifest.paths.first(where: { $0.relativePath == path }) else { throw CheckpointRestoreError.invalidJournal }
+        return state
+    }
+
+    private func exists(_ url: URL) throws -> Bool {
+        var attributes = stat()
+        if Darwin.lstat(url.path, &attributes) == 0 { return true }
+        if errno == ENOENT { return false }
+        throw posix("lstat")
+    }
+
+    private func digest(_ bytes: Data) -> String { CheckpointBlobReference.make(for: bytes).sha256 }
+    private func posix(_ operation: String) -> CheckpointFileSystemError { .posix(operation: operation, code: errno) }
+    private func recoveryRequired(_ journal: CheckpointRestoreJournal) -> CheckpointRestoreError {
+        .recoveryRequired(operationID: journal.id, paths: journal.selectedPaths, phase: journal.phase)
     }
 
     private func makePreparedIndex(at preparedIndex: URL, target: CheckpointWorktreeTarget,

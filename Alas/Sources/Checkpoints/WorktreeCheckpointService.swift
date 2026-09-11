@@ -9,6 +9,10 @@ protocol WorktreeCheckpointServicing: Sendable {
     func restorePreview(target: CheckpointWorktreeTarget, id: CheckpointID, coordination: CheckpointCoordinationSnapshot,
                         selectedGroupIDs: Set<UUID>?) async throws -> CheckpointRestorePreview
     func diffContent(target: CheckpointWorktreeTarget, id: CheckpointID, path: String) async -> CheckpointDiffContent
+    func restore(target: CheckpointWorktreeTarget, preview: CheckpointRestorePreview, selectedGroupIDs: Set<UUID>,
+                 coordination: CheckpointCoordinationSnapshot) async throws -> CheckpointRestoreResult
+    func recoverInterruptedRestore(target: CheckpointWorktreeTarget, operationID: UUID,
+                                   coordination: CheckpointCoordinationSnapshot) async throws -> CheckpointRestoreResult
 }
 
 enum CheckpointCaptureError: Error, Equatable, Sendable {
@@ -25,13 +29,15 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
     private let store: WorktreeCheckpointStore
     private let snapshotter: WorktreeStateSnapshotter
     private let hooks: CheckpointCaptureHooks
+    private let restoreFaultInjector: CheckpointRestoreFaultInjector
 
     init(store: WorktreeCheckpointStore = .init(),
          snapshotter: WorktreeStateSnapshotter = .live,
-         hooks: CheckpointCaptureHooks = .none) {
+         hooks: CheckpointCaptureHooks = .none, restoreFaultInjector: CheckpointRestoreFaultInjector = .none) {
         self.store = store
         self.snapshotter = snapshotter
         self.hooks = hooks
+        self.restoreFaultInjector = restoreFaultInjector
     }
 
     func summaries(target: CheckpointWorktreeTarget) async throws -> CheckpointCatalogSnapshot {
@@ -189,7 +195,7 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
         guard refreshed.currentFingerprint == preview.currentFingerprint else { throw CheckpointRestoreError.stalePreview }
         let manifest = try await store.load(id: refreshed.checkpointID, lineageID: target.lineageID)
         let selected = selectedGroupIDs.isEmpty ? preview.selectedGroupIDs : selectedGroupIDs
-        let groups = Dictionary(uniqueKeysWithValues: preview.groups.map { ($0.id, $0) })
+        let groups = Dictionary(uniqueKeysWithValues: refreshed.groups.map { ($0.id, $0) })
         for id in selected where groups[id] == nil { throw CheckpointRestoreError.missingPreviewGroup(id) }
         let selectedPaths = Set(selected.compactMap { groups[$0] }.flatMap(\.memberPaths))
         let current = try await snapshotter.snapshot(target: target, includingPaths: Set(manifest.paths.map(\.relativePath)))
@@ -202,6 +208,23 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
                                                        faultInjector: faultInjector)
             .prepare(target: target, preview: preview, manifest: manifest, current: current,
                      selectedPaths: selectedPaths.sorted(), recoveryCheckpointID: recovery.id)
+    }
+
+    func restore(target: CheckpointWorktreeTarget, preview: CheckpointRestorePreview, selectedGroupIDs: Set<UUID>,
+                 coordination: CheckpointCoordinationSnapshot) async throws -> CheckpointRestoreResult {
+        guard !selectedGroupIDs.isEmpty else { throw CheckpointRestoreError.emptySelection }
+        let preparation = try await prepareRestore(target: target, preview: preview, selectedGroupIDs: selectedGroupIDs,
+                                                    coordination: coordination, faultInjector: restoreFaultInjector)
+        return try await restoreTransaction.apply(preparation)
+    }
+
+    func recoverInterruptedRestore(target: CheckpointWorktreeTarget, operationID: UUID,
+                                   coordination: CheckpointCoordinationSnapshot) async throws -> CheckpointRestoreResult {
+        try await restoreTransaction.recover(target: target, operationID: operationID, coordination: coordination)
+    }
+
+    private var restoreTransaction: CheckpointRestoreTransaction {
+        .init(store: store, git: snapshotter.git, fileSystem: snapshotter.fileSystem, faultInjector: restoreFaultInjector)
     }
 
     private func normalizedLabel(_ label: String) throws -> String {
