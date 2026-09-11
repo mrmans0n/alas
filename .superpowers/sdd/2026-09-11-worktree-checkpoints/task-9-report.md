@@ -35,3 +35,12 @@
 - `swiftformat Alas/Sources/Right/Checkpoints/CreateCheckpointSheet.swift AlasTests/Checkpoints/CheckpointPresentationTests.swift` completed with no changes.
 - `git diff --check` passed.
 - `ALAS_FFF_TARGET_ARCH=arm64 xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS,arch=arm64' -derivedDataPath /private/tmp/alas-task9-single-dd -resultBundlePath /private/tmp/alas-task9-presentation-fixed.xcresult -only-testing:AlasTests/CheckpointPresentationTests test` passed: 7 tests, 0 failures.
+
+## Controller fix
+
+- Gap found during controller review: unavailable checkpoint summaries surfaced by catalog reconciliation did not render their unavailable reason and still exposed the Restore action.
+- Fix: checkpoint rows now render the unavailable reason as the status line, suppress expansion, disable Restore, and leave Delete available for cleanup.
+- Added presentation coverage for unavailable status text.
+- `swiftformat Alas/Sources/Right/Checkpoints/CheckpointRows.swift Alas/Sources/Right/ChangesTabView.swift AlasTests/Checkpoints/CheckpointPresentationTests.swift` completed with no file changes.
+- `git diff --check` passed.
+- `ALAS_FFF_TARGET_ARCH=arm64 xcodebuild -quiet -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS,arch=arm64' -derivedDataPath /private/tmp/alas-task9-controller-fix3-dd -resultBundlePath /private/tmp/alas-task9-controller-fix3.xcresult -only-testing:AlasTests/CheckpointPresentationTests -only-testing:AlasTests/AppKitDiffScrollerTests test` passed: result status succeeded, 19 tests.

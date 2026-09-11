@@ -30,6 +30,13 @@ enum CheckpointPresentation {
         "\(checkpoint.stagedFileCount) staged, \(checkpoint.unstagedFileCount) unstaged, \(checkpoint.untrackedFileCount) untracked"
     }
 
+    static func statusLine(_ checkpoint: WorktreeCheckpointSummary, now: Date = .now) -> String {
+        if let reason = checkpoint.unavailableReason {
+            return reason
+        }
+        return "\(compactDate(checkpoint.createdAt, now: now)) · \(summary(checkpoint)) · \(bytes(checkpoint.byteCount))"
+    }
+
     static func kind(_ kind: CheckpointKind) -> String {
         kind == .manual ? "Manual" : "Recovery"
     }
@@ -54,6 +61,7 @@ struct CheckpointSummaryRow: View {
     @Environment(\.theme) private var theme
 
     var body: some View {
+        let unavailable = checkpoint.unavailableReason != nil
         HStack(spacing: 8) {
             Button(action: onToggle) {
                 VStack(alignment: .leading, spacing: 3) {
@@ -63,19 +71,23 @@ struct CheckpointSummaryRow: View {
                             .font(.system(size: 9, weight: .semibold))
                             .foregroundColor(theme.color("fg-muted"))
                     }
-                    Text("\(CheckpointPresentation.compactDate(checkpoint.createdAt)) · \(CheckpointPresentation.summary(checkpoint)) · \(CheckpointPresentation.bytes(checkpoint.byteCount))")
+                    Text(CheckpointPresentation.statusLine(checkpoint))
                         .font(.system(size: 10))
-                        .foregroundColor(theme.color("fg-muted"))
+                        .foregroundColor(unavailable ? theme.color("del") : theme.color("fg-muted"))
                         .lineLimit(1)
                 }
                 Spacer(minLength: 0)
-                Icon(name: expanded ? "chevron.down" : "chevron.right", size: 9, color: theme.color("fg-faint"))
+                if !unavailable {
+                    Icon(name: expanded ? "chevron.down" : "chevron.right", size: 9, color: theme.color("fg-faint"))
+                }
             }
             .buttonStyle(.plain)
+            .disabled(unavailable)
             .accessibilityLabel("\(checkpoint.label), \(CheckpointPresentation.kind(checkpoint.kind)) checkpoint")
 
             Menu {
                 Button("Restore...") { onRestore() }
+                    .disabled(unavailable)
                 Divider()
                 Button("Delete...", role: .destructive) { onDelete() }
             } label: {

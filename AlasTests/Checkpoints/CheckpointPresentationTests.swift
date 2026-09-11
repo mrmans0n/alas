@@ -21,6 +21,12 @@ struct CheckpointPresentationTests {
             stagedFileCount: 2, unstagedFileCount: 3, untrackedFileCount: 4, unavailableReason: nil
         )
         #expect(CheckpointPresentation.summary(summary) == "2 staged, 3 unstaged, 4 untracked")
+        #expect(CheckpointPresentation.statusLine(summary).contains(CheckpointPresentation.summary(summary)))
+        let unavailable = WorktreeCheckpointSummary(
+            id: summary.id, kind: .manual, label: summary.label, createdAt: summary.createdAt, byteCount: summary.byteCount,
+            stagedFileCount: 0, unstagedFileCount: 0, untrackedFileCount: 0, unavailableReason: "Checkpoint data is missing."
+        )
+        #expect(CheckpointPresentation.statusLine(unavailable) == "Checkpoint data is missing.")
     }
 
     @Test func labelsAndFooterDescribeTheCheckpointPolicy() {

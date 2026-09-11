@@ -473,7 +473,7 @@ struct ChangesTabView: View {
                 rows.append(appKitRow(
                     id: CheckpointPresentation.rowID(checkpointID: checkpoint.id),
                     token: "\(checkpoint.id.uuidString)-\(isExpanded)-\(isLoading)-\(String(reflecting: error))",
-                    estimatedHeight: 42
+                    estimatedHeight: checkpoint.unavailableReason == nil ? 42 : 48
                 ) {
                     CheckpointSummaryRow(
                         checkpoint: checkpoint,
