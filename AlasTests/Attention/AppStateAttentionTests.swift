@@ -5,6 +5,53 @@ import Testing
 @Suite("AppState attention", .serialized)
 @MainActor
 struct AppStateAttentionTests {
+    @Test func acpCompletionRecordsFinishedHistoryButRemovalDoesNot() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeStateWithWorktree()
+        let bridge = ACPHarnessBridge(harness: state.harness)
+        let session = ACPSession(id: "acp", agentId: "claude", worktreeId: "worktree", title: "Agent")
+        session.agentState = .ready
+        _ = state.tabs.appendACP(owner: .worktree("worktree"), sessionId: session.id, title: "Agent")
+        bridge.observe(session: session)
+        #expect(state.attentionStore.events.isEmpty)
+
+        session.transcript.streamingState = .streaming
+        session.transcript.streamingState = .idle
+        session.transcript.streamingState = .idle
+        #expect(state.attentionStore.events.map(\.kind) == [.agentFinished])
+        #expect(state.harness.activityBySession[session.id] == nil)
+
+        session.transcript.streamingState = .streaming
+        session.agentState = .idle
+        session.transcript.streamingState = .idle
+        #expect(state.attentionStore.events.map(\.kind) == [.agentFinished])
+
+        session.agentState = .ready
+        session.transcript.streamingState = .streaming
+        bridge.forget(sessionId: session.id)
+        #expect(state.attentionStore.events.map(\.kind) == [.agentFinished])
+        #expect(state.harness.activityBySession[session.id] == nil)
+    }
+
+    @Test func corruptHistoryDoesNotSuppressFirstAttentionFromNewSessionAfterStartup() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        try Data("broken history".utf8).write(to: fixture.url)
+        let state = fixture.makeStateWithWorktree()
+        state.reconcileAttention(liveSignals: [])
+        _ = state.tabs.appendTerminal(worktreeId: "worktree", title: "New agent", sessionId: "new-session")
+        state.harness.handleSocketEvent(
+            AgentHookEvent(version: 1, event: .awaitingInput, agent: .claude,
+                           sessionId: "new-session", pid: nil, timestamp: nil, body: "New question"),
+            stateLookup: { _ in nil }, shouldNotifyOnAwaiting: { false }
+        )
+
+        #expect(state.attentionStore.loadError != nil)
+        #expect(state.attentionAggregation.unresolvedCount == 1)
+        #expect(state.attentionStore.events.first?.jumpTarget == .session(sessionID: "new-session"))
+    }
+
     @Test func harnessChangesRecordHistoryAndUseLiveStateForPresentation() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
@@ -73,12 +120,14 @@ struct AppStateAttentionTests {
                                 path: URL(fileURLWithPath: "/repo"), status: .clean, lastActivity: fixture.now)
         state.projectsManager = ProjectsManager(persistedProjects: [project])
         state.projectsManager.insertOptimisticWorktree(worktree)
-        _ = state.tabs.appendTerminal(worktreeId: worktree.id, title: "Agent", sessionId: "session")
-
-        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput)
+        let session = ACPSession(id: "session", agentId: "claude", worktreeId: worktree.id, title: "Agent")
+        _ = state.tabs.appendACP(owner: .worktree(worktree.id), sessionId: session.id, title: "Agent")
+        session.transcript.streamingState = .awaitingInput
+        let bridge = ACPHarnessBridge(harness: state.harness)
+        bridge.observe(session: session)
         #expect(state.attentionAggregation.unresolvedCount == 0)
-        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .busy)
-        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput)
+        session.transcript.streamingState = .streaming
+        session.transcript.streamingState = .awaitingInput
         #expect(state.attentionAggregation.unresolvedCount == 1)
     }
 
@@ -125,6 +174,16 @@ struct AppStateAttentionTests {
 
         func makeState() -> AppState {
             AppState(store: MemoryStore(), attentionStore: AttentionStore(url: url))
+        }
+
+        func makeStateWithWorktree() -> AppState {
+            let state = makeState()
+            let project = ProjectConfig(id: "project", name: "Project", path: "/repo", color: "blue", addedAt: now)
+            let worktree = Worktree(id: "worktree", projectId: project.id, name: "main", branch: "main",
+                                    path: URL(fileURLWithPath: "/repo"), status: .clean, lastActivity: now)
+            state.projectsManager = ProjectsManager(persistedProjects: [project])
+            state.projectsManager.insertOptimisticWorktree(worktree)
+            return state
         }
 
         func cleanup() {

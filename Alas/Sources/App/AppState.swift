@@ -94,7 +94,6 @@ final class AppState {
     var isAttentionInboxOpen = false
     @ObservationIgnored var attentionReturnDestination: AttentionReturnDestination?
     @ObservationIgnored var attentionSuppressedStartupSignals: [AttentionSourceKey: String] = [:]
-    @ObservationIgnored var attentionObservedHarnessSessions: Set<String> = []
     @ObservationIgnored var runScriptCompletionTasks: [String: (worktreeID: String, sessionID: String, location: RunScriptCaptureLocation, task: Task<Void, Never>)] = [:]
     @ObservationIgnored let runScriptCompletionWaiter: RunScriptCompletionWaiter
     private(set) var isReopeningClosedTab = false

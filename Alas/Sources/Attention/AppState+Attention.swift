@@ -132,7 +132,6 @@ extension AppState {
     }
 
     func observeHarnessAttention(_ transition: HarnessActivityTransition) {
-        let firstObservation = attentionObservedHarnessSessions.insert(transition.sessionID).inserted
         // Forget can arrive after the tab or session owner has already been removed.
         guard let state = transition.state else {
             for suffix in ["awaiting", "permission"] {
@@ -146,12 +145,12 @@ extension AppState {
             sessionID: transition.sessionID, agent: transition.agent, state: state,
             body: transition.body, owner: context.owner, display: context.display
         )
-        if firstObservation, attentionStore.loadError != nil {
+        if transition.isSnapshot {
             reconcileAttention(liveSignals: observations.compactMap(\.activeSignal), at: transition.occurredAt)
         } else {
             for observation in observations { observeAttention(observation, at: transition.occurredAt) }
         }
-        if state == .idle, !(firstObservation && attentionStore.loadError != nil) {
+        if state == .idle, !transition.isSnapshot {
             attentionStore.appendHistory(AttentionProducer.finished(
                 sessionID: transition.sessionID, agent: transition.agent,
                 owner: context.owner, display: context.display

@@ -7,6 +7,7 @@ struct HarnessActivityTransition: Equatable {
     let state: ActivityState?
     let body: String?
     let occurredAt: Date
+    var isSnapshot = false
 }
 
 @Observable
@@ -257,16 +258,16 @@ final class HarnessService {
     /// (currently the ACP bridge) report activity for sessions they own.
     /// No notification side effects — those remain socket-driven so we don't
     /// double-fire when both hooks and ACP cover the same session.
-    func setExternalActivity(sessionId: String, agent: AgentKind, state: ActivityState) {
+    func setExternalActivity(sessionId: String, agent: AgentKind, state: ActivityState, isSnapshot: Bool = false) {
         let previous = activityBySession[sessionId]
         activityBySession[sessionId] = HarnessActivityState(
             agent: agent, state: state, pid: nil,
             lastBody: nil, updatedAt: Date()
         )
-        emitActivityTransition(sessionID: sessionId, previous: previous)
+        emitActivityTransition(sessionID: sessionId, previous: previous, isSnapshot: isSnapshot)
     }
 
-    private func emitActivityTransition(sessionID: String, previous: HarnessActivityState?) {
+    private func emitActivityTransition(sessionID: String, previous: HarnessActivityState?, isSnapshot: Bool = false) {
         let current = activityBySession[sessionID]
         let bodyChanged = current?.lastBody != previous?.lastBody
             && (current?.state == .awaitingInput || current?.state == .permissionRequest)
@@ -274,7 +275,7 @@ final class HarnessService {
               let agent = current?.agent ?? previous?.agent else { return }
         onActivityTransition?(HarnessActivityTransition(
             sessionID: sessionID, agent: agent, state: current?.state,
-            body: current?.lastBody, occurredAt: current?.updatedAt ?? Date()
+            body: current?.lastBody, occurredAt: current?.updatedAt ?? Date(), isSnapshot: isSnapshot
         ))
     }
 

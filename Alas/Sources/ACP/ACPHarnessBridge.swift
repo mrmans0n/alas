@@ -24,10 +24,12 @@ final class ACPHarnessBridge {
     /// harness service. Idempotent — re-observing a session replaces the
     /// existing subscription.
     func observe(session: ACPSession) {
+        var isSnapshot = true
         sessionCancellables[session.id] = session.transcript.$streamingState
             .sink { [weak self, weak session] state in
                 guard let self, let session else { return }
-                self.apply(state: state, session: session)
+                self.apply(state: state, session: session, isSnapshot: isSnapshot)
+                isSnapshot = false
             }
     }
 
@@ -77,17 +79,22 @@ final class ACPHarnessBridge {
         observedSessionsByManager[worktreeId] = current
     }
 
-    private func apply(state: ACPSession.StreamingState, session: ACPSession) {
+    private func apply(state: ACPSession.StreamingState, session: ACPSession, isSnapshot: Bool) {
         let agent = Self.agentKind(for: session.agentId)
         switch state {
         case .idle:
+            // A completed turn and removal both clear the badge, but only a
+            // real transition to idle contributes completion history.
+            if !isSnapshot, session.agentState == .ready, harness.activityBySession[session.id] != nil {
+                harness.setExternalActivity(sessionId: session.id, agent: agent, state: .idle)
+            }
             harness.forgetSession(session.id)
         case .sending, .streaming:
-            harness.setExternalActivity(sessionId: session.id, agent: agent, state: .busy)
+            harness.setExternalActivity(sessionId: session.id, agent: agent, state: .busy, isSnapshot: isSnapshot)
         case .awaitingPermission:
-            harness.setExternalActivity(sessionId: session.id, agent: agent, state: .permissionRequest)
+            harness.setExternalActivity(sessionId: session.id, agent: agent, state: .permissionRequest, isSnapshot: isSnapshot)
         case .awaitingInput:
-            harness.setExternalActivity(sessionId: session.id, agent: agent, state: .awaitingInput)
+            harness.setExternalActivity(sessionId: session.id, agent: agent, state: .awaitingInput, isSnapshot: isSnapshot)
         }
     }
 
