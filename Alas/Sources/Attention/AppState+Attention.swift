@@ -99,8 +99,7 @@ struct AttentionNavigationEnvironment {
                 return true
             },
             focusRemoteWorktree: { item in
-                guard let host = item.worktree?.display.host else { return false }
-                return RemoteHostStatusStore.shared.isOffline(host)
+                item.worktree?.display.host != nil
             }
         )
     }

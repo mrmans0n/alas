@@ -95,6 +95,23 @@ struct AttentionProducerTests {
         #expect(signal.fingerprint.contains("head-1"))
     }
 
+    @Test func failedCheckFingerprintIgnoresNonFailingCheckChurn() throws {
+        let pending = try #require(AttentionProducer.review(
+            snapshot: Fixtures.review(checks: [.init(id: "build", name: "Build", workflow: nil, bucket: .fail, detailURL: nil, completedAt: nil),
+                                               .init(id: "lint", name: "Lint", workflow: nil, bucket: .pending, detailURL: nil, completedAt: nil)]),
+            owner: Fixtures.owner,
+            display: Fixtures.display
+        ).compactMap(\.activeSignal).first { $0.kind == .failedChecks })
+        let passing = try #require(AttentionProducer.review(
+            snapshot: Fixtures.review(checks: [.init(id: "build", name: "Build", workflow: nil, bucket: .fail, detailURL: nil, completedAt: nil),
+                                               .init(id: "lint", name: "Lint", workflow: nil, bucket: .pass, detailURL: nil, completedAt: Date())]),
+            owner: Fixtures.owner,
+            display: Fixtures.display
+        ).compactMap(\.activeSignal).first { $0.kind == .failedChecks })
+
+        #expect(pending.fingerprint == passing.fingerprint)
+    }
+
     @Test func agentReviewReplyUsesReplyIDAndCommentDestination() throws {
         let comment = Fixtures.comment(replyID: "reply-1", author: .agent(name: "Codex"))
         let signal = try #require(AttentionProducer.reviewReply(comment: comment, owner: Fixtures.owner, display: Fixtures.display).compactMap(\.activeSignal).first)
@@ -140,8 +157,16 @@ struct AttentionProducerTests {
         }
 
         static func review(check: ReviewCheckBucket? = nil, decision: ReviewDecision = .approved, needsPush: Bool = false, upstreamAhead: Int = 0) -> ReviewLoopSnapshot {
+            review(
+                checks: check.map { [ReviewCheck(id: "ci", name: "CI", workflow: nil, bucket: $0, detailURL: nil, completedAt: nil)] } ?? [],
+                decision: decision,
+                needsPush: needsPush,
+                upstreamAhead: upstreamAhead
+            )
+        }
+
+        static func review(checks: [ReviewCheck], decision: ReviewDecision = .approved, needsPush: Bool = false, upstreamAhead: Int = 0) -> ReviewLoopSnapshot {
             let remote = CodeHostRemote(kind: .github, host: "github.com", owner: "owner", repository: "repo", remoteName: "origin", webURL: URL(string: "https://github.com/owner/repo")!)
-            let checks = check.map { [ReviewCheck(id: "ci", name: "CI", workflow: nil, bucket: $0, detailURL: nil, completedAt: nil)] } ?? []
             let request = ReviewRequest(remote: remote, number: 42, title: "Review", url: remote.webURL, state: .open, isDraft: false, headRefName: "feature", baseRefName: "main", headSHA: "head-1", reviewDecision: decision, mergeState: .clean, checks: checks, threads: [])
             return ReviewLoopSnapshot(local: ReviewLoopLocalState(branchName: "feature", headSHA: "head-1", baseBranch: "main", hasWorkingTreeChanges: false, hasStagedChanges: false, aheadCommitCount: 0, hasUpstream: true, upstreamAheadCommitCount: upstreamAhead, needsPush: needsPush), remote: remote, reviewRequest: request, providerAvailable: true, providerAuthenticated: true, providerCapabilities: .githubCLI, errorMessage: nil)
         }

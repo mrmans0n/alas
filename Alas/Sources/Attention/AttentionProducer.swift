@@ -101,7 +101,11 @@ enum AttentionProducer {
         var observations: [AttentionObservation] = []
 
         if request.worstCheckBucket == .fail {
-            let checks = request.checks.map { "\($0.id):\($0.bucket.rawValue)" }.sorted().joined(separator: "|")
+            let checks = request.checks
+                .filter { $0.bucket == .fail }
+                .map { "\($0.id):\($0.bucket.rawValue)" }
+                .sorted()
+                .joined(separator: "|")
             observations.append(.active(signal(
                 sourceKey: checkKey, fingerprint: "\(head)|\(checks)", owner: owner,
                 kind: .failedChecks, title: "CI failed", body: nil, jumpTarget: target, display: display

@@ -238,6 +238,33 @@ struct AppStateAttentionTests {
         #expect(state.attentionAggregation.unresolvedCount == 0)
     }
 
+    @Test func recoveredHostEventOpensWorktreeAndClearsAfterHostRecovers() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeState()
+        let project = ProjectConfig(id: "project", name: "Project", path: "/repo", color: "blue",
+                                    addedAt: fixture.now, host: "buildbox")
+        let worktree = Worktree(id: "worktree", projectId: project.id, name: "main", branch: "main",
+                                path: URL(fileURLWithPath: "/repo"), status: .clean, lastActivity: fixture.now)
+        state.projectsManager = ProjectsManager(persistedProjects: [project])
+        state.projectsManager.insertOptimisticWorktree(worktree)
+        let owner = AttentionWorktreeIdentity.make(worktree: worktree, project: project)
+        let signal = try #require(AttentionProducer.host(
+            host: "buildbox",
+            isDisconnected: true,
+            owner: owner,
+            display: AttentionWorktree(worktree: worktree, project: project).resolved.display
+        ).compactMap(\.activeSignal).first)
+        state.attentionStore.observe(.active(signal), at: fixture.now)
+        let item = try #require(state.attentionAggregation.items.first)
+
+        let result = await state.openAttentionItem(item)
+
+        #expect(result == .opened)
+        #expect(state.selectedWorktreeId == worktree.id)
+        #expect(state.attentionAggregation.unresolvedCount == 0)
+    }
+
     private struct MemoryStore: PersistenceStoreProtocol {
         func write<T: Encodable>(_: T, to _: URL) throws {}
         func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }

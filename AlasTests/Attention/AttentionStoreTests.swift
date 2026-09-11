@@ -168,6 +168,20 @@ struct AttentionStoreTests {
         #expect(fixture.store.writeError == nil)
     }
 
+    @Test func unchangedObservationRetriesFailedWrite() throws {
+        let persistence = FailingThenSucceedingPersistenceStore()
+        let fixture = try Fixture(persistence: persistence)
+        let signal = fixture.signal(fingerprint: "first")
+
+        fixture.store.observe(.active(signal), at: fixture.now)
+        #expect(fixture.store.writeError != nil)
+
+        fixture.store.observe(.active(signal), at: fixture.now.addingTimeInterval(1))
+
+        #expect(fixture.store.writeError == nil)
+        #expect(fixture.store.events.count == 1)
+    }
+
     @Test func retentionExpiresAddressedEventsOlderThanThirtyDays() throws {
         let fixture = try Fixture()
         let eventDate = fixture.now.addingTimeInterval(-31 * 86_400)

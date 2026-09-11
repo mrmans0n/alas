@@ -45,7 +45,10 @@ final class AttentionStore {
         switch observation {
         case .active(let signal):
             let previous = document.observations[signal.sourceKey]
-            guard previous?.isActive != true || previous?.fingerprint != signal.fingerprint else { return }
+            guard previous?.isActive != true || previous?.fingerprint != signal.fingerprint else {
+                retryPersistingUnwrittenDocumentIfNeeded()
+                return
+            }
             let event = AttentionEvent(signal: signal, occurredAt: date)
             document.events.append(event)
             document.observations[signal.sourceKey] = AttentionStoredObservation(
@@ -56,7 +59,10 @@ final class AttentionStore {
         case .inactive(let sourceKey):
             guard let previous = document.observations[sourceKey],
                   previous.isActive != false
-            else { return }
+            else {
+                retryPersistingUnwrittenDocumentIfNeeded()
+                return
+            }
             document.observations[sourceKey] = AttentionStoredObservation(
                 isActive: false,
                 fingerprint: nil,
@@ -185,5 +191,10 @@ final class AttentionStore {
         } catch {
             writeError = error
         }
+    }
+
+    private func retryPersistingUnwrittenDocumentIfNeeded() {
+        guard writeError != nil else { return }
+        persist()
     }
 }
