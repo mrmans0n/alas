@@ -54,6 +54,7 @@ enum CheckpointPresentation {
 struct CheckpointSummaryRow: View {
     let checkpoint: WorktreeCheckpointSummary
     let expanded: Bool
+    let mutationsDisabled: Bool
     let onToggle: () -> Void
     let onRestore: () -> Void
     let onDelete: () -> Void
@@ -87,9 +88,10 @@ struct CheckpointSummaryRow: View {
 
             Menu {
                 Button("Restore...") { onRestore() }
-                    .disabled(unavailable)
+                    .disabled(unavailable || mutationsDisabled)
                 Divider()
                 Button("Delete...", role: .destructive) { onDelete() }
+                    .disabled(mutationsDisabled)
             } label: {
                 Icon(name: "ellipsis", size: 12, color: theme.color("fg-muted"))
                     .frame(width: 20, height: 22)

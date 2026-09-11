@@ -114,6 +114,7 @@ private actor RecordingCheckpointService: WorktreeCheckpointServicing {
                                    coordination: CheckpointCoordinationSnapshot) async throws -> CheckpointRestoreResult {
         callCount += 1
         recoveryCoordinations.append(coordination)
+        journals.removeAll { $0.id == operationID }
         return .init(recoveryCheckpointID: summary.id, restoredPaths: [])
     }
 
@@ -249,6 +250,49 @@ struct RightPaneCheckpointStateTests {
         #expect(state.hasLoadedSnapshot)
         #expect(state.lastCheckpointError != nil)
         #expect(state.checkpointSummaries.isEmpty)
+    }
+
+    @Test func interruptedRestoreDisablesNewCheckpointMutationsButAllowsRecovery() async throws {
+        let repository = try await CheckpointTestRepository.make()
+        defer { repository.remove() }
+        let service = try RecordingCheckpointService(target: repository.target)
+        let state = makeState(repository: repository, service: service)
+        state.checkpointCoordinationProvider = { paths in
+            .init(
+                dirtyEditorPaths: paths,
+                activeTerminalCount: 0,
+                activeACPCount: 0,
+                otherGitMutationActive: false,
+                scopeDescription: "This repository only"
+            )
+        }
+        let operationID = UUID(uuidString: "44444444-4444-4444-4444-444444444444")!
+        let checkpointID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+        await service.installJournal(.init(
+            id: operationID,
+            lineageID: repository.target.lineageID,
+            checkpointID: checkpointID,
+            recoveryCheckpointID: checkpointID,
+            phase: .prepared,
+            stagingRoot: "staging",
+            selectedPaths: ["selected.swift"],
+            expectedFingerprint: "fingerprint",
+            expectedIndexChecksum: "checksum"
+        ))
+
+        await state.refresh()
+        #expect(state.hasInterruptedCheckpointRestore)
+        #expect(state.checkpointMutationsDisabled)
+
+        state.requestCheckpointCreation()
+        #expect(state.pendingCheckpointCreation == nil)
+
+        await state.previewCheckpointRestore(id: checkpointID)
+        #expect(state.lastCheckpointError == CheckpointRestoreBlocker.interruptedRestore.description)
+
+        await state.recoverCheckpointRestore(operationID: operationID)
+        #expect((await service.recoveryCoordinationHistory()).last?.dirtyEditorPaths == Set(["selected.swift"]))
+        #expect(state.lastCheckpointStatus == "Recovered pre-restore state from interrupted checkpoint restore.")
     }
 
     private func makeState(repository: CheckpointTestRepository, service: RecordingCheckpointService) -> RightPaneState {

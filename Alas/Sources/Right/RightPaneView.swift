@@ -147,6 +147,12 @@ struct RightPaneView: View {
                 )) { _ in
                     CreateCheckpointSheet(rps: rps)
                 }
+                .sheet(item: Binding(
+                    get: { rps.checkpointRestorePreview },
+                    set: { if $0 == nil { rps.checkpointRestorePreview = nil } }
+                )) { preview in
+                    RestoreCheckpointSheet(rps: rps, preview: preview)
+                }
                 .alert(
                     "Delete checkpoint \(rps.pendingCheckpointDeletion?.label ?? "")?",
                     isPresented: Binding(

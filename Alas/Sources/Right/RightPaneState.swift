@@ -124,12 +124,16 @@ final class RightPaneState: GGSplitCommitServicing {
     var nonterminalCheckpointJournals: [CheckpointRestoreJournal] = []
     private(set) var checkpointOperationInFlight: CheckpointOperationKind? = nil
     var lastCheckpointError: String? = nil
+    var lastCheckpointStatus: String? = nil
     var checkpointLoadError: String? = nil
     @ObservationIgnored var checkpointCoordinationProvider: (@MainActor (Set<String>) -> CheckpointCoordinationSnapshot)?
     @ObservationIgnored var checkpointTargetProvider: (@MainActor () -> CheckpointWorktreeTarget?)?
     @ObservationIgnored private let checkpointService: any WorktreeCheckpointServicing
 
-    var checkpointMutationsDisabled: Bool { checkpointOperationInFlight != nil }
+    var hasInterruptedCheckpointRestore: Bool { !nonterminalCheckpointJournals.isEmpty }
+    var checkpointMutationsDisabled: Bool {
+        checkpointOperationInFlight != nil || hasInterruptedCheckpointRestore
+    }
     var hasOtherGitMutationInFlight: Bool {
         mergeOp.current != nil || stageMutationWorker != nil || stashOperationInFlight || discardOperationInFlight
             || pullInFlight || ggActionState.inFlightAction != nil
@@ -733,6 +737,7 @@ final class RightPaneState: GGSplitCommitServicing {
 
     func requestCheckpointCreation() {
         guard !checkpointMutationsDisabled else { return }
+        lastCheckpointStatus = nil
         pendingCheckpointCreation = .init()
     }
 
@@ -753,6 +758,7 @@ final class RightPaneState: GGSplitCommitServicing {
         guard checkpointOperationInFlight == nil else { return }
         checkpointOperationInFlight = .capture
         lastCheckpointError = nil
+        lastCheckpointStatus = nil
         watcher.stop()
         markSnapshotUnknown()
         defer {
@@ -801,9 +807,14 @@ final class RightPaneState: GGSplitCommitServicing {
             lastCheckpointError = CheckpointRestoreBlocker.remoteTarget.description
             return
         }
+        guard !hasInterruptedCheckpointRestore else {
+            lastCheckpointError = CheckpointRestoreBlocker.interruptedRestore.description
+            return
+        }
         guard checkpointOperationInFlight == nil else { return }
         checkpointOperationInFlight = .preview
         lastCheckpointError = nil
+        lastCheckpointStatus = nil
         defer { checkpointOperationInFlight = nil }
         do {
             // The service resolves current-only paths as well as checkpoint paths.
@@ -826,7 +837,7 @@ final class RightPaneState: GGSplitCommitServicing {
                 selectedGroupIDs: selected
             )
         } catch {
-            lastCheckpointError = error.localizedDescription
+            lastCheckpointError = CheckpointRestoreErrorPresentation.message(error)
         }
     }
 
@@ -835,9 +846,14 @@ final class RightPaneState: GGSplitCommitServicing {
             lastCheckpointError = CheckpointRestoreBlocker.remoteTarget.description
             return
         }
+        guard !hasInterruptedCheckpointRestore else {
+            lastCheckpointError = CheckpointRestoreBlocker.interruptedRestore.description
+            return
+        }
         guard checkpointOperationInFlight == nil else { return }
         checkpointOperationInFlight = .restore
         lastCheckpointError = nil
+        lastCheckpointStatus = nil
         let selectedPaths = Set(preview.groups.filter { selectedGroupIDs.contains($0.id) }.flatMap(\.memberPaths))
         // Coordinate before clearing any local mutation state. In particular,
         // an active stash or discard must remain visible to the service.
@@ -858,7 +874,7 @@ final class RightPaneState: GGSplitCommitServicing {
             checkpointRestorePreview = nil
             await refresh()
         } catch {
-            lastCheckpointError = error.localizedDescription
+            lastCheckpointError = CheckpointRestoreErrorPresentation.message(error)
             await refresh()
         }
     }
@@ -871,6 +887,7 @@ final class RightPaneState: GGSplitCommitServicing {
         guard checkpointOperationInFlight == nil else { return }
         checkpointOperationInFlight = .delete
         lastCheckpointError = nil
+        lastCheckpointStatus = nil
         watcher.stop()
         markSnapshotUnknown()
         defer {
@@ -886,7 +903,7 @@ final class RightPaneState: GGSplitCommitServicing {
             pendingCheckpointDeletion = nil
             await refresh()
         } catch {
-            lastCheckpointError = error.localizedDescription
+            lastCheckpointError = CheckpointRestoreErrorPresentation.message(error)
             await refresh()
         }
     }
@@ -899,6 +916,7 @@ final class RightPaneState: GGSplitCommitServicing {
         guard checkpointOperationInFlight == nil else { return }
         checkpointOperationInFlight = .recovery
         lastCheckpointError = nil
+        lastCheckpointStatus = nil
         defer { checkpointOperationInFlight = nil }
         do {
             let journals = try await checkpointService.nonterminalJournals(target: target)
@@ -918,6 +936,7 @@ final class RightPaneState: GGSplitCommitServicing {
                 coordination: coordination
             )
             await refresh()
+            lastCheckpointStatus = "Recovered pre-restore state from interrupted checkpoint restore."
         } catch {
             lastCheckpointError = error.localizedDescription
             await refresh()

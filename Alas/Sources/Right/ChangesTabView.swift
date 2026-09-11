@@ -429,7 +429,7 @@ struct ChangesTabView: View {
         let summaries = rps.checkpointSummaries
         rows.append(appKitRow(
             id: "checkpoints-header",
-            token: "\(String(reflecting: summaries))\(rps.checkpointsExpanded)\(rps.checkpointMutationsDisabled)\(String(reflecting: rps.checkpointLoadError))",
+            token: "\(String(reflecting: summaries))\(rps.checkpointsExpanded)\(rps.checkpointMutationsDisabled)\(String(reflecting: rps.checkpointLoadError))\(String(reflecting: rps.nonterminalCheckpointJournals))\(String(reflecting: rps.lastCheckpointStatus))",
             estimatedHeight: 32,
             retention: .sticky
         ) {
@@ -451,6 +451,33 @@ struct ChangesTabView: View {
                 .accessibilityLabel("Create checkpoint")
             }
         })
+
+        if let journal = rps.nonterminalCheckpointJournals.first {
+            rows.append(appKitRow(
+                id: "checkpoint-recovery-\(journal.id.uuidString)",
+                token: "\(String(reflecting: journal))\(String(reflecting: rps.checkpointOperationInFlight))\(String(reflecting: rps.lastCheckpointError))",
+                estimatedHeight: 118
+            ) {
+                CheckpointRecoveryCard(
+                    journal: journal,
+                    inFlight: rps.checkpointOperationInFlight != nil,
+                    error: rps.lastCheckpointError,
+                    status: nil,
+                    onRecover: { Task { await rps.recoverCheckpointRestore(operationID: journal.id) } }
+                )
+            })
+        } else if let status = rps.lastCheckpointStatus {
+            rows.append(appKitRow(
+                id: "checkpoint-recovery-status",
+                token: status,
+                estimatedHeight: 32
+            ) {
+                Text(status)
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("add"))
+                    .padding(.horizontal, 12).padding(.vertical, 7)
+            })
+        }
 
         guard rps.checkpointsExpanded else { return }
         if let error = rps.checkpointLoadError {
@@ -478,6 +505,7 @@ struct ChangesTabView: View {
                     CheckpointSummaryRow(
                         checkpoint: checkpoint,
                         expanded: isExpanded,
+                        mutationsDisabled: rps.checkpointMutationsDisabled,
                         onToggle: { rps.toggleCheckpointExpanded(checkpoint.id) },
                         onRestore: { Task { await rps.previewCheckpointRestore(id: checkpoint.id) } },
                         onDelete: { rps.pendingCheckpointDeletion = checkpoint }
