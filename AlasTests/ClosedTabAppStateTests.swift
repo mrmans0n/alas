@@ -550,6 +550,26 @@ struct ClosedTabAppStateTests {
         #expect(manager.liveSession(for: session.id) != nil)
     }
 
+    @Test func closedACPSessionWithIdleScheduledPromptStaysRetained() async throws {
+        let fixture = makeFixture()
+        let manager = try #require(fixture.state.acpManager(for: fixture.first))
+        let session = manager.createSession(id: "idle-scheduled-close", agentId: "claude")
+        session.agentState = .idle
+        session.enqueueScheduled(blocks: [.text("later")], scheduledAt: Date().addingTimeInterval(60))
+        manager.retainSession(id: session.id)
+        let tab = fixture.state.tabs.append(
+            acpSession: ACPSessionTabState(sessionId: session.id, title: "Closed chat"),
+            to: fixture.first.id
+        )
+
+        fixture.state.requestCloseTab(worktreeId: fixture.first.id, tabId: tab.id)
+        manager.releaseSession(id: session.id)
+
+        #expect(fixture.state.retainedACPSessionCleanupCountForTesting == 1)
+        #expect(fixture.state.pendingACPDetachCountForTesting == 0)
+        #expect(manager.liveSession(for: session.id) != nil)
+    }
+
     @Test func retainedDisconnectedScheduleSurvivesQueueRestart() async throws {
         let fixture = makeFixture()
         let manager = try #require(fixture.state.acpManager(for: fixture.first))

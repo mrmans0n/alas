@@ -6605,7 +6605,7 @@ final class AppState {
         case .disconnected:
             guard hasScheduledQueueWork || hasForcedQueueWork else { return nil }
         case .idle:
-            return nil
+            guard hasScheduledQueueWork || hasForcedQueueWork else { return nil }
         case .failed:
             guard hasScheduledQueueWork || hasForcedQueueWork else { return nil }
         }
@@ -6634,6 +6634,9 @@ final class AppState {
         guard let nextScheduledAt else { return nil }
         let secondsUntilScheduledSend = nextScheduledAt.timeIntervalSinceNow
         if case .disconnected = session.agentState, secondsUntilScheduledSend <= 0 {
+            return .seconds(30)
+        }
+        if case .idle = session.agentState, secondsUntilScheduledSend <= 0 {
             return .seconds(30)
         }
         if case .spawning = session.agentState, secondsUntilScheduledSend <= 0 {
@@ -6684,7 +6687,9 @@ final class AppState {
         switch session.agentState {
         case .disconnected, .failed:
             break
-        case .idle, .ready, .spawning:
+        case .idle:
+            break
+        case .ready, .spawning:
             return
         }
         guard session.queue.contains(where: { item in
