@@ -191,6 +191,7 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
             }
         }
         .padding(.horizontal, 6)
+        .contentShape(Rectangle())
         .onHover { hoveringWorkspaceID = $0 ? workspace.id : nil }
         .contextMenu {
             Button("New checkout...", systemImage: "plus") { creatingCheckout = workspace }
