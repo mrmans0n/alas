@@ -61,19 +61,21 @@ struct RunScriptFailureBanner: View {
             Button(action: onOpen) {
                 HStack(spacing: 8) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(theme.color("del"))
                     Text(presentation.title)
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(theme.color("fg"))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                     if let overflowText = presentation.overflowText {
                         Text(overflowText)
-                            .font(.system(size: 11))
+                            .font(.system(size: 12))
                             .foregroundStyle(theme.color("fg-muted"))
                     }
                     Spacer(minLength: 0)
                     Text("Show output")
-                        .font(.system(size: 11))
+                        .font(.system(size: 12))
                         .foregroundStyle(theme.color("accent"))
                 }
                 .contentShape(Rectangle())
@@ -85,15 +87,20 @@ struct RunScriptFailureBanner: View {
                 Image(systemName: "xmark")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(theme.color("fg-muted"))
-                    .frame(width: 18, height: 18)
+                    .frame(width: 32, height: 32)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Dismiss run script failure")
         }
         .padding(.horizontal, 12)
-        .frame(height: 30)
+        .padding(.vertical, 6)
         .background(theme.color("del").opacity(0.12))
-        .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(theme.color("del").opacity(0.3), lineWidth: 0.75)
+        )
+        .clipShape(.rect(cornerRadius: 8))
         .accessibilityIdentifier("run-script-failure-banner")
     }
 }
