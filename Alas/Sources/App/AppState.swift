@@ -7784,19 +7784,22 @@ final class AppState {
     /// worktree that is clean on disk but has an unsaved buffer would be
     /// deleted and its buffer silently discarded by `cleanupWorktreeState`.
     ///
-    /// `forgeConfirmedMergedWorktreeIds` names worktrees the cleanup scanner
-    /// verified as merged via the code host (a SHA-matched, confirmed-merged
-    /// review request) rather than by git's own local ancestry check. Git's
-    /// `branch -d` cannot recognize a squash- or rebase-merged branch as
-    /// merged — the resulting commit on the base branch isn't a descendant of
-    /// the original tip by history alone — so it silently leaves those
-    /// branches behind. For worktrees in this set, branch deletion uses `-D`
-    /// instead, trusting the code host's stronger evidence over git's blind
-    /// spot. Empty by default, so existing callers are unaffected.
+    /// `forgeConfirmedMergedBranchSHAs` maps a worktree id to the exact HEAD
+    /// SHA the cleanup scanner verified as merged via the code host (a
+    /// SHA-matched, confirmed-merged review request) rather than by git's own
+    /// local ancestry check. Git's `branch -d` cannot recognize a squash- or
+    /// rebase-merged branch as merged — the resulting commit on the base
+    /// branch isn't a descendant of the original tip by history alone — so it
+    /// silently leaves those branches behind. For worktrees in this map,
+    /// branch deletion uses `-D` instead, trusting the code host's stronger
+    /// evidence over git's blind spot — but only once the deletion path
+    /// re-confirms the branch's current tip still matches the recorded SHA,
+    /// since a new commit could have landed on it between this scan and now.
+    /// Empty by default, so existing callers are unaffected.
     func batchDeleteWorktrees(
         _ worktrees: [Worktree],
         keepBranch: Bool,
-        forgeConfirmedMergedWorktreeIds: Set<String> = []
+        forgeConfirmedMergedBranchSHAs: [String: String] = [:]
     ) async -> [WorktreeBatchResult] {
         guard !worktrees.isEmpty else { return [] }
 
@@ -7912,7 +7915,7 @@ final class AppState {
                 // No modal mid-batch: a worktree needing force is reported and
                 // left for the user to handle through the single-item flow.
                 promptsForForce: false,
-                branchVerifiedMergedOnForge: forgeConfirmedMergedWorktreeIds.contains(worktree.id)
+                verifiedMergedBranchSHA: forgeConfirmedMergedBranchSHAs[worktree.id]
             )
 
             results.append(WorktreeBatchResult(
@@ -8014,12 +8017,12 @@ final class AppState {
                     idleThresholdDays: idleThresholdDays
                 ))
             },
-            deleteBatch: { [weak self] worktrees, keepBranch, forgeConfirmedMergedWorktreeIds in
+            deleteBatch: { [weak self] worktrees, keepBranch, forgeConfirmedMergedBranchSHAs in
                 guard let self else { return [] }
                 return await self.batchDeleteWorktrees(
                     worktrees,
                     keepBranch: keepBranch,
-                    forgeConfirmedMergedWorktreeIds: forgeConfirmedMergedWorktreeIds
+                    forgeConfirmedMergedBranchSHAs: forgeConfirmedMergedBranchSHAs
                 )
             },
             archiveBatch: { [weak self] worktrees in
@@ -8479,7 +8482,7 @@ final class AppState {
         removedIndex: Int,
         refreshAfter: Bool = true,
         promptsForForce: Bool = true,
-        branchVerifiedMergedOnForge: Bool = false
+        verifiedMergedBranchSHA: String? = nil
     ) async -> WorktreeBatchOutcome {
         let outcome: WorktreeRemovalOutcome
         do {
@@ -8488,7 +8491,7 @@ final class AppState {
                 worktree: worktree,
                 deleteBranchIfMerged: deleteBranchIfMerged,
                 force: force,
-                branchVerifiedMergedOnForge: branchVerifiedMergedOnForge
+                verifiedMergedBranchSHA: verifiedMergedBranchSHA
             )
         } catch let WorktreeService.WorktreeError.gitFailed(stderr) {
             if !force,
@@ -8609,7 +8612,7 @@ final class AppState {
         worktree: Worktree,
         deleteBranchIfMerged: Bool,
         force: Bool,
-        branchVerifiedMergedOnForge: Bool = false
+        verifiedMergedBranchSHA: String? = nil
     ) async throws -> WorktreeRemovalOutcome {
         try await ProjectMutationGate.shared.withMutation(projectID: worktree.projectId) {
             try await Task.detached {
@@ -8619,7 +8622,7 @@ final class AppState {
                         worktree: worktree,
                         deleteBranchIfMerged: deleteBranchIfMerged,
                         force: force,
-                        branchVerifiedMergedOnForge: branchVerifiedMergedOnForge
+                        verifiedMergedBranchSHA: verifiedMergedBranchSHA
                     )
                     return .synchronous
                 }
@@ -8628,7 +8631,7 @@ final class AppState {
                     worktree: worktree,
                     deleteBranchIfMerged: deleteBranchIfMerged,
                     force: force,
-                    branchVerifiedMergedOnForge: branchVerifiedMergedOnForge
+                    verifiedMergedBranchSHA: verifiedMergedBranchSHA
                 )
             }.value
         }

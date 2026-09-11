@@ -78,8 +78,8 @@ enum WorktreeCleanupClassifier {
         // Merge state
         var mergeConfidence: WorktreeCleanupVerdict.Confidence?
         switch probe.mergeState {
-        case .mergedOnForge(let identity, let url):
-            qualifying.append(.mergedOnForge(identity: identity, url: url))
+        case .mergedOnForge(let identity, let url, let headSHA):
+            qualifying.append(.mergedOnForge(identity: identity, url: url, headSHA: headSHA))
             mergeConfidence = .high
         case .mergedLocally(let base):
             qualifying.append(.mergedLocally(base: base))

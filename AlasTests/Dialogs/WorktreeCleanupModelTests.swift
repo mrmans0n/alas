@@ -242,19 +242,24 @@ struct WorktreeCleanupModelTests {
     /// Only a high-confidence candidate — the scan matched its exact HEAD SHA
     /// against a confirmed-merged review request — is trusted enough to
     /// force-delete its branch. A selected dirty row overridden by the user,
-    /// or a medium/low-confidence match, must not be swept into that set even
-    /// though both are part of the same batch.
+    /// or a medium/low-confidence match, must not be swept into that map even
+    /// though both are part of the same batch. The SHA that travels along is
+    /// the exact one carried by the candidate's `.mergedOnForge` signal.
     @Test func deleteSelectedNamesOnlyHighConfidenceCandidatesAsForgeConfirmed() async {
-        let highConfidence = candidate(branch: "a", verdict: .candidate(confidence: .high))
+        let highConfidence = candidate(
+            branch: "a",
+            verdict: .candidate(confidence: .high),
+            signals: [.mergedOnForge(identity: "#1", url: URL(string: "https://example.com/1")!, headSHA: "abc123")]
+        )
         let mediumConfidence = candidate(branch: "b", verdict: .candidate(confidence: .medium))
         let overriddenDirty = candidate(branch: "c", verdict: .dirty)
-        var passedForgeConfirmedIds: Set<String> = []
+        var passedForgeConfirmedSHAs: [String: String] = [:]
         let model = WorktreeCleanupModel(
             projectId: "p",
             keepBranches: false,
             scan: { .success([highConfidence, mediumConfidence, overriddenDirty]) },
-            deleteBatch: { _, _, forgeConfirmedMergedWorktreeIds in
-                passedForgeConfirmedIds = forgeConfirmedMergedWorktreeIds
+            deleteBatch: { _, _, forgeConfirmedMergedBranchSHAs in
+                passedForgeConfirmedSHAs = forgeConfirmedMergedBranchSHAs
                 return []
             },
             archiveBatch: { _ in [] },
@@ -265,7 +270,7 @@ struct WorktreeCleanupModelTests {
 
         await model.deleteSelected()
 
-        #expect(passedForgeConfirmedIds == ["/tmp/wt-a"])
+        #expect(passedForgeConfirmedSHAs == ["/tmp/wt-a": "abc123"])
     }
 
     @Test func selectedWorktreesFollowsDisplayOrder() {

@@ -93,7 +93,7 @@ struct WorktreeCleanupScannerTests {
         )
         #expect(results[0].verdict == .candidate(confidence: .high))
         #expect(results[0].signals.contains(
-            .mergedOnForge(identity: "#42", url: ref.url)
+            .mergedOnForge(identity: "#42", url: ref.url, headSHA: Self.localHeadSHA)
         ))
     }
 
@@ -153,7 +153,7 @@ struct WorktreeCleanupScannerTests {
         )
         #expect(results[0].verdict == .candidate(confidence: .high))
         #expect(results[0].signals.contains(
-            .mergedOnForge(identity: "#10", url: olderRef.url)
+            .mergedOnForge(identity: "#10", url: olderRef.url, headSHA: "old-commit-sha")
         ))
     }
 
