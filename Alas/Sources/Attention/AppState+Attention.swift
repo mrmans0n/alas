@@ -61,10 +61,14 @@ extension AppState {
               let context = attentionContext(for: entry.worktree) else { return }
         let observations = rightPaneAttentionObservations(snapshot: snapshot, owner: context.owner, display: context.display)
         let activeKeys = Set(observations.compactMap(\.activeSignal).map(\.sourceKey))
-        // A branch switch or detached review request ends the previous request's live occurrence.
-        for event in attentionStore.events where event.owner == context.owner && [.failedChecks, .actionableFeedback, .reviewSyncBlocked].contains(event.kind) {
-            if !activeKeys.contains(event.sourceKey) {
-                observeAttention(.inactive(sourceKey: event.sourceKey), at: date)
+        // Only a successful provider snapshot can confirm that a request disappeared.
+        // Missing/auth-failed snapshots leave occurrence identity and acknowledgments intact.
+        if let review = snapshot.review,
+           review.providerAvailable, review.providerAuthenticated, review.errorMessage == nil {
+            for event in attentionStore.events where event.owner == context.owner && [.failedChecks, .actionableFeedback, .reviewSyncBlocked].contains(event.kind) {
+                if !activeKeys.contains(event.sourceKey) {
+                    observeAttention(.inactive(sourceKey: event.sourceKey), at: date)
+                }
             }
         }
         reconcileAttention(liveSignals: observations.compactMap(\.activeSignal), at: date)
@@ -98,7 +102,8 @@ extension AppState {
             ChangedFile(path: $0, status: "U", stage: .unstaged, add: 0, del: 0, renameFrom: nil, conflict: .bothModified)
         }
         var observations = AttentionProducer.git(operation: snapshot.mergeOperation, changes: conflicts, owner: owner, display: display)
-        if let review = snapshot.review {
+        if let review = snapshot.review,
+           review.providerAvailable, review.providerAuthenticated, review.errorMessage == nil {
             observations += AttentionProducer.review(snapshot: review, owner: owner, display: display)
         }
         return observations

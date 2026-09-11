@@ -58,13 +58,52 @@ struct AttentionIntegrationTests {
         #expect(fixture.state.attentionStore.events.count == 2)
     }
 
+    @Test func unavailableProviderDoesNotResurrectAcknowledgedReviewFailure() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let failed = review()
+        fixture.state.observeRightPaneAttention(worktreeID: "one", snapshot: .init(mergeOperation: nil, conflictedPaths: [], review: failed))
+        let event = try #require(fixture.state.attentionStore.events.first)
+        fixture.state.attentionStore.acknowledge(eventID: event.id, at: Date())
+        let unavailable = ReviewLoopSnapshot(local: failed.local, remote: failed.remote, reviewRequest: nil, providerAvailable: false, providerAuthenticated: false, providerCapabilities: .githubCLI, errorMessage: "Provider unavailable")
+        fixture.state.observeRightPaneAttention(worktreeID: "one", snapshot: .init(mergeOperation: nil, conflictedPaths: [], review: unavailable))
+        fixture.state.observeRightPaneAttention(worktreeID: "one", snapshot: .init(mergeOperation: nil, conflictedPaths: [], review: nil))
+        fixture.state.observeRightPaneAttention(worktreeID: "one", snapshot: .init(mergeOperation: nil, conflictedPaths: [], review: failed))
+        #expect(fixture.state.attentionStore.events.count == 1)
+        #expect(fixture.state.attentionAggregation.unresolvedCount == 0)
+    }
+
+    @Test func firstSuccessAfterRelaunchEndsPersistedDisconnection() throws {
+        let fixture = try Fixture(host: "mini")
+        defer { fixture.cleanup() }
+        fixture.state.observeHostAttention(host: "mini", isDisconnected: true)
+        for event in fixture.state.attentionStore.events {
+            fixture.state.attentionStore.acknowledge(eventID: event.id, at: Date())
+        }
+        let relaunched = AppState(store: MemoryStore(), attentionStore: AttentionStore(url: fixture.directory.appendingPathComponent("events.json")))
+        relaunched.projectsManager = fixture.state.projectsManager
+        let hosts = RemoteHostStatusStore()
+        hosts.onStatusTransition = { host, offline, date in
+            relaunched.observeHostAttention(host: host, isDisconnected: offline, at: date)
+        }
+        hosts.reportSuccess(host: "mini")
+        hosts.reportSuccess(host: "mini")
+        #expect(relaunched.attentionStore.document.observations.values.allSatisfy { !$0.isActive })
+        hosts.reportConnectionFailure(host: "mini")
+        hosts.reportConnectionFailure(host: "mini")
+        #expect(relaunched.attentionStore.events.count == 4)
+        #expect(relaunched.attentionAggregation.unresolvedCount == 2)
+    }
+
     @Test func feedbackAndRemoteDivergenceAreIndependentAndNoRequestEndsLiveOccurrence() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
         let snapshot = RightPaneAttentionSnapshot(mergeOperation: nil, conflictedPaths: [], review: review(decision: .changesRequested, upstreamAhead: 2, needsPush: true))
         fixture.state.observeRightPaneAttention(worktreeID: "one", snapshot: snapshot)
         #expect(Set(fixture.state.attentionStore.events.map(\.kind)) == [.failedChecks, .actionableFeedback, .reviewSyncBlocked])
-        fixture.state.observeRightPaneAttention(worktreeID: "one", snapshot: .init(mergeOperation: nil, conflictedPaths: [], review: nil))
+        let prior = try #require(snapshot.review)
+        let removed = ReviewLoopSnapshot(local: prior.local, remote: prior.remote, reviewRequest: nil, providerAvailable: true, providerAuthenticated: true, providerCapabilities: .githubCLI, errorMessage: nil)
+        fixture.state.observeRightPaneAttention(worktreeID: "one", snapshot: .init(mergeOperation: nil, conflictedPaths: [], review: removed))
         #expect(fixture.state.attentionStore.document.observations.values.allSatisfy { !$0.isActive })
         #expect(fixture.state.attentionAggregation.unresolvedCount == 3)
     }
