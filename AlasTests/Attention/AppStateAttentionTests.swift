@@ -206,6 +206,21 @@ struct AppStateAttentionTests {
         #expect(state.tabs.activeTabId(forWorktree: "worktree") == first.id)
     }
 
+    @Test func closingInboxKeepsFallbackWhenSavedWorktreeDisappears() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeStateWithWorktree()
+        state.selectedWorktreeId = "worktree"
+
+        state.openAttentionInbox()
+        state.projectsManager = ProjectsManager(persistedProjects: [])
+        state.selectedWorktreeId = nil
+        state.closeAttentionInbox()
+
+        #expect(!state.isAttentionInboxOpen)
+        #expect(state.selectedWorktreeId == nil)
+    }
+
     @Test func stoppedRightPaneStatesDoNotContributeLiveAttentionSignals() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }

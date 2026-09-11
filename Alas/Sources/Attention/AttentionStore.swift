@@ -104,9 +104,26 @@ final class AttentionStore {
     }
 
     func registerAlias(from legacyOwner: AttentionWorktreeIdentity, to lineageOwner: AttentionWorktreeIdentity) {
-        guard legacyOwner != lineageOwner, document.aliases[legacyOwner] != lineageOwner else { return }
-        document.aliases[legacyOwner] = lineageOwner
-        migrateObservations(from: legacyOwner, to: lineageOwner)
+        registerAliases([(from: legacyOwner, to: lineageOwner)])
+    }
+
+    func registerAliases(_ aliases: [(from: AttentionWorktreeIdentity, to: AttentionWorktreeIdentity)]) {
+        var changed = false
+        var sawExistingAlias = false
+        for alias in aliases {
+            guard alias.from != alias.to else { continue }
+            if document.aliases[alias.from] == alias.to {
+                sawExistingAlias = true
+                continue
+            }
+            document.aliases[alias.from] = alias.to
+            migrateObservations(from: alias.from, to: alias.to)
+            changed = true
+        }
+        guard changed else {
+            if sawExistingAlias { retryPersistingUnwrittenDocumentIfNeeded() }
+            return
+        }
         retain(at: now())
         persist()
     }

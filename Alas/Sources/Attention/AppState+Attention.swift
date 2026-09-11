@@ -339,6 +339,7 @@ extension AppState {
         isAttentionInboxOpen = false
         guard let destination = attentionReturnDestination else { return }
         attentionReturnDestination = nil
+        guard canRestoreAttentionReturnDestination(destination) else { return }
         _ = switchToSpace(id: destination.spaceID)
         workspaceNavigationState = destination.workspaceNavigationState
         selectedWorktreeId = destination.worktreeID
@@ -584,19 +585,62 @@ extension AppState {
     }
 
     private func refreshAttentionAliases() {
-        for entry in attentionWorktrees {
+        let aliases: [(from: AttentionWorktreeIdentity, to: AttentionWorktreeIdentity)] = attentionWorktrees.compactMap { entry in
             let owner = AttentionWorktreeIdentity.make(worktree: entry.worktree, project: entry.project)
-            registerAttentionAlias(owner: owner, displayPath: entry.resolved.display.path)
+            return attentionAlias(owner: owner, displayPath: entry.resolved.display.path)
         }
+        attentionStore.registerAliases(aliases)
     }
 
     private func registerAttentionAlias(owner: AttentionWorktreeIdentity, displayPath: String) {
-        guard owner.lineageID != nil else { return }
+        guard let alias = attentionAlias(owner: owner, displayPath: displayPath) else { return }
+        attentionStore.registerAlias(from: alias.from, to: alias.to)
+    }
+
+    private func attentionAlias(owner: AttentionWorktreeIdentity, displayPath: String) -> (from: AttentionWorktreeIdentity, to: AttentionWorktreeIdentity)? {
+        guard owner.lineageID != nil else { return nil }
         let legacyOwner = AttentionWorktreeIdentity(
             projectID: owner.projectID, location: owner.location,
             lineageID: nil, legacyPath: displayPath
         )
-        attentionStore.registerAlias(from: legacyOwner, to: owner)
+        return legacyOwner == owner ? nil : (legacyOwner, owner)
+    }
+
+    private func canRestoreAttentionReturnDestination(_ destination: AttentionReturnDestination) -> Bool {
+        guard spacesManager.space(id: destination.spaceID) != nil else { return false }
+        if let worktreeID = destination.worktreeID {
+            guard isRestorableAttentionWorktree(id: worktreeID) else { return false }
+            if let tabID = destination.activeTabID,
+               !tabs.tabs(forWorktree: worktreeID).contains(where: { $0.id == tabID }) {
+                return false
+            }
+        }
+        if let checkoutID = destination.workspaceNavigationState.selectedCheckoutID {
+            guard let checkout = workspacesManager.checkout(id: checkoutID),
+                  checkout.archivedAt == nil else { return false }
+            if let memberID = destination.workspaceNavigationState.focusedCheckoutMemberID {
+                let memberWorktreeIDs = workspaceMemberWorktreeIDs(checkout)
+                guard let worktreeID = memberWorktreeIDs[memberID],
+                      isRestorableAttentionWorktree(id: worktreeID),
+                      destination.worktreeID == nil || destination.worktreeID == worktreeID else { return false }
+            }
+            if case .workspaceCheckout(let ownerCheckoutID, let location)? = destination.sharedSessionOwner,
+               ownerCheckoutID != checkoutID || checkout.executionLocation.normalized != location.normalized {
+                return false
+            }
+        }
+        if let owner = destination.sharedSessionOwner,
+           let tabID = destination.sharedActiveTabID,
+           !tabs.tabs(for: owner).contains(where: { $0.id == tabID }) {
+            return false
+        }
+        return true
+    }
+
+    private func isRestorableAttentionWorktree(id: String) -> Bool {
+        guard let worktree = attentionWorktrees.first(where: { $0.worktree.id == id })?.worktree,
+              let project = projects.first(where: { $0.id == worktree.projectId }) else { return false }
+        return !projectsManager.isWorktreeHidden(projectId: project.id, path: worktree.path)
     }
 }
 

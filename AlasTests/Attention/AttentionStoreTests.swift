@@ -157,6 +157,38 @@ struct AttentionStoreTests {
         #expect(fixture.store.document.events.count == 1)
     }
 
+    @Test func existingAliasRetriesFailedWrite() throws {
+        let persistence = FailingThenSucceedingPersistenceStore()
+        let fixture = try Fixture(persistence: persistence)
+
+        fixture.store.registerAlias(from: fixture.legacyOwner, to: fixture.lineageOwner)
+        #expect(fixture.store.writeError != nil)
+        fixture.store.registerAlias(from: fixture.legacyOwner, to: fixture.lineageOwner)
+
+        #expect(fixture.store.writeError == nil)
+        #expect(fixture.store.document.aliases[fixture.legacyOwner] == fixture.lineageOwner)
+    }
+
+    @Test func registeringAliasesPersistsBatchOnce() throws {
+        let persistence = CountingPersistenceStore()
+        let fixture = try Fixture(persistence: persistence)
+        let otherLegacyOwner = AttentionWorktreeIdentity(
+            projectID: "project",
+            location: .local,
+            lineageID: nil,
+            legacyPath: "/other"
+        )
+
+        fixture.store.registerAliases([
+            (from: fixture.legacyOwner, to: fixture.lineageOwner),
+            (from: otherLegacyOwner, to: fixture.lineageOwner)
+        ])
+
+        #expect(persistence.writeCount == 1)
+        #expect(fixture.store.document.aliases[fixture.legacyOwner] == fixture.lineageOwner)
+        #expect(fixture.store.document.aliases[otherLegacyOwner] == fixture.lineageOwner)
+    }
+
     @Test func acknowledgmentAndAliasSurviveRelaunch() throws {
         let fixture = try Fixture()
         fixture.store.observe(.active(fixture.signal(fingerprint: "request-1")), at: fixture.now)
@@ -373,5 +405,17 @@ private final class FailingThenSucceedingPersistenceStore: PersistenceStoreProto
 
     private enum TestError: Error {
         case writeFailed
+    }
+}
+
+private final class CountingPersistenceStore: PersistenceStoreProtocol {
+    private(set) var writeCount = 0
+
+    func write<T: Encodable>(_: T, to _: URL) throws {
+        writeCount += 1
+    }
+
+    func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? {
+        nil
     }
 }
