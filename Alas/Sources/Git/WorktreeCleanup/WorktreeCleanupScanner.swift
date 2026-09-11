@@ -15,25 +15,26 @@ struct WorktreeCleanupGitFacts: Equatable, Sendable {
     var headSHA: String?
 }
 
-/// Merged review requests for one repository, keyed by head branch.
+/// Merged review requests for one repository, keyed by head branch. A branch
+/// name can have multiple entries: it may have been reused across several
+/// merged reviews over time, and the caller must be able to check the local
+/// worktree's HEAD against any of them, not just the most recent — keeping
+/// only the newest would silently drop the exact "reused branch name" case
+/// SHA verification exists to handle.
 struct WorktreeForgeMergeIndex: Sendable {
-    let refsByHeadBranch: [String: MergedReviewRequestRef]
+    let refsByHeadBranch: [String: [MergedReviewRequestRef]]
 
-    init(refsByHeadBranch: [String: MergedReviewRequestRef]) {
+    init(refsByHeadBranch: [String: [MergedReviewRequestRef]]) {
         self.refsByHeadBranch = refsByHeadBranch
     }
 
     init(refs: [MergedReviewRequestRef]) {
-        // Newest first from both CLIs, so keep the first ref seen for a branch.
-        var byBranch: [String: MergedReviewRequestRef] = [:]
-        for ref in refs where byBranch[ref.headRefName] == nil {
-            byBranch[ref.headRefName] = ref
-        }
-        self.refsByHeadBranch = byBranch
+        self.refsByHeadBranch = Dictionary(grouping: refs, by: \.headRefName)
     }
 
-    func ref(forBranch branch: String) -> MergedReviewRequestRef? {
-        refsByHeadBranch[branch]
+    /// Every merged ref recorded for a branch name, oldest and newest alike.
+    func refs(forBranch branch: String) -> [MergedReviewRequestRef] {
+        refsByHeadBranch[branch] ?? []
     }
 }
 
@@ -149,8 +150,8 @@ struct WorktreeCleanupScanner: Sendable {
     ) -> WorktreeMergeState {
         switch indexResult {
         case .success(let index):
-            if let ref = index.ref(forBranch: branch),
-               let localHeadSHA, ref.headSHA == localHeadSHA {
+            if let localHeadSHA,
+               let ref = index.refs(forBranch: branch).first(where: { $0.headSHA == localHeadSHA }) {
                 return .mergedOnForge(identity: "#\(ref.number)", url: ref.url)
             }
             if isMergedLocally { return .mergedLocally(base: baseBranch) }

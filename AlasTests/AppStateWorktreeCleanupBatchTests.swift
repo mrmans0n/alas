@@ -94,6 +94,27 @@ struct AppStateWorktreeCleanupBatchTests {
         }
     }
 
+    /// The scan that produced a worktree's cached `Worktree.branch` can be
+    /// stale by the time the batch actually runs. If something switches the
+    /// checkout to a detached HEAD in that window, deleting on the stale
+    /// cached branch name would remove a worktree whose commits are now
+    /// reachable only via that detached HEAD — orphaning them. The batch
+    /// must re-read the current branch immediately before removal.
+    @Test func batchSkipsAWorktreeWhoseBranchChangedSinceTheScan() async throws {
+        let fixture = try await makeCleanupFixture(worktreeCount: 2)
+        let target = fixture.worktrees[1]
+
+        // Simulate an external actor detaching HEAD in this worktree after
+        // the scan captured `target` as a named-branch `Worktree` value.
+        let detach = try await Process.git(["checkout", "--detach"], cwd: target.path)
+        #expect(detach.exitCode == 0)
+
+        let results = await fixture.state.batchDeleteWorktrees([target], keepBranch: false)
+
+        #expect(results[0].outcome == .skipped(reason: "Branch changed since this list was scanned"))
+        #expect(FileManager.default.fileExists(atPath: target.path.path))
+    }
+
     @Test func emptySelectionReturnsNoResultsAndTouchesNothing() async throws {
         let fixture = try await makeCleanupFixture(worktreeCount: 2)
         let before = fixture.state.projectsManager

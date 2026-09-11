@@ -84,7 +84,7 @@ struct WorktreeCleanupScannerTests {
             headSHA: Self.localHeadSHA
         )
         let scanner = Self.scanner(mergeIndex: { _ in
-            .success(WorktreeForgeMergeIndex(refsByHeadBranch: ["feature/a": ref]))
+            .success(WorktreeForgeMergeIndex(refsByHeadBranch: ["feature/a": [ref]]))
         })
         let results = await Self.scan(
             scanner,
@@ -108,7 +108,7 @@ struct WorktreeCleanupScannerTests {
             headSHA: "old-unrelated-sha"
         )
         let scanner = Self.scanner(mergeIndex: { _ in
-            .success(WorktreeForgeMergeIndex(refsByHeadBranch: ["feature/a": ref]))
+            .success(WorktreeForgeMergeIndex(refsByHeadBranch: ["feature/a": [ref]]))
         })
         let results = await Self.scan(
             scanner,
@@ -119,6 +119,41 @@ struct WorktreeCleanupScannerTests {
         })
         #expect(results[0].signals.contains(.notMerged))
         #expect(results[0].verdict == .active)
+    }
+
+    /// A branch name reused across two merged reviews must still match: the
+    /// index has to retain every ref for a branch, not just the newest, or a
+    /// worktree whose HEAD corresponds to the *older* merged review would be
+    /// compared only against the newer SHA and wrongly read as not merged.
+    @Test func olderRefForAReusedBranchNameStillMatches() async {
+        let olderRef = MergedReviewRequestRef(
+            number: 10,
+            headRefName: "feature/a",
+            url: URL(string: "https://github.com/o/r/pull/10")!,
+            headSHA: "old-commit-sha"
+        )
+        let newerRef = MergedReviewRequestRef(
+            number: 99,
+            headRefName: "feature/a",
+            url: URL(string: "https://github.com/o/r/pull/99")!,
+            headSHA: "new-commit-sha"
+        )
+        var facts = Self.cleanFacts
+        facts.headSHA = "old-commit-sha"
+        let scanner = Self.scanner(
+            facts: { _ in facts },
+            mergeIndex: { _ in
+                .success(WorktreeForgeMergeIndex(refsByHeadBranch: ["feature/a": [newerRef, olderRef]]))
+            }
+        )
+        let results = await Self.scan(
+            scanner,
+            worktrees: [Self.worktree(branch: "feature/a")]
+        )
+        #expect(results[0].verdict == .candidate(confidence: .high))
+        #expect(results[0].signals.contains(
+            .mergedOnForge(identity: "#10", url: olderRef.url)
+        ))
     }
 
     /// The core degradation rule: a forge failure must not manufacture a
@@ -182,7 +217,7 @@ struct WorktreeCleanupScannerTests {
         let scanner = Self.scanner(
             facts: { _ in facts },
             mergeIndex: { _ in
-                .success(WorktreeForgeMergeIndex(refsByHeadBranch: ["feature/a": ref]))
+                .success(WorktreeForgeMergeIndex(refsByHeadBranch: ["feature/a": [ref]]))
             }
         )
         let results = await Self.scan(
@@ -230,7 +265,7 @@ struct WorktreeCleanupScannerTests {
         let scanner = Self.scanner(
             facts: { _ in facts },
             mergeIndex: { _ in
-                .success(WorktreeForgeMergeIndex(refsByHeadBranch: ["feature/a": ref]))
+                .success(WorktreeForgeMergeIndex(refsByHeadBranch: ["feature/a": [ref]]))
             }
         )
         let results = await Self.scan(

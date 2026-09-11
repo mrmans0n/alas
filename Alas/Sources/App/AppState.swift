@@ -4389,9 +4389,17 @@ final class AppState {
     func batchArchiveWorktrees(_ worktrees: [Worktree]) -> [WorktreeBatchResult] {
         guard !worktrees.isEmpty else { return [] }
 
-        let dirtyCount = worktrees.reduce(0) { total, worktree in
-            total + dirtyEditorTabIds(worktreeId: worktree.id).count
-        }
+        // Snapshot which tabs are dirty right now, before the prompt. If the
+        // user confirms "Discard & Archive", those specific buffers stay
+        // marked dirty in the tab model until cleanup actually closes them —
+        // discarding doesn't retroactively un-dirty anything — so the
+        // per-item re-check below must compare against this snapshot rather
+        // than against "is anything dirty right now", or the confirmed
+        // discard would skip every worktree it was meant to cover.
+        let dirtyTabsAtConfirmation = Dictionary(
+            uniqueKeysWithValues: worktrees.map { ($0.id, Set(dirtyEditorTabIds(worktreeId: $0.id))) }
+        )
+        let dirtyCount = dirtyTabsAtConfirmation.values.reduce(0) { $0 + $1.count }
         if dirtyCount > 0 {
             guard promptForDirtyBuffersInBatch(
                 action: "Archive",
@@ -4423,10 +4431,13 @@ final class AppState {
             }
             // Re-check right before archiving: the scan that selected this
             // worktree — and even the whole-batch dirty-buffer prompt above —
-            // can be stale by the time this specific item is reached. A
-            // buffer edited, or a session opened, in that gap must not be
-            // torn down.
-            guard dirtyEditorTabIds(worktreeId: worktree.id).isEmpty else {
+            // can be stale by the time this specific item is reached. Only
+            // dirtiness the confirmation didn't already cover counts: a tab
+            // dirty at confirmation time and discarded is expected here, but
+            // a tab that turned dirty (or newly opened dirty) since then must
+            // not be torn down.
+            let currentDirtyTabs = Set(dirtyEditorTabIds(worktreeId: worktree.id))
+            guard currentDirtyTabs.isSubset(of: dirtyTabsAtConfirmation[worktree.id] ?? []) else {
                 results.append(WorktreeBatchResult(
                     worktreeId: worktree.id,
                     branch: worktree.branch,
@@ -7508,9 +7519,17 @@ final class AppState {
     ) async -> [WorktreeBatchResult] {
         guard !worktrees.isEmpty else { return [] }
 
-        let dirtyCount = worktrees.reduce(0) { total, worktree in
-            total + dirtyEditorTabIds(worktreeId: worktree.id).count
-        }
+        // Snapshot which tabs are dirty right now, before the prompt. If the
+        // user confirms "Discard & Delete", those specific buffers stay
+        // marked dirty in the tab model until cleanup actually closes them —
+        // discarding doesn't retroactively un-dirty anything — so the
+        // per-item re-check below must compare against this snapshot rather
+        // than against "is anything dirty right now", or the confirmed
+        // discard would skip every worktree it was meant to cover.
+        let dirtyTabsAtConfirmation = Dictionary(
+            uniqueKeysWithValues: worktrees.map { ($0.id, Set(dirtyEditorTabIds(worktreeId: $0.id))) }
+        )
+        let dirtyCount = dirtyTabsAtConfirmation.values.reduce(0) { $0 + $1.count }
         if dirtyCount > 0 {
             guard promptForDirtyBuffersInBatch(
                 action: "Delete",
@@ -7548,8 +7567,12 @@ final class AppState {
             // confirms, and — because each `await performDeleteWorktree`
             // below suspends and yields the main actor — a *later* item in
             // this very loop can pick up a buffer edited or a session opened
-            // while an *earlier* item was still being removed.
-            guard dirtyEditorTabIds(worktreeId: worktree.id).isEmpty else {
+            // while an *earlier* item was still being removed. Only
+            // dirtiness the confirmation didn't already cover counts: a tab
+            // dirty at confirmation time and discarded is expected here, but
+            // a tab that turned dirty since then must not be torn down.
+            let currentDirtyTabs = Set(dirtyEditorTabIds(worktreeId: worktree.id))
+            guard currentDirtyTabs.isSubset(of: dirtyTabsAtConfirmation[worktree.id] ?? []) else {
                 results.append(WorktreeBatchResult(
                     worktreeId: worktree.id,
                     branch: worktree.branch,
@@ -7564,6 +7587,21 @@ final class AppState {
                     worktreeId: worktree.id,
                     branch: worktree.branch,
                     outcome: .skipped(reason: "Became busy since this list was scanned")
+                ))
+                continue
+            }
+            // Re-read the worktree's actual current branch immediately before
+            // removal — the cached `Worktree.branch` from the scan could be
+            // stale if something switched this checkout to a detached HEAD
+            // (or a different branch entirely) in the meantime. A detached
+            // worktree's commits are reachable only via its own HEAD, so
+            // removing one on stale information risks orphaning commits that
+            // did not exist, or were not detached, at scan time.
+            guard WorktreeService.localBranchName(forWorktreeAt: worktree.path) == worktree.branch else {
+                results.append(WorktreeBatchResult(
+                    worktreeId: worktree.id,
+                    branch: worktree.branch,
+                    outcome: .skipped(reason: "Branch changed since this list was scanned")
                 ))
                 continue
             }
