@@ -23,6 +23,18 @@ struct SidebarHeaderView: View {
     }
 
     var body: some View {
+        ViewThatFits(in: .horizontal) {
+            expandedHeader
+            compactHeader
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .windowDragHandle()
+    }
+
+    private var expandedHeader: some View {
         HStack(alignment: .center, spacing: 12) {
             TrafficLights()
             Spacer()
@@ -58,11 +70,48 @@ struct SidebarHeaderView: View {
                 ToolbarBtn(icon: "sidebar.left", tooltip: "Hide sidebar", action: onHideSidebar)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .contentShape(Rectangle())
-        .onHover { hovering = $0 }
-        .windowDragHandle()
+    }
+
+    private var compactHeader: some View {
+        HStack(spacing: 8) {
+            TrafficLights()
+            Spacer(minLength: 0)
+            HStack(spacing: 2) {
+                ToolbarBtn(icon: "search", tooltip: "Search", action: onSearch)
+                AttentionToolbarButton(count: attentionCount, isOpen: attentionInboxOpen, action: onOpenAttentionInbox)
+                Menu {
+                    Menu("Sort worktrees") {
+                        ForEach(WorktreeSortPresentation.modes, id: \.self) { mode in
+                            Toggle(WorktreeSortPresentation.title(for: mode), isOn: Binding(
+                                get: { worktreeSortMode == mode },
+                                set: { selected in if selected { onSetWorktreeSortMode(mode) } }
+                            ))
+                        }
+                    }
+                    Button("Add repository...", systemImage: "folder.badge.plus", action: onAddProject)
+                    if let onNewWorkspace {
+                        Button("New workspace...", systemImage: "square.grid.2x2", action: onNewWorkspace)
+                    }
+                    Divider()
+                    Button("Settings", systemImage: "gear", action: onSettings)
+                    Button("Hide sidebar", systemImage: "sidebar.left", action: onHideSidebar)
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(theme.color(addMenuHovered ? "fg" : "fg-muted"))
+                        .frame(width: 26, height: 22)
+                        .contentShape(Rectangle())
+                        .background(addMenuHovered ? theme.color("bg-3") : .clear)
+                        .clipShape(.rect(cornerRadius: 5))
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .onHover { addMenuHovered = $0 }
+                .help("More sidebar actions")
+                .accessibilityLabel("More sidebar actions")
+            }
+        }
     }
 }
 

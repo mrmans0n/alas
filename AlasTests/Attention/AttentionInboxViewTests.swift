@@ -60,16 +60,45 @@ struct AttentionInboxViewTests {
     }
 
     @Test func toolbarHeightDoesNotChangeWithThreeDigitBadge() throws {
-        #expect(try headerHeight(count: 0) == headerHeight(count: 999))
+        #expect(try headerSize(count: 0).height == headerSize(count: 999).height)
     }
 
-    private func headerHeight(count: Int) throws -> Int {
+    @Test func toolbarFitsDefaultAndMinimumSidebarWidths() throws {
+        let baselineHeight = try headerSize(count: 0).height
+        for width in [CGFloat(200), CGFloat(244)] {
+            for count in [0, 999] {
+                for workspacesEnabled in [false, true] {
+                    let size = try headerSize(count: count, width: width, workspacesEnabled: workspacesEnabled)
+                    #expect(size.width <= width)
+                    #expect(size.height == baselineHeight)
+                }
+            }
+        }
+    }
+
+    @Test func historyWithDeletedOwnerShowsDestinationExplanation() throws {
+        let unavailable = try historyRowHeight(ownerAvailable: false)
+        let available = try historyRowHeight(ownerAvailable: true)
+        #expect(unavailable > available)
+    }
+
+    private func historyRowHeight(ownerAvailable: Bool) throws -> CGFloat {
+        let item = makeItem(acknowledgedAt: Date(timeIntervalSince1970: 200), ownerAvailable: ownerAvailable)
+        let view = AttentionInboxRow(presentation: .init(item: item, now: Date()), isHistory: true,
+                                    navigationError: nil, onOpen: { _ in })
+            .environment(\.theme, try ThemeStore().current)
+        let controller = NSHostingController(rootView: view)
+        return controller.sizeThatFits(in: NSSize(width: 700, height: CGFloat.greatestFiniteMagnitude)).height
+    }
+
+    private func headerSize(count: Int, width: CGFloat = 300, workspacesEnabled: Bool = false) throws -> NSSize {
         let view = SidebarHeaderView(worktreeSortMode: .lastUpdateDesc, onSetWorktreeSortMode: { _ in },
                                      onSettings: {}, onAddProject: {}, onSearch: {}, onHideSidebar: {},
+                                     onNewWorkspace: workspacesEnabled ? {} : nil,
                                      attentionCount: count, attentionInboxOpen: false, onOpenAttentionInbox: {})
             .environment(\.theme, try ThemeStore().current)
         let controller = NSHostingController(rootView: view)
-        return Int(controller.sizeThatFits(in: NSSize(width: 300, height: CGFloat.greatestFiniteMagnitude)).height)
+        return controller.sizeThatFits(in: NSSize(width: width, height: CGFloat.greatestFiniteMagnitude))
     }
 
     private func aggregation(items: [AttentionItem] = [], history: [AttentionItem] = []) -> AttentionAggregation {
@@ -77,12 +106,15 @@ struct AttentionInboxViewTests {
                              unresolvedCountByProject: items.isEmpty ? [:] : ["p1": items.count])
     }
 
-    private func makeItem(target: AttentionJumpTarget = .session(sessionID: "s1"), acknowledgedAt: Date? = nil) -> AttentionItem {
-        AttentionItem(eventID: UUID(), sourceKey: .init(rawValue: "source"),
+    private func makeItem(target: AttentionJumpTarget = .session(sessionID: "s1"), acknowledgedAt: Date? = nil,
+                          ownerAvailable: Bool = false) -> AttentionItem {
+        let display = AttentionWorktreeDisplaySnapshot(projectName: "Alas", branch: "feature/inbox", path: "/repo", host: "build-host")
+        return AttentionItem(eventID: UUID(), sourceKey: .init(rawValue: "source"),
                       owner: .init(projectID: "p1", location: .ssh("build-host"), lineageID: "lineage", legacyPath: nil),
                       kind: .agentAwaiting, title: "Codex is waiting for input", body: nil,
                       occurredAt: Date(timeIntervalSince1970: 100), presentation: .live, jumpTarget: target,
-                      display: .init(projectName: "Alas", branch: "feature/inbox", path: "/repo", host: "build-host"),
-                      worktree: nil, acknowledgedAt: acknowledgedAt)
+                      display: display,
+                      worktree: ownerAvailable ? .init(id: "worktree", projectID: "p1", display: display) : nil,
+                      acknowledgedAt: acknowledgedAt)
     }
 }

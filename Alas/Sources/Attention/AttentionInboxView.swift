@@ -183,7 +183,7 @@ struct AttentionInboxRow: View {
                     .foregroundStyle(theme.color("fg-muted"))
                     .textSelection(.enabled)
             }
-            if let error = navigationError ?? (isHistory ? nil : presentation.unavailableReason) {
+            if let error = navigationError ?? (isHistory && presentation.item.jumpTarget == .none ? nil : presentation.unavailableReason) {
                 Text(error).font(.system(size: 11)).foregroundStyle(theme.color("warn"))
             }
             HStack {
