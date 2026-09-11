@@ -301,7 +301,6 @@ final class ACPSessionManager: ObservableObject {
     func queueForceSend(for id: ACPSession.ID, itemId: UUID) async {
         guard let session = sessions[id] else { return }
         if case .spawning = session.agentState {
-            guard await confirmedWriterLease(for: id) else { return }
             pendingQueueForceSends[id] = itemId
             onQueueChanged?(id, true)
             return
@@ -310,7 +309,6 @@ final class ACPSessionManager: ObservableObject {
             await reattach(to: id)
         }
         if case .spawning = session.agentState {
-            guard await confirmedWriterLease(for: id) else { return }
             pendingQueueForceSends[id] = itemId
             onQueueChanged?(id, true)
             return

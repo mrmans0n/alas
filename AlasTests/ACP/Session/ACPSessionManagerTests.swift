@@ -613,6 +613,28 @@ struct ACPSessionManagerTests {
         #expect(client.sent.contains(where: { $0.method == "session/prompt" }))
     }
 
+    @Test("queue force send during pre-lease spawn is retained")
+    func queueForceSendDuringPreLeaseSpawnIsRetained() async throws {
+        var queueChanged = false
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-force-send-prelease-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let mgr = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            onQueueChanged: { _, _ in queueChanged = true }
+        )
+        let session = mgr.createSession(id: "session", agentId: "claude")
+        session.agentState = .spawning
+        session.enqueueScheduled(blocks: [.text("later")], scheduledAt: .distantFuture)
+        let itemId = try #require(session.queue.first?.id)
+
+        await mgr.queueForceSend(for: session.id, itemId: itemId)
+
+        #expect(queueChanged)
+    }
+
     @Test("stale force send during attach falls back to queue flush")
     func staleForceSendDuringAttachFallsBackToQueueFlush() async throws {
         let gate = AsyncGate()
