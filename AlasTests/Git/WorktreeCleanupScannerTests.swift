@@ -374,6 +374,31 @@ struct WorktreeCleanupScannerTests {
         #expect(Set(updates.map(\.candidate.id)) == Set(worktrees.map(\.id)))
     }
 
+    @Test func cancellingScanCancelsMergeIndexLookup() async {
+        let probe = WorktreeCleanupCancellationProbe()
+        let scanner = Self.scanner(mergeIndex: { _ in
+            await probe.markStarted()
+            do {
+                try await Task.sleep(nanoseconds: 1_000_000_000)
+            } catch is CancellationError {
+                await probe.markCancelled()
+            } catch {}
+            return .failure(CancellationError())
+        })
+        let scanTask = Task {
+            await Self.scan(
+                scanner,
+                worktrees: [Self.worktree(branch: "feature/a")]
+            )
+        }
+        await probe.waitUntilStarted()
+
+        scanTask.cancel()
+        _ = await scanTask.value
+
+        #expect(await probe.didObserveCancellation)
+    }
+
     @Test func statusPorcelainDistinguishesUntrackedFromModified() {
         let modified = WorktreeCleanupScanner.parseStatusPorcelain(" M Sources/A.swift\n")
         #expect(modified.hasUncommittedChanges)
@@ -425,5 +450,28 @@ private actor WorktreeCleanupUpdateRecorder {
 
     func append(_ update: WorktreeCleanupScanUpdate) {
         updates.append(update)
+    }
+}
+
+private actor WorktreeCleanupCancellationProbe {
+    private(set) var didObserveCancellation = false
+    private var started = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func markStarted() {
+        started = true
+        startWaiters.forEach { $0.resume() }
+        startWaiters.removeAll()
+    }
+
+    func waitUntilStarted() async {
+        if started { return }
+        await withCheckedContinuation { continuation in
+            startWaiters.append(continuation)
+        }
+    }
+
+    func markCancelled() {
+        didObserveCancellation = true
     }
 }

@@ -134,7 +134,11 @@ struct WorktreeCleanupScanner: Sendable {
                         activeSessionCount,
                         operationInFlight
                     )
-                    let indexResult = await mergeIndexTask.value
+                    let indexResult = await withTaskCancellationHandler {
+                        await mergeIndexTask.value
+                    } onCancel: {
+                        mergeIndexTask.cancel()
+                    }
                     return (
                         index,
                         Self.candidate(
