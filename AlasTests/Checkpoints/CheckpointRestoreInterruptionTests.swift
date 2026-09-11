@@ -82,6 +82,24 @@ struct CheckpointRestoreInterruptionTests {
         }
     }
 
+    @Test func failureAfterIndexLockIntentDoesNotLeaveALock() async throws {
+        let fixture = try await CheckpointRestoreFixture.make(faultInjector: .init {
+            if $0 == .afterIndexLockIntentJournaled { throw CheckpointRestoreFixture.Fault.injected }
+        })
+        defer { fixture.remove() }
+        let checkpoint = try await fixture.service.createManual(target: fixture.repo.target, label: "Saved")
+        try await fixture.later()
+        let preview = try await fixture.preview(checkpoint.id)
+
+        await #expect(throws: (any Error).self) {
+            try await fixture.service.restore(target: fixture.repo.target, preview: preview,
+                                               selectedGroupIDs: preview.selectedGroupIDs, coordination: .clear)
+        }
+
+        #expect(try await fixture.store.recoverableJournals(lineageID: fixture.repo.target.lineageID).isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: fixture.repo.root.appendingPathComponent(".git/index.lock").path))
+    }
+
     @Test(arguments: [CheckpointRestoreFaultPoint.afterFileMove(path: "added"), .afterFileMove(path: "selected.bin"),
                       .beforeIndexInstall, .afterIndexInstall, .beforeVerification])
     func failuresRollBackBothLayers(point: CheckpointRestoreFaultPoint) async throws {
@@ -249,7 +267,7 @@ struct CheckpointRestoreInterruptionTests {
         #expect(try Data(contentsOf: URL(fileURLWithPath: journal.stagingRoot + "/backups/" + name)) == Data("later disk".utf8))
     }
 
-    @Test func checkpointRefreshScavengesUnjournaledRestoreStaging() async throws {
+    @Test func checkpointRefreshLeavesUnownedUUIDShapedRestoreDirectoryAlone() async throws {
         let fixture = try await CheckpointRestoreFixture.make()
         defer { fixture.remove() }
         let orphanID = UUID()
@@ -259,6 +277,7 @@ struct CheckpointRestoreInterruptionTests {
 
         _ = try await fixture.service.nonterminalJournals(target: fixture.repo.target)
 
-        #expect(!FileManager.default.fileExists(atPath: orphan.path))
+        #expect(FileManager.default.fileExists(atPath: orphan.path))
+        #expect(try Data(contentsOf: orphan.appendingPathComponent("payload")) == Data("orphan".utf8))
     }
 }

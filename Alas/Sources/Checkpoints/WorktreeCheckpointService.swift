@@ -44,8 +44,7 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
 
     func summaries(target: CheckpointWorktreeTarget) async throws -> CheckpointCatalogSnapshot {
         try validateLineage(target)
-        let journals = try await store.recoverableJournals(lineageID: target.lineageID)
-        try scavengeUnjournaledRestoreStaging(target: target, preserving: Set(journals.map(\.id)))
+        _ = try await store.recoverableJournals(lineageID: target.lineageID)
         if let cached = cachedCatalogs[target.lineageID] { return cached }
         let catalog = try await store.catalog(lineageID: target.lineageID)
         cachedCatalogs[target.lineageID] = catalog
@@ -54,9 +53,7 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
 
     func nonterminalJournals(target: CheckpointWorktreeTarget) async throws -> [CheckpointRestoreJournal] {
         try validateLineage(target)
-        let journals = try await store.recoverableJournals(lineageID: target.lineageID)
-        try scavengeUnjournaledRestoreStaging(target: target, preserving: Set(journals.map(\.id)))
-        return journals
+        return try await store.recoverableJournals(lineageID: target.lineageID)
     }
 
     func manifest(target: CheckpointWorktreeTarget, id: CheckpointID) async throws -> WorktreeCheckpointManifest {
@@ -192,7 +189,7 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
             do {
                 let attempt = try await CheckpointCaptureAttempt(snapshot: snapshotter.snapshot(target: target), capturedAt: .now)
                 try await hooks.afterPayloadStaging(number)
-                let verification = try await snapshotter.snapshot(target: target)
+                let verification = try await snapshotter.snapshot(target: target, retainingPayloads: false)
                 guard attempt.snapshot.fingerprint == verification.fingerprint else { continue }
                 return try await publish(target: target, attempt: attempt, paths: Set(attempt.snapshot.paths.keys),
                                          kind: .manual, label: label)
@@ -311,17 +308,5 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
             throw CheckpointStoreError.checkpointNotFound
         }
         return summary
-    }
-
-    private func scavengeUnjournaledRestoreStaging(target: CheckpointWorktreeTarget, preserving operationIDs: Set<UUID>) throws {
-        guard !target.path.isRemoteAlasPath else { return }
-        let prefix = ".alas-checkpoint-restore-"
-        for url in try FileManager.default.contentsOfDirectory(at: target.path, includingPropertiesForKeys: [.isDirectoryKey]) where url.lastPathComponent.hasPrefix(prefix) {
-            let resourceValues = try url.resourceValues(forKeys: [.isDirectoryKey])
-            guard resourceValues.isDirectory == true else { continue }
-            let suffix = String(url.lastPathComponent.dropFirst(prefix.count))
-            guard let operationID = UUID(uuidString: suffix), !operationIDs.contains(operationID) else { continue }
-            try FileManager.default.removeItem(at: url)
-        }
     }
 }

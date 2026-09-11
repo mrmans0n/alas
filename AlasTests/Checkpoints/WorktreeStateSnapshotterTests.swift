@@ -250,6 +250,35 @@ struct WorktreeStateSnapshotterTests {
         #expect(first.fingerprint != changed.fingerprint)
     }
 
+    @Test func fingerprintOnlySnapshotDoesNotRetainPayloadBytes() async throws {
+        let repo = try await CheckpointTestRepository.make()
+        defer { repo.remove() }
+        try repo.write("one", to: "file")
+
+        let full = try await WorktreeStateSnapshotter.live.snapshot(target: repo.target)
+        let fingerprintOnly = try await WorktreeStateSnapshotter.live.snapshot(target: repo.target, retainingPayloads: false)
+
+        #expect(fingerprintOnly.fingerprint == full.fingerprint)
+        #expect(fingerprintOnly.paths == full.paths)
+        #expect(fingerprintOnly.payloads.isEmpty)
+    }
+
+    @Test func caseOnlyRenameCapturesDestinationAsSingleLeaf() async throws {
+        let repo = try await CheckpointTestRepository.make()
+        defer { repo.remove() }
+        try repo.write("old", to: "foo")
+        try await repo.commitAll("lowercase")
+        try await repo.git(["mv", "foo", "Foo"])
+
+        let snapshot = try await WorktreeStateSnapshotter.live.snapshot(target: repo.target)
+
+        #expect(snapshot.paths["foo"] == nil)
+        let state = try #require(snapshot.paths["Foo"])
+        #expect(try snapshot.payload(state.head) == Data("old".utf8))
+        #expect(try snapshot.payload(state.index) == Data("old".utf8))
+        #expect(snapshot.groups.contains { $0.primaryPath == "Foo" && $0.renameSource == "foo" && $0.memberPaths == ["Foo"] })
+    }
+
     @Test func lineageReplacementFailsCapture() async throws {
         let repo = try await CheckpointTestRepository.make()
         defer { repo.remove() }

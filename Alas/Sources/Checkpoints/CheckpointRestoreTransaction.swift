@@ -42,6 +42,7 @@ enum CheckpointRestoreFaultPoint: Equatable, Sendable {
     case afterPartialIndexWrite
     case beforeIndexCandidateSync
     case afterIndexCandidatePublication
+    case afterIndexLockIntentJournaled
     case afterIndexLockJournaled
     case afterIndexLockHandoff
     case afterIndexInstall
@@ -364,13 +365,17 @@ struct CheckpointRestoreTransaction: Sendable {
     private func acquireLock(journal: inout CheckpointRestoreJournal, target: CheckpointWorktreeTarget) async throws {
         let lock = try await gitPath("index.lock", target: target)
         _ = try fileSystem.list(lock.deletingLastPathComponent())
+        journal.ownedIndexLockPath = lock.path
+        journal.ownedIndexLockChecksum = digest(Data())
+        journal.ownedIndexLockDevice = nil
+        journal.ownedIndexLockInode = nil
+        try await store.writeJournal(journal)
+        try faultInjector.hit(.afterIndexLockIntentJournaled)
         let descriptor = Darwin.open(lock.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
         guard descriptor >= 0 else { throw CheckpointRestoreError.blocked(.indexLock) }
         defer { _ = Darwin.close(descriptor) }
         var attributes = stat()
         guard Darwin.fstat(descriptor, &attributes) == 0 else { throw posix("stat lock") }
-        journal.ownedIndexLockPath = lock.path
-        journal.ownedIndexLockChecksum = digest(Data())
         journal.ownedIndexLockDevice = UInt64(attributes.st_dev)
         journal.ownedIndexLockInode = UInt64(attributes.st_ino)
         try await store.writeJournal(journal)
@@ -380,12 +385,16 @@ struct CheckpointRestoreTransaction: Sendable {
     }
 
     private func validateLock(_ journal: CheckpointRestoreJournal) throws {
-        guard let path = journal.ownedIndexLockPath, let checksum = journal.ownedIndexLockChecksum,
-              let device = journal.ownedIndexLockDevice, let inode = journal.ownedIndexLockInode else {
+        guard let path = journal.ownedIndexLockPath, let checksum = journal.ownedIndexLockChecksum else {
             throw CheckpointRestoreError.blocked(.indexLock)
         }
         let actual = try indexIdentity(at: URL(fileURLWithPath: path))
-        let originalMatches = actual.device == device && actual.inode == inode && actual.checksum == checksum
+        let originalMatches: Bool
+        if let device = journal.ownedIndexLockDevice, let inode = journal.ownedIndexLockInode {
+            originalMatches = actual.device == device && actual.inode == inode && actual.checksum == checksum
+        } else {
+            originalMatches = actual.checksum == checksum
+        }
         let pendingMatches = journal.pendingIndexLock.map { sameIdentity(actual, $0) } ?? false
         guard originalMatches || pendingMatches else {
             throw CheckpointRestoreError.blocked(.indexLock)

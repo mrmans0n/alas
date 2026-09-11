@@ -44,7 +44,8 @@ struct WorktreeStateSnapshotter: Sendable {
     }
 
     func snapshot(target: CheckpointWorktreeTarget, includingPaths: Set<String> = [],
-                  ignoringRestoreOperation: UUID? = nil, onlyIncludedPaths: Bool = false) async throws -> WorktreeStateSnapshot {
+                  ignoringRestoreOperation: UUID? = nil, onlyIncludedPaths: Bool = false,
+                  retainingPayloads: Bool = true) async throws -> WorktreeStateSnapshot {
         guard !target.path.isRemoteAlasPath else { throw CheckpointSnapshotError.remoteTarget }
         try validateLineage(target)
         let head = try await headOID(target)
@@ -77,6 +78,11 @@ struct WorktreeStateSnapshotter: Sendable {
             candidates.formUnion(changes.paths)
             renames += changes.renames
         }
+        let caseOnlyRenamePairs: [(String, String)] = renames.compactMap { source, destination in
+            guard source != destination, source.caseInsensitiveCompare(destination) == .orderedSame else { return nil }
+            return (destination, source)
+        }
+        let caseOnlyRenameSources = Dictionary(uniqueKeysWithValues: caseOnlyRenamePairs)
         let untracked = Set(try records(try await data(["ls-files", "--others", "--exclude-standard", "-z"], target)))
         candidates.formUnion(untracked)
         if onlyIncludedPaths { candidates.formIntersection(includingPaths) }
@@ -84,25 +90,30 @@ struct WorktreeStateSnapshotter: Sendable {
         var states: [String: CheckpointPathState] = [:]
         var exclusions: [CheckpointExclusion] = []
         for path in candidates.sorted() {
+            if caseOnlyRenameSources.values.contains(path) { continue }
             if let operation = ignoringRestoreOperation,
                path.hasPrefix(".alas-checkpoint-restore-\(operation.uuidString.lowercased())/") { continue }
-            let isUntracked = untracked.contains(path) && index.values[path] == nil && headEntries.values[path] == nil
+            let headPath = caseOnlyRenameSources[path] ?? path
+            let indexPath = index.values[path] == nil ? headPath : path
+            let isUntracked = untracked.contains(path) && index.values[indexPath] == nil && headEntries.values[headPath] == nil
             if isUntracked, !includingPaths.contains(path), let reason = try exclusion(path, root: target.path) {
                 exclusions.append(.init(relativePath: path, reason: reason))
                 continue
             }
             _ = try fileSystem.validateRelativePath(path, under: target.path)
-            let headState = try await gitState(headEntries.values[path], target, payloads: &payloads)
-            let indexState = try await gitState(index.values[path], target, payloads: &payloads)
+            let headState = try await gitState(headEntries.values[headPath], target, payloads: &payloads,
+                                               retainingPayloads: retainingPayloads)
+            let indexState = try await gitState(index.values[indexPath], target, payloads: &payloads,
+                                                retainingPayloads: retainingPayloads)
             let diskState: CheckpointFileState
             if try fileSystem.metadata(root: target.path, relativePath: path) == nil {
                 diskState = .absent
             } else {
                 switch try fileSystem.readLeaf(root: target.path, relativePath: path) {
                 case .regular(let bytes, let executable):
-                    diskState = .regular(blob: add(bytes, to: &payloads), executable: executable)
+                    diskState = .regular(blob: add(bytes, to: &payloads, retainingPayload: retainingPayloads), executable: executable)
                 case .symlink(let bytes):
-                    diskState = .symlink(blob: add(bytes, to: &payloads))
+                    diskState = .symlink(blob: add(bytes, to: &payloads, retainingPayload: retainingPayloads))
                 }
             }
             states[path] = .init(relativePath: path, head: headState, index: indexState, worktree: diskState)
@@ -212,7 +223,7 @@ struct WorktreeStateSnapshotter: Sendable {
                 }
                 changed = previous != members
             }
-            let rename = renames.last { members.contains($0.0) && members.contains($0.1) }
+            let rename = renames.last { members.contains($0.1) && (!paths.contains($0.0) || members.contains($0.0)) }
             groups.append(.init(id: UUID(), primaryPath: rename?.1 ?? path, renameSource: rename?.0,
                                 memberPaths: members.sorted()))
             remaining.subtract(members)
@@ -242,15 +253,16 @@ struct WorktreeStateSnapshotter: Sendable {
     }
 
     private func gitState(_ entry: Entry?, _ target: CheckpointWorktreeTarget,
-                          payloads: inout [String: Data]) async throws -> CheckpointFileState {
+                          payloads: inout [String: Data], retainingPayloads: Bool = true) async throws -> CheckpointFileState {
         guard let entry else { return .absent }
-        let blob = add(try await data(["cat-file", "blob", entry.oid], target), to: &payloads)
+        let blob = add(try await data(["cat-file", "blob", entry.oid], target), to: &payloads,
+                       retainingPayload: retainingPayloads)
         return entry.mode == "120000" ? .symlink(blob: blob) : .regular(blob: blob, executable: entry.mode == "100755")
     }
 
-    private func add(_ data: Data, to payloads: inout [String: Data]) -> CheckpointBlobReference {
+    private func add(_ data: Data, to payloads: inout [String: Data], retainingPayload: Bool = true) -> CheckpointBlobReference {
         let reference = CheckpointBlobReference.make(for: data)
-        payloads[reference.sha256] = data
+        if retainingPayload { payloads[reference.sha256] = data }
         return reference
     }
 
