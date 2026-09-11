@@ -42,11 +42,15 @@ actor WorktreeCheckpointStore {
             guard catalog.schemaVersion == CheckpointCatalogSnapshot.currentSchemaVersion, catalog.lineageID == lineageID else {
                 throw CheckpointStoreError.invalidLineageID
             }
-            let manifests = try validManifests(lineageID: lineageID)
+            let reconciliation = try validManifests(lineageID: lineageID)
+            let unavailable = reconciliation.unavailable + catalog.summaries.filter { existing in
+                existing.unavailableReason != nil && !reconciliation.unavailable.contains(where: { candidate in candidate.id == existing.id })
+            }
             let rebuilt = snapshot(
                 lineageID: lineageID,
-                manifests: manifests,
-                byteCount: try byteCount(Set(manifests.flatMap { references(in: $0) }), layout: paths(lineageID), incoming: [:])
+                manifests: reconciliation.valid,
+                unavailable: unavailable,
+                byteCount: try byteCount(Set(reconciliation.valid.flatMap { references(in: $0) }), layout: paths(lineageID), incoming: [:])
             )
             if rebuilt != catalog { try writeCatalog(rebuilt, layout: paths(lineageID)) }
             return rebuilt
@@ -62,14 +66,14 @@ actor WorktreeCheckpointStore {
         try manifest.validate()
         try prepare(manifest.lineageID)
         let layout = paths(manifest.lineageID)
-        _ = try catalog(lineageID: manifest.lineageID)
+        let currentCatalog = try catalog(lineageID: manifest.lineageID)
         let manifestReferences = references(in: manifest)
         guard manifestReferences == Set(publication.blobs.keys) else { throw CheckpointStoreError.blobDoesNotMatchReference }
         for (reference, data) in publication.blobs {
             guard CheckpointBlobReference.make(for: data) == reference else { throw CheckpointStoreError.blobDoesNotMatchReference }
         }
 
-        let existingManifests = try validManifests(lineageID: manifest.lineageID)
+        let existingManifests = try validManifests(lineageID: manifest.lineageID).valid
         var candidates = existingManifests + [manifest]
         let protected = try protectedIDs(lineageID: manifest.lineageID)
         let victims = retentionVictims(from: candidates, protected: protected)
@@ -89,7 +93,7 @@ actor WorktreeCheckpointStore {
         try fileSystem.synchronizeDirectory(temporary)
         try fileSystem.move(temporary, to: entry)
 
-        let next = snapshot(lineageID: manifest.lineageID, manifests: candidates, byteCount: bytes)
+        let next = snapshot(lineageID: manifest.lineageID, manifests: candidates, unavailable: currentCatalog.summaries.filter { $0.unavailableReason != nil }, byteCount: bytes)
         try writeCatalog(next, layout: layout)
         for victim in victims { try removeEntry(victim.id, layout: layout) }
         try garbageCollect(layout: layout, manifests: candidates, journals: try activeJournals(lineageID: manifest.lineageID))
@@ -118,11 +122,11 @@ actor WorktreeCheckpointStore {
         try validate(lineageID)
         try prepare(lineageID)
         guard !(try protectedIDs(lineageID: lineageID).contains(id)) else { throw CheckpointStoreError.operationReferencesCheckpoint }
-        let manifests = try validManifests(lineageID: lineageID)
+        let manifests = try validManifests(lineageID: lineageID).valid
         guard manifests.contains(where: { $0.id == id }) else { throw CheckpointStoreError.checkpointNotFound }
         let remaining = manifests.filter { $0.id != id }
         let layout = paths(lineageID)
-        let next = snapshot(lineageID: lineageID, manifests: remaining, byteCount: try byteCount(Set(remaining.flatMap { references(in: $0) }), layout: layout, incoming: [:]))
+        let next = snapshot(lineageID: lineageID, manifests: remaining, unavailable: (try catalog(lineageID: lineageID)).summaries.filter { $0.unavailableReason != nil }, byteCount: try byteCount(Set(remaining.flatMap { references(in: $0) }), layout: layout, incoming: [:]))
         try writeCatalog(next, layout: layout)
         try removeEntry(id, layout: layout)
         try garbageCollect(layout: layout, manifests: remaining, journals: try activeJournals(lineageID: lineageID))
@@ -200,14 +204,29 @@ actor WorktreeCheckpointStore {
         return manifest
     }
 
-    private func validManifests(lineageID: String) throws -> [WorktreeCheckpointManifest] {
+    private struct ManifestReconciliation {
+        var valid: [WorktreeCheckpointManifest]
+        var unavailable: [WorktreeCheckpointSummary]
+    }
+
+    private func validManifests(lineageID: String) throws -> ManifestReconciliation {
         try prepare(lineageID)
         let layout = paths(lineageID)
-        var result: [WorktreeCheckpointManifest] = []
+        var result = ManifestReconciliation(valid: [], unavailable: [])
         for entry in try fileSystem.list(layout.entries) where !entry.lastPathComponent.hasPrefix(".") {
             guard let id = UUID(uuidString: entry.lastPathComponent) else { continue }
-            do { result.append(try load(id: id, lineageID: lineageID)) }
-            catch { try quarantine(entry, in: layout.quarantine, name: id.uuidString.lowercased()) }
+            do {
+                let manifest = try readManifest(id: id, lineageID: lineageID)
+                do {
+                    try validate(manifest: manifest, layout: layout)
+                    result.valid.append(manifest)
+                } catch {
+                    result.unavailable.append(unavailableSummary(for: manifest, error: error))
+                    try quarantine(entry, in: layout.quarantine, name: id.uuidString.lowercased())
+                }
+            } catch {
+                try quarantine(entry, in: layout.quarantine, name: id.uuidString.lowercased())
+            }
         }
         return result
     }
@@ -215,16 +234,20 @@ actor WorktreeCheckpointStore {
     private func rebuildCatalog(lineageID: String) throws -> CheckpointCatalogSnapshot {
         let manifests = try validManifests(lineageID: lineageID)
         let layout = paths(lineageID)
-        let next = snapshot(lineageID: lineageID, manifests: manifests, byteCount: try byteCount(Set(manifests.flatMap { references(in: $0) }), layout: layout, incoming: [:]))
+        let next = snapshot(lineageID: lineageID, manifests: manifests.valid, unavailable: manifests.unavailable, byteCount: try byteCount(Set(manifests.valid.flatMap { references(in: $0) }), layout: layout, incoming: [:]))
         try writeCatalog(next, layout: layout)
         return next
     }
 
-    private func snapshot(lineageID: String, manifests: [WorktreeCheckpointManifest], byteCount: Int64) -> CheckpointCatalogSnapshot {
-        let summaries = manifests.sorted { $0.createdAt > $1.createdAt }.map { manifest in
+    private func snapshot(lineageID: String, manifests: [WorktreeCheckpointManifest], unavailable: [WorktreeCheckpointSummary] = [], byteCount: Int64) -> CheckpointCatalogSnapshot {
+        let summaries = (manifests.sorted { $0.createdAt > $1.createdAt }.map { manifest in
             WorktreeCheckpointSummary(id: manifest.id, kind: manifest.kind, label: manifest.label, createdAt: manifest.createdAt, byteCount: manifest.byteCount, stagedFileCount: manifest.paths.filter { $0.index != $0.head }.count, unstagedFileCount: manifest.paths.filter { $0.worktree != $0.index }.count, untrackedFileCount: manifest.paths.filter { $0.head.kind == .absent && $0.worktree.kind != .absent }.count, unavailableReason: nil)
-        }
+        } + unavailable).sorted { $0.createdAt > $1.createdAt }
         return .init(lineageID: lineageID, summaries: summaries, byteCount: byteCount)
+    }
+
+    private func unavailableSummary(for manifest: WorktreeCheckpointManifest, error: Error) -> WorktreeCheckpointSummary {
+        WorktreeCheckpointSummary(id: manifest.id, kind: manifest.kind, label: manifest.label, createdAt: manifest.createdAt, byteCount: manifest.byteCount, stagedFileCount: 0, unstagedFileCount: 0, untrackedFileCount: 0, unavailableReason: String(describing: error))
     }
 
     private func writeCatalog(_ catalog: CheckpointCatalogSnapshot, layout: Layout) throws {
