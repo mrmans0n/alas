@@ -44,7 +44,7 @@ struct WorktreeStateSnapshotter: Sendable {
     }
 
     func snapshot(target: CheckpointWorktreeTarget, includingPaths: Set<String> = [],
-                  ignoringRestoreOperation: UUID? = nil) async throws -> WorktreeStateSnapshot {
+                  ignoringRestoreOperation: UUID? = nil, onlyIncludedPaths: Bool = false) async throws -> WorktreeStateSnapshot {
         guard !target.path.isRemoteAlasPath else { throw CheckpointSnapshotError.remoteTarget }
         try validateLineage(target)
         let head = try await text(["rev-parse", "--verify", "HEAD"], target)
@@ -78,6 +78,7 @@ struct WorktreeStateSnapshotter: Sendable {
         }
         let untracked = Set(try records(try await data(["ls-files", "--others", "--exclude-standard", "-z"], target)))
         candidates.formUnion(untracked)
+        if onlyIncludedPaths { candidates.formIntersection(includingPaths) }
         var payloads: [String: Data] = [:]
         var states: [String: CheckpointPathState] = [:]
         var exclusions: [CheckpointExclusion] = []

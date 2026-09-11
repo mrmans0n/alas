@@ -39,6 +39,10 @@ enum CheckpointRestoreFaultPoint: Equatable, Sendable {
     case afterJournalPrepared
     case afterFileMove(path: String)
     case beforeIndexInstall
+    case afterPartialIndexWrite
+    case beforeIndexCandidateSync
+    case afterIndexCandidatePublication
+    case afterIndexLockHandoff
     case afterIndexInstall
     case beforeVerification
     case duringRollback(path: String)
@@ -238,7 +242,7 @@ struct CheckpointRestoreTransaction: Sendable {
         guard [journal.expectedIndexChecksum, journal.preparedIndexChecksum].contains(digest(indexBytes)) else {
             throw CheckpointRestoreError.stalePreview
         }
-        let current = try await snapshot(target, journal: journal, including: Set(journal.selectedPaths))
+        let current = try await selectedSnapshot(target, journal: journal)
         guard current.headOID == recovery.headOID else { throw CheckpointRestoreError.blocked(.changedHEAD) }
         let root = URL(fileURLWithPath: journal.stagingRoot)
         let originalIndex = try fileSystem.fileData(root.appendingPathComponent("original-index"))
@@ -283,11 +287,12 @@ struct CheckpointRestoreTransaction: Sendable {
         // Preserve the exact original index bytes, including extensions and stat
         // entries. The recovery manifest independently verifies its selected states.
         try await installIndex(originalIndex, journal: &journal, target: target)
-        let after = try await snapshot(target, journal: journal, including: Set(desired.paths.map(\.relativePath)))
+        let after = try await selectedSnapshot(target, journal: journal)
         for state in recovery.paths {
             guard after.paths[state.relativePath] == state else { throw CheckpointRestoreError.invalidGitOutput }
         }
-        guard after.fingerprint == journal.expectedFingerprint else { throw CheckpointRestoreError.stalePreview }
+        guard after.indexChecksum == journal.expectedIndexChecksum,
+              after.headOID == recovery.headOID else { throw CheckpointRestoreError.stalePreview }
         try await finish(&journal, target: target, phase: .recovered)
     }
 
@@ -313,6 +318,16 @@ struct CheckpointRestoreTransaction: Sendable {
         if let lock = journal.ownedIndexLockPath {
             guard lock == (try await gitPath("index.lock", target: target)).path else { throw CheckpointRestoreError.invalidJournal }
         }
+        if let pending = journal.pendingIndexLock {
+            let candidate = URL(fileURLWithPath: pending.path)
+            let index = try await gitPath("index", target: target)
+            let prefix = ".alas-checkpoint-index-\(journal.id.uuidString.lowercased())-"
+            guard candidate.deletingLastPathComponent().path == index.deletingLastPathComponent().path,
+                  candidate.lastPathComponent.hasPrefix(prefix),
+                  UUID(uuidString: String(candidate.lastPathComponent.dropFirst(prefix.count))) != nil else {
+                throw CheckpointRestoreError.invalidJournal
+            }
+        }
         for marker in ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer"] {
             let path = try await gitPath(marker, target: target)
             if FileManager.default.fileExists(atPath: path.path) { throw CheckpointRestoreError.blocked(.gitOperation) }
@@ -323,6 +338,11 @@ struct CheckpointRestoreTransaction: Sendable {
                           including paths: Set<String>) async throws -> WorktreeStateSnapshot {
         try await WorktreeStateSnapshotter(git: git, fileSystem: fileSystem)
             .snapshot(target: target, includingPaths: paths, ignoringRestoreOperation: journal.id)
+    }
+
+    private func selectedSnapshot(_ target: CheckpointWorktreeTarget, journal: CheckpointRestoreJournal) async throws -> WorktreeStateSnapshot {
+        try await WorktreeStateSnapshotter(git: git, fileSystem: fileSystem)
+            .snapshot(target: target, includingPaths: Set(journal.selectedPaths), onlyIncludedPaths: true)
     }
 
     private func revalidateIndexAndHead(_ journal: CheckpointRestoreJournal, target: CheckpointWorktreeTarget,
@@ -362,10 +382,10 @@ struct CheckpointRestoreTransaction: Sendable {
               let device = journal.ownedIndexLockDevice, let inode = journal.ownedIndexLockInode else {
             throw CheckpointRestoreError.blocked(.indexLock)
         }
-        var attributes = stat()
-        guard Darwin.lstat(path, &attributes) == 0, attributes.st_mode & S_IFMT == S_IFREG,
-              UInt64(attributes.st_dev) == device, UInt64(attributes.st_ino) == inode,
-              digest(try fileSystem.fileData(URL(fileURLWithPath: path))) == checksum else {
+        let actual = try indexIdentity(at: URL(fileURLWithPath: path))
+        let originalMatches = actual.device == device && actual.inode == inode && actual.checksum == checksum
+        let pendingMatches = journal.pendingIndexLock.map { sameIdentity(actual, $0) } ?? false
+        guard originalMatches || pendingMatches else {
             throw CheckpointRestoreError.blocked(.indexLock)
         }
     }
@@ -374,34 +394,93 @@ struct CheckpointRestoreTransaction: Sendable {
         try validateLock(journal)
         let index = try await gitPath("index", target: target)
         guard let path = journal.ownedIndexLockPath else { throw CheckpointRestoreError.invalidJournal }
-        let descriptor = Darwin.open(path, O_WRONLY | O_NOFOLLOW)
-        guard descriptor >= 0 else { throw posix("open lock") }
-        defer { _ = Darwin.close(descriptor) }
-        var attributes = stat()
-        guard Darwin.fstat(descriptor, &attributes) == 0,
-              UInt64(attributes.st_dev) == journal.ownedIndexLockDevice,
-              UInt64(attributes.st_ino) == journal.ownedIndexLockInode else { throw CheckpointRestoreError.blocked(.indexLock) }
-        guard Darwin.ftruncate(descriptor, 0) == 0 else { throw posix("truncate lock") }
-        try bytes.withUnsafeBytes { buffer in
-            var offset = 0
-            while offset < buffer.count {
-                let count = Darwin.write(descriptor, buffer.baseAddress!.advanced(by: offset), buffer.count - offset)
-                if count < 0 && errno == EINTR { continue }
-                guard count > 0 else { throw posix("write lock") }
-                offset += count
+        let lock = URL(fileURLWithPath: path)
+        // A previous handoff may have completed before ownership promotion was
+        // journaled. Record the exact accepted identity before another attempt.
+        let currentLock = try indexIdentity(at: lock)
+        if let previous = journal.pendingIndexLock, try exists(URL(fileURLWithPath: previous.path)) {
+            guard sameIdentity(try indexIdentity(at: URL(fileURLWithPath: previous.path)), previous) else {
+                throw CheckpointRestoreError.invalidJournal
             }
+            try fileSystem.removeIfPresent(URL(fileURLWithPath: previous.path))
         }
-        guard Darwin.fsync(descriptor) == 0 else { throw posix("fsync lock") }
-        journal.ownedIndexLockChecksum = digest(bytes)
+        journal.ownedIndexLockChecksum = currentLock.checksum
+        journal.ownedIndexLockDevice = currentLock.device
+        journal.ownedIndexLockInode = currentLock.inode
+        journal.pendingIndexLock = nil
+        try await store.writeJournal(journal)
+
+        // Never truncate index.lock. An incomplete candidate cannot invalidate
+        // the durable identity of the lock that still protects the live index.
+        let candidate = try makeIndexCandidate(bytes, index: index, operationID: journal.id)
+        journal.pendingIndexLock = candidate
         if journal.phase != .rollingBack { journal.phase = .installingIndex }
+        try await store.writeJournal(journal)
+        try faultInjector.hit(.afterIndexCandidatePublication)
+        try validateLock(journal)
+        guard sameIdentity(try indexIdentity(at: URL(fileURLWithPath: candidate.path)), candidate) else {
+            throw CheckpointRestoreError.invalidJournal
+        }
+        try fileSystem.move(URL(fileURLWithPath: candidate.path), to: lock)
+        try faultInjector.hit(.afterIndexLockHandoff)
+        try validateLock(journal)
+        journal.ownedIndexLockChecksum = candidate.checksum
+        journal.ownedIndexLockDevice = candidate.device
+        journal.ownedIndexLockInode = candidate.inode
+        journal.pendingIndexLock = nil
         try await store.writeJournal(journal)
         try validateLock(journal)
         if bytes.isEmpty {
             try fileSystem.removeIfPresent(index)
             try removeOwnedLock(journal)
         } else {
-            try fileSystem.move(URL(fileURLWithPath: path), to: index)
+            try fileSystem.move(lock, to: index)
         }
+    }
+
+    private func makeIndexCandidate(_ bytes: Data, index: URL, operationID: UUID) throws -> CheckpointRestoreJournal.IndexLockCandidate {
+        let name = ".alas-checkpoint-index-\(operationID.uuidString.lowercased())-\(UUID().uuidString.lowercased())"
+        let candidate = index.deletingLastPathComponent().appendingPathComponent(name)
+        _ = try fileSystem.list(candidate.deletingLastPathComponent())
+        let descriptor = Darwin.open(candidate.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
+        guard descriptor >= 0 else { throw posix("create index candidate") }
+        defer { _ = Darwin.close(descriptor) }
+        do {
+            try bytes.withUnsafeBytes { buffer in
+                var offset = 0
+                let chunkSize = max(1, buffer.count / 2)
+                while offset < buffer.count {
+                    let count = Darwin.write(descriptor, buffer.baseAddress!.advanced(by: offset), min(chunkSize, buffer.count - offset))
+                    if count < 0 && errno == EINTR { continue }
+                    guard count > 0 else { throw posix("write index candidate") }
+                    let firstWrite = offset == 0
+                    offset += count
+                    if firstWrite { try faultInjector.hit(.afterPartialIndexWrite) }
+                }
+            }
+            try faultInjector.hit(.beforeIndexCandidateSync)
+            guard Darwin.fsync(descriptor) == 0 else { throw posix("fsync index candidate") }
+            try fileSystem.synchronizeDirectory(candidate.deletingLastPathComponent())
+            let identity = try indexIdentity(at: candidate)
+            guard identity.checksum == digest(bytes) else { throw CheckpointRestoreError.invalidJournal }
+            return identity
+        } catch {
+            try? fileSystem.removeIfPresent(candidate)
+            throw error
+        }
+    }
+
+    private func indexIdentity(at url: URL) throws -> CheckpointRestoreJournal.IndexLockCandidate {
+        var attributes = stat()
+        guard Darwin.lstat(url.path, &attributes) == 0, attributes.st_mode & S_IFMT == S_IFREG else {
+            throw CheckpointRestoreError.blocked(.indexLock)
+        }
+        return .init(path: url.path, checksum: digest(try fileSystem.fileData(url)),
+                     device: UInt64(attributes.st_dev), inode: UInt64(attributes.st_ino))
+    }
+
+    private func sameIdentity(_ lhs: CheckpointRestoreJournal.IndexLockCandidate, _ rhs: CheckpointRestoreJournal.IndexLockCandidate) -> Bool {
+        lhs.device == rhs.device && lhs.inode == rhs.inode && lhs.checksum == rhs.checksum
     }
 
     private func removeOwnedLock(_ journal: CheckpointRestoreJournal) throws {

@@ -3,6 +3,85 @@ import Testing
 @testable import Alas
 
 struct CheckpointRestoreInterruptionTests {
+    @Test(arguments: [false, true])
+    func selectiveRecoveryPreservesUnrelatedEditsMadeAfterInterruption(replacedByDirectory: Bool) async throws {
+        let fixture = try await CheckpointRestoreFixture.make(faultInjector: .init {
+            if $0 == .beforeIndexInstall { throw CheckpointRestoreFixture.Fault.injected }
+            if case .duringRollback = $0 { throw CheckpointRestoreFixture.Fault.injected }
+        })
+        defer { fixture.remove() }
+        let checkpoint = try await fixture.service.createManual(target: fixture.repo.target, label: "Saved")
+        try await fixture.later()
+        let preview = try await fixture.preview(checkpoint.id)
+        let selected = Set(preview.groups.filter { $0.primaryPath == "selected.bin" }.map(\.id))
+        let before = try await fixture.snapshot()
+        await #expect(throws: (any Error).self) {
+            try await fixture.service.restore(target: fixture.repo.target, preview: preview,
+                                               selectedGroupIDs: selected, coordination: .clear)
+        }
+        let unrelatedPath: String
+        if replacedByDirectory {
+            try FileManager.default.removeItem(at: fixture.repo.root.appendingPathComponent("keep.swift"))
+            unrelatedPath = "keep.swift/note.txt"
+        } else {
+            unrelatedPath = "keep.swift"
+        }
+        try fixture.repo.write("unrelated edit after interruption", to: unrelatedPath)
+        try fixture.repo.write("new unrelated file", to: "after-interruption.txt")
+        try fixture.repo.write("new excluded file", to: ".env")
+        let store = WorktreeCheckpointStore(root: fixture.storeRoot)
+        let service = WorktreeCheckpointService(store: store)
+        let journals = try await store.recoverableJournals(lineageID: fixture.repo.target.lineageID)
+        let journal = try #require(journals.first)
+        let result = try await service.recoverInterruptedRestore(target: fixture.repo.target, operationID: journal.id, coordination: .clear)
+        #expect(result.restoredPaths == ["selected.bin"])
+        let after = try await WorktreeStateSnapshotter.live.snapshot(target: fixture.repo.target, includingPaths: ["selected.bin"], onlyIncludedPaths: true)
+        #expect(after.paths["selected.bin"] == before.paths["selected.bin"])
+        #expect(after.indexChecksum == before.indexChecksum)
+        #expect(try fixture.repo.disk(unrelatedPath) == Data("unrelated edit after interruption".utf8))
+        #expect(try fixture.repo.disk("after-interruption.txt") == Data("new unrelated file".utf8))
+        #expect(try fixture.repo.disk(".env") == Data("new excluded file".utf8))
+        #expect(try await store.recoverableJournals(lineageID: fixture.repo.target.lineageID).isEmpty)
+    }
+
+    @Test(arguments: [CheckpointRestoreFaultPoint.afterPartialIndexWrite, .beforeIndexCandidateSync,
+                      .afterIndexCandidatePublication, .afterIndexLockHandoff], [false, true])
+    func indexInstallationInterruptionCanRecoverWithoutTrustingForeignLockBytes(point: CheckpointRestoreFaultPoint, tamper: Bool) async throws {
+        let fixture = try await CheckpointRestoreFixture.make(faultInjector: .init {
+            if $0 == point { throw CheckpointRestoreFixture.Fault.injected }
+            if case .duringRollback = $0 { throw CheckpointRestoreFixture.Fault.injected }
+        })
+        defer { fixture.remove() }
+        let checkpoint = try await fixture.service.createManual(target: fixture.repo.target, label: "Saved")
+        try await fixture.later()
+        let preview = try await fixture.preview(checkpoint.id)
+        let before = try await fixture.snapshot()
+        await #expect(throws: (any Error).self) {
+            try await fixture.service.restore(target: fixture.repo.target, preview: preview,
+                                               selectedGroupIDs: preview.selectedGroupIDs, coordination: .clear)
+        }
+        let store = WorktreeCheckpointStore(root: fixture.storeRoot)
+        let service = WorktreeCheckpointService(store: store)
+        let journals = try await store.recoverableJournals(lineageID: fixture.repo.target.lineageID)
+        let journal = try #require(journals.first)
+        if tamper {
+            try fixture.repo.write("foreign lock bytes", to: ".git/index.lock")
+            await #expect(throws: (any Error).self) {
+                try await service.recoverInterruptedRestore(target: fixture.repo.target, operationID: journal.id, coordination: .clear)
+            }
+            #expect(try fixture.repo.disk(".git/index.lock") == Data("foreign lock bytes".utf8))
+            #expect(try await store.recoverableJournals(lineageID: fixture.repo.target.lineageID).count == 1)
+        } else {
+            _ = try await service.recoverInterruptedRestore(target: fixture.repo.target, operationID: journal.id, coordination: .clear)
+            let after = try await fixture.snapshot()
+            #expect(after.paths == before.paths)
+            #expect(after.indexChecksum == before.indexChecksum)
+            #expect(try await store.recoverableJournals(lineageID: fixture.repo.target.lineageID).isEmpty)
+            let names = try FileManager.default.contentsOfDirectory(atPath: fixture.repo.root.appendingPathComponent(".git").path)
+            #expect(!names.contains { $0.hasPrefix(".alas-checkpoint-index-") || $0 == "index.lock" })
+        }
+    }
+
     @Test(arguments: [CheckpointRestoreFaultPoint.afterFileMove(path: "added"), .afterFileMove(path: "selected.bin"),
                       .beforeIndexInstall, .afterIndexInstall, .beforeVerification])
     func failuresRollBackBothLayers(point: CheckpointRestoreFaultPoint) async throws {

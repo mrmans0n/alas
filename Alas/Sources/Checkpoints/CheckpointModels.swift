@@ -424,6 +424,13 @@ struct CheckpointCatalogSnapshot: Codable, Equatable, Sendable {
 }
 
 struct CheckpointRestoreJournal: Codable, Equatable, Sendable, Identifiable {
+    struct IndexLockCandidate: Codable, Equatable, Sendable {
+        let path: String
+        let checksum: String
+        let device: UInt64
+        let inode: UInt64
+    }
+
     enum Phase: String, Codable, Equatable, Sendable {
         case prepared
         case applyingFiles
@@ -454,6 +461,7 @@ struct CheckpointRestoreJournal: Codable, Equatable, Sendable, Identifiable {
     var ownedIndexLockChecksum: String?
     var ownedIndexLockDevice: UInt64?
     var ownedIndexLockInode: UInt64?
+    var pendingIndexLock: IndexLockCandidate?
     let stagingNames: [String: String]
 
     init(
