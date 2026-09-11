@@ -163,8 +163,10 @@ private struct RestorePreparationFixture: Sendable {
 
     func state() async throws -> (String, Data, String, [String: Data]) {
         let snapshot = try await snapshot()
-        let records = try await repo.status().split(separator: 0).filter { !$0.hasPrefix(Data("? .alas-checkpoint-restore-".utf8)) }
-        return (snapshot.headOID, Data(records.joined(separator: Data([0]))), snapshot.indexChecksum, [
+        let excludedPrefix = Array("? .alas-checkpoint-restore-".utf8)
+        let records = try await repo.status().split(separator: 0).map(Array.init)
+        let userStatus = Data(records.filter { !$0.starts(with: excludedPrefix) }.flatMap { $0 + [0] })
+        return (snapshot.headOID, userStatus, snapshot.indexChecksum, [
             "delete.txt": try repo.disk("delete.txt"),
             "run.sh": try repo.disk("run.sh"),
             "link": try leaf("link"),
