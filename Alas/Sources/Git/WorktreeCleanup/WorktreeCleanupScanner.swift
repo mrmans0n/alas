@@ -25,6 +25,13 @@ struct WorktreeCleanupScanUpdate: Equatable, Sendable {
     let total: Int
 }
 
+private struct WorktreeCleanupProbeResult: Sendable {
+    let index: Int
+    let facts: WorktreeCleanupGitFacts
+    let activeSessionCount: Int
+    let operationInFlight: Bool
+}
+
 /// Merged review requests for one repository, keyed by head branch. A branch
 /// name can have multiple entries: it may have been reused across several
 /// merged reviews over time, and the caller must be able to check the local
@@ -102,79 +109,106 @@ struct WorktreeCleanupScanner: Sendable {
             return candidates
         }
 
-        // The forge query and bounded per-worktree probes are independent.
-        // Start them together so network latency does not sit in front of all
-        // local git work, then publish each row as soon as both inputs exist.
+        guard !worktrees.isEmpty else { return [] }
+
+        // Local probes and the forge query are independent. Stream bounded
+        // probe results into a buffer while the network request runs, then
+        // publish buffered and future rows as soon as forge evidence exists.
+        let (probeResults, probeTask) = localProbeResults(for: worktrees)
         let mergeIndexTask = Task {
             await dependencies.mergeIndex(project)
         }
-        defer { mergeIndexTask.cancel() }
+        defer {
+            probeTask.cancel()
+            mergeIndexTask.cancel()
+        }
 
-        return await withTaskGroup(
-            of: (Int, WorktreeCleanupCandidate).self
-        ) { group in
+        return await withTaskCancellationHandler {
+            let indexResult = await mergeIndexTask.value
             var results = [WorktreeCleanupCandidate?](
                 repeating: nil,
                 count: worktrees.count
             )
-            var next = 0
             var completed = 0
 
-            func addTask(_ index: Int) {
-                let worktree = worktrees[index]
-                _ = group.addTaskUnlessCancelled {
-                    async let facts = dependencies.gitFacts(worktree)
-                    async let activeSessionCount =
-                        dependencies.activeSessionCount(worktree.id)
-                    async let operationInFlight =
-                        dependencies.operationInFlight(worktree.id)
-
-                    let inputs = await (
-                        facts,
-                        activeSessionCount,
-                        operationInFlight
-                    )
-                    let indexResult = await withTaskCancellationHandler {
-                        await mergeIndexTask.value
-                    } onCancel: {
-                        mergeIndexTask.cancel()
-                    }
-                    return (
-                        index,
-                        Self.candidate(
-                            worktree: worktree,
-                            facts: inputs.0,
-                            activeSessionCount: inputs.1,
-                            operationInFlight: inputs.2,
-                            baseBranch: baseBranch,
-                            indexResult: indexResult,
-                            now: now,
-                            idleThresholdDays: idleThresholdDays
-                        )
-                    )
-                }
-            }
-
-            while next < worktrees.count && next < Self.probeConcurrency {
-                addTask(next)
-                next += 1
-            }
-            while let (index, candidate) = await group.next() {
-                results[index] = candidate
+            for await probe in probeResults {
+                guard !Task.isCancelled else { break }
+                let worktree = worktrees[probe.index]
+                let candidate = Self.candidate(
+                    worktree: worktree,
+                    facts: probe.facts,
+                    activeSessionCount: probe.activeSessionCount,
+                    operationInFlight: probe.operationInFlight,
+                    baseBranch: baseBranch,
+                    indexResult: indexResult,
+                    now: now,
+                    idleThresholdDays: idleThresholdDays
+                )
+                results[probe.index] = candidate
                 completed += 1
                 await onUpdate(.init(
                     candidate: candidate,
                     completed: completed,
                     total: worktrees.count
                 ))
-                if next < worktrees.count {
-                    addTask(next)
-                    next += 1
-                }
             }
 
             return results.compactMap { $0 }
+        } onCancel: {
+            probeTask.cancel()
+            mergeIndexTask.cancel()
         }
+    }
+
+    private func localProbeResults(
+        for worktrees: [Worktree]
+    ) -> (
+        stream: AsyncStream<WorktreeCleanupProbeResult>,
+        task: Task<Void, Never>
+    ) {
+        let (stream, continuation) = AsyncStream<WorktreeCleanupProbeResult>.makeStream()
+        let task = Task {
+            await withTaskGroup(of: WorktreeCleanupProbeResult.self) { group in
+                var next = 0
+
+                func addTask(_ index: Int) {
+                    let worktree = worktrees[index]
+                    _ = group.addTaskUnlessCancelled {
+                        async let facts = dependencies.gitFacts(worktree)
+                        async let activeSessionCount =
+                            dependencies.activeSessionCount(worktree.id)
+                        async let operationInFlight =
+                            dependencies.operationInFlight(worktree.id)
+
+                        let inputs = await (
+                            facts,
+                            activeSessionCount,
+                            operationInFlight
+                        )
+                        return WorktreeCleanupProbeResult(
+                            index: index,
+                            facts: inputs.0,
+                            activeSessionCount: inputs.1,
+                            operationInFlight: inputs.2
+                        )
+                    }
+                }
+
+                while next < worktrees.count && next < Self.probeConcurrency {
+                    addTask(next)
+                    next += 1
+                }
+                while let result = await group.next() {
+                    continuation.yield(result)
+                    if next < worktrees.count {
+                        addTask(next)
+                        next += 1
+                    }
+                }
+            }
+            continuation.finish()
+        }
+        return (stream, task)
     }
 
     /// Resolves merge state, preserving the distinction the acceptance criteria

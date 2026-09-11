@@ -374,6 +374,35 @@ struct WorktreeCleanupScannerTests {
         #expect(Set(updates.map(\.candidate.id)) == Set(worktrees.map(\.id)))
     }
 
+    @Test func localProbesContinueWhileForgeLookupIsPending() async {
+        let forgeGate = WorktreeCleanupForgeGate()
+        let recorder = WorktreeCleanupProbeStartRecorder()
+        let scanner = Self.scanner(
+            facts: { _ in
+                await recorder.recordStart()
+                return Self.cleanFacts
+            },
+            mergeIndex: { _ in
+                await forgeGate.pause()
+                return .success(WorktreeForgeMergeIndex(refsByHeadBranch: [:]))
+            }
+        )
+        let worktrees = (0..<8).map {
+            Self.worktree(branch: "feature/\($0)")
+        }
+        let scanTask = Task {
+            await Self.scan(scanner, worktrees: worktrees)
+        }
+        await forgeGate.waitUntilPaused()
+        try? await Task.sleep(nanoseconds: 500_000_000)
+        let probesStartedBeforeForgeCompleted = await recorder.count
+
+        await forgeGate.resume()
+        _ = await scanTask.value
+
+        #expect(probesStartedBeforeForgeCompleted == worktrees.count)
+    }
+
     @Test func cancellingScanCancelsMergeIndexLookup() async {
         let probe = WorktreeCleanupCancellationProbe()
         let scanner = Self.scanner(mergeIndex: { _ in
@@ -523,5 +552,32 @@ private actor WorktreeCleanupProbeStartRecorder {
         await withCheckedContinuation { continuation in
             waitContinuation = continuation
         }
+    }
+}
+
+private actor WorktreeCleanupForgeGate {
+    private var isPaused = false
+    private var pauseWaiters: [CheckedContinuation<Void, Never>] = []
+    private var resumeContinuation: CheckedContinuation<Void, Never>?
+
+    func pause() async {
+        isPaused = true
+        pauseWaiters.forEach { $0.resume() }
+        pauseWaiters.removeAll()
+        await withCheckedContinuation { continuation in
+            resumeContinuation = continuation
+        }
+    }
+
+    func waitUntilPaused() async {
+        if isPaused { return }
+        await withCheckedContinuation { continuation in
+            pauseWaiters.append(continuation)
+        }
+    }
+
+    func resume() {
+        resumeContinuation?.resume()
+        resumeContinuation = nil
     }
 }
