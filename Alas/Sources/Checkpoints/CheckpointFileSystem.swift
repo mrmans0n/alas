@@ -158,7 +158,7 @@ struct LiveCheckpointFileSystem: CheckpointFileSystem, Sendable {
             return
         }
         if errno == ENOENT { return }
-        if errno == EISDIR {
+        if errno == EISDIR || errno == EPERM {
             guard Darwin.rmdir(url.path) == 0 else { throw posixError("rmdir") }
             try synchronizeDirectory(url.deletingLastPathComponent())
             return
