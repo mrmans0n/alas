@@ -6650,12 +6650,13 @@ final class AppState {
     ) {
         let key = owner.storageKey
         guard retainedACPSessionCleanupTasks[key]?[sessionId] == nil else { return }
+        acpManagers[owner]?.retainSession(id: sessionId)
         let id = UUID()
         let task = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
                 guard let manager = self.acpManagers[owner] else {
-                    self.clearRetainedACPSessionCleanup(worktreeId: key, sessionId: sessionId, id: id)
+                    self.clearRetainedACPSessionCleanup(owner: owner, sessionId: sessionId, id: id)
                     return
                 }
                 guard let delay = self.retainedScheduledSessionCleanupDelay(
@@ -6663,7 +6664,7 @@ final class AppState {
                     sessionId: sessionId,
                     retainActivePrompt: retainActivePrompt
                 ) else {
-                    self.clearRetainedACPSessionCleanup(worktreeId: key, sessionId: sessionId, id: id)
+                    self.clearRetainedACPSessionCleanup(owner: owner, sessionId: sessionId, id: id)
                     self.cleanupACPSession(owner: owner, sessionId: sessionId)
                     return
                 }
@@ -6710,29 +6711,34 @@ final class AppState {
 
     private func cancelRetainedACPSessionCleanup(owner: SessionOwnerID, sessionId: ACPSession.ID) {
         let key = owner.storageKey
-        retainedACPSessionCleanupTasks[key]?[sessionId]?.task.cancel()
+        guard let pending = retainedACPSessionCleanupTasks[key]?[sessionId] else { return }
+        pending.task.cancel()
         retainedACPSessionCleanupTasks[key]?.removeValue(forKey: sessionId)
         if retainedACPSessionCleanupTasks[key]?.isEmpty == true {
             retainedACPSessionCleanupTasks.removeValue(forKey: key)
         }
+        acpManagers[owner]?.releaseSession(id: sessionId)
     }
 
     private func cancelRetainedACPSessionCleanups(owner: SessionOwnerID) {
         let key = owner.storageKey
         if let pendingBySession = retainedACPSessionCleanupTasks[key] {
-            for pending in pendingBySession.values {
+            for (sessionId, pending) in pendingBySession {
                 pending.task.cancel()
+                acpManagers[owner]?.releaseSession(id: sessionId)
             }
         }
         retainedACPSessionCleanupTasks.removeValue(forKey: key)
     }
 
-    private func clearRetainedACPSessionCleanup(worktreeId: String, sessionId: ACPSession.ID, id: UUID) {
-        guard retainedACPSessionCleanupTasks[worktreeId]?[sessionId]?.id == id else { return }
-        retainedACPSessionCleanupTasks[worktreeId]?.removeValue(forKey: sessionId)
-        if retainedACPSessionCleanupTasks[worktreeId]?.isEmpty == true {
-            retainedACPSessionCleanupTasks.removeValue(forKey: worktreeId)
+    private func clearRetainedACPSessionCleanup(owner: SessionOwnerID, sessionId: ACPSession.ID, id: UUID) {
+        let key = owner.storageKey
+        guard retainedACPSessionCleanupTasks[key]?[sessionId]?.id == id else { return }
+        retainedACPSessionCleanupTasks[key]?.removeValue(forKey: sessionId)
+        if retainedACPSessionCleanupTasks[key]?.isEmpty == true {
+            retainedACPSessionCleanupTasks.removeValue(forKey: key)
         }
+        acpManagers[owner]?.releaseSession(id: sessionId)
     }
 
     private func awaitPendingACPDetach(worktreeId: String, sessionId: ACPSession.ID) async {
