@@ -269,9 +269,14 @@ private struct AgentSidebarManagerObserver: View {
     let onChange: () -> Void
 
     var body: some View {
+        let sessionChanges = Publishers.MergeMany(manager.sessions.values.map(\.objectWillChange))
+
         Color.clear
             .frame(width: 0, height: 0)
             .onReceive(manager.objectWillChange) { _ in
+                onChange()
+            }
+            .onReceive(sessionChanges) { _ in
                 onChange()
             }
     }
