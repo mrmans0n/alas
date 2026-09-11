@@ -36,6 +36,7 @@ struct RightPaneView: View {
         let initialState = state.rightPaneStore.activeState(worktreeId: worktree.id)
         initialState?.activeTab = RightPaneTab.visible(
             initialState?.activeTab ?? .changes,
+            agentTabEnabled: state.config.agentTabEnabled,
             runTabEnabled: state.config.runTabEnabled
         )
         _rps = State(initialValue: initialState)
@@ -68,6 +69,7 @@ struct RightPaneView: View {
                             state.config.files.showIgnored.toggle()
                             state.saveConfig()
                         },
+                        showAgentTab: state.config.agentTabEnabled,
                         showRunTab: state.config.runTabEnabled,
                         activeRunCount: state.runRecords
                             .records(worktreeID: worktree.id)
@@ -75,7 +77,7 @@ struct RightPaneView: View {
                         activeAgentCount: state.agentSidebarRollup(for: worktree).active.count
                     )
 
-                    if rps.hasLoadedSnapshot || rps.activeTab == .agent {
+                    if rps.hasLoadedSnapshot || (rps.activeTab == .agent && state.config.agentTabEnabled) {
                         switch rps.activeTab {
                         case .changes:
                             ChangesTabView(
@@ -150,6 +152,14 @@ struct RightPaneView: View {
                 .onChange(of: state.config.runTabEnabled) {
                     rps.activeTab = RightPaneTab.visible(
                         rps.activeTab,
+                        agentTabEnabled: state.config.agentTabEnabled,
+                        runTabEnabled: state.config.runTabEnabled
+                    )
+                }
+                .onChange(of: state.config.agentTabEnabled) {
+                    rps.activeTab = RightPaneTab.visible(
+                        rps.activeTab,
+                        agentTabEnabled: state.config.agentTabEnabled,
                         runTabEnabled: state.config.runTabEnabled
                     )
                 }
