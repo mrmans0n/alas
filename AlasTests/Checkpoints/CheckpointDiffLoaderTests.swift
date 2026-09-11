@@ -49,6 +49,30 @@ struct CheckpointDiffLoaderTests {
         }
     }
 
+    @Test func emptyFileAdditionAndDeletionRemainVisible() async throws {
+        let repo = try await CheckpointTestRepository.make()
+        defer { repo.remove() }
+        let service = WorktreeCheckpointService(store: .init(root: repo.root.appendingPathComponent(".git/checkpoints")))
+        let additionBaseline = try await service.createManual(target: repo.target, label: "Before empty add")
+        try repo.write(Data(), to: "empty.txt")
+
+        guard case .text(let addition) = await service.diffContent(target: repo.target, id: additionBaseline.id, path: "empty.txt") else {
+            Issue.record("Expected empty addition text diff")
+            return
+        }
+        #expect(addition.metadataSummary == "Empty file added.")
+
+        try await repo.commitAll("empty")
+        let deletionBaseline = try await service.createManual(target: repo.target, label: "Before empty delete")
+        try FileManager.default.removeItem(at: repo.root.appendingPathComponent("empty.txt"))
+
+        guard case .text(let deletion) = await service.diffContent(target: repo.target, id: deletionBaseline.id, path: "empty.txt") else {
+            Issue.record("Expected empty deletion text diff")
+            return
+        }
+        #expect(deletion.metadataSummary == "Empty file deleted.")
+    }
+
     @Test @MainActor func imagesKeepBothSidesAndFrameCounts() async throws {
         let repo = try await CheckpointTestRepository.make()
         defer { repo.remove() }

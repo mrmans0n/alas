@@ -68,6 +68,28 @@ struct WorktreeCheckpointCaptureTests {
         }
     }
 
+    @Test func deleteRefusesStaleWorktreeLineage() async throws {
+        let fixture = try await CheckpointCaptureFixture.make()
+        defer { fixture.remove() }
+        let service = fixture.service()
+        let summary = try await service.createManual(target: fixture.target, label: "Before stale delete")
+        let staleTarget = CheckpointWorktreeTarget(
+            worktreeID: fixture.target.worktreeID,
+            projectID: fixture.target.projectID,
+            path: fixture.target.path,
+            lineageID: UUID().uuidString.lowercased(),
+            branch: fixture.target.branch,
+            repositoryName: fixture.target.repositoryName,
+            workspaceName: fixture.target.workspaceName
+        )
+
+        await #expect(throws: CheckpointSnapshotError.lineageChanged) {
+            try await service.delete(target: staleTarget, id: summary.id)
+        }
+
+        #expect(try await service.summaries(target: fixture.target).summaries == [summary])
+    }
+
     @Test func recoveryPublishesOnlySelectedCurrentStates() async throws {
         let fixture = try await CheckpointCaptureFixture.make()
         defer { fixture.remove() }

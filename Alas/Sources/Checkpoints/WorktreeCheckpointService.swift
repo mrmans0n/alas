@@ -43,6 +43,7 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
     }
 
     func summaries(target: CheckpointWorktreeTarget) async throws -> CheckpointCatalogSnapshot {
+        try validateLineage(target)
         let journals = try await store.recoverableJournals(lineageID: target.lineageID)
         try scavengeUnjournaledRestoreStaging(target: target, preserving: Set(journals.map(\.id)))
         if let cached = cachedCatalogs[target.lineageID] { return cached }
@@ -62,6 +63,7 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
     }
 
     func delete(target: CheckpointWorktreeTarget, id: CheckpointID) async throws -> CheckpointCatalogSnapshot {
+        try validateLineage(target)
         let catalog = try await store.delete(id: id, lineageID: target.lineageID)
         cachedCatalogs[target.lineageID] = catalog
         return catalog
@@ -152,15 +154,24 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false,
                                                     attributes: [.posixPermissions: 0o700])
             defer { try? FileManager.default.removeItem(at: directory) }
-            try (before ?? Data()).write(to: directory.appendingPathComponent("before"))
-            try (after ?? Data()).write(to: directory.appendingPathComponent("after"))
+            if let before {
+                try before.write(to: directory.appendingPathComponent("before"))
+            }
+            if let after {
+                try after.write(to: directory.appendingPathComponent("after"))
+            }
+            let beforePath = before == nil ? "/dev/null" : "before"
+            let afterPath = after == nil ? "/dev/null" : "after"
             let result = try await snapshotter.git.run(["diff", "--no-index", "--no-ext-diff", "--no-textconv", "--no-color",
-                                                       "--src-prefix=checkpoint/", "--dst-prefix=current/", "--", "before", "after"],
+                                                       "--src-prefix=checkpoint/", "--dst-prefix=current/", "--", beforePath, afterPath],
                                                       cwd: directory, environment: [:])
             guard result.exitCode == 0 || result.exitCode == 1 else {
                 throw ProcessError.nonZeroExit(result.exitCode, result.stderr)
             }
-            let diff = DiffParser.parse(result.stdout)
+            var diff = DiffParser.parse(result.stdout)
+            if diff.hunks.isEmpty, diff.metadataSummary == nil, before == nil || after == nil {
+                diff.metadataSummary = before == nil ? "Empty file added." : "Empty file deleted."
+            }
             if diff.isBinary { return .binary(beforeByteCount: before.map { Int64($0.count) }, afterByteCount: after.map { Int64($0.count) }) }
             return .text(diff)
         } catch {
@@ -240,6 +251,12 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
 
     private var restoreTransaction: CheckpointRestoreTransaction {
         .init(store: store, git: snapshotter.git, fileSystem: snapshotter.fileSystem, faultInjector: restoreFaultInjector)
+    }
+
+    private func validateLineage(_ target: CheckpointWorktreeTarget) throws {
+        guard WorktreeService.existingLocalLineageID(forWorktreeAt: target.path) == target.lineageID else {
+            throw CheckpointSnapshotError.lineageChanged
+        }
     }
 
     private func previewHeadOID(target: CheckpointWorktreeTarget) async throws -> String {

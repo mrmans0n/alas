@@ -124,6 +124,25 @@ struct WorktreeCheckpointStoreTests {
         #expect(try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent(lineageA).appendingPathComponent("quarantine").path).contains { $0.hasPrefix(checkpoint.manifest.id.uuidString.lowercased()) })
     }
 
+    @Test func publishingReplacesCorruptContentAddressedBlob() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bytes = Data([1, 2, 3])
+        let first = try publication(lineageID: lineageA, label: "Damaged", bytes: bytes, createdAt: Date(timeIntervalSince1970: 1))
+        let second = try publication(lineageID: lineageA, label: "Replacement", bytes: bytes, createdAt: Date(timeIntervalSince1970: 2))
+        let store = WorktreeCheckpointStore(root: root)
+        _ = try await store.publish(first)
+        let blob = try #require(first.blobs.keys.first)
+        try Data([9]).write(to: blobURL(root: root, lineageID: lineageA, blob: blob))
+
+        let catalog = try await store.publish(second)
+
+        #expect(try await store.readBlob(blob, lineageID: lineageA) == bytes)
+        #expect(try await store.load(id: second.manifest.id, lineageID: lineageA) == second.manifest)
+        #expect(catalog.summaries.map(\.label) == ["Replacement", "Damaged"])
+        #expect(catalog.summaries.first { $0.label == "Damaged" }?.unavailableReason != nil)
+    }
+
     @Test func undecodableManifestRetainsUnavailableSummaryFromPreviousCatalog() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -242,6 +261,33 @@ struct WorktreeCheckpointStoreTests {
         #expect(!FileManager.default.fileExists(atPath: staging.path))
         let journalNames = try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent(lineageA).appendingPathComponent("journals").path)
         #expect(journalNames.isEmpty)
+    }
+
+    @Test func stagedAdditionIsNotCountedAsUntracked() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bytes = Data("new file".utf8)
+        let blob = CheckpointBlobReference.make(for: bytes)
+        let manifest = try WorktreeCheckpointManifest(
+            kind: .manual,
+            label: "Staged add",
+            createdAt: Date(timeIntervalSince1970: 1),
+            byteCount: Int64(bytes.count),
+            lineageID: lineageA,
+            capturedPath: "/tmp/repository",
+            repositoryName: "Alas",
+            branch: "main",
+            headOID: String(repeating: "f", count: 40),
+            exclusions: [], groups: [],
+            paths: [.init(relativePath: "New.swift", head: .absent, index: .regular(blob: blob, executable: false), worktree: .regular(blob: blob, executable: false))]
+        )
+        let store = WorktreeCheckpointStore(root: root)
+
+        let summary = try await store.publish(.init(manifest: manifest, blobs: [blob: bytes])).summaries.first
+
+        #expect(summary?.stagedFileCount == 1)
+        #expect(summary?.unstagedFileCount == 0)
+        #expect(summary?.untrackedFileCount == 0)
     }
 
     private func publication(lineageID: String, label: String, bytes: Data, kind: CheckpointKind = .manual, createdAt: Date = Date(timeIntervalSince1970: 1_700_000_000)) throws -> CheckpointPublication {

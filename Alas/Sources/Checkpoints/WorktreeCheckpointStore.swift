@@ -96,7 +96,12 @@ actor WorktreeCheckpointStore {
 
         for (reference, data) in publication.blobs {
             let blob = blobURL(reference, layout: layout)
-            guard !exists(blob) else { continue }
+            if exists(blob) {
+                if CheckpointBlobReference.make(for: try fileSystem.fileData(blob)) == reference {
+                    continue
+                }
+                try fileSystem.removeIfPresent(blob)
+            }
             let temporaryBlob = layout.blobs.appendingPathComponent(".\(reference.sha256).tmp")
             try fileSystem.writeDurable(data, to: temporaryBlob, mode: 0o600)
             do {
@@ -297,7 +302,7 @@ actor WorktreeCheckpointStore {
 
     private func snapshot(lineageID: String, manifests: [WorktreeCheckpointManifest], unavailable: [WorktreeCheckpointSummary] = [], byteCount: Int64) -> CheckpointCatalogSnapshot {
         let summaries = (manifests.sorted { $0.createdAt > $1.createdAt }.map { manifest in
-            WorktreeCheckpointSummary(id: manifest.id, kind: manifest.kind, label: manifest.label, createdAt: manifest.createdAt, byteCount: manifest.byteCount, stagedFileCount: manifest.paths.filter { $0.index != $0.head }.count, unstagedFileCount: manifest.paths.filter { $0.worktree != $0.index }.count, untrackedFileCount: manifest.paths.filter { $0.head.kind == .absent && $0.worktree.kind != .absent }.count, unavailableReason: nil)
+            WorktreeCheckpointSummary(id: manifest.id, kind: manifest.kind, label: manifest.label, createdAt: manifest.createdAt, byteCount: manifest.byteCount, stagedFileCount: manifest.paths.filter { $0.index != $0.head }.count, unstagedFileCount: manifest.paths.filter { $0.worktree != $0.index }.count, untrackedFileCount: manifest.paths.filter { $0.head.kind == .absent && $0.index.kind == .absent && $0.worktree.kind != .absent }.count, unavailableReason: nil)
         } + unavailable).sorted { $0.createdAt > $1.createdAt }
         return .init(lineageID: lineageID, summaries: summaries, byteCount: byteCount)
     }
