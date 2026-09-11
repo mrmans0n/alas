@@ -55,6 +55,36 @@ struct WorktreeCheckpointStoreTests {
         #expect(try await store.catalog(lineageID: lineageA).summaries.map(\.label) == ["Small"])
     }
 
+    @Test func byteLimitPrunesOldestRecoveryBeforeManualCheckpoint() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = WorktreeCheckpointStore(root: root, limits: .init(manualCount: 20, recoveryCount: 5, bytes: 6))
+        let recovery = try publication(lineageID: lineageA, label: "Recovery old", bytes: Data([1, 1, 1]), kind: .recovery, createdAt: Date(timeIntervalSince1970: 1))
+        let manual = try publication(lineageID: lineageA, label: "Manual old", bytes: Data([2, 2, 2]), createdAt: Date(timeIntervalSince1970: 2))
+        let incoming = try publication(lineageID: lineageA, label: "Manual new", bytes: Data([3, 3, 3]), createdAt: Date(timeIntervalSince1970: 3))
+
+        _ = try await store.publish(recovery)
+        _ = try await store.publish(manual)
+        let catalog = try await store.publish(incoming)
+
+        #expect(catalog.byteCount == 6)
+        #expect(catalog.summaries.map(\.label) == ["Manual new", "Manual old"])
+        await #expect(throws: CheckpointStoreError.checkpointNotFound) {
+            try await store.load(id: recovery.manifest.id, lineageID: lineageA)
+        }
+    }
+
+    @Test func byteLimitRejectsIncomingCheckpointThatCannotFitByItself() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = WorktreeCheckpointStore(root: root, limits: .init(manualCount: 20, recoveryCount: 5, bytes: 2))
+        let incoming = try publication(lineageID: lineageA, label: "Too large", bytes: Data([1, 2, 3]))
+
+        await #expect(throws: CheckpointStoreError.byteLimitExceeded) {
+            try await store.publish(incoming)
+        }
+    }
+
     @Test func activeJournalProtectsItsCheckpointsFromDeletion() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -92,6 +122,23 @@ struct WorktreeCheckpointStoreTests {
         #expect(catalog.summaries[0].label == "Damaged")
         #expect(catalog.summaries[0].unavailableReason != nil)
         #expect(try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent(lineageA).appendingPathComponent("quarantine").path).contains { $0.hasPrefix(checkpoint.manifest.id.uuidString.lowercased()) })
+    }
+
+    @Test func deletingUnavailableCheckpointRemovesCatalogSummaryAndQuarantine() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let checkpoint = try publication(lineageID: lineageA, label: "Damaged", bytes: Data([1, 2, 3]))
+        let store = WorktreeCheckpointStore(root: root)
+        _ = try await store.publish(checkpoint)
+        let blob = try #require(checkpoint.blobs.keys.first)
+        try Data([9]).write(to: blobURL(root: root, lineageID: lineageA, blob: blob))
+        _ = try await store.catalog(lineageID: lineageA)
+
+        let catalog = try await store.delete(id: checkpoint.manifest.id, lineageID: lineageA)
+
+        #expect(catalog.summaries.isEmpty)
+        let quarantineNames = try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent(lineageA).appendingPathComponent("quarantine").path)
+        #expect(!quarantineNames.contains { $0.hasPrefix(checkpoint.manifest.id.uuidString.lowercased()) })
     }
 
     @Test func corruptCatalogIsQuarantinedAndRebuiltFromValidManifests() async throws {
@@ -133,6 +180,31 @@ struct WorktreeCheckpointStoreTests {
 
         _ = try await store.publish(first)
         #expect(try await store.publish(second).byteCount == 3)
+    }
+
+    @Test func recoverableJournalsCleanTerminalJournalStaging() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let staging = root.appendingPathComponent("staging", isDirectory: true)
+        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+        try Data("backup".utf8).write(to: staging.appendingPathComponent("backup"))
+        let store = WorktreeCheckpointStore(root: root)
+        let journal = CheckpointRestoreJournal(
+            lineageID: lineageA,
+            checkpointID: UUID(),
+            recoveryCheckpointID: UUID(),
+            phase: .completed,
+            stagingRoot: staging.path,
+            selectedPaths: ["File.swift"],
+            expectedFingerprint: "fingerprint",
+            expectedIndexChecksum: "checksum"
+        )
+        try await store.writeJournal(journal)
+
+        #expect(try await store.recoverableJournals(lineageID: lineageA).isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: staging.path))
+        let journalNames = try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent(lineageA).appendingPathComponent("journals").path)
+        #expect(journalNames.isEmpty)
     }
 
     private func publication(lineageID: String, label: String, bytes: Data, kind: CheckpointKind = .manual, createdAt: Date = Date(timeIntervalSince1970: 1_700_000_000)) throws -> CheckpointPublication {

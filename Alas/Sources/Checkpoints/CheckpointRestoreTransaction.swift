@@ -42,6 +42,7 @@ enum CheckpointRestoreFaultPoint: Equatable, Sendable {
     case afterPartialIndexWrite
     case beforeIndexCandidateSync
     case afterIndexCandidatePublication
+    case afterIndexLockJournaled
     case afterIndexLockHandoff
     case afterIndexInstall
     case beforeVerification
@@ -372,9 +373,10 @@ struct CheckpointRestoreTransaction: Sendable {
         journal.ownedIndexLockChecksum = digest(Data())
         journal.ownedIndexLockDevice = UInt64(attributes.st_dev)
         journal.ownedIndexLockInode = UInt64(attributes.st_ino)
+        try await store.writeJournal(journal)
+        try faultInjector.hit(.afterIndexLockJournaled)
         guard Darwin.fsync(descriptor) == 0 else { throw posix("fsync lock") }
         try fileSystem.synchronizeDirectory(lock.deletingLastPathComponent())
-        try await store.writeJournal(journal)
     }
 
     private func validateLock(_ journal: CheckpointRestoreJournal) throws {
