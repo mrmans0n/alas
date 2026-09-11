@@ -37,7 +37,10 @@ struct RightPaneTransitionalView: View {
                     totalDel: 0,
                     onHidePane: {},
                     showIgnored: state.config.files.showIgnored,
-                    onToggleShowIgnored: {}
+                    onToggleShowIgnored: {},
+                    showAgentTab: state.config.agentTabEnabled,
+                    showRunTab: state.config.runTabEnabled,
+                    activeAgentCount: state.agentSidebarRollup(for: worktree).active.count
                 )
                 .disabled(true)
 
@@ -100,7 +103,7 @@ struct RightPaneLoadingSkeletonView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
-        case .files, .run:
+        case .files, .agent, .run:
             VStack(alignment: .leading, spacing: 6) {
                 SkeletonRow(widthFraction: 0.6,  leadingInset: 0)
                 SkeletonRow(widthFraction: 0.5,  leadingInset: 16)

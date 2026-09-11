@@ -87,6 +87,8 @@ final class AppState {
     /// separate from `tabs`: a run's outcome outlives its terminal shell, and a
     /// live shell never implies a live command.
     var runRecords = RunRecordStore()
+    /// Follow-up composers outlive the conditional Agent pane and worktree navigation.
+    var agentSidebarFollowUps: [String: [ACPSession.ID: AgentSidebarFollowUpDraft]] = [:]
     var selectedRunScriptFailure: RunScriptFailure?
     @ObservationIgnored var runScriptCompletionTasks: [String: (worktreeID: String, sessionID: String, location: RunScriptCaptureLocation, task: Task<Void, Never>)] = [:]
     @ObservationIgnored let runScriptCompletionWaiter: RunScriptCompletionWaiter
@@ -8961,6 +8963,78 @@ final class AppState {
         acpManagers[.worktree(id)]
     }
 
+    /// The manager owns persisted history; center tabs only supply terminal rows.
+    func agentSidebarRollup(for worktree: Worktree) -> AgentSidebarRollup {
+        let manager = acpManager(forWorktreeId: worktree.id)
+        let terminalTabs = tabs.tabs(forWorktree: worktree.id).compactMap { tab -> TerminalTabState? in
+            guard case .terminal(let terminal) = tab else { return nil }
+            return terminal
+        }
+        let liveSessions = manager?.sessions.values.filter { session in
+            manager?.sessionRows.first(where: { $0.id == session.id })?.archived != true
+        } ?? []
+        return AgentSidebarRollupBuilder.build(.init(
+            worktreeID: worktree.id,
+            persistedACP: manager?.sessionRows.filter { !$0.archived } ?? [],
+            liveACP: liveSessions.sorted {
+                if $0.createdAt != $1.createdAt { return $0.createdAt > $1.createdAt }
+                return $0.id < $1.id
+            },
+            terminalTabs: terminalTabs,
+            harnessActivity: harness.activityBySession,
+            remoteHost: projectAndWorktree(withWorktreeId: worktree.id)?.project.host
+        ))
+    }
+
+    func focusAgentSidebarRow(_ rowID: AgentSidebarRowID, in worktree: Worktree) async {
+        switch rowID {
+        case .acp(let sessionID):
+            guard let manager = acpManager(forWorktreeId: worktree.id),
+                  manager.liveSession(for: sessionID) != nil
+                    || manager.sessionRows.contains(where: { $0.id == sessionID && !$0.archived })
+            else { return }
+            selectWorktree(id: worktree.id)
+            await openExistingACPSession(sessionId: sessionID, worktree: worktree)
+        case .terminal(let tabID, let sessionID):
+            let matchingLeafID = tabs.tabs(forWorktree: worktree.id).compactMap { tab -> String? in
+                guard tab.id == tabID,
+                      case .terminal(let terminal) = tab,
+                      let leaf = terminal.root.leaves().first(where: { $0.sessionId == sessionID })
+                else { return nil }
+                return leaf.id
+            }.first
+            guard let matchingLeafID else { return }
+            selectWorktree(id: worktree.id)
+            _ = tabs.setFocusedLeaf(worktreeId: worktree.id, tabId: tabID, leafId: matchingLeafID)
+            activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tabID)
+        }
+    }
+
+    func sendAgentSidebarFollowUp(for sessionID: ACPSession.ID, worktreeID: String, text: String) {
+        guard let complete = beginAgentSidebarFollowUp(for: sessionID, worktreeID: worktreeID, text: text) else { return }
+        Task {
+            await sendPrompt(for: sessionID, worktreeID: worktreeID, text: text, attachments: [], onResult: complete)
+        }
+    }
+
+    /// Own completion in AppState so a hidden pane cannot lose a failed message.
+    func beginAgentSidebarFollowUp(
+        for sessionID: ACPSession.ID,
+        worktreeID: String,
+        text: String
+    ) -> (@MainActor (Bool) -> Void)? {
+        guard agentSidebarFollowUps[worktreeID]?[sessionID]?.delivery != .sending,
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        agentSidebarFollowUps[worktreeID, default: [:]][sessionID] = .init(text: text, delivery: .sending)
+        return { [weak self] succeeded in
+            guard let self else { return }
+            self.agentSidebarFollowUps[worktreeID, default: [:]][sessionID]?.delivery = succeeded ? .sent : .failed
+            if succeeded, self.agentSidebarFollowUps[worktreeID]?[sessionID]?.text == text {
+                self.agentSidebarFollowUps[worktreeID, default: [:]][sessionID]?.text = ""
+            }
+        }
+    }
+
     func acpManager(for owner: SessionOwnerID) -> ACPSessionManager? {
         acpManagers[owner]
     }
@@ -9889,6 +9963,11 @@ final class AppState {
     func openExistingACPSession(sessionId: ACPSession.ID) async {
         guard let worktreeId = selectedWorktreeId,
               let worktree = worktree(withId: worktreeId) else { return }
+        await openExistingACPSession(sessionId: sessionId, worktree: worktree)
+    }
+
+    /// Pins the owner before suspension, including when sidebar focus reopens history.
+    func openExistingACPSession(sessionId: ACPSession.ID, worktree: Worktree) async {
         await awaitPendingACPDetach(owner: .worktree(worktree.id), sessionId: sessionId)
         guard let mgr = acpManager(for: worktree) else { return }
         cancelRetainedACPSessionCleanup(owner: .worktree(worktree.id), sessionId: sessionId)
@@ -11038,6 +11117,21 @@ extension AppState: RemoteSessionsProvider {
         onResult(false)
     }
 
+    func sendPrompt(
+        for id: String,
+        worktreeID: String,
+        text: String,
+        attachments: [ACPMessage.Attachment],
+        onResult: @escaping @MainActor (Bool) -> Void
+    ) async {
+        guard let manager = acpManager(forWorktreeId: worktreeID),
+              manager.liveSession(for: id) != nil else {
+            onResult(false)
+            return
+        }
+        await manager.sendPrompt(for: id, text: text, attachments: attachments, onResult: onResult)
+    }
+
     func writeAttachment(_ data: Data, mimeType: String, name: String?, for id: String) -> URL? {
         guard let mgr = acpManagers.values.first(where: { $0.liveSession(for: id) != nil }),
               let session = mgr.liveSession(for: id) else { return nil }
@@ -11054,6 +11148,11 @@ extension AppState: RemoteSessionsProvider {
             await mgr.interruptBypassingLease(for: id)
             return
         }
+    }
+
+    func stop(for id: String, worktreeID: String) async {
+        guard let manager = acpManager(forWorktreeId: worktreeID) else { return }
+        await manager.interrupt(for: id)
     }
 
     func queueForceSend(for id: String, itemId: UUID) async {

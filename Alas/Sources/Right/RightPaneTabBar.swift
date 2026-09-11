@@ -29,9 +29,12 @@ struct RightPaneTabBar: View {
     let onHidePane: () -> Void
     let showIgnored: Bool
     let onToggleShowIgnored: () -> Void
+    var showAgentTab: Bool = false
     var showRunTab: Bool = false
     /// Number of commands currently starting or running in this worktree.
     var activeRunCount: Int = 0
+    /// Number of non-detached Agent sidebar rows in this worktree.
+    var activeAgentCount: Int = 0
 
     @Environment(\.theme) private var theme
 
@@ -66,7 +69,16 @@ struct RightPaneTabBar: View {
                         set: { _ in onToggleShowIgnored() }
                     ))
                 }
-            if RightPaneTab.available(runTabEnabled: showRunTab).contains(.run) {
+            if RightPaneTab.available(agentTabEnabled: showAgentTab, runTabEnabled: showRunTab).contains(.agent) {
+                segment(
+                    .agent,
+                    icon: "person.crop.circle",
+                    label: "Agent",
+                    count: activeAgentCount > 0 ? activeAgentCount : nil,
+                    layout: layout
+                )
+            }
+            if RightPaneTab.available(agentTabEnabled: showAgentTab, runTabEnabled: showRunTab).contains(.run) {
                 segment(
                     .run,
                     icon: "play",
@@ -92,8 +104,48 @@ struct RightPaneTabBar: View {
         count: Int?,
         layout: RightPaneTabBarLayout
     ) -> some View {
-        let isOn = activeTab == tab
-        return Button {
+        RightPaneSegmentButton(
+            activeTab: $activeTab,
+            tab: tab,
+            icon: icon,
+            label: label,
+            count: count,
+            layout: layout
+        )
+    }
+
+    @ViewBuilder
+    private var trailing: some View {
+        switch activeTab {
+        case .changes:
+            if shouldShowChangeSummary(additions: totalAdd, deletions: totalDel) {
+                HStack(spacing: 6) {
+                    Text("+\(totalAdd)").foregroundColor(theme.color("add"))
+                    Text("−\(totalDel)").foregroundColor(theme.color("del"))
+                }
+                .font(.system(size: 11, design: .monospaced))
+                .padding(.trailing, 4)
+            }
+        case .files, .agent, .run:
+            EmptyView()
+        }
+    }
+}
+
+private struct RightPaneSegmentButton: View {
+    @Binding var activeTab: RightPaneTab
+    let tab: RightPaneTab
+    let icon: String
+    let label: String
+    let count: Int?
+    let layout: RightPaneTabBarLayout
+
+    @Environment(\.theme) private var theme
+
+    private var isOn: Bool { activeTab == tab }
+
+    var body: some View {
+        Button {
             activeTab = tab
         } label: {
             HStack(spacing: 5) {
@@ -115,17 +167,7 @@ struct RightPaneTabBar: View {
             }
             .padding(.horizontal, 9)
             .frame(height: 22)
-            .background(
-                ZStack {
-                    if isOn {
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(theme.color("bg-3"))
-                        RoundedRectangle(cornerRadius: 4)
-                            .stroke(Color.white.opacity(0.04), lineWidth: 1)
-                            .blendMode(.plusLighter)
-                    }
-                }
-            )
+            .background(selectionBackground)
             .clipShape(RoundedRectangle(cornerRadius: 4))
             .shadow(color: isOn ? Color.black.opacity(0.25) : .clear, radius: 1, x: 0, y: 1)
             .contentShape(Rectangle())
@@ -137,19 +179,13 @@ struct RightPaneTabBar: View {
     }
 
     @ViewBuilder
-    private var trailing: some View {
-        switch activeTab {
-        case .changes:
-            if shouldShowChangeSummary(additions: totalAdd, deletions: totalDel) {
-                HStack(spacing: 6) {
-                    Text("+\(totalAdd)").foregroundColor(theme.color("add"))
-                    Text("−\(totalDel)").foregroundColor(theme.color("del"))
-                }
-                .font(.system(size: 11, design: .monospaced))
-                .padding(.trailing, 4)
-            }
-        case .files, .run:
-            EmptyView()
+    private var selectionBackground: some View {
+        if isOn {
+            RoundedRectangle(cornerRadius: 4)
+                .fill(theme.color("bg-3"))
+            RoundedRectangle(cornerRadius: 4)
+                .stroke(Color.white.opacity(0.04), lineWidth: 1)
+                .blendMode(.plusLighter)
         }
     }
 }
