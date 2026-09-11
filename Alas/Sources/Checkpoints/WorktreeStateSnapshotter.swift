@@ -100,18 +100,23 @@ struct WorktreeStateSnapshotter: Sendable {
                 exclusions.append(.init(relativePath: path, reason: reason))
                 continue
             }
-            _ = try fileSystem.validateRelativePath(path, under: target.path)
             let headState = try await gitState(headEntries.values[headPath], target, payloads: &payloads,
                                                retainingPayloads: retainingPayloads)
             let indexState = try await gitState(index.values[indexPath], target, payloads: &payloads,
                                                 retainingPayloads: retainingPayloads)
-            let diskState = try diskState(
-                path: path,
-                root: target.path,
-                tracked: headState.kind != .absent || indexState.kind != .absent,
-                payloads: &payloads,
-                retainingPayloads: retainingPayloads
-            )
+            let diskState: CheckpointFileState
+            do {
+                _ = try fileSystem.validateRelativePath(path, under: target.path)
+                diskState = try self.diskState(
+                    path: path,
+                    root: target.path,
+                    tracked: headState.kind != .absent || indexState.kind != .absent,
+                    payloads: &payloads,
+                    retainingPayloads: retainingPayloads
+                )
+            } catch CheckpointFileSystemError.unsafePath where headState.kind == .absent && indexState.kind == .absent && includingPaths.contains(path) {
+                diskState = .absent
+            }
             states[path] = .init(relativePath: path, head: headState, index: indexState, worktree: diskState)
         }
         try validateLineage(target)

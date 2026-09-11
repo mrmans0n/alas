@@ -38,6 +38,26 @@ struct CheckpointRestoreIntegrationTests {
         }
     }
 
+    @Test func restoreReplacesTrackedFileToDirectoryTransition() async throws {
+        let repo = try await CheckpointTestRepository.make()
+        defer { repo.remove() }
+        let root = URL(fileURLWithPath: "/private/tmp/checkpoint-file-dir-store-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try repo.write("saved config", to: "config")
+        try await repo.commitAll("baseline")
+        let service = WorktreeCheckpointService(store: .init(root: root))
+        let checkpoint = try await service.createManual(target: repo.target, label: "Saved")
+        try FileManager.default.removeItem(at: repo.root.appendingPathComponent("config"))
+        try repo.write("local override", to: "config/local.json")
+
+        let preview = try await service.restorePreview(target: repo.target, id: checkpoint.id, coordination: .clear)
+        _ = try await service.restore(target: repo.target, preview: preview,
+                                      selectedGroupIDs: preview.selectedGroupIDs, coordination: .clear)
+
+        #expect(try repo.disk("config") == Data("saved config".utf8))
+        #expect(!FileManager.default.fileExists(atPath: repo.root.appendingPathComponent("config/local.json").path))
+    }
+
     @Test func fullRestorePreservesEverySavedLayerAndPublishesRecovery() async throws {
         let fixture = try await CheckpointRestoreFixture.make()
         defer { fixture.remove() }

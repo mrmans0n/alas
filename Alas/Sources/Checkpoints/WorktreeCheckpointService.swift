@@ -107,7 +107,8 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
         var blockers: Set<CheckpointRestoreBlocker> = []
         do { _ = try await store.load(id: id, lineageID: target.lineageID) }
         catch { blockers.insert(.corruptCheckpoint) }
-        let current = try await snapshotter.snapshot(target: target, includingPaths: Set(saved.paths.map(\.relativePath)))
+        let current = try await snapshotter.snapshot(target: target, includingPaths: Set(saved.paths.map(\.relativePath)),
+                                                     retainingPayloads: false)
         return try .make(manifest: saved, current: current, coordination: coordination, selectedGroupIDs: selectedGroupIDs, blockers: blockers)
     }
 
@@ -231,7 +232,7 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
         return try await CheckpointRestoreTransaction(store: store, git: snapshotter.git, fileSystem: snapshotter.fileSystem,
                                                        faultInjector: faultInjector)
             .prepare(target: target, preview: preview, manifest: manifest, current: current,
-                     selectedPaths: selectedPaths.sorted(), recoveryCheckpointID: recovery.id)
+                     selectedPaths: selectedPaths.sorted(by: restoreApplicationOrder), recoveryCheckpointID: recovery.id)
     }
 
     func restore(target: CheckpointWorktreeTarget, preview: CheckpointRestorePreview, selectedGroupIDs: Set<UUID>,
@@ -255,6 +256,13 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
         guard WorktreeService.existingLocalLineageID(forWorktreeAt: target.path) == target.lineageID else {
             throw CheckpointSnapshotError.lineageChanged
         }
+    }
+
+    private func restoreApplicationOrder(_ lhs: String, _ rhs: String) -> Bool {
+        let lhsDepth = lhs.split(separator: "/").count
+        let rhsDepth = rhs.split(separator: "/").count
+        if lhsDepth != rhsDepth { return lhsDepth > rhsDepth }
+        return lhs < rhs
     }
 
     private func previewHeadOID(target: CheckpointWorktreeTarget) async throws -> String {

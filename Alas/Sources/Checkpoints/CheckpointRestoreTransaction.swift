@@ -169,6 +169,9 @@ struct CheckpointRestoreTransaction: Sendable {
                 }
                 let replacement = preparation.replacementsRoot.appendingPathComponent(name)
                 if try fileSystem.metadata(root: preparation.replacementsRoot, relativePath: name) != nil {
+                    if before.worktree.kind == .absent {
+                        try removeEmptyDirectoryIfPresent(destination)
+                    }
                     try moveLeaf(replacement, to: destination)
                 }
                 journal.completedPaths.append(path)
@@ -551,10 +554,19 @@ struct CheckpointRestoreTransaction: Sendable {
     }
 
     private func leafState(_ path: String, root: URL) throws -> CheckpointFileState {
-        guard try fileSystem.metadata(root: root, relativePath: path) != nil else { return .absent }
-        switch try fileSystem.readLeaf(root: root, relativePath: path) {
-        case .regular(let bytes, let executable): return .regular(blob: .make(for: bytes), executable: executable)
-        case .symlink(let bytes): return .symlink(blob: .make(for: bytes))
+        do {
+            guard try fileSystem.metadata(root: root, relativePath: path) != nil else { return .absent }
+            switch try fileSystem.readLeaf(root: root, relativePath: path) {
+            case .regular(let bytes, let executable): return .regular(blob: .make(for: bytes), executable: executable)
+            case .symlink(let bytes): return .symlink(blob: .make(for: bytes))
+            }
+        } catch CheckpointFileSystemError.unsupportedLeaf {
+            let url = try fileSystem.validateRelativePath(path, under: root)
+            var isDirectory: ObjCBool = false
+            if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue {
+                return .absent
+            }
+            throw CheckpointFileSystemError.unsupportedLeaf
         }
     }
 
@@ -580,6 +592,14 @@ struct CheckpointRestoreTransaction: Sendable {
         guard Darwin.renamex_np(source.path, destination.path, UInt32(RENAME_EXCL)) == 0 else { throw posix("rename leaf") }
         try fileSystem.synchronizeDirectory(source.deletingLastPathComponent())
         try fileSystem.synchronizeDirectory(destination.deletingLastPathComponent())
+    }
+
+    private func removeEmptyDirectoryIfPresent(_ url: URL) throws {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else { return }
+        guard Darwin.rmdir(url.path) == 0 else { throw posix("rmdir empty restore directory") }
+        try fileSystem.synchronizeDirectory(url.deletingLastPathComponent())
     }
 
     private func stagingName(_ path: String, journal: CheckpointRestoreJournal) throws -> String {
