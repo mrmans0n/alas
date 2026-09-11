@@ -762,7 +762,8 @@ struct WorktreeService {
         deleteBranchIfMerged: Bool,
         force: Bool = false,
         forceTwice: Bool = false,
-        usesRemoteHostRegistry: Bool = true
+        usesRemoteHostRegistry: Bool = true,
+        verifiedMergedBranchSHA: String? = nil
     ) async throws {
         var args = ["worktree", "remove", worktree.path.path]
         if forceTwice {
@@ -791,9 +792,53 @@ struct WorktreeService {
             throw WorktreeError.gitFailed(result.stderr)
         }
         if deleteBranchIfMerged && worktree.branch != "(detached)" {
-            // Best-effort delete. -d only succeeds if merged; ignore failures.
-            _ = try? await Process.git(["branch", "-d", worktree.branch], cwd: repoPath, usesRemoteHostRegistry: usesRemoteHostRegistry)
+            // `-d` only succeeds when git's own local ancestry check shows
+            // the branch merged, which a squash or rebase merge can never
+            // satisfy — the resulting commit on the base branch isn't a
+            // descendant of the original branch tip by history alone. When
+            // the caller has independently verified the merge via the code
+            // host (a SHA-matched, confirmed-merged review request), `-D`
+            // trusts that stronger evidence instead of git's own blind spot
+            // — but only after re-reading the branch's current tip here and
+            // confirming it still matches the SHA that was verified: a new
+            // commit can land on the branch between that scan and this call,
+            // and `-D` must never discard one just because an older tip was
+            // once confirmed merged. Still best-effort: ignore failures
+            // either way, and never force-delete a branch we haven't
+            // ourselves just reverified.
+            let branchDeleteFlag: String
+            if let verifiedMergedBranchSHA {
+                let currentTip = await Self.currentBranchTip(
+                    branch: worktree.branch,
+                    gitDirArguments: [],
+                    cwd: repoPath,
+                    usesRemoteHostRegistry: usesRemoteHostRegistry
+                )
+                branchDeleteFlag = currentTip == verifiedMergedBranchSHA ? "-D" : "-d"
+            } else {
+                branchDeleteFlag = "-d"
+            }
+            _ = try? await Process.git(["branch", branchDeleteFlag, worktree.branch], cwd: repoPath, usesRemoteHostRegistry: usesRemoteHostRegistry)
         }
+    }
+
+    /// Re-reads a branch's current tip SHA immediately before a force branch
+    /// delete chooses `-D` over `-d`. Called right at the point of use rather
+    /// than trusting a scan-time value, since the branch can gain commits in
+    /// the window between the scan that verified a merge and this deletion.
+    private static func currentBranchTip(
+        branch: String,
+        gitDirArguments: [String],
+        cwd: URL,
+        usesRemoteHostRegistry: Bool
+    ) async -> String? {
+        guard let result = try? await Process.git(
+            gitDirArguments + ["rev-parse", "refs/heads/\(branch)"],
+            cwd: cwd,
+            usesRemoteHostRegistry: usesRemoteHostRegistry
+        ), result.exitCode == 0 else { return nil }
+        let sha = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        return sha.isEmpty ? nil : sha
     }
 
     func removeFastLocal(
@@ -802,6 +847,7 @@ struct WorktreeService {
         deleteBranchIfMerged: Bool,
         force: Bool = false,
         usesRemoteHostRegistry: Bool = true,
+        verifiedMergedBranchSHA: String? = nil,
         moveItem: @Sendable (URL, URL) throws -> Void = {
             try WorktreeService.renameAtomically(from: $0, to: $1)
         }
@@ -812,7 +858,8 @@ struct WorktreeService {
                 worktree: worktree,
                 deleteBranchIfMerged: deleteBranchIfMerged,
                 force: force,
-                usesRemoteHostRegistry: usesRemoteHostRegistry
+                usesRemoteHostRegistry: usesRemoteHostRegistry,
+                verifiedMergedBranchSHA: verifiedMergedBranchSHA
             )
             return .synchronous
         }
@@ -919,7 +966,8 @@ struct WorktreeService {
                 deleteBranchIfMerged: deleteBranchIfMerged,
                 force: force,
                 forceTwice: registration.isLocked && force,
-                usesRemoteHostRegistry: false
+                usesRemoteHostRegistry: false,
+                verifiedMergedBranchSHA: verifiedMergedBranchSHA
             )
             return .synchronous
         }
@@ -943,7 +991,8 @@ struct WorktreeService {
                 deleteBranchIfMerged: deleteBranchIfMerged,
                 force: force,
                 forceTwice: registration.isLocked && force,
-                usesRemoteHostRegistry: false
+                usesRemoteHostRegistry: false,
+                verifiedMergedBranchSHA: verifiedMergedBranchSHA
             )
             return .synchronous
         }
@@ -1085,8 +1134,25 @@ struct WorktreeService {
 
         if deleteBranchIfMerged && worktree.branch != "(detached)" {
             let branchGitDirectory = branchDeletionGitDirectory ?? expectedCommonDirectory
+            // See `remove(...)`'s matching comment: `-d` can't recognize a
+            // squash/rebase merge, so a branch verified merged via the code
+            // host uses `-D` instead of silently lingering — but only once
+            // the branch's current tip, re-read here, still matches the SHA
+            // that was verified merged.
+            let branchDeleteFlag: String
+            if let verifiedMergedBranchSHA {
+                let currentTip = await Self.currentBranchTip(
+                    branch: worktree.branch,
+                    gitDirArguments: ["--git-dir", branchGitDirectory.path],
+                    cwd: expectedCommonDirectory,
+                    usesRemoteHostRegistry: false
+                )
+                branchDeleteFlag = currentTip == verifiedMergedBranchSHA ? "-D" : "-d"
+            } else {
+                branchDeleteFlag = "-d"
+            }
             _ = try? await Process.git(
-                ["--git-dir", branchGitDirectory.path, "branch", "-d", worktree.branch],
+                ["--git-dir", branchGitDirectory.path, "branch", branchDeleteFlag, worktree.branch],
                 cwd: expectedCommonDirectory,
                 usesRemoteHostRegistry: false
             )

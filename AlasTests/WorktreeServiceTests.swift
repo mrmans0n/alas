@@ -1049,6 +1049,172 @@ extension WorktreeServiceTests {
         #expect(branches.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 
+    /// Squash-merging breaks the ancestry chain `git branch -d` relies on:
+    /// the resulting commit on the base branch is not a descendant of the
+    /// original branch tip by history alone, so an un-forced delete
+    /// genuinely fails. `verifiedMergedBranchSHA` trusts a stronger,
+    /// external signal (the code host's own record of the merge) — the
+    /// branch's tip as of that verification — and uses `-D` instead, once
+    /// it re-confirms the branch's current tip still matches.
+    @Test func fastLocalRemoveDeletesSquashMergedBranchWhenForgeVerified() async throws {
+        let repo = try await makeRepo()
+        let destination = repo.deletingLastPathComponent()
+            .appendingPathComponent("\(repo.lastPathComponent)-squash-verified")
+        defer {
+            try? FileManager.default.removeItem(at: destination)
+            try? FileManager.default.removeItem(at: repo)
+        }
+        let service = WorktreeService()
+        let worktree = try await service.add(
+            repoPath: repo,
+            base: "main",
+            branch: "feature/squash",
+            destination: destination,
+            projectId: "p"
+        )
+        try "content".write(
+            to: destination.appendingPathComponent("file.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        _ = try await Process.git(["add", "."], cwd: destination)
+        _ = try await Process.git(["commit", "-q", "-m", "feature work"], cwd: destination)
+        let branchTip = try await Process.git(["rev-parse", "feature/squash"], cwd: repo)
+        let verifiedSHA = branchTip.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let squash = try await Process.git(["merge", "--squash", "feature/squash"], cwd: repo)
+        #expect(squash.exitCode == 0)
+        let squashCommit = try await Process.git(["commit", "-q", "-m", "squashed"], cwd: repo)
+        #expect(squashCommit.exitCode == 0)
+
+        // Sanity check the premise: an unverified `-d` genuinely can't do this.
+        let plainDelete = try await Process.git(["branch", "-d", "feature/squash"], cwd: repo)
+        #expect(plainDelete.exitCode != 0)
+
+        let outcome = try await service.removeFastLocal(
+            repoPath: repo,
+            worktree: worktree,
+            deleteBranchIfMerged: true,
+            force: false,
+            verifiedMergedBranchSHA: verifiedSHA
+        )
+        guard case .staged(let ticket) = outcome else {
+            Issue.record("Expected staged removal")
+            return
+        }
+        defer { try? FileManager.default.removeItem(at: ticket.trashRoot) }
+
+        let branches = try await Process.git(["branch", "--list", "feature/squash"], cwd: repo)
+        #expect(branches.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+
+    /// Without forge verification, a squash-merged branch is left behind —
+    /// this is the pre-existing, unchanged behavior for every worktree the
+    /// scanner hasn't independently confirmed via the code host.
+    @Test func fastLocalRemoveKeepsSquashMergedBranchWithoutForgeVerification() async throws {
+        let repo = try await makeRepo()
+        let destination = repo.deletingLastPathComponent()
+            .appendingPathComponent("\(repo.lastPathComponent)-squash-unverified")
+        defer {
+            try? FileManager.default.removeItem(at: destination)
+            try? FileManager.default.removeItem(at: repo)
+        }
+        let service = WorktreeService()
+        let worktree = try await service.add(
+            repoPath: repo,
+            base: "main",
+            branch: "feature/squash-unverified",
+            destination: destination,
+            projectId: "p"
+        )
+        try "content".write(
+            to: destination.appendingPathComponent("file.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        _ = try await Process.git(["add", "."], cwd: destination)
+        _ = try await Process.git(["commit", "-q", "-m", "feature work"], cwd: destination)
+        _ = try await Process.git(["merge", "--squash", "feature/squash-unverified"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "squashed"], cwd: repo)
+
+        let outcome = try await service.removeFastLocal(
+            repoPath: repo,
+            worktree: worktree,
+            deleteBranchIfMerged: true,
+            force: false
+            // verifiedMergedBranchSHA defaults to nil
+        )
+        guard case .staged(let ticket) = outcome else {
+            Issue.record("Expected staged removal")
+            return
+        }
+        defer { try? FileManager.default.removeItem(at: ticket.trashRoot) }
+
+        let branches = try await Process.git(["branch", "--list", "feature/squash-unverified"], cwd: repo)
+        #expect(!branches.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+
+    /// A `verifiedMergedBranchSHA` that no longer matches the branch's actual
+    /// tip must not be trusted for `-D`: a commit landed on the branch after
+    /// whatever scan produced that SHA, and force-deleting on stale evidence
+    /// would discard it. This is exactly the TOCTOU gap re-reading the tip
+    /// immediately before the delete decision closes.
+    @Test func fastLocalRemoveKeepsSquashMergedBranchWhenVerifiedSHAIsStale() async throws {
+        let repo = try await makeRepo()
+        let destination = repo.deletingLastPathComponent()
+            .appendingPathComponent("\(repo.lastPathComponent)-squash-stale")
+        defer {
+            try? FileManager.default.removeItem(at: destination)
+            try? FileManager.default.removeItem(at: repo)
+        }
+        let service = WorktreeService()
+        let worktree = try await service.add(
+            repoPath: repo,
+            base: "main",
+            branch: "feature/squash-stale",
+            destination: destination,
+            projectId: "p"
+        )
+        try "content".write(
+            to: destination.appendingPathComponent("file.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        _ = try await Process.git(["add", "."], cwd: destination)
+        _ = try await Process.git(["commit", "-q", "-m", "feature work"], cwd: destination)
+        let staleSHA = "0000000000000000000000000000000000000000"
+        let squash = try await Process.git(["merge", "--squash", "feature/squash-stale"], cwd: repo)
+        #expect(squash.exitCode == 0)
+        let squashCommit = try await Process.git(["commit", "-q", "-m", "squashed"], cwd: repo)
+        #expect(squashCommit.exitCode == 0)
+
+        // A new commit lands on the branch after the (stale) SHA was
+        // "verified" — simulating the exact race the re-check guards
+        // against.
+        try "more".write(
+            to: destination.appendingPathComponent("file2.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        _ = try await Process.git(["add", "."], cwd: destination)
+        _ = try await Process.git(["commit", "-q", "-m", "one more commit"], cwd: destination)
+
+        let outcome = try await service.removeFastLocal(
+            repoPath: repo,
+            worktree: worktree,
+            deleteBranchIfMerged: true,
+            force: false,
+            verifiedMergedBranchSHA: staleSHA
+        )
+        guard case .staged(let ticket) = outcome else {
+            Issue.record("Expected staged removal")
+            return
+        }
+        defer { try? FileManager.default.removeItem(at: ticket.trashRoot) }
+
+        let branches = try await Process.git(["branch", "--list", "feature/squash-stale"], cwd: repo)
+        #expect(!branches.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+
     @Test func fastLocalRemoveReportsBothPathsWhenRollbackFails() async throws {
         let fixture = try await makeLinkedWorktree(suffix: "rollback-fails")
         defer { fixture.removeFiles() }

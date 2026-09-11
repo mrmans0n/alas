@@ -22,26 +22,43 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
         limit: Int,
         cwd: URL
     ) async throws -> [MergedReviewRequestRef] {
-        let result = try await runner.run(
-            "glab",
-            args: [
-                // glab spells this `--merged`; there is no `--state` flag on
-                // `mr list` (verified against `glab mr list --help`).
-                "mr", "list",
-                "--merged",
-                "--per-page", "\(limit)",
-                "--output", "json",
-                "-R", remote.repositorySlug,
-            ],
-            cwd: cwd
-        )
-        guard result.exitCode == 0 else {
-            throw CodeHostProviderError.commandFailed(
-                command: "glab mr list",
-                stderr: result.stderr
+        // Unlike `gh pr list --limit`, which fetches as many pages as needed
+        // to satisfy any requested count, `glab mr list` fetches exactly one
+        // page — bounded by `--per-page`, which GitLab's REST API caps at
+        // 100 regardless of what's requested (verified against `glab mr
+        // list --help`: `-p --page` and `-P --per-page` are independent,
+        // there is no total-count flag). Page manually until a short page
+        // signals the end, or `limit` is reached.
+        let perPage = 100
+        var refs: [MergedReviewRequestRef] = []
+        var page = 1
+        while refs.count < limit {
+            let result = try await runner.run(
+                "glab",
+                args: [
+                    // glab spells this `--merged`; there is no `--state` flag
+                    // on `mr list` (verified against `glab mr list --help`).
+                    "mr", "list",
+                    "--merged",
+                    "--per-page", "\(perPage)",
+                    "--page", "\(page)",
+                    "--output", "json",
+                    "-R", remote.repositorySlug,
+                ],
+                cwd: cwd
             )
+            guard result.exitCode == 0 else {
+                throw CodeHostProviderError.commandFailed(
+                    command: "glab mr list",
+                    stderr: result.stderr
+                )
+            }
+            let pageRefs = try Self.parseMergedMRList(result.stdout)
+            refs.append(contentsOf: pageRefs)
+            guard pageRefs.count == perPage else { break }
+            page += 1
         }
-        return try Self.parseMergedMRList(result.stdout)
+        return Array(refs.prefix(limit))
     }
 
     static func parseMergedMRList(_ json: String) throws -> [MergedReviewRequestRef] {
@@ -78,6 +95,67 @@ struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding {
                 "Unable to parse glab mr list output"
             )
         }
+    }
+
+    func repositoryParent(remote: CodeHostRemote, cwd: URL) async throws -> CodeHostRemote? {
+        // `glab repo view`'s own JSON shape for fork ancestry isn't
+        // documented; the raw REST passthrough is, and this codebase already
+        // uses it elsewhere (see the issues endpoints above). GitLab's
+        // project resource carries `forked_from_project` with a stable,
+        // documented shape.
+        let result = try await runner.run(
+            "glab",
+            args: ["api", "projects/\(Self.encodedProjectPath(remote.repositorySlug))"],
+            cwd: cwd
+        )
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(
+                command: "glab api projects",
+                stderr: result.stderr
+            )
+        }
+        return try Self.parseRepoParent(result.stdout, remote: remote)
+    }
+
+    static func parseRepoParent(_ json: String, remote: CodeHostRemote) throws -> CodeHostRemote? {
+        struct ForkedFromProject: Decodable {
+            let pathWithNamespace: String
+
+            enum CodingKeys: String, CodingKey {
+                case pathWithNamespace = "path_with_namespace"
+            }
+        }
+        struct Item: Decodable {
+            let forkedFromProject: ForkedFromProject?
+
+            enum CodingKeys: String, CodingKey {
+                case forkedFromProject = "forked_from_project"
+            }
+        }
+        let item: Item
+        do {
+            item = try JSONDecoder().decode(Item.self, from: Data(json.utf8))
+        } catch {
+            throw CodeHostProviderError.malformedOutput(
+                "Unable to parse glab api projects output"
+            )
+        }
+        guard let parent = item.forkedFromProject else { return nil }
+        guard let webURL = URL(string: "https://\(remote.host)/\(parent.pathWithNamespace)") else {
+            return nil
+        }
+        let parts = parent.pathWithNamespace.split(separator: "/")
+        guard let repository = parts.last else { return nil }
+        let owner = parts.dropLast().joined(separator: "/")
+        guard !owner.isEmpty else { return nil }
+        return CodeHostRemote(
+            kind: remote.kind,
+            host: remote.host,
+            owner: owner,
+            repository: String(repository),
+            remoteName: remote.remoteName,
+            webURL: webURL
+        )
     }
 
     func isAvailable(cwd: URL) async -> Bool {
