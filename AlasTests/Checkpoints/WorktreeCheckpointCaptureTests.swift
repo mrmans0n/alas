@@ -90,6 +90,30 @@ struct WorktreeCheckpointCaptureTests {
         #expect(try await service.summaries(target: fixture.target).summaries == [summary])
     }
 
+    @Test func journalRefreshRefusesStaleLineageBeforeScavengingRestoreStaging() async throws {
+        let fixture = try await CheckpointCaptureFixture.make()
+        defer { fixture.remove() }
+        let operationID = UUID()
+        let staging = fixture.repo.root
+            .appendingPathComponent(".alas-checkpoint-restore-\(operationID.uuidString.lowercased())", isDirectory: true)
+        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+        let staleTarget = CheckpointWorktreeTarget(
+            worktreeID: fixture.target.worktreeID,
+            projectID: fixture.target.projectID,
+            path: fixture.target.path,
+            lineageID: UUID().uuidString.lowercased(),
+            branch: fixture.target.branch,
+            repositoryName: fixture.target.repositoryName,
+            workspaceName: fixture.target.workspaceName
+        )
+
+        await #expect(throws: CheckpointSnapshotError.lineageChanged) {
+            try await fixture.service().nonterminalJournals(target: staleTarget)
+        }
+
+        #expect(FileManager.default.fileExists(atPath: staging.path))
+    }
+
     @Test func recoveryPublishesOnlySelectedCurrentStates() async throws {
         let fixture = try await CheckpointCaptureFixture.make()
         defer { fixture.remove() }

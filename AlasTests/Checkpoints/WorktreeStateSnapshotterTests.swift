@@ -134,10 +134,38 @@ struct WorktreeStateSnapshotterTests {
         guard add.exitCode == 0 else { throw ProcessError.nonZeroExit(add.exitCode, add.stderr) }
 
         let snapshot = try await WorktreeStateSnapshotter.live.snapshot(target: target)
+        let emptyTree = try await Process.git(["hash-object", "-t", "tree", "/dev/null"], cwd: root)
+        guard emptyTree.exitCode == 0 else { throw ProcessError.nonZeroExit(emptyTree.exitCode, emptyTree.stderr) }
 
-        #expect(snapshot.headOID == WorktreeStateSnapshotter.emptyTreeOID)
+        #expect(snapshot.headOID == emptyTree.stdout.trimmingCharacters(in: .whitespacesAndNewlines))
         #expect(snapshot.paths["initial.swift"]?.head == .absent)
         #expect(try snapshot.payload(#require(snapshot.paths["initial.swift"]).index) == Data("initial".utf8))
+    }
+
+    @Test func sha256UnbornRepositoryCapturesInitialWorkAgainstRepositoryEmptyTree() async throws {
+        let root = URL(fileURLWithPath: "/private/tmp").appendingPathComponent("checkpoint-unborn-sha256-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for args in [["init", "--object-format=sha256", "-b", "main"], ["config", "user.name", "Checkpoint Tests"],
+                     ["config", "user.email", "checkpoints@example.test"], ["config", "commit.gpgsign", "false"],
+                     ["config", "core.hooksPath", "/dev/null"], ["config", "core.filemode", "true"]] {
+            let result = try await Process.git(args, cwd: root)
+            guard result.exitCode == 0 else { throw ProcessError.nonZeroExit(result.exitCode, result.stderr) }
+        }
+        let lineage = try #require(WorktreeService.localLineageID(forWorktreeAt: root))
+        let target = CheckpointWorktreeTarget(worktreeID: "unborn-sha256", projectID: "test", path: root,
+                                              lineageID: lineage, branch: "main", repositoryName: "test", workspaceName: nil)
+        try Data("initial".utf8).write(to: root.appendingPathComponent("initial.swift"))
+        let add = try await Process.git(["add", "initial.swift"], cwd: root)
+        guard add.exitCode == 0 else { throw ProcessError.nonZeroExit(add.exitCode, add.stderr) }
+        let emptyTree = try await Process.git(["hash-object", "-t", "tree", "/dev/null"], cwd: root)
+        guard emptyTree.exitCode == 0 else { throw ProcessError.nonZeroExit(emptyTree.exitCode, emptyTree.stderr) }
+
+        let snapshot = try await WorktreeStateSnapshotter.live.snapshot(target: target)
+
+        #expect(snapshot.headOID == emptyTree.stdout.trimmingCharacters(in: .whitespacesAndNewlines))
+        #expect(snapshot.headOID.count == 64)
+        #expect(snapshot.paths["initial.swift"]?.head == .absent)
     }
 
     @Test func unmergedEntryFailsCapture() async throws {

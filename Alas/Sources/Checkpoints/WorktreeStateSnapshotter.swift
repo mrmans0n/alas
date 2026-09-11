@@ -34,7 +34,6 @@ struct CheckpointCaptureAttempt: Equatable, Sendable {
 
 struct WorktreeStateSnapshotter: Sendable {
     static let live = Self()
-    static let emptyTreeOID = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
     let git: any CheckpointGitRunning
     let fileSystem: any CheckpointFileSystem
 
@@ -267,7 +266,13 @@ struct WorktreeStateSnapshotter: Sendable {
         if result.exitCode == 0 { return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) }
         let unborn = try await git.run(["rev-parse", "--verify", "--quiet", "HEAD"], cwd: target.path, environment: [:])
         guard unborn.exitCode == 1 else { throw ProcessError.nonZeroExit(result.exitCode, result.stderr) }
-        return Self.emptyTreeOID
+        return try await emptyTreeOID(target)
+    }
+
+    private func emptyTreeOID(_ target: CheckpointWorktreeTarget) async throws -> String {
+        let result = try await git.run(["hash-object", "-t", "tree", "/dev/null"], cwd: target.path, environment: [:])
+        guard result.exitCode == 0 else { throw ProcessError.nonZeroExit(result.exitCode, result.stderr) }
+        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func intentToAddPaths(_ target: CheckpointWorktreeTarget) async throws -> [String] {

@@ -629,7 +629,9 @@ struct CheckpointRestoreTransaction: Sendable {
         if result.exitCode == 0 { return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) }
         let unborn = try await git.run(["rev-parse", "--verify", "--quiet", "HEAD"], cwd: target.path, environment: [:])
         guard unborn.exitCode == 1 else { throw CheckpointRestoreError.invalidGitOutput }
-        return WorktreeStateSnapshotter.emptyTreeOID
+        let empty = try await git.run(["hash-object", "-t", "tree", "/dev/null"], cwd: target.path, environment: [:])
+        guard empty.exitCode == 0 else { throw CheckpointRestoreError.invalidGitOutput }
+        return empty.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func runGit(_ args: [String], target: CheckpointWorktreeTarget, index: URL) async throws {
