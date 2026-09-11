@@ -4129,6 +4129,7 @@ extension ACPSessionManager {
     /// Remote SSH channel drops are commonly transient. Reuse the regular
     /// reattach path so restoration and queued-prompt handling stay identical.
     func scheduleAutoReconnect(sessionId: ACPSession.ID) {
+        scheduleScheduledQueueReconnect(sessionId: sessionId)
         guard sessions[sessionId] != nil,
               effectiveRemoteHost() != nil
         else { return }

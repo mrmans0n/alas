@@ -264,4 +264,21 @@ struct ACPSessionManagerReattachTests {
 
         #expect(session.agentState != .disconnected)
     }
+
+    @Test("local disconnect schedules due queue reattach")
+    func localDisconnectSchedulesDueQueueReattach() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-local-scheduled-reattach-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let mgr = ACPSessionManager(worktreeId: "/tmp/wt", worktreePath: "/tmp/wt", store: store)
+        let session = mgr.createSession(agentId: "no-such-agent-\(UUID().uuidString)")
+        session.agentState = .disconnected
+        session.enqueueScheduled(blocks: [.text("due")], scheduledAt: Date().addingTimeInterval(-1))
+
+        mgr.scheduleAutoReconnect(sessionId: session.id)
+        for _ in 0 ..< 50 where session.agentState == .disconnected {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        #expect(session.agentState != .disconnected)
+    }
 }
