@@ -4561,7 +4561,12 @@ extension ACPSessionManager {
         if scheduledAt == nil {
             onScheduledPersisted = nil
         } else {
-            onScheduledPersisted = { persisted in onCompleted(persisted) }
+            onScheduledPersisted = { persisted in
+                onCompleted(persisted)
+                if persisted, let scheduledAt, scheduledAt > Date() {
+                    self.scheduleScheduledQueueReconnect(sessionId: sessionId)
+                }
+            }
         }
 
         switch session.agentState {
@@ -4587,7 +4592,9 @@ extension ACPSessionManager {
                 if scheduledAt == nil {
                     Task { @MainActor in onCompleted(true) }
                 }
-                Task { @MainActor in await reattach(to: sessionId) }
+                if scheduledAt.map({ $0 <= Date() }) ?? true {
+                    Task { @MainActor in await reattach(to: sessionId) }
+                }
                 return true
             }
             runner.send(text: text, attachments: attachments, intent: intent, draft: draft) { succeeded in
@@ -4630,8 +4637,6 @@ extension ACPSessionManager {
             }
             if scheduledAt.map({ $0 <= Date() }) ?? true {
                 Task { @MainActor in await reattach(to: sessionId) }
-            } else {
-                scheduleScheduledQueueReconnect(sessionId: sessionId)
             }
             return true
         }
