@@ -5,6 +5,81 @@ import Testing
 @Suite("Attention navigation", .serialized)
 @MainActor
 struct AttentionNavigationTests {
+    @Test(arguments: ["selection", "close", "delete", "overlap"])
+    func suspendedNavigationDoesNotAcknowledgeAnAbandonedDestination(change: String) async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let item = try fixture.record(.conflicts(path: nil))
+        let other = try fixture.record(.session(sessionID: "s2"))
+        var environment = AttentionNavigationEnvironment.live(appState: fixture.state)
+        environment.focusSession = { _, _ in true }
+        environment.revealRightPane = { _, _ in
+            await Task.yield()
+            switch change {
+            case "selection": fixture.state.selectedWorktreeId = "elsewhere"
+            case "close": fixture.state.closeAttentionInbox()
+            case "delete": fixture.state.projectsManager = ProjectsManager(persistedProjects: [])
+            default: _ = await fixture.state.openAttentionItem(other)
+            }
+            return true
+        }
+        fixture.state.attentionNavigationEnvironment = environment
+        fixture.state.openAttentionInbox()
+        let result = await fixture.state.openAttentionItem(item)
+        #expect(result != .opened)
+        #expect(fixture.state.attentionStore.acknowledgments[item.eventID] == nil)
+        if change == "selection" {
+            #expect(fixture.state.selectedWorktreeId == "elsewhere")
+            #expect(fixture.state.isAttentionInboxOpen)
+        }
+        if change == "overlap" { #expect(fixture.state.attentionStore.acknowledgments[other.eventID] != nil) }
+    }
+
+    @Test func attentionRevealResetsOnTabChangeAndExplicitReturn() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let pane = RightPaneState(worktree: fixture.worktree, baseBranch: "main")
+        pane.changes = [ChangedFile(path: "file.swift", status: "U", stage: .unstaged, add: 0, del: 0, renameFrom: nil, conflict: .bothModified)]
+        #expect(pane.revealAttentionTarget(.conflicts(path: nil)))
+        pane.activeTab = .files
+        #expect(pane.attentionRevealedTarget == nil)
+        #expect(pane.attentionScrollRequest == nil)
+        #expect(pane.revealAttentionTarget(.conflicts(path: nil)))
+        pane.endAttentionReveal()
+        #expect(pane.attentionRevealedTarget == nil)
+        #expect(pane.attentionScrollRequest == nil)
+    }
+
+    @Test func attentionRevealDoesNotSurviveLeavingItsWorktree() throws {
+        let fixture = try Fixture()
+        defer { fixture.state.rightPaneStore.deactivate()
+        fixture.cleanup() }
+        fixture.state.selectedWorktreeId = fixture.worktree.id
+        let pane = fixture.state.rightPaneStore.state(for: fixture.worktree, baseBranch: "", comparisonMode: fixture.state.config.changes.comparisonMode)
+        pane.changes = [ChangedFile(path: "file.swift", status: "U", stage: .unstaged, add: 0, del: 0, renameFrom: nil, conflict: .bothModified)]
+        #expect(pane.revealAttentionTarget(.conflicts(path: nil)))
+        fixture.state.selectedWorktreeId = "elsewhere"
+        #expect(pane.attentionRevealedTarget == nil)
+        #expect(pane.attentionScrollRequest == nil)
+    }
+
+    @Test func initialAndRepeatedReviewCommentJumpsHaveFreshScrollCommands() {
+        let target = ReviewSessionTarget.localChanges(worktreeID: "worktree", repositoryPath: URL(fileURLWithPath: "/repo"), scope: .all)
+        let fileID = DiffReviewFileID(namespace: "unstaged", path: "file.swift")
+        let record = ReviewSessionRecord(id: .init(rawValue: "review-record"), target: target, selectedFileID: fileID, focusedCommentID: "comment2", createdAt: Date(), updatedAt: Date())
+        let tabs = TabsManager(store: MemoryStore())
+        let first = tabs.openOrFocusReviewSession(worktreeId: "worktree", record: record)
+        let second = tabs.openOrFocusReviewSession(worktreeId: "worktree", record: record)
+        guard case .reviewSession(let initial) = first, case .reviewSession(let repeated) = second else {
+            Issue.record("Expected review session tabs")
+            return
+        }
+        #expect(initial.commentScrollRequest?.commentID == "comment2")
+        #expect(initial.commentScrollRequest?.fileID == fileID)
+        #expect(repeated.commentScrollRequest?.commentID == "comment2")
+        #expect(initial.commentScrollRequest != repeated.commentScrollRequest)
+    }
+
     @Test(arguments: [true, false])
     func exactTargetsAcknowledgeOnlyAfterSuccessfulNavigation(succeeds: Bool) async throws {
         let targets: [AttentionJumpTarget] = [

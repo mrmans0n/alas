@@ -261,6 +261,19 @@ struct ReviewSessionTabState: Codable, Equatable, Identifiable {
     var title: String
     var selectedFileID: DiffReviewFileID?
     var focusedCommentID: String?
+    /// Transient command identity makes repeated jumps to the same comment observable.
+    var commentScrollRequest: DiffReviewDraftCommentScrollCommand?
+
+    mutating func requestCommentScroll() {
+        guard let focusedCommentID, let selectedFileID else {
+            commentScrollRequest = nil
+            return
+        }
+        commentScrollRequest = DiffReviewDraftCommentScrollCommand(
+            commentID: focusedCommentID, fileID: selectedFileID,
+            generation: (commentScrollRequest?.generation ?? 0) + 1
+        )
+    }
 
     private enum CodingKeys: String, CodingKey {
         case id
@@ -280,6 +293,7 @@ struct ReviewSessionTabState: Codable, Equatable, Identifiable {
         self.title = record.target.title
         self.selectedFileID = record.selectedFileID
         self.focusedCommentID = record.focusedCommentID
+        requestCommentScroll()
     }
 
     init(from decoder: any Decoder) throws {
@@ -291,6 +305,7 @@ struct ReviewSessionTabState: Codable, Equatable, Identifiable {
         title = try container.decode(String.self, forKey: .title)
         selectedFileID = try container.decodeIfPresent(DiffReviewFileID.self, forKey: .selectedFileID)
         focusedCommentID = try container.decodeIfPresent(String.self, forKey: .focusedCommentID)
+        requestCommentScroll()
     }
 
     mutating func retarget(to record: ReviewSessionRecord) {
@@ -299,6 +314,7 @@ struct ReviewSessionTabState: Codable, Equatable, Identifiable {
         title = record.target.title
         selectedFileID = record.selectedFileID
         focusedCommentID = record.focusedCommentID
+        requestCommentScroll()
     }
 }
 

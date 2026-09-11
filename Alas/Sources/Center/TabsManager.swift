@@ -1026,6 +1026,7 @@ final class TabsManager {
             existing.title = record.target.title
             existing.selectedFileID = record.selectedFileID
             existing.focusedCommentID = record.focusedCommentID
+            existing.requestCommentScroll()
             let tab = Tab.reviewSession(existing)
             file.tabs[idx] = tab
             file.activeTabId = tab.id

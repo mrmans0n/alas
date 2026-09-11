@@ -103,6 +103,14 @@ struct ChangesTabView: View {
                     if rps.attentionScrollRequest?.generation == generation { rps.attentionScrollRequest = nil }
                 }
             )
+            if isGGDrawerActive, rps.attentionRevealedTarget != nil {
+                Button("Back to stack") { rps.endAttentionReveal() }
+                    .buttonStyle(.plain)
+                    .font(.caption)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+            }
             if isGGDrawerActive, !isRevealingAttentionReview {
                 GGStackDrawer(rps: rps, appState: appState)
             } else {
@@ -113,6 +121,7 @@ struct ChangesTabView: View {
                 )
             }
         }
+        .onDisappear { rps.endAttentionReveal() }
         .task(id: amendProbeKey) {
             let key = amendProbeKey
             guard currentDraft?.amend == true, !isGGDrawerActive else { return }

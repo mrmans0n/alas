@@ -91,7 +91,12 @@ final class AppState {
     var agentSidebarFollowUps: [String: [ACPSession.ID: AgentSidebarFollowUpDraft]] = [:]
     var selectedRunScriptFailure: RunScriptFailure?
     let attentionStore: AttentionStore
-    var isAttentionInboxOpen = false
+    var isAttentionInboxOpen = false {
+        didSet {
+            if oldValue != isAttentionInboxOpen { attentionNavigationGeneration += 1 }
+        }
+    }
+    @ObservationIgnored var attentionNavigationGeneration = 0
     var attentionNavigationErrors: [UUID: String] = [:]
     @ObservationIgnored var attentionNavigationEnvironment: AttentionNavigationEnvironment?
     @ObservationIgnored var attentionReturnDestination: AttentionReturnDestination?
@@ -112,7 +117,13 @@ final class AppState {
     private(set) var workspaceRecoveryError: WorkspaceRecoveryState?
     var workspaceNavigationState = WorkspaceNavigationState()
     @ObservationIgnored private var workspaceSpaceCheckpointTask: Task<Void, Never>?
-    var selectedWorktreeId: String?
+    var selectedWorktreeId: String? {
+        didSet {
+            guard oldValue != selectedWorktreeId else { return }
+            attentionNavigationGeneration += 1
+            if let oldValue { rightPaneStore.activeState(worktreeId: oldValue)?.endAttentionReveal() }
+        }
+    }
     let suppressesRestoredRightPaneAfterAbandonedStartup: Bool
     private(set) var isRefreshingProjectTopologies = false
     var pendingSettingsSection: SettingsSection?

@@ -141,10 +141,19 @@ final class RightPaneState: GGSplitCommitServicing {
     private(set) var fileTreeGeneration: Int = 0
 
     // New in right-sidebar-refactor:
-    var activeTab: RightPaneTab = .changes
+    var activeTab: RightPaneTab = .changes {
+        didSet {
+            if oldValue != activeTab { endAttentionReveal() }
+        }
+    }
     var attentionScrollRequest: AppKitDiffScrollRequest?
     private(set) var attentionRevealedTarget: AttentionJumpTarget?
     private var attentionRevealGeneration = 0
+
+    func endAttentionReveal() {
+        attentionRevealedTarget = nil
+        attentionScrollRequest = nil
+    }
 
     /// Validate the destination before switching the visible Changes surface.
     func revealAttentionTarget(_ target: AttentionJumpTarget) -> Bool {

@@ -34,10 +34,13 @@ final class RightPaneStore {
     }
 
     func revealAttentionTarget(_ target: AttentionJumpTarget, for worktree: Worktree) async -> Bool {
-        guard let appState else { return false }
+        guard let appState, let context = appState.attentionContext(for: worktree) else { return false }
+        let navigationGeneration = appState.attentionNavigationGeneration
         let pane = state(for: worktree, baseBranch: appState.config.worktrees.baseBranch,
                          comparisonMode: appState.config.changes.comparisonMode)
         guard await pane.refresh() else { return false }
+        guard activeId == worktree.id,
+              appState.isAttentionNavigationCurrent(generation: navigationGeneration, owner: context.owner, worktreeID: worktree.id) else { return false }
         guard pane.revealAttentionTarget(target) else { return false }
         appState.config.rightPaneVisible = true
         return true
@@ -249,6 +252,7 @@ final class RightPaneStore {
         }
         if activeId != id {
             if let prev = activeId, let prevState = states[prev] {
+                prevState.endAttentionReveal()
                 prevState.stop()
             }
             if wasCached, result.currentBranch != worktree.branch {
@@ -395,6 +399,7 @@ final class RightPaneStore {
     /// consumer.
     func deactivate() {
         if let prev = activeId, let prevState = states[prev] {
+            prevState.endAttentionReveal()
             prevState.stop()
         }
         activeId = nil

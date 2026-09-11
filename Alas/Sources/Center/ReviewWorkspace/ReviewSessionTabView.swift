@@ -219,9 +219,8 @@ struct ReviewSessionTabView: View {
         .onChange(of: tabState.sessionID) { _, _ in
             rekeyDraftControllerForCurrentSession()
         }
-        .onChange(of: tabState.focusedCommentID) { _, commentID in
-            setSelectedFileID(tabState.selectedFileID, persist: false)
-            setFocusedDraftCommentID(commentID, persist: false)
+        .onChange(of: tabState.commentScrollRequest, initial: true) { _, request in
+            revealRequestedComment(request)
         }
         .onDisappear {
             selectionPersister.flush()
@@ -743,6 +742,7 @@ struct ReviewSessionTabView: View {
         }
         do {
             try draftCommentController?.load()
+            revealRequestedComment(tabState.commentScrollRequest)
         } catch {
             // Draft comment load failures stay non-blocking; the controller keeps the error.
         }
@@ -1190,6 +1190,13 @@ struct ReviewSessionTabView: View {
             commentID: comment.id,
             fileID: comment.fileID
         )
+    }
+
+    private func revealRequestedComment(_ request: DiffReviewDraftCommentScrollCommand?) {
+        guard let request else { return }
+        setSelectedFileID(request.fileID, persist: false)
+        setFocusedDraftCommentID(request.commentID, persist: false)
+        draftCommentScrollCommand = draftCommentScrollController.command(commentID: request.commentID, fileID: request.fileID)
     }
 
     private func selectInlineFeedback(_ item: DiffReviewInlineFeedback) {

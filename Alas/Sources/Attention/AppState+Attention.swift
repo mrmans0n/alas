@@ -90,6 +90,8 @@ extension AppState {
                                      presentation: item.presentation, jumpTarget: item.jumpTarget, display: current.display,
                                      worktree: current, acknowledgedAt: item.acknowledgedAt)
         focusGlobalWorktree(id: worktree.id, projectId: project.id)
+        attentionNavigationGeneration += 1
+        let navigationGeneration = attentionNavigationGeneration
         let environment = attentionNavigationEnvironment ?? .live(appState: self)
         let opened: Bool
         let failure: String
@@ -113,12 +115,22 @@ extension AppState {
             opened = false
             failure = "This event has no destination."
         }
+        guard isAttentionNavigationCurrent(generation: navigationGeneration, owner: item.owner, worktreeID: worktree.id) else {
+            return unavailable("Navigation was canceled because the destination changed.")
+        }
         guard opened else { return unavailable(failure) }
         attentionNavigationErrors[item.eventID] = nil
         isAttentionInboxOpen = false
         attentionReturnDestination = nil
         attentionStore.acknowledge(eventID: item.eventID, at: Date())
         return .opened
+    }
+
+    func isAttentionNavigationCurrent(generation: Int, owner: AttentionWorktreeIdentity, worktreeID: String) -> Bool {
+        guard !Task.isCancelled, attentionNavigationGeneration == generation,
+              selectedWorktreeId == worktreeID,
+              let worktree = attentionWorktree(for: owner), worktree.id == worktreeID else { return false }
+        return !projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path)
     }
 
     var attentionAggregation: AttentionAggregation {
@@ -226,6 +238,7 @@ extension AppState {
 
     func openAttentionInbox() {
         guard !isAttentionInboxOpen else { return }
+        if let selectedWorktreeId { rightPaneStore.activeState(worktreeId: selectedWorktreeId)?.endAttentionReveal() }
         attentionReturnDestination = AttentionReturnDestination(
             worktreeID: selectedWorktreeId,
             activeTabID: selectedWorktreeId.flatMap { tabs.activeTabId(forWorktree: $0) }
