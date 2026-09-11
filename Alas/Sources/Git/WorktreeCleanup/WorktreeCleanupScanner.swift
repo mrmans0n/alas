@@ -122,7 +122,7 @@ struct WorktreeCleanupScanner: Sendable {
 
             func addTask(_ index: Int) {
                 let worktree = worktrees[index]
-                group.addTask {
+                _ = group.addTaskUnlessCancelled {
                     async let facts = dependencies.gitFacts(worktree)
                     async let activeSessionCount =
                         dependencies.activeSessionCount(worktree.id)

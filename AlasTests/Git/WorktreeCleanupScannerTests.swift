@@ -399,6 +399,34 @@ struct WorktreeCleanupScannerTests {
         #expect(await probe.didObserveCancellation)
     }
 
+    @Test func cancellingScanDoesNotStartQueuedWorktreeProbes() async {
+        let concurrencyLimit = 4
+        let recorder = WorktreeCleanupProbeStartRecorder()
+        let scanner = Self.scanner(
+            facts: { _ in
+                await recorder.recordStart()
+                try? await Task.sleep(nanoseconds: 10_000_000_000)
+                return Self.cleanFacts
+            },
+            mergeIndex: { _ in
+                try? await Task.sleep(nanoseconds: 10_000_000_000)
+                return .failure(CancellationError())
+            }
+        )
+        let worktrees = (0..<8).map {
+            Self.worktree(branch: "feature/\($0)")
+        }
+        let scanTask = Task {
+            await Self.scan(scanner, worktrees: worktrees)
+        }
+        await recorder.waitUntilStarted(concurrencyLimit)
+
+        scanTask.cancel()
+        _ = await scanTask.value
+
+        #expect(await recorder.count == concurrencyLimit)
+    }
+
     @Test func statusPorcelainDistinguishesUntrackedFromModified() {
         let modified = WorktreeCleanupScanner.parseStatusPorcelain(" M Sources/A.swift\n")
         #expect(modified.hasUncommittedChanges)
@@ -473,5 +501,27 @@ private actor WorktreeCleanupCancellationProbe {
 
     func markCancelled() {
         didObserveCancellation = true
+    }
+}
+
+private actor WorktreeCleanupProbeStartRecorder {
+    private(set) var count = 0
+    private var waitTarget: Int?
+    private var waitContinuation: CheckedContinuation<Void, Never>?
+
+    func recordStart() {
+        count += 1
+        guard let waitTarget, count >= waitTarget else { return }
+        self.waitTarget = nil
+        waitContinuation?.resume()
+        waitContinuation = nil
+    }
+
+    func waitUntilStarted(_ target: Int) async {
+        if count >= target { return }
+        waitTarget = target
+        await withCheckedContinuation { continuation in
+            waitContinuation = continuation
+        }
     }
 }
