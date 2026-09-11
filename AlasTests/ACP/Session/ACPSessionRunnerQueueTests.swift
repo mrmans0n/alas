@@ -381,8 +381,8 @@ struct ACPSessionRunnerQueueTests {
         #expect(session.queue[0].brokerOperationKey != operationKey)
     }
 
-    @Test("queued prompt response ack waits for durable queue pop")
-    func queuedPromptResponseAckWaitsForDurableQueuePop() async throws {
+    @Test("queued prompt response ack waits for durable queue pop and resumes draining")
+    func queuedPromptResponseAckWaitsForDurableQueuePopAndResumesDraining() async throws {
         let (runner, mock, session, store) = try mkRunner()
         let acknowledgement = DurableAcknowledgementRecorder()
         mock.scriptResponse(method: "session/prompt") { _ in
@@ -392,16 +392,19 @@ struct ACPSessionRunnerQueueTests {
             )
         }
         session.enqueue(blocks: [.text("ack-after-pop")])
+        session.enqueue(blocks: [.text("next")])
         runner.persistQueue()
         await runner.flushPersistence()
 
         runner.flushQueueIfIdle()
-        try await Task.sleep(nanoseconds: 200_000_000)
+        try await Task.sleep(nanoseconds: 300_000_000)
         await runner.flushPersistence()
 
+        let prompts = mock.sent.filter { $0.method == "session/prompt" }
+        #expect(prompts.count == 2)
         #expect(session.queue.isEmpty)
         #expect(try store.loadQueue(sessionId: "s").isEmpty)
-        #expect(acknowledgement.recordedCount == 1)
+        #expect(acknowledgement.recordedCount == 2)
     }
 
     @Test(".steer while streaming with queue → cancel sent, queue cleared, new prompt sent, snapshot captured")

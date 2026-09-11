@@ -4203,7 +4203,10 @@ extension ACPSessionManager {
         guard let session = sessions[sessionId],
               session.agentState != .ready,
               let scheduledAt = earliestReconnectSchedule(in: session)
-        else { return }
+        else {
+            scheduledReconnectTasks.removeValue(forKey: sessionId)?.task.cancel()
+            return
+        }
         if case .needsAuth = session.setupState { return }
         if let existing = scheduledReconnectTasks[sessionId] {
             guard existing.deadline != scheduledAt else { return }
@@ -4292,11 +4295,11 @@ extension ACPSessionManager {
                 self.persistContextRecoveryPending(sessionId: sessionId, pending: false)
                 session.contextRestoreWarning = nil
                 session.markContextRecoveryRestored()
+                if !self.sendPendingQueueForceSend(sessionId: sessionId) {
+                    self.runners[sessionId]?.flushQueueIfIdle()
+                }
             } else {
                 session.contextRecoveryStatus = .failed("Transcript recovery failed.")
-            }
-            if !self.sendPendingQueueForceSend(sessionId: sessionId) {
-                self.runners[sessionId]?.flushQueueIfIdle()
             }
         }) else { return false }
         session.contextRecoveryStatus = .sendingTranscript
@@ -4372,8 +4375,10 @@ extension ACPSessionManager {
                     persistQueue(for: session)
                 }
             }
-            if persisted {
-                _ = sendPendingQueueForceSend(sessionId: sessionId)
+            if persisted,
+               !sendPendingQueueForceSend(sessionId: sessionId),
+               session.contextRecoveryStatus == nil {
+                runners[sessionId]?.flushQueueIfIdle()
             }
             onPersisted?(persisted)
         }

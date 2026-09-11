@@ -1448,7 +1448,9 @@ extension ACPSessionRunner {
                 self.session.pendingQueuePersistenceCount -= 1
                 if didPersist {
                     acknowledgement?()
-                    self.sendPendingQueueForceSendsAfterPersistence()
+                    if !self.sendPendingQueueForceSendsAfterPersistence(), acknowledgement != nil {
+                        self.flushQueueIfIdle()
+                    }
                 }
                 completion?(didPersist)
             })
@@ -1661,19 +1663,21 @@ extension ACPSessionRunner {
         )
     }
 
-    private func sendPendingQueueForceSendsAfterPersistence() {
+    @discardableResult
+    private func sendPendingQueueForceSendsAfterPersistence() -> Bool {
         guard session.pendingQueuePersistenceCount == 0,
               !pendingQueueForceSendsAfterPersistence.isEmpty
-        else { return }
+        else { return false }
         let itemIds = pendingQueueForceSendsAfterPersistence
         pendingQueueForceSendsAfterPersistence.removeAll()
         var forced = false
         for itemId in itemIds.reversed() {
             forced = session.forceQueueItem(id: itemId) || forced
         }
-        guard forced else { return }
+        guard forced else { return false }
         persistQueue()
         flushQueueIfIdle()
+        return true
     }
 
     /// Cancel the in-flight turn (if any), discard the ENTIRE queue

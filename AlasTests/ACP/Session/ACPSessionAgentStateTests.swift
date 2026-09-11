@@ -298,6 +298,29 @@ struct ACPSessionManagerReattachTests {
         #expect(mgr.liveSession(for: session.id) != nil)
     }
 
+    @Test("removing last scheduled item cancels reconnect retention")
+    func removingLastScheduledItemCancelsReconnectRetention() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-scheduled-cancel-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let mgr = ACPSessionManager(worktreeId: "/tmp/wt", worktreePath: "/tmp/wt", store: store)
+        let session = mgr.createSession(agentId: "no-such-agent-\(UUID().uuidString)")
+        session.agentState = .disconnected
+        session.enqueueScheduled(blocks: [.text("later")], scheduledAt: Date().addingTimeInterval(60))
+
+        mgr.retainSession(id: session.id)
+        mgr.scheduleAutoReconnect(sessionId: session.id)
+        mgr.releaseSession(id: session.id)
+        #expect(mgr.liveSession(for: session.id) != nil)
+
+        session.clearPendingQueue()
+        mgr.persistQueue(for: session)
+        for _ in 0 ..< 50 where mgr.liveSession(for: session.id) != nil {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        #expect(mgr.liveSession(for: session.id) == nil)
+    }
+
     @Test("scheduled reconnect refreshes stale mirror queue")
     func scheduledReconnectRefreshesStaleMirrorQueue() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-scheduled-refresh-\(UUID()).sqlite")
