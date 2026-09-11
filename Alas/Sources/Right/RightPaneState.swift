@@ -812,7 +812,7 @@ final class RightPaneState: GGSplitCommitServicing {
             let resolved = try await checkpointService.restorePreview(
                 target: target,
                 id: id,
-                coordination: checkpointCoordination(selectedPaths: []),
+                coordination: .clear,
                 selectedGroupIDs: selectedGroupIDs
             )
             let selected = selectedGroupIDs ?? resolved.selectedGroupIDs
