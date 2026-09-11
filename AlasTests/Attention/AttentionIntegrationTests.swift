@@ -129,7 +129,8 @@ struct AttentionIntegrationTests {
         let event = try #require(fixture.state.attentionStore.events.first)
         #expect(event.owner.legacyPath == "/repo/two")
         fixture.state.attentionStore.acknowledge(eventID: event.id, at: Date())
-        let updated = try #require(store.find(commentID: comment.id))
+        let persistedComment = try store.find(commentID: comment.id)
+        let updated = try #require(persistedComment)
         fixture.state.observeReviewReplyAttention(worktree: target, comment: updated, reply: try #require(updated.allReplies.last))
         #expect(fixture.state.attentionAggregation.unresolvedCount == 0)
         var answered = updated
