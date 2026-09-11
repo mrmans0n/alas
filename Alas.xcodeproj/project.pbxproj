@@ -1426,6 +1426,7 @@
 		D7BBE05B1EECE01D43EE48B0 /* WorkspaceModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38AA6E00C56FC42ABDCBB329 /* WorkspaceModels.swift */; };
 		D7C0F02B7A62097E3EF21160 /* FileSearchRanker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FABF9037326B7EE23FCC040 /* FileSearchRanker.swift */; };
 		D7D45D387EEF0436834DF7AD /* ThemeStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05EE713DD3CACF29F206553C /* ThemeStore.swift */; };
+		D7DC1DB58494BFCCDB5732CA /* AgentTabPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FCFA9964097ABAFEDD64ECA /* AgentTabPresentation.swift */; };
 		D8254D678C89FC54678A1A88 /* RemoteHelperInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DFB9832AA15DF6888553C7E /* RemoteHelperInstallerTests.swift */; };
 		D84D5F836F828349114F2D3C /* RightPaneTabTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1352DFCDFF4769EAF89B75CF /* RightPaneTabTests.swift */; };
 		D85B5032B8F2A71AFF5A13B6 /* FileTreeBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3ABD3A575FAEC381A5744BFA /* FileTreeBuilderTests.swift */; };
@@ -2011,6 +2012,7 @@
 		2F7E37886988A6F285BEA163 /* ReviewSessionModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewSessionModels.swift; sourceTree = "<group>"; };
 		2F8A28C3DBC50749BB1D2BEA /* HeadReaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeadReaderTests.swift; sourceTree = "<group>"; };
 		2FACC9A36AFADFB92DC240BD /* ACPTranscriptRowContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPTranscriptRowContent.swift; sourceTree = "<group>"; };
+		2FCFA9964097ABAFEDD64ECA /* AgentTabPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentTabPresentation.swift; sourceTree = "<group>"; };
 		2FD28E0005DE3A33A974A511 /* libsqlite3.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libsqlite3.tbd; path = usr/lib/libsqlite3.tbd; sourceTree = SDKROOT; };
 		2FE3A300CA2284FF5EEEF102 /* StashRows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StashRows.swift; sourceTree = "<group>"; };
 		2FE4396C610C7714AFDD6B41 /* DiffReviewImageState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffReviewImageState.swift; sourceTree = "<group>"; };
@@ -4395,6 +4397,7 @@
 			isa = PBXGroup;
 			children = (
 				0440E0CF2FCB4EF89EF53DC2 /* AgentSidebarRollup.swift */,
+				2FCFA9964097ABAFEDD64ECA /* AgentTabPresentation.swift */,
 				A1AD121323EC19D333DC2556 /* AgentTabView.swift */,
 				002C8D5C52466955E0A90606 /* BaseBranchSelector.swift */,
 				FF68BCA1222E7C06DA4AC595 /* BaseResolutionMapping.swift */,
@@ -6642,6 +6645,7 @@
 				2584552219DE6987E1E6AF36 /* AgentRunError.swift in Sources */,
 				0BA997A903C1DC2A41D64E22 /* AgentRunner.swift in Sources */,
 				2D428B399E48ED859E4D0797 /* AgentSidebarRollup.swift in Sources */,
+				D7DC1DB58494BFCCDB5732CA /* AgentTabPresentation.swift in Sources */,
 				D2F62FD2AC838FFDC305206D /* AgentTabView.swift in Sources */,
 				55C7881F382ACCEBCDB7D157 /* AgentsPane.swift in Sources */,
 				59EFDD354514B21BBA4206AD /* AiSplitButton.swift in Sources */,
