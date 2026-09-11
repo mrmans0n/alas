@@ -156,7 +156,7 @@ final class ACPSessionManager: ObservableObject {
     private var elicitationCoordinators: [ACPSession.ID: ACPElicitationCoordinator] = [:]
     private var autoReconnectTasks: [ACPSession.ID: Task<Void, Never>] = [:]
     private var scheduledReconnectTasks: [ACPSession.ID: (deadline: Date, task: Task<Void, Never>)] = [:]
-    private var managerQueuePersistenceSessionIds: Set<ACPSession.ID> = []
+    private var managerQueuePersistenceCounts: [ACPSession.ID: Int] = [:]
     private var disposalTasks: [ACPSession.ID: Task<Void, Error>] = [:]
     /// Per-session attach counter. The built-in MCP registration grace timer
     /// captures the epoch at attach and only writes the row if it still matches,
@@ -181,6 +181,23 @@ final class ACPSessionManager: ObservableObject {
 
     func retainedCleanupHasForkBarrierWork(for id: ACPSession.ID) -> Bool {
         runners[id]?.hasRetainedCleanupForkBarrierWork == true
+    }
+
+    private func beginManagerQueuePersistence(sessionId: ACPSession.ID) {
+        managerQueuePersistenceCounts[sessionId, default: 0] += 1
+    }
+
+    private func endManagerQueuePersistence(sessionId: ACPSession.ID) {
+        let remaining = (managerQueuePersistenceCounts[sessionId] ?? 1) - 1
+        if remaining > 0 {
+            managerQueuePersistenceCounts[sessionId] = remaining
+        } else {
+            managerQueuePersistenceCounts.removeValue(forKey: sessionId)
+        }
+    }
+
+    private func hasManagerQueuePersistence(sessionId: ACPSession.ID) -> Bool {
+        (managerQueuePersistenceCounts[sessionId] ?? 0) > 0
     }
 
     func retainedCleanupHasAutoReconnectWork(for id: ACPSession.ID) -> Bool {
@@ -301,7 +318,7 @@ final class ACPSessionManager: ObservableObject {
     /// running) — the remote-web twin of the queued bubble's "send now".
     func queueForceSend(for id: ACPSession.ID, itemId: UUID) async {
         guard let session = sessions[id] else { return }
-        guard !managerQueuePersistenceSessionIds.contains(id) else {
+        guard !hasManagerQueuePersistence(sessionId: id) else {
             deferQueueForceSend(session: session, itemId: itemId)
             return
         }
@@ -1704,7 +1721,7 @@ final class ACPSessionManager: ObservableObject {
         guard !isMirror(sessionId: session.id) else { return }
         let sessionId = session.id
         scheduleScheduledQueueReconnect(sessionId: sessionId)
-        if !managerQueuePersistenceSessionIds.contains(sessionId),
+        if !hasManagerQueuePersistence(sessionId: sessionId),
            let runner = runners[sessionId] {
             runner.persistQueue()
             return
@@ -4380,17 +4397,26 @@ extension ACPSessionManager {
         let task = enqueuePersistenceResult { persistence in
             try await persistence.upsertQueue(sessionId: sessionId, items: items, fence: fence)
         }
-        managerQueuePersistenceSessionIds.insert(sessionId)
+        beginManagerQueuePersistence(sessionId: sessionId)
         session.pendingQueuePersistenceCount += 1
         Task { @MainActor in
             let persisted = await task.value == true
             session.pendingQueuePersistenceCount -= 1
-            managerQueuePersistenceSessionIds.remove(sessionId)
             if !persisted, let scheduledId {
                 if session.removeFromQueue(id: scheduledId) {
-                    persistQueue(for: session)
+                    let items = session.queue
+                    let fence = leaseFence(sessionId: sessionId)
+                    let rollback = enqueuePersistence { persistence in
+                        _ = try await persistence.upsertQueue(
+                            sessionId: sessionId,
+                            items: items,
+                            fence: fence
+                        )
+                    }
+                    await rollback.value
                 }
             }
+            endManagerQueuePersistence(sessionId: sessionId)
             if persisted,
                !sendPendingQueueForceSend(sessionId: sessionId) {
                 if pendingQueueForceSends[sessionId]?.isEmpty == false {
@@ -4429,14 +4455,14 @@ extension ACPSessionManager {
         session.enqueue(blocks: blocks, delegatedSource: source)
         let fence = leaseFence(sessionId: sessionId)
         let items = session.queue
-        managerQueuePersistenceSessionIds.insert(sessionId)
+        beginManagerQueuePersistence(sessionId: sessionId)
         session.pendingQueuePersistenceCount += 1
         let task = enqueuePersistenceResult { persistence in
             try await persistence.upsertQueue(sessionId: sessionId, items: items, fence: fence)
         }
         let persisted = await task.value == true
         session.pendingQueuePersistenceCount -= 1
-        managerQueuePersistenceSessionIds.remove(sessionId)
+        endManagerQueuePersistence(sessionId: sessionId)
         guard persisted else {
             session.queue.removeAll { $0.delegatedSource == source }
             runners[sessionId]?.flushQueueIfIdle()
@@ -4478,14 +4504,14 @@ extension ACPSessionManager {
         )
         let fence = leaseFence(sessionId: sessionId)
         let items = session.queue
-        managerQueuePersistenceSessionIds.insert(sessionId)
+        beginManagerQueuePersistence(sessionId: sessionId)
         session.pendingQueuePersistenceCount += 1
         let task = enqueuePersistenceResult { persistence in
             try await persistence.upsertQueue(sessionId: sessionId, items: items, fence: fence)
         }
         let persisted = await task.value == true
         session.pendingQueuePersistenceCount -= 1
-        managerQueuePersistenceSessionIds.remove(sessionId)
+        endManagerQueuePersistence(sessionId: sessionId)
         guard persisted else {
             if let index = session.queue.firstIndex(where: { $0.id == id }) {
                 session.queue.remove(at: index)
