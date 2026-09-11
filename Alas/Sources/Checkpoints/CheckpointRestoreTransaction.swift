@@ -17,6 +17,7 @@ struct CheckpointRestorePreparation: Equatable, Sendable {
     let selectedPaths: [String]
     let expectedFingerprint: String
     let expectedIndexChecksum: String
+    let preparedIndexChecksum: String
     let preparedIndex: URL
     let stagingRoot: URL
     let replacementsRoot: URL
@@ -72,6 +73,7 @@ struct CheckpointRestoreTransaction: Sendable {
             try fileSystem.createDirectoryExclusively(backupsRoot, mode: 0o700)
             try await makePreparedIndex(at: preparedIndex, target: target, manifest: manifest, current: current,
                                         selectedPaths: selectedPaths)
+            let preparedIndexChecksum = CheckpointBlobReference.make(for: try fileSystem.fileData(preparedIndex)).sha256
 
             var stagingNames: [String: String] = [:]
             let saved = Dictionary(uniqueKeysWithValues: manifest.paths.map { ($0.relativePath, $0) })
@@ -88,6 +90,7 @@ struct CheckpointRestoreTransaction: Sendable {
                                                     phase: .prepared, stagingRoot: stagingRoot.path, selectedPaths: selectedPaths,
                                                     expectedFingerprint: preview.currentFingerprint,
                                                     expectedIndexChecksum: current.indexChecksum,
+                                                    preparedIndexChecksum: preparedIndexChecksum,
                                                     stagingNames: stagingNames)
             try await store.writeJournal(journal)
             journalWritten = true
@@ -98,6 +101,7 @@ struct CheckpointRestoreTransaction: Sendable {
             return .init(operationID: operationID, target: target, checkpointID: manifest.id,
                          recoveryCheckpointID: recoveryCheckpointID, selectedPaths: selectedPaths,
                          expectedFingerprint: preview.currentFingerprint, expectedIndexChecksum: current.indexChecksum,
+                         preparedIndexChecksum: preparedIndexChecksum,
                          preparedIndex: preparedIndex, stagingRoot: stagingRoot,
                          replacementsRoot: replacementsRoot, backupsRoot: backupsRoot)
         } catch {

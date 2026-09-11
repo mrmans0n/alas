@@ -14,7 +14,7 @@ struct CheckpointRestorePreparationTests {
         let before = try await fixture.state()
 
         let preparation = try await fixture.service.prepareRestore(target: fixture.target, preview: preview,
-                                                                    selectedGroupIDs: preview.selectedGroupIDs)
+                                                                    selectedGroupIDs: preview.selectedGroupIDs, coordination: .clear)
 
         #expect(try await fixture.state() == before)
         #expect(preparation.stagingRoot.deletingLastPathComponent() == fixture.repo.root)
@@ -40,6 +40,7 @@ struct CheckpointRestorePreparationTests {
         #expect(journal?.recoveryCheckpointID == preparation.recoveryCheckpointID)
         #expect(journal?.stagingRoot == preparation.stagingRoot.path)
         #expect(journal?.stagingNames.keys.sorted() == preparation.selectedPaths)
+        #expect(journal?.preparedIndexChecksum == preparation.preparedIndexChecksum)
     }
 
     @Test func storageFailureLeavesNoRestoreStagingDirectory() async throws {
@@ -57,7 +58,8 @@ struct CheckpointRestorePreparationTests {
         let preview = try await service.restorePreview(target: repo.target, id: checkpoint.id, coordination: .clear)
 
         await #expect(throws: CheckpointStoreError.byteLimitExceeded) {
-            try await service.prepareRestore(target: repo.target, preview: preview, selectedGroupIDs: preview.selectedGroupIDs)
+            try await service.prepareRestore(target: repo.target, preview: preview, selectedGroupIDs: preview.selectedGroupIDs,
+                                             coordination: .clear)
         }
         let names = try FileManager.default.contentsOfDirectory(atPath: repo.root.path)
         #expect(!names.contains { $0.hasPrefix(".alas-checkpoint-restore-") })
@@ -73,13 +75,50 @@ struct CheckpointRestorePreparationTests {
 
         await #expect(throws: CheckpointRestoreError.blocked(.indexLock)) {
             try await fixture.service.prepareRestore(target: fixture.target, preview: preview,
-                                                     selectedGroupIDs: preview.selectedGroupIDs)
+                                                     selectedGroupIDs: preview.selectedGroupIDs, coordination: .clear)
         }
         #expect(try await fixture.service.summaries(target: fixture.target).summaries == [checkpoint])
+    }
+
+    @Test func freshPreflightRejectsCurrentSessionCoordination() async throws {
+        let fixture = try await RestorePreparationFixture.make()
+        defer { fixture.remove() }
+        let checkpoint = try await fixture.service.createManual(target: fixture.target, label: "Saved")
+        try await fixture.makeLaterState()
+        let preview = try await fixture.service.restorePreview(target: fixture.target, id: checkpoint.id, coordination: .clear)
+        let active = CheckpointCoordinationSnapshot(dirtyEditorPaths: [], activeTerminalCount: 1, activeACPCount: 0,
+                                                    otherGitMutationActive: false, scopeDescription: "This repository only")
+
+        await #expect(throws: CheckpointRestoreError.blocked(.activeSession)) {
+            try await fixture.service.prepareRestore(target: fixture.target, preview: preview,
+                                                     selectedGroupIDs: preview.selectedGroupIDs, coordination: active)
+        }
+        #expect(try await fixture.service.summaries(target: fixture.target).summaries == [checkpoint])
+    }
+
+    @Test func preparedJournalFaultRemovesJournalAndStaging() async throws {
+        let fixture = try await RestorePreparationFixture.make()
+        defer { fixture.remove() }
+        let checkpoint = try await fixture.service.createManual(target: fixture.target, label: "Saved")
+        try await fixture.makeLaterState()
+        let preview = try await fixture.service.restorePreview(target: fixture.target, id: checkpoint.id, coordination: .clear)
+        let injector = CheckpointRestoreFaultInjector { point in
+            if point == .afterJournalPrepared { throw RestorePreparationFixture.Fault.injected }
+        }
+
+        await #expect(throws: RestorePreparationFixture.Fault.injected) {
+            try await fixture.service.prepareRestore(target: fixture.target, preview: preview,
+                                                     selectedGroupIDs: preview.selectedGroupIDs, coordination: .clear,
+                                                     faultInjector: injector)
+        }
+        #expect(try await fixture.store.recoverableJournals(lineageID: fixture.target.lineageID).isEmpty)
+        let names = try FileManager.default.contentsOfDirectory(atPath: fixture.repo.root.path)
+        #expect(!names.contains { $0.hasPrefix(".alas-checkpoint-restore-") })
     }
 }
 
 private struct RestorePreparationFixture: Sendable {
+    enum Fault: Error, Equatable { case injected }
     let repo: CheckpointTestRepository
     let storeRoot: URL
     let store: WorktreeCheckpointStore

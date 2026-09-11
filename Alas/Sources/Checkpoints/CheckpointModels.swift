@@ -448,6 +448,7 @@ struct CheckpointRestoreJournal: Codable, Equatable, Sendable, Identifiable {
     let completedPaths: [String]
     let expectedFingerprint: String
     let expectedIndexChecksum: String
+    let preparedIndexChecksum: String?
     let ownedIndexLockPath: String?
     let ownedIndexLockChecksum: String?
     let stagingNames: [String: String]
@@ -463,6 +464,7 @@ struct CheckpointRestoreJournal: Codable, Equatable, Sendable, Identifiable {
         completedPaths: [String] = [],
         expectedFingerprint: String,
         expectedIndexChecksum: String,
+        preparedIndexChecksum: String? = nil,
         ownedIndexLockPath: String? = nil,
         ownedIndexLockChecksum: String? = nil,
         stagingNames: [String: String] = [:]
@@ -477,6 +479,7 @@ struct CheckpointRestoreJournal: Codable, Equatable, Sendable, Identifiable {
         self.completedPaths = completedPaths
         self.expectedFingerprint = expectedFingerprint
         self.expectedIndexChecksum = expectedIndexChecksum
+        self.preparedIndexChecksum = preparedIndexChecksum
         self.ownedIndexLockPath = ownedIndexLockPath
         self.ownedIndexLockChecksum = ownedIndexLockChecksum
         self.stagingNames = stagingNames

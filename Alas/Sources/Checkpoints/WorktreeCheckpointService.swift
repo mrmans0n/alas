@@ -181,7 +181,7 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
     }
 
     func prepareRestore(target: CheckpointWorktreeTarget, preview: CheckpointRestorePreview,
-                        selectedGroupIDs: Set<UUID>, coordination: CheckpointCoordinationSnapshot = .clear,
+                        selectedGroupIDs: Set<UUID>, coordination: CheckpointCoordinationSnapshot,
                         faultInjector: CheckpointRestoreFaultInjector = .none) async throws -> CheckpointRestorePreparation {
         let refreshed = try await restorePreview(target: target, id: preview.checkpointID, coordination: coordination,
                                                  selectedGroupIDs: selectedGroupIDs)
