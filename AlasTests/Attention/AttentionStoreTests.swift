@@ -43,6 +43,80 @@ struct AttentionStoreTests {
         #expect(fixture.store.document.events.contains { $0.fingerprint == "request-0" } == false)
     }
 
+    @Test func malformedDocumentReportsLoadErrorAfterPersistenceRecoversFile() throws {
+        let fixture = try Fixture()
+        try Data("not json".utf8).write(to: fixture.url)
+
+        let store = AttentionStore(url: fixture.url, persistence: PersistenceStore(), now: { fixture.now })
+
+        #expect(store.loadError != nil)
+        #expect(FileManager.default.fileExists(atPath: fixture.url.path) == false)
+        let contents = try FileManager.default.contentsOfDirectory(atPath: fixture.url.deletingLastPathComponent().path)
+        #expect(contents.contains { $0.hasPrefix("attention-events.json.broken-") })
+    }
+
+    @Test func appendHistoryPersistsInformationalEvent() throws {
+        let fixture = try Fixture()
+        fixture.store.appendHistory(fixture.history(fingerprint: "finished"), at: fixture.now)
+
+        #expect(fixture.store.document.events.count == 1)
+        let event = try #require(fixture.store.document.events.first)
+        #expect(event.kind == .agentFinished)
+        #expect(event.requiresAction == false)
+        #expect(event.occurredAt == fixture.now)
+    }
+
+    @Test func documentDecodingDefaultsMissingCollections() throws {
+        let fixture = try Fixture()
+        try Data("{\"schemaVersion\":1}".utf8).write(to: fixture.url)
+
+        let store = AttentionStore(url: fixture.url, persistence: PersistenceStore(), now: { fixture.now })
+
+        #expect(store.document.events.isEmpty)
+        #expect(store.document.acknowledgments.isEmpty)
+        #expect(store.document.observations.isEmpty)
+        #expect(store.document.aliases.isEmpty)
+    }
+
+    @Test func laterSuccessfulWriteClearsWriteError() throws {
+        let persistence = FailingThenSucceedingPersistenceStore()
+        let fixture = try Fixture(persistence: persistence)
+
+        fixture.store.observe(.active(fixture.signal(fingerprint: "first")), at: fixture.now)
+        #expect(fixture.store.writeError != nil)
+
+        fixture.store.observe(.active(fixture.signal(fingerprint: "second")), at: fixture.now)
+        #expect(fixture.store.writeError == nil)
+    }
+
+    @Test func retentionExpiresAddressedEventsOlderThanThirtyDays() throws {
+        let fixture = try Fixture()
+        let eventDate = fixture.now.addingTimeInterval(-31 * 86_400)
+        fixture.store.observe(.active(fixture.signal(fingerprint: "old")), at: eventDate)
+        #expect(fixture.store.document.events.count == 1)
+        let event = try #require(fixture.store.document.events.first)
+
+        fixture.store.acknowledge(eventID: event.id, at: fixture.now)
+
+        #expect(fixture.store.document.events.isEmpty)
+    }
+
+    @Test func hardCapPrunesOldestAddressedEventByOccurrenceDate() throws {
+        let fixture = try Fixture(maxEvents: 2)
+        fixture.store.observe(.active(fixture.signal(fingerprint: "newest")), at: fixture.now.addingTimeInterval(100))
+        let newest = try #require(fixture.store.document.events.last)
+        fixture.store.acknowledge(eventID: newest.id, at: fixture.now.addingTimeInterval(100))
+
+        fixture.store.observe(.active(fixture.signal(fingerprint: "oldest")), at: fixture.now)
+        let oldest = try #require(fixture.store.document.events.last)
+        fixture.store.acknowledge(eventID: oldest.id, at: fixture.now.addingTimeInterval(100))
+
+        fixture.store.observe(.active(fixture.signal(fingerprint: "unresolved")), at: fixture.now.addingTimeInterval(200))
+
+        #expect(fixture.store.document.events.map(\.fingerprint) == ["newest", "unresolved"])
+    }
+
+    @MainActor
     private struct Fixture {
         let now = Date(timeIntervalSince1970: 1_000_000)
         let url: URL
@@ -60,14 +134,18 @@ struct AttentionStoreTests {
         )
         let store: AttentionStore
 
-        init(maxEvents: Int = 2_000, resolvedRetention: TimeInterval = 30 * 86_400) throws {
+        init(
+            persistence: any PersistenceStoreProtocol = PersistenceStore(),
+            maxEvents: Int = 2_000,
+            resolvedRetention: TimeInterval = 30 * 86_400
+        ) throws {
             let directory = FileManager.default.temporaryDirectory
                 .appendingPathComponent(UUID().uuidString, isDirectory: true)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             url = directory.appendingPathComponent("attention-events.json")
             store = AttentionStore(
                 url: url,
-                persistence: PersistenceStore(),
+                persistence: persistence,
                 now: { Date(timeIntervalSince1970: 1_000_000) },
                 maxEvents: maxEvents,
                 resolvedRetention: resolvedRetention
@@ -91,5 +169,42 @@ struct AttentionStoreTests {
                 )
             )
         }
+
+        func history(fingerprint: String) -> AttentionHistoryEvent {
+            AttentionHistoryEvent(
+                sourceKey: AttentionSourceKey(rawValue: "session:1"),
+                fingerprint: fingerprint,
+                owner: lineageOwner,
+                kind: .agentFinished,
+                title: "Agent finished",
+                body: nil,
+                jumpTarget: .none,
+                display: AttentionWorktreeDisplaySnapshot(
+                    projectName: "Project",
+                    branch: "main",
+                    path: "/repo",
+                    host: nil
+                )
+            )
+        }
+    }
+}
+
+private final class FailingThenSucceedingPersistenceStore: PersistenceStoreProtocol {
+    private var shouldFail = true
+
+    func write<T: Encodable>(_ value: T, to url: URL) throws {
+        if shouldFail {
+            shouldFail = false
+            throw TestError.writeFailed
+        }
+    }
+
+    func readIfExists<T: Decodable>(_ type: T.Type, from url: URL) throws -> T? {
+        nil
+    }
+
+    private enum TestError: Error {
+        case writeFailed
     }
 }

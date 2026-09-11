@@ -27,8 +27,9 @@ final class AttentionStore {
         self.maxEvents = maxEvents
         self.resolvedRetention = resolvedRetention
         do {
-            document = try persistence.readIfExists(AttentionDocument.self, from: url) ?? AttentionDocument()
-            loadError = nil
+            let result = try persistence.readIfExistsReportingRecovery(AttentionDocument.self, from: url)
+            document = result.value ?? AttentionDocument()
+            loadError = result.recoveryError
         } catch {
             document = AttentionDocument()
             loadError = error
@@ -89,16 +90,18 @@ final class AttentionStore {
 
     private func retain(at date: Date) {
         let cutoff = date.addingTimeInterval(-resolvedRetention)
+        let acknowledgedIDs = Set(document.acknowledgments.keys)
         document.events.removeAll { event in
-            document.acknowledgments[event.id] != nil && event.occurredAt < cutoff
+            acknowledgedIDs.contains(event.id) && event.occurredAt < cutoff
         }
 
         while document.events.count > maxEvents,
-              let index = document.events.firstIndex(where: { document.acknowledgments[$0.id] != nil }) {
+              let index = oldestEventIndex(where: { document.acknowledgments[$0.id] != nil }) {
             document.events.remove(at: index)
         }
         while document.events.count > maxEvents {
-            document.events.removeFirst()
+            guard let index = oldestEventIndex(where: { document.acknowledgments[$0.id] == nil }) else { break }
+            document.events.remove(at: index)
         }
 
         let retainedIDs = Set(document.events.map(\.id))
@@ -106,6 +109,19 @@ final class AttentionStore {
         document.observations = document.observations.filter { _, observation in
             observation.isActive || observation.eventID.map(retainedIDs.contains) ?? false
         }
+    }
+
+    private func oldestEventIndex(where predicate: (AttentionEvent) -> Bool) -> Int? {
+        document.events.indices
+            .filter { predicate(document.events[$0]) }
+            .min { lhs, rhs in
+                let lhsEvent = document.events[lhs]
+                let rhsEvent = document.events[rhs]
+                if lhsEvent.occurredAt != rhsEvent.occurredAt {
+                    return lhsEvent.occurredAt < rhsEvent.occurredAt
+                }
+                return lhs < rhs
+            }
     }
 
     private func persist() {

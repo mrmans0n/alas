@@ -3,6 +3,29 @@ import Foundation
 protocol PersistenceStoreProtocol {
     func write<T: Encodable>(_ value: T, to url: URL) throws
     func readIfExists<T: Decodable>(_ type: T.Type, from url: URL) throws -> T?
+    func readIfExistsReportingRecovery<T: Decodable>(
+        _ type: T.Type,
+        from url: URL
+    ) throws -> PersistenceReadResult<T>
+}
+
+struct PersistenceReadResult<Value> {
+    let value: Value?
+    let recoveryError: Error?
+
+    init(value: Value?, recoveryError: Error? = nil) {
+        self.value = value
+        self.recoveryError = recoveryError
+    }
+}
+
+extension PersistenceStoreProtocol {
+    func readIfExistsReportingRecovery<T: Decodable>(
+        _ type: T.Type,
+        from url: URL
+    ) throws -> PersistenceReadResult<T> {
+        PersistenceReadResult(value: try readIfExists(type, from: url))
+    }
 }
 
 struct PersistenceStore: PersistenceStoreProtocol {
@@ -34,12 +57,21 @@ struct PersistenceStore: PersistenceStoreProtocol {
     }
 
     func readIfExists<T: Decodable>(_ type: T.Type, from url: URL) throws -> T? {
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        try readIfExistsReportingRecovery(type, from: url).value
+    }
+
+    func readIfExistsReportingRecovery<T: Decodable>(
+        _ type: T.Type,
+        from url: URL
+    ) throws -> PersistenceReadResult<T> {
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return PersistenceReadResult(value: nil)
+        }
         do {
-            return try read(T.self, from: url)
+            return PersistenceReadResult(value: try read(T.self, from: url))
         } catch {
             try moveBroken(url)
-            return nil
+            return PersistenceReadResult(value: nil, recoveryError: error)
         }
     }
 
