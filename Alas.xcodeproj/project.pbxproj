@@ -1550,11 +1550,13 @@
 		E22E6141A5EF030F79CF8CBE /* RemotePairingServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA59378FB8733DBAC67592A3 /* RemotePairingServiceTests.swift */; };
 		E239749EA0CB37C2C12B3591 /* ACPStdioClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5302E56E1C16EDECDB45CB20 /* ACPStdioClientTests.swift */; };
 		E25FF1C0DD04577A7FE780EF /* CheckpointPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44ABA5347FCD98CABBFE47DE /* CheckpointPresentationTests.swift */; };
+		E283BBDEFAEC2191601E2965 /* CheckpointDiffTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CBDD619D8463328F6C13E61 /* CheckpointDiffTabView.swift */; };
 		E29D10B84F406C38E2F4C457 /* FileResultRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3375A79ACFD3567389DA855C /* FileResultRow.swift */; };
 		E2A3B2DB4B1F9A7C318921D7 /* ACPImageStaging.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98796FD86FE05979A2BCBCF3 /* ACPImageStaging.swift */; };
 		E2A49F787B3DC3F45E92854D /* AgentEditView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9E480C05A2AA6FF8863B7C5 /* AgentEditView.swift */; };
 		E2B39318C3417839BAE511A7 /* ACPChatTypographyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3659703F6EB9AD2454C2898B /* ACPChatTypographyTests.swift */; };
 		E2DCFEC0D07DABA65F203307 /* WebPreviewCommandTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90F16D337319425673775B11 /* WebPreviewCommandTests.swift */; };
+		E2E444F9EBD231652F7F047C /* CheckpointDiffTabTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 166844386117E6A01FDE589E /* CheckpointDiffTabTests.swift */; };
 		E2FA5B84915EC84D8640701E /* OpenBinaryRoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D89087B3506E3F54F29C718 /* OpenBinaryRoutingTests.swift */; };
 		E30243803319861ACA6A4513 /* ACPSessionManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB5B73ECBD730B5BB24E2240 /* ACPSessionManagerTests.swift */; };
 		E30832C33A680645C481826F /* ANSIStreamTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86CB3F953562BAFB284B5DB7 /* ANSIStreamTests.swift */; };
@@ -1914,6 +1916,7 @@
 		15B5B9112025B94DF41A1AA2 /* TrackedRevisionStallTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackedRevisionStallTests.swift; sourceTree = "<group>"; };
 		15CE3FADE2353C1214143336 /* ClosedTabHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClosedTabHistory.swift; sourceTree = "<group>"; };
 		163616126043BC277DDE52F6 /* WebPageMetadataFetcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebPageMetadataFetcher.swift; sourceTree = "<group>"; };
+		166844386117E6A01FDE589E /* CheckpointDiffTabTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckpointDiffTabTests.swift; sourceTree = "<group>"; };
 		1688AB1B49758FAB5BF0AF2F /* light.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = light.json; sourceTree = "<group>"; };
 		169FC38D03727F34855EB521 /* AlasFieldTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasFieldTests.swift; sourceTree = "<group>"; };
 		16C9E59E3987C1D3C9989D91 /* PaneTreeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaneTreeTests.swift; sourceTree = "<group>"; };
@@ -1956,6 +1959,7 @@
 		1C8926C5ABBB7B8157ACFEF3 /* session-update-context-compaction-partial.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "session-update-context-compaction-partial.json"; sourceTree = "<group>"; };
 		1C8F14A2CEAE4B8404213C73 /* AlasSegmentedControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasSegmentedControl.swift; sourceTree = "<group>"; };
 		1CA759D2C99D1FEE3C67A1BA /* RemoteImageCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteImageCacheTests.swift; sourceTree = "<group>"; };
+		1CBDD619D8463328F6C13E61 /* CheckpointDiffTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckpointDiffTabView.swift; sourceTree = "<group>"; };
 		1CEAAB5A1851AAC887017ACB /* ACPContextCompactionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPContextCompactionView.swift; sourceTree = "<group>"; };
 		1D3505FB870FA22C9C0FDB26 /* RightPaneStateSyncStatusTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RightPaneStateSyncStatusTests.swift; sourceTree = "<group>"; };
 		1D4A5200C6EBB6434DD6B8BD /* ShortcutReservationsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutReservationsTests.swift; sourceTree = "<group>"; };
@@ -4948,6 +4952,7 @@
 				FEF671D3D8D5F1D59AFBD8BF /* BreadcrumbView.swift */,
 				F8685E5E5AC7A77D6D27A847 /* CenterPaneView.swift */,
 				0307CFD55404D01F14A5B602 /* CenterTypography.swift */,
+				1CBDD619D8463328F6C13E61 /* CheckpointDiffTabView.swift */,
 				15CE3FADE2353C1214143336 /* ClosedTabHistory.swift */,
 				C78D0715973BD840FDE95AA2 /* CloseTabConfirmationPolicy.swift */,
 				BF3AC3A1F7C5649E75015293 /* CreatingWorktreeView.swift */,
@@ -6041,6 +6046,7 @@
 			children = (
 				EEA93A40C5E1FAC4E569B7DA /* CheckpointCoordinationTests.swift */,
 				38CB485BA93482126CCAA211 /* CheckpointDiffLoaderTests.swift */,
+				166844386117E6A01FDE589E /* CheckpointDiffTabTests.swift */,
 				2342E857ED037E8FF8024BAE /* CheckpointFileSystemTests.swift */,
 				BDCDFEB92EF701A089548A02 /* CheckpointModelTests.swift */,
 				44ABA5347FCD98CABBFE47DE /* CheckpointPresentationTests.swift */,
@@ -6969,6 +6975,7 @@
 				D46F8DF1FB66AD0ED92F3DF0 /* ChangesTreeBuilder.swift in Sources */,
 				B7542C247255B91CEC68004F /* ChatFontCatalog.swift in Sources */,
 				D49FD01D96C6B00C3683FBCA /* ChatPane.swift in Sources */,
+				E283BBDEFAEC2191601E2965 /* CheckpointDiffTabView.swift in Sources */,
 				C14ECC6D006CCA4B671D9389 /* CheckpointFileSystem.swift in Sources */,
 				EC2E7F94D59AF27F12CF3A96 /* CheckpointGitRunner.swift in Sources */,
 				B99253604B1E778E3F4D7135 /* CheckpointModels.swift in Sources */,
@@ -7876,6 +7883,7 @@
 				981730A24BE369F4AE9012F3 /* ChatPaneTests.swift in Sources */,
 				0AAF4AA7F8D4C777AA3005B6 /* CheckpointCoordinationTests.swift in Sources */,
 				CFC115C9F16F0ADF90034C4F /* CheckpointDiffLoaderTests.swift in Sources */,
+				E2E444F9EBD231652F7F047C /* CheckpointDiffTabTests.swift in Sources */,
 				F9B7BD2F0A73C31B97E712CB /* CheckpointFileSystemTests.swift in Sources */,
 				E48489F352E8AD513310DF2B /* CheckpointModelTests.swift in Sources */,
 				E25FF1C0DD04577A7FE780EF /* CheckpointPresentationTests.swift in Sources */,

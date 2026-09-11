@@ -847,6 +847,26 @@ final class TabsManager {
     }
 
     @discardableResult
+    func appendCheckpointDiff(
+        worktreeID: String,
+        checkpointID: CheckpointID,
+        groupID: UUID,
+        primaryPath: String,
+        checkpointLabel: String
+    ) -> Tab {
+        let state = CheckpointDiffTabState(
+            worktreeID: worktreeID,
+            checkpointID: checkpointID,
+            groupID: groupID,
+            primaryPath: primaryPath,
+            checkpointLabel: checkpointLabel
+        )
+        let tab = Tab.checkpointDiff(state)
+        append(tab, to: worktreeID)
+        return tab
+    }
+
+    @discardableResult
     func appendCommit(worktreeId: String, sha: String, title: String) -> Tab {
         let state = CommitTabState(worktreeId: worktreeId, sha: sha, title: title)
         let tab = Tab.commit(state)

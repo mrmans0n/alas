@@ -8,6 +8,7 @@ enum Tab: Codable, Equatable, Identifiable {
     case editor(EditorTabState)
     case diff(DiffTabState)
     case stashDiff(StashDiffTabState)
+    case checkpointDiff(CheckpointDiffTabState)
     case commit(CommitTabState)
     case commitEditor(CommitEditorTabState)
     case draftCommit(DraftCommitTabState)
@@ -32,6 +33,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .editor(let s):       return s.id
         case .diff(let s):         return s.id
         case .stashDiff(let s):    return s.id
+        case .checkpointDiff(let s): return s.id
         case .commit(let s):       return s.id
         case .commitEditor(let s): return s.id
         case .draftCommit(let s):  return s.id
@@ -58,6 +60,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .editor(let s):       return s.title
         case .diff(let s):         return s.title
         case .stashDiff(let s):    return s.title
+        case .checkpointDiff(let s): return s.title
         case .commit(let s):       return s.title
         case .commitEditor(let s): return s.title
         case .draftCommit:         return "Draft commit"
@@ -84,6 +87,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .editor:       return "code"
         case .diff:         return "diff"
         case .stashDiff:    return "archivebox"
+        case .checkpointDiff: return "clock.arrow.circlepath"
         case .commit:       return "commit"
         case .commitEditor: return "commit"
         case .draftCommit:  return "commit"
@@ -131,6 +135,7 @@ enum Tab: Codable, Equatable, Identifiable {
         switch self {
         case .editor(let s):       return s.isExternal ? nil : s.relativePath
         case .stashDiff(let s):    return s.file.path
+        case .checkpointDiff(let s): return s.primaryPath
         case .imagePreview(let s): return s.relativePath
         case .binaryPreview(let s): return s.relativePath.hasPrefix("/") ? nil : s.relativePath
         case .mergeConflict(let s): return s.relativePath
@@ -162,7 +167,7 @@ enum Tab: Codable, Equatable, Identifiable {
         switch self {
         case .editor, .imagePreview, .binaryPreview, .mergeConflict:
             return true
-        case .stashDiff, .fileSnapshot, .fileHistory:
+        case .stashDiff, .checkpointDiff, .fileSnapshot, .fileHistory:
             return false
         default:
             return false
@@ -835,6 +840,32 @@ struct StashDiffTabState: Codable, Equatable, Identifiable {
         self.file = file
         self.title = "\((file.path as NSString).lastPathComponent) @ \(stash.ref)"
         self.id = "stash-diff:\(worktreeId):\(stash.ref):\(stash.sha):\(file.path)\u{0}\(file.isUntracked)"
+    }
+}
+
+struct CheckpointDiffTabState: Codable, Equatable, Identifiable {
+    let id: TabID
+    let worktreeID: String
+    let checkpointID: CheckpointID
+    let groupID: UUID
+    let primaryPath: String
+    let checkpointLabel: String
+    let title: String
+
+    init(
+        worktreeID: String,
+        checkpointID: CheckpointID,
+        groupID: UUID,
+        primaryPath: String,
+        checkpointLabel: String
+    ) {
+        self.id = "checkpoint-diff:\(worktreeID):\(checkpointID.uuidString):\(groupID.uuidString)"
+        self.worktreeID = worktreeID
+        self.checkpointID = checkpointID
+        self.groupID = groupID
+        self.primaryPath = primaryPath
+        self.checkpointLabel = checkpointLabel
+        self.title = "\((primaryPath as NSString).lastPathComponent) @ \(checkpointLabel)"
     }
 }
 

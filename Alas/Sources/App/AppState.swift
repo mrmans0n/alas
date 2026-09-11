@@ -10422,6 +10422,36 @@ final class AppState {
         activateWorktreeCenterTab(worktreeId: worktreeId, tabId: tab.id)
     }
 
+    func openCheckpointDiffTab(
+        worktree: Worktree,
+        checkpointID: CheckpointID,
+        groupID: UUID,
+        primaryPath: String,
+        checkpointLabel: String
+    ) {
+        let worktreeID = worktree.id
+        let existing = tabs.tabs(forWorktree: worktreeID).first { tab in
+            if case .checkpointDiff(let state) = tab {
+                return state.worktreeID == worktreeID
+                    && state.checkpointID == checkpointID
+                    && state.groupID == groupID
+            }
+            return false
+        }
+        if let existing {
+            activateWorktreeCenterTab(worktreeId: worktreeID, tabId: existing.id)
+            return
+        }
+        let tab = tabs.appendCheckpointDiff(
+            worktreeID: worktreeID,
+            checkpointID: checkpointID,
+            groupID: groupID,
+            primaryPath: primaryPath,
+            checkpointLabel: checkpointLabel
+        )
+        activateWorktreeCenterTab(worktreeId: worktreeID, tabId: tab.id)
+    }
+
     func openCommitTab(worktreeId: String, commit: CommitInfo) {
         guard let worktree = worktree(withId: worktreeId) else { return }
         if selectedWorktreeId != worktree.id {

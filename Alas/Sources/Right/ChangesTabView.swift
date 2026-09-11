@@ -499,7 +499,15 @@ struct ChangesTabView: View {
                             token: "\(checkpoint.id.uuidString)-\(group.id.uuidString)",
                             estimatedHeight: 30
                         ) {
-                            CheckpointFileGroupRow(group: group, manifest: manifest)
+                            CheckpointFileGroupRow(group: group, manifest: manifest) {
+                                appState.openCheckpointDiffTab(
+                                    worktree: rps.worktree,
+                                    checkpointID: checkpoint.id,
+                                    groupID: group.id,
+                                    primaryPath: group.primaryPath,
+                                    checkpointLabel: checkpoint.label
+                                )
+                            }
                         })
                     }
                     if !manifest.exclusions.isEmpty {

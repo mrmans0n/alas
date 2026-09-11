@@ -108,7 +108,7 @@ enum StartupRecoveryPaneCompletionPolicy {
     static func shouldComplete(activeTab: Tab?) -> Bool {
         switch activeTab {
         case .terminal, .editor, .diff, .stashDiff, .commit, .commitEditor, .draftCommit,
-             .draftReviewRequest, .reviewChanges, .reviewSession, .imagePreview,
+             .checkpointDiff, .draftReviewRequest, .reviewChanges, .reviewSession, .imagePreview,
              .mergeConflict, .acpSession, .reviewPR, .fileSnapshot, .fileHistory,
              .ggInbox, .ggSplitCommit:
             false
@@ -513,6 +513,15 @@ struct CenterPaneView: View {
                         StashDiffTabView(
                             worktreePath: worktree.path,
                             state: s,
+                            codeFontFamily: state.config.code.fontFamily,
+                            codeFontSize: CGFloat(state.config.code.fontSize),
+                            onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) }
+                        )
+                        .id(s.id)
+                    case .checkpointDiff(let s):
+                        CheckpointDiffTabView(
+                            state: s,
+                            target: state.checkpointTarget(for: worktree),
                             codeFontFamily: state.config.code.fontFamily,
                             codeFontSize: CGFloat(state.config.code.fontSize),
                             onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) }

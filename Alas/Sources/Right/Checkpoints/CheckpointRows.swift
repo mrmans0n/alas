@@ -171,18 +171,28 @@ struct CheckpointFooterRow: View {
 struct CheckpointFileGroupRow: View {
     let group: CheckpointFileGroup
     let manifest: WorktreeCheckpointManifest
+    let onInspect: () -> Void
 
     @Environment(\.theme) private var theme
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(group.renameSource.map { "\($0) → \(group.primaryPath)" } ?? group.primaryPath)
-                .font(.system(size: 11))
-            Text(badges)
-                .font(.system(size: 9))
-                .foregroundColor(theme.color("fg-muted"))
+        Button {
+            onInspect()
+        } label: {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(group.renameSource.map { "\($0) → \(group.primaryPath)" } ?? group.primaryPath)
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("fg"))
+                Text(badges)
+                    .font(.system(size: 9))
+                    .foregroundColor(theme.color("fg-muted"))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
         .padding(.leading, 28).padding(.vertical, 5)
+        .accessibilityLabel("Inspect checkpoint file \(group.primaryPath)")
     }
 
     private var badges: String {
