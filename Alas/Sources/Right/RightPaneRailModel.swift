@@ -28,6 +28,13 @@ enum RightPaneRailBadge: Equatable {
     }
 }
 
+/// The right pane state a resolved rail action leads to: which tab is active
+/// and whether the pane body is expanded.
+struct RightPaneRailOutcome: Equatable {
+    var tab: RightPaneTab
+    var visible: Bool
+}
+
 /// How a rail tab button paints. The collapsed active tab is its own state:
 /// it drops its accent fill and becomes a muted "last used" marker.
 enum RightPaneRailTabState: Equatable {
@@ -58,5 +65,26 @@ enum RightPaneRailModel {
     ) -> RightPaneRailTabState {
         guard tab == active else { return .inactive }
         return collapsed ? .activeCollapsed : .active
+    }
+
+    /// Applies a resolved rail action to the pane's state. Kept pure and
+    /// separate from the view so the transition that decides which tab a
+    /// collapsed pane reopens on is covered by tests rather than only by
+    /// clicking the rail.
+    static func apply(
+        _ action: RightPaneRailAction,
+        currentTab: RightPaneTab,
+        currentVisible: Bool
+    ) -> RightPaneRailOutcome {
+        switch action {
+        case .collapse:
+            return RightPaneRailOutcome(tab: currentTab, visible: false)
+        case .expand(let tab):
+            return RightPaneRailOutcome(tab: tab, visible: true)
+        case .select(let tab):
+            // Selecting never changes whether the body is showing; it is only
+            // reachable while the pane is already expanded.
+            return RightPaneRailOutcome(tab: tab, visible: currentVisible)
+        }
     }
 }

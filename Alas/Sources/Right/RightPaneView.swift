@@ -327,16 +327,17 @@ struct RightPaneView: View {
     }
 
     private func handle(_ action: RightPaneRailAction, rps: RightPaneState) {
-        switch action {
-        case .collapse:
-            state.config.rightPaneVisible = false
+        let outcome = RightPaneRailModel.apply(
+            action,
+            currentTab: rps.activeTab,
+            currentVisible: state.config.rightPaneVisible
+        )
+        if rps.activeTab != outcome.tab {
+            rps.activeTab = outcome.tab
+        }
+        if state.config.rightPaneVisible != outcome.visible {
+            state.config.rightPaneVisible = outcome.visible
             state.saveConfig()
-        case .expand(let tab):
-            rps.activeTab = tab
-            state.config.rightPaneVisible = true
-            state.saveConfig()
-        case .select(let tab):
-            rps.activeTab = tab
         }
     }
 

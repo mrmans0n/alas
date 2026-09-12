@@ -97,36 +97,43 @@ struct ThreePaneLayout<Sidebar: View, Center: View, Right: View>: View {
                 center(sizing.rightVisible)
                     .frame(width: CGFloat(alignedCenterWidth))
                     .frame(maxHeight: .infinity)
-                if sizing.rightVisible {
-                    DragHandle(
-                        axis: .horizontal,
-                        onDragChanged: { translation in
-                            let start = rightDragStartWidth ?? sizing.rightWidth
-                            rightDragStartWidth = start
-                            // Dragging this gutter right shrinks the right
-                            // pane, hence the negated translation.
-                            transientRightWidth = PaneDragMath.resolvedWidth(
-                                startWidth: start,
-                                translation: -Double(translation),
-                                min: rightMin,
-                                max: rightMax
-                            )
-                        },
-                        onDragEnded: {
-                            if let width = transientRightWidth {
-                                rightWidth = width
-                                onWidthsChanged()
+                // `right(...)` is called from exactly one place, inside a
+                // single `if`, so collapsing or expanding the pane never moves
+                // it between two `_ConditionalContent` branches. Swapping
+                // branches would give the subtree a new identity, tearing down
+                // `RightPaneView`'s state and re-firing `.onAppear` /
+                // `.onDisappear` on every rail click. Only the drag handle's
+                // presence and the frame width vary; an `Optional`-wrapped
+                // sibling appearing or disappearing leaves the stable sibling's
+                // identity untouched.
+                if sizing.rightVisible || railSizing.railWidth > 0 {
+                    if sizing.rightVisible {
+                        DragHandle(
+                            axis: .horizontal,
+                            onDragChanged: { translation in
+                                let start = rightDragStartWidth ?? sizing.rightWidth
+                                rightDragStartWidth = start
+                                // Dragging this gutter right shrinks the right
+                                // pane, hence the negated translation.
+                                transientRightWidth = PaneDragMath.resolvedWidth(
+                                    startWidth: start,
+                                    translation: -Double(translation),
+                                    min: rightMin,
+                                    max: rightMax
+                                )
+                            },
+                            onDragEnded: {
+                                if let width = transientRightWidth {
+                                    rightWidth = width
+                                    onWidthsChanged()
+                                }
+                                transientRightWidth = nil
+                                rightDragStartWidth = nil
                             }
-                            transientRightWidth = nil
-                            rightDragStartWidth = nil
-                        }
-                    )
-                    right(false)
-                        .frame(width: CGFloat(alignedRightWidth))
-                        .frame(maxHeight: .infinity)
-                } else if railSizing.railWidth > 0 {
-                    right(true)
-                        .frame(width: CGFloat(railSizing.railWidth))
+                        )
+                    }
+                    right(!sizing.rightVisible)
+                        .frame(width: CGFloat(sizing.rightVisible ? alignedRightWidth : railSizing.railWidth))
                         .frame(maxHeight: .infinity)
                 }
             }
