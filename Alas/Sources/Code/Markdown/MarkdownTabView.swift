@@ -191,6 +191,7 @@ struct MarkdownTabView: View {
             fontFamily: appState.config.code.fontFamily,
             fontSize: appState.config.code.fontSize,
             showLineNumbers: appState.config.code.showLineNumbers,
+            showMinimap: appState.config.code.showMinimap,
             textRendering: CodeEditorTextRenderingConfiguration(code: appState.config.code),
             onInitialHighlightReady: {
                 if resolvedMode == .editor {
