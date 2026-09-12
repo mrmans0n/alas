@@ -144,4 +144,36 @@ struct CheckpointDiffTabTests {
         #expect(binary == .binary(message: "Binary file changed. Checkpoint: 12 bytes · Current: missing"))
         #expect(unavailable == .unavailable("Lineage changed."))
     }
+
+    @Test func loadKeyChangesWhenCurrentWorktreeGenerationChanges() {
+        let state = CheckpointDiffTabState(
+            worktreeID: "wt-1",
+            checkpointID: UUID(uuidString: "00000000-0000-0000-0000-000000000119")!,
+            groupID: UUID(uuidString: "00000000-0000-0000-0000-000000000915")!,
+            primaryPath: "Sources/App.swift",
+            checkpointLabel: "Before app"
+        )
+
+        let initial = CheckpointDiffLoadKey.fingerprint(
+            state: state,
+            lineageID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            retryGeneration: 0,
+            currentGeneration: 1
+        )
+        let changedCurrent = CheckpointDiffLoadKey.fingerprint(
+            state: state,
+            lineageID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            retryGeneration: 0,
+            currentGeneration: 2
+        )
+        let retried = CheckpointDiffLoadKey.fingerprint(
+            state: state,
+            lineageID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            retryGeneration: 1,
+            currentGeneration: 1
+        )
+
+        #expect(initial != changedCurrent)
+        #expect(initial != retried)
+    }
 }

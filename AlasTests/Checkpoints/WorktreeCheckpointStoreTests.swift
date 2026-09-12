@@ -350,6 +350,23 @@ struct WorktreeCheckpointStoreTests {
         #expect(try await WorktreeCheckpointStore(root: root).readBlob(second.blobs.keys.first!, lineageID: lineageA) == Data([2]))
     }
 
+    @Test func catalogReclaimsAbandonedLineageLock() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lineageRoot = root.appendingPathComponent(lineageA, isDirectory: true)
+        let lock = lineageRoot.appendingPathComponent(".store.lock", isDirectory: true)
+        try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSinceNow: -600)],
+            ofItemAtPath: lock.path
+        )
+
+        let catalog = try await WorktreeCheckpointStore(root: root).catalog(lineageID: lineageA)
+
+        #expect(catalog.summaries.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: lock.path))
+    }
+
     @Test func stagedAdditionIsNotCountedAsUntracked() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

@@ -45,7 +45,6 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
     func summaries(target: CheckpointWorktreeTarget) async throws -> CheckpointCatalogSnapshot {
         try validateLineage(target)
         _ = try await store.recoverableJournals(lineageID: target.lineageID)
-        if let cached = cachedCatalogs[target.lineageID] { return cached }
         let catalog = try await store.catalog(lineageID: target.lineageID)
         cachedCatalogs[target.lineageID] = catalog
         return catalog

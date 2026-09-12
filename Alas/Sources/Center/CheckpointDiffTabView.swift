@@ -29,12 +29,24 @@ enum CheckpointDiffTabPresentation: Equatable {
     }
 }
 
+enum CheckpointDiffLoadKey {
+    static func fingerprint(
+        state: CheckpointDiffTabState,
+        lineageID: String?,
+        retryGeneration: Int,
+        currentGeneration: Int
+    ) -> String {
+        "\(state.id)\u{0}\(lineageID ?? "no-target")\u{0}\(retryGeneration)\u{0}\(currentGeneration)"
+    }
+}
+
 struct CheckpointDiffTabView: View {
     let state: CheckpointDiffTabState
     let target: CheckpointWorktreeTarget?
     var service: any WorktreeCheckpointServicing = WorktreeCheckpointService()
     var codeFontFamily: String = ""
     var codeFontSize: CGFloat = 13
+    var currentGeneration: Int = 0
     var onStartupRecoveryReady: () -> Void = {}
 
     @Environment(\.theme) private var theme
@@ -68,7 +80,12 @@ struct CheckpointDiffTabView: View {
     }
 
     private var loadKey: String {
-        "\(state.id)\u{0}\(target?.lineageID ?? "no-target")\u{0}\(retryGeneration)"
+        CheckpointDiffLoadKey.fingerprint(
+            state: state,
+            lineageID: target?.lineageID,
+            retryGeneration: retryGeneration,
+            currentGeneration: currentGeneration
+        )
     }
 
     @ViewBuilder

@@ -519,11 +519,14 @@ struct CenterPaneView: View {
                         )
                         .id(s.id)
                     case .checkpointDiff(let s):
+                        let checkpointRightPaneState = state.rightPaneStore.activeState(worktreeId: worktree.id)
+                            ?? activateRightPaneStateForCenterTab()
                         CheckpointDiffTabView(
                             state: s,
                             target: state.checkpointTarget(for: worktree),
                             codeFontFamily: state.config.code.fontFamily,
                             codeFontSize: CGFloat(state.config.code.fontSize),
+                            currentGeneration: checkpointRightPaneState.changesGeneration,
                             onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) }
                         )
                         .id(s.id)

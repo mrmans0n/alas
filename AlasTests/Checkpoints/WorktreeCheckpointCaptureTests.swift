@@ -46,6 +46,18 @@ struct WorktreeCheckpointCaptureTests {
         #expect(!FileManager.default.fileExists(atPath: discarded.path))
     }
 
+    @Test func summariesRefreshCatalogCreatedByAnotherServiceInstance() async throws {
+        let fixture = try await CheckpointCaptureFixture.make()
+        defer { fixture.remove() }
+        let first = fixture.service()
+        let second = fixture.service()
+
+        #expect(try await first.summaries(target: fixture.target).summaries.isEmpty)
+        let checkpoint = try await second.createManual(target: fixture.target, label: "External")
+
+        #expect(try await first.summaries(target: fixture.target).summaries.map(\.id) == [checkpoint.id])
+    }
+
     @Test func repeatedConcurrentChangesPublishNothing() async throws {
         let fixture = try await CheckpointCaptureFixture.make()
         defer { fixture.remove() }

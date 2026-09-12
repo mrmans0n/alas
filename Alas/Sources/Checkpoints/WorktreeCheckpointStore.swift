@@ -17,6 +17,11 @@ struct CheckpointPublication: Sendable {
     let blobs: [CheckpointBlobReference: Data]
 }
 
+private struct CheckpointStoreLockOwner: Codable {
+    let pid: Int32
+    let createdAt: Date
+}
+
 actor WorktreeCheckpointStore {
     struct Limits: Equatable, Sendable {
         var manualCount = 20
@@ -27,6 +32,7 @@ actor WorktreeCheckpointStore {
     private let root: URL
     private let fileSystem: any CheckpointFileSystem
     private let limits: Limits
+    private let lockStaleAge: TimeInterval = 120
 
     init(root: URL = Paths.checkpointsRoot, fileSystem: any CheckpointFileSystem = LiveCheckpointFileSystem(), limits: Limits = .init()) {
         self.root = root
@@ -280,7 +286,7 @@ actor WorktreeCheckpointStore {
     private func withLineageLock<T>(lineageID: String, _ body: () throws -> T) throws -> T {
         let layout = paths(lineageID)
         let lock = try acquireLineageLock(layout: layout)
-        defer { try? fileSystem.removeIfPresent(lock) }
+        defer { try? removeDirectoryTreeIfPresent(lock) }
         try removeAbandonedBlobTemporaries(layout: layout)
         return try body()
     }
@@ -291,12 +297,43 @@ actor WorktreeCheckpointStore {
         while true {
             do {
                 try fileSystem.createDirectoryExclusively(lock, mode: 0o700)
+                do {
+                    let owner = CheckpointStoreLockOwner(pid: getpid(), createdAt: Date())
+                    try fileSystem.writeDurable(JSONEncoder.checkpoints.encode(owner), to: lock.appendingPathComponent("owner.json"), mode: 0o600)
+                    try fileSystem.synchronizeDirectory(lock)
+                } catch {
+                    try? fileSystem.removeIfPresent(lock.appendingPathComponent("owner.json"))
+                    try? fileSystem.removeIfPresent(lock)
+                    throw error
+                }
                 return lock
             } catch CheckpointFileSystemError.posix(operation: "mkdir", code: EEXIST) {
+                if try reclaimAbandonedLineageLock(lock) { continue }
                 guard Date() < deadline else { throw CheckpointStoreError.lineageLockUnavailable }
                 usleep(10_000)
             }
         }
+    }
+
+    private func reclaimAbandonedLineageLock(_ lock: URL) throws -> Bool {
+        let ownerURL = lock.appendingPathComponent("owner.json")
+        if let owner = try? JSONDecoder.checkpoints.decode(CheckpointStoreLockOwner.self, from: fileSystem.fileData(ownerURL)) {
+            guard !processIsAlive(owner.pid) || Date().timeIntervalSince(owner.createdAt) > lockStaleAge else { return false }
+            try removeDirectoryTreeIfPresent(lock)
+            return true
+        }
+
+        let attributes = try? FileManager.default.attributesOfItem(atPath: lock.path)
+        let modifiedAt = attributes?[.modificationDate] as? Date
+        guard let modifiedAt, Date().timeIntervalSince(modifiedAt) > lockStaleAge else { return false }
+        try removeDirectoryTreeIfPresent(lock)
+        return true
+    }
+
+    private func processIsAlive(_ pid: Int32) -> Bool {
+        guard pid > 0 else { return false }
+        if kill(pid, 0) == 0 { return true }
+        return errno == EPERM
     }
 
     private func exists(_ url: URL) -> Bool { FileManager.default.fileExists(atPath: url.path) }
