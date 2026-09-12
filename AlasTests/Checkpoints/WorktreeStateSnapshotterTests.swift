@@ -238,6 +238,18 @@ struct WorktreeStateSnapshotterTests {
         #expect(snapshot.exclusions.isEmpty)
     }
 
+    @Test func trackedPayloadAboveRetainedLimitFailsBeforeCapture() async throws {
+        let repo = try await CheckpointTestRepository.make()
+        defer { repo.remove() }
+        try repo.write(Data(repeating: 7, count: 33), to: "large.bin")
+        try await repo.stage("large.bin")
+        let snapshotter = WorktreeStateSnapshotter(retainedPayloadByteLimit: 32)
+
+        await #expect(throws: CheckpointSnapshotError.payloadTooLarge(path: "large.bin", byteCount: 33, limit: 32)) {
+            try await snapshotter.snapshot(target: repo.target)
+        }
+    }
+
     @Test func fingerprintIsStableAndChangesWithDiskBytes() async throws {
         let repo = try await CheckpointTestRepository.make()
         defer { repo.remove() }

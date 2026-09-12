@@ -6,8 +6,30 @@ enum CheckpointSnapshotError: Error, Equatable, Sendable {
     case lineageChanged
     case invalidGitOutput
     case unsupportedPaths([String])
+    case payloadTooLarge(path: String, byteCount: Int64, limit: Int64)
     case missingPayload(String)
     case stateChanged
+}
+
+extension CheckpointSnapshotError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .remoteTarget:
+            return "Checkpoints are only available for local worktrees."
+        case .lineageChanged:
+            return "This worktree identity changed. Refresh before using checkpoints."
+        case .invalidGitOutput:
+            return "Git returned checkpoint data Alas could not understand."
+        case .unsupportedPaths(let paths):
+            return "Checkpoint capture does not support: \(paths.joined(separator: ", "))."
+        case .payloadTooLarge(let path, let byteCount, let limit):
+            return "\(path) is too large to capture safely (\(CheckpointPresentation.bytes(byteCount)); limit \(CheckpointPresentation.bytes(limit)))."
+        case .missingPayload(let hash):
+            return "Checkpoint payload is missing: \(hash)."
+        case .stateChanged:
+            return "The worktree changed while Alas was creating the checkpoint. Try again."
+        }
+    }
 }
 
 struct WorktreeStateSnapshot: Equatable, Sendable {
@@ -35,13 +57,17 @@ struct CheckpointCaptureAttempt: Equatable, Sendable {
 
 struct WorktreeStateSnapshotter: Sendable {
     static let live = Self()
+    static let defaultRetainedPayloadByteLimit: Int64 = 100 * 1024 * 1024
     let git: any CheckpointGitRunning
     let fileSystem: any CheckpointFileSystem
+    let retainedPayloadByteLimit: Int64
 
     init(git: any CheckpointGitRunning = LiveCheckpointGitRunner(),
-         fileSystem: any CheckpointFileSystem = LiveCheckpointFileSystem()) {
+         fileSystem: any CheckpointFileSystem = LiveCheckpointFileSystem(),
+         retainedPayloadByteLimit: Int64 = Self.defaultRetainedPayloadByteLimit) {
         self.git = git
         self.fileSystem = fileSystem
+        self.retainedPayloadByteLimit = retainedPayloadByteLimit
     }
 
     func snapshot(target: CheckpointWorktreeTarget, includingPaths: Set<String> = [],
@@ -95,7 +121,8 @@ struct WorktreeStateSnapshotter: Sendable {
             if let operation = ignoringRestoreOperation,
                path.hasPrefix(".alas-checkpoint-restore-\(operation.uuidString.lowercased())/") { continue }
             if caseOnlyRenameSourcePaths.contains(path) {
-                let headState = try await gitState(headEntries.values[path], target, payloads: &payloads,
+                let headState = try await gitState(headEntries.values[path], target, path: path,
+                                                   payloads: &payloads,
                                                    retainingPayloads: retainingPayloads)
                 states[path] = .init(relativePath: path, head: headState, index: .absent, worktree: .absent)
                 continue
@@ -107,9 +134,11 @@ struct WorktreeStateSnapshotter: Sendable {
                 exclusions.append(.init(relativePath: path, reason: reason))
                 continue
             }
-            let headState = try await gitState(headEntries.values[headPath], target, payloads: &payloads,
+            let headState = try await gitState(headEntries.values[headPath], target, path: headPath,
+                                               payloads: &payloads,
                                                retainingPayloads: retainingPayloads)
-            let indexState = try await gitState(index.values[indexPath], target, payloads: &payloads,
+            let indexState = try await gitState(index.values[indexPath], target, path: indexPath,
+                                                payloads: &payloads,
                                                 retainingPayloads: retainingPayloads)
             let diskState: CheckpointFileState
             do {
@@ -118,6 +147,7 @@ struct WorktreeStateSnapshotter: Sendable {
                     path: path,
                     root: target.path,
                     directoryAsAbsent: headState.kind != .absent || indexState.kind != .absent || includingPaths.contains(path),
+                    relativePath: path,
                     payloads: &payloads,
                     retainingPayloads: retainingPayloads
                 )
@@ -261,24 +291,36 @@ struct WorktreeStateSnapshotter: Sendable {
     }
 
     private func gitState(_ entry: Entry?, _ target: CheckpointWorktreeTarget,
+                          path: String,
                           payloads: inout [String: Data], retainingPayloads: Bool = true) async throws -> CheckpointFileState {
         guard let entry else { return .absent }
         if !retainingPayloads {
             let blob = try await git.blobReference(oid: entry.oid, cwd: target.path, environment: [:])
             return entry.mode == "120000" ? .symlink(blob: blob) : .regular(blob: blob, executable: entry.mode == "100755")
         }
+        let byteCount = try await gitBlobSize(oid: entry.oid, target)
+        guard byteCount <= retainedPayloadByteLimit else {
+            throw CheckpointSnapshotError.payloadTooLarge(path: path, byteCount: byteCount, limit: retainedPayloadByteLimit)
+        }
         let blob = add(try await data(["cat-file", "blob", entry.oid], target), to: &payloads,
                        retainingPayload: retainingPayloads)
         return entry.mode == "120000" ? .symlink(blob: blob) : .regular(blob: blob, executable: entry.mode == "100755")
     }
 
-    private func diskState(path: String, root: URL, directoryAsAbsent: Bool, payloads: inout [String: Data],
+    private func diskState(path: String, root: URL, directoryAsAbsent: Bool, relativePath: String, payloads: inout [String: Data],
                            retainingPayloads: Bool) throws -> CheckpointFileState {
         do {
             guard let metadata = try fileSystem.metadata(root: root, relativePath: path) else { return .absent }
             if !retainingPayloads, metadata.kind == .regular {
                 let url = try fileSystem.validateRelativePath(path, under: root)
                 return .regular(blob: try streamFileReference(at: url), executable: metadata.executable)
+            }
+            if retainingPayloads, metadata.kind == .regular, metadata.byteCount > retainedPayloadByteLimit {
+                throw CheckpointSnapshotError.payloadTooLarge(
+                    path: relativePath,
+                    byteCount: metadata.byteCount,
+                    limit: retainedPayloadByteLimit
+                )
             }
             switch try fileSystem.readLeaf(root: root, relativePath: path) {
             case .regular(let bytes, let executable):
@@ -294,6 +336,12 @@ struct WorktreeStateSnapshotter: Sendable {
             }
             throw CheckpointFileSystemError.unsupportedLeaf
         }
+    }
+
+    private func gitBlobSize(oid: String, _ target: CheckpointWorktreeTarget) async throws -> Int64 {
+        let size = try await text(["cat-file", "-s", oid], target)
+        guard let byteCount = Int64(size) else { throw CheckpointSnapshotError.invalidGitOutput }
+        return byteCount
     }
 
     private func streamFileReference(at url: URL) throws -> CheckpointBlobReference {

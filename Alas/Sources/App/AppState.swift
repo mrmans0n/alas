@@ -4773,7 +4773,8 @@ final class AppState {
             self?.acquireCheckpointTerminalLease(for: session)
         }
         terminal.onSessionUnregistered = { [weak self] session in
-            self?.checkpointWriterLeases.release(sessionID: session.id)
+            guard let self else { return }
+            self.checkpointWriterLeases.release(sessionID: session.id, instanceID: self.instanceId)
         }
         terminal.onSessionProcessExited = { [weak self] leafId, owner, processAlive in
             self?.handleTerminalProcessExited(
@@ -9296,7 +9297,9 @@ final class AppState {
         checkpointWriterLeases.acquire(
             lineageIDs: lineageIDs,
             sessionID: session.id,
-            instanceID: instanceId
+            instanceID: instanceId,
+            zmxSessionName: session.zmxSessionName,
+            remoteHost: session.remoteHost
         )
     }
 
