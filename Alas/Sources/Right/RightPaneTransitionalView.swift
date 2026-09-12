@@ -57,18 +57,7 @@ struct RightPaneTransitionalView: View {
                             activeAgentCount: state.agentSidebarRollup(for: worktree).active.count,
                             showAgentTab: state.config.agentTabEnabled,
                             showRunTab: state.config.runTabEnabled,
-                            onAction: { action in
-                                let outcome = RightPaneRailModel.apply(
-                                    action,
-                                    currentTab: activeTab,
-                                    currentVisible: state.config.rightPaneVisible
-                                )
-                                activeTab = outcome.tab
-                                if state.config.rightPaneVisible != outcome.visible {
-                                    state.config.rightPaneVisible = outcome.visible
-                                    state.saveConfig()
-                                }
-                            }
+                            onAction: { handle($0) }
                         )
                     }
                 } else {
@@ -92,7 +81,35 @@ struct RightPaneTransitionalView: View {
                 }
             }
             .sidebarChromeTheme(textContrast: override.textContrast)
+            .onReceive(NotificationCenter.default.publisher(for: .alasSelectRightPaneTab)) { notification in
+                handleTabShortcut(notification)
+            }
         }
+    }
+
+    /// Shared by the rail's own taps and by the tab shortcuts, so both move
+    /// this pane the same way. There is no `RightPaneState` for a transitional
+    /// worktree — `activeTab` is local — but the pane can still be opened and
+    /// closed, and `.creating` varies its skeleton by tab.
+    private func handle(_ action: RightPaneRailAction) {
+        let outcome = RightPaneRailModel.apply(
+            action,
+            currentTab: activeTab,
+            currentVisible: state.config.rightPaneVisible
+        )
+        activeTab = outcome.tab
+        if state.config.rightPaneVisible != outcome.visible {
+            state.config.rightPaneVisible = outcome.visible
+            state.saveConfig()
+        }
+    }
+
+    private func handleTabShortcut(_ notification: Notification) {
+        guard let raw = notification.object as? String,
+              let tab = RightPaneTab(rawValue: raw),
+              state.acceptsRightPaneTabShortcut(tab)
+        else { return }
+        handle(RightPaneRailAction.resolve(tapped: tab, active: activeTab, collapsed: collapsed))
     }
 
     @ViewBuilder

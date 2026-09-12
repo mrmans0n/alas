@@ -1,4 +1,5 @@
 import Testing
+import Foundation
 @testable import Alas
 
 /// The keyboard path into the rail (`AppState.activateRightPaneTab`) routes
@@ -85,5 +86,50 @@ struct RightPaneTabShortcutTests {
         let toggle = ShortcutAction.toggleRightPane.defaultBinding
         #expect(toggle.key == "b")
         #expect(toggle.modifiers == [.command, .option])
+    }
+
+    /// A narrow window makes `ThreePaneSizing` auto-collapse the pane while
+    /// `rightPaneVisible` stays true. Resolving from that preference instead
+    /// of the effective collapsed state would close a pane the user already
+    /// sees as closed; resolving from the effective state reopens it instead.
+    @Test func autoCollapsedPaneResolvesFromTheEffectiveState() {
+        let fromEffectiveState = outcome(tapped: .changes, active: .changes, visible: false)
+        #expect(fromEffectiveState.tab == .changes)
+        #expect(fromEffectiveState.visible == true)
+
+        let fromPreferenceAlone = outcome(tapped: .changes, active: .changes, visible: true)
+        #expect(fromPreferenceAlone.visible == false)
+    }
+
+    /// An older config may already have bound ⌘⌃1–4 to something else — legal
+    /// before these actions existed. The new action must start unbound rather
+    /// than silently claiming a chord the user already assigned.
+    @Test func anExistingOverrideOnARailChordKeepsItsBinding() throws {
+        var config = AppConfig.defaults
+        config.shortcutOverrides[ShortcutAction.searchFiles.rawValue] =
+            ShortcutAction.rightPaneChangesTab.defaultBinding
+
+        let data = try JSONEncoder().encode(config)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+
+        #expect(decoded.shortcutOverrides[ShortcutAction.searchFiles.rawValue]
+            == ShortcutAction.rightPaneChangesTab.defaultBinding)
+        // Present as an explicit nil: claimed, so deliberately unbound.
+        let railOverride = try #require(
+            decoded.shortcutOverrides[ShortcutAction.rightPaneChangesTab.rawValue]
+        )
+        #expect(railOverride == nil)
+    }
+
+    /// A rail chord nobody else claimed must keep its default — the migration
+    /// only unbinds on a real collision.
+    @Test func anUnclaimedRailChordKeepsItsDefault() throws {
+        let data = try JSONEncoder().encode(AppConfig.defaults)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+
+        for action in [ShortcutAction.rightPaneChangesTab, .rightPaneFilesTab,
+                       .rightPaneAgentTab, .rightPaneRunTab] {
+            #expect(decoded.shortcutOverrides[action.rawValue] == nil)
+        }
     }
 }

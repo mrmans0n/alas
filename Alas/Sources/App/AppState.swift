@@ -1036,43 +1036,16 @@ final class AppState {
         _ = saveConfig()
     }
 
-    /// Keyboard equivalent of tapping `tab` on the right pane's icon rail:
-    /// opens the pane on that tab, switches to it when the pane is already
-    /// showing, and collapses the pane when that tab is the one showing.
-    ///
-    /// Routed through the same `resolve` + `apply` pair the rail's own click
-    /// handler uses, so the keyboard and the mouse cannot drift apart.
-    ///
-    /// Rail-preview only. With the flag off a hidden pane has no mounted
-    /// `RightPaneState` to target, and mounting one fires
-    /// `prepareForVisiblePane`, which resets the active tab to Changes — so
-    /// the shortcut would silently land on the wrong tab.
-    func activateRightPaneTab(_ tab: RightPaneTab) {
-        guard config.rightPaneRailEnabled else { return }
-        guard RightPaneTab.available(
-            agentTabEnabled: config.agentTabEnabled,
-            runTabEnabled: config.runTabEnabled
-        ).contains(tab) else { return }
-        guard let worktreeId = selectedWorktreeId,
-              let rps = rightPaneStore.activeState(worktreeId: worktreeId)
-        else { return }
-
-        let outcome = RightPaneRailModel.apply(
-            RightPaneRailAction.resolve(
-                tapped: tab,
-                active: rps.activeTab,
-                collapsed: !config.rightPaneVisible
-            ),
-            currentTab: rps.activeTab,
-            currentVisible: config.rightPaneVisible
-        )
-        if rps.activeTab != outcome.tab {
-            rps.activeTab = outcome.tab
-        }
-        if config.rightPaneVisible != outcome.visible {
-            config.rightPaneVisible = outcome.visible
-            _ = saveConfig()
-        }
+    /// Whether a rail tab shortcut should act at all. The rail-hosting views
+    /// own the rest of the decision: only they know the *effective* collapsed
+    /// state, which differs from `rightPaneVisible` whenever a narrow window
+    /// made `ThreePaneSizing` auto-collapse the pane.
+    func acceptsRightPaneTabShortcut(_ tab: RightPaneTab) -> Bool {
+        config.rightPaneRailEnabled
+            && RightPaneTab.available(
+                agentTabEnabled: config.agentTabEnabled,
+                runTabEnabled: config.runTabEnabled
+            ).contains(tab)
     }
 
     func toggleSidebarVisibility() {

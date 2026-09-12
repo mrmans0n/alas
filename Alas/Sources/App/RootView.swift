@@ -913,12 +913,6 @@ private struct RootBaseHandlers: ViewModifier {
                 state.toggleRightPaneVisibility()
             }
         let a = aRightPane
-            .onReceive(NotificationCenter.default.publisher(for: .alasSelectRightPaneTab)) { notification in
-                guard let raw = notification.object as? String,
-                      let tab = RightPaneTab(rawValue: raw)
-                else { return }
-                state.activateRightPaneTab(tab)
-            }
         let b = a
             .onReceive(NotificationCenter.default.publisher(for: .alasCreateProject)) { _ in
                 showNewProject = true

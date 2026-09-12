@@ -56,6 +56,9 @@ struct RightPaneView: View {
             if let rps = rps, rps.worktree.id == worktree.id {
                 presentation(rps: rps)
                 .sidebarChromeTheme(textContrast: override.textContrast)
+                .onReceive(NotificationCenter.default.publisher(for: .alasSelectRightPaneTab)) { notification in
+                    handleTabShortcut(notification, rps: rps)
+                }
                 .task(id: worktree.id) {
                     agentManager = state.acpManager(for: worktree)
                 }
@@ -329,6 +332,22 @@ struct RightPaneView: View {
                 tabContent(rps: rps)
             }
         }
+    }
+
+    /// Keyboard equivalent of tapping a rail tab. Handled here rather than in
+    /// `AppState` because `collapsed` is the layout's *effective* state: when a
+    /// narrow window makes `ThreePaneSizing` auto-collapse the pane it is true
+    /// while `config.rightPaneVisible` is still true, and resolving from the
+    /// preference alone would collapse a pane the user sees as already closed.
+    private func handleTabShortcut(_ notification: Notification, rps: RightPaneState) {
+        guard let raw = notification.object as? String,
+              let tab = RightPaneTab(rawValue: raw),
+              state.acceptsRightPaneTabShortcut(tab)
+        else { return }
+        handle(
+            RightPaneRailAction.resolve(tapped: tab, active: rps.activeTab, collapsed: collapsed),
+            rps: rps
+        )
     }
 
     private func handle(_ action: RightPaneRailAction, rps: RightPaneState) {
