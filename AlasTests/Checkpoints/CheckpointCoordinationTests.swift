@@ -86,4 +86,17 @@ struct CheckpointCoordinationTests {
         #expect(state.checkpointFileWritesDisabled(worktreeId: "uncached-worktree"))
         #expect(state.checkpointTerminalAdmissionDisabled(worktreeId: "uncached-worktree"))
     }
+
+    @Test func appStateDiscoversCheckpointRecoveryBeforeBlockingKnownWorktreeWrites() async throws {
+        let repo = try await CheckpointTestRepository.make()
+        defer { repo.remove() }
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(path: repo.root, displayName: "test", color: "#000000")
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let worktree = try #require(state.projectsManager.worktrees(projectId: project.id).first)
+
+        #expect(state.checkpointFileWritesDisabled(worktreeId: worktree.id))
+        #expect(await !state.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktree.id))
+        #expect(await !state.checkpointTerminalAdmissionDisabledAfterDiscovery(worktreeId: worktree.id))
+    }
 }

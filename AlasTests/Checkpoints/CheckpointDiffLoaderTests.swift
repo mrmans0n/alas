@@ -161,6 +161,44 @@ struct CheckpointDiffLoaderTests {
         #expect(additions == ["assets/new.png"])
     }
 
+    @Test func oversizedCurrentSideReturnsSizePreviewWithoutReadingFile() async throws {
+        let repo = try await CheckpointTestRepository.make()
+        defer { repo.remove() }
+        let bytes = Data("small\n".utf8)
+        let blob = CheckpointBlobReference.make(for: bytes)
+        let manifest = try WorktreeCheckpointManifest(
+            kind: .manual,
+            label: "Saved",
+            createdAt: Date(timeIntervalSince1970: 1),
+            byteCount: Int64(bytes.count),
+            lineageID: repo.target.lineageID,
+            capturedPath: repo.root.path,
+            repositoryName: "test",
+            branch: "main",
+            headOID: String(repeating: "f", count: 40),
+            exclusions: [],
+            groups: [],
+            paths: [.init(relativePath: "huge.txt", head: .regular(blob: blob, executable: false), index: .regular(blob: blob, executable: false), worktree: .regular(blob: blob, executable: false))]
+        )
+        let store = WorktreeCheckpointStore(root: repo.root.appendingPathComponent(".git/checkpoints"))
+        _ = try await store.publish(.init(manifest: manifest, blobs: [blob: bytes]))
+        let service = WorktreeCheckpointService(
+            store: store,
+            snapshotter: .init(fileSystem: OversizedReadFailingFileSystem(
+                oversizedRelativePath: "huge.txt",
+                byteCount: 10 * 1024 * 1024 + 1
+            ))
+        )
+
+        guard case .binary(let before, let after) = await service.diffContent(target: repo.target, id: manifest.id, path: "huge.txt") else {
+            Issue.record("Expected oversized diff to return a size preview")
+            return
+        }
+
+        #expect(before == Int64(bytes.count))
+        #expect(after == Int64(10 * 1024 * 1024 + 1))
+    }
+
     private func describe(_ content: CheckpointDiffContent) -> String {
         switch content {
         case .text:
@@ -213,6 +251,66 @@ private struct PathReadFailingFileSystem: CheckpointFileSystem {
 
     func metadata(root: URL, relativePath: String) throws -> CheckpointLeafMetadata? {
         if relativePath == failingRelativePath { throw Failure.unexpectedRead(relativePath) }
+        return try live.metadata(root: root, relativePath: relativePath)
+    }
+
+    func validateRelativePath(_ relativePath: String, under root: URL) throws -> URL {
+        try live.validateRelativePath(relativePath, under: root)
+    }
+
+    func createDirectoryExclusively(_ url: URL, mode: mode_t) throws {
+        try live.createDirectoryExclusively(url, mode: mode)
+    }
+
+    func writeDurable(_ data: Data, to url: URL, mode: mode_t) throws {
+        try live.writeDurable(data, to: url, mode: mode)
+    }
+
+    func createSymlink(target: Data, at url: URL) throws {
+        try live.createSymlink(target: target, at: url)
+    }
+
+    func move(_ source: URL, to destination: URL) throws {
+        try live.move(source, to: destination)
+    }
+
+    func moveExclusively(_ source: URL, to destination: URL) throws {
+        try live.moveExclusively(source, to: destination)
+    }
+
+    func removeIfPresent(_ url: URL) throws {
+        try live.removeIfPresent(url)
+    }
+
+    func list(_ url: URL) throws -> [URL] {
+        try live.list(url)
+    }
+
+    func fileData(_ url: URL) throws -> Data {
+        try live.fileData(url)
+    }
+
+    func synchronizeDirectory(_ url: URL) throws {
+        try live.synchronizeDirectory(url)
+    }
+}
+
+private struct OversizedReadFailingFileSystem: CheckpointFileSystem {
+    enum Failure: Error { case unexpectedRead(String) }
+
+    let oversizedRelativePath: String
+    let byteCount: Int64
+    private let live = LiveCheckpointFileSystem()
+
+    func readLeaf(root: URL, relativePath: String) throws -> CheckpointLeafRead {
+        if relativePath == oversizedRelativePath { throw Failure.unexpectedRead(relativePath) }
+        return try live.readLeaf(root: root, relativePath: relativePath)
+    }
+
+    func metadata(root: URL, relativePath: String) throws -> CheckpointLeafMetadata? {
+        if relativePath == oversizedRelativePath {
+            return .init(kind: .regular, executable: false, byteCount: byteCount)
+        }
         return try live.metadata(root: root, relativePath: relativePath)
     }
 

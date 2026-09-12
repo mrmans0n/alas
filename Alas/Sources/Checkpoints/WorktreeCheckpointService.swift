@@ -27,6 +27,8 @@ struct CheckpointCaptureHooks: Sendable {
 }
 
 actor WorktreeCheckpointService: WorktreeCheckpointServicing {
+    private static let diffPreviewByteLimit: Int64 = 10 * 1024 * 1024
+
     private struct CheckpointDiffSide: Sendable {
         let state: CheckpointFileState
         let data: Data?
@@ -124,17 +126,33 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
             }
             let saved = try await store.load(id: id, lineageID: target.lineageID)
             _ = try snapshotter.fileSystem.validateRelativePath(path, under: target.path)
-            let before: CheckpointDiffSide
+            let beforeState: CheckpointFileState
+            let beforeStoredInCheckpoint: Bool
             if let state = saved.paths.first(where: { $0.relativePath == path })?.worktree {
-                before = .init(state: state, data: try await checkpointDiffPayload(state, lineageID: target.lineageID))
+                beforeState = state
+                beforeStoredInCheckpoint = true
             } else {
                 let current = try await snapshotter.snapshot(target: target, includingPaths: [path],
-                                                             onlyIncludedPaths: true)
+                                                             onlyIncludedPaths: true, retainingPayloads: false)
                 guard current.headOID == saved.headOID, let state = current.paths[path] else {
                     return .unavailable("The checkpoint baseline is unavailable for this path.")
                 }
-                before = .init(state: state.head, data: try current.payload(state.head))
+                beforeState = state.head
+                beforeStoredInCheckpoint = false
             }
+            let afterMetadata = try snapshotter.fileSystem.metadata(root: target.path, relativePath: path)
+            if shouldLimitCheckpointDiffPreview(before: beforeState, after: afterMetadata) {
+                return .binary(beforeByteCount: checkpointDiffByteCount(beforeState), afterByteCount: afterMetadata?.byteCount)
+            }
+            let beforeData: Data?
+            if beforeStoredInCheckpoint {
+                beforeData = try await checkpointDiffPayload(beforeState, lineageID: target.lineageID)
+            } else {
+                let current = try await snapshotter.snapshot(target: target, includingPaths: [path],
+                                                             onlyIncludedPaths: true)
+                beforeData = try current.payload(beforeState)
+            }
+            let before = CheckpointDiffSide(state: beforeState, data: beforeData)
             let after = try currentCheckpointDiffSide(target: target, path: path)
             if ImageFileType.isSupported(relativePath: path),
                before.state.kind != .symlink,
@@ -184,6 +202,21 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
     private func checkpointDiffPayload(_ state: CheckpointFileState, lineageID: String) async throws -> Data? {
         guard let blob = state.blob else { return nil }
         return try await store.readBlob(blob, lineageID: lineageID)
+    }
+
+    private func shouldLimitCheckpointDiffPreview(before: CheckpointFileState, after: CheckpointLeafMetadata?) -> Bool {
+        if let beforeByteCount = checkpointDiffByteCount(before),
+           beforeByteCount > Self.diffPreviewByteLimit {
+            return true
+        }
+        if let after, after.kind == .regular, after.byteCount > Self.diffPreviewByteLimit {
+            return true
+        }
+        return false
+    }
+
+    private func checkpointDiffByteCount(_ state: CheckpointFileState) -> Int64? {
+        state.blob?.byteCount
     }
 
     private func currentCheckpointDiffSide(target: CheckpointWorktreeTarget, path: String) throws -> CheckpointDiffSide {

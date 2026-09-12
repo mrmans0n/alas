@@ -177,8 +177,29 @@ final class AppState {
         rightPaneStore.activeState(worktreeId: worktreeId)?.checkpointMutationsDisabled ?? true
     }
 
+    func checkpointFileWritesDisabledAfterDiscovery(worktreeId: String) async -> Bool {
+        await checkpointMutationsDisabledAfterDiscovery(worktreeId: worktreeId)
+    }
+
     func checkpointTerminalAdmissionDisabled(worktreeId: String) -> Bool {
         rightPaneStore.activeState(worktreeId: worktreeId)?.checkpointMutationsDisabled ?? true
+    }
+
+    func checkpointTerminalAdmissionDisabledAfterDiscovery(worktreeId: String) async -> Bool {
+        await checkpointMutationsDisabledAfterDiscovery(worktreeId: worktreeId)
+    }
+
+    private func checkpointMutationsDisabledAfterDiscovery(worktreeId: String) async -> Bool {
+        guard let (_, worktree) = projectAndWorktree(withWorktreeId: worktreeId) else {
+            return true
+        }
+        let pane = rightPaneStore.state(
+            for: worktree,
+            baseBranch: config.worktrees.baseBranch,
+            comparisonMode: config.changes.comparisonMode
+        )
+        await pane.refresh()
+        return pane.checkpointMutationsDisabled
     }
 
     typealias TerminalSessionOpener = (
@@ -1779,7 +1800,7 @@ final class AppState {
         guard let authoritative = await authoritativeCheckoutForWorkspaceTerminal(checkout) else {
             throw NSError(domain: "AppState", code: 3, userInfo: [NSLocalizedDescriptionKey: "The Workspace checkout root is not owned by this checkout."])
         }
-        guard !checkpointTerminalAdmissionDisabled(for: authoritative) else {
+        guard await !checkpointTerminalAdmissionDisabledAfterDiscovery(for: authoritative) else {
             throw TerminalLaunchError.checkpointRecoveryRequired
         }
         let context = WorkspaceTerminalContext(
@@ -1817,7 +1838,7 @@ final class AppState {
         else {
             throw AgentTerminalLaunchError.projectUnavailable
         }
-        guard !checkpointTerminalAdmissionDisabled(for: authoritative) else {
+        guard await !checkpointTerminalAdmissionDisabledAfterDiscovery(for: authoritative) else {
             throw TerminalLaunchError.checkpointRecoveryRequired
         }
         guard let agent = agentRegistry.enabled().first(where: { $0.id == agentId }) else {
@@ -5330,7 +5351,7 @@ final class AppState {
         titleOverride: String? = nil,
         runScriptKey: String? = nil
     ) async throws -> Tab {
-        guard !checkpointTerminalAdmissionDisabled(worktreeId: worktree.id) else {
+        guard await !checkpointTerminalAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) else {
             throw TerminalLaunchError.checkpointRecoveryRequired
         }
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
@@ -6234,9 +6255,8 @@ final class AppState {
     }
 
     func saveActiveTab(worktreeId: String) {
-        guard !checkpointFileWritesDisabled(worktreeId: worktreeId) else { return }
         Task {
-            guard !self.checkpointFileWritesDisabled(worktreeId: worktreeId) else { return }
+            guard await !self.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId) else { return }
             _ = await tabs.saveActiveAsync(worktreeId: worktreeId, config: config.code)
         }
     }
@@ -6246,7 +6266,7 @@ final class AppState {
             var roots: [String: URL] = [:]
             for project in projects {
                 for worktree in projectsManager.worktrees(projectId: project.id) {
-                    guard !self.checkpointFileWritesDisabled(worktreeId: worktree.id) else { continue }
+                    guard await !self.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktree.id) else { continue }
                     roots[worktree.id] = roots[worktree.id] ?? worktree.path
                 }
             }
@@ -9169,6 +9189,14 @@ final class AppState {
         for member in checkout.members where member.availability == .available {
             guard let worktree = checkpointMemberWorktree(for: member) else { continue }
             if checkpointTerminalAdmissionDisabled(worktreeId: worktree.id) { return true }
+        }
+        return false
+    }
+
+    private func checkpointTerminalAdmissionDisabledAfterDiscovery(for checkout: WorkspaceCheckout) async -> Bool {
+        for member in checkout.members where member.availability == .available {
+            guard let worktree = checkpointMemberWorktree(for: member) else { continue }
+            if await checkpointTerminalAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) { return true }
         }
         return false
     }

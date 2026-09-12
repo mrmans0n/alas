@@ -30,6 +30,10 @@ enum CheckpointDiffTabPresentation: Equatable {
     static func combinedContent(_ contents: [(path: String, content: CheckpointDiffContent)]) -> CheckpointDiffContent {
         guard contents.count > 1 else { return contents.first?.content ?? .unavailable("The checkpoint diff could not be loaded.") }
 
+        if let imagePair = combinedImagePair(contents) {
+            return .image(imagePair)
+        }
+
         var hunks: [ParsedDiff.Hunk] = []
         var summaries: [String] = []
         for item in contents {
@@ -60,6 +64,31 @@ enum CheckpointDiffTabPresentation: Equatable {
             hunks: hunks,
             metadataSummary: summaries.isEmpty ? nil : summaries.joined(separator: "\n")
         ))
+    }
+
+    private static func combinedImagePair(_ contents: [(path: String, content: CheckpointDiffContent)]) -> ImageDiffPair? {
+        let imageItems = contents.compactMap { item -> (path: String, pair: ImageDiffPair)? in
+            guard case .image(let pair) = item.content else { return nil }
+            return (item.path, pair)
+        }
+        guard imageItems.count == contents.count else { return nil }
+        guard let before = imageItems.first(where: { !isMissing($0.pair.before) }),
+              let after = imageItems.reversed().first(where: { !isMissing($0.pair.after) })
+        else {
+            return imageItems.first?.pair
+        }
+        let oldPath = before.path == after.path ? before.pair.oldPath : before.path
+        return ImageDiffPair(
+            before: before.pair.before,
+            after: after.pair.after,
+            oldPath: oldPath,
+            kind: before.path == after.path ? .modified : .renamed
+        )
+    }
+
+    private static func isMissing(_ side: ImageDiffSide) -> Bool {
+        if case .missing = side { return true }
+        return false
     }
 
     private static func byteText(_ count: Int64?) -> String {

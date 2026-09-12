@@ -222,6 +222,33 @@ struct CheckpointDiffTabTests {
         #expect(diff.hunks.flatMap(\.lines).map(\.text) == ["old contents", "new contents"])
     }
 
+    @Test func combinedContentPreservesImagePairsForStructuralImageGroups() {
+        let beforeFailure = ImageDiffLoadFailure(message: "before")
+        let afterFailure = ImageDiffLoadFailure(message: "after")
+
+        let content = CheckpointDiffTabPresentation.combinedContent([
+            (path: "Old.png", content: .image(.init(before: .failed(beforeFailure), after: .missing, oldPath: nil, kind: .deleted))),
+            (path: "New.png", content: .image(.init(before: .missing, after: .failed(afterFailure), oldPath: nil, kind: .added))),
+        ])
+
+        guard case .image(let pair) = content else {
+            Issue.record("Expected combined image diff")
+            return
+        }
+        guard case .failed(let before) = pair.before else {
+            Issue.record("Expected preserved before image side")
+            return
+        }
+        guard case .failed(let after) = pair.after else {
+            Issue.record("Expected preserved after image side")
+            return
+        }
+        #expect(before == beforeFailure)
+        #expect(after == afterFailure)
+        #expect(pair.oldPath == "Old.png")
+        #expect(pair.kind == .renamed)
+    }
+
     @Test func loadKeyChangesWhenCurrentWorktreeGenerationChanges() {
         let state = CheckpointDiffTabState(
             worktreeID: "wt-1",
