@@ -43,5 +43,12 @@ isolated JavaScript world. All captured page content is labeled as untrusted
 context in feedback.
 
 A remote preview retains its execution host. Remote loopback URLs are blocked
-on launch and navigation, including redirects. Enter a reachable remote URL
-instead. This feature does not create tunnels or infer local port forwarding.
+on launch and navigation, including redirects. Remote navigations also perform
+a bounded system DNS lookup and reject unresolved names or any returned loopback
+address, including hosts-file aliases. Enter a reachable remote URL instead.
+This feature does not create tunnels or infer local port forwarding.
+
+These checks prevent accidental local endpoint routing; they are not a network
+sandbox. WebKit uses this Mac's network and its own connections, so preflight
+DNS checks cannot pin a later connection or prevent DNS rebinding and arbitrary
+page subresource requests.

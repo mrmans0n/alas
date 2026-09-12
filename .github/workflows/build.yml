@@ -321,6 +321,7 @@ jobs:
             -clonedSourcePackagesDirPath .build/xcode/SourcePackages \
             -only-testing AlasTests/WebPreviewBrowserTests \
             -only-testing AlasTests/WebPreviewFeedbackTests \
+            -only-testing AlasTests/RunEndpointTests \
             -only-testing AlasTests/AppStateRunRecordTests \
             -only-testing 'AlasTests/OwnerTabsManagerTests/checkoutCompositionKeepsMemberPreviewsVisible()' \
             -only-testing 'AlasTests/OwnerTabsManagerTests/checkoutOwnerWebPreviewComposesWithSharedTabs()' \

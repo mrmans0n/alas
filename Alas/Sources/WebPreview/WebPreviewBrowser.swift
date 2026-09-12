@@ -3,15 +3,69 @@ import SwiftUI
 import WebKit
 
 enum WebPreviewNavigation {
+    typealias HostResolver = @MainActor (String) async -> [String]?
+
     static func allows(_ url: URL, remoteHost: String?) -> Bool {
         guard RunEndpointPolicy.endpoint(from: url.absoluteString) != nil else { return false }
         return remoteHost == nil || !RunEndpointPolicy.isLoopback(url)
+    }
+
+    @MainActor
+    static func allowsResolved(_ url: URL, remoteHost: String?, resolveHost: HostResolver) async -> Bool {
+        guard allows(url, remoteHost: remoteHost) else { return false }
+        guard remoteHost != nil else { return true }
+        guard let host = url.host(percentEncoded: false),
+              let addresses = await resolveHost(host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))),
+              !addresses.isEmpty else { return false }
+        return addresses.allSatisfy { !RunEndpointPolicy.isLoopbackHost($0) }
     }
 
     static func captureRect(_ rect: CGRect, viewport: CGSize) -> CGRect? {
         let clipped = rect.standardized.intersection(CGRect(origin: .zero, size: viewport))
         guard !clipped.isNull, clipped.width >= 1, clipped.height >= 1 else { return nil }
         return clipped
+    }
+}
+
+enum WebPreviewHostLookup {
+    private static let queue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "Web preview DNS"
+        queue.maxConcurrentOperationCount = 2
+        queue.qualityOfService = .utility
+        return queue
+    }()
+
+    @MainActor
+    static func resolve(_ host: String) async -> [String]? {
+        await withCheckedContinuation { continuation in
+            let result = Resolution(continuation: continuation)
+            let operation = BlockOperation {
+                let addresses = Host(name: host).addresses
+                Task { @MainActor in result.finish(addresses) }
+            }
+            queue.addOperation(operation)
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(5))
+                operation.cancel()
+                result.finish(nil)
+            }
+        }
+    }
+
+    @MainActor
+    private final class Resolution {
+        var continuation: CheckedContinuation<[String]?, Never>?
+
+        init(continuation: CheckedContinuation<[String]?, Never>) {
+            self.continuation = continuation
+        }
+
+        func finish(_ addresses: [String]?) {
+            let pending = continuation
+            continuation = nil
+            pending?.resume(returning: addresses)
+        }
     }
 }
 
@@ -33,10 +87,13 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
     private var navigationGeneration = 0
     private var consoleHandler: PreviewConsoleHandler?
     private var urlObservation: NSKeyValueObservation?
+    private let resolveHost: WebPreviewNavigation.HostResolver
 
-    init(ownerKey: String, remoteHost: String?) {
+    init(ownerKey: String, remoteHost: String?,
+         resolveHost: @escaping WebPreviewNavigation.HostResolver = { await WebPreviewHostLookup.resolve($0) }) {
         self.ownerKey = ownerKey
         self.remoteHost = remoteHost
+        self.resolveHost = resolveHost
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
@@ -99,7 +156,7 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
             decisionHandler(.cancel)
             return
         }
-        decisionHandler(.allow)
+        validateRemoteURL(url) { decisionHandler($0 ? .allow : .cancel) }
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
@@ -110,7 +167,25 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
             decisionHandler(.cancel)
             return
         }
-        decisionHandler(.allow)
+        validateRemoteURL(url) { decisionHandler($0 ? .allow : .cancel) }
+    }
+
+    private func validateRemoteURL(_ url: URL, completion: @escaping @MainActor @Sendable (Bool) -> Void) {
+        guard remoteHost != nil else { completion(true)
+        return }
+        let generation = navigationGeneration
+        Task { @MainActor [weak self] in
+            guard let self else { completion(false)
+            return }
+            let allowed = await WebPreviewNavigation.allowsResolved(url, remoteHost: remoteHost, resolveHost: resolveHost)
+            guard generation == navigationGeneration else { completion(false)
+            return }
+            if !allowed {
+                loading = false
+                error = "Navigation blocked. The remote endpoint resolves to loopback or its address could not be verified."
+            }
+            completion(allowed)
+        }
     }
 
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,

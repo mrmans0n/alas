@@ -24,6 +24,35 @@ struct WebPreviewBrowserTests {
         #expect(first.webView.configuration.websiteDataStore !== second.webView.configuration.websiteDataStore)
     }
 
+    @Test func remoteAliasesRejectAnyResolvedLoopbackAddress() async {
+        let url = URL(string: "https://preview.example.test")!
+        for addresses in [["127.0.0.1"], ["::1"], ["::ffff:127.0.0.1"], ["192.0.2.1", "127.0.0.2"], []] {
+            #expect(!(await WebPreviewNavigation.allowsResolved(url, remoteHost: "devbox", resolveHost: { _ in addresses })))
+        }
+        #expect(!(await WebPreviewNavigation.allowsResolved(url, remoteHost: "devbox", resolveHost: { _ in nil })))
+        #expect(await WebPreviewNavigation.allowsResolved(url, remoteHost: "devbox", resolveHost: { _ in ["192.0.2.1"] }))
+        #expect(await WebPreviewNavigation.allowsResolved(url, remoteHost: nil, resolveHost: { _ in
+            Issue.record("Local previews should not perform remote DNS validation")
+            return nil
+        }))
+    }
+
+    @Test func remoteAliasIsRejectedByTheWebKitNavigationGate() async throws {
+        let browser = WebPreviewBrowser(ownerKey: "remote", remoteHost: "devbox", resolveHost: { _ in ["127.0.0.1"] })
+        defer { browser.close() }
+        browser.navigate(URL(string: "http://preview.example.test:3000")!)
+        try await waitUntil { browser.error != nil }
+        #expect(browser.error?.contains("Navigation blocked") == true)
+        #expect(!browser.loading)
+        #expect(browser.capture == nil)
+    }
+
+    @Test func nativeHostLookupRecognizesLocalhost() async throws {
+        let addresses = try #require(await WebPreviewHostLookup.resolve("localhost"))
+        #expect(!addresses.isEmpty)
+        #expect(addresses.contains { RunEndpointPolicy.isLoopbackHost($0) })
+    }
+
     @Test func webKitInvokesNavigationGateForPageInitiatedRequests() async throws {
         let browser = WebPreviewBrowser(ownerKey: "navigation", remoteHost: nil)
         defer { browser.close() }
