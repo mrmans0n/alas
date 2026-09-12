@@ -11,6 +11,14 @@ struct ACPComposerActionButtonMetricsTests {
                 >= ACPComposerActionButtonMetrics.capsuleHeight)
     }
 
+    @Test("segment divider is an inset hairline inside the capsule")
+    func segmentDividerIsInsetHairline() {
+        #expect(ACPComposerActionButtonMetrics.dividerWidth == 1)
+        #expect(ACPComposerActionButtonMetrics.dividerHeight < ACPComposerActionButtonMetrics.capsuleHeight)
+        #expect(ACPComposerActionButtonMetrics.dividerOnAccentOpacity > 0)
+        #expect(ACPComposerActionButtonMetrics.dividerOnAccentOpacity < 1)
+    }
+
     @Test("badge remains compact relative to the composer action capsule")
     func badgeStaysCompactRelativeToActionCapsule() {
         #expect(ACPComposerActionButtonMetrics.badgeMinHeight < ACPComposerActionButtonMetrics.capsuleHeight)

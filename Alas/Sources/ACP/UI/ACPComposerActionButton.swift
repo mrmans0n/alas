@@ -32,7 +32,7 @@ struct ACPComposerActionButton: View {
     // MARK: - Send (split capsule, accent-colored)
 
     private var sendCapsule: some View {
-        HStack(spacing: 1) {
+        HStack(spacing: 0) {
             Button(action: onPrimary) {
                 HStack(spacing: 5) {
                     Image(systemName: "arrow.up")
@@ -52,6 +52,14 @@ struct ACPComposerActionButton: View {
                     )
                     .fill(theme.color("accent"))
                 )
+                .overlay(alignment: .trailing) {
+                    // `line` is a neutral hairline meant for neutral fills; on the
+                    // accent half it disappears. Tint the foreground color instead.
+                    segmentDivider(
+                        theme.color("bg-0")
+                            .opacity(ACPComposerActionButtonMetrics.dividerOnAccentOpacity)
+                    )
+                }
                 .overlay(alignment: .topTrailing) { badgeOverlay }
             }
             .buttonStyle(.plain)
@@ -78,20 +86,26 @@ struct ACPComposerActionButton: View {
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(theme.color("bg-0"))
                     .padding(.horizontal, 7)
+                    // Height stays on the label so the whole painted segment is
+                    // clickable — a frame applied after `Menu` grows the layout
+                    // and background but leaves the hit target at label height.
                     .frame(height: ACPComposerActionButtonMetrics.capsuleHeight)
-                    .background(
-                        UnevenRoundedRectangle(
-                            cornerRadii: .init(
-                                bottomTrailing: ACPComposerActionButtonMetrics.cornerRadius,
-                                topTrailing: ACPComposerActionButtonMetrics.cornerRadius
-                            )
-                        )
-                        .fill(theme.color("accent"))
-                    )
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
+            // The fill belongs on the Menu, not on its label: `.borderlessButton`
+            // wraps the label in its own chrome, so a label background stops short
+            // of the control's edges and leaves a gap next to the primary half.
+            .background(
+                UnevenRoundedRectangle(
+                    cornerRadii: .init(
+                        bottomTrailing: ACPComposerActionButtonMetrics.cornerRadius,
+                        topTrailing: ACPComposerActionButtonMetrics.cornerRadius
+                    )
+                )
+                .fill(theme.color("accent"))
+            )
             .help("Schedule send")
         }
         .popover(isPresented: $showsCustomSchedule) {
@@ -173,12 +187,8 @@ struct ACPComposerActionButton: View {
                     )
                     .fill(theme.color("bg-3"))
                 )
+                .overlay(alignment: .trailing) { segmentDivider(theme.color("line")) }
                 .overlay(alignment: .topTrailing) { badgeOverlay }
-                .overlay(alignment: .trailing) {
-                    Rectangle()
-                        .fill(theme.color("line"))
-                        .frame(width: 1, height: 16)
-                }
             }
             .buttonStyle(.plain)
             .help("Queue (⏎). Hold ⌥ to steer.")
@@ -196,27 +206,41 @@ struct ACPComposerActionButton: View {
                     .foregroundStyle(theme.color("fg"))
                     .padding(.horizontal, 7)
                     .frame(height: ACPComposerActionButtonMetrics.capsuleHeight)
-                    .background(
-                        UnevenRoundedRectangle(
-                            cornerRadii: .init(
-                                topLeading: 0,
-                                bottomLeading: 0,
-                                bottomTrailing: ACPComposerActionButtonMetrics.cornerRadius,
-                                topTrailing: ACPComposerActionButtonMetrics.cornerRadius
-                            )
-                        )
-                        .fill(theme.color("bg-3"))
-                    )
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
+            .background(
+                UnevenRoundedRectangle(
+                    cornerRadii: .init(
+                        topLeading: 0,
+                        bottomLeading: 0,
+                        bottomTrailing: ACPComposerActionButtonMetrics.cornerRadius,
+                        topTrailing: ACPComposerActionButtonMetrics.cornerRadius
+                    )
+                )
+                .fill(theme.color("bg-3"))
+            )
             .help("More actions")
         }
         .overlay(
             RoundedRectangle(cornerRadius: ACPComposerActionButtonMetrics.cornerRadius)
                 .strokeBorder(theme.color("line"), lineWidth: 1)
         )
+    }
+
+    // MARK: - Segment divider (hairline between the primary half and the chevron)
+
+    /// Inset hairline drawn on the trailing edge of the primary half. Both
+    /// halves share one background, so this divider is the only thing marking
+    /// the split.
+    private func segmentDivider(_ color: Color) -> some View {
+        Rectangle()
+            .fill(color)
+            .frame(
+                width: ACPComposerActionButtonMetrics.dividerWidth,
+                height: ACPComposerActionButtonMetrics.dividerHeight
+            )
     }
 
     @ViewBuilder
@@ -265,6 +289,9 @@ enum ACPComposerActionButtonMetrics {
     static let badgeMinWidth: CGFloat = 16
     static let badgeMinHeight: CGFloat = 14
     static let badgeOffset = CGSize(width: 6, height: -6)
+    static let dividerWidth: CGFloat = 1
+    static let dividerHeight: CGFloat = 16
+    static let dividerOnAccentOpacity: Double = 0.35
 
     static var badgeTopOutset: CGFloat {
         max(0, -badgeOffset.height)
