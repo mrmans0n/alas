@@ -86,6 +86,10 @@ struct ACPComposerActionButton: View {
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(theme.color("bg-0"))
                     .padding(.horizontal, 7)
+                    // Height stays on the label so the whole painted segment is
+                    // clickable — a frame applied after `Menu` grows the layout
+                    // and background but leaves the hit target at label height.
+                    .frame(height: ACPComposerActionButtonMetrics.capsuleHeight)
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
@@ -93,7 +97,6 @@ struct ACPComposerActionButton: View {
             // The fill belongs on the Menu, not on its label: `.borderlessButton`
             // wraps the label in its own chrome, so a label background stops short
             // of the control's edges and leaves a gap next to the primary half.
-            .frame(height: ACPComposerActionButtonMetrics.capsuleHeight)
             .background(
                 UnevenRoundedRectangle(
                     cornerRadii: .init(
@@ -202,11 +205,11 @@ struct ACPComposerActionButton: View {
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(theme.color("fg"))
                     .padding(.horizontal, 7)
+                    .frame(height: ACPComposerActionButtonMetrics.capsuleHeight)
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
-            .frame(height: ACPComposerActionButtonMetrics.capsuleHeight)
             .background(
                 UnevenRoundedRectangle(
                     cornerRadii: .init(
