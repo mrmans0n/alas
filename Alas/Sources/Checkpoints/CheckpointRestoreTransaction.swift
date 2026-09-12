@@ -244,7 +244,7 @@ struct CheckpointRestoreTransaction: Sendable {
         if journal.preparedIndexChecksum == nil && journal.stagingNames.isEmpty && journal.phase == .prepared
             && journal.completedPaths.isEmpty && journal.pendingPath == nil && journal.ownedIndexLockPath == nil
             && journal.pendingIndexLock == nil {
-            try await finish(&journal, target: target, phase: .recovered)
+            try await discardIncompletePreparation(&journal, target: target)
             return .init(recoveryCheckpointID: journal.recoveryCheckpointID, restoredPaths: journal.selectedPaths)
         }
         do { try await rollback(&journal, target: target) }
@@ -584,6 +584,31 @@ struct CheckpointRestoreTransaction: Sendable {
             try fileSystem.synchronizeDirectory(target.path)
             try await store.finishJournal(id: journal.id, lineageID: target.lineageID)
         } catch { return }
+    }
+
+    private func discardIncompletePreparation(_ journal: inout CheckpointRestoreJournal,
+                                              target: CheckpointWorktreeTarget) async throws {
+        try removeDirectoryTreeIfPresent(URL(fileURLWithPath: journal.stagingRoot, isDirectory: true))
+        try fileSystem.synchronizeDirectory(target.path)
+        var terminal = journal
+        terminal.phase = .recovered
+        try await store.writeJournal(terminal)
+        journal = terminal
+        try await store.finishJournal(id: journal.id, lineageID: target.lineageID)
+    }
+
+    private func removeDirectoryTreeIfPresent(_ url: URL) throws {
+        guard try exists(url) else { return }
+        for child in try fileSystem.list(url) {
+            var isDirectory: ObjCBool = false
+            if FileManager.default.fileExists(atPath: child.path, isDirectory: &isDirectory),
+               isDirectory.boolValue {
+                try removeDirectoryTreeIfPresent(child)
+            } else {
+                try fileSystem.removeIfPresent(child)
+            }
+        }
+        try fileSystem.removeIfPresent(url)
     }
 
     private func leafState(_ path: String, root: URL) throws -> CheckpointFileState {
