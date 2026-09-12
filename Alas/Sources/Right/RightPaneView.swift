@@ -212,6 +212,12 @@ struct RightPaneView: View {
             rps = activated
             await activated.refresh(forceReviewLoopRemote: true)
         }
+        .onAppear {
+            state.rightPaneStore.prepareForVisiblePane(worktreeId: worktree.id)
+        }
+        .onChange(of: worktree.id) { _, worktreeId in
+            state.rightPaneStore.consumePendingRevealForVisiblePane(worktreeId: worktreeId)
+        }
         // When the right pane is hidden or unmounted (no worktree selected),
         // stop the active state's filesystem watcher and 5-min sync timer
         // so they don't keep running with no UI consumer. Re-mounting

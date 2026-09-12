@@ -74,6 +74,96 @@ struct RightPaneStoreBaseBranchTests {
         #expect(store.activeState(worktreeId: worktree.id, baseBranch: "release") == nil)
     }
 
+    @Test func reactivatingRightPaneDefaultsToChangesTab() async throws {
+        let repo = try await makeRepoOnMain()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let worktree = makeWorktree(at: repo, branch: "feature/default-tab")
+        let store = RightPaneStore(git: GitService())
+
+        let state = store.state(for: worktree, baseBranch: "main", comparisonMode: .manual)
+        state.activeTab = .files
+
+        store.deactivate()
+        let backgroundState = store.state(for: worktree, baseBranch: "main", comparisonMode: .manual)
+
+        #expect(backgroundState.activeTab == .files)
+
+        store.prepareForVisiblePane(worktreeId: worktree.id)
+
+        #expect(backgroundState.activeTab == .changes)
+    }
+
+    @Test func switchingWorktreesPreservesSelectedTab() async throws {
+        let firstRepo = try await makeRepoOnMain()
+        defer { try? FileManager.default.removeItem(at: firstRepo) }
+        let secondRepo = try await makeRepoOnMain()
+        defer { try? FileManager.default.removeItem(at: secondRepo) }
+        let first = makeWorktree(at: firstRepo, branch: "feature/first")
+        let second = makeWorktree(at: secondRepo, branch: "feature/second")
+        let store = RightPaneStore(git: GitService())
+
+        let firstState = store.state(for: first, baseBranch: "main", comparisonMode: .manual)
+        firstState.activeTab = .files
+
+        _ = store.state(for: second, baseBranch: "main", comparisonMode: .manual)
+        let reactivated = store.state(for: first, baseBranch: "main", comparisonMode: .manual)
+
+        #expect(reactivated.activeTab == .files)
+    }
+
+    @Test func pendingFileRevealKeepsFilesTabWhenPaneAppears() async throws {
+        let repo = try await makeRepoOnMain()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let worktree = makeWorktree(at: repo, branch: "feature/reveal")
+        let store = RightPaneStore(git: GitService())
+        let state = store.state(for: worktree, baseBranch: "main", comparisonMode: .manual)
+
+        state.reveal(path: "a.txt", opensPane: true)
+        store.prepareForVisiblePane(worktreeId: worktree.id)
+
+        #expect(state.activeTab == .files)
+    }
+
+    @Test func existingFileRevealDoesNotPreventDefaultTabWhenPaneReopens() async throws {
+        let repo = try await makeRepoOnMain()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let worktree = makeWorktree(at: repo, branch: "feature/reveal-default")
+        let store = RightPaneStore(git: GitService())
+        let state = store.state(for: worktree, baseBranch: "main", comparisonMode: .manual)
+
+        state.reveal(path: "a.txt")
+        store.prepareForVisiblePane(worktreeId: worktree.id)
+
+        #expect(state.activeTab == .changes)
+    }
+
+    @Test func visibleWorktreeSwitchConsumesPendingFileReveal() async throws {
+        let repo = try await makeRepoOnMain()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let worktree = makeWorktree(at: repo, branch: "feature/reveal-switch")
+        let store = RightPaneStore(git: GitService())
+        let state = store.state(for: worktree, baseBranch: "main", comparisonMode: .manual)
+
+        state.reveal(path: "a.txt", opensPane: true)
+        store.consumePendingRevealForVisiblePane(worktreeId: worktree.id)
+        store.prepareForVisiblePane(worktreeId: worktree.id)
+
+        #expect(state.activeTab == .changes)
+    }
+
+    @Test func visiblePaneDefaultSurvivesInitialRefresh() async throws {
+        let repo = try await makeRepoOnMain()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let worktree = makeWorktree(at: repo, branch: "feature/refresh-default")
+        let store = RightPaneStore(git: GitService())
+        let state = store.state(for: worktree, baseBranch: "main", comparisonMode: .manual)
+
+        store.prepareForVisiblePane(worktreeId: worktree.id)
+        await state.refresh(forceReviewLoopRemote: true)
+
+        #expect(state.activeTab == .changes)
+    }
+
     @Test func asyncProbeConfirmsSlashNamedOriginRef() async throws {
         let repo = try await makeRepoOnMain(branch: "release/1.0")
         defer { try? FileManager.default.removeItem(at: repo) }

@@ -7075,7 +7075,7 @@ final class AppState {
         )
     }
 
-    func revealInFiles(worktreeId: String, path: String) {
+    func revealInFiles(worktreeId: String, path: String, opensPane: Bool) {
         guard let worktree = worktree(withId: worktreeId) else { return }
         config.rightPaneVisible = true
         _ = saveConfig()
@@ -7084,7 +7084,7 @@ final class AppState {
             baseBranch: config.worktrees.baseBranch,
             comparisonMode: config.changes.comparisonMode
         )
-        rps.reveal(path: path)
+        rps.reveal(path: path, opensPane: opensPane)
     }
 
     /// Open a markdown relative-link target as a new editor tab in the same worktree.

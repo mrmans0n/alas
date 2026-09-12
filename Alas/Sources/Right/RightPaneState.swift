@@ -106,6 +106,7 @@ final class RightPaneState: GGSplitCommitServicing {
     var openPaths: Set<String> = []   // expanded directories in the tree
     var revealPath: String? = nil
     private(set) var revealTick: Int = 0
+    private var pendingRevealForPaneMount = false
     private(set) var loadedFileTreeChildPaths: Set<String> = [""]
     private(set) var loadingFileTreeChildPaths: Set<String> = []
     private(set) var failedFileTreeChildPaths: Set<String> = []
@@ -2707,8 +2708,9 @@ final class RightPaneState: GGSplitCommitServicing {
         }
     }
 
-    func reveal(path: String) {
+    func reveal(path: String, opensPane: Bool = false) {
         activeTab = .files
+        pendingRevealForPaneMount = pendingRevealForPaneMount || opensPane
         let pathComponents = path.split(separator: "/").map(String.init)
         for i in 0..<(pathComponents.count - 1) {
             let ancestor = pathComponents[0...i].joined(separator: "/")
@@ -2719,6 +2721,15 @@ final class RightPaneState: GGSplitCommitServicing {
         }
         revealPath = path
         revealTick += 1
+    }
+
+    func consumePendingRevealForPaneMount() -> Bool {
+        defer { pendingRevealForPaneMount = false }
+        return pendingRevealForPaneMount
+    }
+
+    func completeInitialTabSelection() {
+        didInitDefaultTab = true
     }
 
     func clearReveal() {

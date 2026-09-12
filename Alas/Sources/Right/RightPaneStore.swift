@@ -385,6 +385,24 @@ final class RightPaneStore {
         activeId = nil
     }
 
+    /// Selects the initial tab when the right pane is mounted. Center-pane
+    /// tabs can activate this store while the sidebar is hidden, so visibility
+    /// is tracked by the view lifecycle rather than `activeId`.
+    func prepareForVisiblePane(worktreeId: String) {
+        guard let state = states[worktreeId] else { return }
+        state.completeInitialTabSelection()
+        guard !state.consumePendingRevealForPaneMount() else { return }
+        state.activeTab = .changes
+    }
+
+    /// Clears a reveal intent when its worktree replaces an already-visible
+    /// pane. Unlike mounting a pane, switching worktrees must not reset tabs.
+    func consumePendingRevealForVisiblePane(worktreeId: String) {
+        guard let state = states[worktreeId] else { return }
+        state.completeInitialTabSelection()
+        _ = state.consumePendingRevealForPaneMount()
+    }
+
     /// The cached `RightPaneState` for `worktreeId`, if one exists.
     /// Does NOT create a new state — returns nil if the worktree isn't active.
     /// Used by `DraftCommitTabView` to observe staged-set changes.
