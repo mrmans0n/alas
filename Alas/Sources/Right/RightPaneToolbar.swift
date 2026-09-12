@@ -31,6 +31,7 @@ struct RightPaneToolbar: View {
         .frame(height: 24)
         .background(theme.color("bg-2"))
         .overlay(Divider().opacity(0.5), alignment: .bottom)
+        .windowDragHandle()
     }
 
     /// Only the Changes tab names a branch, so only it gets the branch icon;
