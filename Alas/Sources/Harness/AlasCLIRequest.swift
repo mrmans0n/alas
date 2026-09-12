@@ -42,6 +42,7 @@ struct AlasCLIRequest: Equatable {
         case notify(body: String, title: String?, level: AlasCLINotifyLevel)
         case worktree(WorktreeCommand)
         case workspace(WorkspaceCommand)
+        case preview(WebPreviewCommand)
         case review(ReviewCommand)
         case sessionList
         case sessionNew(prompt: String, agentID: String?, worktree: SessionWorktreeSelector)
@@ -423,6 +424,11 @@ struct AlasCLIRequest: Equatable {
                 sessionID: try requiredNonEmpty(params.session_id),
                 prompt: try requiredNonEmpty(params.prompt)
             )
+        case let name? where name.hasPrefix("preview_"):
+            guard let action = WebPreviewCommand.Action(rawValue: String(name.dropFirst("preview_".count))) else {
+                throw AlasCLIRequestError.unsupportedCommand
+            }
+            command = .preview(try WebPreviewCommand.decode(action: action, data: data))
         case "resolve":
             command = .resolve
         default:

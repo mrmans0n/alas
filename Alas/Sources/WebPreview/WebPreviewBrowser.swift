@@ -97,6 +97,7 @@ enum WebPreviewHostLookup {
 final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
     let ownerKey: String
     let remoteHost: String?
+    let automationID = UUID().uuidString
     let webView: WKWebView
     var address = ""
     var error: String?
@@ -106,11 +107,14 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
     var loading = false
     var capturing = false
     var capture: WebPreviewCapture?
+    private(set) var isClosed = false
     var onNavigate: ((URL) -> Void)?
     private var navigationGeneration = 0
     private var consoleHandler: PreviewConsoleHandler?
     private var urlObservation: NSKeyValueObservation?
     private let resolveHost: WebPreviewNavigation.HostResolver
+    let automationState = WebPreviewBrowserAutomationState()
+    var automationDocumentGeneration: Int { navigationGeneration }
 
     init(ownerKey: String, remoteHost: String?,
          resolveHost: @escaping WebPreviewNavigation.HostResolver = { await WebPreviewHostLookup.resolve($0) }) {
@@ -145,7 +149,10 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
     }
 
     func close() {
+        guard !isClosed else { return }
+        isClosed = true
         navigationGeneration += 1
+        automationState.invalidate()
         webView.stopLoading()
         urlObservation?.invalidate()
         urlObservation = nil
@@ -159,20 +166,26 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
         store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast) {}
     }
 
-    func navigate(_ url: URL) {
+    @discardableResult
+    func navigate(_ url: URL) -> WKNavigation? {
+        guard !isClosed else { return nil }
         guard WebPreviewNavigation.allows(url, remoteHost: remoteHost) else {
             error = remoteHost != nil && RunEndpointPolicy.isLoopback(url)
                 ? "This endpoint is on \(remoteHost!). Enter a remotely reachable URL; localhost would open a service on this Mac."
                 : "Only HTTP and HTTPS pages can be opened in previews."
-            return
+            return nil
         }
         error = nil
         address = url.absoluteString
-        webView.load(URLRequest(url: url))
+        return webView.load(URLRequest(url: url))
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void) {
+        guard !isClosed else {
+            decisionHandler(.cancel)
+            return
+        }
         guard let url = navigationAction.request.url,
               WebPreviewNavigation.allows(url, remoteHost: remoteHost) else {
             error = "Navigation blocked. Previews accept HTTP(S) pages and cannot open remote localhost endpoints."
@@ -184,6 +197,10 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
                  decisionHandler: @escaping @MainActor @Sendable (WKNavigationResponsePolicy) -> Void) {
+        guard !isClosed else {
+            decisionHandler(.cancel)
+            return
+        }
         guard let url = navigationResponse.response.url,
               WebPreviewNavigation.allows(url, remoteHost: remoteHost), navigationResponse.canShowMIMEType else {
             error = "This response cannot be displayed in a web preview."
@@ -200,8 +217,10 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
         Task { @MainActor [weak self] in
             guard let self else { completion(false)
             return }
+            guard !isClosed else { completion(false)
+            return }
             let allowed = await WebPreviewNavigation.allowsResolved(url, remoteHost: remoteHost, resolveHost: resolveHost)
-            guard generation == navigationGeneration else { completion(false)
+            guard !isClosed, generation == navigationGeneration else { completion(false)
             return }
             if !allowed {
                 loading = false
@@ -213,12 +232,15 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
 
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+        guard !isClosed else { return nil }
         if let url = navigationAction.request.url { navigate(url) }
         return nil
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        guard !isClosed else { return }
         navigationGeneration += 1
+        automationDocumentWillChange(navigation)
         loading = true
         error = nil
         consoleErrors = []
@@ -226,6 +248,7 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard !isClosed else { return }
         loading = false
         canGoBack = webView.canGoBack
         canGoForward = webView.canGoForward
@@ -244,11 +267,13 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { failed(error) }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        guard !isClosed else { return }
         loading = false
         error = "The preview process stopped. Reload to reconnect."
     }
 
     private func failed(_ failure: Error) {
+        guard !isClosed else { return }
         loading = false
         if (failure as NSError).code != NSURLErrorCancelled {
             error = "Endpoint unavailable: \(failure.localizedDescription)"
@@ -256,7 +281,7 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
     }
 
     func captureRegion(_ selection: CGRect? = nil, elementAt point: CGPoint? = nil) {
-        guard !capturing, !loading, let url = webView.url,
+        guard !isClosed, !capturing, !loading, let url = webView.url,
               WebPreviewNavigation.allows(url, remoteHost: remoteHost) else { return }
         capturing = true
         let generation = navigationGeneration
@@ -266,6 +291,7 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
         Task { @MainActor in
             defer { capturing = false }
             do {
+                guard !isClosed else { return }
                 let metrics = try? await webView.callAsyncJavaScript(
                     "return {scale: devicePixelRatio, x: scrollX, y: scrollY};",
                     arguments: [:], in: nil, contentWorld: .defaultClient) as? [String: Double]
@@ -292,7 +318,7 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
                 let configuration = WKSnapshotConfiguration()
                 configuration.rect = region
                 let image = try await webView.takeSnapshot(configuration: configuration)
-                guard generation == navigationGeneration, webView.url == url,
+                guard !isClosed, generation == navigationGeneration, webView.url == url,
                       viewport == webView.bounds.size else {
                     error = "The page changed during capture. Capture again."
                     return

@@ -21,6 +21,7 @@ usage: alas workspace list
 usage: alas workspace show <checkout-uuid>
 usage: alas workspace switch <checkout-uuid>
 usage: alas workspace focus <checkout-uuid> --member <member-uuid>
+usage: alas preview <list|open|navigate|reload|back|forward|inspect|capture|console|click|type|scroll|wait|cancel> ...
 usage: alas session list
 usage: alas session new --prompt <text> [--agent <id>] [--worktree <name-or-branch> | --new-worktree <branch> [--base <ref>]]
 usage: alas session send <session-id> <prompt>
@@ -44,6 +45,7 @@ pub fn parse(args: &[String], base: &std::path::Path) -> Result<Command, String>
         Some("notify") => parse_notify(&it.map(|s| s.as_str()).collect::<Vec<_>>()),
         Some("wt") => parse_wt(&it.map(|s| s.as_str()).collect::<Vec<_>>()),
         Some("workspace") => parse_workspace(&it.map(|s| s.as_str()).collect::<Vec<_>>()),
+        Some("preview") => parse_preview(&it.map(|s| s.as_str()).collect::<Vec<_>>()),
         Some("session") => parse_session(&it.map(|s| s.as_str()).collect::<Vec<_>>()),
         Some("review") => {
             let rest: Vec<&str> = it.map(String::as_str).collect();
@@ -51,6 +53,279 @@ pub fn parse(args: &[String], base: &std::path::Path) -> Result<Command, String>
         }
         _ => Err(USAGE_ALL.into()),
     }
+}
+
+fn parse_preview(args: &[&str]) -> Result<Command, String> {
+    const USAGE: &str = "usage: alas preview <list|open|navigate|reload|back|forward|inspect|capture|console|click|type|scroll|wait|cancel> ...";
+    match args.first().copied() {
+        Some("list") if args.len() == 1 => Ok(Command::Preview(alas_client::PreviewCommand::List)),
+        Some("open") => parse_preview_open(&args[1..]),
+        Some("navigate") if args.len() == 3 => {
+            Ok(Command::Preview(alas_client::PreviewCommand::Navigate {
+                preview_id: non_empty(args[1], "preview_id")?,
+                url: limited_non_empty(args[2], "url", 8192)?,
+            }))
+        }
+        Some("reload") if args.len() == 2 => Ok(preview_id_command(args[1], |preview_id| {
+            alas_client::PreviewCommand::Reload { preview_id }
+        })?),
+        Some("back") if args.len() == 2 => Ok(preview_id_command(args[1], |preview_id| {
+            alas_client::PreviewCommand::Back { preview_id }
+        })?),
+        Some("forward") if args.len() == 2 => Ok(preview_id_command(args[1], |preview_id| {
+            alas_client::PreviewCommand::Forward { preview_id }
+        })?),
+        Some("inspect") => parse_preview_inspect(&args[1..]),
+        Some("capture") => parse_preview_capture(&args[1..]),
+        Some("console") => parse_preview_console(&args[1..]),
+        Some("click") if args.len() == 3 => {
+            Ok(Command::Preview(alas_client::PreviewCommand::Click {
+                preview_id: non_empty(args[1], "preview_id")?,
+                element_id: non_empty(args[2], "element_id")?,
+            }))
+        }
+        Some("type") => parse_preview_type(&args[1..]),
+        Some("scroll") if args.len() == 4 => {
+            Ok(Command::Preview(alas_client::PreviewCommand::Scroll {
+                preview_id: non_empty(args[1], "preview_id")?,
+                x: bounded_scroll(args[2])?,
+                y: bounded_scroll(args[3])?,
+            }))
+        }
+        Some("wait") => parse_preview_wait(&args[1..]),
+        Some("cancel") if args.len() == 2 => Ok(preview_id_command(args[1], |preview_id| {
+            alas_client::PreviewCommand::Cancel { preview_id }
+        })?),
+        _ => Err(USAGE.into()),
+    }
+}
+
+fn preview_id_command(
+    preview_id: &str,
+    build: impl FnOnce(String) -> alas_client::PreviewCommand,
+) -> Result<Command, String> {
+    Ok(Command::Preview(build(non_empty(
+        preview_id,
+        "preview_id",
+    )?)))
+}
+
+fn parse_preview_open(args: &[&str]) -> Result<Command, String> {
+    const USAGE: &str = "usage: alas preview open [--url <url> | --script-key <key>]";
+    let mut url = None;
+    let mut script_key = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i] {
+            "--url" => {
+                if url.is_some() {
+                    return Err(USAGE.into());
+                }
+                i += 1;
+                url = Some(limited_non_empty(
+                    flag_value(args, i).ok_or(USAGE)?,
+                    "url",
+                    8192,
+                )?);
+            }
+            "--script-key" => {
+                if script_key.is_some() {
+                    return Err(USAGE.into());
+                }
+                i += 1;
+                script_key = Some(non_empty(flag_value(args, i).ok_or(USAGE)?, "script_key")?);
+            }
+            _ => return Err(USAGE.into()),
+        }
+        i += 1;
+    }
+    if url.is_some() && script_key.is_some() {
+        return Err(USAGE.into());
+    }
+    Ok(Command::Preview(alas_client::PreviewCommand::Open {
+        url,
+        script_key,
+    }))
+}
+
+fn parse_preview_inspect(args: &[&str]) -> Result<Command, String> {
+    const USAGE: &str =
+        "usage: alas preview inspect <preview-id> [--selector <selector>] [--limit <1...100>]";
+    let (preview_id, rest) = args.split_first().ok_or(USAGE)?;
+    let mut selector = None;
+    let mut limit = 50;
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i] {
+            "--selector" => {
+                if selector.is_some() {
+                    return Err(USAGE.into());
+                }
+                i += 1;
+                selector = Some(non_empty(flag_value(rest, i).ok_or(USAGE)?, "selector")?);
+            }
+            "--limit" => {
+                i += 1;
+                limit = bounded_u64(flag_value(rest, i).ok_or(USAGE)?, 1, 100, USAGE)?;
+            }
+            _ => return Err(USAGE.into()),
+        }
+        i += 1;
+    }
+    Ok(Command::Preview(alas_client::PreviewCommand::Inspect {
+        preview_id: non_empty(preview_id, "preview_id")?,
+        selector,
+        limit,
+    }))
+}
+
+fn parse_preview_capture(args: &[&str]) -> Result<Command, String> {
+    const USAGE: &str = "usage: alas preview capture <preview-id> [--element-id <id> | --region <x> <y> <width> <height>]";
+    let (preview_id, rest) = args.split_first().ok_or(USAGE)?;
+    let target = match rest {
+        [] => alas_client::PreviewCaptureTarget::Viewport,
+        ["--element-id", element_id] => alas_client::PreviewCaptureTarget::Element {
+            element_id: non_empty(element_id, "element_id")?,
+        },
+        ["--region", x, y, width, height] => alas_client::PreviewCaptureTarget::Region {
+            x: finite_f64(x, USAGE)?,
+            y: finite_f64(y, USAGE)?,
+            width: positive_f64(width, USAGE)?,
+            height: positive_f64(height, USAGE)?,
+        },
+        _ => return Err(USAGE.into()),
+    };
+    Ok(Command::Preview(alas_client::PreviewCommand::Capture {
+        preview_id: non_empty(preview_id, "preview_id")?,
+        target,
+    }))
+}
+
+fn parse_preview_console(args: &[&str]) -> Result<Command, String> {
+    const USAGE: &str = "usage: alas preview console <preview-id> [--clear]";
+    let (preview_id, rest) = args.split_first().ok_or(USAGE)?;
+    let clear = match rest {
+        [] => false,
+        ["--clear"] => true,
+        _ => return Err(USAGE.into()),
+    };
+    Ok(Command::Preview(alas_client::PreviewCommand::Console {
+        preview_id: non_empty(preview_id, "preview_id")?,
+        clear,
+    }))
+}
+
+fn parse_preview_type(args: &[&str]) -> Result<Command, String> {
+    const USAGE: &str = "usage: alas preview type <preview-id> <element-id> <text> [--append]";
+    if args.len() != 3 && args.len() != 4 {
+        return Err(USAGE.into());
+    }
+    let append = match args.get(3).copied() {
+        None => false,
+        Some("--append") => true,
+        Some(_) => return Err(USAGE.into()),
+    };
+    let text = args[2].to_string();
+    if text.chars().count() > 10_000 || text.len() > 40_000 {
+        return Err(USAGE.into());
+    }
+    Ok(Command::Preview(alas_client::PreviewCommand::Type {
+        preview_id: non_empty(args[0], "preview_id")?,
+        element_id: non_empty(args[1], "element_id")?,
+        text,
+        append,
+    }))
+}
+
+fn parse_preview_wait(args: &[&str]) -> Result<Command, String> {
+    const USAGE: &str = "usage: alas preview wait <preview-id> <loaded|visible|hidden> [selector] [--timeout-ms <1...20000>]";
+    if args.len() < 2 {
+        return Err(USAGE.into());
+    }
+    let condition = match args[1] {
+        "loaded" => alas_client::PreviewWaitCondition::Loaded,
+        "visible" => alas_client::PreviewWaitCondition::Visible,
+        "hidden" => alas_client::PreviewWaitCondition::Hidden,
+        _ => return Err(USAGE.into()),
+    };
+    let mut selector = None;
+    let mut timeout_ms = 5_000;
+    let mut i = 2;
+    while i < args.len() {
+        match args[i] {
+            "--timeout-ms" => {
+                i += 1;
+                timeout_ms = bounded_u64(flag_value(args, i).ok_or(USAGE)?, 1, 20_000, USAGE)?;
+            }
+            value if !value.starts_with("--") && selector.is_none() => {
+                selector = Some(non_empty(value, "selector")?);
+            }
+            _ => return Err(USAGE.into()),
+        }
+        i += 1;
+    }
+    match condition {
+        alas_client::PreviewWaitCondition::Loaded if selector.is_some() => return Err(USAGE.into()),
+        alas_client::PreviewWaitCondition::Visible | alas_client::PreviewWaitCondition::Hidden
+            if selector.is_none() =>
+        {
+            return Err(USAGE.into());
+        }
+        _ => {}
+    }
+    Ok(Command::Preview(alas_client::PreviewCommand::Wait {
+        preview_id: non_empty(args[0], "preview_id")?,
+        condition,
+        selector,
+        timeout_ms,
+    }))
+}
+
+fn non_empty(value: &str, name: &str) -> Result<String, String> {
+    limited_non_empty(value, name, 4096)
+}
+
+fn limited_non_empty(value: &str, name: &str, max_bytes: usize) -> Result<String, String> {
+    let value = value.trim();
+    if value.is_empty() || value.len() > max_bytes {
+        Err(format!("{name} must be non-empty"))
+    } else {
+        Ok(value.to_string())
+    }
+}
+
+fn bounded_u64(value: &str, min: u64, max: u64, usage: &str) -> Result<u64, String> {
+    value
+        .parse::<u64>()
+        .ok()
+        .filter(|value| *value >= min && *value <= max)
+        .ok_or_else(|| usage.to_string())
+}
+
+fn bounded_scroll(value: &str) -> Result<f64, String> {
+    value
+        .parse::<f64>()
+        .ok()
+        .filter(|value| value.is_finite() && value.abs() <= 100_000.0)
+        .ok_or_else(|| "usage: alas preview scroll <preview-id> <x> <y>".to_string())
+}
+
+fn finite_f64(value: &str, usage: &str) -> Result<f64, String> {
+    value
+        .parse::<f64>()
+        .ok()
+        .filter(|value| value.is_finite() && value.abs() <= 100_000.0)
+        .ok_or_else(|| usage.to_string())
+}
+
+fn positive_f64(value: &str, usage: &str) -> Result<f64, String> {
+    finite_f64(value, usage).and_then(|value| {
+        if value > 0.0 && value.abs() <= 100_000.0 {
+            Ok(value)
+        } else {
+            Err(usage.to_string())
+        }
+    })
 }
 
 fn parse_workspace(args: &[&str]) -> Result<Command, String> {
@@ -1308,15 +1583,26 @@ mod tests {
         );
         assert_eq!(
             parse(&s(&["workspace", "show", checkout]), Path::new("/b")).unwrap(),
-            Command::WorkspaceShow { checkout_id: checkout.into() }
+            Command::WorkspaceShow {
+                checkout_id: checkout.into()
+            }
         );
         assert_eq!(
             parse(&s(&["workspace", "switch", checkout]), Path::new("/b")).unwrap(),
-            Command::WorkspaceSwitch { checkout_id: checkout.into() }
+            Command::WorkspaceSwitch {
+                checkout_id: checkout.into()
+            }
         );
         assert_eq!(
-            parse(&s(&["workspace", "focus", checkout, "--member", member]), Path::new("/b")).unwrap(),
-            Command::WorkspaceFocus { checkout_id: checkout.into(), member_id: member.into() }
+            parse(
+                &s(&["workspace", "focus", checkout, "--member", member]),
+                Path::new("/b")
+            )
+            .unwrap(),
+            Command::WorkspaceFocus {
+                checkout_id: checkout.into(),
+                member_id: member.into()
+            }
         );
         assert!(parse(&s(&["workspace", "focus", checkout]), Path::new("/b")).is_err());
         assert!(parse(&s(&["workspace", "delete", checkout]), Path::new("/b")).is_err());
@@ -1412,6 +1698,178 @@ mod tests {
         ] {
             assert!(parse(&s(invalid), Path::new("/b")).is_err());
         }
+    }
+
+    #[test]
+    fn preview_cli_parses_core_subcommands_and_defaults() {
+        assert_eq!(
+            parse(&s(&["preview", "list"]), Path::new("/b")).unwrap(),
+            Command::Preview(alas_client::PreviewCommand::List)
+        );
+        assert_eq!(
+            parse(
+                &s(&["preview", "open", "--script-key", "web"]),
+                Path::new("/b")
+            )
+            .unwrap(),
+            Command::Preview(alas_client::PreviewCommand::Open {
+                url: None,
+                script_key: Some("web".into())
+            })
+        );
+        assert_eq!(
+            parse(
+                &s(&[
+                    "preview",
+                    "inspect",
+                    "p1",
+                    "--selector",
+                    "button",
+                    "--limit",
+                    "10",
+                ]),
+                Path::new("/b")
+            )
+            .unwrap(),
+            Command::Preview(alas_client::PreviewCommand::Inspect {
+                preview_id: "p1".into(),
+                selector: Some("button".into()),
+                limit: 10
+            })
+        );
+        assert_eq!(
+            parse(&s(&["preview", "console", "p1"]), Path::new("/b")).unwrap(),
+            Command::Preview(alas_client::PreviewCommand::Console {
+                preview_id: "p1".into(),
+                clear: false
+            })
+        );
+    }
+
+    #[test]
+    fn preview_cli_validates_contract_bounds_and_exclusions() {
+        assert!(
+            parse(
+                &s(&[
+                    "preview",
+                    "open",
+                    "--url",
+                    "http://localhost",
+                    "--script-key",
+                    "web",
+                ]),
+                Path::new("/b")
+            )
+            .is_err()
+        );
+        assert!(
+            parse(
+                &s(&["preview", "inspect", "p1", "--limit", "0"]),
+                Path::new("/b")
+            )
+            .is_err()
+        );
+        assert!(
+            parse(
+                &s(&["preview", "inspect", "p1", "--limit", "101"]),
+                Path::new("/b")
+            )
+            .is_err()
+        );
+        assert!(
+            parse(
+                &s(&["preview", "type", "p1", "e1", &"x".repeat(10_001)]),
+                Path::new("/b")
+            )
+            .is_err()
+        );
+        assert!(
+            parse(
+                &s(&["preview", "scroll", "p1", "100001", "0"]),
+                Path::new("/b")
+            )
+            .is_err()
+        );
+        assert!(parse(&s(&["preview", "wait", "p1", "visible"]), Path::new("/b")).is_err());
+        assert!(
+            parse(
+                &s(&["preview", "wait", "p1", "loaded", "--selector", "main"]),
+                Path::new("/b")
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn preview_cli_parses_capture_region_click_type_scroll_wait_and_cancel() {
+        assert_eq!(
+            parse(
+                &s(&[
+                    "preview", "capture", "p1", "--region", "1", "2", "300", "200",
+                ]),
+                Path::new("/b")
+            )
+            .unwrap(),
+            Command::Preview(alas_client::PreviewCommand::Capture {
+                preview_id: "p1".into(),
+                target: alas_client::PreviewCaptureTarget::Region {
+                    x: 1.0,
+                    y: 2.0,
+                    width: 300.0,
+                    height: 200.0
+                }
+            })
+        );
+        assert_eq!(
+            parse(
+                &s(&["preview", "type", "p1", "e1", "hello", "--append"]),
+                Path::new("/b")
+            )
+            .unwrap(),
+            Command::Preview(alas_client::PreviewCommand::Type {
+                preview_id: "p1".into(),
+                element_id: "e1".into(),
+                text: "hello".into(),
+                append: true
+            })
+        );
+        assert_eq!(
+            parse(
+                &s(&[
+                    "preview",
+                    "wait",
+                    "p1",
+                    "visible",
+                    "main",
+                    "--timeout-ms",
+                    "20000",
+                ]),
+                Path::new("/b")
+            )
+            .unwrap(),
+            Command::Preview(alas_client::PreviewCommand::Wait {
+                preview_id: "p1".into(),
+                condition: alas_client::PreviewWaitCondition::Visible,
+                selector: Some("main".into()),
+                timeout_ms: 20_000
+            })
+        );
+        assert!(matches!(
+            parse(&s(&["preview", "click", "p1", "e1"]), Path::new("/b")).unwrap(),
+            Command::Preview(alas_client::PreviewCommand::Click { .. })
+        ));
+        assert!(matches!(
+            parse(
+                &s(&["preview", "scroll", "p1", "-5", "10"]),
+                Path::new("/b")
+            )
+            .unwrap(),
+            Command::Preview(alas_client::PreviewCommand::Scroll { .. })
+        ));
+        assert!(matches!(
+            parse(&s(&["preview", "cancel", "p1"]), Path::new("/b")).unwrap(),
+            Command::Preview(alas_client::PreviewCommand::Cancel { .. })
+        ));
     }
 
     #[test]

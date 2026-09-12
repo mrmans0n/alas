@@ -149,11 +149,10 @@ struct WebPreviewTabView: View {
             .clipped()
         }
         .onAppear {
-            browser.onNavigate = { url in state.tabs.updateWebPreviewURL(worktreeId: tab.ownerKey, url: url) }
-            if browser.webView.url == nil, let url = tab.url { browser.navigate(url) }
+            if browser.webView.url == nil, !browser.loading, let url = tab.url { browser.navigate(url) }
         }
         .onChange(of: tab.url) {
-            if let url = tab.url, url != browser.webView.url { browser.navigate(url) }
+            if let url = tab.url, url != browser.webView.url, browser.address != url.absoluteString { browser.navigate(url) }
         }
         .sheet(item: $browser.capture) { capture in
             WebPreviewFeedbackSheet(state: state, capture: capture)
