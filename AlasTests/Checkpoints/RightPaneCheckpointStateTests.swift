@@ -295,6 +295,30 @@ struct RightPaneCheckpointStateTests {
         #expect(!state.checkpointMutationsDisabled)
     }
 
+    @Test func mutationAdmissionRevalidatesJournalsAfterSuccessfulDiscovery() async throws {
+        let repository = try await CheckpointTestRepository.make()
+        defer { repository.remove() }
+        let service = try RecordingCheckpointService(target: repository.target)
+        let state = makeState(repository: repository, service: service)
+        await state.refresh()
+        #expect(!state.checkpointMutationsDisabled)
+
+        await service.installJournal(.init(
+            id: UUID(uuidString: "55555555-5555-5555-5555-555555555555")!,
+            lineageID: repository.target.lineageID,
+            checkpointID: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
+            recoveryCheckpointID: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
+            phase: .prepared,
+            stagingRoot: "staging",
+            selectedPaths: ["selected.swift"],
+            expectedFingerprint: "fingerprint",
+            expectedIndexChecksum: "checksum"
+        ))
+
+        #expect(await state.checkpointMutationsDisabledAfterJournalRevalidation())
+        #expect(state.hasInterruptedCheckpointRestore)
+    }
+
     @Test func unavailableCheckpointSummaryEvictsExpandedManifestCache() async throws {
         let repository = try await CheckpointTestRepository.make()
         defer { repository.remove() }

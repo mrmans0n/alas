@@ -198,8 +198,7 @@ final class AppState {
             baseBranch: config.worktrees.baseBranch,
             comparisonMode: config.changes.comparisonMode
         )
-        await pane.refresh()
-        return pane.checkpointMutationsDisabled
+        return await pane.checkpointMutationsDisabledAfterJournalRevalidation()
     }
 
     typealias TerminalSessionOpener = (

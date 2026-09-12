@@ -740,6 +740,25 @@ final class RightPaneState: GGSplitCommitServicing {
         }
     }
 
+    func checkpointMutationsDisabledAfterJournalRevalidation() async -> Bool {
+        guard checkpointOperationInFlight == nil else { return true }
+        guard let target = checkpointTarget else {
+            nonterminalCheckpointJournals = []
+            checkpointJournalDiscoverySucceeded = worktree.path.isRemoteAlasPath
+            checkpointLoadError = worktree.path.isRemoteAlasPath ? CheckpointRestoreBlocker.remoteTarget.description : nil
+            return checkpointMutationsDisabled
+        }
+        do {
+            nonterminalCheckpointJournals = try await checkpointService.nonterminalJournals(target: target)
+            checkpointJournalDiscoverySucceeded = true
+            checkpointLoadError = nil
+        } catch {
+            checkpointJournalDiscoverySucceeded = false
+            checkpointLoadError = error.localizedDescription
+        }
+        return checkpointMutationsDisabled
+    }
+
     func requestCheckpointCreation() {
         guard !checkpointMutationsDisabled else { return }
         lastCheckpointStatus = nil

@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import Foundation
 
 protocol WorktreeCheckpointServicing: Sendable {
@@ -140,9 +141,9 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
                 beforeState = state.head
                 beforeStoredInCheckpoint = false
             }
-            let afterMetadata = try snapshotter.fileSystem.metadata(root: target.path, relativePath: path)
-            if shouldLimitCheckpointDiffPreview(before: beforeState, after: afterMetadata) {
-                return .binary(beforeByteCount: checkpointDiffByteCount(beforeState), afterByteCount: afterMetadata?.byteCount)
+            let afterMetadata = try currentCheckpointDiffMetadata(target: target, path: path)
+            if let oversized = try oversizedCheckpointDiffPreview(before: beforeState, after: afterMetadata, target: target, path: path) {
+                return oversized
             }
             let beforeData: Data?
             if beforeStoredInCheckpoint {
@@ -204,6 +205,23 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
         return try await store.readBlob(blob, lineageID: lineageID)
     }
 
+    private func oversizedCheckpointDiffPreview(
+        before: CheckpointFileState,
+        after: CheckpointLeafMetadata?,
+        target: CheckpointWorktreeTarget,
+        path: String
+    ) throws -> CheckpointDiffContent? {
+        guard shouldLimitCheckpointDiffPreview(before: before, after: after) else { return nil }
+        if let blob = before.blob,
+           let after,
+           after.kind == .regular,
+           after.byteCount == blob.byteCount,
+           try currentFileMatchesBlob(blob, target: target, path: path) {
+            return .text(.init(hunks: []))
+        }
+        return .binary(beforeByteCount: checkpointDiffByteCount(before), afterByteCount: after?.byteCount)
+    }
+
     private func shouldLimitCheckpointDiffPreview(before: CheckpointFileState, after: CheckpointLeafMetadata?) -> Bool {
         if let beforeByteCount = checkpointDiffByteCount(before),
            beforeByteCount > Self.diffPreviewByteLimit {
@@ -219,8 +237,35 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
         state.blob?.byteCount
     }
 
+    private func currentFileMatchesBlob(
+        _ blob: CheckpointBlobReference,
+        target: CheckpointWorktreeTarget,
+        path: String
+    ) throws -> Bool {
+        let url = try snapshotter.fileSystem.validateRelativePath(path, under: target.path)
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+
+        var hasher = SHA256()
+        while true {
+            let chunk = try handle.read(upToCount: 1024 * 1024) ?? Data()
+            if chunk.isEmpty { break }
+            hasher.update(data: chunk)
+        }
+        let digest = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+        return digest == blob.sha256
+    }
+
+    private func currentCheckpointDiffMetadata(target: CheckpointWorktreeTarget, path: String) throws -> CheckpointLeafMetadata? {
+        do {
+            return try snapshotter.fileSystem.metadata(root: target.path, relativePath: path)
+        } catch CheckpointFileSystemError.unsupportedLeaf {
+            return nil
+        }
+    }
+
     private func currentCheckpointDiffSide(target: CheckpointWorktreeTarget, path: String) throws -> CheckpointDiffSide {
-        guard try snapshotter.fileSystem.metadata(root: target.path, relativePath: path) != nil else {
+        guard try currentCheckpointDiffMetadata(target: target, path: path) != nil else {
             return .init(state: .absent, data: nil)
         }
 

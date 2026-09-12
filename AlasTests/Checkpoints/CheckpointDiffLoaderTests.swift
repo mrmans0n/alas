@@ -166,6 +166,14 @@ struct CheckpointDiffLoaderTests {
         defer { repo.remove() }
         let bytes = Data("small\n".utf8)
         let blob = CheckpointBlobReference.make(for: bytes)
+        let fileState = CheckpointFileState.regular(blob: blob, executable: false)
+        let pathState = CheckpointPathState(
+            relativePath: "huge.txt",
+            head: fileState,
+            index: fileState,
+            worktree: fileState
+        )
+        let oversizedByteCount = Int64(10 * 1024 * 1024 + 1)
         let manifest = try WorktreeCheckpointManifest(
             kind: .manual,
             label: "Saved",
@@ -178,7 +186,7 @@ struct CheckpointDiffLoaderTests {
             headOID: String(repeating: "f", count: 40),
             exclusions: [],
             groups: [],
-            paths: [.init(relativePath: "huge.txt", head: .regular(blob: blob, executable: false), index: .regular(blob: blob, executable: false), worktree: .regular(blob: blob, executable: false))]
+            paths: [pathState]
         )
         let store = WorktreeCheckpointStore(root: repo.root.appendingPathComponent(".git/checkpoints"))
         _ = try await store.publish(.init(manifest: manifest, blobs: [blob: bytes]))
@@ -186,7 +194,7 @@ struct CheckpointDiffLoaderTests {
             store: store,
             snapshotter: .init(fileSystem: OversizedReadFailingFileSystem(
                 oversizedRelativePath: "huge.txt",
-                byteCount: 10 * 1024 * 1024 + 1
+                byteCount: oversizedByteCount
             ))
         )
 
@@ -196,7 +204,68 @@ struct CheckpointDiffLoaderTests {
         }
 
         #expect(before == Int64(bytes.count))
-        #expect(after == Int64(10 * 1024 * 1024 + 1))
+        #expect(after == oversizedByteCount)
+    }
+
+    @Test func currentDirectoryAtCheckpointFilePathIsTreatedAsAbsentLeaf() async throws {
+        let repo = try await CheckpointTestRepository.make()
+        defer { repo.remove() }
+        try repo.write("saved\n", to: "config")
+        let service = WorktreeCheckpointService(store: .init(root: repo.root.appendingPathComponent(".git/checkpoints")))
+        let checkpoint = try await service.createManual(target: repo.target, label: "Saved")
+        try FileManager.default.removeItem(at: repo.root.appendingPathComponent("config"))
+        try repo.write("child\n", to: "config/local.json")
+
+        guard case .text(let diff) = await service.diffContent(target: repo.target, id: checkpoint.id, path: "config") else {
+            Issue.record("Expected directory replacement to render as a file deletion")
+            return
+        }
+
+        let lines = diff.hunks.flatMap(\.lines)
+        let deletedTexts = lines.filter { $0.kind == .delete }.map(\.text)
+        #expect(deletedTexts == ["saved"])
+    }
+
+    @Test func oversizedEqualCurrentFileDoesNotReportChangedBinaryPreview() async throws {
+        let repo = try await CheckpointTestRepository.make()
+        defer { repo.remove() }
+        let bytes = Data(repeating: 42, count: 10 * 1024 * 1024 + 1)
+        let blob = CheckpointBlobReference.make(for: bytes)
+        let fileState = CheckpointFileState.regular(blob: blob, executable: false)
+        let pathState = CheckpointPathState(
+            relativePath: "huge.txt",
+            head: fileState,
+            index: fileState,
+            worktree: fileState
+        )
+        let manifest = try WorktreeCheckpointManifest(
+            kind: .manual,
+            label: "Saved",
+            createdAt: Date(timeIntervalSince1970: 1),
+            byteCount: Int64(bytes.count),
+            lineageID: repo.target.lineageID,
+            capturedPath: repo.root.path,
+            repositoryName: "test",
+            branch: "main",
+            headOID: String(repeating: "f", count: 40),
+            exclusions: [],
+            groups: [],
+            paths: [pathState]
+        )
+        try repo.write(bytes, to: "huge.txt")
+        let store = WorktreeCheckpointStore(root: repo.root.appendingPathComponent(".git/checkpoints"))
+        _ = try await store.publish(.init(manifest: manifest, blobs: [blob: bytes]))
+        let service = WorktreeCheckpointService(store: store)
+
+        guard case .text(let diff) = await service.diffContent(target: repo.target, id: manifest.id, path: "huge.txt") else {
+            Issue.record("Expected equal oversized file to render as no text changes")
+            return
+        }
+
+        let hunksAreEmpty = diff.hunks.isEmpty
+        let metadataSummary = diff.metadataSummary
+        #expect(hunksAreEmpty)
+        #expect(metadataSummary == nil)
     }
 
     private func describe(_ content: CheckpointDiffContent) -> String {
