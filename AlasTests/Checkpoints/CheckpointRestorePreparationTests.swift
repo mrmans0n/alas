@@ -115,6 +115,36 @@ struct CheckpointRestorePreparationTests {
         let names = try FileManager.default.contentsOfDirectory(atPath: fixture.repo.root.path)
         #expect(!names.contains { $0.hasPrefix(".alas-checkpoint-restore-") })
     }
+
+    @Test func recoveryFinishesEarlyAdmissionJournalWithoutStaging() async throws {
+        let repo = try await CheckpointTestRepository.make()
+        defer { repo.remove() }
+        let root = URL(fileURLWithPath: "/private/tmp/checkpoint-restore-admission-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try repo.write("baseline", to: "file.txt")
+        try await repo.commitAll("baseline")
+        let store = WorktreeCheckpointStore(root: root)
+        let operationID = UUID()
+        let journal = CheckpointRestoreJournal(
+            id: operationID,
+            lineageID: repo.target.lineageID,
+            checkpointID: UUID(),
+            recoveryCheckpointID: UUID(),
+            phase: .prepared,
+            stagingRoot: repo.root.appendingPathComponent(".alas-checkpoint-restore-\(operationID.uuidString.lowercased())").path,
+            selectedPaths: ["file.txt"],
+            expectedFingerprint: "pending",
+            expectedIndexChecksum: ""
+        )
+        try await store.writeJournal(journal)
+
+        let result = try await CheckpointRestoreTransaction(store: store, git: LiveCheckpointGitRunner(), fileSystem: LiveCheckpointFileSystem())
+            .recover(target: repo.target, operationID: operationID, coordination: .clear)
+
+        #expect(result.recoveryCheckpointID == journal.recoveryCheckpointID)
+        #expect(result.restoredPaths == ["file.txt"])
+        #expect(try await store.recoverableJournals(lineageID: repo.target.lineageID).isEmpty)
+    }
 }
 
 private struct RestorePreparationFixture: Sendable {

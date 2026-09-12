@@ -30,6 +30,11 @@ struct CheckpointCaptureHooks: Sendable {
 actor WorktreeCheckpointService: WorktreeCheckpointServicing {
     private static let diffPreviewByteLimit: Int64 = 10 * 1024 * 1024
 
+    private struct RestoreAdmission: Sendable {
+        let operationID: UUID
+        let stagingRoot: URL
+    }
+
     private struct CheckpointDiffSide: Sendable {
         let state: CheckpointFileState
         let data: Data?
@@ -353,25 +358,38 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
         let selected = selectedGroupIDs.isEmpty ? preview.selectedGroupIDs : selectedGroupIDs
         let groups = Dictionary(uniqueKeysWithValues: refreshed.groups.map { ($0.id, $0) })
         for id in selected where groups[id] == nil { throw CheckpointRestoreError.missingPreviewGroup(id) }
-        let current = try await snapshotter.snapshot(target: target, includingPaths: Set(manifest.paths.map(\.relativePath)))
-        guard current.fingerprint == preview.currentFingerprint else { throw CheckpointRestoreError.stalePreview }
-        let savedByPath = Dictionary(uniqueKeysWithValues: manifest.paths.map { ($0.relativePath, $0) })
-        let selectedPaths = requiredRestorePaths(
-            for: Set(selected.compactMap { groups[$0] }.flatMap(\.memberPaths)),
-            current: current,
-            saved: savedByPath
-        )
-        let recovery = try await createRecovery(target: target, current: current, selectedPaths: selectedPaths,
-                                                protecting: manifest.id)
-        _ = try await store.load(id: recovery.id, lineageID: target.lineageID)
-        try faultInjector.hit(.afterRecoveryPublication)
-        let orderedSelectedPaths = selectedPaths.sorted { lhs, rhs in
-            restoreApplicationOrder(lhs, rhs, current: current, saved: savedByPath)
+        let initiallySelectedPaths = Set(selected.compactMap { groups[$0] }.flatMap(\.memberPaths))
+        let admission = try await beginRestoreAdmission(target: target, checkpointID: manifest.id,
+                                                        selectedPaths: initiallySelectedPaths,
+                                                        expectedFingerprint: preview.currentFingerprint)
+        do {
+            let current = try await snapshotter.snapshot(target: target, includingPaths: Set(manifest.paths.map(\.relativePath)))
+            guard current.fingerprint == preview.currentFingerprint else { throw CheckpointRestoreError.stalePreview }
+            let savedByPath = Dictionary(uniqueKeysWithValues: manifest.paths.map { ($0.relativePath, $0) })
+            let selectedPaths = requiredRestorePaths(
+                for: initiallySelectedPaths,
+                current: current,
+                saved: savedByPath
+            )
+            try await updateRestoreAdmission(admission, target: target, checkpointID: manifest.id,
+                                             selectedPaths: selectedPaths,
+                                             expectedFingerprint: preview.currentFingerprint,
+                                             expectedIndexChecksum: current.indexChecksum)
+            let recovery = try await createRecovery(target: target, current: current, selectedPaths: selectedPaths,
+                                                    protecting: manifest.id)
+            _ = try await store.load(id: recovery.id, lineageID: target.lineageID)
+            try faultInjector.hit(.afterRecoveryPublication)
+            let orderedSelectedPaths = restoreApplicationOrder(paths: selectedPaths, current: current, saved: savedByPath)
+            return try await CheckpointRestoreTransaction(store: store, git: snapshotter.git, fileSystem: snapshotter.fileSystem,
+                                                           faultInjector: faultInjector)
+                .prepare(target: target, preview: preview, manifest: manifest, current: current,
+                         selectedPaths: orderedSelectedPaths, recoveryCheckpointID: recovery.id,
+                         operationID: admission.operationID, precreatedStaging: true)
+        } catch {
+            try? await store.discardPreparedJournal(id: admission.operationID, lineageID: target.lineageID)
+            try? FileManager.default.removeItem(at: admission.stagingRoot)
+            throw error
         }
-        return try await CheckpointRestoreTransaction(store: store, git: snapshotter.git, fileSystem: snapshotter.fileSystem,
-                                                       faultInjector: faultInjector)
-            .prepare(target: target, preview: preview, manifest: manifest, current: current,
-                     selectedPaths: orderedSelectedPaths, recoveryCheckpointID: recovery.id)
     }
 
     func restore(target: CheckpointWorktreeTarget, preview: CheckpointRestorePreview, selectedGroupIDs: Set<UUID>,
@@ -397,19 +415,71 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
         }
     }
 
-    private func restoreApplicationOrder(_ lhs: String, _ rhs: String,
+    private func beginRestoreAdmission(target: CheckpointWorktreeTarget, checkpointID: CheckpointID,
+                                       selectedPaths: Set<String>, expectedFingerprint: String) async throws -> RestoreAdmission {
+        let operationID = UUID()
+        let stagingRoot = target.path.appendingPathComponent(".alas-checkpoint-restore-\(operationID.uuidString.lowercased())", isDirectory: true)
+        let journal = CheckpointRestoreJournal(id: operationID, lineageID: target.lineageID,
+                                               checkpointID: checkpointID, recoveryCheckpointID: checkpointID,
+                                               phase: .prepared, stagingRoot: stagingRoot.path,
+                                               selectedPaths: selectedPaths.sorted(),
+                                               expectedFingerprint: expectedFingerprint,
+                                               expectedIndexChecksum: "")
+        try await store.writeJournal(journal)
+        do {
+            try snapshotter.fileSystem.createDirectoryExclusively(stagingRoot, mode: 0o700)
+            try snapshotter.fileSystem.createDirectoryExclusively(stagingRoot.appendingPathComponent("replacements", isDirectory: true), mode: 0o700)
+            try snapshotter.fileSystem.createDirectoryExclusively(stagingRoot.appendingPathComponent("backups", isDirectory: true), mode: 0o700)
+            return .init(operationID: operationID, stagingRoot: stagingRoot)
+        } catch {
+            try? await store.discardPreparedJournal(id: operationID, lineageID: target.lineageID)
+            try? FileManager.default.removeItem(at: stagingRoot)
+            throw error
+        }
+    }
+
+    private func updateRestoreAdmission(_ admission: RestoreAdmission, target: CheckpointWorktreeTarget,
+                                        checkpointID: CheckpointID, selectedPaths: Set<String>,
+                                        expectedFingerprint: String, expectedIndexChecksum: String) async throws {
+        let journal = CheckpointRestoreJournal(id: admission.operationID, lineageID: target.lineageID,
+                                               checkpointID: checkpointID, recoveryCheckpointID: checkpointID,
+                                               phase: .prepared, stagingRoot: admission.stagingRoot.path,
+                                               selectedPaths: selectedPaths.sorted(),
+                                               expectedFingerprint: expectedFingerprint,
+                                               expectedIndexChecksum: expectedIndexChecksum)
+        try await store.writeJournal(journal)
+    }
+
+    private func restoreApplicationOrder(paths: Set<String>,
                                          current: WorktreeStateSnapshot,
-                                         saved: [String: CheckpointPathState]) -> Bool {
-        if rhs.hasPrefix(lhs + "/") {
-            return restoreParentBeforeChild(lhs, current: current, saved: saved)
+                                         saved: [String: CheckpointPathState]) -> [String] {
+        let sortedPaths = paths.sorted()
+        var outgoing: [String: Set<String>] = Dictionary(uniqueKeysWithValues: sortedPaths.map { ($0, []) })
+        var incomingCount: [String: Int] = Dictionary(uniqueKeysWithValues: sortedPaths.map { ($0, 0) })
+        for parent in sortedPaths {
+            for child in sortedPaths where child.hasPrefix(parent + "/") {
+                let before = restoreParentBeforeChild(parent, current: current, saved: saved) ? parent : child
+                let after = before == parent ? child : parent
+                if outgoing[before, default: []].insert(after).inserted {
+                    incomingCount[after, default: 0] += 1
+                }
+            }
         }
-        if lhs.hasPrefix(rhs + "/") {
-            return !restoreParentBeforeChild(rhs, current: current, saved: saved)
+
+        var ready = sortedPaths.filter { incomingCount[$0, default: 0] == 0 }
+        var ordered: [String] = []
+        while let path = ready.first {
+            ready.removeFirst()
+            ordered.append(path)
+            for next in outgoing[path, default: []].sorted() {
+                incomingCount[next, default: 0] -= 1
+                if incomingCount[next, default: 0] == 0 {
+                    ready.append(next)
+                    ready.sort()
+                }
+            }
         }
-        let lhsDepth = lhs.split(separator: "/").count
-        let rhsDepth = rhs.split(separator: "/").count
-        if lhsDepth != rhsDepth { return lhsDepth > rhsDepth }
-        return lhs < rhs
+        return ordered.count == sortedPaths.count ? ordered : sortedPaths
     }
 
     private func restoreParentBeforeChild(_ parent: String,

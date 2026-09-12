@@ -73,21 +73,25 @@ struct CheckpointRestoreTransaction: Sendable {
 
     func prepare(target: CheckpointWorktreeTarget, preview: CheckpointRestorePreview,
                  manifest: WorktreeCheckpointManifest, current: WorktreeStateSnapshot,
-                 selectedPaths: [String], recoveryCheckpointID: CheckpointID) async throws -> CheckpointRestorePreparation {
+                 selectedPaths: [String], recoveryCheckpointID: CheckpointID,
+                 operationID: UUID = UUID(), precreatedStaging: Bool = false) async throws -> CheckpointRestorePreparation {
         guard current.fingerprint == preview.currentFingerprint else { throw CheckpointRestoreError.stalePreview }
-        let operationID = UUID()
         let stagingRoot = target.path.appendingPathComponent(".alas-checkpoint-restore-\(operationID.uuidString.lowercased())", isDirectory: true)
         let replacementsRoot = stagingRoot.appendingPathComponent("replacements", isDirectory: true)
         let backupsRoot = stagingRoot.appendingPathComponent("backups", isDirectory: true)
         let preparedIndex = stagingRoot.appendingPathComponent("index")
-        var createdStaging = false
         var journalWritten = false
 
         do {
-            try fileSystem.createDirectoryExclusively(stagingRoot, mode: 0o700)
-            createdStaging = true
-            try fileSystem.createDirectoryExclusively(replacementsRoot, mode: 0o700)
-            try fileSystem.createDirectoryExclusively(backupsRoot, mode: 0o700)
+            if precreatedStaging {
+                _ = try fileSystem.list(stagingRoot)
+                _ = try fileSystem.list(replacementsRoot)
+                _ = try fileSystem.list(backupsRoot)
+            } else {
+                try fileSystem.createDirectoryExclusively(stagingRoot, mode: 0o700)
+                try fileSystem.createDirectoryExclusively(replacementsRoot, mode: 0o700)
+                try fileSystem.createDirectoryExclusively(backupsRoot, mode: 0o700)
+            }
             let initialJournal = CheckpointRestoreJournal(id: operationID, lineageID: target.lineageID,
                                                            checkpointID: manifest.id, recoveryCheckpointID: recoveryCheckpointID,
                                                            phase: .prepared, stagingRoot: stagingRoot.path, selectedPaths: selectedPaths,
@@ -132,7 +136,7 @@ struct CheckpointRestoreTransaction: Sendable {
                          replacementsRoot: replacementsRoot, backupsRoot: backupsRoot)
         } catch {
             if journalWritten { try? await store.discardPreparedJournal(id: operationID, lineageID: target.lineageID) }
-            if createdStaging { try? FileManager.default.removeItem(at: stagingRoot) }
+            try? FileManager.default.removeItem(at: stagingRoot)
             throw error
         }
     }
@@ -327,12 +331,12 @@ struct CheckpointRestoreTransaction: Sendable {
               Set(journal.selectedPaths).count == journal.selectedPaths.count,
               Set(journal.completedPaths).isSubset(of: Set(journal.selectedPaths)),
               journal.pendingPath.map({ journal.selectedPaths.contains($0) }) ?? true else { throw CheckpointRestoreError.invalidJournal }
-        let root = URL(fileURLWithPath: journal.stagingRoot)
-        _ = try fileSystem.list(root)
-        _ = try fileSystem.list(root.appendingPathComponent("backups"))
-        _ = try fileSystem.list(root.appendingPathComponent("replacements"))
         let preparationIsComplete = journal.preparedIndexChecksum != nil
         if preparationIsComplete {
+            let root = URL(fileURLWithPath: journal.stagingRoot)
+            _ = try fileSystem.list(root)
+            _ = try fileSystem.list(root.appendingPathComponent("backups"))
+            _ = try fileSystem.list(root.appendingPathComponent("replacements"))
             guard Set(journal.stagingNames.values).count == journal.selectedPaths.count else { throw CheckpointRestoreError.invalidJournal }
         } else {
             guard journal.phase == .prepared, journal.stagingNames.isEmpty, journal.completedPaths.isEmpty,
@@ -576,7 +580,7 @@ struct CheckpointRestoreTransaction: Sendable {
         // Verification and the durable terminal record make the transaction
         // complete. A cleanup failure must not attempt another restore.
         do {
-            try FileManager.default.removeItem(at: URL(fileURLWithPath: journal.stagingRoot))
+            try fileSystem.removeIfPresent(URL(fileURLWithPath: journal.stagingRoot))
             try fileSystem.synchronizeDirectory(target.path)
             try await store.finishJournal(id: journal.id, lineageID: target.lineageID)
         } catch { return }

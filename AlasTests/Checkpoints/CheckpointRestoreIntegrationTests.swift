@@ -81,6 +81,36 @@ struct CheckpointRestoreIntegrationTests {
         #expect(isDirectory.boolValue)
     }
 
+    @Test func restoreOrdersStructuralParentsBeforeUnrelatedDeeperPaths() async throws {
+        let repo = try await CheckpointTestRepository.make()
+        defer { repo.remove() }
+        let root = URL(fileURLWithPath: "/private/tmp/checkpoint-restore-order-store-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try repo.write("baseline", to: "base.txt")
+        try await repo.commitAll("baseline")
+        try repo.write("saved child", to: "z/c")
+        try repo.write("saved unrelated", to: "zz/u")
+        let service = WorktreeCheckpointService(store: .init(root: root))
+        let checkpoint = try await service.createManual(target: repo.target, label: "Saved")
+        try FileManager.default.removeItem(at: repo.root.appendingPathComponent("z"))
+        try repo.write("current file", to: "z")
+        try repo.write("current unrelated", to: "zz/u")
+
+        let preview = try await service.restorePreview(target: repo.target, id: checkpoint.id, coordination: .clear)
+        let preparation = try await service.prepareRestore(target: repo.target, preview: preview,
+                                                           selectedGroupIDs: preview.selectedGroupIDs, coordination: .clear)
+
+        let parentIndex = try #require(preparation.selectedPaths.firstIndex(of: "z"))
+        let childIndex = try #require(preparation.selectedPaths.firstIndex(of: "z/c"))
+        #expect(parentIndex < childIndex)
+
+        _ = try await CheckpointRestoreTransaction(store: .init(root: root), git: LiveCheckpointGitRunner(), fileSystem: LiveCheckpointFileSystem())
+            .apply(preparation)
+
+        #expect(try repo.disk("z/c") == Data("saved child".utf8))
+        #expect(try repo.disk("zz/u") == Data("saved unrelated".utf8))
+    }
+
     @Test func fullRestorePreservesEverySavedLayerAndPublishesRecovery() async throws {
         let fixture = try await CheckpointRestoreFixture.make()
         defer { fixture.remove() }
