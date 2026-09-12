@@ -139,6 +139,28 @@ struct CheckpointDiffLoaderTests {
         #expect(diff.metadataSummary == "File mode changed from 100644 to 120000 — no content changes.")
     }
 
+    @Test func imageNamedSymlinkUsesTextDiffInsteadOfImageDecode() async throws {
+        let repo = try await CheckpointTestRepository.make()
+        defer { repo.remove() }
+        try repo.symlink("assets/old.png", at: "logo.png")
+        let service = WorktreeCheckpointService(store: .init(root: repo.root.appendingPathComponent(".git/checkpoints")))
+        let checkpoint = try await service.createManual(target: repo.target, label: "Saved")
+        try FileManager.default.removeItem(at: repo.root.appendingPathComponent("logo.png"))
+        try repo.symlink("assets/new.png", at: "logo.png")
+
+        let content = await service.diffContent(target: repo.target, id: checkpoint.id, path: "logo.png")
+        guard case .text(let diff) = content else {
+            Issue.record("Expected symlink target diff, got \(describe(content))")
+            return
+        }
+        let lines = diff.hunks.flatMap(\.lines)
+        let deletions = lines.filter { $0.kind == .delete }.map(\.text)
+        let additions = lines.filter { $0.kind == .add }.map(\.text)
+
+        #expect(deletions == ["assets/old.png"])
+        #expect(additions == ["assets/new.png"])
+    }
+
     private func describe(_ content: CheckpointDiffContent) -> String {
         switch content {
         case .text:

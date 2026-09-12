@@ -56,7 +56,9 @@ actor WorktreeCheckpointStore {
             guard catalog.schemaVersion == CheckpointCatalogSnapshot.currentSchemaVersion, catalog.lineageID == lineageID else {
                 throw CheckpointStoreError.invalidLineageID
             }
-            let reconciliation = try validManifests(lineageID: lineageID, previousSummaries: catalog.summaries)
+            let catalogIDs = Set(catalog.summaries.map(\.id))
+            let reconciliation = try validManifests(lineageID: lineageID, previousSummaries: catalog.summaries,
+                                                    allowedIDs: catalogIDs)
             let unavailable = reconciliation.unavailable + catalog.summaries.filter { existing in
                 existing.unavailableReason != nil && !reconciliation.unavailable.contains(where: { candidate in candidate.id == existing.id })
             }
@@ -95,7 +97,9 @@ actor WorktreeCheckpointStore {
             guard CheckpointBlobReference.make(for: data) == reference else { throw CheckpointStoreError.blobDoesNotMatchReference }
         }
 
-        let existingManifests = try validManifests(lineageID: manifest.lineageID).valid
+        let currentCatalogIDs = Set(currentCatalog.summaries.map(\.id))
+        let existingManifests = try validManifests(lineageID: manifest.lineageID, previousSummaries: currentCatalog.summaries,
+                                                   allowedIDs: currentCatalogIDs).valid
         var candidates = existingManifests + [manifest]
         let protected = try protectedIDsUnlocked(lineageID: manifest.lineageID).union(additionalProtectedIDs)
         var victims = retentionVictims(from: candidates, protected: protected)
@@ -389,12 +393,14 @@ actor WorktreeCheckpointStore {
         var unavailable: [WorktreeCheckpointSummary]
     }
 
-    private func validManifests(lineageID: String, previousSummaries: [WorktreeCheckpointSummary] = []) throws -> ManifestReconciliation {
+    private func validManifests(lineageID: String, previousSummaries: [WorktreeCheckpointSummary] = [],
+                                allowedIDs: Set<CheckpointID>? = nil) throws -> ManifestReconciliation {
         try prepare(lineageID)
         let layout = paths(lineageID)
         var result = ManifestReconciliation(valid: [], unavailable: [])
         for entry in try fileSystem.list(layout.entries) where !entry.lastPathComponent.hasPrefix(".") {
             guard let id = UUID(uuidString: entry.lastPathComponent) else { continue }
+            if let allowedIDs, !allowedIDs.contains(id) { continue }
             do {
                 let manifest = try readManifest(id: id, lineageID: lineageID)
                 do {
@@ -555,8 +561,14 @@ actor WorktreeCheckpointStore {
         let journalManifests = journals.flatMap { journal in
             [journal.checkpointID, journal.recoveryCheckpointID].compactMap { try? readManifest(id: $0, lineageID: journal.lineageID) }
         }
-        let protected = Set((manifests + journalManifests).flatMap { references(in: $0) })
-        for url in try fileSystem.list(layout.blobs) where shouldRemoveBlob(url, protected: protected) { try fileSystem.removeIfPresent(url) }
+        let protectedManifests = manifests + journalManifests
+        let protectedIDs = Set(protectedManifests.map(\.id))
+        for url in try fileSystem.list(layout.entries) {
+            guard let id = UUID(uuidString: url.lastPathComponent), !protectedIDs.contains(id) else { continue }
+            try removeEntry(id, layout: layout)
+        }
+        let protectedBlobs = Set(protectedManifests.flatMap { references(in: $0) })
+        for url in try fileSystem.list(layout.blobs) where shouldRemoveBlob(url, protected: protectedBlobs) { try fileSystem.removeIfPresent(url) }
     }
 
     private func removeAbandonedBlobTemporaries(layout: Layout) throws {

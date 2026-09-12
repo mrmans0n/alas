@@ -136,7 +136,9 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
                 before = .init(state: state.head, data: try current.payload(state.head))
             }
             let after = try currentCheckpointDiffSide(target: target, path: path)
-            if ImageFileType.isSupported(relativePath: path) {
+            if ImageFileType.isSupported(relativePath: path),
+               before.state.kind != .symlink,
+               after.state.kind != .symlink {
                 func side(_ diffSide: CheckpointDiffSide) -> ImageDiffSide {
                     guard diffSide.state.kind != .absent, let data = diffSide.data else { return .missing }
                     guard let image = NSImage(data: data) else {
@@ -209,7 +211,8 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
             try FileManager.default.setAttributes([.posixPermissions: side.state.mode == "100755" ? 0o755 : 0o644],
                                                   ofItemAtPath: url.path)
         case .symlink:
-            try LiveCheckpointFileSystem().createSymlink(target: side.data ?? Data(), at: url)
+            try (side.data ?? Data()).write(to: url)
+            try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path)
         }
 
         return filename

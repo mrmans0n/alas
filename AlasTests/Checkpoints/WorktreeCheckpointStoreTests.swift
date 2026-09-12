@@ -224,6 +224,28 @@ struct WorktreeCheckpointStoreTests {
         #expect(labels.filter { $0.hasPrefix("Manual") }.count == 20)
     }
 
+    @Test func catalogRefreshDoesNotResurrectPrunedEntriesLeftAfterCatalogPublication() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = WorktreeCheckpointStore(root: root, limits: .init(manualCount: 1, recoveryCount: 5, bytes: 100_000))
+        let first = try publication(lineageID: lineageA, label: "First", bytes: Data([1]), createdAt: Date(timeIntervalSince1970: 1))
+        let second = try publication(lineageID: lineageA, label: "Second", bytes: Data([2]), createdAt: Date(timeIntervalSince1970: 2))
+        _ = try await store.publish(first)
+        _ = try await store.publish(second)
+        let orphan = root
+            .appendingPathComponent(lineageA)
+            .appendingPathComponent("entries")
+            .appendingPathComponent(first.manifest.id.uuidString.lowercased(), isDirectory: true)
+        try FileManager.default.createDirectory(at: orphan, withIntermediateDirectories: true)
+        try JSONEncoder.checkpoints.encode(first.manifest).write(to: orphan.appendingPathComponent("manifest.json"))
+
+        let catalog = try await WorktreeCheckpointStore(root: root, limits: .init(manualCount: 1, recoveryCount: 5, bytes: 100_000))
+            .catalog(lineageID: lineageA)
+
+        #expect(catalog.summaries.map(\.label) == ["Second"])
+        #expect(!FileManager.default.fileExists(atPath: orphan.path))
+    }
+
     @Test func sharedReferencesCountOnceTowardByteLimit() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
