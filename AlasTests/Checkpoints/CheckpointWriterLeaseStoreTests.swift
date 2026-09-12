@@ -17,6 +17,30 @@ struct CheckpointWriterLeaseStoreTests {
         #expect(store.activeLeaseCount(lineageID: lineageID, excludingInstanceID: "other-instance") == 1)
     }
 
+    @Test func liveReusedPidDoesNotKeepStaleLeaseActive() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lineageID = UUID().uuidString.lowercased()
+        let directory = root.appendingPathComponent(lineageID, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let record = CheckpointWriterLeaseRecord(
+            schemaVersion: CheckpointWriterLeaseRecord.schemaVersion,
+            instanceID: "stale-instance",
+            sessionID: "stale-session",
+            pid: Int64(getpid()),
+            zmxSessionName: nil,
+            remoteHost: nil,
+            createdAt: Date(timeIntervalSince1970: 1)
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(record).write(to: directory.appendingPathComponent("stale.json"))
+        let store = CheckpointWriterLeaseStore(root: root, activePersistentSessionNames: { [] })
+
+        #expect(store.activeLeaseCount(lineageID: lineageID, excludingInstanceID: "current-instance") == 0)
+        #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("stale.json").path))
+    }
+
     @Test func releaseRemovesSessionFromAllLineages() throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

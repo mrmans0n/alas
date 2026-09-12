@@ -346,7 +346,7 @@ struct CheckpointRestoreTransaction: Sendable {
         }
         for path in journal.selectedPaths {
             try validateRestorePath(path, selectedPaths: journal.selectedPaths, under: target.path)
-            guard !path.split(separator: "/").contains(".git"), !path.hasPrefix(".alas-checkpoint-restore-") else {
+            guard !path.split(separator: "/").contains(".git"), !containsReservedRestoreDirectory(path) else {
                 throw CheckpointRestoreError.invalidJournal
             }
             if preparationIsComplete {
@@ -374,6 +374,13 @@ struct CheckpointRestoreTransaction: Sendable {
         for marker in ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer"] {
             let path = try await gitPath(marker, target: target)
             if FileManager.default.fileExists(atPath: path.path) { throw CheckpointRestoreError.blocked(.gitOperation) }
+        }
+    }
+
+    private func containsReservedRestoreDirectory(_ path: String) -> Bool {
+        path.split(separator: "/").contains { component in
+            let prefix = ".alas-checkpoint-restore-"
+            return component.hasPrefix(prefix) && UUID(uuidString: String(component.dropFirst(prefix.count))) != nil
         }
     }
 

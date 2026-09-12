@@ -58,6 +58,25 @@ struct CheckpointRestoreIntegrationTests {
         #expect(!FileManager.default.fileExists(atPath: repo.root.appendingPathComponent("config/local.json").path))
     }
 
+    @Test func restoreAllowsUserFileSharingRestorePrefix() async throws {
+        let repo = try await CheckpointTestRepository.make()
+        defer { repo.remove() }
+        let root = URL(fileURLWithPath: "/private/tmp/checkpoint-restore-prefix-store-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = ".alas-checkpoint-restore-notes"
+        try repo.write("saved notes", to: path)
+        try await repo.commitAll("baseline")
+        let service = WorktreeCheckpointService(store: .init(root: root))
+        let checkpoint = try await service.createManual(target: repo.target, label: "Saved")
+        try repo.write("local notes", to: path)
+
+        let preview = try await service.restorePreview(target: repo.target, id: checkpoint.id, coordination: .clear)
+        _ = try await service.restore(target: repo.target, preview: preview,
+                                      selectedGroupIDs: preview.selectedGroupIDs, coordination: .clear)
+
+        #expect(try repo.disk(path) == Data("saved notes".utf8))
+    }
+
     @Test func restoreReplacesTrackedFileWithSavedDirectoryTransition() async throws {
         let repo = try await CheckpointTestRepository.make()
         defer { repo.remove() }

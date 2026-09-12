@@ -91,7 +91,7 @@ struct CheckpointWriterLeaseStore: Sendable {
     }
 
     private func recordIsActive(_ record: CheckpointWriterLeaseRecord, persistentSessionNames: Set<String>) -> Bool {
-        if ACPProcessLiveness.pidAlive(record.pid) { return true }
+        if ACPProcessLiveness.pidMatchesLease(pid: record.pid, createdAt: record.createdAt) { return true }
         guard let zmxSessionName = record.zmxSessionName else { return false }
         if record.remoteHost != nil { return true }
         return persistentSessionNames.contains(zmxSessionName)
