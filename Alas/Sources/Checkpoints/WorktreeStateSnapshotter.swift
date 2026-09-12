@@ -117,7 +117,7 @@ struct WorktreeStateSnapshotter: Sendable {
                 diskState = try self.diskState(
                     path: path,
                     root: target.path,
-                    tracked: headState.kind != .absent || indexState.kind != .absent,
+                    directoryAsAbsent: headState.kind != .absent || indexState.kind != .absent || includingPaths.contains(path),
                     payloads: &payloads,
                     retainingPayloads: retainingPayloads
                 )
@@ -272,7 +272,7 @@ struct WorktreeStateSnapshotter: Sendable {
         return entry.mode == "120000" ? .symlink(blob: blob) : .regular(blob: blob, executable: entry.mode == "100755")
     }
 
-    private func diskState(path: String, root: URL, tracked: Bool, payloads: inout [String: Data],
+    private func diskState(path: String, root: URL, directoryAsAbsent: Bool, payloads: inout [String: Data],
                            retainingPayloads: Bool) throws -> CheckpointFileState {
         do {
             guard let metadata = try fileSystem.metadata(root: root, relativePath: path) else { return .absent }
@@ -286,7 +286,7 @@ struct WorktreeStateSnapshotter: Sendable {
             case .symlink(let bytes):
                 return .symlink(blob: add(bytes, to: &payloads, retainingPayload: retainingPayloads))
             }
-        } catch CheckpointFileSystemError.unsupportedLeaf where tracked {
+        } catch CheckpointFileSystemError.unsupportedLeaf where directoryAsAbsent {
             var isDirectory: ObjCBool = false
             let url = try fileSystem.validateRelativePath(path, under: root)
             if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue {

@@ -75,6 +75,27 @@ struct CheckpointRestorePreviewTests {
         #expect(blocked.blocker == .dirtyEditorBuffer)
     }
 
+    @Test func previewTreatsCurrentDirectoryAsAbsentForSavedUntrackedLeaf() async throws {
+        let repo = try await CheckpointTestRepository.make()
+        defer { repo.remove() }
+        let root = URL(fileURLWithPath: "/private/tmp/checkpoint-untracked-directory-preview-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try repo.write("baseline\n", to: "README.md")
+        try await repo.commitAll("baseline")
+        try repo.write("saved untracked\n", to: "config")
+        let service = WorktreeCheckpointService(store: .init(root: root))
+        let checkpoint = try await service.createManual(target: repo.target, label: "Saved")
+        try FileManager.default.removeItem(at: repo.root.appendingPathComponent("config"))
+        try repo.write("later child\n", to: "config/local.json")
+
+        let preview = try await service.restorePreview(target: repo.target, id: checkpoint.id, coordination: .clear)
+
+        let group = try #require(preview.groups.first { $0.memberPaths.contains("config/local.json") })
+        #expect(group.memberPaths == ["config", "config/local.json"])
+        #expect(group.effects.map(\.relativePath).contains("config"))
+        #expect(group.effects.map(\.relativePath).contains("config/local.json"))
+    }
+
     @Test func blockersHaveDeterministicPriorityAndScope() {
         var blockers: Set<CheckpointRestoreBlocker> = [.corruptCheckpoint, .dirtyEditorBuffer, .activeSession, .otherGitMutation, .indexLock, .gitOperation, .changedHEAD, .lineageMismatch, .interruptedRestore]
         for expected: CheckpointRestoreBlocker in [.interruptedRestore, .lineageMismatch, .changedHEAD, .gitOperation, .indexLock, .otherGitMutation, .dirtyEditorBuffer, .activeSession, .corruptCheckpoint] {
