@@ -27,6 +27,11 @@ struct CheckpointCaptureHooks: Sendable {
 }
 
 actor WorktreeCheckpointService: WorktreeCheckpointServicing {
+    private struct CheckpointDiffSide: Sendable {
+        let state: CheckpointFileState
+        let data: Data?
+    }
+
     private let store: WorktreeCheckpointStore
     private let snapshotter: WorktreeStateSnapshotter
     private let hooks: CheckpointCaptureHooks
@@ -119,47 +124,37 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
             }
             let saved = try await store.load(id: id, lineageID: target.lineageID)
             _ = try snapshotter.fileSystem.validateRelativePath(path, under: target.path)
-            let before: Data?
+            let before: CheckpointDiffSide
             if let state = saved.paths.first(where: { $0.relativePath == path })?.worktree {
-                if let blob = state.blob { before = try await store.readBlob(blob, lineageID: target.lineageID) }
-                else { before = nil }
+                before = .init(state: state, data: try await checkpointDiffPayload(state, lineageID: target.lineageID))
             } else {
                 let current = try await snapshotter.snapshot(target: target, includingPaths: [path])
                 guard current.headOID == saved.headOID, let state = current.paths[path] else {
                     return .unavailable("The checkpoint baseline is unavailable for this path.")
                 }
-                before = try current.payload(state.head)
+                before = .init(state: state.head, data: try current.payload(state.head))
             }
-            let after: Data?
-            if try snapshotter.fileSystem.metadata(root: target.path, relativePath: path) == nil { after = nil }
-            else {
-                switch try snapshotter.fileSystem.readLeaf(root: target.path, relativePath: path) {
-                case .regular(let data, _), .symlink(let data): after = data
-                }
-            }
+            let after = try currentCheckpointDiffSide(target: target, path: path)
             if ImageFileType.isSupported(relativePath: path) {
-                func side(_ data: Data?) -> ImageDiffSide {
-                    guard let data else { return .missing }
-                    guard let image = NSImage(data: data) else { return .failed(.init(message: "Image could not be decoded.")) }
+                func side(_ diffSide: CheckpointDiffSide) -> ImageDiffSide {
+                    guard diffSide.state.kind != .absent, let data = diffSide.data else { return .missing }
+                    guard let image = NSImage(data: data) else {
+                        return .failed(.init(message: "Image could not be decoded."))
+                    }
                     return GitService.imageSide(forDecodedImage: image)
                 }
                 return .image(.init(before: side(before), after: side(after), oldPath: nil,
-                                    kind: before == nil ? .added : after == nil ? .deleted : .modified))
+                                    kind: before.state.kind == .absent ? .added : after.state.kind == .absent ? .deleted : .modified))
             }
-            let binary = [before, after].compactMap { $0 }.contains { $0.contains(0) || String(data: $0, encoding: .utf8) == nil }
-            if binary { return .binary(beforeByteCount: before.map { Int64($0.count) }, afterByteCount: after.map { Int64($0.count) }) }
+            if before.data == after.data, let metadataSummary = checkpointDiffMetadataSummary(before: before.state, after: after.state) {
+                return .text(.init(hunks: [], isBinary: false, metadataSummary: metadataSummary))
+            }
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent("checkpoint-diff-\(UUID().uuidString)")
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false,
                                                     attributes: [.posixPermissions: 0o700])
             defer { try? FileManager.default.removeItem(at: directory) }
-            if let before {
-                try before.write(to: directory.appendingPathComponent("before"))
-            }
-            if let after {
-                try after.write(to: directory.appendingPathComponent("after"))
-            }
-            let beforePath = before == nil ? "/dev/null" : "before"
-            let afterPath = after == nil ? "/dev/null" : "after"
+            let beforePath = try writeCheckpointDiffSide(before, filename: "before", in: directory)
+            let afterPath = try writeCheckpointDiffSide(after, filename: "after", in: directory)
             let result = try await snapshotter.git.run(["diff", "--no-index", "--no-ext-diff", "--no-textconv", "--no-color",
                                                        "--src-prefix=checkpoint/", "--dst-prefix=current/", "--", beforePath, afterPath],
                                                       cwd: directory, environment: [:])
@@ -167,14 +162,66 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
                 throw ProcessError.nonZeroExit(result.exitCode, result.stderr)
             }
             var diff = DiffParser.parse(result.stdout)
-            if diff.hunks.isEmpty, diff.metadataSummary == nil, before == nil || after == nil {
-                diff.metadataSummary = before == nil ? "Empty file added." : "Empty file deleted."
+            if diff.hunks.isEmpty, diff.metadataSummary == nil {
+                if before.state.kind == .absent || after.state.kind == .absent {
+                    diff.metadataSummary = before.state.kind == .absent ? "Empty file added." : "Empty file deleted."
+                } else {
+                    diff.metadataSummary = checkpointDiffMetadataSummary(before: before.state, after: after.state)
+                }
             }
-            if diff.isBinary { return .binary(beforeByteCount: before.map { Int64($0.count) }, afterByteCount: after.map { Int64($0.count) }) }
+            if diff.isBinary, diff.metadataSummary == nil {
+                return .binary(beforeByteCount: before.data.map { Int64($0.count) }, afterByteCount: after.data.map { Int64($0.count) })
+            }
             return .text(diff)
         } catch {
             return .unavailable("The checkpoint diff could not be loaded.")
         }
+    }
+
+    private func checkpointDiffPayload(_ state: CheckpointFileState, lineageID: String) async throws -> Data? {
+        guard let blob = state.blob else { return nil }
+        return try await store.readBlob(blob, lineageID: lineageID)
+    }
+
+    private func currentCheckpointDiffSide(target: CheckpointWorktreeTarget, path: String) throws -> CheckpointDiffSide {
+        guard try snapshotter.fileSystem.metadata(root: target.path, relativePath: path) != nil else {
+            return .init(state: .absent, data: nil)
+        }
+
+        switch try snapshotter.fileSystem.readLeaf(root: target.path, relativePath: path) {
+        case .regular(let data, let executable):
+            return .init(state: .regular(blob: .make(for: data), executable: executable), data: data)
+        case .symlink(let data):
+            return .init(state: .symlink(blob: .make(for: data)), data: data)
+        }
+    }
+
+    private func writeCheckpointDiffSide(_ side: CheckpointDiffSide, filename: String, in directory: URL) throws -> String {
+        guard side.state.kind != .absent else { return "/dev/null" }
+        let url = directory.appendingPathComponent(filename, isDirectory: false)
+
+        switch side.state.kind {
+        case .absent:
+            return "/dev/null"
+        case .regular:
+            try (side.data ?? Data()).write(to: url)
+            try FileManager.default.setAttributes([.posixPermissions: side.state.mode == "100755" ? 0o755 : 0o644],
+                                                  ofItemAtPath: url.path)
+        case .symlink:
+            try LiveCheckpointFileSystem().createSymlink(target: side.data ?? Data(), at: url)
+        }
+
+        return filename
+    }
+
+    private func checkpointDiffMetadataSummary(before: CheckpointFileState, after: CheckpointFileState) -> String? {
+        if before.mode != after.mode, let beforeMode = before.mode, let afterMode = after.mode {
+            return "File mode changed from \(beforeMode) to \(afterMode) — no content changes."
+        }
+        if before.kind != after.kind {
+            return "File type changed from \(before.kind.rawValue) to \(after.kind.rawValue) — no content changes."
+        }
+        return nil
     }
 
     private func previewGit(_ args: [String], target: CheckpointWorktreeTarget) async throws -> String {

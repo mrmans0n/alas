@@ -318,7 +318,7 @@ actor WorktreeCheckpointStore {
     private func reclaimAbandonedLineageLock(_ lock: URL) throws -> Bool {
         let ownerURL = lock.appendingPathComponent("owner.json")
         if let owner = try? JSONDecoder.checkpoints.decode(CheckpointStoreLockOwner.self, from: fileSystem.fileData(ownerURL)) {
-            guard !processIsAlive(owner.pid) || Date().timeIntervalSince(owner.createdAt) > lockStaleAge else { return false }
+            guard !processIsAlive(owner.pid) else { return false }
             try removeDirectoryTreeIfPresent(lock)
             return true
         }

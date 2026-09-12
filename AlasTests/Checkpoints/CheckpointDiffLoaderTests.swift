@@ -73,6 +73,60 @@ struct CheckpointDiffLoaderTests {
         #expect(deletion.metadataSummary == "Empty file deleted.")
     }
 
+    @Test func modeOnlyDiffRemainsVisible() async throws {
+        let repo = try await CheckpointTestRepository.make()
+        defer { repo.remove() }
+        try repo.write("same\n", to: "script.sh")
+        let fileURL = repo.root.appendingPathComponent("script.sh")
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: fileURL.path)
+        let service = WorktreeCheckpointService(store: .init(root: repo.root.appendingPathComponent(".git/checkpoints")))
+        let checkpoint = try await service.createManual(target: repo.target, label: "Saved")
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fileURL.path)
+
+        guard case .text(let diff) = await service.diffContent(target: repo.target, id: checkpoint.id, path: "script.sh") else {
+            Issue.record("Expected text diff")
+            return
+        }
+
+        #expect(diff.hunks.isEmpty)
+        #expect(diff.metadataSummary == "File mode changed from 100644 to 100755 — no content changes.")
+    }
+
+    @Test func fileKindOnlyDiffRemainsVisible() async throws {
+        let repo = try await CheckpointTestRepository.make()
+        defer { repo.remove() }
+        try repo.write("target", to: "linkish")
+        try repo.write("target\n", to: "target")
+        let fileURL = repo.root.appendingPathComponent("linkish")
+        let service = WorktreeCheckpointService(store: .init(root: repo.root.appendingPathComponent(".git/checkpoints")))
+        let checkpoint = try await service.createManual(target: repo.target, label: "Saved")
+        try FileManager.default.removeItem(at: fileURL)
+        try FileManager.default.createSymbolicLink(atPath: fileURL.path, withDestinationPath: "target")
+
+        let content = await service.diffContent(target: repo.target, id: checkpoint.id, path: "linkish")
+        guard case .text(let diff) = content else {
+            Issue.record("Expected text diff, got \(describe(content))")
+            return
+        }
+
+        #expect(diff.isBinary == false)
+        #expect(diff.hunks.isEmpty)
+        #expect(diff.metadataSummary == "File mode changed from 100644 to 120000 — no content changes.")
+    }
+
+    private func describe(_ content: CheckpointDiffContent) -> String {
+        switch content {
+        case .text:
+            return "text"
+        case .image:
+            return "image"
+        case .binary(let beforeByteCount, let afterByteCount):
+            return "binary(\(String(describing: beforeByteCount)), \(String(describing: afterByteCount)))"
+        case .unavailable(let message):
+            return "unavailable(\(message))"
+        }
+    }
+
     @Test @MainActor func imagesKeepBothSidesAndFrameCounts() async throws {
         let repo = try await CheckpointTestRepository.make()
         defer { repo.remove() }
