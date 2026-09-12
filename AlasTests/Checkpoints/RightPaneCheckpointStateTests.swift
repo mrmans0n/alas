@@ -319,6 +319,36 @@ struct RightPaneCheckpointStateTests {
         #expect(state.hasInterruptedCheckpointRestore)
     }
 
+    @Test func queuedStageMutationRevalidatesJournalsBeforeTouchingIndex() async throws {
+        let repository = try await CheckpointTestRepository.make()
+        defer { repository.remove() }
+        try repository.write("changed\n", to: "file.txt")
+        let service = try RecordingCheckpointService(target: repository.target)
+        let state = makeState(repository: repository, service: service)
+        await state.refresh()
+        #expect(!state.checkpointMutationsDisabled)
+        let changedFile = try #require(state.changes.first { $0.path == "file.txt" })
+
+        await service.installJournal(.init(
+            id: UUID(uuidString: "55555555-5555-5555-5555-555555555555")!,
+            lineageID: repository.target.lineageID,
+            checkpointID: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
+            recoveryCheckpointID: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
+            phase: .prepared,
+            stagingRoot: "staging",
+            selectedPaths: ["selected.swift"],
+            expectedFingerprint: "fingerprint",
+            expectedIndexChecksum: "checksum"
+        ))
+
+        state.stageAll([changedFile])
+
+        #expect(!(await state.finishPendingStageMutations()))
+        #expect(state.hasInterruptedCheckpointRestore)
+        let stagedNames = try await Process.git(["diff", "--cached", "--name-only"], cwd: repository.root)
+        #expect(stagedNames.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+
     @Test func unavailableCheckpointSummaryEvictsExpandedManifestCache() async throws {
         let repository = try await CheckpointTestRepository.make()
         defer { repository.remove() }

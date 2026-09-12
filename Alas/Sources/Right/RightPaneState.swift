@@ -759,6 +759,16 @@ final class RightPaneState: GGSplitCommitServicing {
         return checkpointMutationsDisabled
     }
 
+    private func checkpointMutationAllowedAfterJournalRevalidation() async -> Bool {
+        !(await checkpointMutationsDisabledAfterJournalRevalidation())
+    }
+
+    private func requireCheckpointMutationAllowedAfterJournalRevalidation() async throws {
+        guard await checkpointMutationAllowedAfterJournalRevalidation() else {
+            throw GGMutationError.operationInFlight
+        }
+    }
+
     func requestCheckpointCreation() {
         guard !checkpointMutationsDisabled else { return }
         lastCheckpointStatus = nil
@@ -1903,7 +1913,7 @@ final class RightPaneState: GGSplitCommitServicing {
         guard let pending = pendingGGReorder,
               model.hasChanges
         else { throw GGMutationError.staleConfirmation }
-        guard !checkpointMutationsDisabled else { throw GGMutationError.operationInFlight }
+        try await requireCheckpointMutationAllowedAfterJournalRevalidation()
         guard mergeOp.current == nil else { throw GGMutationError.blockingGitOperation }
         try await ggMutationCoordinator.apply(
             .reorder(order: model.orderedIDs),
@@ -1932,7 +1942,7 @@ final class RightPaneState: GGSplitCommitServicing {
         guard let pending = pendingGGRestack, pending.hasWork else {
             throw GGMutationError.staleConfirmation
         }
-        guard !checkpointMutationsDisabled else { throw GGMutationError.operationInFlight }
+        try await requireCheckpointMutationAllowedAfterJournalRevalidation()
         guard mergeOp.current == nil else { throw GGMutationError.blockingGitOperation }
         // The stack identity only carries the base name + head SHA, so a base
         // ref that advanced since the preview was built would still match.
@@ -1943,7 +1953,7 @@ final class RightPaneState: GGSplitCommitServicing {
             pendingGGRestack = GGRestackPresentation(prepared: revalidated)
             throw GGMutationError.staleConfirmation
         }
-        guard !checkpointMutationsDisabled else { throw GGMutationError.operationInFlight }
+        try await requireCheckpointMutationAllowedAfterJournalRevalidation()
         try await ggMutationCoordinator.apply(.restack, confirmedAgainst: revalidated.snapshot)
         pendingGGRestack = nil
     }
@@ -2042,7 +2052,7 @@ final class RightPaneState: GGSplitCommitServicing {
         planToken: String,
         confirmedAgainst identity: GGStackIdentity
     ) async throws {
-        guard !checkpointMutationsDisabled else { throw GGMutationError.operationInFlight }
+        try await requireCheckpointMutationAllowedAfterJournalRevalidation()
         try await ggMutationCoordinator.apply(
             .applySplit(planURL: planURL, target: target, planToken: planToken),
             confirmedAgainst: identity
@@ -2080,11 +2090,12 @@ final class RightPaneState: GGSplitCommitServicing {
     func performGGDrop() {
         guard !checkpointMutationsDisabled else { return }
         guard let prepared = pendingGGDropPrepared else { return }
-        pendingGGDrop = nil
-        pendingGGDropPrepared = nil
-        guard let operation = ggMutationCoordinator.startApplying(prepared) else { return }
         let actionGeneration = ggActionState.actionGeneration
         Task { @MainActor in
+            guard await checkpointMutationAllowedAfterJournalRevalidation() else { return }
+            pendingGGDrop = nil
+            pendingGGDropPrepared = nil
+            guard let operation = ggMutationCoordinator.startApplying(prepared) else { return }
             do {
                 try await operation.value
             } catch let error as GGMutationError {
@@ -2144,7 +2155,7 @@ final class RightPaneState: GGSplitCommitServicing {
         else {
             throw GGMutationError.staleConfirmation
         }
-        guard !checkpointMutationsDisabled else { throw GGMutationError.operationInFlight }
+        try await requireCheckpointMutationAllowedAfterJournalRevalidation()
         let request = GGMutationRequest.unstack(
             target: model.targetID,
             name: name,
@@ -2166,7 +2177,7 @@ final class RightPaneState: GGSplitCommitServicing {
         }
 
         pendingGGUnstackPrepared = freshPrepared
-        guard !checkpointMutationsDisabled else { throw GGMutationError.operationInFlight }
+        try await requireCheckpointMutationAllowedAfterJournalRevalidation()
         try await ggMutationCoordinator.apply(freshPrepared)
         pendingGGUnstack = nil
         pendingGGUnstackPrepared = nil
@@ -2420,25 +2431,27 @@ final class RightPaneState: GGSplitCommitServicing {
     }
 
     private func startGGLanding(_ prepared: GGPreparedMutation) {
-        guard !checkpointMutationsDisabled else {
-            ggLandingStore.fail(
+        Task { @MainActor in
+            guard await checkpointMutationAllowedAfterJournalRevalidation() else {
+                ggLandingStore.fail(
+                    projectId: worktree.projectId,
+                    message: GGErrorPresentation.message(for: GGMutationError.operationInFlight)
+                )
+                return
+            }
+            guard let operation = ggMutationCoordinator.startApplying(prepared) else {
+                ggLandingStore.fail(
+                    projectId: worktree.projectId,
+                    message: GGErrorPresentation.message(for: GGMutationError.operationInFlight)
+                )
+                return
+            }
+            ggLandingStore.attach(
                 projectId: worktree.projectId,
-                message: GGErrorPresentation.message(for: GGMutationError.operationInFlight)
+                task: completeGGMutation(operation, request: prepared.request),
+                cancel: { operation.cancel() }
             )
-            return
         }
-        guard let operation = ggMutationCoordinator.startApplying(prepared) else {
-            ggLandingStore.fail(
-                projectId: worktree.projectId,
-                message: GGErrorPresentation.message(for: GGMutationError.operationInFlight)
-            )
-            return
-        }
-        ggLandingStore.attach(
-            projectId: worktree.projectId,
-            task: completeGGMutation(operation, request: prepared.request),
-            cancel: { operation.cancel() }
-        )
     }
 
     @discardableResult
@@ -2447,20 +2460,24 @@ final class RightPaneState: GGSplitCommitServicing {
         confirmedAgainst identity: GGStackIdentity? = nil
     ) -> Task<Void, Never>? {
         guard !checkpointMutationsDisabled else { return nil }
-        guard let operation = ggMutationCoordinator.startApplying(
-            request,
-            confirmedAgainst: identity
-        ) else { return nil }
-        let completion = completeGGMutation(operation, request: request)
-        return Task { _ = try? await completion.value }
+        return Task { @MainActor in
+            guard await checkpointMutationAllowedAfterJournalRevalidation() else { return }
+            guard let operation = ggMutationCoordinator.startApplying(
+                request,
+                confirmedAgainst: identity
+            ) else { return }
+            _ = try? await completeGGMutation(operation, request: request).value
+        }
     }
 
     @discardableResult
     func runGGMutation(_ prepared: GGPreparedMutation) -> Task<Void, Never>? {
         guard !checkpointMutationsDisabled else { return nil }
-        guard let operation = ggMutationCoordinator.startApplying(prepared) else { return nil }
-        let completion = completeGGMutation(operation, request: prepared.request)
-        return Task { _ = try? await completion.value }
+        return Task { @MainActor in
+            guard await checkpointMutationAllowedAfterJournalRevalidation() else { return }
+            guard let operation = ggMutationCoordinator.startApplying(prepared) else { return }
+            _ = try? await completeGGMutation(operation, request: prepared.request).value
+        }
     }
 
     func ggTargetForCommitPublish() -> GGStackTargetIdentity? {
@@ -2512,7 +2529,7 @@ final class RightPaneState: GGSplitCommitServicing {
         target: GGStackTargetIdentity? = nil,
         markExecutionStarted: @escaping @MainActor () -> Void = {}
     ) async throws {
-        guard !checkpointMutationsDisabled else { throw GGMutationError.operationInFlight }
+        try await requireCheckpointMutationAllowedAfterJournalRevalidation()
         guard let operation = ggMutationCoordinator.startApplying(
             .sync,
             confirmedAgainst: nil,
@@ -3266,6 +3283,11 @@ final class RightPaneState: GGSplitCommitServicing {
     private func runStageMutationQueue() async {
         while let mutation = pendingStageMutations.first(where: { !$0.hasAppliedGitMutation }) {
             do {
+                guard await checkpointMutationAllowedAfterJournalRevalidation() else {
+                    pendingStageMutationsSucceeded = false
+                    pendingStageMutations.removeAll { $0.id == mutation.id }
+                    continue
+                }
                 if mutation.target == .staged {
                     try await git.stageAll(worktreePath: worktree.path, files: mutation.gitPaths)
                 } else {
@@ -3465,7 +3487,7 @@ final class RightPaneState: GGSplitCommitServicing {
 
     @MainActor
     private func runDiscard(_ pending: PendingDiscard) async {
-        guard !checkpointMutationsDisabled else { return }
+        guard await checkpointMutationAllowedAfterJournalRevalidation() else { return }
         discardOperationInFlight = true
         defer { discardOperationInFlight = false }
         let paths = pending.paths
@@ -3501,6 +3523,7 @@ final class RightPaneState: GGSplitCommitServicing {
         Task { @MainActor in
             defer { self.stashOperationInFlight = false }
             do {
+                guard await self.checkpointMutationAllowedAfterJournalRevalidation() else { return }
                 let result = try await self.git.pushStash(
                     worktreePath: self.worktree.path,
                     message: message,
@@ -3573,6 +3596,7 @@ final class RightPaneState: GGSplitCommitServicing {
         Task { @MainActor in
             defer { self.stashOperationInFlight = false }
             do {
+                guard await self.checkpointMutationAllowedAfterJournalRevalidation() else { return }
                 try await self.git.dropStash(worktreePath: self.worktree.path, stash: pending.stash)
                 await self.refresh()
             } catch {
@@ -3599,6 +3623,7 @@ final class RightPaneState: GGSplitCommitServicing {
         Task { @MainActor in
             defer { self.stashOperationInFlight = false }
             do {
+                guard await self.checkpointMutationAllowedAfterJournalRevalidation() else { return }
                 let result = try await operation()
                 await self.refresh()
                 self.handleStashOperationResult(result)
@@ -3891,6 +3916,7 @@ final class RightPaneState: GGSplitCommitServicing {
         guard !checkpointMutationsDisabled else { return }
         Task { @MainActor in
             do {
+                guard await self.checkpointMutationAllowedAfterJournalRevalidation() else { return }
                 let result = try await git.merge(worktreePath: worktree.path, branch: branch)
                 await refresh()
                 handleOperationResult(result)
@@ -3905,6 +3931,7 @@ final class RightPaneState: GGSplitCommitServicing {
         guard !checkpointMutationsDisabled else { return }
         Task { @MainActor in
             do {
+                guard await self.checkpointMutationAllowedAfterJournalRevalidation() else { return }
                 let result = try await git.rebase(worktreePath: worktree.path, onto: onto)
                 await refresh()
                 handleOperationResult(result)
@@ -3919,6 +3946,7 @@ final class RightPaneState: GGSplitCommitServicing {
         guard !checkpointMutationsDisabled else { return }
         Task { @MainActor in
             do {
+                guard await self.checkpointMutationAllowedAfterJournalRevalidation() else { return }
                 let result = try await git.cherryPick(worktreePath: worktree.path, sha: sha)
                 await refresh()
                 handleOperationResult(result)
@@ -3943,6 +3971,7 @@ final class RightPaneState: GGSplitCommitServicing {
         Task { @MainActor in
             defer { pullInFlight = false }
             do {
+                guard await self.checkpointMutationAllowedAfterJournalRevalidation() else { return }
                 let result = try await git.pull(worktreePath: worktree.path)
                 await refresh()
                 // pull() already fetched upstream; skip the redundant network
@@ -3966,6 +3995,7 @@ final class RightPaneState: GGSplitCommitServicing {
         guard !checkpointMutationsDisabled else { return }
         Task { @MainActor in
             do {
+                guard await self.checkpointMutationAllowedAfterJournalRevalidation() else { return }
                 let result = try await git.revert(worktreePath: worktree.path, sha: sha)
                 await refresh()
                 handleOperationResult(result)
@@ -3981,6 +4011,7 @@ final class RightPaneState: GGSplitCommitServicing {
         Task { @MainActor in
             guard let op = mergeOp.current else { return }
             do {
+                guard await self.checkpointMutationAllowedAfterJournalRevalidation() else { return }
                 let result = try await git.continueOperation(worktreePath: worktree.path, op: op)
                 await refresh()
                 handleOperationResult(result)
@@ -3996,6 +4027,7 @@ final class RightPaneState: GGSplitCommitServicing {
         Task { @MainActor in
             guard let op = mergeOp.current else { return }
             do {
+                guard await self.checkpointMutationAllowedAfterJournalRevalidation() else { return }
                 try await git.abortOperation(worktreePath: worktree.path, op: op)
                 await refresh()
             } catch {
@@ -4010,6 +4042,7 @@ final class RightPaneState: GGSplitCommitServicing {
         Task { @MainActor in
             guard let op = mergeOp.current else { return }
             do {
+                guard await self.checkpointMutationAllowedAfterJournalRevalidation() else { return }
                 let result = try await git.skipOperation(worktreePath: worktree.path, op: op)
                 await refresh()
                 handleOperationResult(result)
@@ -4024,6 +4057,7 @@ final class RightPaneState: GGSplitCommitServicing {
         guard !checkpointMutationsDisabled else { return }
         Task { @MainActor in
             do {
+                guard await self.checkpointMutationAllowedAfterJournalRevalidation() else { return }
                 try await git.useOurs(worktreePath: worktree.path, relativePath: file.path)
                 try await git.markResolved(worktreePath: worktree.path, relativePath: file.path)
                 await refresh()
@@ -4037,6 +4071,7 @@ final class RightPaneState: GGSplitCommitServicing {
     func useTheirs(file: ChangedFile) {
         Task { @MainActor in
             do {
+                guard await self.checkpointMutationAllowedAfterJournalRevalidation() else { return }
                 try await git.useTheirs(worktreePath: worktree.path, relativePath: file.path)
                 try await git.markResolved(worktreePath: worktree.path, relativePath: file.path)
                 await refresh()
@@ -4050,6 +4085,7 @@ final class RightPaneState: GGSplitCommitServicing {
     func keepDeleted(file: ChangedFile) {
         Task { @MainActor in
             do {
+                guard await self.checkpointMutationAllowedAfterJournalRevalidation() else { return }
                 try await git.keepDeleted(worktreePath: worktree.path, relativePath: file.path)
                 await refresh()
             } catch {
@@ -4062,6 +4098,7 @@ final class RightPaneState: GGSplitCommitServicing {
     func markResolved(file: ChangedFile) {
         Task { @MainActor in
             do {
+                guard await self.checkpointMutationAllowedAfterJournalRevalidation() else { return }
                 try await git.markResolved(worktreePath: worktree.path, relativePath: file.path)
                 await refresh()
             } catch {
@@ -4088,6 +4125,7 @@ final class RightPaneState: GGSplitCommitServicing {
             guard let self else { return }
             var report: BulkConflictResolveReport
             do {
+                guard await self.checkpointMutationAllowedAfterJournalRevalidation() else { return }
                 let agentOutput = try await MergeAgent.resolveAllInWorkspace(
                     agent: agent,
                     prompt: prompt,
