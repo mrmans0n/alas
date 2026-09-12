@@ -48,6 +48,25 @@ struct AttentionInboxViewTests {
         #expect(presentation.activeRows.isEmpty)
     }
 
+    @Test func historyToggleLabelReflectsCountAndCollapsedState() {
+        #expect(AttentionInboxPresentation.historyToggleLabel(count: 1, isExpanded: false) == "Show 1 earlier event")
+        #expect(AttentionInboxPresentation.historyToggleLabel(count: 3, isExpanded: false) == "Show 3 earlier events")
+        #expect(AttentionInboxPresentation.historyToggleLabel(count: 3, isExpanded: true) == "Hide 3 earlier events")
+    }
+
+    @Test func inboxStartsWithHistoryCollapsed() throws {
+        let active = makeItem()
+        let acknowledged = makeItem(acknowledgedAt: Date(timeIntervalSince1970: 200))
+        let collapsed = try inboxListHeight(aggregation: aggregation(items: [active], history: [acknowledged]), historyExpanded: false)
+        let expanded = try inboxListHeight(aggregation: aggregation(items: [active], history: [acknowledged]), historyExpanded: true)
+        let withoutHistory = try inboxListHeight(aggregation: aggregation(items: [active]), historyExpanded: false)
+        let historyRow = try historyRowHeight(ownerAvailable: true)
+        // Collapsed only grows by the toggle header, never by a full history row; expanding reveals it.
+        #expect(collapsed > withoutHistory)
+        #expect(collapsed - withoutHistory < historyRow)
+        #expect(expanded - collapsed > historyRow / 2)
+    }
+
     @Test func activeRowsExposeDismissActionButHistoryRowsDoNot() {
         let active = makeItem()
         let acknowledged = makeItem(acknowledgedAt: Date(timeIntervalSince1970: 200))
@@ -90,6 +109,15 @@ struct AttentionInboxViewTests {
         let unavailable = try historyRowHeight(ownerAvailable: false)
         let available = try historyRowHeight(ownerAvailable: true)
         #expect(unavailable > available)
+    }
+
+    private func inboxListHeight(aggregation: AttentionAggregation, historyExpanded: Bool) throws -> CGFloat {
+        let presentation = AttentionInboxPresentation(aggregation: aggregation, loadError: nil)
+        let view = AttentionInboxList(presentation: presentation, historyExpanded: .constant(historyExpanded),
+                                      navigationErrors: [:], onDismiss: { _ in }, onOpen: { _ in })
+            .environment(\.theme, try ThemeStore().current)
+        let controller = NSHostingController(rootView: view)
+        return controller.sizeThatFits(in: NSSize(width: 400, height: CGFloat.greatestFiniteMagnitude)).height
     }
 
     private func historyRowHeight(ownerAvailable: Bool) throws -> CGFloat {

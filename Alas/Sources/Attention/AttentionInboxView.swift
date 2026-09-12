@@ -59,6 +59,12 @@ struct AttentionInboxPresentation {
     let errors: [PersistenceError]
     var emptyTitle: String? { activeRows.isEmpty ? "Nothing needs attention" : nil }
 
+    /// Label for the collapsed-by-default history section, used for both the tooltip and VoiceOver.
+    static func historyToggleLabel(count: Int, isExpanded: Bool) -> String {
+        let events = count == 1 ? "1 earlier event" : "\(count) earlier events"
+        return isExpanded ? "Hide \(events)" : "Show \(events)"
+    }
+
     init(aggregation: AttentionAggregation, loadError: String?, writeError: String? = nil, now: Date = Date()) {
         activeRows = aggregation.items.map { AttentionInboxRowPresentation(item: $0, now: now) }
         historyRows = aggregation.history.map { AttentionInboxRowPresentation(item: $0, now: now) }
@@ -77,6 +83,7 @@ struct AttentionInboxView: View {
     let onDismiss: (AttentionItem) -> Void
     let onOpen: (AttentionItem) async -> Void
     @Environment(\.theme) private var theme
+    @State private var historyExpanded = false
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
@@ -85,7 +92,7 @@ struct AttentionInboxView: View {
             )
             VStack(spacing: 0) {
                 HStack(spacing: 9) {
-                    Image(systemName: "bell")
+                    Image(systemName: "tray")
                         .font(.system(size: 12))
                         .foregroundStyle(theme.color("warn"))
                         .accessibilityHidden(true)
@@ -110,42 +117,58 @@ struct AttentionInboxView: View {
                 .padding(.vertical, 10)
                 Divider()
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 10) {
-                        ForEach(presentation.errors) { error in
-                            AttentionInboxErrorRow(title: error.title, message: error.message)
-                        }
-                        if let emptyTitle = presentation.emptyTitle {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text(emptyTitle).font(.system(size: 13, weight: .medium))
-                                Text("New requests will appear here. Earlier events stay below.")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(theme.color("fg-muted"))
-                            }
-                            .padding(.vertical, 16)
-                        }
-                        ForEach(presentation.activeRows) { row in
-                            AttentionInboxRow(presentation: row, isHistory: false,
-                                              navigationError: navigationErrors[row.id], onDismiss: onDismiss, onOpen: onOpen)
-                        }
-                        if !presentation.historyRows.isEmpty {
-                            Text("Earlier")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(theme.color("fg-muted"))
-                                .padding(.top, 10)
-                                .accessibilityAddTraits(.isHeader)
-                            ForEach(presentation.historyRows) { row in
-                                AttentionInboxRow(presentation: row, isHistory: true,
-                                                  navigationError: navigationErrors[row.id], onDismiss: onDismiss, onOpen: onOpen)
-                            }
-                        }
-                    }
-                    .padding(14)
+                    AttentionInboxList(presentation: presentation, historyExpanded: $historyExpanded,
+                                       navigationErrors: navigationErrors, onDismiss: onDismiss, onOpen: onOpen)
+                        .padding(14)
                 }
             }
             .frame(width: 400)
             .frame(maxHeight: 520)
             .background(theme.color("bg-1"))
             .foregroundStyle(theme.color("fg"))
+        }
+    }
+}
+
+/// The scrollable body of the inbox: errors, empty state, active rows, and the collapsible
+/// history section. Split out from `AttentionInboxView` so it can be measured directly in
+/// tests without the ScrollView's greedy-fill sizing masking its intrinsic height.
+struct AttentionInboxList: View {
+    let presentation: AttentionInboxPresentation
+    @Binding var historyExpanded: Bool
+    let navigationErrors: [UUID: String]
+    let onDismiss: (AttentionItem) -> Void
+    let onOpen: (AttentionItem) async -> Void
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        LazyVStack(alignment: .leading, spacing: 10) {
+            ForEach(presentation.errors) { error in
+                AttentionInboxErrorRow(title: error.title, message: error.message)
+            }
+            if let emptyTitle = presentation.emptyTitle {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(emptyTitle).font(.system(size: 13, weight: .medium))
+                    Text("New requests will appear here. Earlier events stay collapsed below.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(theme.color("fg-muted"))
+                }
+                .padding(.vertical, 16)
+            }
+            ForEach(presentation.activeRows) { row in
+                AttentionInboxRow(presentation: row, isHistory: false,
+                                  navigationError: navigationErrors[row.id], onDismiss: onDismiss, onOpen: onOpen)
+            }
+            if !presentation.historyRows.isEmpty {
+                AttentionInboxHistoryToggle(count: presentation.historyRows.count, isExpanded: $historyExpanded)
+                    .padding(.top, 10)
+                if historyExpanded {
+                    ForEach(presentation.historyRows) { row in
+                        AttentionInboxRow(presentation: row, isHistory: true,
+                                          navigationError: navigationErrors[row.id], onDismiss: onDismiss, onOpen: onOpen)
+                    }
+                }
+            }
         }
     }
 }
@@ -223,6 +246,42 @@ struct AttentionInboxRow: View {
         .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(theme.color("line"), lineWidth: 1) }
         .foregroundStyle(theme.color(isHistory ? "fg-muted" : "fg"))
         .accessibilityElement(children: .contain)
+    }
+}
+
+/// Header for the acknowledged-history section. Starts collapsed so the panel opens on
+/// what still needs attention rather than on a wall of past events.
+private struct AttentionInboxHistoryToggle: View {
+    let count: Int
+    @Binding var isExpanded: Bool
+    @Environment(\.theme) private var theme
+    @State private var hovering = false
+
+    var body: some View {
+        Button {
+            isExpanded.toggle()
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    .accessibilityHidden(true)
+                Text("Earlier")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("\(count)")
+                    .font(.system(size: 11))
+                    .monospacedDigit()
+                    .accessibilityHidden(true)
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(theme.color(hovering ? "fg" : "fg-muted"))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help(AttentionInboxPresentation.historyToggleLabel(count: count, isExpanded: isExpanded))
+        .accessibilityLabel(AttentionInboxPresentation.historyToggleLabel(count: count, isExpanded: isExpanded))
+        .accessibilityAddTraits(.isHeader)
     }
 }
 
