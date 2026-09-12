@@ -129,8 +129,10 @@ private struct PaneLeafView: View {
         .onTapGesture {
             if let owner {
                 _ = state.tabs.setFocusedLeaf(owner: owner, tabId: tabId, leafId: leaf.id)
+                state.acknowledgeFocusedSessionAttention(worktreeID: worktreeId, owner: owner, tabID: tabId)
             } else {
                 _ = state.tabs.setFocusedLeaf(worktreeId: worktreeId, tabId: tabId, leafId: leaf.id)
+                state.acknowledgeFocusedSessionAttention(worktreeID: worktreeId, tabID: tabId)
             }
         }
         .background(

@@ -20,9 +20,11 @@ enum RootWorkspaceVisibilityPolicy {
     static func showsWorkspace(
         hasProjects: Bool,
         workspacesEnabled: Bool = false,
-        hasWorkspaceContent: Bool = false
+        hasWorkspaceContent: Bool = false,
+        hasAttentionHistory: Bool = false,
+        hasAttentionHistoryLoadError: Bool = false
     ) -> Bool {
-        hasProjects || (workspacesEnabled && hasWorkspaceContent)
+        hasProjects || hasAttentionHistory || hasAttentionHistoryLoadError || (workspacesEnabled && hasWorkspaceContent)
     }
 }
 
@@ -156,7 +158,9 @@ struct RootView: View {
         if !RootWorkspaceVisibilityPolicy.showsWorkspace(
             hasProjects: !state.projects.isEmpty,
             workspacesEnabled: state.config.workspacesEnabled,
-            hasWorkspaceContent: !state.workspacesManager.workspaces.isEmpty || !state.workspacesManager.checkouts.isEmpty
+            hasWorkspaceContent: !state.workspacesManager.workspaces.isEmpty || !state.workspacesManager.checkouts.isEmpty,
+            hasAttentionHistory: !state.attentionStore.events.isEmpty,
+            hasAttentionHistoryLoadError: state.attentionStore.loadError != nil
         ) {
             EmptyState(
                 canCreateWorktree: false,
@@ -274,6 +278,22 @@ struct RootView: View {
 
     @ViewBuilder
     private func centerContent(effectiveRightPaneVisible: Bool) -> some View {
+        if state.isAttentionInboxOpen {
+            AttentionInboxView(
+                aggregation: state.attentionAggregation,
+                loadError: state.attentionStore.loadError?.localizedDescription,
+                writeError: state.attentionStore.writeError?.localizedDescription,
+                navigationErrors: state.attentionNavigationErrors,
+                onClose: { state.closeAttentionInbox() },
+                onOpen: { item in _ = await state.openAttentionItem(item) }
+            )
+        } else {
+            worktreeCenterContent(effectiveRightPaneVisible: effectiveRightPaneVisible)
+        }
+    }
+
+    @ViewBuilder
+    private func worktreeCenterContent(effectiveRightPaneVisible: Bool) -> some View {
         let resolver = CenterSelectionStateResolver(
             selectedWorktreeId: state.selectedWorktreeId,
             projects: state.navigationProjects,

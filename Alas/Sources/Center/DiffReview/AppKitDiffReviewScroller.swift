@@ -1,6 +1,10 @@
 import SwiftUI
 
 enum AppKitDiffReviewScrollRequestResolver {
+    static func hasExactDraftCommentTarget(_ command: DiffReviewDraftCommentScrollCommand, in plan: AppKitDiffReviewRowPlan) -> Bool {
+        plan.corePlan.rows.contains { $0.id == AppKitDiffReviewRowID.draftComment(command.targetID) }
+    }
+
     enum Command: Equatable {
         case file(DiffReviewScrollCommand)
         case inlineFeedback(DiffReviewInlineFeedbackScrollCommand)
@@ -139,8 +143,10 @@ struct AppKitDiffReviewScroller: View {
     let onNavigationFile: (DiffReviewFileID, Int) -> Void
     let onActiveFileChange: (DiffReviewFileID) -> Void
     let onProgrammaticScrollCompletion: (Int) -> Void
+    var onDraftCommentReveal: (DiffReviewDraftCommentScrollCommand, Bool) -> Void = { _, _ in }
     @State private var scrollRequest: AppKitDiffScrollRequest?
     @State private var requestCoordinator = AppKitDiffReviewScrollRequestCoordinator()
+    @State private var pendingCommentReveal: (command: DiffReviewDraftCommentScrollCommand, generation: Int)?
 
     var body: some View {
         let plan = AppKitDiffReviewRowPlanBuilder.build(inputs: inputs)
@@ -154,7 +160,12 @@ struct AppKitDiffReviewScroller: View {
                 else { return }
                 onActiveFileChange(fileID)
             },
-            onScrollRequestCompletion: onProgrammaticScrollCompletion
+            onScrollRequestCompletion: { generation in
+                onProgrammaticScrollCompletion(generation)
+                guard let pending = pendingCommentReveal, pending.generation == generation else { return }
+                pendingCommentReveal = nil
+                onDraftCommentReveal(pending.command, AppKitDiffReviewScrollRequestResolver.hasExactDraftCommentTarget(pending.command, in: plan))
+            }
         )
         .onAppear { submitInitialCommand(using: plan) }
         .onChange(of: fileCommand) { _, command in
@@ -185,6 +196,14 @@ struct AppKitDiffReviewScroller: View {
     ) {
         guard let command else { return }
         let request = requestCoordinator.request(for: command, plan: plan)
+        pendingCommentReveal = nil
+        if case .draftComment(let comment) = command {
+            if AppKitDiffReviewScrollRequestResolver.hasExactDraftCommentTarget(comment, in: plan) {
+                pendingCommentReveal = (comment, request.generation)
+            } else {
+                onDraftCommentReveal(comment, false)
+            }
+        }
         scrollRequest = request
         onNavigationFile(command.fileID, request.generation)
     }

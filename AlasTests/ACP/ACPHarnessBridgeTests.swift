@@ -24,6 +24,44 @@ struct ACPHarnessBridgeTests {
         #expect(harness.activityBySession["s1"]?.agent == .claude)
     }
 
+    @Test("transitioning from awaiting input to sending acknowledges the session interaction")
+    func sendingFromAwaitingInputAcknowledgesSessionInteraction() async {
+        let harness = makeHarness()
+        var acknowledged: [(SessionOwnerID, ACPSession.ID)] = []
+        let bridge = ACPHarnessBridge(harness: harness) { owner, sessionID in
+            acknowledged.append((owner, sessionID))
+        }
+        let session = ACPSession(id: "s1", agentId: "claude", worktreeId: "wt", title: "t")
+        bridge.observe(session: session)
+        session.transcript.streamingState = .awaitingInput
+        await Task.yield()
+        session.transcript.streamingState = .sending
+        await Task.yield()
+
+        #expect(acknowledged.count == 1)
+        #expect(acknowledged.first?.0 == session.owner)
+        #expect(acknowledged.first?.1 == "s1")
+    }
+
+    @Test("transitioning from awaiting permission to streaming acknowledges the session interaction")
+    func streamingFromAwaitingPermissionAcknowledgesSessionInteraction() async {
+        let harness = makeHarness()
+        var acknowledged: [(SessionOwnerID, ACPSession.ID)] = []
+        let bridge = ACPHarnessBridge(harness: harness) { owner, sessionID in
+            acknowledged.append((owner, sessionID))
+        }
+        let session = ACPSession(id: "s1", agentId: "claude", worktreeId: "wt", title: "t")
+        bridge.observe(session: session)
+        session.transcript.streamingState = .awaitingPermission
+        await Task.yield()
+        session.transcript.streamingState = .streaming
+        await Task.yield()
+
+        #expect(acknowledged.count == 1)
+        #expect(acknowledged.first?.0 == session.owner)
+        #expect(acknowledged.first?.1 == "s1")
+    }
+
     @Test("streamingState .streaming writes .busy")
     func streamingMapsToBusy() async {
         let harness = makeHarness()

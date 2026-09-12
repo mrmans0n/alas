@@ -197,6 +197,7 @@ enum ReviewDraftWorkspaceActions {
         worktreeID: String? = nil,
         now: @escaping () -> Date = Date.init,
         sessionStore: @escaping () -> ReviewSessionStore = { ReviewSessionStore() },
+        acknowledgeCommentAttention: @escaping (ReviewDraftComment) -> Void = { _ in },
         notifyExternalChange: @escaping () -> Void = {
             NotificationCenter.default.post(name: .alasReviewDraftCommentsDidChangeExternally, object: nil)
         },
@@ -223,11 +224,21 @@ enum ReviewDraftWorkspaceActions {
                 try? controller?.edit(commentID: comment.id, bodyMarkdown: bodyMarkdown)
             },
             delete: { comment in
-                try? controller?.delete(commentID: comment.id)
+                guard let controller else { return }
+                do {
+                    try controller.delete(commentID: comment.id)
+                    acknowledgeCommentAttention(comment)
+                } catch {}
             },
             resolve: { comment in
-                try? controller?.resolve(commentID: comment.id)
-                guard let worktreeID, let controller else { return }
+                guard let controller else { return }
+                do {
+                    try controller.resolve(commentID: comment.id)
+                    acknowledgeCommentAttention(comment)
+                } catch {
+                    return
+                }
+                guard let worktreeID else { return }
                 try? ReviewHandoffProgress.recomputeAndPersist(
                     worktreeID: worktreeID,
                     sessionStore: sessionStore(),
@@ -241,7 +252,11 @@ enum ReviewDraftWorkspaceActions {
                 notifyExternalChange()
             },
             dismiss: { comment in
-                try? controller?.dismiss(commentID: comment.id)
+                guard let controller else { return }
+                do {
+                    try controller.dismiss(commentID: comment.id)
+                    acknowledgeCommentAttention(comment)
+                } catch {}
             },
             copyPrompt: { bundle in
                 ReviewFeedbackPromptActions.copyPrompt(bundle, pasteboard: pasteboard)

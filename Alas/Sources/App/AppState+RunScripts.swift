@@ -516,6 +516,7 @@ extension AppState {
 
     func presentRunScriptFailure(_ failure: RunScriptFailure) {
         selectedRunScriptFailure = failure
+        acknowledgeAttentionSurface(worktreeID: failure.worktreeID, target: .runScriptFailure(failureID: failure.id))
     }
 
     func waitForRunScriptCompletionTasksForTesting() async {
@@ -584,7 +585,7 @@ extension AppState {
                         at: observedAt,
                         failureID: failureID
                     )
-                    runScriptFailureQueue.append(RunScriptFailure(
+                    let failure = RunScriptFailure(
                         id: failureID,
                         runID: runID,
                         scriptKey: script.key,
@@ -594,7 +595,15 @@ extension AppState {
                         exitCode: completion.exitCode,
                         completedAt: observedAt,
                         capturedOutput: capturedOutput
-                    ))
+                    )
+                    runScriptFailureQueue.append(failure)
+                    if let context = attentionContext(for: worktree) {
+                        for observation in AttentionProducer.script(
+                            failure: failure, owner: context.owner, display: context.display
+                        ) {
+                            observeAttention(observation, at: failure.completedAt)
+                        }
+                    }
                 } catch is CancellationError {
                     // `cancelRunScriptCompletionTask` already recorded the
                     // lost observation; it owns that transition.

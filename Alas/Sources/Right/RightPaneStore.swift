@@ -24,11 +24,47 @@ final class RightPaneStore {
 
     @ObservationIgnored
     var reviewSnapshotDidChange: ((String, String, ReviewLoopSnapshot) -> Void)?
+    @ObservationIgnored
+    var attentionSnapshotDidChange: ((String, RightPaneAttentionSnapshot) -> Void)?
 
     private let git: GitService
 
     init(git: GitService = GitService()) {
         self.git = git
+    }
+
+    func revealAttentionTarget(_ target: AttentionJumpTarget, for worktree: Worktree) async -> Bool {
+        guard let appState, let context = appState.attentionContext(for: worktree) else { return false }
+        let navigationGeneration = appState.attentionNavigationGeneration
+        let pane = state(for: worktree, baseBranch: appState.config.worktrees.baseBranch,
+                         comparisonMode: appState.config.changes.comparisonMode)
+        guard await pane.refresh() else { return false }
+        guard activeId == worktree.id,
+              appState.isAttentionNavigationCurrent(generation: navigationGeneration, owner: context.owner, worktreeID: worktree.id) else { return false }
+        let revealTarget = Self.refreshedAttentionTarget(for: target, pane: pane, owner: context.owner, display: context.display)
+        guard pane.revealAttentionTarget(revealTarget) else { return false }
+        appState.config.rightPaneVisible = true
+        return true
+    }
+
+    static func refreshedAttentionTarget(
+        for target: AttentionJumpTarget,
+        pane: RightPaneState,
+        owner: AttentionWorktreeIdentity,
+        display: AttentionWorktreeDisplaySnapshot
+    ) -> AttentionJumpTarget {
+        switch target {
+        case .conflicts:
+            let conflicts = pane.attentionSnapshot.conflictedPaths.map {
+                ChangedFile(path: $0, status: "U", stage: .unstaged, add: 0, del: 0, renameFrom: nil, conflict: .bothModified)
+            }
+            return AttentionProducer.git(operation: nil, changes: conflicts, owner: owner, display: display)
+                .compactMap(\.activeSignal)
+                .first { $0.kind == .conflicts }?
+                .jumpTarget ?? .conflicts(path: nil)
+        default:
+            return target
+        }
     }
 
     /// Returns the branch name the Commits section should compare HEAD against
@@ -150,7 +186,8 @@ final class RightPaneStore {
                 app.tabs.closeDiffTabs(worktreeId: id, relativePaths: paths)
             }
             new.openConflict = { [weak self] path in
-                guard let app = self?.appState else { return }
+                guard let app = self?.appState,
+                      self?.states[id]?.changes.contains(where: { $0.path == path && $0.conflict != nil }) == true else { return }
                 let title = (path as NSString).lastPathComponent
                 let tab = app.tabs.openMergeConflict(
                     worktreeId: id,
@@ -158,6 +195,7 @@ final class RightPaneStore {
                     title: title
                 )
                 app.tabs.activate(worktreeId: id, tabId: tab.id)
+                app.acknowledgeAttentionSurface(worktreeID: id, target: .conflicts(path: path))
             }
             new.ggContextProvider = { [weak self] branch in
                 guard let app = self?.appState,
@@ -197,6 +235,9 @@ final class RightPaneStore {
                     snapshot: snapshot
                 )
             }
+            new.attentionSnapshotDidChange = { [weak self] snapshot in
+                self?.attentionSnapshotDidChange?(worktree.id, snapshot)
+            }
 
             if shouldDeferInitialRefresh {
                 new.baseBranchProbeTask = Task { @MainActor [weak self, weak new] in
@@ -234,6 +275,7 @@ final class RightPaneStore {
         }
         if activeId != id {
             if let prev = activeId, let prevState = states[prev] {
+                prevState.endAttentionReveal()
                 prevState.stop()
             }
             if wasCached, result.currentBranch != worktree.branch {
@@ -380,6 +422,7 @@ final class RightPaneStore {
     /// consumer.
     func deactivate() {
         if let prev = activeId, let prevState = states[prev] {
+            prevState.endAttentionReveal()
             prevState.stop()
         }
         activeId = nil
@@ -390,6 +433,10 @@ final class RightPaneStore {
     /// Used by `DraftCommitTabView` to observe staged-set changes.
     func activeState(worktreeId: String) -> RightPaneState? {
         states[worktreeId]
+    }
+
+    func isActiveState(worktreeId: String) -> Bool {
+        activeId == worktreeId
     }
 
     func activeState(worktreeId: String, baseBranch: String) -> RightPaneState? {

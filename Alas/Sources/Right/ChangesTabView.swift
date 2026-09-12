@@ -97,20 +97,34 @@ struct ChangesTabView: View {
         VStack(spacing: 0) {
             AppKitDiffScroller(
                 plan: appKitScrollPlan,
-                scrollRequest: nil,
+                scrollRequest: rps.attentionScrollRequest,
                 onActiveOwnerChange: { _ in },
-                onScrollRequestCompletion: { _ in }
+                onScrollRequestCompletion: { generation in
+                    if rps.attentionScrollRequest?.generation == generation { rps.attentionScrollRequest = nil }
+                }
             )
-            if isGGDrawerActive {
+            if isGGDrawerActive, rps.attentionRevealedTarget != nil {
+                Button("Back to stack") { rps.endAttentionReveal() }
+                    .buttonStyle(.plain)
+                    .font(.caption)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+            }
+            if isGGDrawerActive, !isRevealingAttentionReview {
                 GGStackDrawer(rps: rps, appState: appState)
             } else {
                 ReviewLoopDrawer(
                     state: rps.reviewLoop,
                     canOpenAgentHandoff: rps.canOpenReviewLoopHandoff(appState: appState),
-                    onAction: { action in rps.handleReviewReadinessAction(action, appState: appState) }
+                    onAction: { action in rps.handleReviewReadinessAction(action, appState: appState) },
+                    onRevealReviewRequest: { number in
+                        appState.acknowledgeAttentionSurface(worktreeID: rps.worktree.id, target: .reviewRequest(number: number))
+                    }
                 )
             }
         }
+        .onDisappear { rps.endAttentionReveal() }
         .task(id: amendProbeKey) {
             let key = amendProbeKey
             guard currentDraft?.amend == true, !isGGDrawerActive else { return }
@@ -118,6 +132,11 @@ struct ChangesTabView: View {
                 try await GitService().headPublicationState(worktreePath: rps.worktree.path)
             }
         }
+    }
+
+    private var isRevealingAttentionReview: Bool {
+        if case .reviewRequest = rps.attentionRevealedTarget { return true }
+        return false
     }
 
     private var publishMutationDisabledReason: String? {
@@ -279,10 +298,10 @@ struct ChangesTabView: View {
         }
 
         if let operation = rps.mergeOp.current,
-           Self.shouldShowGenericOperationCard(
+           (rps.attentionRevealedTarget == .gitOperation || Self.shouldShowGenericOperationCard(
             mergeOperation: operation,
             pausedGGOperation: rps.ggActionState.pausedOperation
-           ) {
+           )) {
             rows.append(appKitRow(
                 id: "changes-operation",
                 token: String(reflecting: operation) + String(!conflicts.isEmpty),
@@ -295,6 +314,9 @@ struct ChangesTabView: View {
                     onSkip: { rps.skipOperation() },
                     onAbort: { rps.abortOperation() }
                 )
+                .simultaneousGesture(TapGesture().onEnded {
+                    appState.acknowledgeAttentionSurface(worktreeID: rps.worktree.id, target: .gitOperation)
+                })
             })
         }
 
@@ -328,6 +350,9 @@ struct ChangesTabView: View {
                         .workingTreeFile(worktreePath: rps.worktree.path, relativePath: file.path)
                     }
                 )
+                .simultaneousGesture(TapGesture().onEnded {
+                    appState.acknowledgeAttentionSurface(worktreeID: rps.worktree.id, target: .conflicts(path: nil))
+                })
             })
         }
 

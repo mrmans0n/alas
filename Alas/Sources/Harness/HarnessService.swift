@@ -1,6 +1,17 @@
 import Foundation
 import Observation
 
+struct HarnessActivityTransition: Equatable {
+    let sessionID: String
+    let owner: SessionOwnerID?
+    let agent: AgentKind
+    let previousState: ActivityState?
+    let state: ActivityState?
+    let body: String?
+    let occurredAt: Date
+    var isSnapshot = false
+}
+
 @Observable
 final class HarnessService {
     let detector = HarnessDetector()
@@ -13,6 +24,7 @@ final class HarnessService {
 
     var onClickThrough: ((String, String, String) -> Void)?
     var onContextClickThrough: ((NotificationClickContext) -> Void)?
+    var onActivityTransition: ((HarnessActivityTransition) -> Void)?
 
     struct HarnessActivityState: Equatable {
         var agent: AgentKind
@@ -103,6 +115,13 @@ final class HarnessService {
         shouldNotifyOnAwaiting: () -> Bool
     ) {
         let previousState = activityBySession[event.sessionId]?.state
+        let previous = activityBySession[event.sessionId]
+        // Idle commits separately because Cursor may defer the authoritative change.
+        defer {
+            if event.event != .idle {
+                emitActivityTransition(sessionID: event.sessionId, previous: previous, owner: ownerLookup(event.sessionId))
+            }
+        }
 
         switch event.event {
         case .attached, .busy:
@@ -203,6 +222,7 @@ final class HarnessService {
         stateLookup: @escaping (String) -> (projectId: String, worktreeId: String)?,
         ownerLookup: @escaping (String) -> SessionOwnerID?
     ) {
+        let previous = activityBySession[event.sessionId]
         activityBySession[event.sessionId] = HarnessActivityState(
             agent: event.agent, state: .idle, pid: event.pid,
             lastBody: event.body, updatedAt: Date()
@@ -215,6 +235,7 @@ final class HarnessService {
                 owner: ownerLookup(event.sessionId)
             )
         }
+        emitActivityTransition(sessionID: event.sessionId, previous: previous, owner: ownerLookup(event.sessionId))
     }
 
     func stop() {
@@ -226,22 +247,38 @@ final class HarnessService {
     }
 
     func forgetSession(_ sessionId: String) {
+        let previous = activityBySession[sessionId]
         harnessBySession.removeValue(forKey: sessionId)
         activeHarnessBySession.removeValue(forKey: sessionId)
         activityBySession.removeValue(forKey: sessionId)
         cursorIdleDebouncers.removeValue(forKey: sessionId)?.cancel()
         pendingCursorIdleEvents.removeValue(forKey: sessionId)
+        emitActivityTransition(sessionID: sessionId, previous: previous, owner: nil)
     }
 
     /// Peer-write entry point alongside socket events. Lets non-hook sources
     /// (currently the ACP bridge) report activity for sessions they own.
     /// No notification side effects — those remain socket-driven so we don't
     /// double-fire when both hooks and ACP cover the same session.
-    func setExternalActivity(sessionId: String, agent: AgentKind, state: ActivityState) {
+    func setExternalActivity(sessionId: String, owner: SessionOwnerID? = nil, agent: AgentKind, state: ActivityState, body: String? = nil, isSnapshot: Bool = false) {
+        let previous = activityBySession[sessionId]
         activityBySession[sessionId] = HarnessActivityState(
             agent: agent, state: state, pid: nil,
-            lastBody: nil, updatedAt: Date()
+            lastBody: body, updatedAt: Date()
         )
+        emitActivityTransition(sessionID: sessionId, previous: previous, owner: owner, isSnapshot: isSnapshot)
+    }
+
+    private func emitActivityTransition(sessionID: String, previous: HarnessActivityState?, owner: SessionOwnerID?, isSnapshot: Bool = false) {
+        let current = activityBySession[sessionID]
+        let bodyChanged = current?.lastBody != previous?.lastBody
+            && (current?.state == .awaitingInput || current?.state == .permissionRequest)
+        guard current?.state != previous?.state || current?.agent != previous?.agent || bodyChanged,
+              let agent = current?.agent ?? previous?.agent else { return }
+        onActivityTransition?(HarnessActivityTransition(
+            sessionID: sessionID, owner: owner, agent: agent, previousState: previous?.state, state: current?.state,
+            body: current?.lastBody, occurredAt: current?.updatedAt ?? Date(), isSnapshot: isSnapshot
+        ))
     }
 
     enum AggregatedState: String, Equatable {

@@ -31,6 +31,7 @@ struct AlasActionService {
     var notifyReviewCommentsChanged: () -> Void = {
         NotificationCenter.default.post(name: .alasReviewDraftCommentsDidChangeExternally, object: nil)
     }
+    var notifyReviewReplyAdded: (Worktree, ReviewDraftComment, ReviewCommentReply) -> Void = { _, _, _ in }
     var now: () -> Date = Date.init
     var gitStatus: (URL) async throws -> [ChangedFile] = { try await GitService().status(worktreePath: $0) }
     var providerReviewOriginalPath: (ReviewDraftSessionID, String) async -> String? = { _, _ in nil }
@@ -610,20 +611,22 @@ struct AlasActionService {
         let store = draftCommentStore()
         do {
             guard var comment = try store.find(commentID: commentID),
-                  Self.resolveSessionWorktree(for: comment.sessionID, origin: origin, projectWorktrees: projectWorktrees) != nil else {
+                  let commentWorktree = Self.resolveSessionWorktree(for: comment.sessionID, origin: origin, projectWorktrees: projectWorktrees) else {
                 return .error("unknown review comment id \"\(commentID)\"")
             }
             let timestamp = now()
             var replies = comment.allReplies
-            replies.append(ReviewCommentReply(
+            let reply = ReviewCommentReply(
                 id: UUID().uuidString,
                 author: Self.cliAgentAuthor,
                 bodyMarkdown: body,
                 createdAt: timestamp
-            ))
+            )
+            replies.append(reply)
             comment.replies = replies
             comment.updatedAt = timestamp
             try store.save(comment)
+            notifyReviewReplyAdded(commentWorktree, comment, reply)
         } catch {
             return .error("could not update review comment: \(error.localizedDescription)")
         }
@@ -645,20 +648,26 @@ struct AlasActionService {
                 return .error("unknown review comment id \"\(commentID)\"")
             }
             let timestamp = now()
+            var appendedReply: ReviewCommentReply?
             if let reply {
                 var replies = comment.allReplies
-                replies.append(ReviewCommentReply(
+                let entry = ReviewCommentReply(
                     id: UUID().uuidString,
                     author: Self.cliAgentAuthor,
                     bodyMarkdown: reply,
                     createdAt: timestamp
-                ))
+                )
+                replies.append(entry)
+                appendedReply = entry
                 comment.replies = replies
             }
             comment.state = reopen ? .active : .resolved
             comment.resolvedBy = reopen ? nil : Self.cliAgentAuthor
             comment.updatedAt = timestamp
             try store.save(comment)
+            if let appendedReply {
+                notifyReviewReplyAdded(commentWorktree, comment, appendedReply)
+            }
             // Best-effort: the comment mutation above already succeeded and
             // must not be retried, so a failure recomputing handoff/session
             // status (a separate store) is swallowed rather than reported

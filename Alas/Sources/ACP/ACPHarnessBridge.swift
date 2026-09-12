@@ -12,22 +12,29 @@ import Combine
 @MainActor
 final class ACPHarnessBridge {
     private let harness: HarnessService
+    private let acknowledgeSessionInteraction: (SessionOwnerID, ACPSession.ID) -> Void
     private var sessionCancellables: [ACPSession.ID: AnyCancellable] = [:]
     private var managerCancellables: [String: AnyCancellable] = [:]
     private var observedSessionsByManager: [String: Set<ACPSession.ID>] = [:]
 
-    init(harness: HarnessService) {
+    init(
+        harness: HarnessService,
+        acknowledgeSessionInteraction: @escaping (SessionOwnerID, ACPSession.ID) -> Void = { _, _ in }
+    ) {
         self.harness = harness
+        self.acknowledgeSessionInteraction = acknowledgeSessionInteraction
     }
 
     /// Subscribe to a session's `streamingState` and mirror it into the
     /// harness service. Idempotent — re-observing a session replaces the
     /// existing subscription.
     func observe(session: ACPSession) {
+        var isSnapshot = true
         sessionCancellables[session.id] = session.transcript.$streamingState
             .sink { [weak self, weak session] state in
                 guard let self, let session else { return }
-                self.apply(state: state, session: session)
+                self.apply(state: state, session: session, isSnapshot: isSnapshot)
+                isSnapshot = false
             }
     }
 
@@ -77,18 +84,37 @@ final class ACPHarnessBridge {
         observedSessionsByManager[worktreeId] = current
     }
 
-    private func apply(state: ACPSession.StreamingState, session: ACPSession) {
+    private func apply(state: ACPSession.StreamingState, session: ACPSession, isSnapshot: Bool) {
         let agent = Self.agentKind(for: session.agentId)
+        let previousState = harness.activityBySession[session.id]?.state
         switch state {
         case .idle:
+            // A completed turn and removal both clear the badge, but only a
+            // real transition to idle contributes completion history.
+            acknowledgeIfUserAddressedAttention(previousState: previousState, session: session, isSnapshot: isSnapshot)
+            if !isSnapshot, session.agentState == .ready, harness.activityBySession[session.id] != nil {
+                harness.setExternalActivity(sessionId: session.id, owner: session.owner, agent: agent, state: .idle)
+            }
             harness.forgetSession(session.id)
         case .sending, .streaming:
-            harness.setExternalActivity(sessionId: session.id, agent: agent, state: .busy)
+            acknowledgeIfUserAddressedAttention(previousState: previousState, session: session, isSnapshot: isSnapshot)
+            harness.setExternalActivity(sessionId: session.id, owner: session.owner, agent: agent, state: .busy, isSnapshot: isSnapshot)
         case .awaitingPermission:
-            harness.setExternalActivity(sessionId: session.id, agent: agent, state: .permissionRequest)
+            harness.setExternalActivity(sessionId: session.id, owner: session.owner, agent: agent, state: .permissionRequest, isSnapshot: isSnapshot)
         case .awaitingInput:
-            harness.setExternalActivity(sessionId: session.id, agent: agent, state: .awaitingInput)
+            harness.setExternalActivity(sessionId: session.id, owner: session.owner, agent: agent, state: .awaitingInput, isSnapshot: isSnapshot)
         }
+    }
+
+    private func acknowledgeIfUserAddressedAttention(
+        previousState: ActivityState?,
+        session: ACPSession,
+        isSnapshot: Bool
+    ) {
+        guard !isSnapshot,
+              previousState == .awaitingInput || previousState == .permissionRequest
+        else { return }
+        acknowledgeSessionInteraction(session.owner, session.id)
     }
 
     /// Map the ACP `agentId` string (free-form, sourced from

@@ -90,6 +90,26 @@ final class AppState {
     /// Follow-up composers outlive the conditional Agent pane and worktree navigation.
     var agentSidebarFollowUps: [String: [ACPSession.ID: AgentSidebarFollowUpDraft]] = [:]
     var selectedRunScriptFailure: RunScriptFailure?
+    let attentionStore: AttentionStore
+    var isAttentionInboxOpen = false {
+        didSet {
+            if oldValue != isAttentionInboxOpen {
+                attentionNavigationGeneration += 1
+                if isAttentionInboxOpen { attentionPendingReviewReveal = nil }
+            }
+        }
+    }
+    @ObservationIgnored var attentionNavigationGeneration = 0
+    @ObservationIgnored var attentionNavigationDepth = 0
+    var attentionNavigationErrors: [UUID: String] = [:]
+    @ObservationIgnored var attentionNavigationEnvironment: AttentionNavigationEnvironment?
+    @ObservationIgnored var attentionReturnDestination: AttentionReturnDestination?
+    @ObservationIgnored var attentionSuppressedStartupSignals: [AttentionSourceKey: String] = [:]
+    @ObservationIgnored var attentionInitializedSnapshotSources: Set<String> = []
+    @ObservationIgnored var attentionPendingReviewReveal: AttentionPendingReviewReveal?
+    @ObservationIgnored var attentionAliasRetryTask: Task<Void, Never>?
+    @ObservationIgnored var attentionAliasRetryAttempts = 0
+    @ObservationIgnored var attentionAliasRetryNotBefore: Date?
     @ObservationIgnored var runScriptCompletionTasks: [String: (worktreeID: String, sessionID: String, location: RunScriptCaptureLocation, task: Task<Void, Never>)] = [:]
     @ObservationIgnored let runScriptCompletionWaiter: RunScriptCompletionWaiter
     private(set) var isReopeningClosedTab = false
@@ -106,7 +126,14 @@ final class AppState {
     private(set) var workspaceRecoveryError: WorkspaceRecoveryState?
     var workspaceNavigationState = WorkspaceNavigationState()
     @ObservationIgnored private var workspaceSpaceCheckpointTask: Task<Void, Never>?
-    var selectedWorktreeId: String?
+    var selectedWorktreeId: String? {
+        didSet {
+            guard oldValue != selectedWorktreeId else { return }
+            attentionNavigationGeneration += 1
+            attentionPendingReviewReveal = nil
+            if let oldValue { rightPaneStore.activeState(worktreeId: oldValue)?.endAttentionReveal() }
+        }
+    }
     let suppressesRestoredRightPaneAfterAbandonedStartup: Bool
     private(set) var isRefreshingProjectTopologies = false
     var pendingSettingsSection: SettingsSection?
@@ -683,11 +710,15 @@ final class AppState {
         workspaceRemoteTransport: WorkspaceRemoteTransport = .init(),
         worktreeCleanupLauncher: @escaping WorktreeCleanupLauncher = {
             try WorktreeTrashCleaner.launch($0)
-        }
+        },
+        attentionStore: AttentionStore? = nil,
+        attentionNavigationEnvironment: AttentionNavigationEnvironment? = nil
     ) {
         self.store = store
         self.workspaceStore = workspaceStore
         self.workspaceRemoteTransport = workspaceRemoteTransport
+        self.attentionStore = attentionStore ?? AttentionStore()
+        self.attentionNavigationEnvironment = attentionNavigationEnvironment
         restoreActiveTabsOnNextReload = restoreActiveTabsOnStartup
         suppressesRestoredRightPaneAfterAbandonedStartup = !restoreActiveTabsOnStartup
         _tabs = tabsManager
@@ -759,6 +790,15 @@ final class AppState {
         // we'd resolve to a 0-element id list. RootView calls reloadTabs() after
         // refreshAll() returns.
         rightPaneStore.appState = self
+        rightPaneStore.attentionSnapshotDidChange = { [weak self] worktreeID, snapshot in
+            self?.observeRightPaneAttention(worktreeID: worktreeID, snapshot: snapshot)
+        }
+        RemoteHostStatusStore.shared.onStatusTransition = { [weak self] host, isDisconnected, date in
+            self?.observeHostAttention(host: host, isDisconnected: isDisconnected, at: date)
+        }
+        harness.onActivityTransition = { [weak self] transition in
+            self?.observeHarnessAttention(transition)
+        }
         AlasTerminationCoordinator.shared.flush = { [weak self] in
             await GGLandingStore.shared.cancelAllAndWait()
             await self?.cancelAllRunScriptCompletionTasks()
@@ -1051,13 +1091,7 @@ final class AppState {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 await self.setWorkspacesEnabled(true, persistConfig: false)
-                self.loadWorkspaceCheckoutSessionTabs(restoringActiveTabs: restoringActiveTabs)
-                await self.restoreLoadedWorkspaceCheckoutACPSessions()
-                if !self.config.terminal.keepSessionsAlive {
-                    self.pruneWorkspaceCheckoutTerminalTabs()
-                }
-                self.refreshPersistedHookSymlinks()
-                self.sweepOrphanWorkspaceCheckoutZmxSessions()
+                await self.restoreWorkspaceCheckoutSessionTabsAfterReload(restoringActiveTabs: restoringActiveTabs)
             }
         }
         let allWorktreeIds = projectsManager.projects.flatMap {
@@ -1091,12 +1125,25 @@ final class AppState {
         // TerminalTabView.task) to fire when the user opens the tab.
         refreshPersistedHookSymlinks()
         sweepOrphanZmxSessions(worktreeIds: allWorktreeIds)
+        reconcileAttention(observations: currentAttentionObservations)
         Task { [weak self] in
             await self?.reconcileInterruptedDelegations()
         }
         Task { @MainActor [weak self] in
             await self?.bootstrapScheduledACPSessions(worktreeIds: allWorktreeIds)
         }
+    }
+
+    func restoreWorkspaceCheckoutSessionTabsAfterReload(restoringActiveTabs: Bool) async {
+        guard config.workspacesEnabled else { return }
+        loadWorkspaceCheckoutSessionTabs(restoringActiveTabs: restoringActiveTabs)
+        await restoreLoadedWorkspaceCheckoutACPSessions()
+        if !config.terminal.keepSessionsAlive {
+            pruneWorkspaceCheckoutTerminalTabs()
+        }
+        refreshPersistedHookSymlinks()
+        sweepOrphanWorkspaceCheckoutZmxSessions()
+        reconcileAttention(observations: currentAttentionObservations)
     }
 
     private func restoreLoadedWorkspaceCheckoutACPSessions() async {
@@ -1601,12 +1648,22 @@ final class AppState {
         }
     }
 
+    func selectWorktreeFromSidebar(id: String) {
+        selectWorktree(id: id)
+        acknowledgeAttentionSurface(worktreeID: id, target: .remoteWorktree)
+    }
+
     func selectInitialWorktree(id: String?) {
         selectWorktree(id: id)
     }
 
     func activateWorktreeCenterTab(worktreeId: String, tabId: TabID) {
+        if let pending = attentionPendingReviewReveal,
+           pending.worktreeID != worktreeId || pending.tabID != tabId {
+            attentionPendingReviewReveal = nil
+        }
         tabs.activate(worktreeId: worktreeId, tabId: tabId)
+        acknowledgeFocusedSessionAttention(worktreeID: worktreeId, tabID: tabId)
         if let checkout = selectedWorkspaceCheckout,
            workspaceMemberWorktreeIDs(checkout).values.contains(worktreeId) {
             tabs.clearActiveTab(owner: .workspaceCheckout(checkout.id, checkout.executionLocation))
@@ -2489,8 +2546,10 @@ final class AppState {
            tabs.tabs(for: sharedSessionOwner).contains(where: { $0.id == tabID }) {
             tabs.activate(owner: sharedSessionOwner, tabId: tabID)
             tabs.clearActiveTab(worktreeId: worktreeID)
+            acknowledgeFocusedSessionAttention(worktreeID: worktreeID, owner: sharedSessionOwner, tabID: tabID)
         } else {
             tabs.activate(worktreeId: worktreeID, tabId: tabID)
+            acknowledgeFocusedSessionAttention(worktreeID: worktreeID, tabID: tabID)
             if let sharedSessionOwner {
                 tabs.clearActiveTab(owner: sharedSessionOwner)
             }
@@ -4950,6 +5009,9 @@ final class AppState {
                 guard let self else { return .error("Alas is not available.") }
                 return await self.cliOpenReview(worktree: worktree, target: target)
             },
+            notifyReviewReplyAdded: { [weak self] worktree, comment, reply in
+                self?.observeReviewReplyAttention(worktree: worktree, comment: comment, reply: reply)
+            },
             providerReviewOriginalPath: { [weak self] sessionID, relativePath in
                 await self?.reviewRequestOriginalPath(forDraftSessionID: sessionID, relativePath: relativePath) ?? nil
             },
@@ -5071,7 +5133,7 @@ final class AppState {
             owner: owner
         )
         if level == .attention, let sessionId {
-            harness.setExternalActivity(sessionId: sessionId, agent: agent, state: .awaitingInput)
+            harness.setExternalActivity(sessionId: sessionId, owner: owner, agent: agent, state: .awaitingInput, body: body)
         }
         return .ok
     }
@@ -5092,7 +5154,7 @@ final class AppState {
             owner: owner
         )
         if level == .attention {
-            harness.setExternalActivity(sessionId: sessionId, agent: agent, state: .awaitingInput)
+            harness.setExternalActivity(sessionId: sessionId, owner: owner, agent: agent, state: .awaitingInput, body: body)
         }
         return .ok
     }
@@ -5175,6 +5237,7 @@ final class AppState {
             tabs.activate(owner: owner, tabId: tabId)
             if let selectedWorktreeId {
                 tabs.clearActiveTab(worktreeId: selectedWorktreeId)
+                acknowledgeFocusedSessionAttention(worktreeID: selectedWorktreeId, owner: owner, tabID: tabId)
             }
         }
         NSApp.activate(ignoringOtherApps: true)
@@ -5707,6 +5770,7 @@ final class AppState {
                 from: state.focusedLeafId, direction: direction, frames: frames
               ) else { return }
         _ = tabs.setFocusedLeaf(worktreeId: worktreeId, tabId: activeId, leafId: next)
+        acknowledgeFocusedSessionAttention(worktreeID: worktreeId, tabID: activeId)
     }
 
     func focusPane(worktreeId: String, sharedSessionOwner: SessionOwnerID?, direction: PaneFocusDirection) {
@@ -5727,6 +5791,7 @@ final class AppState {
             return
         }
         _ = tabs.setFocusedLeaf(owner: owner, tabId: activeId, leafId: next)
+        acknowledgeFocusedSessionAttention(worktreeID: worktreeId, owner: owner, tabID: activeId)
     }
 
     /// Resize the focused leaf's enclosing split by ±0.05 toward `direction`.
@@ -8924,7 +8989,12 @@ final class AppState {
     /// so the sidebar work badge surfaces ACP activity. Attached for every
     /// manager created via `acpManager(for:)`; detached from `disposeACPManager(for:)`.
     @ObservationIgnored
-    private lazy var acpHarnessBridge = ACPHarnessBridge(harness: harness)
+    private lazy var acpHarnessBridge = ACPHarnessBridge(
+        harness: harness,
+        acknowledgeSessionInteraction: { [weak self] owner, sessionID in
+            self?.acknowledgeACPResponseInteraction(owner: owner, sessionID: sessionID)
+        }
+    )
 
     #if DEBUG
     @ObservationIgnored

@@ -18,6 +18,12 @@ enum RightPaneTab: String {
     }
 }
 
+struct RightPaneAttentionSnapshot: Equatable {
+    let mergeOperation: MergeOperation?
+    let conflictedPaths: [String]
+    let review: ReviewLoopSnapshot?
+}
+
 enum GGStackLoadState: Equatable {
     case inactive
     case loading
@@ -66,6 +72,16 @@ final class RightPaneState: GGSplitCommitServicing {
     let reviewLoop: ReviewLoopState
     @ObservationIgnored
     var reviewSnapshotDidChange: ((ReviewLoopSnapshot) -> Void)?
+    @ObservationIgnored
+    var attentionSnapshotDidChange: ((RightPaneAttentionSnapshot) -> Void)?
+
+    var attentionSnapshot: RightPaneAttentionSnapshot {
+        RightPaneAttentionSnapshot(
+            mergeOperation: mergeOp.current,
+            conflictedPaths: changes.filter { $0.conflict != nil }.map(\.path).sorted(),
+            review: reviewLoop.snapshot
+        )
+    }
     var changes: [ChangedFile] = []
     var stashes: [GitStash] = []
     var stashesExpanded: Bool = false
@@ -76,6 +92,10 @@ final class RightPaneState: GGSplitCommitServicing {
     var pendingStashDrop: PendingStashDrop? = nil
     private(set) var stashOperationInFlight: Bool = false
     private(set) var hasLoadedSnapshot: Bool = false
+    private(set) var latestSnapshotRefreshSucceeded: Bool = false
+    var hasCurrentAttentionSnapshot: Bool {
+        hasLoadedSnapshot && latestSnapshotRefreshSucceeded
+    }
     var displayChanges: [ChangedFile] {
         guard hasLoadedSnapshot else { return [] }
         return Self.applyingStageMutations(
@@ -125,7 +145,52 @@ final class RightPaneState: GGSplitCommitServicing {
     private(set) var fileTreeGeneration: Int = 0
 
     // New in right-sidebar-refactor:
-    var activeTab: RightPaneTab = .changes
+    var activeTab: RightPaneTab = .changes {
+        didSet {
+            if oldValue != activeTab { endAttentionReveal() }
+        }
+    }
+    var attentionScrollRequest: AppKitDiffScrollRequest?
+    private(set) var attentionRevealedTarget: AttentionJumpTarget?
+    private var attentionRevealGeneration = 0
+
+    func endAttentionReveal() {
+        attentionRevealedTarget = nil
+        attentionScrollRequest = nil
+    }
+
+    /// Validate the destination before switching the visible Changes surface.
+    func revealAttentionTarget(_ target: AttentionJumpTarget) -> Bool {
+        let rowID: String?
+        switch target {
+        case .conflicts(let path):
+            let conflicts = changes.filter { $0.conflict != nil }
+            guard !conflicts.isEmpty, path == nil || conflicts.contains(where: { $0.path == path }) else { return false }
+            workingTreeExpanded = true
+            rowID = "changes-conflicts"
+        case .gitOperation:
+            guard mergeOp.current != nil else { return false }
+            rowID = "changes-operation"
+        case .reviewRequest(let number):
+            guard let snapshot = reviewLoop.snapshot,
+                  snapshot.providerAvailable,
+                  snapshot.providerAuthenticated,
+                  snapshot.errorMessage == nil,
+                  let request = snapshot.reviewRequest,
+                  number == nil || request.number == number else { return false }
+            reviewLoop.setExpanded(true)
+            rowID = nil
+        default: return false
+        }
+        activeTab = .changes
+        attentionRevealedTarget = target
+        attentionRevealGeneration += 1
+        attentionScrollRequest = rowID.map {
+            AppKitDiffScrollRequest(targetID: $0, fallbackID: nil, alignment: .top, animated: false, generation: attentionRevealGeneration)
+        }
+        return true
+    }
+
     var commits: [CommitInfo] = []
     var comparisonRef: String? = nil
     var workingTreeExpanded: Bool = true
@@ -996,6 +1061,7 @@ final class RightPaneState: GGSplitCommitServicing {
                 didInitDefaultTab = true
             }
             self.hasLoadedSnapshot = true
+            self.latestSnapshotRefreshSucceeded = true
             let previousReviewRequestFingerprint = Self.reviewRequestReloadFingerprint(reviewLoop.snapshot?.reviewRequest)
             let upstreamBranchName = resolvedUpstream.map {
                 String($0.ref.dropFirst($0.remote.count + 1))
@@ -1015,6 +1081,8 @@ final class RightPaneState: GGSplitCommitServicing {
             if previousReviewRequestFingerprint != currentReviewRequestFingerprint {
                 changesGeneration += 1
             }
+            guard snapshotGeneration == snapshotInvalidationGeneration else { return false }
+            attentionSnapshotDidChange?(attentionSnapshot)
             return true
         } catch is CancellationError {
             reviewLoop.cancelLocalRefresh(reviewLoopInspection)
@@ -1026,6 +1094,7 @@ final class RightPaneState: GGSplitCommitServicing {
             }
             sidebarError = error.localizedDescription
             hasLoadedSnapshot = true
+            latestSnapshotRefreshSucceeded = false
             changesGeneration += 1
             // Surface failures via os.Logger so they're visible in Console.app
             // and the unified log. The previous `print` here silently kept
@@ -2120,6 +2189,7 @@ final class RightPaneState: GGSplitCommitServicing {
     func markSnapshotUnknown() {
         snapshotInvalidationGeneration += 1
         hasLoadedSnapshot = false
+        latestSnapshotRefreshSucceeded = false
         changes = []
         stashes = []
         expandedStashRefs = []

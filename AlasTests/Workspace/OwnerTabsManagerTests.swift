@@ -63,6 +63,26 @@ struct OwnerTabsManagerTests {
         #expect(manager.tabs(forWorktree: "member").map(\.id) == [member.id])
     }
 
+    @Test func composedWorktreeTabActivationAcknowledgesSessionAttention() throws {
+        let manager = TabsManager(store: OwnerTabsMemoryStore())
+        let state = AppState(store: OwnerTabsMemoryStore(), tabsManager: manager)
+        let project = ProjectConfig(id: "project", name: "Project", path: "/repo", color: "blue", addedAt: Date())
+        let worktree = Worktree(id: "member", projectId: project.id, name: "main", branch: "main",
+                                path: URL(fileURLWithPath: "/repo"), status: .clean, lastActivity: Date())
+        state.projectsManager = ProjectsManager(persistedProjects: [project])
+        state.projectsManager.insertOptimisticWorktree(worktree)
+        state.selectedWorktreeId = worktree.id
+        let owner = SessionOwnerID.workspaceCheckout(UUID(), .local)
+        let tab = manager.appendTerminal(worktreeId: worktree.id, title: "Member", sessionId: "member-session")
+        state.harness.setExternalActivity(sessionId: "member-session", agent: .claude, state: .awaitingInput)
+        let item = try #require(state.attentionAggregation.items.first)
+
+        state.activateComposedCenterTab(worktreeID: worktree.id, sharedSessionOwner: owner, tabID: tab.id)
+
+        #expect(state.attentionStore.acknowledgments[item.eventID] != nil)
+        #expect(state.attentionAggregation.unresolvedCount == 0)
+    }
+
     @Test func composedMemberCloseUsesExistingClosedTabLifecycle() {
         let manager = TabsManager(store: OwnerTabsMemoryStore())
         let state = AppState(store: OwnerTabsMemoryStore(), tabsManager: manager)

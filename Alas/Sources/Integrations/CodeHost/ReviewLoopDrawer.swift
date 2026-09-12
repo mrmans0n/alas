@@ -4,6 +4,7 @@ struct ReviewLoopDrawer: View {
     @Bindable var state: ReviewLoopState
     let canOpenAgentHandoff: Bool
     let onAction: (ReviewReadinessActionKind) -> Void
+    var onRevealReviewRequest: (Int) -> Void = { _ in }
 
     @Environment(\.theme) private var theme
 
@@ -84,8 +85,18 @@ struct ReviewLoopDrawer: View {
         }
     }
 
-    private func toggleExpanded() {
+    func toggleExpanded() {
         state.setExpanded(!state.isExpanded)
+        if state.isExpanded, let request = state.snapshot?.reviewRequest {
+            onRevealReviewRequest(request.number)
+        }
+    }
+
+    func performAction(_ action: ReviewReadinessActionKind) {
+        if let request = state.snapshot?.reviewRequest {
+            onRevealReviewRequest(request.number)
+        }
+        onAction(action)
     }
 
     private func headerTitle(model: ReviewReadinessModel) -> some View {
@@ -99,7 +110,7 @@ struct ReviewLoopDrawer: View {
 
             if let requestNumberTitle = model.requestNumberTitle {
                 Button {
-                    onAction(.openReviewRequest)
+                    performAction(.openReviewRequest)
                 } label: {
                     Text(requestNumberTitle.uppercased())
                         .font(.system(size: 10.5, weight: .semibold))
@@ -139,7 +150,7 @@ struct ReviewLoopDrawer: View {
                     HStack(spacing: 8) {
                         ForEach(model.actions) { action in
                             ReviewReadinessActionButton(action: action) {
-                                onAction(action.kind)
+                                performAction(action.kind)
                             }
                         }
                     }

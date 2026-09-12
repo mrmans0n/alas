@@ -1,8 +1,25 @@
+import SwiftUI
 import Testing
 @testable import Alas
 
 @Suite("AppKitDiffReviewScroller")
 struct AppKitDiffReviewScrollerTests {
+    @Test func commentRevealRequiresExactRowInsteadOfFileOrPlaceholderFallback() {
+        let file = fileID()
+        let command = DiffReviewDraftCommentScrollCommand(commentID: "comment", fileID: file, generation: 1)
+        let rowID = AppKitDiffReviewRowID.draftComment(command.targetID)
+        let placeholder = AppKitDiffReviewRowID.placeholder(fileID: file)
+        let fallback = plan(fileID: file, fallbackByTargetID: [rowID: placeholder], placeholderByFileID: [file: placeholder])
+        #expect(!AppKitDiffReviewScrollRequestResolver.hasExactDraftCommentTarget(command, in: fallback))
+        let exact = AppKitDiffReviewRowPlan(corePlan: .init(rows: [
+            .init(id: rowID, ownerID: file.rawValue, equalityToken: .init(0), contentSignature: 0,
+                  estimatedHeight: 100, build: { AnyView(EmptyView()) })
+        ]), fallbackByTargetID: [rowID: rowID], headerByFileID: [:], placeholderByFileID: [:])
+        #expect(AppKitDiffReviewScrollRequestResolver.hasExactDraftCommentTarget(command, in: exact))
+        let missing = DiffReviewDraftCommentScrollCommand(commentID: "missing", fileID: file, generation: 2)
+        #expect(!AppKitDiffReviewScrollRequestResolver.hasExactDraftCommentTarget(missing, in: exact))
+    }
+
     @Test func fileCommandsTargetHeadersAtTop() {
         let fileID = fileID()
         let headerID = AppKitDiffReviewRowID.header(fileID: fileID)

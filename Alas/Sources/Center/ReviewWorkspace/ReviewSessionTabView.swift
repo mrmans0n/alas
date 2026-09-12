@@ -23,6 +23,19 @@ struct ReviewSessionTabLoadCoordinator {
     }
 }
 
+struct ReviewSessionCommentJumpConsumer {
+    private var consumedSessionID: ReviewSessionID?
+    private var consumedRequest: DiffReviewDraftCommentScrollCommand?
+
+    mutating func consume(_ request: DiffReviewDraftCommentScrollCommand?, sessionID: ReviewSessionID, isLoaded: Bool) -> DiffReviewDraftCommentScrollCommand? {
+        guard isLoaded, let request,
+              consumedSessionID != sessionID || consumedRequest != request else { return nil }
+        consumedSessionID = sessionID
+        consumedRequest = request
+        return request
+    }
+}
+
 struct ReviewSessionTabLoadPublication {
     let record: ReviewSessionRecord
     let loaded: ReviewSessionLoadedContext
@@ -88,6 +101,8 @@ struct ReviewSessionTabView: View {
     @State private var focusedDraftCommentID: String?
     @State private var draftCommentScrollCommand: DiffReviewDraftCommentScrollCommand?
     @State private var draftCommentScrollController = DiffReviewDraftCommentScrollController()
+    @State private var commentJumpConsumer = ReviewSessionCommentJumpConsumer()
+    @State private var attentionCommentCommand: (submitted: DiffReviewDraftCommentScrollCommand, requested: DiffReviewDraftCommentScrollCommand)?
     @State private var focusedFeedbackID: String?
     @State private var inlineFeedbackScrollCommand: DiffReviewInlineFeedbackScrollCommand?
     @State private var inlineFeedbackScrollController = DiffReviewInlineFeedbackScrollController()
@@ -218,6 +233,9 @@ struct ReviewSessionTabView: View {
         }
         .onChange(of: tabState.sessionID) { _, _ in
             rekeyDraftControllerForCurrentSession()
+        }
+        .onChange(of: tabState.commentScrollRequest, initial: true) { _, request in
+            revealRequestedComment(request)
         }
         .onDisappear {
             selectionPersister.flush()
@@ -398,7 +416,11 @@ struct ReviewSessionTabView: View {
                 draftCommentScrollCommand: draftCommentScrollCommand,
                 draftCommentActions: draftCommentActions(for: loaded),
                 onSelectDraftComment: selectDraftComment,
-                onSaveDraftComment: saveDraftComment
+                onSaveDraftComment: saveDraftComment,
+                onDraftCommentReveal: { command, succeeded in
+                    let requested = attentionCommentCommand?.submitted == command ? attentionCommentCommand?.requested : nil
+                    completeAttentionCommentReveal(requested ?? command, succeeded: succeeded)
+                }
             )
             .environment(\.reviewDraftSummaryRailStatus, ReviewDraftSummaryRailStatus(record: record))
         }
@@ -594,6 +616,7 @@ struct ReviewSessionTabView: View {
                 loadDraftCommentController(for: refreshedRecord)
                 isLoading = false
                 loadCoordinator.finish(token)
+                revealRequestedComment(tabState.commentScrollRequest)
                 return true
             }
             if resolvedRecord.paused, refreshedRecord.target != storedRecord.target {
@@ -617,6 +640,7 @@ struct ReviewSessionTabView: View {
             loadDraftCommentController(for: refreshedRecord)
             isLoading = false
             loadCoordinator.finish(token)
+            revealRequestedComment(tabState.commentScrollRequest)
             return true
         } catch is CancellationError {
             guard loadCoordinator.canPublish(token) else { return false }
@@ -628,6 +652,7 @@ struct ReviewSessionTabView: View {
             loadError = error.localizedDescription
             isLoading = false
             loadCoordinator.finish(token)
+            if let request = tabState.commentScrollRequest { completeAttentionCommentReveal(request, succeeded: false) }
             return true
         }
     }
@@ -739,6 +764,7 @@ struct ReviewSessionTabView: View {
         }
         do {
             try draftCommentController?.load()
+            revealRequestedComment(tabState.commentScrollRequest)
         } catch {
             // Draft comment load failures stay non-blocking; the controller keeps the error.
         }
@@ -767,7 +793,11 @@ struct ReviewSessionTabView: View {
             },
             worktreeID: persistsState ? tabState.worktreeId : nil,
             now: now,
-            sessionStore: { sessionStore }
+            sessionStore: { sessionStore },
+            acknowledgeCommentAttention: { comment in
+                guard let worktree else { return }
+                appState?.acknowledgeReviewCommentAttention(worktreeID: worktree.id, commentID: comment.id)
+            }
         )
         let baseAvailability = actions.availability
         actions.availability = { comment in
@@ -1180,12 +1210,43 @@ struct ReviewSessionTabView: View {
     }
 
     private func selectDraftComment(_ comment: ReviewDraftComment) {
+        guard loaded?.session.files.contains(where: { $0.id == comment.fileID }) == true else { return }
         setFocusedDraftCommentID(comment.id, persist: true)
         setSelectedFileID(comment.fileID, persist: true)
-        draftCommentScrollCommand = draftCommentScrollController.command(
+        let command = draftCommentScrollController.command(
             commentID: comment.id,
             fileID: comment.fileID
         )
+        attentionCommentCommand = nil
+        if let worktree {
+            appState?.beginReviewAttentionInteraction(worktreeID: worktree.id, tabID: tabState.id,
+                sessionID: comment.sessionID.rawValue, command: command)
+        }
+        draftCommentScrollCommand = command
+    }
+
+    private func revealRequestedComment(_ request: DiffReviewDraftCommentScrollCommand?) {
+        guard let request = commentJumpConsumer.consume(
+            request, sessionID: tabState.sessionID,
+            isLoaded: loaded != nil && loadCoordinator.activeToken == nil && loadedDraftSessionID == record?.target.draftSessionID
+        ) else { return }
+        guard loaded?.session.files.contains(where: { $0.id == request.fileID }) == true,
+              draftCommentController?.comments.contains(where: { $0.id == request.commentID && $0.fileID == request.fileID }) == true else {
+            completeAttentionCommentReveal(request, succeeded: false)
+            return
+        }
+        setSelectedFileID(request.fileID, persist: false)
+        setFocusedDraftCommentID(request.commentID, persist: false)
+        let command = draftCommentScrollController.command(commentID: request.commentID, fileID: request.fileID)
+        attentionCommentCommand = (command, request)
+        draftCommentScrollCommand = command
+    }
+
+    private func completeAttentionCommentReveal(_ command: DiffReviewDraftCommentScrollCommand, succeeded: Bool) {
+        guard let worktree,
+              let sessionID = record?.target.draftSessionID.rawValue ?? appState?.attentionPendingReviewReveal?.sessionID else { return }
+        appState?.completeReviewAttentionReveal(worktreeID: worktree.id, tabID: tabState.id,
+            sessionID: sessionID, command: command, succeeded: succeeded)
     }
 
     private func selectInlineFeedback(_ item: DiffReviewInlineFeedback) {
