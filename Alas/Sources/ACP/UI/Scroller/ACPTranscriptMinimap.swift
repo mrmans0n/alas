@@ -51,20 +51,35 @@ final class ACPTranscriptMinimap {
         let promptColor = NSColor(theme.color("accent")).withAlphaComponent(0.26)
         let cardColor = NSColor(theme.color("bg-2"))
         let textColor = NSColor(theme.color("fg-faint")).withAlphaComponent(0.6)
-        for (index, message) in transcript.messages.enumerated() where !indices.contains(index) {
-            let y = CGFloat(transcript.messageIndexOffset + index) * slot
+        for start in stride(from: 0, to: transcript.messages.count, by: sampleStride) {
+            let end = min(transcript.messages.count, start + sampleStride)
+            let messages = transcript.messages[start..<end]
+            guard let message = messages.first(where: {
+                if case .user = $0 { return true }
+                return false
+            }) ?? messages.first(where: {
+                if case .toolCall = $0 { return true }
+                if case .fileEdit = $0 { return true }
+                return false
+            }) ?? messages.first(where: {
+                if case .plan = $0 { return false }
+                return true
+            }) else { continue }
+            let y = CGFloat(transcript.messageIndexOffset + start) * slot
+            let height = CGFloat(end - start) * slot
             let rect: CGRect
             let color: NSColor
             switch message {
             case .user:
-                rect = CGRect(x: 24, y: y, width: 64, height: 18)
-                color = promptColor
+                rect = CGRect(x: 24, y: y, width: 64, height: max(2, height))
+                color = promptColor.withAlphaComponent(promptColor.alphaComponent * 0.45)
             case .toolCall, .fileEdit:
-                rect = CGRect(x: 0, y: y, width: 88, height: 8)
+                rect = CGRect(x: 0, y: y, width: 88, height: max(2, min(8, height)))
                 color = cardColor
-            case .plan: continue
+            case .plan:
+                continue
             default:
-                rect = CGRect(x: 0, y: y, width: 60, height: 2)
+                rect = CGRect(x: 0, y: y, width: 60, height: max(1, min(2, height)))
                 color = textColor
             }
             result.marks.append(.init(rect: rect, color: color))

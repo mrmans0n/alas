@@ -160,6 +160,17 @@ struct MinimapTests {
         #expect(renderer.needsUpdate(transcript: transcript, theme: try Theme.loadBundled(id: "light")))
     }
 
+    @Test("Long transcript previews keep fallback marks bounded")
+    @MainActor func transcriptPreviewBounded() throws {
+        let theme = try Theme.loadBundled(id: "cool-slate")
+        let transcript = ACPTranscript()
+        transcript.messages = (0..<10_000).map { _ in
+            .systemNotice(id: UUID(), text: "message")
+        }
+        let drawing = ACPTranscriptMinimap().drawing(transcript: transcript, theme: theme)
+        #expect(drawing.marks.count < 3_000)
+    }
+
     @Test("Character blocks preserve indentation, gaps, and attributed syntax colors")
     func syntaxBlocks() {
         let text = NSMutableAttributedString(string: "  let x\n\t42\n", attributes: [.foregroundColor: NSColor.white])
