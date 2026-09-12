@@ -209,6 +209,20 @@ struct WorktreeCheckpointStoreTests {
         #expect(!quarantineNames.contains { $0.hasPrefix(checkpoint.manifest.id.uuidString.lowercased()) })
     }
 
+    @Test func committedDeleteSurvivesEntryCleanupFailure() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let checkpoint = try publication(lineageID: lineageA, label: "Delete me", bytes: Data([1, 2, 3]))
+        _ = try await WorktreeCheckpointStore(root: root).publish(checkpoint)
+        let fileSystem = RemoveFailingFileSystem(failingLastPathComponent: checkpoint.manifest.id.uuidString.lowercased(), failingParentLastPathComponent: "entries")
+        let store = WorktreeCheckpointStore(root: root, fileSystem: fileSystem)
+
+        let catalog = try await store.delete(id: checkpoint.manifest.id, lineageID: lineageA)
+
+        #expect(catalog.summaries.isEmpty)
+        #expect(try await WorktreeCheckpointStore(root: root).catalog(lineageID: lineageA).summaries.isEmpty)
+    }
+
     @Test func corruptCatalogIsQuarantinedAndRebuiltFromValidManifests() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

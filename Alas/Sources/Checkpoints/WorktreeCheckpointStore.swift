@@ -217,9 +217,11 @@ actor WorktreeCheckpointStore {
         let remainingUnavailable = unavailable.filter { $0.id != id }
         let next = snapshot(lineageID: lineageID, manifests: remaining, unavailable: remainingUnavailable, byteCount: try storageByteCount(manifests: remaining, layout: layout, incoming: [:]))
         try writeCatalog(next, layout: layout)
-        try removeEntry(id, layout: layout)
-        try removeQuarantinedEntry(id, layout: layout)
-        try garbageCollect(layout: layout, manifests: remaining, journals: try activeJournalsUnlocked(lineageID: lineageID))
+        try? removeEntry(id, layout: layout)
+        try? removeQuarantinedEntry(id, layout: layout)
+        if let journals = try? activeJournalsUnlocked(lineageID: lineageID) {
+            try? garbageCollect(layout: layout, manifests: remaining, journals: journals)
+        }
         return next
     }
 
