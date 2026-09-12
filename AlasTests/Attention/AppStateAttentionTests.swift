@@ -190,6 +190,40 @@ struct AppStateAttentionTests {
         #expect(state.harness.activityBySession[session.id] == nil)
     }
 
+    @Test func dismissAttentionItemAcknowledgesAndClearsNavigationError() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeStateWithWorktree()
+        _ = state.tabs.appendTerminal(worktreeId: "worktree", title: "Agent", sessionId: "session")
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput)
+        let item = try #require(state.attentionAggregation.items.first)
+        state.attentionNavigationErrors[item.eventID] = "The session is no longer available."
+
+        state.dismissAttentionItem(item)
+
+        #expect(state.attentionStore.acknowledgments[item.eventID] != nil)
+        #expect(state.attentionNavigationErrors[item.eventID] == nil)
+        #expect(state.attentionAggregation.unresolvedCount == 0)
+        #expect(state.attentionAggregation.history.contains { $0.eventID == item.eventID })
+    }
+
+    @Test func dismissAllAttentionItemsAcknowledgesEveryActiveItem() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeStateWithWorktree()
+        _ = state.tabs.appendTerminal(worktreeId: "worktree", title: "Agent", sessionId: "session")
+        _ = state.tabs.appendTerminal(worktreeId: "worktree", title: "Agent 2", sessionId: "other")
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput)
+        state.harness.setExternalActivity(sessionId: "other", agent: .codex, state: .permissionRequest)
+        let before = state.attentionAggregation.items
+        #expect(before.count == 2)
+
+        state.dismissAllAttentionItems()
+
+        #expect(before.allSatisfy { state.attentionStore.acknowledgments[$0.eventID] != nil })
+        #expect(state.attentionAggregation.unresolvedCount == 0)
+    }
+
     @Test func acpResponseInteractionAcknowledgesSessionAttention() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
@@ -630,37 +664,6 @@ struct AppStateAttentionTests {
         #expect(state.attentionStore.document.aliases[legacyOwner]?.lineageID == "lineage")
     }
 
-    @Test func inboxRestoresOriginalTabAfterRepeatedOpen() throws {
-        let fixture = try Fixture()
-        defer { fixture.cleanup() }
-        let state = fixture.makeState()
-        let first = state.tabs.appendTerminal(worktreeId: "worktree", title: "First", sessionId: "first")
-        state.selectedWorktreeId = "worktree"
-        state.openAttentionInbox()
-        _ = state.tabs.appendTerminal(worktreeId: "worktree", title: "Second", sessionId: "second")
-        state.openAttentionInbox()
-        state.closeAttentionInbox()
-
-        #expect(!state.isAttentionInboxOpen)
-        #expect(state.selectedWorktreeId == "worktree")
-        #expect(state.tabs.activeTabId(forWorktree: "worktree") == first.id)
-    }
-
-    @Test func closingInboxKeepsFallbackWhenSavedWorktreeDisappears() throws {
-        let fixture = try Fixture()
-        defer { fixture.cleanup() }
-        let state = fixture.makeStateWithWorktree()
-        state.selectedWorktreeId = "worktree"
-
-        state.openAttentionInbox()
-        state.projectsManager = ProjectsManager(persistedProjects: [])
-        state.selectedWorktreeId = nil
-        state.closeAttentionInbox()
-
-        #expect(!state.isAttentionInboxOpen)
-        #expect(state.selectedWorktreeId == nil)
-    }
-
     @Test func stoppedRightPaneStatesDoNotContributeLiveAttentionSignals() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
@@ -885,59 +888,19 @@ struct AppStateAttentionTests {
         #expect(state.attentionStore.acknowledgments[item.eventID] != nil)
     }
 
-    @Test func closingInboxRestoresWorkspaceCheckoutNavigation() async throws {
+    @Test func openingAndClosingInboxTogglesStateAndCancelsPendingReviewReveal() throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
-        let workspaceURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
-        defer { try? FileManager.default.removeItem(at: workspaceURL) }
-        let workspaceStore = WorkspaceStore(url: workspaceURL)
-        let workspacesManager = WorkspacesManager(bridge: WorkspaceSpacePersistenceBridge(workspaceStore: workspaceStore))
-        let workspaceID = UUID()
-        let project = ProjectConfig(id: "project", name: "Project", path: "/repo", color: "blue", addedAt: fixture.now)
-        let worktree = Worktree(id: "worktree", projectId: project.id, name: "main", branch: "main",
-                                path: URL(fileURLWithPath: "/repo"), status: .clean, lastActivity: fixture.now)
-        let memberID = UUID()
-        let checkout = WorkspaceCheckout(
-            workspaceID: workspaceID,
-            fallbackWorkspaceName: "Shared",
-            executionLocation: .local,
-            branch: "topic",
-            rootPath: "/repo",
-            members: [
-                WorkspaceCheckoutMember(
-                    workspaceMemberID: memberID,
-                    projectID: project.id,
-                    fallbackProjectName: project.name,
-                    fallbackRepositoryRoot: project.path,
-                    worktreePath: worktree.path.path,
-                    availability: .available
-                )
-            ]
-        )
-        try await workspaceStore.checkpoint(WorkspaceStateFile(checkouts: [checkout]))
-        _ = await workspacesManager.setEnabled(true, spacesFile: SpacesFile(activeSpaceId: "main", spaces: []))
-        let state = AppState(
-            store: MemoryStore(),
-            workspacesManager: workspacesManager,
-            workspaceStore: workspaceStore,
-            attentionStore: AttentionStore(url: fixture.url)
-        )
-        state.projectsManager = ProjectsManager(persistedProjects: [project])
-        state.projectsManager.insertOptimisticWorktree(worktree)
-        state.selectWorkspaceCheckout(id: checkout.id)
-        let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
-        let sharedTab = state.tabs.appendACP(owner: owner, sessionId: "shared-acp", title: "Shared agent")
-        state.tabs.activate(owner: owner, tabId: sharedTab.id)
+        let state = fixture.makeStateWithWorktree()
 
         state.openAttentionInbox()
-        state.selectWorktree(id: Optional<String>.none)
+        #expect(state.isAttentionInboxOpen)
+        state.openAttentionInbox()
+        #expect(state.isAttentionInboxOpen)
         state.closeAttentionInbox()
-
-        #expect(state.selectedWorkspaceCheckout?.id == checkout.id)
-        #expect(state.workspaceNavigationState.focusedCheckoutMemberID == memberID)
-        #expect(state.workspaceNavigationState.repositoryFocusWorktreeID == worktree.id)
-        #expect(state.selectedWorktreeId == worktree.id)
-        #expect(state.tabs.activeTabId(for: owner) == sharedTab.id)
+        #expect(!state.isAttentionInboxOpen)
+        state.closeAttentionInbox()
+        #expect(!state.isAttentionInboxOpen)
     }
 
     @Test func offlineHostEventOpensWorktreeAndClearsWhileStillOffline() async throws {

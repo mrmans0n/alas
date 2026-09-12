@@ -278,18 +278,7 @@ struct RootView: View {
 
     @ViewBuilder
     private func centerContent(effectiveRightPaneVisible: Bool) -> some View {
-        if state.isAttentionInboxOpen {
-            AttentionInboxView(
-                aggregation: state.attentionAggregation,
-                loadError: state.attentionStore.loadError?.localizedDescription,
-                writeError: state.attentionStore.writeError?.localizedDescription,
-                navigationErrors: state.attentionNavigationErrors,
-                onClose: { state.closeAttentionInbox() },
-                onOpen: { item in _ = await state.openAttentionItem(item) }
-            )
-        } else {
-            worktreeCenterContent(effectiveRightPaneVisible: effectiveRightPaneVisible)
-        }
+        worktreeCenterContent(effectiveRightPaneVisible: effectiveRightPaneVisible)
     }
 
     @ViewBuilder

@@ -36,8 +36,13 @@ struct SidebarView: View {
                     onHideSidebar: onHideSidebar,
                     onNewWorkspace: state.config.workspacesEnabled ? { showingNewWorkspace = true } : nil,
                     attentionCount: attentionAggregation.unresolvedCount,
-                    attentionInboxOpen: state.isAttentionInboxOpen,
-                    onOpenAttentionInbox: { state.openAttentionInbox() }
+                    attentionInboxOpen: $state.isAttentionInboxOpen,
+                    attentionAggregation: attentionAggregation,
+                    attentionLoadError: state.attentionStore.loadError?.localizedDescription,
+                    attentionWriteError: state.attentionStore.writeError?.localizedDescription,
+                    attentionNavigationErrors: state.attentionNavigationErrors,
+                    onDismissAttentionItem: { state.dismissAttentionItem($0) },
+                    onOpenAttentionItem: { item in _ = await state.openAttentionItem(item) }
                 )
                 ScrollView(.vertical, showsIndicators: true) {
                     VStack(alignment: .leading, spacing: 8) {

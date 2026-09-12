@@ -9,8 +9,44 @@ struct SidebarHeaderView: View {
     let onHideSidebar: () -> Void
     var onNewWorkspace: (() -> Void)? = nil
     var attentionCount: Int = 0
-    var attentionInboxOpen: Bool = false
-    var onOpenAttentionInbox: () -> Void = {}
+    @Binding var attentionInboxOpen: Bool
+    var attentionAggregation: AttentionAggregation = AttentionAggregation(items: [], history: [], unresolvedCount: 0, unresolvedCountByProject: [:])
+    var attentionLoadError: String? = nil
+    var attentionWriteError: String? = nil
+    var attentionNavigationErrors: [UUID: String] = [:]
+    var onDismissAttentionItem: (AttentionItem) -> Void = { _ in }
+    var onOpenAttentionItem: (AttentionItem) async -> Void = { _ in }
+    init(worktreeSortMode: AppConfig.WorktreeSortMode,
+         onSetWorktreeSortMode: @escaping (AppConfig.WorktreeSortMode) -> Void,
+         onSettings: @escaping () -> Void,
+         onAddProject: @escaping () -> Void,
+         onSearch: @escaping () -> Void,
+         onHideSidebar: @escaping () -> Void,
+         onNewWorkspace: (() -> Void)? = nil,
+         attentionCount: Int = 0,
+         attentionInboxOpen: Binding<Bool> = .constant(false),
+         attentionAggregation: AttentionAggregation = AttentionAggregation(items: [], history: [], unresolvedCount: 0, unresolvedCountByProject: [:]),
+         attentionLoadError: String? = nil,
+         attentionWriteError: String? = nil,
+         attentionNavigationErrors: [UUID: String] = [:],
+         onDismissAttentionItem: @escaping (AttentionItem) -> Void = { _ in },
+         onOpenAttentionItem: @escaping (AttentionItem) async -> Void = { _ in }) {
+        self.worktreeSortMode = worktreeSortMode
+        self.onSetWorktreeSortMode = onSetWorktreeSortMode
+        self.onSettings = onSettings
+        self.onAddProject = onAddProject
+        self.onSearch = onSearch
+        self.onHideSidebar = onHideSidebar
+        self.onNewWorkspace = onNewWorkspace
+        self.attentionCount = attentionCount
+        self._attentionInboxOpen = attentionInboxOpen
+        self.attentionAggregation = attentionAggregation
+        self.attentionLoadError = attentionLoadError
+        self.attentionWriteError = attentionWriteError
+        self.attentionNavigationErrors = attentionNavigationErrors
+        self.onDismissAttentionItem = onDismissAttentionItem
+        self.onOpenAttentionItem = onOpenAttentionItem
+    }
     @Environment(\.theme) private var theme
     @State private var hovering = false
     @State private var addMenuHovered = false
@@ -34,6 +70,19 @@ struct SidebarHeaderView: View {
         .windowDragHandle()
     }
 
+    private var attentionToolbarButton: some View {
+        AttentionToolbarButton(count: attentionCount, isOpen: $attentionInboxOpen) {
+            AttentionInboxView(
+                aggregation: attentionAggregation,
+                loadError: attentionLoadError,
+                writeError: attentionWriteError,
+                navigationErrors: attentionNavigationErrors,
+                onDismiss: onDismissAttentionItem,
+                onOpen: onOpenAttentionItem
+            )
+        }
+    }
+
     private var expandedHeader: some View {
         HStack(alignment: .center, spacing: 12) {
             TrafficLights()
@@ -45,7 +94,7 @@ struct SidebarHeaderView: View {
                     headerHovered: hovering
                 )
                 ToolbarBtn(icon: "search", tooltip: "Search", action: onSearch)
-                AttentionToolbarButton(count: attentionCount, isOpen: attentionInboxOpen, action: onOpenAttentionInbox)
+                attentionToolbarButton
                 if let onNewWorkspace {
                     Menu {
                         Button("Add repository...", systemImage: "folder.badge.plus", action: onAddProject)
@@ -78,7 +127,7 @@ struct SidebarHeaderView: View {
             Spacer(minLength: 0)
             HStack(spacing: 2) {
                 ToolbarBtn(icon: "search", tooltip: "Search", action: onSearch)
-                AttentionToolbarButton(count: attentionCount, isOpen: attentionInboxOpen, action: onOpenAttentionInbox)
+                attentionToolbarButton
                 Menu {
                     Menu("Sort worktrees") {
                         ForEach(WorktreeSortPresentation.modes, id: \.self) { mode in
@@ -115,15 +164,17 @@ struct SidebarHeaderView: View {
     }
 }
 
-private struct AttentionToolbarButton: View {
+private struct AttentionToolbarButton<Content: View>: View {
     let count: Int
-    let isOpen: Bool
-    let action: () -> Void
+    @Binding var isOpen: Bool
+    @ViewBuilder let content: () -> Content
     @Environment(\.theme) private var theme
     @State private var hovering = false
 
     var body: some View {
-        Button(action: action) {
+        Button {
+            isOpen.toggle()
+        } label: {
             Image(systemName: "exclamationmark.triangle")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(theme.color(count > 0 ? "warn" : (hovering ? "fg" : "fg-muted")))
@@ -151,6 +202,9 @@ private struct AttentionToolbarButton: View {
         .help(SidebarHeaderView.attentionAccessibilityLabel(count: count))
         .accessibilityLabel(SidebarHeaderView.attentionAccessibilityLabel(count: count))
         .accessibilityAddTraits(isOpen ? .isSelected : [])
+        .popover(isPresented: $isOpen, arrowEdge: .bottom) {
+            content()
+        }
     }
 }
 

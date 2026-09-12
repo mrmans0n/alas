@@ -93,12 +93,20 @@ final class AttentionStore {
     }
 
     func acknowledge(eventID: UUID, at date: Date) {
-        guard document.events.contains(where: { $0.id == eventID }) else { return }
-        guard document.acknowledgments[eventID] == nil else {
+        acknowledge(eventIDs: [eventID], at: date)
+    }
+
+    func acknowledge(eventIDs: [UUID], at date: Date) {
+        var changed = false
+        let knownIDs = Set(document.events.map(\.id))
+        for eventID in eventIDs where knownIDs.contains(eventID) && document.acknowledgments[eventID] == nil {
+            document.acknowledgments[eventID] = AttentionAcknowledgment(eventID: eventID, acknowledgedAt: date)
+            changed = true
+        }
+        guard changed else {
             retryPersistingUnwrittenDocumentIfNeeded()
             return
         }
-        document.acknowledgments[eventID] = AttentionAcknowledgment(eventID: eventID, acknowledgedAt: date)
         retain(at: date)
         persist()
     }
