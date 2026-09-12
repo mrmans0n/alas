@@ -19,7 +19,17 @@ struct MergeView3Way: View {
     let onJumpToConflict: (Int) -> Void
 
     @State private var coordinator = MergeScrollCoordinator()
+    /// Available width of the merge view. Drives minimap visibility: below
+    /// `minWidthForMinimap` the three panes are too narrow to be usable with
+    /// a 13pt strip reserved on the right.
+    @State private var availableWidth: CGFloat = 0
     @Environment(\.theme) var theme
+
+    static let minWidthForMinimap: CGFloat = 730
+
+    private var showsMinimap: Bool {
+        availableWidth >= Self.minWidthForMinimap
+    }
 
     private var layout: MergeRegionVisualLayout.Layout {
         MergeRegionVisualLayout.compute(regions: model.regions, showBase: showBase)
@@ -116,16 +126,23 @@ struct MergeView3Way: View {
                 codeFontSize: codeFontSize,
                 coordinator: coordinator
             )
-            MergeConflictMinimap(
-                conflictCount: model.conflictCount,
-                resolvedCount: max(model.initialConflictCount - model.conflictCount, 0),
-                currentConflictIndex: model.currentConflictIndex,
-                onJump: onJumpToConflict
-            )
-            .frame(width: 13)
+            if showsMinimap {
+                MergeConflictMinimap(
+                    conflictCount: model.conflictCount,
+                    resolvedCount: max(model.initialConflictCount - model.conflictCount, 0),
+                    currentConflictIndex: model.currentConflictIndex,
+                    onJump: onJumpToConflict
+                )
+                .frame(width: 13)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
+        .onGeometryChange(for: CGFloat.self) { proxy in
+            proxy.size.width
+        } action: { width in
+            availableWidth = width
+        }
         .onChange(of: model.currentConflictIndex, initial: true) { _, _ in
             scrollToCurrentConflict()
         }
@@ -177,17 +194,20 @@ private struct MergeThreeWayLayout: Layout {
         subviews: Subviews,
         cache: inout ()
     ) {
-        guard subviews.count == 6 else { return }
-        let fixedWidth = actionGutterWidth * 2 + minimapWidth
+        guard subviews.count == 6 || subviews.count == 5 else { return }
+        let minimapVisible = subviews.count == 6
+        let fixedWidth = actionGutterWidth * 2 + (minimapVisible ? minimapWidth : 0)
         let paneWidth = max((bounds.width - fixedWidth) / 3, 0)
-        let widths = [
+        var widths = [
             paneWidth,
             actionGutterWidth,
             paneWidth,
             actionGutterWidth,
             paneWidth,
-            minimapWidth,
         ]
+        if minimapVisible {
+            widths.append(minimapWidth)
+        }
 
         var x = bounds.minX
         for (index, width) in widths.enumerated() {

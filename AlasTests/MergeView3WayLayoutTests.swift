@@ -6,6 +6,49 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct MergeView3WayLayoutTests {
+    @Test func minimapIsHiddenWhenCenterPaneIsTooNarrow() throws {
+        let model = Self.makeModel()
+        try assertMinimapVisibility(width: 700, visible: false, model: model)
+        try assertMinimapVisibility(width: 1_200, visible: true, model: model)
+    }
+
+    private static func makeModel() -> MergeConflictTabModel {
+        let model = MergeConflictTabModel(
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-layout-test"),
+            relativePath: "long.swift",
+            gitService: GitService()
+        )
+        model.resultText = longConflictText(lineCount: 1_200)
+        model.reparse()
+        return model
+    }
+
+    @discardableResult
+    private func assertMinimapVisibility(width: CGFloat, visible: Bool, model: MergeConflictTabModel) throws -> NSHostingController<AnyView> {
+        let view = MergeView3Way(
+            model: model,
+            fileExtension: "swift",
+            codeFontFamily: "SF Mono",
+            codeFontSize: 13,
+            showBase: false,
+            onJumpToConflict: { _ in }
+        )
+        .environment(\.theme, try ThemeStore().current)
+        let controller = NSHostingController(rootView: AnyView(view))
+        controller.view.frame = NSRect(x: 0, y: 0, width: width, height: 600)
+        controller.view.layoutSubtreeIfNeeded()
+
+        let divider = controller.view.descendantViews { view in
+            abs(view.frame.width - 6) < 0.5 && abs(view.frame.height - 14) < 0.5
+        }
+        if visible {
+            #expect(!divider.isEmpty)
+        } else {
+            #expect(divider.isEmpty)
+        }
+        return controller
+    }
+
     @Test func longConflictedFilesDoNotExpandMergeViewHeight() throws {
         let model = MergeConflictTabModel(
             worktreePath: URL(fileURLWithPath: "/tmp/alas-layout-test"),
@@ -68,12 +111,14 @@ struct MergeView3WayLayoutTests {
 
 private extension NSView {
     func descendantScrollViews() -> [NSScrollView] {
-        var result: [NSScrollView] = []
-        if let scrollView = self as? NSScrollView {
-            result.append(scrollView)
-        }
+        descendantViews { $0 is NSScrollView }.compactMap { $0 as? NSScrollView }
+    }
+
+    func descendantViews(where predicate: (NSView) -> Bool) -> [NSView] {
+        var result: [NSView] = []
+        if predicate(self) { result.append(self) }
         for subview in subviews {
-            result.append(contentsOf: subview.descendantScrollViews())
+            result.append(contentsOf: subview.descendantViews(where: predicate))
         }
         return result
     }
