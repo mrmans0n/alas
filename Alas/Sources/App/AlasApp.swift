@@ -283,7 +283,7 @@ struct AlasApp: App {
                                                 object: RightPaneTab.agent.rawValue)
             }
             .keyboardShortcut(state.shortcut(for: .rightPaneAgentTab))
-            .disabled(!state.config.rightPaneRailEnabled || !state.config.agentTabEnabled)
+            .disabled(!state.config.rightPaneRailEnabled)
             Button("Right Sidebar: Run") {
                 NotificationCenter.default.post(name: .alasSelectRightPaneTab,
                                                 object: RightPaneTab.run.rawValue)

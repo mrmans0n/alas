@@ -29,7 +29,6 @@ struct RightPaneTabBar: View {
     let onHidePane: () -> Void
     let showIgnored: Bool
     let onToggleShowIgnored: () -> Void
-    var showAgentTab: Bool = false
     var showRunTab: Bool = false
     /// Number of commands currently starting or running in this worktree.
     var activeRunCount: Int = 0
@@ -69,16 +68,14 @@ struct RightPaneTabBar: View {
                         set: { _ in onToggleShowIgnored() }
                     ))
                 }
-            if RightPaneTab.available(agentTabEnabled: showAgentTab, runTabEnabled: showRunTab).contains(.agent) {
-                segment(
-                    .agent,
-                    icon: "person.crop.circle",
-                    label: "Agent",
-                    count: activeAgentCount > 0 ? activeAgentCount : nil,
-                    layout: layout
-                )
-            }
-            if RightPaneTab.available(agentTabEnabled: showAgentTab, runTabEnabled: showRunTab).contains(.run) {
+            segment(
+                .agent,
+                icon: "person.crop.circle",
+                label: "Agent",
+                count: activeAgentCount > 0 ? activeAgentCount : nil,
+                layout: layout
+            )
+            if RightPaneTab.available(runTabEnabled: showRunTab).contains(.run) {
                 segment(
                     .run,
                     icon: "play",
