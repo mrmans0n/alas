@@ -175,7 +175,7 @@ private struct AttentionToolbarButton<Content: View>: View {
         Button {
             isOpen.toggle()
         } label: {
-            Image(systemName: "bell")
+            Image(systemName: "tray")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(theme.color(hovering || isOpen ? "fg" : "fg-muted"))
                 .frame(width: 26, height: 22)
