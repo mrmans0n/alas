@@ -189,10 +189,18 @@ final class AppState {
         await checkpointMutationsDisabledAfterDiscovery(worktreeId: worktreeId)
     }
 
+    func checkpointWorktreeRemovalDisabledAfterDiscovery(_ worktree: Worktree) async -> Bool {
+        await checkpointMutationsDisabledAfterDiscovery(for: worktree)
+    }
+
     private func checkpointMutationsDisabledAfterDiscovery(worktreeId: String) async -> Bool {
         guard let (_, worktree) = projectAndWorktree(withWorktreeId: worktreeId) else {
             return true
         }
+        return await checkpointMutationsDisabledAfterDiscovery(for: worktree)
+    }
+
+    private func checkpointMutationsDisabledAfterDiscovery(for worktree: Worktree) async -> Bool {
         let pane = rightPaneStore.state(
             for: worktree,
             baseBranch: config.worktrees.baseBranch,
@@ -666,6 +674,8 @@ final class AppState {
             }
         }
     }
+
+    private static let checkpointRecoveryBlocksWorktreeRemovalMessage = "An interrupted checkpoint restore needs recovery before this worktree can be deleted."
 
     /// Set when a worktree deletion fails because Git requires `--force`.
     /// The UI presents a confirmation dialog; confirming retries with force.
@@ -2418,6 +2428,9 @@ final class AppState {
         guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
         let resolvedWorktree = try await resolveDirtyBuffersBeforeWorkspaceMemberDeletion(checkoutID: checkoutID, memberID: memberID)
         guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        if let resolvedWorktree {
+            try await requireCheckpointWorktreeRemovalAllowedAfterDiscovery(resolvedWorktree)
+        }
         let checkout = try await workspaceCoordinator().deleteMember(checkoutID: checkoutID, memberID: memberID, confirmingRisks: confirmingRisks)
         if let resolvedWorktree,
            checkout.members.first(where: { $0.id == memberID })?.availability == .explicitlyDeleted {
@@ -2569,6 +2582,9 @@ final class AppState {
             }
         }
         guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        for worktree in resolvedWorktrees.values {
+            try await requireCheckpointWorktreeRemovalAllowedAfterDiscovery(worktree)
+        }
         let checkout = try await workspaceCoordinator().deleteCheckout(checkoutID: id, confirmingRisks: confirmingRisks)
         for member in checkout.members where member.availability == .explicitlyDeleted {
             if let worktree = resolvedWorktrees[member.id] {
@@ -2578,6 +2594,12 @@ final class AppState {
         await workspacesManager.refreshCheckoutSnapshots()
         selectWorkspaceCheckout(id: id)
         return checkout
+    }
+
+    private func requireCheckpointWorktreeRemovalAllowedAfterDiscovery(_ worktree: Worktree) async throws {
+        guard await !checkpointWorktreeRemovalDisabledAfterDiscovery(worktree) else {
+            throw WorkspaceStoreError.recoveryRequired
+        }
     }
 
     func forgetWorkspaceCheckout(id: UUID, confirmedPreserveArtifacts: Bool = false) async throws {
@@ -8367,6 +8389,9 @@ final class AppState {
         if projectsManager.operationState(for: worktree.id) == .deleting {
             return .ok
         }
+        guard await !checkpointWorktreeRemovalDisabledAfterDiscovery(worktree) else {
+            return .error(Self.checkpointRecoveryBlocksWorktreeRemovalMessage)
+        }
         let dirty = dirtyEditorTabIds(worktreeId: worktree.id)
         if !dirty.isEmpty && !force {
             return .error("worktree has unsaved editor changes; save them or rerun with --force to delete")
@@ -8705,6 +8730,13 @@ final class AppState {
         promptsForForce: Bool = true,
         verifiedMergedBranchSHA: String? = nil
     ) async -> WorktreeBatchOutcome {
+        guard await !checkpointWorktreeRemovalDisabledAfterDiscovery(worktree) else {
+            projectsManager.setOperationState(
+                id: worktree.id,
+                state: .deleteFailed(message: Self.checkpointRecoveryBlocksWorktreeRemovalMessage)
+            )
+            return .failed(message: Self.checkpointRecoveryBlocksWorktreeRemovalMessage)
+        }
         let outcome: WorktreeRemovalOutcome
         do {
             outcome = try await Self.performRemoveWorktree(
@@ -8796,19 +8828,8 @@ final class AppState {
         guard let pending = pendingForceDeleteWorktree else { return }
         pendingForceDeleteWorktree = nil
 
-        guard let project = projects.first(where: { $0.id == pending.projectId }),
-              projectsManager.worktrees(projectId: pending.projectId).contains(where: { $0.id == pending.id })
+        guard let worktree = projectsManager.worktrees(projectId: pending.projectId).first(where: { $0.id == pending.id })
         else { return }
-
-        let worktree = Worktree(
-            id: pending.id,
-            projectId: pending.projectId,
-            name: pending.branch,
-            branch: pending.branch,
-            path: pending.worktreePath,
-            status: .clean,
-            lastActivity: Date()
-        )
 
         projectsManager.setOperationState(id: pending.id, state: .deleting)
 

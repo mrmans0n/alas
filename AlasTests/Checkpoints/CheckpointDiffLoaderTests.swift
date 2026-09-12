@@ -73,6 +73,42 @@ struct CheckpointDiffLoaderTests {
         #expect(deletion.metadataSummary == "Empty file deleted.")
     }
 
+    @Test func absentOnBothSidesDoesNotReportEmptyFileChange() async throws {
+        let repo = try await CheckpointTestRepository.make()
+        defer { repo.remove() }
+        let pathState = CheckpointPathState(
+            relativePath: "deleted.txt",
+            head: .absent,
+            index: .absent,
+            worktree: .absent
+        )
+        let manifest = try WorktreeCheckpointManifest(
+            kind: .manual,
+            label: "Saved",
+            createdAt: Date(timeIntervalSince1970: 1),
+            byteCount: 0,
+            lineageID: repo.target.lineageID,
+            capturedPath: repo.root.path,
+            repositoryName: "test",
+            branch: "main",
+            headOID: String(repeating: "f", count: 40),
+            exclusions: [],
+            groups: [],
+            paths: [pathState]
+        )
+        let store = WorktreeCheckpointStore(root: repo.root.appendingPathComponent(".git/checkpoints"))
+        _ = try await store.publish(.init(manifest: manifest, blobs: [:]))
+        let service = WorktreeCheckpointService(store: store)
+
+        guard case .text(let diff) = await service.diffContent(target: repo.target, id: manifest.id, path: "deleted.txt") else {
+            Issue.record("Expected absent/absent path to render as an unchanged text diff")
+            return
+        }
+
+        #expect(diff.hunks.isEmpty)
+        #expect(diff.metadataSummary == nil)
+    }
+
     @Test func currentOnlyDiffSnapshotsOnlyRequestedPath() async throws {
         let repo = try await CheckpointTestRepository.make()
         defer { repo.remove() }

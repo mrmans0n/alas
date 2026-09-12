@@ -185,7 +185,9 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
             }
             var diff = DiffParser.parse(result.stdout)
             if diff.hunks.isEmpty, diff.metadataSummary == nil {
-                if before.state.kind == .absent || after.state.kind == .absent {
+                if before.state.kind == .absent, after.state.kind == .absent {
+                    diff.metadataSummary = nil
+                } else if before.state.kind == .absent || after.state.kind == .absent {
                     diff.metadataSummary = before.state.kind == .absent ? "Empty file added." : "Empty file deleted."
                 } else {
                     diff.metadataSummary = checkpointDiffMetadataSummary(before: before.state, after: after.state)

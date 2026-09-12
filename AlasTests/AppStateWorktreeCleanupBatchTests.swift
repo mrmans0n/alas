@@ -74,6 +74,30 @@ struct AppStateWorktreeCleanupBatchTests {
         #expect(fixture.state.pendingForceDeleteWorktree == nil)
     }
 
+    @Test func batchDeleteFailsWhenCheckpointRecoveryIsPending() async throws {
+        let fixture = try await makeCleanupFixture(worktreeCount: 2)
+        let target = fixture.worktrees[1]
+        let lineageID = try #require(target.lineageID)
+        let store = WorktreeCheckpointStore()
+        let journal = CheckpointRestoreJournal(
+            lineageID: lineageID,
+            checkpointID: UUID(),
+            recoveryCheckpointID: UUID(),
+            phase: .prepared,
+            stagingRoot: target.path.appendingPathComponent(".alas-checkpoint-restore-\(UUID().uuidString.lowercased())").path,
+            selectedPaths: ["File.swift"],
+            expectedFingerprint: "fingerprint",
+            expectedIndexChecksum: "checksum"
+        )
+        try await store.writeJournal(journal)
+        defer { try? FileManager.default.removeItem(at: Paths.checkpointsRoot.appendingPathComponent(lineageID, isDirectory: true)) }
+
+        let results = await fixture.state.batchDeleteWorktrees([target], keepBranch: false)
+
+        #expect(results[0].outcome == .failed(message: "An interrupted checkpoint restore needs recovery before this worktree can be deleted."))
+        #expect(FileManager.default.fileExists(atPath: target.path.path))
+    }
+
     /// The batch skips per-item selection reconciliation (its list is still
     /// stale mid-run) and reconciles once at the end. Without that final pass
     /// the selection stays pinned to a worktree that no longer exists.
