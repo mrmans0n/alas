@@ -60,6 +60,11 @@ struct WebPreviewBrowserTests {
         #expect(addresses.allSatisfy { RunEndpointPolicy.isLoopbackHost($0) })
     }
 
+    @Test(arguments: ["192.0.2.1", "2001:db8::1"])
+    func nativeHostLookupReturnsNumericAddressesWithoutDNS(address: String) async throws {
+        #expect(await WebPreviewHostLookup.resolve(address) == [address])
+    }
+
     @Test func webKitInvokesNavigationGateForPageInitiatedRequests() async throws {
         let browser = WebPreviewBrowser(ownerKey: "navigation", remoteHost: nil)
         defer { browser.close() }

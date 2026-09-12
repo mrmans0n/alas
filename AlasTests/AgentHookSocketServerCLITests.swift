@@ -1,4 +1,5 @@
 import Darwin
+import Dispatch
 import Foundation
 import Testing
 @testable import Alas
@@ -34,21 +35,33 @@ struct AgentHookSocketServerCLITests {
         return (dir, { try? FileManager.default.removeItem(atPath: dir) })
     }
 
-    private func sendToSocket(path: String, payload: String) throws -> String {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/bash")
-        process.arguments = ["-c", "printf '%s' '\(payload)' | /usr/bin/nc -U -w5 '\(path)'"]
-        let outPipe = Pipe()
-        process.standardOutput = outPipe
-        try process.run()
-        process.waitUntilExit()
-        return String(data: outPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    private static func sendToSocket(path: String, payload: String) async throws -> String {
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                continuation.resume(with: Result {
+                    try sendToSocketDirect(path: path, payload: payload)
+                })
+            }
+        }
     }
 
-    private func sendToSocketDirect(path: String, payload: String) throws -> String {
+    private static func sendToSocketDirect(path: String, payload: String) throws -> String {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw POSIXError(.EIO) }
         defer { close(fd) }
+
+        var timeout = timeval(tv_sec: 5, tv_usec: 0)
+        for option in [SO_RCVTIMEO, SO_SNDTIMEO] {
+            let result = withUnsafePointer(to: &timeout) { pointer in
+                Darwin.setsockopt(
+                    fd,
+                    SOL_SOCKET,
+                    option,
+                    pointer,
+                    socklen_t(MemoryLayout<timeval>.size))
+            }
+            guard result == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        }
 
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
@@ -73,7 +86,7 @@ struct AgentHookSocketServerCLITests {
         return try readAll(fd: fd)
     }
 
-    private func writeAll(fd: Int32, data: Data) throws {
+    private static func writeAll(fd: Int32, data: Data) throws {
         try data.withUnsafeBytes { buffer in
             guard let base = buffer.baseAddress else { return }
             var written = 0
@@ -89,7 +102,7 @@ struct AgentHookSocketServerCLITests {
         }
     }
 
-    private func readAll(fd: Int32) throws -> String {
+    private static func readAll(fd: Int32) throws -> String {
         var data = Data()
         var buffer = [UInt8](repeating: 0, count: 64 * 1024)
         while true {
@@ -128,7 +141,7 @@ struct AgentHookSocketServerCLITests {
         }
 
         let json = #"{"v":1,"kind":"cli","command":"open","session_id":"s1","paths":["/tmp/a.txt"]}"#
-        let response = try sendToSocket(path: path, payload: json)
+        let response = try await Self.sendToSocket(path: path, payload: json)
         let object = try responseObject(response)
 
         #expect(object["ok"] as? Bool == true)
@@ -137,7 +150,7 @@ struct AgentHookSocketServerCLITests {
         #expect(request?.paths == ["/tmp/a.txt"])
     }
 
-    @Test func cliRequestReturnsHandlerError() throws {
+    @Test func cliRequestReturnsHandlerError() async throws {
         let (dir, cleanup) = tmpSocketDir()
         defer { cleanup() }
         let path = "\(dir)/test.sock"
@@ -147,14 +160,14 @@ struct AgentHookSocketServerCLITests {
         server.onCLIRequest = { _ in .error("Path does not exist.") }
 
         let json = #"{"v":1,"kind":"cli","command":"open","session_id":"s1","paths":["/tmp/missing.txt"]}"#
-        let response = try sendToSocket(path: path, payload: json)
+        let response = try await Self.sendToSocket(path: path, payload: json)
         let object = try responseObject(response)
 
         #expect(object["ok"] as? Bool == false)
         #expect(object["error"] as? String == "Path does not exist.")
     }
 
-    @Test func cliRequestWithoutHandlerReturnsUnavailableError() throws {
+    @Test func cliRequestWithoutHandlerReturnsUnavailableError() async throws {
         let (dir, cleanup) = tmpSocketDir()
         defer { cleanup() }
         let path = "\(dir)/test.sock"
@@ -162,7 +175,7 @@ struct AgentHookSocketServerCLITests {
         defer { server.shutdown() }
 
         let json = #"{"v":1,"kind":"cli","command":"open","session_id":"s1","paths":["/tmp/a.txt"]}"#
-        let response = try sendToSocket(path: path, payload: json)
+        let response = try await Self.sendToSocket(path: path, payload: json)
         let object = try responseObject(response)
 
         #expect(object["ok"] as? Bool == false)
@@ -181,7 +194,7 @@ struct AgentHookSocketServerCLITests {
         server.onCLIRequest = { _ in .ok }
 
         let json = #"{"v":1,"kind":"cli","command":"open","session_id":"s1","paths":["/tmp/a.txt"]}"#
-        _ = try sendToSocket(path: path, payload: json)
+        _ = try await Self.sendToSocket(path: path, payload: json)
         let event = await holder.wait(timeoutMs: 300)
 
         #expect(event == nil)
@@ -199,7 +212,7 @@ struct AgentHookSocketServerCLITests {
         server.onCLIRequest = { _ in .ok }
 
         let json = #"{"v":1,"kind":"cli","event":"busy","agent":"claude","session_id":"s1","paths":["/tmp/a"]}"#
-        let response = try sendToSocket(path: path, payload: json)
+        let response = try await Self.sendToSocket(path: path, payload: json)
         let object = try responseObject(response)
         let event = await holder.wait(timeoutMs: 300)
 
@@ -234,18 +247,19 @@ struct AgentHookSocketServerCLITests {
         let longRequest = #"{"v":1,"kind":"cli","command":"open","session_id":"s1","paths":["/tmp/a.txt"]}"#
         let cancelRequest = #"{"v":1,"kind":"cli","command":"preview_cancel","session_id":"s1","params":{"preview_id":"p1"}}"#
 
-        let longTask = Task { try sendToSocketDirect(path: path, payload: longRequest) }
+        let longTask = Task { try await Self.sendToSocket(path: path, payload: longRequest) }
         await gate.waitUntilEntered()
 
         let response: String
         do {
             response = try await withThrowingTaskGroup(of: String.self) { group in
-                group.addTask { try sendToSocketDirect(path: path, payload: cancelRequest) }
+                group.addTask { try await Self.sendToSocket(path: path, payload: cancelRequest) }
                 group.addTask {
                     try await Task.sleep(nanoseconds: 1_000_000_000)
                     throw POSIXError(.ETIMEDOUT)
                 }
-                let first = try await #require(group.next())
+                let next = try await group.next()
+                let first = try #require(next)
                 group.cancelAll()
                 return first
             }
@@ -274,7 +288,7 @@ struct AgentHookSocketServerCLITests {
         server.onCLIRequest = { _ in .text([payload]) }
 
         let json = #"{"v":1,"kind":"cli","command":"open","session_id":"s1","paths":["/tmp/a.txt"]}"#
-        let response = try sendToSocketDirect(path: path, payload: json)
+        let response = try await Self.sendToSocket(path: path, payload: json)
         let object = try responseObject(response)
 
         #expect(object["ok"] as? Bool == true)
@@ -303,7 +317,7 @@ struct AgentHookSocketServerCLITests {
         let json = #"{"v":1,"kind":"cli","command":"open","session_id":"s1","paths":["/tmp/a.txt"]}"#
         let clientTask = Task {
             do {
-                _ = try sendToSocketDirect(path: path, payload: json)
+                _ = try await Self.sendToSocket(path: path, payload: json)
             } catch {
             }
             await completion.finish()

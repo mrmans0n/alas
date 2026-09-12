@@ -39,10 +39,15 @@ enum WebPreviewHostLookup {
 
     @MainActor
     static func resolve(_ host: String) async -> [String]? {
-        await withCheckedContinuation { continuation in
+        let normalizedHost = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        if RunEndpointPolicy.isLoopbackHost(normalizedHost) || isNumericAddress(normalizedHost) {
+            return [normalizedHost]
+        }
+
+        return await withCheckedContinuation { continuation in
             let result = Resolution(continuation: continuation)
             let operation = BlockOperation {
-                let addresses = lookupAddresses(host)
+                let addresses = lookupAddresses(normalizedHost)
                 Task { @MainActor in result.finish(addresses) }
             }
             queue.addOperation(operation)
@@ -52,6 +57,13 @@ enum WebPreviewHostLookup {
                 result.finish(nil)
             }
         }
+    }
+
+    private static func isNumericAddress(_ host: String) -> Bool {
+        var ipv4 = in_addr()
+        if inet_pton(AF_INET, host, &ipv4) == 1 { return true }
+        var ipv6 = in6_addr()
+        return inet_pton(AF_INET6, host, &ipv6) == 1
     }
 
     private static func lookupAddresses(_ host: String) -> [String]? {
