@@ -6,6 +6,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.16.3] - 2026-09-12
+
+### ✨ Features
+
+- Add a needs-attention inbox for worktrees with actionable notifications (#1179).
+- Show delegated sessions as a tree in the Agent tab (#1191).
+
+### 🎨 Changed
+
+- Reopen the right pane on Changes by default (#1188).
+- Unify the Send split button and prevent it from shrinking (#1189).
+
+### 🏗️ Internal
+
+- Stop pinning RemoteWeb asset cache-bust versions in tests (#1190).
+
 ## [0.16.2] - 2026-09-11
 
 ### ✨ Features
