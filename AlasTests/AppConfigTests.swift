@@ -31,7 +31,7 @@ struct AppConfigTests {
         #expect(cfg.worktrees.branchPrefix == "feature/")
         #expect(cfg.workspacesEnabled == false)
         #expect(cfg.runTabEnabled == false)
-        #expect(cfg.rightPaneRailEnabled == false)
+        #expect(cfg.rightPaneRailEnabled == true)
     }
 
     @Test func decodeOldConfigDefaultsWorkspacesDisabled() throws {
@@ -56,13 +56,28 @@ struct AppConfigTests {
         #expect(decoded.runTabEnabled == false)
     }
 
-    @Test func decodeOldConfigDefaultsRightPaneRailDisabled() throws {
+    @Test func decodeOldConfigDefaultsRightPaneRailEnabled() throws {
+        // A config written before the rail shipped has no opinion on it, so
+        // it must decode with the rail on — the feature is on by default now,
+        // not opt-in.
         let data = try JSONEncoder().encode(AppConfig.defaults)
         var object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
         object.removeValue(forKey: "rightPaneRailEnabled")
 
         let oldConfig = try JSONSerialization.data(withJSONObject: object)
         let decoded = try JSONDecoder().decode(AppConfig.self, from: oldConfig)
+
+        #expect(decoded.rightPaneRailEnabled == true)
+    }
+
+    @Test func decodeConfigWithRailExplicitlyDisabledStaysDisabled() throws {
+        // A user who opted out while it was a preview (or turned off the
+        // fallback toggle) must keep seeing the legacy tab bar after upgrade.
+        var cfg = AppConfig.defaults
+        cfg.rightPaneRailEnabled = false
+
+        let data = try JSONEncoder().encode(cfg)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
 
         #expect(decoded.rightPaneRailEnabled == false)
     }

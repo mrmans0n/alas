@@ -47,9 +47,10 @@ struct AppConfig: Codable, Equatable {
     /// Preview gate for the worktree Run tab. This remains off until the
     /// command lifecycle UI has completed preview testing.
     var runTabEnabled: Bool = false
-    /// Preview gate for the right pane icon rail. This remains off until the
-    /// rail presentation has completed preview testing.
-    var rightPaneRailEnabled: Bool = false
+    /// The right pane icon rail is the default presentation. This stays as a
+    /// fallback switch so a user can revert to the legacy tab bar; it is not
+    /// gating an in-progress feature the way the flags above are.
+    var rightPaneRailEnabled: Bool = true
     var recentProjectIds: [String] = []
     var recentWorktreeIdsByProject: [String: [String]] = [:]
     var recentWorktreeRefs: [RepoSelectorRecents.RecentWorktreeRef] = []
@@ -517,7 +518,7 @@ struct AppConfig: Codable, Equatable {
         files: Files(showIgnored: true),
         workspacesEnabled: false,
         runTabEnabled: false,
-        rightPaneRailEnabled: false,
+        rightPaneRailEnabled: true,
         recentProjectIds: [],
         recentWorktreeIdsByProject: [:],
         recentWorktreeRefs: [],
@@ -851,7 +852,10 @@ extension AppConfig {
         // The Run tab preview is opt-in. Configs written before it existed
         // continue to load without exposing unfinished command controls.
         runTabEnabled = (try? c.decode(Bool.self, forKey: .runTabEnabled)) ?? false
-        rightPaneRailEnabled = (try? c.decode(Bool.self, forKey: .rightPaneRailEnabled)) ?? false
+        // The rail is on by default now, so a config written before it
+        // existed — or before it graduated from preview — must decode with
+        // it enabled rather than falling back to the legacy tab bar.
+        rightPaneRailEnabled = (try? c.decode(Bool.self, forKey: .rightPaneRailEnabled)) ?? true
         recentProjectIds = (try? c.decode([String].self, forKey: .recentProjectIds)) ?? []
         recentWorktreeIdsByProject =
             (try? c.decode([String: [String]].self, forKey: .recentWorktreeIdsByProject)) ?? [:]
