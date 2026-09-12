@@ -6094,6 +6094,9 @@ final class AppState {
 
     @discardableResult
     func restoreTerminalTabIfNeededAsync(worktreeId: String, tabId: TabID) async throws -> Tab? {
+        guard await !checkpointTerminalAdmissionDisabledAfterDiscovery(worktreeId: worktreeId) else {
+            throw TerminalLaunchError.checkpointRecoveryRequired
+        }
         let legacySessionInfos = await legacySessionInfosForTerminalRestore(
             worktreeId: worktreeId,
             tabId: tabId
@@ -6126,6 +6129,9 @@ final class AppState {
               checkout.operation == .idle,
               owner == SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
         else { return nil }
+        guard await !checkpointTerminalAdmissionDisabledAfterDiscovery(for: checkout) else {
+            throw TerminalLaunchError.checkpointRecoveryRequired
+        }
         guard let tab = tabs.tabs(for: owner).first(where: { $0.id == tabID }),
               case .terminal(let state) = tab else { return nil }
         guard await workspaceCheckoutManifestMatches(checkout) else { return nil }
@@ -6297,11 +6303,14 @@ final class AppState {
                 return
             }
             Task { @MainActor [weak self] in
+                guard let self,
+                      await !self.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId)
+                else { return }
                 do {
                     try await Self.createRemoteEmptyFile(host: host, worktreeRoot: worktree.path, relativePath: relativePath)
-                    self?.openFile(relativePath: relativePath, worktreeId: worktreeId)
+                    self.openFile(relativePath: relativePath, worktreeId: worktreeId)
                 } catch {
-                    self?.showFileActionError(title: "New File Failed", message: error.localizedDescription)
+                    self.showFileActionError(title: "New File Failed", message: error.localizedDescription)
                 }
             }
             return
@@ -6314,16 +6323,21 @@ final class AppState {
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
-        do {
-            let relativePath = try relativePath(for: url, in: worktree.path)
-            if FileManager.default.fileExists(atPath: url.path) {
-                throw CocoaError(.fileWriteFileExists)
+        Task { @MainActor [weak self] in
+            guard let self,
+                  await !self.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId)
+            else { return }
+            do {
+                let relativePath = try self.relativePath(for: url, in: worktree.path)
+                if FileManager.default.fileExists(atPath: url.path) {
+                    throw CocoaError(.fileWriteFileExists)
+                }
+                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try Data().write(to: url, options: .withoutOverwriting)
+                self.openFile(relativePath: relativePath, worktreeId: worktreeId)
+            } catch {
+                self.showFileActionError(title: "New File Failed", message: error.localizedDescription)
             }
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try Data().write(to: url, options: .withoutOverwriting)
-            openFile(relativePath: relativePath, worktreeId: worktreeId)
-        } catch {
-            showFileActionError(title: "New File Failed", message: error.localizedDescription)
         }
     }
 
@@ -6339,28 +6353,36 @@ final class AppState {
 
         if let host = project.host {
             Task { @MainActor [weak self] in
+                guard let self,
+                      await !self.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId)
+                else { return }
                 do {
                     try await Self.createRemoteEmptyFile(
                         host: host,
                         worktreeRoot: worktree.path,
                         relativePath: relativePath
                     )
-                    self?.openFile(relativePath: relativePath, worktreeId: worktreeId)
+                    self.openFile(relativePath: relativePath, worktreeId: worktreeId)
                     onCreated()
                 } catch {
-                    self?.showFileActionError(title: "New File Failed", message: error.localizedDescription)
+                    self.showFileActionError(title: "New File Failed", message: error.localizedDescription)
                 }
             }
             return
         }
 
         let url = worktree.path.appendingPathComponent(relativePath)
-        do {
-            try Data().write(to: url, options: .withoutOverwriting)
-            openFile(relativePath: relativePath, worktreeId: worktreeId)
-            onCreated()
-        } catch {
-            showFileActionError(title: "New File Failed", message: error.localizedDescription)
+        Task { @MainActor [weak self] in
+            guard let self,
+                  await !self.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId)
+            else { return }
+            do {
+                try Data().write(to: url, options: .withoutOverwriting)
+                self.openFile(relativePath: relativePath, worktreeId: worktreeId)
+                onCreated()
+            } catch {
+                self.showFileActionError(title: "New File Failed", message: error.localizedDescription)
+            }
         }
     }
 
@@ -6376,6 +6398,9 @@ final class AppState {
 
         if let host = project.host {
             Task { @MainActor [weak self] in
+                guard let self,
+                      await !self.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId)
+                else { return }
                 do {
                     try await Self.createRemoteDirectory(
                         host: host,
@@ -6384,20 +6409,25 @@ final class AppState {
                     )
                     onCreated()
                 } catch {
-                    self?.showFileActionError(title: "New Folder Failed", message: error.localizedDescription)
+                    self.showFileActionError(title: "New Folder Failed", message: error.localizedDescription)
                 }
             }
             return
         }
 
-        do {
-            try FileManager.default.createDirectory(
-                at: worktree.path.appendingPathComponent(relativePath, isDirectory: true),
-                withIntermediateDirectories: false
-            )
-            onCreated()
-        } catch {
-            showFileActionError(title: "New Folder Failed", message: error.localizedDescription)
+        Task { @MainActor [weak self] in
+            guard let self,
+                  await !self.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId)
+            else { return }
+            do {
+                try FileManager.default.createDirectory(
+                    at: worktree.path.appendingPathComponent(relativePath, isDirectory: true),
+                    withIntermediateDirectories: false
+                )
+                onCreated()
+            } catch {
+                self.showFileActionError(title: "New Folder Failed", message: error.localizedDescription)
+            }
         }
     }
 
@@ -6575,11 +6605,14 @@ final class AppState {
             ) else { return }
             guard relativePath != context.tab.relativePath else { return }
             Task { @MainActor [weak self] in
+                guard let self,
+                      await !self.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId)
+                else { return }
                 do {
                     try await context.buffer.moveToRemote(relativePath: relativePath)
-                    _ = self?.tabs.updateEditorPath(worktreeId: worktreeId, tabId: context.tab.id, relativePath: relativePath)
+                    _ = self.tabs.updateEditorPath(worktreeId: worktreeId, tabId: context.tab.id, relativePath: relativePath)
                 } catch {
-                    self?.showFileActionError(title: "Rename File Failed", message: error.localizedDescription)
+                    self.showFileActionError(title: "Rename File Failed", message: error.localizedDescription)
                 }
             }
             return
@@ -6592,13 +6625,18 @@ final class AppState {
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
-        do {
-            let relativePath = try relativePath(for: url, in: worktree.path)
-            guard relativePath != context.tab.relativePath else { return }
-            try context.buffer.moveTo(relativePath: relativePath)
-            _ = tabs.updateEditorPath(worktreeId: worktreeId, tabId: context.tab.id, relativePath: relativePath)
-        } catch {
-            showFileActionError(title: "Rename File Failed", message: error.localizedDescription)
+        Task { @MainActor [weak self] in
+            guard let self,
+                  await !self.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId)
+            else { return }
+            do {
+                let relativePath = try self.relativePath(for: url, in: worktree.path)
+                guard relativePath != context.tab.relativePath else { return }
+                try context.buffer.moveTo(relativePath: relativePath)
+                _ = self.tabs.updateEditorPath(worktreeId: worktreeId, tabId: context.tab.id, relativePath: relativePath)
+            } catch {
+                self.showFileActionError(title: "Rename File Failed", message: error.localizedDescription)
+            }
         }
     }
 

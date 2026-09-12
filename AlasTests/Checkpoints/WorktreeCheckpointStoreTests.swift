@@ -157,6 +157,21 @@ struct WorktreeCheckpointStoreTests {
         #expect(catalog.summaries.map(\.label) == ["Second", "First"])
     }
 
+    @Test func materializingBlobStreamsWithoutCallingBlobFileData() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bytes = Data("restore payload".utf8)
+        let checkpoint = try publication(lineageID: lineageA, label: "Saved", bytes: bytes)
+        _ = try await WorktreeCheckpointStore(root: root).publish(checkpoint)
+        let blob = try #require(checkpoint.blobs.keys.first)
+        let destination = root.appendingPathComponent("restored.bin")
+        let store = WorktreeCheckpointStore(root: root, fileSystem: BlobFileDataFailingFileSystem())
+
+        try await store.materializeBlob(blob, lineageID: lineageA, to: destination, mode: 0o600)
+
+        #expect(try Data(contentsOf: destination) == bytes)
+    }
+
     @Test func undecodableManifestRetainsUnavailableSummaryFromPreviousCatalog() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

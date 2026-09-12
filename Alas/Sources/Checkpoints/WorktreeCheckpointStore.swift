@@ -184,6 +184,17 @@ actor WorktreeCheckpointStore {
         return data
     }
 
+    func materializeBlob(_ reference: CheckpointBlobReference, lineageID: String, to destination: URL, mode: mode_t) throws {
+        try validate(lineageID)
+        try reference.validate()
+        let source = blobURL(reference, layout: paths(lineageID))
+        guard exists(source) else { throw CheckpointStoreError.blobNotFound }
+        guard try blobFileSize(reference, layout: paths(lineageID)) == reference.byteCount else {
+            throw CheckpointStoreError.blobDoesNotMatchReference
+        }
+        try copyBlob(source, reference: reference, to: destination, mode: mode)
+    }
+
     func delete(id: CheckpointID, lineageID: String) throws -> CheckpointCatalogSnapshot {
         try validate(lineageID)
         try prepare(lineageID)
@@ -505,6 +516,55 @@ actor WorktreeCheckpointStore {
         }
         let hash = hasher.finalize().map { String(format: "%02x", $0) }.joined()
         return hash == reference.sha256
+    }
+
+    private func copyBlob(_ source: URL, reference: CheckpointBlobReference, to destination: URL, mode: mode_t) throws {
+        let parent = destination.deletingLastPathComponent()
+        let temporary = parent.appendingPathComponent(".alas-checkpoint-\(UUID().uuidString)")
+        let sourceHandle = try FileHandle(forReadingFrom: source)
+        defer { try? sourceHandle.close() }
+        let descriptor = Darwin.open(temporary.path, O_WRONLY | O_CREAT | O_EXCL, mode)
+        guard descriptor >= 0 else { throw CheckpointFileSystemError.posix(operation: "open", code: errno) }
+        var descriptorIsOpen = true
+
+        do {
+            var hasher = SHA256()
+            var byteCount: Int64 = 0
+            while true {
+                let chunk = try sourceHandle.read(upToCount: 1024 * 1024) ?? Data()
+                if chunk.isEmpty { break }
+                byteCount += Int64(chunk.count)
+                hasher.update(data: chunk)
+                try writeAll(chunk, descriptor: descriptor)
+            }
+            let hash = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+            guard byteCount == reference.byteCount, hash == reference.sha256 else {
+                throw CheckpointStoreError.blobDoesNotMatchReference
+            }
+            guard Darwin.fchmod(descriptor, mode) == 0 else { throw CheckpointFileSystemError.posix(operation: "fchmod", code: errno) }
+            guard Darwin.fsync(descriptor) == 0 else { throw CheckpointFileSystemError.posix(operation: "fsync", code: errno) }
+            guard Darwin.close(descriptor) == 0 else { throw CheckpointFileSystemError.posix(operation: "close", code: errno) }
+            descriptorIsOpen = false
+            guard Darwin.rename(temporary.path, destination.path) == 0 else { throw CheckpointFileSystemError.posix(operation: "rename", code: errno) }
+            try fileSystem.synchronizeDirectory(parent)
+        } catch {
+            if descriptorIsOpen { _ = Darwin.close(descriptor) }
+            _ = Darwin.unlink(temporary.path)
+            throw error
+        }
+    }
+
+    private func writeAll(_ data: Data, descriptor: Int32) throws {
+        try data.withUnsafeBytes { raw in
+            var remaining = raw.count
+            var pointer = raw.baseAddress
+            while remaining > 0 {
+                let written = Darwin.write(descriptor, pointer, remaining)
+                guard written > 0 else { throw CheckpointFileSystemError.posix(operation: "write", code: errno) }
+                remaining -= written
+                pointer = pointer?.advanced(by: written)
+            }
+        }
     }
 
     private func retentionVictims(from manifests: [WorktreeCheckpointManifest], protected: Set<CheckpointID>, incomingID: CheckpointID) -> [WorktreeCheckpointManifest] {

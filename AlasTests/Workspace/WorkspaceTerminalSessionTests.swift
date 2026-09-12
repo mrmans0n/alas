@@ -436,6 +436,12 @@ struct WorkspaceTerminalSessionTests {
             )
         }
         #expect(tabs.tabs(for: owner).isEmpty)
+
+        let savedTab = tabs.appendTerminal(owner: owner, title: "Shared", sessionId: "blocked-leaf")
+        await #expect(throws: AppState.TerminalLaunchError.checkpointRecoveryRequired) {
+            try await state.restoreTerminalTabIfNeededAsync(owner: owner, tabId: savedTab.id)
+        }
+        #expect(state.terminal.registry.session(for: "blocked-leaf") == nil)
     }
 
     @MainActor

@@ -1,4 +1,5 @@
 import Darwin
+import CryptoKit
 import Foundation
 
 enum CheckpointRestoreError: Error, Equatable, Sendable {
@@ -699,9 +700,8 @@ struct CheckpointRestoreTransaction: Sendable {
                 continue
             }
             guard let blob = state.blob, let mode = state.mode else { throw CheckpointRestoreError.missingDesiredPath(path) }
-            let bytes = try await store.readBlob(blob, lineageID: target.lineageID)
             let materialized = preparedIndex.deletingLastPathComponent().appendingPathComponent("index-\(UUID().uuidString.lowercased())")
-            try fileSystem.writeDurable(bytes, to: materialized, mode: 0o600)
+            try await store.materializeBlob(blob, lineageID: target.lineageID, to: materialized, mode: 0o600)
             defer { try? fileSystem.removeIfPresent(materialized) }
             let hash = try await git.run(["hash-object", "-w", materialized.path], cwd: target.path, environment: [:])
             guard hash.exitCode == 0 else { throw ProcessError.nonZeroExit(hash.exitCode, hash.stderr) }
@@ -713,24 +713,43 @@ struct CheckpointRestoreTransaction: Sendable {
     private func materialize(_ state: CheckpointFileState, at url: URL, target: CheckpointWorktreeTarget) async throws {
         guard state.kind != .absent else { return }
         guard let blob = state.blob else { throw CheckpointRestoreError.invalidGitOutput }
-        let bytes = try await store.readBlob(blob, lineageID: target.lineageID)
         switch state.kind {
         case .regular:
-            try fileSystem.writeDurable(bytes, to: url, mode: state.mode == "100755" ? 0o755 : 0o644)
+            try await store.materializeBlob(blob, lineageID: target.lineageID, to: url, mode: state.mode == "100755" ? 0o755 : 0o644)
         case .symlink:
+            let bytes = try await store.readBlob(blob, lineageID: target.lineageID)
             try fileSystem.createSymlink(target: bytes, at: url)
         case .absent:
             return
         }
-        let actual = try fileSystem.readLeaf(root: url.deletingLastPathComponent(), relativePath: url.lastPathComponent)
-        switch (state.kind, actual) {
-        case (.regular, .regular(let data, let executable)):
-            guard CheckpointBlobReference.make(for: data) == blob, executable == (state.mode == "100755") else { throw CheckpointRestoreError.invalidGitOutput }
-        case (.symlink, .symlink(let data)):
+        switch state.kind {
+        case .regular:
+            let metadata = try fileSystem.metadata(root: url.deletingLastPathComponent(), relativePath: url.lastPathComponent)
+            guard metadata?.kind == .regular,
+                  metadata?.byteCount == blob.byteCount,
+                  metadata?.executable == (state.mode == "100755"),
+                  try digestFile(url) == blob.sha256
+            else { throw CheckpointRestoreError.invalidGitOutput }
+        case .symlink:
+            guard case .symlink(let data) = try fileSystem.readLeaf(root: url.deletingLastPathComponent(), relativePath: url.lastPathComponent) else {
+                throw CheckpointRestoreError.invalidGitOutput
+            }
             guard CheckpointBlobReference.make(for: data) == blob else { throw CheckpointRestoreError.invalidGitOutput }
-        default:
-            throw CheckpointRestoreError.invalidGitOutput
+        case .absent:
+            return
         }
+    }
+
+    private func digestFile(_ url: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        while true {
+            let chunk = try handle.read(upToCount: 1024 * 1024) ?? Data()
+            if chunk.isEmpty { break }
+            hasher.update(data: chunk)
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     private func gitPath(_ name: String, target: CheckpointWorktreeTarget) async throws -> URL {
