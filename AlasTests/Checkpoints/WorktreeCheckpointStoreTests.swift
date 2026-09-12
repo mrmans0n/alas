@@ -376,7 +376,7 @@ struct WorktreeCheckpointStoreTests {
         try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: true)
         let owner = Data("""
         {
-          "createdAt" : "2001-01-01T00:00:00Z",
+          "createdAt" : "\(ISO8601DateFormatter().string(from: Date()))",
           "pid" : \(getpid())
         }
         """.utf8)
@@ -390,6 +390,26 @@ struct WorktreeCheckpointStoreTests {
         #expect(FileManager.default.fileExists(atPath: lock.path))
         try FileManager.default.removeItem(at: lock)
         #expect(try await task.value.summaries.isEmpty)
+    }
+
+    @Test func catalogReclaimsLivePidLockWhenOwnerTimestampPredatesProcessStart() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lineageRoot = root.appendingPathComponent(lineageA, isDirectory: true)
+        let lock = lineageRoot.appendingPathComponent(".store.lock", isDirectory: true)
+        try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: true)
+        let owner = Data("""
+        {
+          "createdAt" : "2001-01-01T00:00:00Z",
+          "pid" : \(getpid())
+        }
+        """.utf8)
+        try owner.write(to: lock.appendingPathComponent("owner.json"))
+
+        let catalog = try await WorktreeCheckpointStore(root: root).catalog(lineageID: lineageA)
+
+        #expect(catalog.summaries.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: lock.path))
     }
 
     @Test func stagedAdditionIsNotCountedAsUntracked() async throws {

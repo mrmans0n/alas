@@ -318,7 +318,7 @@ actor WorktreeCheckpointStore {
     private func reclaimAbandonedLineageLock(_ lock: URL) throws -> Bool {
         let ownerURL = lock.appendingPathComponent("owner.json")
         if let owner = try? JSONDecoder.checkpoints.decode(CheckpointStoreLockOwner.self, from: fileSystem.fileData(ownerURL)) {
-            guard !processIsAlive(owner.pid) else { return false }
+            guard !processMatchesOwner(owner) else { return false }
             try removeDirectoryTreeIfPresent(lock)
             return true
         }
@@ -330,10 +330,28 @@ actor WorktreeCheckpointStore {
         return true
     }
 
+    private func processMatchesOwner(_ owner: CheckpointStoreLockOwner) -> Bool {
+        guard processIsAlive(owner.pid) else { return false }
+        guard let startedAt = processStartTime(pid: owner.pid) else { return true }
+        return startedAt <= owner.createdAt.addingTimeInterval(1)
+    }
+
     private func processIsAlive(_ pid: Int32) -> Bool {
         guard pid > 0 else { return false }
         if kill(pid, 0) == 0 { return true }
         return errno == EPERM
+    }
+
+    private func processStartTime(pid: Int32) -> Date? {
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        let result = mib.withUnsafeMutableBufferPointer { pointer in
+            sysctl(pointer.baseAddress, u_int(pointer.count), &info, &size, nil, 0)
+        }
+        guard result == 0, size >= MemoryLayout<kinfo_proc>.stride else { return nil }
+        let startTime = info.kp_proc.p_starttime
+        return Date(timeIntervalSince1970: TimeInterval(startTime.tv_sec) + TimeInterval(startTime.tv_usec) / 1_000_000)
     }
 
     private func exists(_ url: URL) -> Bool { FileManager.default.fileExists(atPath: url.path) }

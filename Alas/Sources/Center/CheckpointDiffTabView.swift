@@ -23,6 +23,10 @@ enum CheckpointDiffTabPresentation: Equatable {
         "Binary file changed. Checkpoint: \(byteText(beforeByteCount)) · Current: \(byteText(afterByteCount))"
     }
 
+    static func emptyTextDiffMessage(_ diff: ParsedDiff, path: String) -> String {
+        diff.metadataSummary ?? "No changes for \(path)"
+    }
+
     private static func byteText(_ count: Int64?) -> String {
         guard let count else { return "missing" }
         return "\(count) bytes"
@@ -115,7 +119,7 @@ struct CheckpointDiffTabView: View {
         VStack(spacing: 0) {
             header
             if diff.hunks.isEmpty {
-                Text("No changes for \(state.primaryPath)")
+                Text(CheckpointDiffTabPresentation.emptyTextDiffMessage(diff, path: state.primaryPath))
                     .foregroundColor(theme.color("fg-dim"))
                     .padding()
             } else if let displayModel {

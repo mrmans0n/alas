@@ -145,6 +145,17 @@ struct CheckpointDiffTabTests {
         #expect(unavailable == .unavailable("Lineage changed."))
     }
 
+    @Test func emptyTextDiffMessagePrefersMetadataSummary() {
+        let metadataOnly = ParsedDiff(
+            hunks: [],
+            metadataSummary: "File mode changed from 100644 to 100755 — no content changes."
+        )
+        let empty = ParsedDiff(hunks: [])
+
+        #expect(CheckpointDiffTabPresentation.emptyTextDiffMessage(metadataOnly, path: "Script.sh") == "File mode changed from 100644 to 100755 — no content changes.")
+        #expect(CheckpointDiffTabPresentation.emptyTextDiffMessage(empty, path: "Script.sh") == "No changes for Script.sh")
+    }
+
     @Test func loadKeyChangesWhenCurrentWorktreeGenerationChanges() {
         let state = CheckpointDiffTabState(
             worktreeID: "wt-1",
