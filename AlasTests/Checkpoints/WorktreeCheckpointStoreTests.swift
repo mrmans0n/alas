@@ -236,6 +236,8 @@ struct WorktreeCheckpointStoreTests {
         #expect(try await reloaded.catalog(lineageID: lineageA).summaries.isEmpty)
         let entries = try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent(lineageA).appendingPathComponent("entries").path)
         #expect(entries.isEmpty)
+        let blob = try #require(checkpoint.blobs.keys.first)
+        #expect(!FileManager.default.fileExists(atPath: blobURL(root: root, lineageID: lineageA, blob: blob).path))
     }
 
     @Test func recoverableJournalsCleanTerminalJournalStaging() async throws {
@@ -263,21 +265,53 @@ struct WorktreeCheckpointStoreTests {
         #expect(journalNames.isEmpty)
     }
 
-    @Test func catalogReconciliationRemovesAbandonedBlobTemporaries() async throws {
+    @Test func recoverableJournalsKeepTerminalJournalWhenStagingCleanupFails() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let staging = root.appendingPathComponent("staging", isDirectory: true)
+        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+        try Data("backup".utf8).write(to: staging.appendingPathComponent("backup"))
+        let fileSystem = RemoveFailingFileSystem(failingLastPathComponent: "backup")
+        let store = WorktreeCheckpointStore(root: root, fileSystem: fileSystem)
+        let journal = CheckpointRestoreJournal(
+            lineageID: lineageA,
+            checkpointID: UUID(),
+            recoveryCheckpointID: UUID(),
+            phase: .completed,
+            stagingRoot: staging.path,
+            selectedPaths: ["File.swift"],
+            expectedFingerprint: "fingerprint",
+            expectedIndexChecksum: "checksum"
+        )
+        try await store.writeJournal(journal)
+
+        await #expect(throws: RemoveFailingFileSystem.Failure.remove) {
+            try await store.recoverableJournals(lineageID: lineageA)
+        }
+
+        #expect(FileManager.default.fileExists(atPath: staging.appendingPathComponent("backup").path))
+        let journalNames = try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent(lineageA).appendingPathComponent("journals").path)
+        #expect(journalNames == ["\(journal.id.uuidString.lowercased()).json"])
+    }
+
+    @Test func catalogReconciliationRemovesAbandonedCheckpointBlobs() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let blobs = root.appendingPathComponent(lineageA).appendingPathComponent("blobs", isDirectory: true)
         try FileManager.default.createDirectory(at: blobs, withIntermediateDirectories: true)
         let digest = String(repeating: "a", count: 64)
         let temporary = blobs.appendingPathComponent(".\(digest).tmp")
+        let finalized = blobs.appendingPathComponent(digest)
         let unrelated = blobs.appendingPathComponent(".not-a-checkpoint-blob.tmp")
         try Data("abandoned".utf8).write(to: temporary)
+        try Data("abandoned".utf8).write(to: finalized)
         try Data("unrelated".utf8).write(to: unrelated)
 
         let store = WorktreeCheckpointStore(root: root)
         _ = try await store.catalog(lineageID: lineageA)
 
         #expect(!FileManager.default.fileExists(atPath: temporary.path))
+        #expect(!FileManager.default.fileExists(atPath: finalized.path))
         #expect(FileManager.default.fileExists(atPath: unrelated.path))
     }
 
@@ -389,6 +423,66 @@ private final class CatalogWriteFailingFileSystem: CheckpointFileSystem, @unchec
     }
 
     func removeIfPresent(_ url: URL) throws {
+        try live.removeIfPresent(url)
+    }
+
+    func list(_ url: URL) throws -> [URL] {
+        try live.list(url)
+    }
+
+    func fileData(_ url: URL) throws -> Data {
+        try live.fileData(url)
+    }
+
+    func synchronizeDirectory(_ url: URL) throws {
+        try live.synchronizeDirectory(url)
+    }
+}
+
+private final class RemoveFailingFileSystem: CheckpointFileSystem, @unchecked Sendable {
+    enum Failure: Error, Equatable { case remove }
+
+    private let live = LiveCheckpointFileSystem()
+    private let failingLastPathComponent: String
+
+    init(failingLastPathComponent: String) {
+        self.failingLastPathComponent = failingLastPathComponent
+    }
+
+    func readLeaf(root: URL, relativePath: String) throws -> CheckpointLeafRead {
+        try live.readLeaf(root: root, relativePath: relativePath)
+    }
+
+    func metadata(root: URL, relativePath: String) throws -> CheckpointLeafMetadata? {
+        try live.metadata(root: root, relativePath: relativePath)
+    }
+
+    func validateRelativePath(_ relativePath: String, under root: URL) throws -> URL {
+        try live.validateRelativePath(relativePath, under: root)
+    }
+
+    func createDirectoryExclusively(_ url: URL, mode: mode_t) throws {
+        try live.createDirectoryExclusively(url, mode: mode)
+    }
+
+    func writeDurable(_ data: Data, to url: URL, mode: mode_t) throws {
+        try live.writeDurable(data, to: url, mode: mode)
+    }
+
+    func createSymlink(target: Data, at url: URL) throws {
+        try live.createSymlink(target: target, at: url)
+    }
+
+    func move(_ source: URL, to destination: URL) throws {
+        try live.move(source, to: destination)
+    }
+
+    func moveExclusively(_ source: URL, to destination: URL) throws {
+        try live.moveExclusively(source, to: destination)
+    }
+
+    func removeIfPresent(_ url: URL) throws {
+        if url.lastPathComponent == failingLastPathComponent { throw Failure.remove }
         try live.removeIfPresent(url)
     }
 

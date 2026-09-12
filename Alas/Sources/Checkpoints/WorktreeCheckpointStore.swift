@@ -54,6 +54,7 @@ actor WorktreeCheckpointStore {
                 byteCount: try byteCount(Set(reconciliation.valid.flatMap { references(in: $0) }), layout: paths(lineageID), incoming: [:])
             )
             if rebuilt != catalog { try writeCatalog(rebuilt, layout: paths(lineageID)) }
+            try garbageCollect(layout: paths(lineageID), manifests: reconciliation.valid, journals: try activeJournals(lineageID: lineageID))
             return rebuilt
         } catch {
             try quarantine(catalogURL, in: paths(lineageID).quarantine, name: "catalog")
@@ -298,6 +299,7 @@ actor WorktreeCheckpointStore {
         let layout = paths(lineageID)
         let next = snapshot(lineageID: lineageID, manifests: manifests.valid, unavailable: manifests.unavailable, byteCount: try byteCount(Set(manifests.valid.flatMap { references(in: $0) }), layout: layout, incoming: [:]))
         try writeCatalog(next, layout: layout)
+        try garbageCollect(layout: layout, manifests: manifests.valid, journals: try activeJournals(lineageID: lineageID))
         return next
     }
 
@@ -393,7 +395,13 @@ actor WorktreeCheckpointStore {
     }
 
     private func shouldRemoveBlob(_ url: URL, protected: Set<CheckpointBlobReference>) -> Bool {
-        isBlobTemporary(url.lastPathComponent) || !protected.contains { $0.sha256 == url.lastPathComponent }
+        isBlobTemporary(url.lastPathComponent) || (isBlobName(url.lastPathComponent) && !protected.contains { $0.sha256 == url.lastPathComponent })
+    }
+
+    private func isBlobName(_ name: String) -> Bool {
+        name.count == 64 && name.allSatisfy { character in
+            character.isNumber || ("a" ... "f").contains(character)
+        }
     }
 
     private func isBlobTemporary(_ name: String) -> Bool {
@@ -421,7 +429,20 @@ actor WorktreeCheckpointStore {
 
     private func cleanupTerminalJournal(_ journal: CheckpointRestoreJournal, url: URL) throws {
         let staging = URL(fileURLWithPath: journal.stagingRoot, isDirectory: true)
-        try? FileManager.default.removeItem(at: staging)
+        try removeDirectoryTreeIfPresent(staging)
+        try fileSystem.removeIfPresent(url)
+    }
+
+    private func removeDirectoryTreeIfPresent(_ url: URL) throws {
+        guard exists(url) else { return }
+        for child in try fileSystem.list(url) {
+            var isDirectory: ObjCBool = false
+            if FileManager.default.fileExists(atPath: child.path, isDirectory: &isDirectory), isDirectory.boolValue {
+                try removeDirectoryTreeIfPresent(child)
+            } else {
+                try fileSystem.removeIfPresent(child)
+            }
+        }
         try fileSystem.removeIfPresent(url)
     }
 
