@@ -849,14 +849,20 @@ struct CheckpointDiffTabState: Codable, Equatable, Identifiable {
     let checkpointID: CheckpointID
     let groupID: UUID
     let primaryPath: String
+    let memberPaths: [String]
     let checkpointLabel: String
     let title: String
+
+    enum CodingKeys: String, CodingKey {
+        case id, worktreeID, checkpointID, groupID, primaryPath, memberPaths, checkpointLabel, title
+    }
 
     init(
         worktreeID: String,
         checkpointID: CheckpointID,
         groupID: UUID,
         primaryPath: String,
+        memberPaths: [String]? = nil,
         checkpointLabel: String
     ) {
         self.id = "checkpoint-diff:\(worktreeID):\(checkpointID.uuidString):\(groupID.uuidString)"
@@ -864,8 +870,22 @@ struct CheckpointDiffTabState: Codable, Equatable, Identifiable {
         self.checkpointID = checkpointID
         self.groupID = groupID
         self.primaryPath = primaryPath
+        let members = memberPaths ?? [primaryPath]
+        self.memberPaths = members.isEmpty ? [primaryPath] : members
         self.checkpointLabel = checkpointLabel
         self.title = "\((primaryPath as NSString).lastPathComponent) @ \(checkpointLabel)"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(TabID.self, forKey: .id)
+        worktreeID = try c.decode(String.self, forKey: .worktreeID)
+        checkpointID = try c.decode(CheckpointID.self, forKey: .checkpointID)
+        groupID = try c.decode(UUID.self, forKey: .groupID)
+        primaryPath = try c.decode(String.self, forKey: .primaryPath)
+        memberPaths = try c.decodeIfPresent([String].self, forKey: .memberPaths) ?? [primaryPath]
+        checkpointLabel = try c.decode(String.self, forKey: .checkpointLabel)
+        title = try c.decode(String.self, forKey: .title)
     }
 }
 

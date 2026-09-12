@@ -19,6 +19,7 @@ struct CheckpointDiffTabTests {
 
         #expect(state.id == "checkpoint-diff:wt-1:\(checkpointID.uuidString):\(groupID.uuidString)")
         #expect(state.title == "Main.swift @ Before navigation refactor")
+        #expect(state.memberPaths == ["Sources/App/Main.swift"])
         #expect(tab.id == state.id)
         #expect(tab.title == state.title)
         #expect(tab.iconName == "clock.arrow.circlepath")
@@ -43,6 +44,7 @@ struct CheckpointDiffTabTests {
             checkpointID: checkpointID,
             groupID: groupID,
             primaryPath: "Assets/icon.png",
+            memberPaths: ["Assets/icon.png", "Assets/icon@2x.png"],
             checkpointLabel: "Before icons"
         )
 
@@ -53,6 +55,11 @@ struct CheckpointDiffTabTests {
         reloaded.loadAll(worktreeIds: [worktreeID])
         #expect(reloaded.tabs(forWorktree: worktreeID) == [tab])
         #expect(reloaded.activeTabId(forWorktree: worktreeID) == tab.id)
+        guard case .checkpointDiff(let state) = tab else {
+            Issue.record("Expected checkpoint diff tab")
+            return
+        }
+        #expect(state.memberPaths == ["Assets/icon.png", "Assets/icon@2x.png"])
     }
 
     @Test func appStateReusesExistingCheckpointDiffTabForSameGroup() throws {
@@ -133,6 +140,38 @@ struct CheckpointDiffTabTests {
         #expect(tabs.map(\.groupID) == [firstGroupID, secondGroupID])
     }
 
+    @Test func appStateStoresAllCheckpointGroupMembersForRenameDiffs() throws {
+        let checkpointID = try #require(UUID(uuidString: "00000000-0000-0000-0000-000000000120"))
+        let groupID = try #require(UUID(uuidString: "00000000-0000-0000-0000-000000000916"))
+        let worktreeID = "wt-checkpoint-diff-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeID)) }
+        let state = AppState()
+        let worktree = Worktree(
+            id: worktreeID,
+            projectId: "project",
+            name: "main",
+            branch: "main",
+            path: URL(fileURLWithPath: "/tmp/repo"),
+            status: .clean,
+            lastActivity: Date()
+        )
+
+        state.openCheckpointDiffTab(
+            worktree: worktree,
+            checkpointID: checkpointID,
+            groupID: groupID,
+            primaryPath: "New.swift",
+            memberPaths: ["New.swift", "Old.swift"],
+            checkpointLabel: "Before rename"
+        )
+
+        let tab = try #require(state.tabs.tabs(forWorktree: worktreeID).compactMap { tab -> CheckpointDiffTabState? in
+            if case .checkpointDiff(let checkpoint) = tab { return checkpoint }
+            return nil
+        }.first)
+        #expect(tab.memberPaths == ["New.swift", "Old.swift"])
+    }
+
     @Test func contentPresentationRoutesTextImageBinaryAndUnavailable() {
         let text = CheckpointDiffTabPresentation.route(.text(.init(hunks: [])))
         let image = CheckpointDiffTabPresentation.route(.image(.failedLoading()))
@@ -154,6 +193,33 @@ struct CheckpointDiffTabTests {
 
         #expect(CheckpointDiffTabPresentation.emptyTextDiffMessage(metadataOnly, path: "Script.sh") == "File mode changed from 100644 to 100755 — no content changes.")
         #expect(CheckpointDiffTabPresentation.emptyTextDiffMessage(empty, path: "Script.sh") == "No changes for Script.sh")
+    }
+
+    @Test func combinedContentIncludesEveryCheckpointGroupMemberDiff() {
+        let oldPathDiff = ParsedDiff(hunks: [.init(
+            header: "@@ -1 +0,0 @@",
+            oldStart: 1,
+            newStart: 0,
+            lines: [.init(kind: .delete, text: "old contents", oldNumber: 1, newNumber: nil)]
+        )])
+        let newPathDiff = ParsedDiff(hunks: [.init(
+            header: "@@ -0,0 +1 @@",
+            oldStart: 0,
+            newStart: 1,
+            lines: [.init(kind: .add, text: "new contents", oldNumber: nil, newNumber: 1)]
+        )])
+
+        let content = CheckpointDiffTabPresentation.combinedContent([
+            (path: "Old.swift", content: .text(oldPathDiff)),
+            (path: "New.swift", content: .text(newPathDiff)),
+        ])
+
+        guard case .text(let diff) = content else {
+            Issue.record("Expected combined text diff")
+            return
+        }
+        #expect(diff.hunks.map(\.header) == ["Old.swift @@ -1 +0,0 @@", "New.swift @@ -0,0 +1 @@"])
+        #expect(diff.hunks.flatMap(\.lines).map(\.text) == ["old contents", "new contents"])
     }
 
     @Test func loadKeyChangesWhenCurrentWorktreeGenerationChanges() {

@@ -533,6 +533,7 @@ struct ChangesTabView: View {
                                     checkpointID: checkpoint.id,
                                     groupID: group.id,
                                     primaryPath: group.primaryPath,
+                                    memberPaths: group.memberPaths,
                                     checkpointLabel: checkpoint.label
                                 )
                             }

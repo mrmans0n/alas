@@ -27,6 +27,41 @@ enum CheckpointDiffTabPresentation: Equatable {
         diff.metadataSummary ?? "No changes for \(path)"
     }
 
+    static func combinedContent(_ contents: [(path: String, content: CheckpointDiffContent)]) -> CheckpointDiffContent {
+        guard contents.count > 1 else { return contents.first?.content ?? .unavailable("The checkpoint diff could not be loaded.") }
+
+        var hunks: [ParsedDiff.Hunk] = []
+        var summaries: [String] = []
+        for item in contents {
+            switch item.content {
+            case .text(let diff):
+                if diff.hunks.isEmpty {
+                    summaries.append("\(item.path): \(diff.metadataSummary ?? "No text changes.")")
+                } else {
+                    hunks.append(contentsOf: diff.hunks.map { hunk in
+                        ParsedDiff.Hunk(
+                            header: "\(item.path) \(hunk.header)",
+                            oldStart: hunk.oldStart,
+                            newStart: hunk.newStart,
+                            lines: hunk.lines
+                        )
+                    })
+                }
+            case .image:
+                summaries.append("\(item.path): Image file changed.")
+            case .binary(let beforeByteCount, let afterByteCount):
+                summaries.append("\(item.path): \(binaryMessage(beforeByteCount: beforeByteCount, afterByteCount: afterByteCount))")
+            case .unavailable(let message):
+                summaries.append("\(item.path): \(message)")
+            }
+        }
+
+        return .text(.init(
+            hunks: hunks,
+            metadataSummary: summaries.isEmpty ? nil : summaries.joined(separator: "\n")
+        ))
+    }
+
     private static func byteText(_ count: Int64?) -> String {
         guard let count else { return "missing" }
         return "\(count) bytes"
@@ -40,7 +75,7 @@ enum CheckpointDiffLoadKey {
         retryGeneration: Int,
         currentGeneration: Int
     ) -> String {
-        "\(state.id)\u{0}\(lineageID ?? "no-target")\u{0}\(retryGeneration)\u{0}\(currentGeneration)"
+        "\(state.id)\u{0}\(state.memberPaths.joined(separator: "\u{0}"))\u{0}\(lineageID ?? "no-target")\u{0}\(retryGeneration)\u{0}\(currentGeneration)"
     }
 }
 
@@ -144,7 +179,7 @@ struct CheckpointDiffTabView: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            Text((state.primaryPath as NSString).lastPathComponent)
+            Text(state.memberPaths.count > 1 ? "\(state.memberPaths.count) files" : (state.primaryPath as NSString).lastPathComponent)
                 .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize))
                 .foregroundColor(theme.color("fg"))
             Text(state.checkpointLabel)
@@ -155,7 +190,7 @@ struct CheckpointDiffTabView: View {
                 .foregroundColor(theme.color("accent"))
                 .clipShape(RoundedRectangle(cornerRadius: 3))
             Text("·").foregroundColor(theme.color("fg-faint"))
-            Text((state.primaryPath as NSString).deletingLastPathComponent)
+            Text(state.memberPaths.count > 1 ? state.primaryPath : (state.primaryPath as NSString).deletingLastPathComponent)
                 .font(.system(size: codeFontSize - 1.5))
                 .foregroundColor(theme.color("fg-dim"))
                 .lineLimit(1)
@@ -210,11 +245,28 @@ struct CheckpointDiffTabView: View {
             return
         }
 
-        let loadedContent = await service.diffContent(
-            target: target,
-            id: state.checkpointID,
-            path: state.primaryPath
-        )
+        let paths = state.memberPaths.isEmpty ? [state.primaryPath] : state.memberPaths
+        let loadedContents = await withTaskGroup(of: (String, CheckpointDiffContent).self) { group in
+            for path in paths {
+                group.addTask {
+                    let content = await service.diffContent(
+                        target: target,
+                        id: state.checkpointID,
+                        path: path
+                    )
+                    return (path, content)
+                }
+            }
+
+            var byPath: [String: CheckpointDiffContent] = [:]
+            for await item in group {
+                byPath[item.0] = item.1
+            }
+            return paths.compactMap { path in
+                byPath[path].map { (path, $0) }
+            }
+        }
+        let loadedContent = CheckpointDiffTabPresentation.combinedContent(loadedContents)
         guard !Task.isCancelled else { return }
         content = loadedContent
         if case .text(let diff) = loadedContent {

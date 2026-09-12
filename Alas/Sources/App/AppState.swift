@@ -10486,6 +10486,7 @@ final class AppState {
         checkpointID: CheckpointID,
         groupID: UUID,
         primaryPath: String,
+        memberPaths: [String]? = nil,
         checkpointLabel: String
     ) {
         let worktreeID = worktree.id
@@ -10506,6 +10507,7 @@ final class AppState {
             checkpointID: checkpointID,
             groupID: groupID,
             primaryPath: primaryPath,
+            memberPaths: memberPaths,
             checkpointLabel: checkpointLabel
         )
         activateWorktreeCenterTab(worktreeId: worktreeID, tabId: tab.id)

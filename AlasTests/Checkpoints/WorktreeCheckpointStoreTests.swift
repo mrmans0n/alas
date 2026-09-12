@@ -224,6 +224,31 @@ struct WorktreeCheckpointStoreTests {
         #expect(labels.filter { $0.hasPrefix("Manual") }.count == 20)
     }
 
+    @Test func retentionDoesNotPruneIncomingCheckpointWhenExistingCheckpointIsProtected() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = WorktreeCheckpointStore(root: root, limits: .init(manualCount: 1, recoveryCount: 5, bytes: 100_000))
+        let createdAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let existing = try publication(lineageID: lineageA, label: "Existing", bytes: Data([1]), createdAt: createdAt)
+        let incoming = try publication(lineageID: lineageA, label: "Incoming", bytes: Data([2]), createdAt: createdAt)
+        _ = try await store.publish(existing)
+        try await store.writeJournal(.init(
+            lineageID: lineageA,
+            checkpointID: existing.manifest.id,
+            recoveryCheckpointID: UUID(),
+            phase: .prepared,
+            stagingRoot: root.appendingPathComponent("staging").path,
+            selectedPaths: ["File.swift"],
+            expectedFingerprint: "fingerprint",
+            expectedIndexChecksum: "checksum"
+        ))
+
+        let catalog = try await store.publish(incoming)
+
+        #expect(catalog.summaries.contains { $0.id == incoming.manifest.id })
+        #expect(try await store.load(id: incoming.manifest.id, lineageID: lineageA) == incoming.manifest)
+    }
+
     @Test func catalogRefreshDoesNotResurrectPrunedEntriesLeftAfterCatalogPublication() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

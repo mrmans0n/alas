@@ -102,7 +102,7 @@ actor WorktreeCheckpointStore {
                                                    allowedIDs: currentCatalogIDs).valid
         var candidates = existingManifests + [manifest]
         let protected = try protectedIDsUnlocked(lineageID: manifest.lineageID).union(additionalProtectedIDs)
-        var victims = retentionVictims(from: candidates, protected: protected)
+        var victims = retentionVictims(from: candidates, protected: protected, incomingID: manifest.id)
         candidates.removeAll { candidate in victims.contains(where: { $0.id == candidate.id }) }
         let incomingByteCount = try storageByteCount(manifests: [manifest], layout: layout, incoming: publication.blobs)
         guard incomingByteCount <= limits.bytes else { throw CheckpointStoreError.byteLimitExceeded }
@@ -507,12 +507,18 @@ actor WorktreeCheckpointStore {
         return hash == reference.sha256
     }
 
-    private func retentionVictims(from manifests: [WorktreeCheckpointManifest], protected: Set<CheckpointID>) -> [WorktreeCheckpointManifest] {
+    private func retentionVictims(from manifests: [WorktreeCheckpointManifest], protected: Set<CheckpointID>, incomingID: CheckpointID) -> [WorktreeCheckpointManifest] {
         var victims: [WorktreeCheckpointManifest] = []
         for kind in [CheckpointKind.recovery, .manual] {
             let limit = kind == .recovery ? limits.recoveryCount : limits.manualCount
-            let ordered = manifests.filter { $0.kind == kind }.sorted { $0.createdAt < $1.createdAt }
-            var excess = max(0, ordered.count - limit)
+            let count = manifests.filter { $0.kind == kind }.count
+            let ordered = manifests
+                .filter { $0.kind == kind && $0.id != incomingID }
+                .sorted { lhs, rhs in
+                    if lhs.createdAt != rhs.createdAt { return lhs.createdAt < rhs.createdAt }
+                    return lhs.id.uuidString < rhs.id.uuidString
+                }
+            var excess = max(0, count - limit)
             for manifest in ordered where excess > 0 && !protected.contains(manifest.id) {
                 victims.append(manifest)
                 excess -= 1

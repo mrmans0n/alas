@@ -852,6 +852,7 @@ final class TabsManager {
         checkpointID: CheckpointID,
         groupID: UUID,
         primaryPath: String,
+        memberPaths: [String]? = nil,
         checkpointLabel: String
     ) -> Tab {
         let state = CheckpointDiffTabState(
@@ -859,6 +860,7 @@ final class TabsManager {
             checkpointID: checkpointID,
             groupID: groupID,
             primaryPath: primaryPath,
+            memberPaths: memberPaths,
             checkpointLabel: checkpointLabel
         )
         let tab = Tab.checkpointDiff(state)
