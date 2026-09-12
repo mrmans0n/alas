@@ -62,6 +62,8 @@ targets:
         NSPrincipalClass: NSApplication
         NSMicrophoneUsageDescription: "Alas uses the microphone to dictate text into the chat composer."
         NSSpeechRecognitionUsageDescription: "Alas uses on-device speech recognition to transcribe dictated text into the chat composer."
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoadsInWebContent: true
         LSApplicationCategoryType: public.app-category.developer-tools
         CFBundleIconFile: AppIcon
         CFBundleIconName: AppIcon

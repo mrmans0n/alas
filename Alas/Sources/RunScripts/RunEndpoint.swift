@@ -16,8 +16,12 @@ enum RunEndpointPolicy {
     ]
 
     static func isLoopback(_ url: URL) -> Bool {
-        guard let host = url.host?.lowercased() else { return false }
-        var normalized = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        guard let host = url.host else { return false }
+        return isLoopbackHost(host)
+    }
+
+    static func isLoopbackHost(_ host: String) -> Bool {
+        var normalized = host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
         if normalized.hasSuffix(".") {
             normalized.removeLast()
         }

@@ -64,6 +64,7 @@ final class TabsManager {
     /// Session-only split drafts survive view recreation when the user switches
     /// tabs, but are deliberately not persisted as part of the tab identity.
     private var ggSplitCommitDrafts: [TabID: GGSplitCommitDraft] = [:]
+    @ObservationIgnored private var webPreviewBrowsers: [String: WebPreviewBrowser] = [:]
     private var commitPublishSessions: [TabID: CommitPublishSession] = [:]
     @ObservationIgnored var onCommitPublishCompletion: ((String, TabID) -> Void)?
     /// Tracks which tab IDs have already had `openExternalDocument` fired so
@@ -945,6 +946,99 @@ final class TabsManager {
     }
 
     @discardableResult
+    func webPreviewBrowser(ownerKey: String, remoteHost: String?) -> WebPreviewBrowser {
+        if let browser = webPreviewBrowsers[ownerKey], browser.remoteHost == remoteHost {
+            return browser
+        }
+        clearWebPreviewBrowser(ownerKey: ownerKey)
+        let browser = WebPreviewBrowser(ownerKey: ownerKey, remoteHost: remoteHost)
+        webPreviewBrowsers[ownerKey] = browser
+        return browser
+    }
+
+    @discardableResult
+    func openWebPreview(worktreeId: String, url: URL? = nil) -> Tab {
+        let existing = tabs(forWorktree: worktreeId).first { tab in
+            guard case .webPreview(let state) = tab else { return false }
+            return state.ownerKey == worktreeId
+        }
+        let remoteHost: String?
+        if case .webPreview(let state) = existing {
+            remoteHost = state.remoteHost
+        } else {
+            remoteHost = nil
+        }
+        return openWebPreview(worktreeId: worktreeId, url: url, remoteHost: remoteHost)
+    }
+
+    @discardableResult
+    func openWebPreview(worktreeId: String, url: URL? = nil, remoteHost: String?) -> Tab {
+        let ownerKey = worktreeId
+        if var file = byWorktree[ownerKey],
+           let idx = file.tabs.firstIndex(where: {
+               if case .webPreview(let state) = $0 {
+                   return state.ownerKey == ownerKey
+               }
+               return false
+           }) {
+            if case .webPreview(var state) = file.tabs[idx] {
+                if let url {
+                    state.url = url
+                }
+                if state.remoteHost != remoteHost {
+                    clearWebPreviewBrowser(ownerKey: ownerKey)
+                }
+                state.remoteHost = remoteHost
+                let tab = Tab.webPreview(state)
+                file.tabs[idx] = tab
+                file.activeTabId = tab.id
+                byWorktree[ownerKey] = file
+                persist(ownerKey)
+                return tab
+            }
+        }
+        let tab = Tab.webPreview(WebPreviewTabState(ownerKey: ownerKey, url: url, remoteHost: remoteHost))
+        append(tab, to: ownerKey)
+        return tab
+    }
+
+    @discardableResult
+    func openWebPreview(owner: SessionOwnerID, url: URL? = nil, remoteHost: String? = nil) -> Tab {
+        openWebPreview(worktreeId: owner.storageKey, url: url, remoteHost: remoteHost ?? Self.remoteHost(for: owner))
+    }
+
+    @discardableResult
+    func updateWebPreviewURL(worktreeId: String, url: URL) -> Tab? {
+        let ownerKey = worktreeId
+        guard var file = byWorktree[ownerKey],
+              let idx = file.tabs.firstIndex(where: {
+                  if case .webPreview(let state) = $0 {
+                      return state.ownerKey == ownerKey
+                  }
+                  return false
+              }),
+              case .webPreview(var state) = file.tabs[idx]
+        else { return nil }
+        let activeTabId = file.activeTabId
+        state.url = url
+        let tab = Tab.webPreview(state)
+        file.tabs[idx] = tab
+        file.activeTabId = activeTabId
+        byWorktree[ownerKey] = file
+        persist(ownerKey)
+        return tab
+    }
+
+    @discardableResult
+    func updateWebPreviewURL(owner: SessionOwnerID, url: URL) -> Tab? {
+        updateWebPreviewURL(worktreeId: owner.storageKey, url: url)
+    }
+
+    private static func remoteHost(for owner: SessionOwnerID) -> String? {
+        owner.checkoutExecutionLocation?.sshHost
+    }
+
+    @discardableResult
     func openOrFocusFileSnapshot(worktreeId: String, relativePath: String, ref: String = "HEAD") -> Tab {
         let state = FileSnapshotTabState(worktreeId: worktreeId, relativePath: relativePath, ref: ref)
         if tabs(forWorktree: worktreeId).contains(where: { $0.id == state.id }) {
@@ -1586,6 +1680,17 @@ final class TabsManager {
         file.stashedDraft = (hasSubject || hasBody || state.publishCheckpoint != nil) ? state : nil
     }
 
+    private func clearWebPreviewBrowsers(for tabs: some Sequence<Tab>) {
+        for tab in tabs {
+            guard case .webPreview(let state) = tab else { continue }
+            clearWebPreviewBrowser(ownerKey: state.ownerKey)
+        }
+    }
+
+    private func clearWebPreviewBrowser(ownerKey: String) {
+        webPreviewBrowsers.removeValue(forKey: ownerKey)?.close()
+    }
+
     func close(worktreeId: String, tabId: TabID) {
         guard var file = byWorktree[worktreeId] else { return }
         guard let idx = file.tabs.firstIndex(where: { $0.id == tabId }) else { return }
@@ -1602,6 +1707,7 @@ final class TabsManager {
                 terminalRuntimeTitles.removeValue(forKey: leaf.id)
             }
         }
+        clearWebPreviewBrowsers(for: [tab])
         if wasActive {
             if file.tabs.isEmpty {
                 file.activeTabId = nil
@@ -1641,11 +1747,13 @@ final class TabsManager {
     func closeOthers(worktreeId: String, keeping tabId: TabID) -> [TabID] {
         guard var file = byWorktree[worktreeId] else { return [] }
         let closed = file.tabs.filter { $0.id != tabId }.map(\.id)
+        let closedTabs = file.tabs.filter { $0.id != tabId }
         guard let kept = file.tabs.first(where: { $0.id == tabId }) else { return [] }
         for id in closed {
             captureDraftIfNeeded(&file, removingTabId: id)
             ggSplitCommitDrafts.removeValue(forKey: id)
         }
+        clearWebPreviewBrowsers(for: closedTabs)
         file.tabs = [kept]
         file.activeTabId = tabId
         byWorktree[worktreeId] = file
@@ -1656,10 +1764,12 @@ final class TabsManager {
     func closeAll(worktreeId: String) -> [TabID] {
         guard var file = byWorktree[worktreeId] else { return [] }
         let closed = file.tabs.map(\.id)
+        let closedTabs = file.tabs
         for id in closed {
             captureDraftIfNeeded(&file, removingTabId: id)
             ggSplitCommitDrafts.removeValue(forKey: id)
         }
+        clearWebPreviewBrowsers(for: closedTabs)
         file.tabs = []
         file.activeTabId = nil
         byWorktree[worktreeId] = file
@@ -1671,10 +1781,12 @@ final class TabsManager {
         guard var file = byWorktree[worktreeId],
               let idx = file.tabs.firstIndex(where: { $0.id == tabId }) else { return [] }
         let closed = file.tabs[0..<idx].map(\.id)
+        let closedTabs = Array(file.tabs[0..<idx])
         for id in closed {
             captureDraftIfNeeded(&file, removingTabId: id)
             ggSplitCommitDrafts.removeValue(forKey: id)
         }
+        clearWebPreviewBrowsers(for: closedTabs)
         if let active = file.activeTabId, closed.contains(active) {
             file.activeTabId = tabId
         }
@@ -1688,10 +1800,12 @@ final class TabsManager {
         guard var file = byWorktree[worktreeId],
               let idx = file.tabs.firstIndex(where: { $0.id == tabId }) else { return [] }
         let closed = file.tabs[(idx + 1)...].map(\.id)
+        let closedTabs = Array(file.tabs[(idx + 1)...])
         for id in closed {
             captureDraftIfNeeded(&file, removingTabId: id)
             ggSplitCommitDrafts.removeValue(forKey: id)
         }
+        clearWebPreviewBrowsers(for: closedTabs)
         if let active = file.activeTabId, closed.contains(active) {
             file.activeTabId = tabId
         }

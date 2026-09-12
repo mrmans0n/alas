@@ -325,6 +325,108 @@ struct TabsManagerTests {
         #expect(first.title == "Review Changes")
     }
 
+    @Test func webPreviewStateRoundTripsWithStableOwnerScopedIdentity() throws {
+        let url = URL(string: "http://127.0.0.1:5173")!
+        let tab = Tab.webPreview(WebPreviewTabState(ownerKey: "owner-a", url: url, remoteHost: "devbox"))
+
+        let decoded = try JSONDecoder().decode(Tab.self, from: JSONEncoder().encode(tab))
+
+        #expect(decoded == tab)
+        #expect(decoded.id == "web-preview:owner-a")
+        #expect(decoded.title == "Web Preview")
+        #expect(decoded.iconName == "globe")
+    }
+
+    @Test func openWebPreviewReusesOneTabPerOwnerAndUpdatesURL() {
+        let manager = TabsManager(store: RestoreMemoryStore())
+        let firstURL = URL(string: "http://127.0.0.1:3000")!
+        let secondURL = URL(string: "http://127.0.0.1:5173/app")!
+
+        let blank = manager.openWebPreview(worktreeId: "owner-a", remoteHost: "devbox")
+        let updated = manager.openWebPreview(worktreeId: "owner-a", url: firstURL, remoteHost: "devbox")
+        let reopenedWithoutHost = manager.openWebPreview(worktreeId: "owner-a")
+        let explicitUpdate = manager.updateWebPreviewURL(worktreeId: "owner-a", url: secondURL)
+        _ = manager.openWebPreview(worktreeId: "owner-b", url: firstURL, remoteHost: nil)
+
+        #expect(blank.id == "web-preview:owner-a")
+        #expect(updated.id == blank.id)
+        #expect(reopenedWithoutHost.id == blank.id)
+        #expect(explicitUpdate?.id == blank.id)
+        #expect(manager.tabs(forWorktree: "owner-a").count == 1)
+        #expect(manager.tabs(forWorktree: "owner-b").map(\.id) == ["web-preview:owner-b"])
+        guard case .webPreview(let state) = manager.tabs(forWorktree: "owner-a").first else {
+            Issue.record("Expected web preview tab")
+            return
+        }
+        #expect(state.ownerKey == "owner-a")
+        #expect(state.url == secondURL)
+        #expect(state.remoteHost == "devbox")
+        #expect(manager.activeTabId(forWorktree: "owner-a") == blank.id)
+    }
+
+    @Test func webPreviewURLUpdatePreservesRemoteHostAndActiveSelection() {
+        let manager = TabsManager(store: RestoreMemoryStore())
+        let ownerKey = "owner-a"
+        let preview = manager.openWebPreview(
+            worktreeId: ownerKey,
+            url: URL(string: "http://devbox:3000")!,
+            remoteHost: "devbox"
+        )
+        let terminal = manager.appendTerminal(worktreeId: ownerKey, title: "Shell", sessionId: "shell")
+        manager.activate(worktreeId: ownerKey, tabId: terminal.id)
+
+        let updated = manager.updateWebPreviewURL(
+            worktreeId: ownerKey,
+            url: URL(string: "http://devbox:3000/dashboard")!
+        )
+
+        #expect(updated?.id == preview.id)
+        #expect(manager.activeTabId(forWorktree: ownerKey) == terminal.id)
+        guard case .webPreview(let state) = manager.tabs(forWorktree: ownerKey).first(where: { $0.id == preview.id }) else {
+            Issue.record("Expected web preview tab")
+            return
+        }
+        #expect(state.remoteHost == "devbox")
+        #expect(state.url == URL(string: "http://devbox:3000/dashboard")!)
+    }
+
+    @Test func explicitLocalPreviewTargetClearsRemoteHostAndReplacesBrowser() throws {
+        let manager = TabsManager(store: RestoreMemoryStore())
+        let original = manager.openWebPreview(worktreeId: "owner-a", remoteHost: "devbox")
+        let remote = manager.webPreviewBrowser(ownerKey: "owner-a", remoteHost: "devbox")
+        remote.onNavigate = { _ in }
+        let url = URL(string: "http://127.0.0.1:3000")!
+
+        let updated = manager.openWebPreview(worktreeId: "owner-a", url: url, remoteHost: nil)
+
+        guard case .webPreview(let state) = updated else {
+            Issue.record("Expected web preview tab")
+            return
+        }
+        #expect(updated.id == original.id)
+        #expect(state.remoteHost == nil)
+        #expect(remote.onNavigate == nil)
+        let local = manager.webPreviewBrowser(ownerKey: state.ownerKey, remoteHost: state.remoteHost)
+        #expect(local !== remote)
+        #expect(WebPreviewNavigation.allows(url, remoteHost: local.remoteHost))
+    }
+
+    @Test func webPreviewBrowserIsReusedUntilRemoteHostChangesOrTabCloses() {
+        let manager = TabsManager(store: RestoreMemoryStore())
+        let tab = manager.openWebPreview(worktreeId: "owner-a", remoteHost: "devbox")
+        let first = manager.webPreviewBrowser(ownerKey: "owner-a", remoteHost: "devbox")
+        let second = manager.webPreviewBrowser(ownerKey: "owner-a", remoteHost: "devbox")
+        let changedHost = manager.webPreviewBrowser(ownerKey: "owner-a", remoteHost: "otherbox")
+
+        #expect(first === second)
+        #expect(first !== changedHost)
+        #expect(changedHost.remoteHost == "otherbox")
+
+        manager.close(worktreeId: "owner-a", tabId: tab.id)
+        let afterClose = manager.webPreviewBrowser(ownerKey: "owner-a", remoteHost: "otherbox")
+        #expect(afterClose !== changedHost)
+    }
+
     @Test func openOrFocusFileSnapshotReusesWorktreePathRefTab() {
         let worktreeId = "tabs-manager-file-snapshot-\(UUID().uuidString)"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }

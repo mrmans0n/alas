@@ -1,4 +1,3 @@
-import AppKit
 import Foundation
 import os
 
@@ -333,14 +332,32 @@ extension AppState {
         )
     }
 
+    func webPreviewRemoteHost(for worktree: Worktree) -> String? {
+        projects.first(where: { $0.id == worktree.projectId })?.host
+            ?? RemoteHostRegistry.shared.host(forPath: worktree.path.path)
+    }
+
+    func openWebPreview(in worktree: Worktree, url: URL? = nil) {
+        let tab = tabs.openWebPreview(worktreeId: worktree.id, url: url, remoteHost: webPreviewRemoteHost(for: worktree))
+        activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
+    }
+
     /// Opens a run's declared endpoint. A remote run whose URL points at
     /// loopback is refused rather than silently opening whatever serves that
     /// port on this Mac.
     func openRunEndpoint(_ script: RunScript, in worktree: Worktree) {
         guard let endpoint = script.endpoint else { return }
-        switch RunEndpointPolicy.action(for: endpoint, target: runExecutionTarget(for: script, in: worktree)) {
+        let currentRecord = runRecords.record(worktreeID: worktree.id, scriptKey: script.key)
+        let target: RunExecutionTarget
+        if let currentRecord, currentRecord.status.isActive {
+            target = currentRecord.target
+        } else {
+            target = runExecutionTarget(for: script, in: worktree)
+        }
+        switch RunEndpointPolicy.action(for: endpoint, target: target) {
         case .open(let url):
-            NSWorkspace.shared.open(url)
+            let tab = tabs.openWebPreview(worktreeId: worktree.id, url: url, remoteHost: target.host)
+            activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
         case let .blockedRemoteLoopback(host, url):
             showFileActionError(
                 title: "Can't Open Endpoint",

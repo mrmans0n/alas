@@ -6,6 +6,82 @@ import Testing
 /// shell lifetime, worktree isolation, and interrupted execution.
 @MainActor
 struct AppStateRunRecordTests {
+    @Test func endpointLaunchOpensOnlyItsOwningPreview() throws {
+        let endpoint = URL(string: "http://localhost:5173")!
+        let fixture = try makeFixture(endpoint: endpoint)
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        fixture.state.openRunEndpoint(fixture.script, in: fixture.worktree)
+        let tab = try #require(fixture.state.tabs.tabs(forWorktree: fixture.worktree.id).first)
+        guard case .webPreview(let preview) = tab else {
+            Issue.record("Expected center web preview")
+            return
+        }
+        #expect(preview.ownerKey == fixture.worktree.id)
+        #expect(preview.url == endpoint)
+        #expect(fixture.state.tabs.tabs(forWorktree: "wt-2").isEmpty)
+        #expect(fixture.state.tabs.activeTabId(forWorktree: fixture.worktree.id) == tab.id)
+    }
+
+    @Test func remoteLoopbackLaunchDoesNotCreatePreview() throws {
+        let fixture = try makeFixture(endpoint: URL(string: "http://localhost:5173")!, host: "devbox")
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        fixture.state.openRunEndpoint(fixture.script, in: fixture.worktree)
+        #expect(fixture.state.tabs.tabs(forWorktree: fixture.worktree.id).isEmpty)
+        #expect(fixture.errors().first?.message.contains("devbox") == true)
+    }
+
+    @Test func endpointLaunchUsesCurrentRunningRecordTarget() throws {
+        let fixture = try makeFixture(endpoint: URL(string: "http://localhost:5173")!)
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let record = RunRecord(
+            id: "remote-run",
+            scriptKey: fixture.script.key,
+            scriptName: fixture.script.displayName,
+            worktreeID: fixture.worktree.id,
+            branch: fixture.worktree.branch,
+            target: RunExecutionTarget(host: "devbox", workingDirectory: fixture.directory.path),
+            endpoint: fixture.script.endpoint,
+            status: .running,
+            startedAt: Date()
+        )
+        fixture.state.runRecords.begin(record)
+
+        fixture.state.openRunEndpoint(fixture.script, in: fixture.worktree)
+
+        #expect(fixture.state.tabs.tabs(forWorktree: fixture.worktree.id).isEmpty)
+        #expect(fixture.errors().first?.message.contains("devbox") == true)
+    }
+
+    @Test func endpointLaunchIgnoresFinishedRecordTarget() throws {
+        let endpoint = URL(string: "http://localhost:5173")!
+        let fixture = try makeFixture(endpoint: endpoint)
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let record = RunRecord(
+            id: "finished-remote-run",
+            scriptKey: fixture.script.key,
+            scriptName: fixture.script.displayName,
+            worktreeID: fixture.worktree.id,
+            branch: fixture.worktree.branch,
+            target: RunExecutionTarget(host: "devbox", workingDirectory: fixture.directory.path),
+            endpoint: fixture.script.endpoint,
+            status: .finished(.succeeded),
+            startedAt: Date(),
+            finishedAt: Date()
+        )
+        fixture.state.runRecords.begin(record)
+
+        fixture.state.openRunEndpoint(fixture.script, in: fixture.worktree)
+
+        let tab = try #require(fixture.state.tabs.tabs(forWorktree: fixture.worktree.id).first)
+        guard case .webPreview(let preview) = tab else {
+            Issue.record("Expected center web preview")
+            return
+        }
+        #expect(preview.url == endpoint)
+        #expect(preview.remoteHost == nil)
+        #expect(fixture.errors().isEmpty)
+    }
+
     private struct MemoryStore: PersistenceStoreProtocol {
         func write<T: Encodable>(_: T, to _: URL) throws {}
         func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }

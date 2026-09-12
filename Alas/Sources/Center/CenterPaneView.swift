@@ -34,7 +34,12 @@ struct CenterTabComposition {
         activeFocusedMemberTabId: TabID?
     ) {
         let shared = sharedTabs.filter(\.isSharedSessionTab)
-        let member = focusedMemberTabs.filter { !$0.isSharedSessionTab }
+        let member = focusedMemberTabs.filter { tab in
+            switch tab {
+            case .terminal, .acpSession: false
+            default: true
+            }
+        }
         tabs = shared + member
         if shared.contains(where: { $0.id == activeSharedTabId }) {
             activeId = activeSharedTabId
@@ -69,7 +74,7 @@ struct CenterTabComposition {
 private extension Tab {
     var isSharedSessionTab: Bool {
         switch self {
-        case .terminal, .acpSession:
+        case .terminal, .acpSession, .webPreview:
             true
         default:
             false
@@ -639,6 +644,11 @@ struct CenterPaneView: View {
                     case .ggLanding(let s):
                         GGLandingTabView(state: state, tabState: s)
                             .id(s.id)
+                    case .webPreview(let s):
+                        WebPreviewTabView(state: state, tab: s)
+                            .id(s.id + (s.remoteHost ?? ""))
+                            .onAppear { completeStartupRecoveryIfActive(s.id) }
+                            .task { completeStartupRecoveryIfActive(s.id) }
                     case .ggInbox(let s):
                         GGInboxTabView(
                             state: state,
@@ -732,6 +742,11 @@ struct CenterPaneView: View {
                 }
                 .padding(12)
                 .animation(.easeOut(duration: 0.2), value: runScriptFailures.map(\.id))
+            }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if selectedCheckoutForSharedOwner != nil {
+                    checkoutPreviewHeader
+                }
             }
         }
         .onAppear {
@@ -868,6 +883,53 @@ struct CenterPaneView: View {
             } else {
                 _ = try? await state.openTerminalTabPreparingRemoteZmxIfNeeded(for: worktree)
             }
+        }
+    }
+
+    private var checkoutPreviewHeader: some View {
+        HStack(spacing: 0) {
+            Button {
+                openWebPreview()
+            } label: {
+                HStack(spacing: 5) {
+                    Icon(name: "globe", size: 11)
+                    Text("Preview")
+                        .font(.system(size: 11, weight: .medium))
+                        .lineLimit(1)
+                }
+                .frame(height: 24)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .controlSize(.small)
+            .help("Open checkout web preview")
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(theme.color("bg-2"))
+        .overlay(Divider().opacity(0.45), alignment: .bottom)
+    }
+
+    private func openWebPreview() {
+        if let checkout = selectedCheckoutForSharedOwner {
+            let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+            let tab = state.tabs.openWebPreview(owner: owner)
+            state.activateComposedCenterTab(
+                worktreeID: worktree.id,
+                sharedSessionOwner: owner,
+                tabID: tab.id
+            )
+        } else {
+            let tab = state.tabs.openWebPreview(
+                worktreeId: worktree.id,
+                remoteHost: state.webPreviewRemoteHost(for: worktree)
+            )
+            state.activateComposedCenterTab(
+                worktreeID: worktree.id,
+                sharedSessionOwner: sharedSessionOwner,
+                tabID: tab.id
+            )
         }
     }
 

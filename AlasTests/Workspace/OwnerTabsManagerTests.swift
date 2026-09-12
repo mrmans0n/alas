@@ -5,6 +5,15 @@ import Testing
 
 @MainActor
 struct OwnerTabsManagerTests {
+    @Test func checkoutCompositionKeepsMemberPreviewsVisible() {
+        let shared = Tab.webPreview(.init(ownerKey: "checkout"))
+        let member = Tab.webPreview(.init(ownerKey: "member"))
+        let composition = CenterTabComposition(sharedTabs: [shared], focusedMemberTabs: [member],
+            activeSharedTabId: nil, activeFocusedMemberTabId: member.id)
+        #expect(composition.tabs.map(\.id) == [shared.id, member.id])
+        #expect(composition.activeId == member.id)
+    }
+
     @Test func checkoutOwnerPersistsTerminalTabsIndependently() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -19,6 +28,47 @@ struct OwnerTabsManagerTests {
         reloaded.load(owner: owner)
         #expect(reloaded.tabs(for: owner).map(\.id) == [tab.id])
         #expect(reloaded.activeTabId(for: owner) == tab.id)
+    }
+
+    @Test func checkoutOwnerWebPreviewComposesWithSharedTabs() {
+        let owner = SessionOwnerID.workspaceCheckout(UUID(), .local)
+        let manager = TabsManager(store: OwnerTabsMemoryStore())
+        let preview = manager.openWebPreview(owner: owner, url: URL(string: "http://example.com")!)
+        let member = Tab.editor(.init(id: "member-editor", title: "Member", relativePath: "Member.swift"))
+        manager.restore(
+            tab: member,
+            worktreeID: "member",
+            placement: .init(previousID: nil, nextID: nil, ordinal: 0)
+        )
+
+        let composition = CenterTabComposition(
+            sharedTabs: manager.tabs(for: owner),
+            focusedMemberTabs: manager.tabs(forWorktree: "member"),
+            activeSharedTabId: manager.activeTabId(for: owner),
+            activeFocusedMemberTabId: manager.activeTabId(forWorktree: "member")
+        )
+
+        #expect(preview.id == "web-preview:\(owner.storageKey)")
+        #expect(composition.tabs.map(\.id) == [preview.id, member.id])
+        #expect(composition.activeId == preview.id)
+    }
+
+    @Test func checkoutOwnerWebPreviewUsesCheckoutRemoteHostAndClearsBrowserOnArchive() {
+        let owner = SessionOwnerID.workspaceCheckout(UUID(), .ssh("build-host"))
+        let manager = TabsManager(store: OwnerTabsMemoryStore())
+        let preview = manager.openWebPreview(owner: owner, url: URL(string: "http://build-host:3000")!)
+        let browser = manager.webPreviewBrowser(ownerKey: owner.storageKey, remoteHost: "build-host")
+
+        guard case .webPreview(let state) = preview else {
+            Issue.record("Expected web preview tab")
+            return
+        }
+        #expect(state.remoteHost == "build-host")
+
+        manager.archive(owner: owner)
+
+        let afterArchive = manager.webPreviewBrowser(ownerKey: owner.storageKey, remoteHost: "build-host")
+        #expect(afterArchive !== browser)
     }
 
     @Test func closingAndArchivingCheckoutOwnerDoNotTouchWorktreeTabs() {
