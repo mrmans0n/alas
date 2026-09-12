@@ -7,16 +7,25 @@ struct AppKitDiffScroller: NSViewRepresentable {
     let scrollRequest: AppKitDiffScrollRequest?
     let onActiveOwnerChange: (String?) -> Void
     let onScrollRequestCompletion: (Int) -> Void
+    /// Drops the vertical scroller control. Scrolling itself is unaffected —
+    /// wheel and trackpad still work — this only removes the chrome, for hosts
+    /// narrow enough that a permanent scroller reads as clutter. Opt-in so the
+    /// center pane's diff keeps its scroller.
+    var hidesScroller: Bool = false
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> AppKitDiffScrollView {
         let scrollView = AppKitDiffScrollView(frame: .zero)
+        scrollView.hasVerticalScroller = !hidesScroller
         context.coordinator.attach(scrollView: scrollView, onActiveOwnerChange: onActiveOwnerChange)
         return scrollView
     }
 
     func updateNSView(_ scrollView: AppKitDiffScrollView, context: Context) {
+        // Re-applied on update so toggling the host's preference takes effect
+        // without rebuilding the scroll view.
+        scrollView.hasVerticalScroller = !hidesScroller
         context.coordinator.update(
             plan: plan,
             scrollRequest: scrollRequest,

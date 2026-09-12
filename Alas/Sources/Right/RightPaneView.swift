@@ -281,7 +281,12 @@ struct RightPaneView: View {
                             },
                             onSearch: { state.openSearchOverlay() }
                         )
+                        // Hides the indicators of every SwiftUI ScrollView in
+                        // the tab bodies (Files, Agent, Run). The Changes tab
+                        // scrolls through AppKit, which this cannot reach — it
+                        // opts out via `AppKitDiffScroller.hidesScroller`.
                         tabContent(rps: rps)
+                            .scrollIndicators(.hidden)
                     }
                 }
                 RightPaneRail(
