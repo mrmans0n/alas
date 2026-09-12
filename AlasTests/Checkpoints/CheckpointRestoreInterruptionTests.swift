@@ -3,6 +3,43 @@ import Testing
 @testable import Alas
 
 struct CheckpointRestoreInterruptionTests {
+    @Test func recoveryCleansIncompletePreparedStagingJournal() async throws {
+        let fixture = try await CheckpointRestoreFixture.make()
+        defer { fixture.remove() }
+        let operationID = UUID()
+        let stagingRoot = fixture.repo.root
+            .appendingPathComponent(".alas-checkpoint-restore-\(operationID.uuidString.lowercased())", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: stagingRoot.appendingPathComponent("backups", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: stagingRoot.appendingPathComponent("replacements", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try await fixture.store.writeJournal(.init(
+            id: operationID,
+            lineageID: fixture.repo.target.lineageID,
+            checkpointID: UUID(),
+            recoveryCheckpointID: UUID(),
+            phase: .prepared,
+            stagingRoot: stagingRoot.path,
+            selectedPaths: ["selected.bin"],
+            expectedFingerprint: "fingerprint",
+            expectedIndexChecksum: "checksum"
+        ))
+
+        let result = try await fixture.service.recoverInterruptedRestore(
+            target: fixture.repo.target,
+            operationID: operationID,
+            coordination: .clear
+        )
+
+        #expect(result.restoredPaths == ["selected.bin"])
+        #expect(!FileManager.default.fileExists(atPath: stagingRoot.path))
+        #expect(try await fixture.store.recoverableJournals(lineageID: fixture.repo.target.lineageID).isEmpty)
+    }
+
     @Test(arguments: [false, true])
     func selectiveRecoveryPreservesUnrelatedEditsMadeAfterInterruption(replacedByDirectory: Bool) async throws {
         let fixture = try await CheckpointRestoreFixture.make(faultInjector: .init {

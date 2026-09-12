@@ -164,11 +164,13 @@ struct RightPaneCheckpointStateTests {
         let state = RightPaneState(worktree: worktree, baseBranch: "main", checkpointService: service)
         state.checkpointTargetProvider = { repository.target }
 
-        await state.createCheckpoint(label: "   ")
+        let blankManifest = await state.createCheckpoint(label: "   ")
+        #expect(blankManifest == nil)
         #expect(state.lastCheckpointError == "Enter a checkpoint name.")
         #expect(state.checkpointSummaries.isEmpty)
 
-        await state.createCheckpoint(label: "Before edit")
+        let createdManifest = await state.createCheckpoint(label: "Before edit")
+        #expect(createdManifest?.id == UUID(uuidString: "11111111-1111-1111-1111-111111111111")!)
         #expect(state.checkpointSummaries.map(\.label) == ["Before edit"])
         #expect(state.checkpointManifests.values.flatMap(\.exclusions).map(\.relativePath) == [".env"])
     }

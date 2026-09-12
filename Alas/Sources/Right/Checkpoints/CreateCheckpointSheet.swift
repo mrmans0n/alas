@@ -83,12 +83,7 @@ struct CreateCheckpointSheet: View {
     private func create() {
         let label = model.label.trimmingCharacters(in: .whitespacesAndNewlines)
         Task { @MainActor in
-            await rps.createCheckpoint(label: label)
-            guard rps.lastCheckpointError == nil,
-                  let summary = rps.checkpointSummaries.first(where: { $0.label == label }),
-                  let manifest = rps.checkpointManifests[summary.id]
-            else { return }
-            capturedManifest = manifest
+            capturedManifest = await rps.createCheckpoint(label: label)
         }
     }
 }

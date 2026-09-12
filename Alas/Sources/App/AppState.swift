@@ -177,6 +177,10 @@ final class AppState {
         rightPaneStore.activeState(worktreeId: worktreeId)?.checkpointMutationsDisabled == true
     }
 
+    func checkpointTerminalAdmissionDisabled(worktreeId: String) -> Bool {
+        rightPaneStore.activeState(worktreeId: worktreeId)?.checkpointMutationsDisabled == true
+    }
+
     typealias TerminalSessionOpener = (
         Worktree,
         ProjectConfig,
@@ -3185,6 +3189,17 @@ final class AppState {
         }
     }
 
+    enum TerminalLaunchError: LocalizedError, Equatable {
+        case checkpointRecoveryRequired
+
+        var errorDescription: String? {
+            switch self {
+            case .checkpointRecoveryRequired:
+                return "Recover the interrupted checkpoint restore before opening terminals."
+            }
+        }
+    }
+
     @discardableResult
     func openAgentTerminalTab(for worktree: Worktree, agentId: String) throws -> Tab {
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
@@ -5309,6 +5324,9 @@ final class AppState {
         titleOverride: String? = nil,
         runScriptKey: String? = nil
     ) async throws -> Tab {
+        guard !checkpointTerminalAdmissionDisabled(worktreeId: worktree.id) else {
+            throw TerminalLaunchError.checkpointRecoveryRequired
+        }
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             throw NSError(domain: "AppState", code: 2)
         }
@@ -5374,6 +5392,9 @@ final class AppState {
         titleOverride: String? = nil,
         runScriptKey: String? = nil
     ) throws -> Tab {
+        guard !checkpointTerminalAdmissionDisabled(worktreeId: worktree.id) else {
+            throw TerminalLaunchError.checkpointRecoveryRequired
+        }
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             throw NSError(domain: "AppState", code: 2)
         }

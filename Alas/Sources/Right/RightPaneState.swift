@@ -746,17 +746,18 @@ final class RightPaneState: GGSplitCommitServicing {
         pendingCheckpointCreation = nil
     }
 
-    func createCheckpoint(label: String) async {
+    @discardableResult
+    func createCheckpoint(label: String) async -> WorktreeCheckpointManifest? {
         let normalized = label.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else {
             lastCheckpointError = "Enter a checkpoint name."
-            return
+            return nil
         }
         guard let target = checkpointTarget else {
             lastCheckpointError = CheckpointRestoreBlocker.remoteTarget.description
-            return
+            return nil
         }
-        guard checkpointOperationInFlight == nil else { return }
+        guard checkpointOperationInFlight == nil else { return nil }
         checkpointOperationInFlight = .capture
         lastCheckpointError = nil
         lastCheckpointStatus = nil
@@ -771,9 +772,11 @@ final class RightPaneState: GGSplitCommitServicing {
             let manifest = try await checkpointService.manifest(target: target, id: summary.id)
             checkpointManifests[summary.id] = manifest
             await refresh()
+            return manifest
         } catch {
             lastCheckpointError = error.localizedDescription
             await refresh()
+            return nil
         }
     }
 

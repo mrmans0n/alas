@@ -87,6 +87,13 @@ struct CheckpointRestoreTransaction: Sendable {
             createdStaging = true
             try fileSystem.createDirectoryExclusively(replacementsRoot, mode: 0o700)
             try fileSystem.createDirectoryExclusively(backupsRoot, mode: 0o700)
+            let initialJournal = CheckpointRestoreJournal(id: operationID, lineageID: target.lineageID,
+                                                           checkpointID: manifest.id, recoveryCheckpointID: recoveryCheckpointID,
+                                                           phase: .prepared, stagingRoot: stagingRoot.path, selectedPaths: selectedPaths,
+                                                           expectedFingerprint: preview.currentFingerprint,
+                                                           expectedIndexChecksum: current.indexChecksum)
+            try await store.writeJournal(initialJournal)
+            journalWritten = true
             let originalIndex = try await gitPath("index", target: target)
             let originalBytes = FileManager.default.fileExists(atPath: originalIndex.path) ? try fileSystem.fileData(originalIndex) : Data()
             guard digest(originalBytes) == current.indexChecksum else { throw CheckpointRestoreError.stalePreview }
@@ -112,7 +119,6 @@ struct CheckpointRestoreTransaction: Sendable {
                                                     preparedIndexChecksum: preparedIndexChecksum,
                                                     stagingNames: stagingNames)
             try await store.writeJournal(journal)
-            journalWritten = true
             guard try await store.journal(id: operationID, lineageID: target.lineageID) == journal else {
                 throw CheckpointRestoreError.invalidGitOutput
             }
@@ -228,6 +234,12 @@ struct CheckpointRestoreTransaction: Sendable {
         if coordination.otherGitMutationActive { throw CheckpointRestoreError.blocked(.otherGitMutation) }
         if coordination.activeTerminalCount > 0 || coordination.activeACPCount > 0 { throw CheckpointRestoreError.blocked(.activeSession) }
         if !coordination.dirtyEditorPaths.isDisjoint(with: journal.selectedPaths) { throw CheckpointRestoreError.blocked(.dirtyEditorBuffer) }
+        if journal.preparedIndexChecksum == nil && journal.stagingNames.isEmpty && journal.phase == .prepared
+            && journal.completedPaths.isEmpty && journal.pendingPath == nil && journal.ownedIndexLockPath == nil
+            && journal.pendingIndexLock == nil {
+            try await finish(&journal, target: target, phase: .recovered)
+            return .init(recoveryCheckpointID: journal.recoveryCheckpointID, restoredPaths: journal.selectedPaths)
+        }
         do { try await rollback(&journal, target: target) }
         catch { throw recoveryRequired(journal) }
         return .init(recoveryCheckpointID: journal.recoveryCheckpointID, restoredPaths: journal.selectedPaths)
@@ -313,13 +325,23 @@ struct CheckpointRestoreTransaction: Sendable {
         _ = try fileSystem.list(root)
         _ = try fileSystem.list(root.appendingPathComponent("backups"))
         _ = try fileSystem.list(root.appendingPathComponent("replacements"))
-        guard Set(journal.stagingNames.values).count == journal.selectedPaths.count else { throw CheckpointRestoreError.invalidJournal }
+        let preparationIsComplete = journal.preparedIndexChecksum != nil
+        if preparationIsComplete {
+            guard Set(journal.stagingNames.values).count == journal.selectedPaths.count else { throw CheckpointRestoreError.invalidJournal }
+        } else {
+            guard journal.phase == .prepared, journal.stagingNames.isEmpty, journal.completedPaths.isEmpty,
+                  journal.pendingPath == nil, journal.ownedIndexLockPath == nil, journal.pendingIndexLock == nil else {
+                throw CheckpointRestoreError.invalidJournal
+            }
+        }
         for path in journal.selectedPaths {
             try validateRestorePath(path, selectedPaths: journal.selectedPaths, under: target.path)
             guard !path.split(separator: "/").contains(".git"), !path.hasPrefix(".alas-checkpoint-restore-") else {
                 throw CheckpointRestoreError.invalidJournal
             }
-            _ = try stagingName(path, journal: journal)
+            if preparationIsComplete {
+                _ = try stagingName(path, journal: journal)
+            }
         }
         if let lock = journal.ownedIndexLockPath {
             guard lock == (try await gitPath("index.lock", target: target)).path else { throw CheckpointRestoreError.invalidJournal }
