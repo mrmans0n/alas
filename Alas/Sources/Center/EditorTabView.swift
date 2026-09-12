@@ -110,7 +110,23 @@ struct EditorTabView: View {
                         ))
                     }
                 },
-                trailing: AnyView(statusBadge)
+                trailing: AnyView(HStack(spacing: 8) {
+                    statusBadge
+                    if !isBinary {
+                        Button {
+                            appState.config.code.showMinimap.toggle()
+                            appState.saveConfig()
+                        } label: {
+                            Image(systemName: "rectangle.trailingthird.inset.filled")
+                                .foregroundStyle(appState.config.code.showMinimap ? theme.color("accent") : theme.color("fg-muted"))
+                                .frame(width: 24, height: 24)
+                        }
+                        .buttonStyle(.plain)
+                        .help(appState.config.code.showMinimap ? "Hide minimap" : "Show minimap")
+                        .accessibilityLabel("Editor minimap")
+                        .accessibilityValue(appState.config.code.showMinimap ? "On" : "Off")
+                    }
+                })
             )
             if isBinary {
                 binaryPlaceholder
@@ -157,6 +173,7 @@ struct EditorTabView: View {
                     fontFamily: appState.config.code.fontFamily,
                     fontSize: appState.config.code.fontSize,
                     showLineNumbers: appState.config.code.showLineNumbers,
+                    showMinimap: appState.config.code.showMinimap,
                     textRendering: CodeEditorTextRenderingConfiguration(code: appState.config.code),
                     onTextViewAttached: { attachFindController(to: $0) },
                     onTextViewDetached: { detachFindController(from: $0) },

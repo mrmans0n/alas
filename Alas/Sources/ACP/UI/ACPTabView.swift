@@ -274,7 +274,11 @@ private struct ACPSessionView: View {
             let chatContentMaxWidth = ACPChatLayout.contentMaxWidth(
                 forChatColumnWidth: chatProxy.size.width
             )
-            chatSurface(contentMaxWidth: chatContentMaxWidth)
+            let showMinimap = ACPTranscriptScrollerView.shouldShowMinimap(
+                preferred: state.config.harness.acpShowMinimap,
+                availableWidth: chatProxy.size.width
+            )
+            chatSurface(contentMaxWidth: chatContentMaxWidth, showMinimap: showMinimap)
                 .frame(width: chatProxy.size.width, height: chatProxy.size.height)
                 .animation(emptyStateAnimation, value: isNewEmptySession)
                 .animation(emptyStateAnimation, value: isFirstRunConnecting)
@@ -305,10 +309,10 @@ private struct ACPSessionView: View {
         return true
     }
 
-    private func chatSurface(contentMaxWidth: CGFloat) -> some View {
+    private func chatSurface(contentMaxWidth: CGFloat, showMinimap: Bool) -> some View {
         ZStack(alignment: .bottom) {
             if showsPreSessionUserInput {
-                messageList(contentMaxWidth: contentMaxWidth)
+                messageList(contentMaxWidth: contentMaxWidth, showMinimap: showMinimap)
                     .transition(.opacity)
             } else if let phase = firstRunConnectingPhase {
                 introStateAndComposer(contentMaxWidth: contentMaxWidth) {
@@ -335,7 +339,7 @@ private struct ACPSessionView: View {
                         agentDisplayName: state.agent(id: session.agentId)?.displayName ?? session.agentId
                     )
                 } else {
-                    messageList(contentMaxWidth: contentMaxWidth)
+                    messageList(contentMaxWidth: contentMaxWidth, showMinimap: showMinimap)
                         .transition(.opacity)
                 }
 
@@ -344,6 +348,7 @@ private struct ACPSessionView: View {
                     contentMaxWidth: contentMaxWidth,
                     typography: chatTypography
                 )
+                .padding(.trailing, showMinimap && !isConnecting ? MinimapView.width : 0)
 
                 if let undo = session.steerUndo, !undo.snapshot.isEmpty {
                     VStack {
@@ -363,7 +368,7 @@ private struct ACPSessionView: View {
         }
     }
 
-    private func messageList(contentMaxWidth: CGFloat) -> ACPMessageList {
+    private func messageList(contentMaxWidth: CGFloat, showMinimap: Bool) -> ACPMessageList {
         ACPMessageList(
             session: session,
             transcript: session.transcript,
@@ -495,7 +500,8 @@ private struct ACPSessionView: View {
             },
             agentDisplayName: { agentID in
                 state.agent(id: agentID)?.displayName ?? agentID
-            }
+            },
+            showMinimap: showMinimap
         )
     }
 

@@ -257,6 +257,7 @@ struct AppConfig: Codable, Equatable {
         /// (the agent runs tools without asking). Seeds the per-session value
         /// only; the composer bolt still wins afterward. Default: false.
         var acpAutoRunByDefault: Bool
+        var acpShowMinimap: Bool
         /// When true (default), every local ACP session gets the built-in
         /// "alas" MCP server exposing CLI actions (open, worktrees, review).
         var exposeAlasMCP: Bool
@@ -270,7 +271,7 @@ struct AppConfig: Codable, Equatable {
         enum CodingKeys: String, CodingKey {
             case notifyOnFinish, notifyOnAwaiting,
                  dismissedHookInstallNudges, dismissedACPSetupNudges,
-                 confirmCloseChatTabs, acpSendOnEnter, acpAutoRunByDefault,
+                 confirmCloseChatTabs, acpSendOnEnter, acpAutoRunByDefault, acpShowMinimap,
                  exposeAlasMCP, alasMCPTransport, acpDictationLocale
         }
 
@@ -280,6 +281,7 @@ struct AppConfig: Codable, Equatable {
              confirmCloseChatTabs: Bool = false,
              acpSendOnEnter: Bool = true,
              acpAutoRunByDefault: Bool = false,
+             acpShowMinimap: Bool = false,
              exposeAlasMCP: Bool = true,
              alasMCPTransport: AlasMCPTransport = .stdio,
              acpDictationLocale: String = "")
@@ -291,6 +293,7 @@ struct AppConfig: Codable, Equatable {
             self.confirmCloseChatTabs = confirmCloseChatTabs
             self.acpSendOnEnter = acpSendOnEnter
             self.acpAutoRunByDefault = acpAutoRunByDefault
+            self.acpShowMinimap = acpShowMinimap
             self.exposeAlasMCP = exposeAlasMCP
             self.alasMCPTransport = alasMCPTransport
             self.acpDictationLocale = acpDictationLocale
@@ -305,6 +308,7 @@ struct AppConfig: Codable, Equatable {
             confirmCloseChatTabs = (try? c.decode(Bool.self, forKey: .confirmCloseChatTabs)) ?? false
             acpSendOnEnter = (try? c.decode(Bool.self, forKey: .acpSendOnEnter)) ?? true
             acpAutoRunByDefault = (try? c.decode(Bool.self, forKey: .acpAutoRunByDefault)) ?? false
+            acpShowMinimap = (try? c.decode(Bool.self, forKey: .acpShowMinimap)) ?? false
             exposeAlasMCP = (try? c.decode(Bool.self, forKey: .exposeAlasMCP)) ?? true
             alasMCPTransport = (try? c.decode(AlasMCPTransport.self, forKey: .alasMCPTransport)) ?? .stdio
             acpDictationLocale = (try? c.decode(String.self, forKey: .acpDictationLocale)) ?? ""
@@ -319,6 +323,7 @@ struct AppConfig: Codable, Equatable {
         var languageServers: [LanguageServerConfig]
         var dismissedInstallNudges: [String]
         var userDefinedRecipes: [String: [InstallRecipe]]
+        var showMinimap: Bool = false
         var showInvisibleCharacters: Bool = false
         var showSpaces: Bool = true
         var showTabs: Bool = true
@@ -327,7 +332,7 @@ struct AppConfig: Codable, Equatable {
         var warningCharacters: [WarningCharacter] = WarningCharacter.defaults
 
         enum CodingKeys: String, CodingKey {
-            case fontFamily, fontSize, formatOnSave, showLineNumbers,
+            case fontFamily, fontSize, formatOnSave, showLineNumbers, showMinimap,
                  languageServers, dismissedInstallNudges, userDefinedRecipes,
                  showInvisibleCharacters, showSpaces, showTabs, showLineEndings,
                  showWarningCharacters, warningCharacters
@@ -717,6 +722,7 @@ extension AppConfig {
                 languageServers: servers,
                 dismissedInstallNudges: dismissed,
                 userDefinedRecipes: userRecipes,
+                showMinimap: (try? codeContainer.decode(Bool.self, forKey: .showMinimap)) ?? false,
                 showInvisibleCharacters: showInvisibleCharacters,
                 showSpaces: showSpaces,
                 showTabs: showTabs,

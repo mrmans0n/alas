@@ -57,6 +57,9 @@ struct ChatPane: View {
                     .padding(.bottom, 12)
 
                 SettingsGroup(title: GroupTitles.appearance) {
+                    SettingsRow(name: "Show minimap") {
+                        AlasToggle(on: state.bind(\.harness.acpShowMinimap))
+                    }
                     SettingsRow(name: RowLabels.fontFamily) {
                         FontFamilyPicker(
                             family: state.bind(\.agents.chatFontFamily),

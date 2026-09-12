@@ -725,6 +725,100 @@ struct ACPTranscriptScrollerViewportHeightReconciliationTests {
 @MainActor
 @Suite("ACPTranscriptScroller logical navigation")
 struct ACPTranscriptScrollerLogicalNavigationTests {
+    @Test("Minimap drag mapping stays stable across differently sized messages")
+    func minimapDragMapping() {
+        let session = ACPSession(id: "mixed-minimap", agentId: "claude", worktreeId: "w", title: "t")
+        let short = ACPMessage.systemNotice(id: UUID(), text: "Short message")
+        let tall = ACPMessage.agent(id: UUID(), StreamingText(String(repeating: "A long response.\n\n", count: 100)))
+        session.replaceTranscriptMessages([short, tall, .systemNotice(id: UUID(), text: "End")])
+        session.followsTranscriptTail = true
+        var host = makeHost(session: session)
+        host.showMinimap = true
+        let scroller = ACPTranscriptScrollerView(frame: NSRect(x: 0, y: 0, width: 800, height: 400))
+        let coordinator = ACPTranscriptScroller.Coordinator()
+        coordinator.attach(scroller: scroller, host: host)
+        scroller.layoutSubtreeIfNeeded()
+        scroller.minimap.onNavigate?(0)
+        let initialProportion = scroller.minimap.proportion
+        let destination = Double(0.5 / (1 - initialProportion))
+        #expect(destination < 1)
+        scroller.minimap.onNavigationStart?()
+        scroller.minimap.onNavigate?(destination)
+        let position = scroller.scrollY
+        #expect(coordinator.topVisibleMessageIdForTesting == tall.stableId)
+        #expect(abs(scroller.minimap.proportion - initialProportion) > 0.01)
+        scroller.minimap.onNavigate?(destination)
+        #expect(abs(scroller.scrollY - position) < 1)
+        scroller.minimap.onNavigationEnd?()
+    }
+
+    @Test("Minimap targets skip plan entries that have no transcript row")
+    func minimapSkipsHiddenPlans() {
+        let session = ACPSession(id: "plan-minimap", agentId: "claude", worktreeId: "w", title: "t")
+        let first = ACPMessage.agent(id: UUID(), StreamingText(String(repeating: "First response.\n\n", count: 80)))
+        let last = ACPMessage.agent(id: UUID(), StreamingText(String(repeating: "Last response.\n\n", count: 80)))
+        session.replaceTranscriptMessages([first, .plan(id: UUID(), []), last])
+        session.followsTranscriptTail = true
+        var host = makeHost(session: session)
+        host.showMinimap = true
+        let scroller = ACPTranscriptScrollerView(frame: NSRect(x: 0, y: 0, width: 800, height: 400))
+        let coordinator = ACPTranscriptScroller.Coordinator()
+        coordinator.attach(scroller: scroller, host: host)
+        scroller.layoutSubtreeIfNeeded()
+        scroller.minimap.onNavigate?(0)
+        #expect(coordinator.topVisibleMessageIdForTesting == first.stableId)
+        scroller.minimap.onNavigate?(0.5)
+        #expect(coordinator.topVisibleMessageIdForTesting == last.stableId)
+        #expect(!session.followsTranscriptTail)
+    }
+
+    @Test("Minimap navigation leaves tail-follow paused while new messages arrive")
+    func minimapNavigationDuringStreaming() throws {
+        let session = ACPSession(id: "minimap", agentId: "claude", worktreeId: "w", title: "t")
+        let allMessages = messages(200)
+        session.replaceTranscriptMessages(allMessages)
+        session.transcript.resetWindowToTail()
+        session.followsTranscriptTail = true
+        var host = makeHost(session: session)
+        host.showMinimap = true
+        let scroller = ACPTranscriptScrollerView(frame: NSRect(x: 0, y: 0, width: 800, height: 400))
+        let coordinator = ACPTranscriptScroller.Coordinator()
+        coordinator.attach(scroller: scroller, host: host)
+        scroller.layoutSubtreeIfNeeded()
+        scroller.minimap.onNavigate?(0.5)
+        #expect(!session.followsTranscriptTail)
+        let anchor = coordinator.topVisibleMessageIdForTesting
+        #expect(anchor != nil && anchor != allMessages.last?.stableId)
+        let position = scroller.scrollY
+        session.transcript.messages.append(.systemNotice(id: UUID(), text: "new message"))
+        coordinator.update(host: host)
+        #expect(!session.followsTranscriptTail)
+        #expect(abs(scroller.scrollY - position) < 1)
+        #expect(coordinator.topVisibleMessageIdForTesting == anchor)
+        scroller.minimap.onNavigate?(1)
+        #expect(session.followsTranscriptTail)
+        #expect(scroller.distanceFromBottom < 1)
+    }
+
+    @Test("Minimap can navigate inside a single response taller than the viewport")
+    func minimapNavigatesWithinResponse() {
+        let session = ACPSession(id: "long-minimap", agentId: "claude", worktreeId: "w", title: "t")
+        session.replaceTranscriptMessages([.agent(id: UUID(), StreamingText(String(repeating: "A paragraph of a long response.\n\n", count: 100)))])
+        session.followsTranscriptTail = true
+        var host = makeHost(session: session)
+        host.showMinimap = true
+        let scroller = ACPTranscriptScrollerView(frame: NSRect(x: 0, y: 0, width: 800, height: 400))
+        let coordinator = ACPTranscriptScroller.Coordinator()
+        coordinator.attach(scroller: scroller, host: host)
+        scroller.layoutSubtreeIfNeeded()
+        #expect(scroller.contentHeight > scroller.viewportHeight * 3)
+        #expect(scroller.minimap.proportion < 1)
+        scroller.minimap.onNavigate?(0.5)
+        #expect(!session.followsTranscriptTail)
+        #expect(scroller.scrollY > scroller.viewportHeight)
+        #expect(scroller.distanceFromBottom > scroller.viewportHeight)
+    }
+
     private func messages(_ count: Int) -> [ACPMessage] {
         (0..<count).map { index in
             .systemNotice(id: UUID(), text: "message \(index)")

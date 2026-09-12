@@ -36,6 +36,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
     let onRetryContextRecovery: () -> Void
     let onOpenForkSource: (String) -> Void
     let agentDisplayName: (String) -> String
+    var showMinimap: Bool = false
 
     /// Ambient theme at the point this representable sits in the SwiftUI
     /// tree. Individual rows are hosted in their own, otherwise-disconnected
@@ -96,6 +97,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         /// Stable id to align at the viewport top after its bounded window
         /// has been reconciled into the AppKit tiling map.
         private var pendingLogicalTargetId: String?
+        private var pendingMinimapRowFraction: CGFloat = 0
+        private var minimapGestureRange: (count: Int, proportion: CGFloat)?
         private var isPendingLogicalResolutionScheduled = false
         private let scrollSettleTimer: DebounceTimer
         /// Memoizes the window-sliced row list + its id → message-index
@@ -107,6 +110,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         /// its message index is O(window) work in exactly the state where
         /// scrolling must stay smooth.
         private let visibleRowsCache = ACPVisibleRowsCache()
+        private var minimapRenderer: ACPTranscriptMinimap?
+        private var pendingMinimapUpdate: DispatchWorkItem?
 
         static let composerSpacerHeight: CGFloat = 220
 
@@ -139,6 +144,16 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             }
             scroller.onLogicalScrollCommit = { [weak self] value in
                 self?.commitLogicalScroll(value: value)
+            }
+            scroller.minimap.onNavigate = { [weak self] value in
+                self?.commitMinimapScroll(value: value)
+            }
+            scroller.minimap.onNavigationStart = { [weak self] in
+                guard let self, let host = self.host, let scroller = self.scroller else { return }
+                self.minimapGestureRange = (host.transcript.logicalMessageCount, scroller.minimap.proportion)
+            }
+            scroller.minimap.onNavigationEnd = { [weak self] in
+                self?.minimapGestureRange = nil
             }
             update(host: host)
         }
@@ -245,6 +260,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             // "already applied" memo would leave the transcript permanently
             // empty once a real width does arrive.
             guard let reconciler, let scroller else { return }
+            scroller.minimapPreferred = host.showMinimap
+            updateMinimap()
             let contentWidth = scroller.contentView.bounds.width
             let specs = Self.rowSpecs(
                 host: host,
@@ -275,6 +292,33 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         }
 
         // MARK: row specs
+
+        private func updateMinimap() {
+            guard let host, let scroller else { return }
+            guard host.showMinimap, scroller.showsMinimap else {
+                minimapGestureRange = nil
+                pendingMinimapUpdate?.cancel()
+                pendingMinimapUpdate = nil
+                minimapRenderer = nil
+                scroller.minimap.update(drawing: MinimapDrawing())
+                return
+            }
+            scroller.minimap.backgroundColor = NSColor(host.theme.color("bg-1"))
+            scroller.minimap.indicatorColor = NSColor(host.theme.color("fg-muted"))
+            if let minimapRenderer, !minimapRenderer.needsUpdate(transcript: host.transcript, theme: host.theme) { return }
+            guard pendingMinimapUpdate == nil else { return }
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.pendingMinimapUpdate = nil
+                guard let host = self.host, host.showMinimap, let scroller = self.scroller, scroller.showsMinimap else { return }
+                if self.minimapRenderer == nil { self.minimapRenderer = ACPTranscriptMinimap() }
+                if let drawing = self.minimapRenderer?.drawing(transcript: host.transcript, theme: host.theme) {
+                    scroller.minimap.update(drawing: drawing)
+                }
+            }
+            pendingMinimapUpdate = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+        }
 
         /// Wraps a row's content with the layout and environment values that
         /// would otherwise reach it "for free" as a child of a single shared
@@ -847,6 +891,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         }
 
         private func commitLogicalScroll(value: Double) {
+            pendingMinimapRowFraction = 0
             guard let host, let scroller, host.transcript.logicalMessageCount > 0 else { return }
             if value >= 1 - Double.ulpOfOne {
                 pendingLogicalTargetGlobalIndex = nil
@@ -880,6 +925,25 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             }
         }
 
+        private func commitMinimapScroll(value: Double) {
+            guard let host, let scroller, host.transcript.logicalMessageCount > 0 else { return }
+            if value >= 1 {
+                commitLogicalScroll(value: 1)
+                return
+            }
+            pauseTailFollow()
+            reconciler?.setFollowsTail(false)
+            host.transcript.freezeVisibleTail()
+            let count = host.transcript.logicalMessageCount
+            // Keep the drag's mapping stable while rows of different heights enter the viewport.
+            let range = minimapGestureRange ?? (count: count, proportion: scroller.minimap.proportion)
+            let position = min(CGFloat(count) - 0.000_001,
+                               max(0, CGFloat(value) * (1 - range.proportion) * CGFloat(range.count)))
+            pendingLogicalTargetGlobalIndex = Int(position)
+            pendingMinimapRowFraction = position - floor(position)
+            if resolvePendingLogicalTargetIfPossible() { update(host: host) }
+        }
+
         /// Returns true when the pending global target is materialized and a
         /// bounded local window has been selected for the next reconcile.
         @discardableResult
@@ -892,8 +956,26 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             }
             let clampedTarget = min(max(0, target), count - 1)
             pendingLogicalTargetGlobalIndex = clampedTarget
-            guard let localIndex = host.transcript.localIndex(forGlobalIndex: clampedTarget) else {
+            guard var localIndex = host.transcript.localIndex(forGlobalIndex: clampedTarget) else {
                 return false
+            }
+            if case .plan = host.transcript.messages[localIndex] {
+                let original = localIndex
+                while localIndex < host.transcript.messages.count {
+                    if case .plan = host.transcript.messages[localIndex] { localIndex += 1 } else { break }
+                }
+                if localIndex == host.transcript.messages.count {
+                    localIndex = original - 1
+                    while localIndex >= 0 {
+                        if case .plan = host.transcript.messages[localIndex] { localIndex -= 1 } else { break }
+                    }
+                }
+                pendingMinimapRowFraction = 0
+                guard localIndex >= 0 else {
+                    pendingLogicalTargetGlobalIndex = nil
+                    pendingLogicalTargetId = nil
+                    return false
+                }
             }
             pendingLogicalTargetGlobalIndex = nil
             pendingLogicalTargetId = host.transcript.stableId(
@@ -930,7 +1012,9 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                   let row = tiling.row(withId: id),
                   let scroller
             else { return }
-            scroller.setScrollY(row.minY)
+            let fraction = pendingMinimapRowFraction
+            pendingMinimapRowFraction = 0
+            scroller.setScrollY(row.minY + row.height * fraction)
             pendingLogicalTargetId = nil
             rememberCurrentAnchor()
         }
@@ -947,6 +1031,19 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 topGlobalIndex: topGlobalIndex,
                 isAtTail: host.session.followsTranscriptTail
             ))
+            syncMinimapViewport()
+        }
+
+        private func syncMinimapViewport() {
+            guard let host, host.showMinimap, let scroller, scroller.showsMinimap,
+                  host.transcript.logicalMessageCount > 0,
+                  pendingLogicalTargetGlobalIndex == nil else { return }
+            let count = CGFloat(host.transcript.logicalMessageCount)
+            let top = globalMessagePosition(at: scroller.scrollY) ?? 0
+            let bottom = globalMessagePosition(at: scroller.scrollY + scroller.viewportHeight) ?? count
+            let proportion = min(1, max(0.000_001, (bottom - top) / count))
+            scroller.minimap.proportion = proportion
+            scroller.minimap.value = host.session.followsTranscriptTail ? 1 : Double(min(1, top / max(0.000_001, count * (1 - proportion))))
         }
 
         private func currentTopGlobalMessageIndex() -> Int? {
@@ -971,6 +1068,26 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             )
             guard let localIndex = lookup.transcriptIndex(for: anchorId) else { return nil }
             return host.transcript.globalIndex(forLocalIndex: localIndex)
+        }
+
+        private func globalMessagePosition(at y: CGFloat) -> CGFloat? {
+            guard let host,
+                  let id = tiling.nearestNonSyntheticRowId(to: y, syntheticIdPrefix: ACPTranscriptScrollerReconciler.syntheticIdPrefix),
+                  let row = tiling.row(withId: id) else { return nil }
+            let lookup = visibleRowsCache.lookup(
+                generation: host.transcript.messagesGeneration,
+                head: host.transcript.visibleHead,
+                tail: host.transcript.visibleTailBound,
+                build: {
+                    ACPTranscriptVisibleRow.rows(messages: host.transcript.messages,
+                                                 visibleHead: host.transcript.visibleHead,
+                                                 visibleTail: host.transcript.visibleTailBound,
+                                                 stableId: { host.transcript.stableId(for: $0) })
+                }
+            )
+            guard let localIndex = lookup.transcriptIndex(for: id),
+                  let globalIndex = host.transcript.globalIndex(forLocalIndex: localIndex) else { return nil }
+            return CGFloat(globalIndex) + min(1, max(0, (y - row.minY) / max(1, row.height)))
         }
 
         private func pauseTailFollow() {

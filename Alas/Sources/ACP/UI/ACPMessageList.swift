@@ -34,6 +34,7 @@ struct ACPMessageList: View {
     let onFork: (ACPForkMessageBoundary, String) -> Void
     let onOpenForkSource: (String) -> Void
     let agentDisplayName: (String) -> String
+    var showMinimap: Bool = false
     @Environment(\.theme) private var theme
 
     /// Height of an invisible spacer at the tail of the transcript stack. The
@@ -74,7 +75,8 @@ struct ACPMessageList: View {
                 onQueueClearAll: onQueueClearAll,
                 onRetryContextRecovery: onRetryContextRecovery,
                 onOpenForkSource: onOpenForkSource,
-                agentDisplayName: agentDisplayName
+                agentDisplayName: agentDisplayName,
+                showMinimap: showMinimap
             )
             if Self.shouldShowGoToNewestAffordance(
                 followsTranscriptTail: session.followsTranscriptTail
@@ -84,6 +86,7 @@ struct ACPMessageList: View {
                     transcript.resetWindowToTail()
                     onRememberScrollAnchor(nil, nil, true)
                 }
+                .padding(.trailing, showMinimap ? MinimapView.width : 0)
             }
         }
         .background(
