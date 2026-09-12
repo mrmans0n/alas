@@ -4,11 +4,12 @@ All notable changes to alas are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.17.1] - 2026-09-13
 
 ### 🎨 Changed
 
-- Enable the Agent tab by default, removing its preview gate.
+- Enable the Agent tab by default, removing its preview gate (#1204).
+- Enable the right-pane icon rail by default and migrate existing preferences (#1203).
 
 ## [0.17.0] - 2026-09-12
 
