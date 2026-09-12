@@ -263,7 +263,7 @@ struct WorktreeStateSnapshotterTests {
         #expect(fingerprintOnly.payloads.isEmpty)
     }
 
-    @Test func caseOnlyRenameCapturesDestinationAsSingleLeaf() async throws {
+    @Test func caseOnlyRenameCapturesSourceAndDestinationAsDirtyRename() async throws {
         let repo = try await CheckpointTestRepository.make()
         defer { repo.remove() }
         try repo.write("old", to: "foo")
@@ -272,11 +272,15 @@ struct WorktreeStateSnapshotterTests {
 
         let snapshot = try await WorktreeStateSnapshotter.live.snapshot(target: repo.target)
 
-        #expect(snapshot.paths["foo"] == nil)
-        let state = try #require(snapshot.paths["Foo"])
-        #expect(try snapshot.payload(state.head) == Data("old".utf8))
-        #expect(try snapshot.payload(state.index) == Data("old".utf8))
-        #expect(snapshot.groups.contains { $0.primaryPath == "Foo" && $0.renameSource == "foo" && $0.memberPaths == ["Foo"] })
+        let source = try #require(snapshot.paths["foo"])
+        #expect(try snapshot.payload(source.head) == Data("old".utf8))
+        #expect(source.index == .absent)
+        #expect(source.worktree == .absent)
+        let destination = try #require(snapshot.paths["Foo"])
+        #expect(destination.head == .absent)
+        #expect(try snapshot.payload(destination.index) == Data("old".utf8))
+        #expect(try snapshot.payload(destination.worktree) == Data("old".utf8))
+        #expect(snapshot.groups.contains { $0.primaryPath == "Foo" && $0.renameSource == "foo" && $0.memberPaths == ["Foo", "foo"] })
     }
 
     @Test func trackedFileReplacedByDirectoryIsCapturedAsAbsentLeaf() async throws {

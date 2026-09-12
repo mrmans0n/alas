@@ -83,6 +83,7 @@ struct WorktreeStateSnapshotter: Sendable {
             return (destination, source)
         }
         let caseOnlyRenameSources = Dictionary(uniqueKeysWithValues: caseOnlyRenamePairs)
+        let caseOnlyRenameSourcePaths = Set(caseOnlyRenamePairs.map(\.1))
         let untracked = Set(try records(try await data(["ls-files", "--others", "--exclude-standard", "-z"], target)))
         candidates.formUnion(untracked)
         if onlyIncludedPaths { candidates.formIntersection(includingPaths) }
@@ -90,11 +91,16 @@ struct WorktreeStateSnapshotter: Sendable {
         var states: [String: CheckpointPathState] = [:]
         var exclusions: [CheckpointExclusion] = []
         for path in candidates.sorted() {
-            if caseOnlyRenameSources.values.contains(path) { continue }
             if let operation = ignoringRestoreOperation,
                path.hasPrefix(".alas-checkpoint-restore-\(operation.uuidString.lowercased())/") { continue }
-            let headPath = caseOnlyRenameSources[path] ?? path
-            let indexPath = index.values[path] == nil ? headPath : path
+            if caseOnlyRenameSourcePaths.contains(path) {
+                let headState = try await gitState(headEntries.values[path], target, payloads: &payloads,
+                                                   retainingPayloads: retainingPayloads)
+                states[path] = .init(relativePath: path, head: headState, index: .absent, worktree: .absent)
+                continue
+            }
+            let headPath = path
+            let indexPath = index.values[path] == nil ? (caseOnlyRenameSources[path] ?? path) : path
             let isUntracked = untracked.contains(path) && index.values[indexPath] == nil && headEntries.values[headPath] == nil
             if isUntracked, !includingPaths.contains(path), let reason = try exclusion(path, root: target.path) {
                 exclusions.append(.init(relativePath: path, reason: reason))
