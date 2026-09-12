@@ -12,7 +12,6 @@ struct MinimapGeometry {
         let extent = min(h, max(16, h * min(1, max(0, proportion))))
         return CGRect(x: 0, y: CGFloat(min(1, max(0, value))) * (h - extent), width: width, height: extent)
     }
-
 }
 
 struct MinimapDrawing {
@@ -124,7 +123,8 @@ final class MinimapView: NSView {
     var proportion: CGFloat = 1 { didSet { needsDisplay = true } }
     var backgroundColor = NSColor.textBackgroundColor { didSet { needsDisplay = true } }
     var indicatorColor = NSColor.secondaryLabelColor { didSet { needsDisplay = true } }
-    var preservesLineScale = false { didSet { raster = nil; needsDisplay = true } }
+    var preservesLineScale = false { didSet { raster = nil
+    needsDisplay = true } }
     private var drawing = MinimapDrawing()
     private var raster: CGImage?
     private var rasterSize = CGSize.zero

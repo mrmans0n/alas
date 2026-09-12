@@ -79,5 +79,4 @@ final class CodeEditorScrollView: MinimapScrollView {
         observers.removeAll()
         observedStorage = nil
     }
-
 }
