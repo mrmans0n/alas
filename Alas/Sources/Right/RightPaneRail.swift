@@ -96,7 +96,9 @@ private struct RightPaneRailButton: View {
         .onHover { hovering = $0 }
         .help(collapsed ? "Open \(label)" : label)
         .accessibilityLabel(accessibilityLabel)
-        .accessibilityAddTraits(state == .active ? .isSelected : [])
+        // `.activeCollapsed` is still the selected tab — it is the one the
+        // pane reopens on — so it carries the trait too.
+        .accessibilityAddTraits(state == .active || state == .activeCollapsed ? .isSelected : [])
     }
 
     private var foreground: Color {
@@ -116,7 +118,10 @@ private struct RightPaneRailButton: View {
             RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.5)
         case .inactive:
             if hovering {
-                RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.06))
+                // A theme token rather than a white wash: the rail sits on
+                // `bg-1`, and `bg-3` reads as a subtle step away from it in
+                // both the dark and the light theme.
+                RoundedRectangle(cornerRadius: 6).fill(theme.color("bg-3"))
             } else {
                 Color.clear
             }
@@ -161,6 +166,9 @@ private struct RightPaneRailButton: View {
     }
 
     private var accessibilityLabel: String {
+        // The live dot draws no text, so VoiceOver would otherwise hear
+        // nothing at all where a sighted user sees activity.
+        if badge == .liveDot { return "\(label), running" }
         guard let text = badge.displayText else { return label }
         return "\(label), \(text)"
     }

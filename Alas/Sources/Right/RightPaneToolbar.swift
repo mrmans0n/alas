@@ -18,17 +18,7 @@ struct RightPaneToolbar: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Text(RightPaneToolbarModel.leading(
-                for: tab,
-                branch: branch,
-                activeAgentCount: activeAgentCount,
-                waitingAgentCount: waitingAgentCount,
-                runningScriptNames: runningScriptNames
-            ))
-            .font(.system(size: 10.5, design: .monospaced))
-            .foregroundColor(theme.color("fg-muted"))
-            .lineLimit(1)
-            .truncationMode(.middle)
+            leading
 
             Spacer(minLength: 6)
             trailing
@@ -41,6 +31,27 @@ struct RightPaneToolbar: View {
         .frame(height: 24)
         .background(theme.color("bg-2"))
         .overlay(Divider().opacity(0.5), alignment: .bottom)
+    }
+
+    /// Only the Changes tab names a branch, so only it gets the branch icon;
+    /// the other tabs' leading text is a summary, not a ref.
+    private var leading: some View {
+        HStack(spacing: 4) {
+            if tab == .changes {
+                Icon(name: "branch", size: 10, color: theme.color("fg-muted"))
+            }
+            Text(RightPaneToolbarModel.leading(
+                for: tab,
+                branch: branch,
+                activeAgentCount: activeAgentCount,
+                waitingAgentCount: waitingAgentCount,
+                runningScriptNames: runningScriptNames
+            ))
+            .font(.system(size: 10.5, design: .monospaced))
+            .foregroundColor(theme.color("fg-muted"))
+            .lineLimit(1)
+            .truncationMode(.middle)
+        }
     }
 
     @ViewBuilder
