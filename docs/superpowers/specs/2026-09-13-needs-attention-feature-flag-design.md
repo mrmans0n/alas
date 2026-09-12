@@ -19,9 +19,9 @@ Attention signals, persistence, aggregation, history, and navigation continue to
 
 ## Implementation
 
-`SidebarView` owns the presentation decision because it already derives the aggregation and supplies both affected sidebar views. It will conditionally construct the header entry point and pass zero project attention counts while the flag is off.
+`SidebarView` owns the presentation decision because it already derives the aggregation and supplies both affected sidebar views. It passes `needsAttentionEnabled` to `SidebarHeaderView`, which conditionally builds the inbox button in both of its width variants. It passes zero project attention counts while the flag is off.
 
-No producer, store, aggregation, or navigation code changes. The existing `SidebarHeaderView` and `RepoGroupView` APIs stay intact, keeping the flag outside the attention domain model.
+No producer, store, aggregation, or navigation code changes. `SidebarHeaderView` gains only the presentation Boolean; `RepoGroupView` keeps its existing API. The flag stays outside the attention domain model.
 
 ## Testing
 
