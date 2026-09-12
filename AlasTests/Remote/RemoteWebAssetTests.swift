@@ -15,6 +15,86 @@ struct RemoteWebAssetTests {
         return try String(contentsOf: url, encoding: .utf8)
     }
 
+    // Cache-busting versions (`/app.js?v=N`) are bumped routinely. Tests derive
+    // them from the assets rather than pinning literals, so a bump only has to
+    // touch index.html and sw.js — pinning them here meant every bump silently
+    // rotted a dozen unrelated expectations.
+    /// Every `"/path?v=N"` reference in `text`, keyed by path.
+    private func versionedAssets(in text: String) -> [String: Int] {
+        // Held locally rather than in a `static let`: `Regex` is not `Sendable`,
+        // so a stored static trips strict concurrency checking.
+        let versionedReference = #/"(/[^"?]+)\?v=(\d+)"/#
+        var assets: [String: Int] = [:]
+        for match in text.matches(of: versionedReference) {
+            assets[String(match.1)] = Int(match.2)
+        }
+        return assets
+    }
+
+    /// Where `index.html` requests `path`, ignoring the version.
+    private func referencePosition(
+        of path: String,
+        in html: String,
+        sourceLocation: SourceLocation = #_sourceLocation
+    ) throws -> String.Index {
+        try #require(
+            html.range(of: "\(path)?v="),
+            "index.html does not reference \(path)",
+            sourceLocation: sourceLocation
+        ).lowerBound
+    }
+
+    /// Asserts `index.html` requests `path` and `sw.js` precaches the same version.
+    private func expectReferencedAndPrecached(
+        _ path: String,
+        html: String,
+        sw: String,
+        sourceLocation: SourceLocation = #_sourceLocation
+    ) throws {
+        let requested = try #require(
+            versionedAssets(in: html)[path],
+            "index.html does not reference \(path)",
+            sourceLocation: sourceLocation
+        )
+        let precached = try #require(
+            versionedAssets(in: sw)[path],
+            "sw.js does not precache \(path)",
+            sourceLocation: sourceLocation
+        )
+        #expect(
+            requested == precached,
+            "index.html requests \(path)?v=\(requested) but sw.js precaches v=\(precached)",
+            sourceLocation: sourceLocation
+        )
+    }
+
+    /// Asserts `path` is requested before `/app.js`, which depends on it.
+    private func expectLoadsBeforeApp(
+        _ path: String,
+        in html: String,
+        sourceLocation: SourceLocation = #_sourceLocation
+    ) throws {
+        let dependency = try referencePosition(of: path, in: html, sourceLocation: sourceLocation)
+        let app = try referencePosition(of: "/app.js", in: html, sourceLocation: sourceLocation)
+        #expect(
+            dependency < app,
+            "\(path) must be loaded before /app.js",
+            sourceLocation: sourceLocation
+        )
+    }
+
+    @Test func remoteWebHTMLAndServiceWorkerAgreeOnAssetVersions() throws {
+        let html = try asset("index.html")
+        let sw = try asset("sw.js")
+
+        // A version the page requests but the worker never precached (or vice
+        // versa) leaves the shell fetching an asset that was warmed under a
+        // stale URL, which is how a bumped asset reaches users late.
+        #expect(versionedAssets(in: html) == versionedAssets(in: sw))
+        #expect(!versionedAssets(in: html).isEmpty)
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v"#))
+    }
+
     @Test func toolCardsUseExplicitToggleInsteadOfNativeDetails() throws {
         let app = try asset("app.js")
         let css = try asset("style.css")
@@ -48,14 +128,10 @@ struct RemoteWebAssetTests {
         let html = try asset("index.html")
         let sw = try asset("sw.js")
 
-        #expect(html.contains(#"/session-ordering.js?v=1"#))
-        #expect(html.range(of: #"/session-ordering.js?v=1"#)!.lowerBound < html.range(of: #"/app.js?v=79"#)!.lowerBound)
-        #expect(html.contains(#"/app.js?v=79"#))
-        #expect(html.contains(#"/style.css?v=44"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v59";"#))
-        #expect(sw.contains(#""/session-ordering.js?v=1""#))
-        #expect(sw.contains(#""/app.js?v=79""#))
-        #expect(sw.contains(#""/style.css?v=44""#))
+        try expectLoadsBeforeApp("/session-ordering.js", in: html)
+        try expectReferencedAndPrecached("/session-ordering.js", html: html, sw: sw)
+        try expectReferencedAndPrecached("/app.js", html: html, sw: sw)
+        try expectReferencedAndPrecached("/style.css", html: html, sw: sw)
     }
 
     @Test func remoteWebToolRowsAvoidNativeButtonRenderingOnMobileSafari() throws {
@@ -68,11 +144,8 @@ struct RemoteWebAssetTests {
         #expect(app.contains("toggle.tabIndex = 0"))
         #expect(app.contains("function handleCardToggleKeydown"))
         #expect(!app.contains(#"const button = el("button", "tool-toggle")"#))
-        #expect(html.contains(#"/app.js?v=79"#))
-        #expect(html.contains(#"/style.css?v=44"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v59";"#))
-        #expect(sw.contains(#""/app.js?v=79""#))
-        #expect(sw.contains(#""/style.css?v=44""#))
+        try expectReferencedAndPrecached("/app.js", html: html, sw: sw)
+        try expectReferencedAndPrecached("/style.css", html: html, sw: sw)
     }
 
     @Test func remoteBareURLLinkifierPreservesIndentedCodeBlocks() throws {
@@ -95,7 +168,6 @@ struct RemoteWebAssetTests {
     @Test func sessionRowsRenderWorktreeSummaryCards() throws {
         let app = try asset("app.js")
         let css = try asset("style.css")
-        let html = try asset("index.html")
 
         #expect(app.contains("function sessionMetaParts"))
         #expect(app.contains("function renderSessionRow"))
@@ -119,15 +191,12 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".session-section"))
         #expect(css.contains(".session-section-title"))
         #expect(css.contains(".session-section-list"))
-        #expect(html.contains("/app.js?v=79"))
-        #expect(html.contains("/style.css?v=44"))
     }
 
     @Test func remoteWebExposesSessionRenameControls() throws {
         let app = try asset("app.js")
         let css = try asset("style.css")
         let html = try asset("index.html")
-        let sw = try asset("sw.js")
 
         #expect(html.contains(#"id="detail-title""#))
         #expect(html.contains(#"id="detail-rename""#))
@@ -147,8 +216,6 @@ struct RemoteWebAssetTests {
         #expect(css.contains("#detail-title { display: none; }"))
         #expect(!css.contains("#detail-title, #detail-rename { display: none; }"))
         #expect(css.contains(".sheet-input"))
-        #expect(sw.contains(#""/app.js?v=79""#))
-        #expect(sw.contains(#""/style.css?v=44""#))
     }
 
     @Test func configSheetScrollsWhenModelListOverflows() throws {
@@ -197,8 +264,7 @@ struct RemoteWebAssetTests {
         let creation = try asset("worktree-creation.js")
         let sw = try asset("sw.js")
 
-        #expect(html.contains(#"/worktree-creation.js?v=1"#))
-        #expect(html.range(of: #"/worktree-creation.js?v=1"#)!.lowerBound < html.range(of: #"/app.js?v=79"#)!.lowerBound)
+        try expectLoadsBeforeApp("/worktree-creation.js", in: html)
         #expect(js.contains("const worktreeCreation = RemoteWorktreeCreation.createFlow(send);"))
         #expect(js.contains(#"case "projectList":"#))
         #expect(js.contains(#"case "branchList":"#))
@@ -217,7 +283,7 @@ struct RemoteWebAssetTests {
         #expect(creation.contains(#"type: "createWorktreeSession""#))
         #expect(creation.contains("function reloadCatalog()"))
         #expect(creation.contains("function reconcileAgents(agents)"))
-        #expect(sw.contains(#""/worktree-creation.js?v=1""#))
+        try expectReferencedAndPrecached("/worktree-creation.js", html: html, sw: sw)
     }
 
     @Test func remoteWebScopesBranchFailuresToTheBaseBranchControl() throws {
@@ -349,14 +415,6 @@ struct RemoteWebAssetTests {
         let js = try asset("app.js")
         let stopHandler = try #require(js.range(of: #"$("stop").onclick"#).map { js[$0.lowerBound...].prefix(220) })
         #expect(!stopHandler.contains("ensureWriter"))
-    }
-
-    @Test func incrementalTranscriptBustsServiceWorkerAssetCache() throws {
-        let sw = try asset("sw.js")
-        let html = try asset("index.html")
-        #expect(sw.contains("alas-remote-shell-v59"))
-        #expect(sw.contains("/app.js?v=79"))
-        #expect(html.contains("app.js?v=79"))
     }
 
     // Regression (codex review, PR #775): applyPage used to clear the
@@ -522,17 +580,6 @@ struct RemoteWebAssetTests {
         #expect(!js.contains("is-sending"))
     }
 
-    @Test func queueParityBustsServiceWorkerAssetCache() throws {
-        let html = try asset("index.html")
-        let sw = try asset("sw.js")
-
-        #expect(html.contains(#"/app.js?v=79"#))
-        #expect(html.contains(#"/style.css?v=44"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v59";"#))
-        #expect(sw.contains(#""/app.js?v=79""#))
-        #expect(sw.contains(#""/style.css?v=44""#))
-    }
-
     @Test func remoteWebOffersUndoAfterASteerDiscardsTheQueue() throws {
         let js = try asset("app.js")
         let css = try asset("style.css")
@@ -560,14 +607,10 @@ struct RemoteWebAssetTests {
         #expect(html.contains(#"id="file-list""#))
         #expect(html.contains(#"id="file-view-body""#))
 
-        #expect(html.contains(#"/changes-view.js?v=6"#))
-        #expect(html.contains(#"/file-browser.js?v=3"#))
-        #expect(html.range(of: #"/changes-view.js?v=6"#)!.lowerBound
-            < html.range(of: #"/app.js?v=79"#)!.lowerBound)
-        #expect(html.range(of: #"/file-browser.js?v=3"#)!.lowerBound
-            < html.range(of: #"/app.js?v=79"#)!.lowerBound)
-        #expect(sw.contains(#""/changes-view.js?v=6""#))
-        #expect(sw.contains(#""/file-browser.js?v=3""#))
+        try expectLoadsBeforeApp("/changes-view.js", in: html)
+        try expectLoadsBeforeApp("/file-browser.js", in: html)
+        try expectReferencedAndPrecached("/changes-view.js", html: html, sw: sw)
+        try expectReferencedAndPrecached("/file-browser.js", html: html, sw: sw)
     }
 
     @Test func remoteWebWiresTabSwitching() throws {
@@ -645,9 +688,9 @@ struct RemoteWebAssetTests {
         #expect(!refreshBody.contains("expandedPaths()"))
         let fileTreeBody = try #require(
             js.range(of: #"case "fileTree": {"#).map { js[$0.lowerBound...].prefix(3000) })
-        #expect(fileTreeBody.contains("changesTree.applyNodes("))
-        #expect(fileTreeBody.range(of: "changesTree.applyNodes(")!.lowerBound
-            < fileTreeBody.range(of: "changesTree.expandedPaths()")!.lowerBound)
+        let applyNodes = try #require(fileTreeBody.range(of: "changesTree.applyNodes("))
+        let expandedPaths = try #require(fileTreeBody.range(of: "changesTree.expandedPaths()"))
+        #expect(applyNodes.lowerBound < expandedPaths.lowerBound)
         let fileTreeFailedBody = try #require(
             js.range(of: #"case "fileTreeFailed":"#).map { js[$0.lowerBound...].prefix(300) })
         #expect(fileTreeFailedBody.contains("pendingExpandedPathsRefresh = false;"))
