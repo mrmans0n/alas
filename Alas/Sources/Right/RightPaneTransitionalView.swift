@@ -9,6 +9,15 @@ import SwiftUI
 /// `.disabled(true)` — all controls (including the hide-pane button) are
 /// inert. Recovery actions for the failure states live on the sidebar row
 /// context menu and the center pane.
+///
+/// The icon rail is the one exception: under the preview flag it is the
+/// pane's only reveal affordance (the center pane suppresses its own
+/// reveal button whenever the flag is on), so a rail tap must still be able
+/// to expand a collapsed pane here — otherwise a pane collapsed before a
+/// worktree entered a transitional state could never be reopened to show
+/// its status. Tab identity has no real effect on `content` beyond which
+/// skeleton variant `.creating` shows, so this reuses the same
+/// `RightPaneRailModel.apply` transition `RightPaneView` uses.
 struct RightPaneTransitionalView: View {
     enum Kind {
         case creating
@@ -43,9 +52,19 @@ struct RightPaneTransitionalView: View {
                             activeAgentCount: state.agentSidebarRollup(for: worktree).active.count,
                             showAgentTab: state.config.agentTabEnabled,
                             showRunTab: state.config.runTabEnabled,
-                            onAction: { _ in }
+                            onAction: { action in
+                                let outcome = RightPaneRailModel.apply(
+                                    action,
+                                    currentTab: activeTab,
+                                    currentVisible: state.config.rightPaneVisible
+                                )
+                                activeTab = outcome.tab
+                                if state.config.rightPaneVisible != outcome.visible {
+                                    state.config.rightPaneVisible = outcome.visible
+                                    state.saveConfig()
+                                }
+                            }
                         )
-                        .disabled(true)
                     }
                 } else {
                     VStack(spacing: 0) {
