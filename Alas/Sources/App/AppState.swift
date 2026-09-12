@@ -1127,6 +1127,7 @@ final class AppState {
         sweepOrphanZmxSessions(worktreeIds: allWorktreeIds)
         reconcileAttention(observations: currentAttentionObservations)
         Task { [weak self] in
+            await self?.loadDelegatedSessionParents()
             await self?.reconcileInterruptedDelegations()
         }
         Task { @MainActor [weak self] in
@@ -8969,8 +8970,19 @@ final class AppState {
     @ObservationIgnored
     private let acpOrchestrationPersistence = ACPOrchestrationPersistence()
 
-    @ObservationIgnored
-    private var delegatedSessionParents: [String: String] = [:]
+    /// Observed, not `@ObservationIgnored`: the agent sidebar reads this to
+    /// draw delegated children under their parent, so a newly recorded link
+    /// has to invalidate the view.
+    private(set) var delegatedSessionParents: [String: String] = [:]
+
+    /// Backfills the links completed in earlier runs. Without this the map only
+    /// ever holds delegations this launch created or recovered, and restored
+    /// history loses its hierarchy.
+    private func loadDelegatedSessionParents() async {
+        guard let links = try? await acpOrchestrationPersistence.delegationParents() else { return }
+        // Live entries win: they may describe a delegation still being written.
+        delegatedSessionParents = links.merging(delegatedSessionParents) { _, live in live }
+    }
 
     /// Force-flush every per-session debounced composer-draft write across
     /// all live managers. Called from app-will-terminate so an in-flight
@@ -9055,7 +9067,8 @@ final class AppState {
             },
             terminalTabs: terminalTabs,
             harnessActivity: harness.activityBySession,
-            remoteHost: projectAndWorktree(withWorktreeId: worktree.id)?.project.host
+            remoteHost: projectAndWorktree(withWorktreeId: worktree.id)?.project.host,
+            delegatedParents: delegatedSessionParents
         ))
     }
 

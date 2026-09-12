@@ -158,6 +158,19 @@ final class ACPOrchestrationStore {
         """).compactMap { $0["target_session_id"] as? String }
     }
 
+    /// Child-to-parent links for every delegation ever recorded. The sidebar
+    /// needs the whole map up front, and the two id columns are far cheaper to
+    /// read than decoding full records.
+    func delegationParents() throws -> [String: String] {
+        try db.query("SELECT child_session_id, parent_session_id FROM delegations")
+            .reduce(into: [String: String]()) { links, row in
+                guard let child = row["child_session_id"] as? String,
+                      let parent = row["parent_session_id"] as? String
+                else { return }
+                links[child] = parent
+            }
+    }
+
     func incompleteDelegations() throws -> [ACPDelegationRecord] {
         try db.query(
             "SELECT * FROM delegations WHERE phase IN (?, ?)",

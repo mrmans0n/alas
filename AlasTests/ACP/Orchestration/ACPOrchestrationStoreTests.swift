@@ -107,6 +107,33 @@ struct ACPOrchestrationStoreTests {
         #expect(record.updatedAt == 130)
     }
 
+    @Test("reports every child-to-parent link regardless of phase")
+    func returnsAllDelegationParents() throws {
+        let store = try ACPOrchestrationStore(path: temporaryPath())
+        try store.insert(newRecord(childSessionId: "child-a", parentSessionId: "parent-1"))
+        try store.insert(newRecord(childSessionId: "child-b", parentSessionId: "parent-1"))
+        try store.insert(newRecord(childSessionId: "child-c", parentSessionId: "parent-2"))
+        try store.updatePhase(
+            childSessionId: "child-c",
+            phase: .closed,
+            failureMessage: nil,
+            updatedAt: 140
+        )
+
+        #expect(try store.delegationParents() == [
+            "child-a": "parent-1",
+            "child-b": "parent-1",
+            "child-c": "parent-2",
+        ])
+    }
+
+    @Test("returns no delegation parents for an empty store")
+    func returnsNoDelegationParentsWhenEmpty() throws {
+        let store = try ACPOrchestrationStore(path: temporaryPath())
+
+        #expect(try store.delegationParents().isEmpty)
+    }
+
     @Test("rejects a duplicate child session id")
     func rejectsDuplicateChild() throws {
         let store = try ACPOrchestrationStore(path: temporaryPath())

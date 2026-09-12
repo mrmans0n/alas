@@ -114,6 +114,98 @@ struct AgentSidebarRollupTests {
         #expect(rollup.rows.map(\.agentID) == ["codex", "claude"])
     }
 
+    @Test @MainActor
+    func delegatedChildrenNestUnderTheirParentWithinTheSameSection() {
+        let parent = makeLiveSession(id: "parent", worktreeID: "worktree-a")
+        let first = makeLiveSession(id: "child-1", worktreeID: "worktree-a")
+        let second = makeLiveSession(id: "child-2", worktreeID: "worktree-a")
+
+        let rollup = AgentSidebarRollupBuilder.build(.init(
+            worktreeID: "worktree-a", persistedACP: [], liveACP: [first, parent, second],
+            terminalTabs: [], harnessActivity: [:], remoteHost: nil,
+            delegatedParents: ["child-1": "parent", "child-2": "parent"]
+        ))
+
+        #expect(rollup.rows.map(\.id) == [.acp("parent"), .acp("child-1"), .acp("child-2")])
+        #expect(rollup.rows[0].delegation == .parent(childCount: 2))
+        #expect(rollup.rows[1].delegation == .child(parentID: "parent", parentTitle: "Session parent", isNested: true))
+        #expect(rollup.rows[2].delegation == .child(parentID: "parent", parentTitle: "Session parent", isNested: true))
+    }
+
+    @Test @MainActor
+    func childKeepsTopLevelPlacementWhenItsParentSitsInTheOtherSection() {
+        let child = makeLiveSession(id: "child-1", worktreeID: "worktree-a")
+
+        let rollup = AgentSidebarRollupBuilder.build(.init(
+            worktreeID: "worktree-a", persistedACP: [makeRow(id: "parent")], liveACP: [child],
+            terminalTabs: [], harnessActivity: [:], remoteHost: nil,
+            delegatedParents: ["child-1": "parent"]
+        ))
+
+        #expect(rollup.active.map(\.id) == [.acp("child-1")])
+        #expect(rollup.history.map(\.id) == [.acp("parent")])
+        #expect(rollup.active[0].delegation == .child(parentID: "parent", parentTitle: "Session parent", isNested: false))
+        #expect(rollup.history[0].delegation == .parent(childCount: 1))
+    }
+
+    @Test @MainActor
+    func childWhoseParentIsNotInThisWorktreeFallsBackToAnUntitledCaption() {
+        let child = makeLiveSession(id: "child-1", worktreeID: "worktree-a")
+
+        let rollup = AgentSidebarRollupBuilder.build(.init(
+            worktreeID: "worktree-a", persistedACP: [], liveACP: [child],
+            terminalTabs: [], harnessActivity: [:], remoteHost: nil,
+            delegatedParents: ["child-1": "parent-elsewhere"]
+        ))
+
+        #expect(rollup.rows.map(\.id) == [.acp("child-1")])
+        #expect(rollup.rows[0].delegation == .child(parentID: "parent-elsewhere", parentTitle: nil, isNested: false))
+    }
+
+    @Test @MainActor
+    func liveChildReplacingItsPersistedRowNestsExactlyOnce() {
+        let parent = makeLiveSession(id: "parent", worktreeID: "worktree-a")
+        let child = makeLiveSession(id: "child-1", worktreeID: "worktree-a")
+
+        let rollup = AgentSidebarRollupBuilder.build(.init(
+            worktreeID: "worktree-a",
+            persistedACP: [makeRow(id: "parent"), makeRow(id: "child-1")],
+            liveACP: [parent, child],
+            terminalTabs: [], harnessActivity: [:], remoteHost: nil,
+            delegatedParents: ["child-1": "parent"]
+        ))
+
+        #expect(rollup.rows.map(\.id) == [.acp("parent"), .acp("child-1")])
+        #expect(rollup.rows[0].delegation == .parent(childCount: 1))
+    }
+
+    @Test @MainActor
+    func mutuallyReferentialDelegationsStayFlatAndKeepEveryRow() {
+        let first = makeLiveSession(id: "a", worktreeID: "worktree-a")
+        let second = makeLiveSession(id: "b", worktreeID: "worktree-a")
+
+        let rollup = AgentSidebarRollupBuilder.build(.init(
+            worktreeID: "worktree-a", persistedACP: [], liveACP: [first, second],
+            terminalTabs: [], harnessActivity: [:], remoteHost: nil,
+            delegatedParents: ["a": "b", "b": "a"]
+        ))
+
+        #expect(rollup.rows.map(\.id) == [.acp("a"), .acp("b")])
+        #expect(rollup.rows.allSatisfy { $0.delegation?.isNestedChild == false })
+    }
+
+    @Test @MainActor
+    func terminalRowsAreNeverAnnotatedWithDelegation() {
+        let rollup = AgentSidebarRollupBuilder.build(.init(
+            worktreeID: "worktree-a", persistedACP: [], liveACP: [],
+            terminalTabs: [makeTerminal(id: "terminal-a", sessionID: "shell-a")],
+            harnessActivity: [:], remoteHost: nil,
+            delegatedParents: ["shell-a": "parent"]
+        ))
+
+        #expect(rollup.rows.map(\.delegation) == [nil])
+    }
+
     @MainActor
     private func makeLiveSession(id: String, worktreeID: String) -> ACPSession {
         ACPSession(id: id, agentId: "codex", worktreeId: worktreeID, title: "Session \(id)")

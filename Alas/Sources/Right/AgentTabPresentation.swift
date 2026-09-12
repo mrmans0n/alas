@@ -65,6 +65,40 @@ struct AgentSidebarSectionHeader: View {
     }
 }
 
+/// The elbow drawn in the gutter of a nested child card. It deliberately
+/// overshoots the card by the stack spacing at both ends so the rail reads as
+/// one continuous line across the gaps between sibling cards.
+struct AgentSidebarDelegationConnector: View {
+    static let gutter: CGFloat = 18
+    private static let stackSpacing: CGFloat = 8
+    private static let elbowY: CGFloat = 20
+    private static let railX: CGFloat = 7
+
+    let continuesBelow: Bool
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        GeometryReader { proxy in
+            Path { path in
+                path.move(to: CGPoint(x: Self.railX, y: -Self.stackSpacing))
+                path.addLine(to: CGPoint(
+                    x: Self.railX,
+                    y: continuesBelow ? proxy.size.height + Self.stackSpacing : Self.elbowY
+                ))
+                path.move(to: CGPoint(x: Self.railX, y: Self.elbowY))
+                path.addLine(to: CGPoint(x: Self.gutter - 3, y: Self.elbowY))
+            }
+            .stroke(
+                theme.color("line"),
+                style: StrokeStyle(lineWidth: 1, lineCap: .round, lineJoin: .round)
+            )
+        }
+        .frame(width: Self.gutter)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
 struct AgentSidebarRowView: View {
     let row: AgentSidebarRow
     let agent: AgentDefinition?
@@ -87,6 +121,7 @@ struct AgentSidebarRowView: View {
                             .foregroundStyle(theme.color("fg"))
                             .lineLimit(2)
                         metadata
+                        delegationNote
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     statusPill
@@ -171,6 +206,46 @@ struct AgentSidebarRowView: View {
         .font(.system(size: 10))
         .foregroundStyle(theme.color("fg-muted"))
         .lineLimit(1)
+    }
+
+    /// A nested child needs no caption — its connector already says who owns
+    /// it — so only parents and orphaned children annotate themselves.
+    @ViewBuilder
+    private var delegationNote: some View {
+        switch row.delegation {
+        case .parent(let childCount):
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.triangle.branch")
+                    .font(.system(size: 8, weight: .semibold))
+                    .accessibilityHidden(true)
+                Text(childCount == 1 ? "1 delegated" : "\(childCount) delegated")
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .monospacedDigit()
+            }
+            .foregroundStyle(theme.color("fg-muted"))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(theme.color("seg-pill-bg"), in: Capsule())
+            .padding(.top, 1)
+        case .child(_, let parentTitle, false):
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.turn.down.right")
+                    .font(.system(size: 8, weight: .semibold))
+                    .accessibilityHidden(true)
+                Text(delegatedByLabel(parentTitle))
+                    .font(.system(size: 9.5))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(theme.color("fg-faint"))
+            .padding(.top, 1)
+        case .child, .none:
+            EmptyView()
+        }
+    }
+
+    private func delegatedByLabel(_ parentTitle: String?) -> String {
+        guard let parentTitle else { return "Delegated by another session" }
+        return "Delegated by \(parentTitle)"
     }
 
     private var statusPill: some View {
@@ -312,6 +387,14 @@ struct AgentSidebarRowView: View {
         }
         if let host = row.host {
             values.append("host \(host)")
+        }
+        switch row.delegation {
+        case .parent(let childCount):
+            values.append(childCount == 1 ? "1 delegated session" : "\(childCount) delegated sessions")
+        case .child(_, let parentTitle, _):
+            values.append(delegatedByLabel(parentTitle))
+        case .none:
+            break
         }
         return values.joined(separator: ", ")
     }
