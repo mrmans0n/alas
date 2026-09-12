@@ -138,7 +138,7 @@ struct CodeEditorView: NSViewRepresentable {
         CodeEditorCoordinator(appState: appState)
     }
 
-    func makeNSView(context: Context) -> NSScrollView {
+    func makeNSView(context: Context) -> MinimapContainerView<CodeEditorScrollView> {
         let scroll = CodeEditorScrollView()
         scroll.hasVerticalScroller = true
         scroll.hasHorizontalScroller = true
@@ -231,10 +231,11 @@ struct CodeEditorView: NSViewRepresentable {
             externalEditable: externalEditable
         )
         scroll.configureMinimap(shown: showMinimap, theme: theme)
-        return scroll
+        return MinimapContainerView(scrollView: scroll)
     }
 
-    func updateNSView(_ nsView: NSScrollView, context: Context) {
+    func updateNSView(_ container: MinimapContainerView<CodeEditorScrollView>, context: Context) {
+        let nsView = container.scrollView
         configureLifecycleCallbacks(on: context.coordinator)
         context.coordinator.updateIfNeeded(
             worktreeId: worktreeId,
@@ -260,10 +261,10 @@ struct CodeEditorView: NSViewRepresentable {
                 rendersTextDecorations: !context.coordinator.currentBufferReadOnly
             )
         }
-        (nsView as? CodeEditorScrollView)?.configureMinimap(shown: showMinimap, theme: theme)
+        nsView.configureMinimap(shown: showMinimap, theme: theme)
     }
 
-    static func dismantleNSView(_ nsView: NSScrollView, coordinator: CodeEditorCoordinator) {
+    static func dismantleNSView(_ nsView: MinimapContainerView<CodeEditorScrollView>, coordinator: CodeEditorCoordinator) {
         // Detach the coordinator from the text view, but DO NOT close the
         // buffer's LSP document or watcher — the buffer outlives this view.
         coordinator.detach()

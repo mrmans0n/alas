@@ -1,7 +1,24 @@
 import AppKit
+import SwiftUI
 import Testing
 
 @testable import Alas
+
+@MainActor
+private final class MinimapTrackingClipView: NSClipView {
+    var widthChanges = 0
+
+    override func setFrameSize(_ newSize: NSSize) {
+        if newSize.width != frame.width { widthChanges += 1 }
+        super.setFrameSize(newSize)
+    }
+}
+
+@MainActor
+private final class MinimapWheelScrollView: MinimapScrollView {
+    var wheelEvent: NSEvent?
+    override func scrollWheel(with event: NSEvent) { wheelEvent = event }
+}
 
 @MainActor
 private final class MinimapColorReferenceView: NSView {
@@ -19,6 +36,18 @@ private final class MinimapColorReferenceView: NSView {
 
 @Suite("Minimap")
 struct MinimapTests {
+    @Test("Wheel events over the minimap reach its document scroll view")
+    @MainActor func wheelForwarding() throws {
+        let scroll = MinimapWheelScrollView(frame: NSRect(x: 0, y: 0, width: 500, height: 300))
+        let container = MinimapContainerView(scrollView: scroll)
+        scroll.showsMinimap = true
+        container.layoutSubtreeIfNeeded()
+        let cgEvent = try #require(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: 20, wheel2: 0, wheel3: 0))
+        let event = try #require(NSEvent(cgEvent: cgEvent))
+        scroll.minimap.scrollWheel(with: event)
+        #expect(scroll.wheelEvent === event)
+    }
+
     @Test("Drag release does not navigate twice when the viewport changes")
     @MainActor func dragRelease() throws {
         let view = MinimapView(frame: CGRect(x: 0, y: 0, width: 96, height: 600))
@@ -206,17 +235,48 @@ struct MinimapTests {
         scroll.hasHorizontalScroller = true
         scroll.scrollerStyle = .legacy
         scroll.documentView = NSView(frame: NSRect(x: 0, y: 0, width: 1000, height: 1000))
+        let container = MinimapContainerView(scrollView: scroll)
+        container.layoutSubtreeIfNeeded()
         scroll.tile()
         let originalWidth = scroll.contentView.frame.width
         scroll.showsMinimap = true
+        container.layoutSubtreeIfNeeded()
         scroll.tile()
         #expect(scroll.contentView.frame.width == originalWidth - MinimapView.width)
         #expect(scroll.verticalScroller!.frame.maxX <= scroll.minimap.frame.minX)
         scroll.tile()
         #expect(scroll.contentView.frame.width == originalWidth - MinimapView.width)
         scroll.showsMinimap = false
+        container.layoutSubtreeIfNeeded()
         scroll.tile()
         #expect(scroll.contentView.frame.width == originalWidth)
+    }
+
+    @Test("Repeated minimap tiling leaves hosted document width unchanged", arguments: [NSScroller.Style.legacy, .overlay])
+    @MainActor func stableLayout(style: NSScroller.Style) {
+        let scroll = MinimapScrollView(frame: NSRect(x: 0, y: 0, width: 500, height: 300))
+        let clip = MinimapTrackingClipView()
+        scroll.contentView = clip
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = true
+        scroll.scrollerStyle = style
+        let document = NSHostingView(rootView: Text("Transcript").frame(width: 1000, height: 1000))
+        document.frame = NSRect(x: 0, y: 0, width: 1000, height: 1000)
+        scroll.documentView = document
+        let container = MinimapContainerView(scrollView: scroll)
+        scroll.showsMinimap = true
+        container.layoutSubtreeIfNeeded()
+        scroll.tile()
+        clip.widthChanges = 0
+        for _ in 0..<10 {
+            container.needsLayout = true
+            container.layoutSubtreeIfNeeded()
+            scroll.tile()
+        }
+        #expect(clip.widthChanges == 0)
+        #expect(scroll.frame.maxX == scroll.minimap.frame.minX)
+        #expect(scroll.minimap.superview === container)
+        #expect(!scroll.minimap.isHidden)
     }
 
     @Test("Transcript minimap collapses when the chat pane is too narrow")
@@ -226,12 +286,23 @@ struct MinimapTests {
         #expect(!ACPTranscriptScrollerView.shouldShowMinimap(preferred: false, availableWidth: 1_200))
 
         let scroller = ACPTranscriptScrollerView(frame: NSRect(x: 0, y: 0, width: 719, height: 400))
+        let container = MinimapContainerView(scrollView: scroller)
         scroller.minimapPreferred = true
-        scroller.layoutSubtreeIfNeeded()
+        container.layoutSubtreeIfNeeded()
         #expect(!scroller.showsMinimap)
-        scroller.setFrameSize(NSSize(width: 720, height: 400))
-        scroller.layoutSubtreeIfNeeded()
+        container.setFrameSize(NSSize(width: 720, height: 400))
+        container.layoutSubtreeIfNeeded()
         #expect(scroller.showsMinimap)
+        #expect(scroller.frame.width == 720 - MinimapView.width)
+        for _ in 0..<10 {
+            container.needsLayout = true
+            container.layoutSubtreeIfNeeded()
+            #expect(scroller.showsMinimap)
+        }
+        container.setFrameSize(NSSize(width: 719, height: 400))
+        container.layoutSubtreeIfNeeded()
+        #expect(!scroller.showsMinimap)
+        #expect(scroller.frame.width == 719)
     }
 
     @Test("Editor and transcript visibility survive independent config round trips")

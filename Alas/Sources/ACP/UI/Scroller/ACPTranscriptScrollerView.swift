@@ -68,7 +68,7 @@ final class ACPTranscriptScrollerView: MinimapScrollView {
     var onContentWidthChange: (() -> Void)?
     private var lastReportedContentWidth: CGFloat?
     var minimapPreferred = false {
-        didSet { updateMinimapVisibility() }
+        didSet { updateMinimapVisibility(availableWidth: superview?.bounds.width ?? bounds.width) }
     }
 
     /// Fired from `layout()` whenever `contentView.bounds.height` differs
@@ -229,7 +229,6 @@ final class ACPTranscriptScrollerView: MinimapScrollView {
     }
 
     override func layout() {
-        updateMinimapVisibility()
         super.layout()
         // `super.layout()` runs AppKit's own scroll-view tiling first, so
         // `contentView.bounds` already reflects any scroller-visibility
@@ -254,10 +253,10 @@ final class ACPTranscriptScrollerView: MinimapScrollView {
         applyLogicalScrollerMetrics()
     }
 
-    private func updateMinimapVisibility() {
+    override func updateMinimapVisibility(availableWidth: CGFloat) {
         showsMinimap = Self.shouldShowMinimap(
             preferred: minimapPreferred,
-            availableWidth: bounds.width
+            availableWidth: availableWidth
         )
     }
 

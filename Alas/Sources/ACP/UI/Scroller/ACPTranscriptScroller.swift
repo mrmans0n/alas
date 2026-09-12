@@ -57,13 +57,13 @@ struct ACPTranscriptScroller: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    func makeNSView(context: Context) -> ACPTranscriptScrollerView {
+    func makeNSView(context: Context) -> MinimapContainerView<ACPTranscriptScrollerView> {
         let scroller = ACPTranscriptScrollerView(frame: .zero)
         context.coordinator.attach(scroller: scroller, host: self)
-        return scroller
+        return MinimapContainerView(scrollView: scroller)
     }
 
-    func updateNSView(_ nsView: ACPTranscriptScrollerView, context: Context) {
+    func updateNSView(_ nsView: MinimapContainerView<ACPTranscriptScrollerView>, context: Context) {
         context.coordinator.update(host: self)
     }
 
