@@ -99,7 +99,8 @@ struct AgentTabView: View {
     private func section(title: String, rows: [AgentSidebarRow]) -> some View {
         if !rows.isEmpty {
             AgentSidebarSectionHeader(title: title, count: rows.count)
-            ForEach(rows) { row in
+            ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                let isNested = row.delegation?.isNestedChild == true
                 AgentSidebarRowView(
                     row: row,
                     agent: agentLookup(row.agentID),
@@ -115,7 +116,23 @@ struct AgentTabView: View {
                         }
                     )
                 )
+                .padding(.leading, isNested ? AgentSidebarDelegationConnector.gutter : 0)
+                .background(alignment: .topLeading) {
+                    if isNested {
+                        AgentSidebarDelegationConnector(
+                            continuesBelow: hasSiblingBelow(rows, after: index)
+                        )
+                    }
+                }
             }
         }
+    }
+
+    /// The builder emits a parent's nested children consecutively, so the rail
+    /// only has to continue when the very next row is nested too.
+    private func hasSiblingBelow(_ rows: [AgentSidebarRow], after index: Int) -> Bool {
+        let next = index + 1
+        guard next < rows.count else { return false }
+        return rows[next].delegation?.isNestedChild == true
     }
 }

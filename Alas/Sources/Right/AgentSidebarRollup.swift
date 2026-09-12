@@ -15,6 +15,24 @@ struct AgentSidebarPlanProgress: Equatable {
     let currentStep: String?
 }
 
+/// A delegated family is at most two levels deep: `ACPSessionOrchestrationPolicy`
+/// refuses `authorizeCreate` for a session that already has a parent, so a child
+/// can never delegate further and the sidebar never indents more than once.
+enum AgentSidebarDelegation: Equatable {
+    /// Carries how many of this session's children are present in the rollup,
+    /// which may be fewer than it ever spawned once archived rows drop out.
+    case parent(childCount: Int)
+    /// `isNested` is false when the parent is missing from this worktree's
+    /// rollup or sits in the other section, in which case the child renders at
+    /// top level with a caption instead of under a connector.
+    case child(parentID: ACPSession.ID, parentTitle: String?, isNested: Bool)
+
+    var isNestedChild: Bool {
+        guard case .child(_, _, let isNested) = self else { return false }
+        return isNested
+    }
+}
+
 struct AgentSidebarRow: Identifiable, Equatable {
     enum ID: Hashable {
         case acp(ACPSession.ID)
@@ -31,6 +49,7 @@ struct AgentSidebarRow: Identifiable, Equatable {
     let host: String?
     let createdAt: Date
     let isLiveACP: Bool
+    var delegation: AgentSidebarDelegation?
 
     static func acp(
         id: ACPSession.ID,
@@ -42,7 +61,8 @@ struct AgentSidebarRow: Identifiable, Equatable {
         plan: AgentSidebarPlanProgress? = nil,
         host: String? = nil,
         createdAt: Date,
-        isLive: Bool
+        isLive: Bool,
+        delegation: AgentSidebarDelegation? = nil
     ) -> Self {
         Self(
             id: .acp(id),
@@ -54,7 +74,8 @@ struct AgentSidebarRow: Identifiable, Equatable {
             plan: plan,
             host: host,
             createdAt: createdAt,
-            isLiveACP: isLive
+            isLiveACP: isLive,
+            delegation: delegation
         )
     }
 
@@ -76,7 +97,8 @@ struct AgentSidebarRow: Identifiable, Equatable {
             plan: nil,
             host: host,
             createdAt: .distantPast,
-            isLiveACP: false
+            isLiveACP: false,
+            delegation: nil
         )
     }
 }
@@ -104,6 +126,9 @@ struct AgentSidebarRollupBuilder {
         let terminalTabs: [TerminalTabState]
         let harnessActivity: [String: HarnessService.HarnessActivityState]
         let remoteHost: String?
+        /// Child session id to parent session id, spanning every delegation the
+        /// app knows about. Ids outside this rollup are ignored.
+        var delegatedParents: [String: String] = [:]
     }
 
     static func build(_ input: Input) -> AgentSidebarRollup {
@@ -118,7 +143,82 @@ struct AgentSidebarRollupBuilder {
             terminalRows(for: $0, activity: input.harnessActivity, remoteHost: input.remoteHost)
         }
 
-        return AgentSidebarRollup(rows: liveRows + persistedRows + terminalRowsList)
+        let acpRows = nestDelegations(in: liveRows + persistedRows, parents: input.delegatedParents)
+        return AgentSidebarRollup(rows: acpRows + terminalRowsList)
+    }
+
+    /// Annotates ACP rows with their delegation relationship and moves nested
+    /// children directly behind their parent, leaving every other row in place.
+    private static func nestDelegations(
+        in rows: [AgentSidebarRow],
+        parents: [String: String]
+    ) -> [AgentSidebarRow] {
+        guard !parents.isEmpty else { return rows }
+
+        var isActive: [ACPSession.ID: Bool] = [:]
+        var titles: [ACPSession.ID: String] = [:]
+        for row in rows {
+            guard let id = row.sessionID else { continue }
+            isActive[id] = row.state != .detached
+            titles[id] = row.title
+        }
+        // Only links whose parent is also on screen can be drawn as a tree.
+        let presentParents = rows.reduce(into: [ACPSession.ID: ACPSession.ID]()) { links, row in
+            guard let id = row.sessionID,
+                  let parentID = parents[id],
+                  parentID != id,
+                  isActive[parentID] != nil
+            else { return }
+            links[id] = parentID
+        }
+
+        var annotations: [ACPSession.ID: AgentSidebarDelegation] = [:]
+        var nestedChildren: [ACPSession.ID: [ACPSession.ID]] = [:]
+        var childCounts: [ACPSession.ID: Int] = [:]
+
+        for row in rows {
+            guard let id = row.sessionID, let parentID = parents[id] else { continue }
+            guard presentParents[id] != nil else {
+                annotations[id] = .child(parentID: parentID, parentTitle: nil, isNested: false)
+                continue
+            }
+            childCounts[parentID, default: 0] += 1
+            // A parent that is itself a child would imply a third level, which
+            // the orchestration policy forbids; refusing to nest there also
+            // keeps a corrupt parent cycle from dropping rows below.
+            let nested = presentParents[parentID] == nil && isActive[parentID] == isActive[id]
+            annotations[id] = .child(parentID: parentID, parentTitle: titles[parentID], isNested: nested)
+            if nested { nestedChildren[parentID, default: []].append(id) }
+        }
+        for (parentID, count) in childCounts where annotations[parentID] == nil {
+            annotations[parentID] = .parent(childCount: count)
+        }
+
+        let rowsByID = rows.reduce(into: [ACPSession.ID: AgentSidebarRow]()) { result, row in
+            if let id = row.sessionID { result[id] = row }
+        }
+        func annotated(_ row: AgentSidebarRow) -> AgentSidebarRow {
+            var copy = row
+            copy.delegation = row.sessionID.flatMap { annotations[$0] }
+            return copy
+        }
+
+        var ordered: [AgentSidebarRow] = []
+        ordered.reserveCapacity(rows.count)
+        for row in rows {
+            guard let id = row.sessionID else {
+                ordered.append(row)
+                continue
+            }
+            // Nested children are emitted by their parent's iteration instead.
+            if annotations[id]?.isNestedChild == true { continue }
+            ordered.append(annotated(row))
+            for childID in nestedChildren[id] ?? [] {
+                guard let childRow = rowsByID[childID] else { continue }
+                ordered.append(annotated(childRow))
+            }
+        }
+        return ordered
     }
 
     private static func liveRow(for session: ACPSession, remoteHost: String?) -> AgentSidebarRow {

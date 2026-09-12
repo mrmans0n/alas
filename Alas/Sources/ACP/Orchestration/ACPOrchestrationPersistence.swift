@@ -41,6 +41,10 @@ actor ACPOrchestrationPersistence {
         try openedStore().parent(childSessionId: childSessionId)
     }
 
+    func delegationParents() throws -> [String: String] {
+        try openedStore().delegationParents()
+    }
+
     func updatePhase(
         childSessionId: String,
         phase: ACPDelegationPhase,
