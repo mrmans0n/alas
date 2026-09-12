@@ -338,6 +338,28 @@ struct WebPreviewAutomationBrowserTests {
         #expect(browser.webView.url?.path == "/")
     }
 
+    @Test func commandNavigationIsCancelledByUnrelatedManualNavigation() async throws {
+        let server = try AutomationFixtureServer()
+        defer { server.listener.cancel() }
+        try await waitUntil("fixture listener did not bind") { (server.listener.port?.rawValue ?? 0) > 0 }
+        let port = try #require(server.listener.port)
+        let (browser, window) = makeVisibleBrowser(ownerKey: "automation-unrelated-navigation")
+        defer { window.orderOut(nil) }
+        defer { browser.close() }
+
+        let slowURL = URL(string: "http://127.0.0.1:\(port.rawValue)/slow")!
+        let manualURL = URL(string: "http://127.0.0.1:\(port.rawValue)/manual")!
+        let pending = Task { @MainActor in
+            try await browser.automation(command: WebPreviewCommand(action: .navigate, url: slowURL.absoluteString, timeoutMS: 5_000))
+        }
+        try await waitUntil("slow navigation did not start") { browser.loading }
+        browser.navigate(manualURL)
+        await expectAutomationError("cancelled") {
+            _ = try await pending.value
+        }
+        try await waitUntil("manual navigation did not finish") { browser.webView.url == manualURL && !browser.loading }
+    }
+
     @Test func sameDocumentHistoryCompletesAndKeepsElementsUsable() async throws {
         let server = try AutomationFixtureServer()
         defer { server.listener.cancel() }
@@ -463,6 +485,14 @@ private final class AutomationFixtureServer: @unchecked Sendable {
                 if request.hasPrefix("GET /redirect ") {
                     let response = "HTTP/1.1 302 Found\r\nLocation: /\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
                     connection.send(content: Data(response.utf8), completion: .contentProcessed { _ in connection.cancel() })
+                    return
+                }
+                if request.hasPrefix("GET /slow ") {
+                    DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(500)) {
+                        let body = "<html><body>Slow</body></html>"
+                        let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)"
+                        connection.send(content: Data(response.utf8), completion: .contentProcessed { _ in connection.cancel() })
+                    }
                     return
                 }
                 let body = #"""

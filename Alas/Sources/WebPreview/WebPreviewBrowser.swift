@@ -166,17 +166,18 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
         store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast) {}
     }
 
-    func navigate(_ url: URL) {
-        guard !isClosed else { return }
+    @discardableResult
+    func navigate(_ url: URL) -> WKNavigation? {
+        guard !isClosed else { return nil }
         guard WebPreviewNavigation.allows(url, remoteHost: remoteHost) else {
             error = remoteHost != nil && RunEndpointPolicy.isLoopback(url)
                 ? "This endpoint is on \(remoteHost!). Enter a remotely reachable URL; localhost would open a service on this Mac."
                 : "Only HTTP and HTTPS pages can be opened in previews."
-            return
+            return nil
         }
         error = nil
         address = url.absoluteString
-        webView.load(URLRequest(url: url))
+        return webView.load(URLRequest(url: url))
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
@@ -239,7 +240,7 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         guard !isClosed else { return }
         navigationGeneration += 1
-        automationDocumentWillChange()
+        automationDocumentWillChange(navigation)
         loading = true
         error = nil
         consoleErrors = []

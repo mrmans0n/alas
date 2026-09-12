@@ -36,13 +36,20 @@ final class WebPreviewBrowserAutomationState {
     private var cancelledOperationIDs = Set<UUID>()
     private var documentNonce = UUID().uuidString
     private var expectedNavigationOperationID: UUID?
+    private var expectedNavigation: WKNavigation?
 
     @discardableResult
-    func documentDidChange() -> String? {
+    func documentDidChange(_ navigation: WKNavigation? = nil) -> String? {
         let token = activeOperationToken
         documentNonce = UUID().uuidString
         if expectedNavigationOperationID == activeOperationID {
-            return nil
+            if let expectedNavigation {
+                if let navigation, navigation === expectedNavigation {
+                    return nil
+                }
+            } else {
+                return nil
+            }
         }
         cancelActiveOperation()
         return token
@@ -57,6 +64,7 @@ final class WebPreviewBrowserAutomationState {
             cancelledOperationIDs.insert(activeOperationID)
         }
         expectedNavigationOperationID = nil
+        expectedNavigation = nil
     }
 
     func begin() throws -> AutomationOperation {
@@ -72,6 +80,7 @@ final class WebPreviewBrowserAutomationState {
         activeOperationID = nil
         if expectedNavigationOperationID == operation.id {
             expectedNavigationOperationID = nil
+            expectedNavigation = nil
         }
         cancelledOperationIDs.remove(operation.id)
         isBusy = false
@@ -85,12 +94,13 @@ final class WebPreviewBrowserAutomationState {
         activeOperationID?.uuidString
     }
 
-    func expectNavigation(for operation: AutomationOperation) {
+    func expectNavigation(for operation: AutomationOperation, navigation: WKNavigation? = nil) {
         expectedNavigationOperationID = operation.id
+        expectedNavigation = navigation
     }
 
-    func willInvalidateActiveOperationForDocumentChange() -> String? {
-        documentDidChange()
+    func willInvalidateActiveOperationForDocumentChange(_ navigation: WKNavigation? = nil) -> String? {
+        documentDidChange(navigation)
     }
 
     func expectedDocumentPrefix(for generation: Int) -> String {
@@ -135,8 +145,8 @@ private final class AutomationAsyncCompletion<Value> {
 }
 
 extension WebPreviewBrowser {
-    func automationDocumentWillChange() {
-        let token = automationState.willInvalidateActiveOperationForDocumentChange()
+    func automationDocumentWillChange(_ navigation: WKNavigation? = nil) {
+        let token = automationState.willInvalidateActiveOperationForDocumentChange(navigation)
         markAutomationCancelled(token: token)
     }
 
@@ -187,7 +197,8 @@ extension WebPreviewBrowser {
                 try checkAuthorized(isAuthorized)
                 automationState.expectNavigation(for: operation)
                 let initialURL = webView.url
-                navigate(url)
+                let navigation = navigate(url)
+                automationState.expectNavigation(for: operation, navigation: navigation)
                 try await waitForLoaded(operation: operation, generationAfter: generation, initialURL: initialURL,
                                         targetURL: url, deadline: deadline, isAuthorized: isAuthorized)
             }
@@ -201,7 +212,8 @@ extension WebPreviewBrowser {
             try checkAuthorized(isAuthorized)
             automationState.expectNavigation(for: operation)
             let initialURL = webView.url
-            navigate(url)
+            let navigation = navigate(url)
+            automationState.expectNavigation(for: operation, navigation: navigation)
             try await waitForLoaded(operation: operation, generationAfter: generation, initialURL: initialURL,
                                     targetURL: url, deadline: deadline, isAuthorized: isAuthorized)
             try checkAuthorized(isAuthorized)
@@ -210,7 +222,8 @@ extension WebPreviewBrowser {
             try checkAuthorized(isAuthorized)
             automationState.expectNavigation(for: operation)
             let initialURL = webView.url
-            webView.reload()
+            let navigation = webView.reload()
+            automationState.expectNavigation(for: operation, navigation: navigation)
             try await waitForLoaded(operation: operation, generationAfter: generation, initialURL: initialURL,
                                     targetURL: nil, deadline: deadline, isAuthorized: isAuthorized)
             try checkAuthorized(isAuthorized)
@@ -221,7 +234,8 @@ extension WebPreviewBrowser {
             try checkAuthorized(isAuthorized)
             automationState.expectNavigation(for: operation)
             let initialURL = webView.url
-            webView.goBack()
+            let navigation = webView.goBack()
+            automationState.expectNavigation(for: operation, navigation: navigation)
             try await waitForLoaded(operation: operation, generationAfter: generation, initialURL: initialURL,
                                     historyItem: historyItem, deadline: deadline, isAuthorized: isAuthorized)
             try checkAuthorized(isAuthorized)
@@ -232,7 +246,8 @@ extension WebPreviewBrowser {
             try checkAuthorized(isAuthorized)
             automationState.expectNavigation(for: operation)
             let initialURL = webView.url
-            webView.goForward()
+            let navigation = webView.goForward()
+            automationState.expectNavigation(for: operation, navigation: navigation)
             try await waitForLoaded(operation: operation, generationAfter: generation, initialURL: initialURL,
                                     historyItem: historyItem, deadline: deadline, isAuthorized: isAuthorized)
             try checkAuthorized(isAuthorized)
