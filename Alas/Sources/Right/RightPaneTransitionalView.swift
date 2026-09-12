@@ -30,22 +30,42 @@ struct RightPaneTransitionalView: View {
                 choice: state.config.sidebarMaterial,
                 backgroundOpacity: override.backgroundOpacity
             )
-            VStack(spacing: 0) {
-                RightPaneTabBar(
-                    activeTab: $activeTab,
-                    changesCount: 0,
-                    totalAdd: 0,
-                    totalDel: 0,
-                    onHidePane: {},
-                    showIgnored: state.config.files.showIgnored,
-                    onToggleShowIgnored: {},
-                    showAgentTab: state.config.agentTabEnabled,
-                    showRunTab: state.config.runTabEnabled,
-                    activeAgentCount: state.agentSidebarRollup(for: worktree).active.count
-                )
-                .disabled(true)
+            Group {
+                if state.config.rightPaneRailEnabled {
+                    HStack(spacing: 0) {
+                        if !collapsed {
+                            content
+                        }
+                        RightPaneRail(
+                            activeTab: activeTab,
+                            collapsed: collapsed,
+                            changesCount: 0,
+                            activeAgentCount: state.agentSidebarRollup(for: worktree).active.count,
+                            showAgentTab: state.config.agentTabEnabled,
+                            showRunTab: state.config.runTabEnabled,
+                            onAction: { _ in }
+                        )
+                        .disabled(true)
+                    }
+                } else {
+                    VStack(spacing: 0) {
+                        RightPaneTabBar(
+                            activeTab: $activeTab,
+                            changesCount: 0,
+                            totalAdd: 0,
+                            totalDel: 0,
+                            onHidePane: {},
+                            showIgnored: state.config.files.showIgnored,
+                            onToggleShowIgnored: {},
+                            showAgentTab: state.config.agentTabEnabled,
+                            showRunTab: state.config.runTabEnabled,
+                            activeAgentCount: state.agentSidebarRollup(for: worktree).active.count
+                        )
+                        .disabled(true)
 
-                content
+                        content
+                    }
+                }
             }
             .sidebarChromeTheme(textContrast: override.textContrast)
         }

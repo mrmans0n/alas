@@ -237,6 +237,7 @@ struct RootView: View {
             RightPaneView(
                 state: state,
                 worktree: wt,
+                collapsed: collapsed,
                 onSelectChangedFile: { file in
                     openOrFocusDiff(
                         worktree: wt,
