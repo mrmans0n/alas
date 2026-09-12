@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### 🎨 Changed
+
+- Enable the Agent tab by default, removing its preview gate.
+
 ## [0.17.0] - 2026-09-12
 
 ### ✨ Features

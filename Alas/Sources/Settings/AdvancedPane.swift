@@ -30,18 +30,6 @@ struct AdvancedPane: View {
                         ))
                     }
                     SettingsRow(
-                        name: "Agent tab preview",
-                        desc: "Shows the worktree Agent tab for preview testing."
-                    ) {
-                        AlasToggle(on: Binding(
-                            get: { state.config.agentTabEnabled },
-                            set: { enabled in
-                                state.config.agentTabEnabled = enabled
-                                state.saveConfig()
-                            }
-                        ))
-                    }
-                    SettingsRow(
                         name: "Run tab preview",
                         desc: "Shows the worktree Run tab for preview testing."
                     ) {

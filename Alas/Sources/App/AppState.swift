@@ -1042,10 +1042,7 @@ final class AppState {
     /// made `ThreePaneSizing` auto-collapse the pane.
     func acceptsRightPaneTabShortcut(_ tab: RightPaneTab) -> Bool {
         config.rightPaneRailEnabled
-            && RightPaneTab.available(
-                agentTabEnabled: config.agentTabEnabled,
-                runTabEnabled: config.runTabEnabled
-            ).contains(tab)
+            && RightPaneTab.available(runTabEnabled: config.runTabEnabled).contains(tab)
     }
 
     func toggleSidebarVisibility() {

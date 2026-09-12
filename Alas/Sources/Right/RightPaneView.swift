@@ -39,7 +39,6 @@ struct RightPaneView: View {
         let initialState = state.rightPaneStore.activeState(worktreeId: worktree.id)
         initialState?.activeTab = RightPaneTab.visible(
             initialState?.activeTab ?? .changes,
-            agentTabEnabled: state.config.agentTabEnabled,
             runTabEnabled: state.config.runTabEnabled
         )
         _rps = State(initialValue: initialState)
@@ -72,14 +71,6 @@ struct RightPaneView: View {
                 .onChange(of: state.config.runTabEnabled) {
                     rps.activeTab = RightPaneTab.visible(
                         rps.activeTab,
-                        agentTabEnabled: state.config.agentTabEnabled,
-                        runTabEnabled: state.config.runTabEnabled
-                    )
-                }
-                .onChange(of: state.config.agentTabEnabled) {
-                    rps.activeTab = RightPaneTab.visible(
-                        rps.activeTab,
-                        agentTabEnabled: state.config.agentTabEnabled,
                         runTabEnabled: state.config.runTabEnabled
                     )
                 }
@@ -201,7 +192,7 @@ struct RightPaneView: View {
 
     @ViewBuilder
     private func tabContent(rps: RightPaneState) -> some View {
-        if rps.hasLoadedSnapshot || (rps.activeTab == .agent && state.config.agentTabEnabled) {
+        if rps.hasLoadedSnapshot || rps.activeTab == .agent {
             switch rps.activeTab {
             case .changes:
                 ChangesTabView(
@@ -298,7 +289,6 @@ struct RightPaneView: View {
                     changesCount: rps.displayChanges.count,
                     activeAgentCount: agentRollup.active.count,
                     activeRunCount: runningScriptNames.count,
-                    showAgentTab: state.config.agentTabEnabled,
                     showRunTab: state.config.runTabEnabled,
                     onAction: { action in handle(action, rps: rps) }
                 )
@@ -322,7 +312,6 @@ struct RightPaneView: View {
                         state.config.files.showIgnored.toggle()
                         state.saveConfig()
                     },
-                    showAgentTab: state.config.agentTabEnabled,
                     showRunTab: state.config.runTabEnabled,
                     activeRunCount: state.runRecords
                         .records(worktreeID: worktree.id)

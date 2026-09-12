@@ -6,15 +6,14 @@ import os
 enum RightPaneTab: String {
     case changes, files, agent, run
 
-    static func available(agentTabEnabled: Bool, runTabEnabled: Bool) -> [Self] {
-        var tabs: [Self] = [.changes, .files]
-        if agentTabEnabled { tabs.append(.agent) }
+    static func available(runTabEnabled: Bool) -> [Self] {
+        var tabs: [Self] = [.changes, .files, .agent]
         if runTabEnabled { tabs.append(.run) }
         return tabs
     }
 
-    static func visible(_ tab: Self, agentTabEnabled: Bool, runTabEnabled: Bool) -> Self {
-        available(agentTabEnabled: agentTabEnabled, runTabEnabled: runTabEnabled).contains(tab) ? tab : .changes
+    static func visible(_ tab: Self, runTabEnabled: Bool) -> Self {
+        available(runTabEnabled: runTabEnabled).contains(tab) ? tab : .changes
     }
 }
 

@@ -47,9 +47,6 @@ struct AppConfig: Codable, Equatable {
     /// Preview gate for the worktree Run tab. This remains off until the
     /// command lifecycle UI has completed preview testing.
     var runTabEnabled: Bool = false
-    /// Preview gate for the worktree Agent tab. This remains off until the
-    /// per-worktree rollup has completed preview testing.
-    var agentTabEnabled: Bool = false
     /// Preview gate for the right pane icon rail. This remains off until the
     /// rail presentation has completed preview testing.
     var rightPaneRailEnabled: Bool = false
@@ -520,7 +517,6 @@ struct AppConfig: Codable, Equatable {
         files: Files(showIgnored: true),
         workspacesEnabled: false,
         runTabEnabled: false,
-        agentTabEnabled: false,
         rightPaneRailEnabled: false,
         recentProjectIds: [],
         recentWorktreeIdsByProject: [:],
@@ -615,7 +611,6 @@ extension AppConfig {
              remote,
              workspacesEnabled,
              runTabEnabled,
-             agentTabEnabled,
              rightPaneRailEnabled,
              recentProjectIds, recentWorktreeIdsByProject, recentWorktreeRefs,
              collapsedProjectIds,
@@ -856,9 +851,6 @@ extension AppConfig {
         // The Run tab preview is opt-in. Configs written before it existed
         // continue to load without exposing unfinished command controls.
         runTabEnabled = (try? c.decode(Bool.self, forKey: .runTabEnabled)) ?? false
-        // The Agent tab preview is opt-in. Configs written before it existed
-        // continue to load without exposing the sidebar rollup.
-        agentTabEnabled = (try? c.decode(Bool.self, forKey: .agentTabEnabled)) ?? false
         rightPaneRailEnabled = (try? c.decode(Bool.self, forKey: .rightPaneRailEnabled)) ?? false
         recentProjectIds = (try? c.decode([String].self, forKey: .recentProjectIds)) ?? []
         recentWorktreeIdsByProject =
