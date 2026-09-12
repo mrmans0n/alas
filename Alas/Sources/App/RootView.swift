@@ -908,9 +908,16 @@ private struct RootBaseHandlers: ViewModifier {
             .onReceive(NotificationCenter.default.publisher(for: .alasToggleSidebar)) { _ in
                 state.toggleSidebarVisibility()
             }
-        let a = aSidebar
+        let aRightPane = aSidebar
             .onReceive(NotificationCenter.default.publisher(for: .alasToggleRightPane)) { _ in
                 state.toggleRightPaneVisibility()
+            }
+        let a = aRightPane
+            .onReceive(NotificationCenter.default.publisher(for: .alasSelectRightPaneTab)) { notification in
+                guard let raw = notification.object as? String,
+                      let tab = RightPaneTab(rawValue: raw)
+                else { return }
+                state.activateRightPaneTab(tab)
             }
         let b = a
             .onReceive(NotificationCenter.default.publisher(for: .alasCreateProject)) { _ in
@@ -1135,6 +1142,8 @@ private struct RootPaneHandlers: ViewModifier {
 extension Notification.Name {
     static let alasToggleSidebar     = Notification.Name("AlasToggleSidebar")
     static let alasToggleRightPane   = Notification.Name("AlasToggleRightPane")
+    /// Object carries the target `RightPaneTab.rawValue`.
+    static let alasSelectRightPaneTab = Notification.Name("AlasSelectRightPaneTab")
     static let alasCreateProject     = Notification.Name("AlasCreateProject")
     static let alasNewWorktree       = Notification.Name("AlasNewWorktree")
     static let alasFocusMainWorktree = Notification.Name("AlasFocusMainWorktree")
