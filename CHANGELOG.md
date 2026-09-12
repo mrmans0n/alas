@@ -6,6 +6,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-09-12
+
+### ✨ Features
+
+- Add worktree-scoped browser tabs with loading and error feedback (#1193).
+- Add owner-scoped MCP and CLI automation for web previews (#1197).
+- Present the attention inbox as a popover and allow dismissing individual items (#1196).
+- Add minimaps to code editors and ACP transcripts (#1201).
+- Add an optional icon rail for the right pane behind a preview flag (#1200).
+
+### 🐛 Fixes
+
+- Resolve loopback and numeric preview hosts without unnecessary DNS lookups (#1194, #1199).
+- Correct the Send/Queue split-button chevron color, height, and hit target (#1195).
+- Use a bell icon for the notification inbox (#1202).
+
+### 🏗️ Internal
+
+- Prevent cooperative-executor starvation in Agent Hook CLI socket tests (#1199).
+
 ## [0.16.3] - 2026-09-12
 
 ### ✨ Features
