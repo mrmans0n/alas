@@ -119,6 +119,7 @@ final class MinimapView: NSView {
     var onNavigate: ((Double) -> Void)?
     var onNavigationStart: (() -> Void)?
     var onNavigationEnd: (() -> Void)?
+    var onScrollWheel: ((NSEvent) -> Void)?
     var value: Double = 0 { didSet { needsDisplay = true } }
     var proportion: CGFloat = 1 { didSet { needsDisplay = true } }
     var backgroundColor = NSColor.textBackgroundColor { didSet { needsDisplay = true } }
@@ -217,6 +218,10 @@ final class MinimapView: NSView {
         CGRect(x: 0, y: 0, width: 0.5, height: bounds.height).fill()
     }
 
+    override func scrollWheel(with event: NSEvent) {
+        if let onScrollWheel { onScrollWheel(event) } else { super.scrollWheel(with: event) }
+    }
+
     override func mouseDown(with event: NSEvent) {
         onNavigationStart?()
         let y = convert(event.locationInWindow, from: nil).y
@@ -278,29 +283,44 @@ class MinimapScrollView: NSScrollView {
     var showsMinimap = false {
         didSet {
             guard showsMinimap != oldValue else { return }
-            if showsMinimap { addSubview(minimap) } else { minimap.removeFromSuperview() }
-            tile()
-            needsLayout = true
+            superview?.needsLayout = true
         }
     }
 
-    override func tile() {
-        super.tile()
-        guard showsMinimap else { return }
-        let width = min(MinimapView.width, max(0, bounds.width / 3))
-        var clip = contentView.frame
-        clip.size.width = max(0, clip.width - width)
-        contentView.frame = clip
-        if let verticalScroller {
-            var frame = verticalScroller.frame
-            frame.origin.x -= width
-            verticalScroller.frame = frame
+    func updateMinimapVisibility(availableWidth: CGFloat) {}
+}
+
+/// Keep the minimap outside AppKit's tiling area so repeated layout passes
+/// never expand and shrink the clip view around hosted document content.
+final class MinimapContainerView<ScrollView: MinimapScrollView>: NSView {
+    let scrollView: ScrollView
+
+    init(scrollView: ScrollView) {
+        self.scrollView = scrollView
+        super.init(frame: scrollView.frame)
+        addSubview(scrollView)
+        addSubview(scrollView.minimap)
+        scrollView.minimap.onScrollWheel = { [weak scrollView] event in
+            scrollView?.scrollWheel(with: event)
         }
-        if let horizontalScroller {
-            var frame = horizontalScroller.frame
-            frame.size.width = max(0, frame.width - width)
-            horizontalScroller.frame = frame
-        }
-        minimap.frame = CGRect(x: bounds.maxX - width, y: 0, width: width, height: bounds.height)
+        needsLayout = true
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        needsLayout = true
+    }
+
+    override func layout() {
+        scrollView.updateMinimapVisibility(availableWidth: bounds.width)
+        let width = scrollView.showsMinimap ? min(MinimapView.width, max(0, bounds.width / 3)) : 0
+        scrollView.minimap.isHidden = !scrollView.showsMinimap
+        let scrollFrame = CGRect(x: bounds.minX, y: bounds.minY, width: max(0, bounds.width - width), height: bounds.height)
+        if scrollView.frame != scrollFrame { scrollView.frame = scrollFrame }
+        let minimapFrame = CGRect(x: bounds.maxX - width, y: bounds.minY, width: width, height: bounds.height)
+        if scrollView.minimap.frame != minimapFrame { scrollView.minimap.frame = minimapFrame }
+        super.layout()
     }
 }
