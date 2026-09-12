@@ -43,7 +43,12 @@ struct RightPaneTransitionalView: View {
                 if state.config.rightPaneRailEnabled {
                     HStack(spacing: 0) {
                         if !collapsed {
+                            // Unlike the active pane, a transitional pane has
+                            // no separate toolbar row — `content` is the only
+                            // header-equivalent region, so it carries the
+                            // drag handle the removed tab bar used to.
                             content
+                                .windowDragHandle()
                         }
                         RightPaneRail(
                             activeTab: activeTab,
