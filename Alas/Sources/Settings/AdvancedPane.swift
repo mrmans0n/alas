@@ -43,7 +43,7 @@ struct AdvancedPane: View {
                     }
                     SettingsRow(
                         name: "Right pane icon rail",
-                        desc: "Replaces the right pane tab bar with a vertical icon rail (preview)."
+                        desc: "Uses a vertical icon rail for the right pane. Turn off to use the classic tab bar."
                     ) {
                         AlasToggle(on: Binding(
                             get: { state.config.rightPaneRailEnabled },

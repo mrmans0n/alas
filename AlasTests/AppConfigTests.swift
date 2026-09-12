@@ -31,7 +31,8 @@ struct AppConfigTests {
         #expect(cfg.worktrees.branchPrefix == "feature/")
         #expect(cfg.workspacesEnabled == false)
         #expect(cfg.runTabEnabled == false)
-        #expect(cfg.rightPaneRailEnabled == false)
+        #expect(cfg.rightPaneRailEnabled == true)
+        #expect(cfg.rightPaneRailDefaultApplied == true)
     }
 
     @Test func decodeOldConfigDefaultsWorkspacesDisabled() throws {
@@ -56,15 +57,52 @@ struct AppConfigTests {
         #expect(decoded.runTabEnabled == false)
     }
 
-    @Test func decodeOldConfigDefaultsRightPaneRailDisabled() throws {
+    @Test func decodeConfigPredatingTheRailMigratesToEnabled() throws {
+        // A config written before the rail existed has no opinion on it and
+        // predates the migration marker too — it must decode with the rail
+        // on and come out the other side marked as migrated.
         let data = try JSONEncoder().encode(AppConfig.defaults)
         var object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
         object.removeValue(forKey: "rightPaneRailEnabled")
+        object.removeValue(forKey: "rightPaneRailDefaultApplied")
 
         let oldConfig = try JSONSerialization.data(withJSONObject: object)
         let decoded = try JSONDecoder().decode(AppConfig.self, from: oldConfig)
 
+        #expect(decoded.rightPaneRailEnabled == true)
+        #expect(decoded.rightPaneRailDefaultApplied == true)
+    }
+
+    @Test func decodePreviewEraConfigWithRailOffMigratesToEnabled() throws {
+        // A config saved during #1200's preview window has an explicit
+        // `rightPaneRailEnabled: false` — written by the old default, not by
+        // a deliberate opt-out — and predates the migration marker. The
+        // one-time migration must override that stale false rather than
+        // reading it as an intentional choice.
+        let data = try JSONEncoder().encode(AppConfig.defaults)
+        var object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        object["rightPaneRailEnabled"] = false
+        object.removeValue(forKey: "rightPaneRailDefaultApplied")
+
+        let oldConfig = try JSONSerialization.data(withJSONObject: object)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: oldConfig)
+
+        #expect(decoded.rightPaneRailEnabled == true)
+        #expect(decoded.rightPaneRailDefaultApplied == true)
+    }
+
+    @Test func decodeConfigWithRailExplicitlyDisabledAfterMigrationStaysDisabled() throws {
+        // Once the migration has run once (marker present), a `false` is a
+        // deliberate opt-out via the fallback toggle and must stick.
+        var cfg = AppConfig.defaults
+        cfg.rightPaneRailEnabled = false
+        cfg.rightPaneRailDefaultApplied = true
+
+        let data = try JSONEncoder().encode(cfg)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+
         #expect(decoded.rightPaneRailEnabled == false)
+        #expect(decoded.rightPaneRailDefaultApplied == true)
     }
 
     @Test func decodeOldHarnessConfigDefaultsAwaitingPingOn() throws {
