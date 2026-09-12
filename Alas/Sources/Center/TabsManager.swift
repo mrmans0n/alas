@@ -2332,10 +2332,11 @@ final class TabsManager {
     }
 
     @discardableResult
-    func saveAll(worktreeRoots: [String: URL] = [:]) -> [(tabId: TabID, error: Error)] {
+    func saveAll(worktreeRoots: [String: URL] = [:], allowedWorktreeIDs: Set<String>? = nil) -> [(tabId: TabID, error: Error)] {
         var errors: [(TabID, Error)] = []
         var saved = Set<ObjectIdentifier>()
         for (tabId, _) in bufferKeys {
+            guard tabIsAllowedForSaveAll(tabId, allowedWorktreeIDs: allowedWorktreeIDs) else { continue }
             guard let buffer = peekBuffer(tabId: tabId), buffer.saveDisposition != .clean else { continue }
             let id = ObjectIdentifier(buffer)
             guard !saved.contains(id) else { continue }
@@ -2351,6 +2352,7 @@ final class TabsManager {
         // skipped by every save sweep. Read-only ones are never dirty, so
         // this is a no-op for the common ⌘-click navigation case.
         for tabId in externalTabURLs.keys {
+            guard tabIsAllowedForSaveAll(tabId, allowedWorktreeIDs: allowedWorktreeIDs) else { continue }
             guard let buffer = peekExternalBuffer(tabId: tabId), buffer.saveDisposition != .clean else { continue }
             let id = ObjectIdentifier(buffer)
             guard !saved.contains(id) else { continue }
@@ -2362,6 +2364,7 @@ final class TabsManager {
             }
         }
         for (worktreeId, file) in byWorktree {
+            if let allowedWorktreeIDs, !allowedWorktreeIDs.contains(worktreeId) { continue }
             for tab in file.tabs {
                 guard case .editor(let state) = tab,
                       peekBuffer(tabId: state.id) == nil,
@@ -2381,10 +2384,11 @@ final class TabsManager {
     }
 
     @discardableResult
-    func saveAllAwaitingRemote(worktreeRoots: [String: URL] = [:]) async -> [(tabId: TabID, error: Error)] {
+    func saveAllAwaitingRemote(worktreeRoots: [String: URL] = [:], allowedWorktreeIDs: Set<String>? = nil) async -> [(tabId: TabID, error: Error)] {
         var errors: [(TabID, Error)] = []
         var saved = Set<ObjectIdentifier>()
         for (tabId, key) in bufferKeys {
+            guard tabIsAllowedForSaveAll(tabId, allowedWorktreeIDs: allowedWorktreeIDs) else { continue }
             guard let buffer = buffers[key], buffer.dirty else { continue }
             let id = ObjectIdentifier(buffer)
             guard !saved.contains(id) else { continue }
@@ -2398,6 +2402,7 @@ final class TabsManager {
         // See the matching pass in `saveAll(worktreeRoots:)`: editable
         // external buffers (global run scripts) live outside `bufferKeys`.
         for tabId in externalTabURLs.keys {
+            guard tabIsAllowedForSaveAll(tabId, allowedWorktreeIDs: allowedWorktreeIDs) else { continue }
             guard let buffer = peekExternalBuffer(tabId: tabId), buffer.dirty else { continue }
             let id = ObjectIdentifier(buffer)
             guard !saved.contains(id) else { continue }
@@ -2409,6 +2414,7 @@ final class TabsManager {
             }
         }
         for (worktreeId, file) in byWorktree {
+            if let allowedWorktreeIDs, !allowedWorktreeIDs.contains(worktreeId) { continue }
             for tab in file.tabs {
                 guard case .editor(let state) = tab,
                       peekBuffer(tabId: state.id) == nil,
@@ -2425,6 +2431,14 @@ final class TabsManager {
             }
         }
         return errors
+    }
+
+    private func tabIsAllowedForSaveAll(_ tabId: TabID, allowedWorktreeIDs: Set<String>?) -> Bool {
+        guard let allowedWorktreeIDs else { return true }
+        guard let worktreeID = byWorktree.first(where: { _, file in
+            file.tabs.contains { $0.id == tabId }
+        })?.key else { return true }
+        return allowedWorktreeIDs.contains(worktreeID)
     }
 
     /// Save all unsaved buffers for a single worktree. Mirrors the snapshot-

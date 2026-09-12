@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 enum CheckpointSnapshotError: Error, Equatable, Sendable {
@@ -262,6 +263,10 @@ struct WorktreeStateSnapshotter: Sendable {
     private func gitState(_ entry: Entry?, _ target: CheckpointWorktreeTarget,
                           payloads: inout [String: Data], retainingPayloads: Bool = true) async throws -> CheckpointFileState {
         guard let entry else { return .absent }
+        if !retainingPayloads {
+            let blob = try await git.blobReference(oid: entry.oid, cwd: target.path, environment: [:])
+            return entry.mode == "120000" ? .symlink(blob: blob) : .regular(blob: blob, executable: entry.mode == "100755")
+        }
         let blob = add(try await data(["cat-file", "blob", entry.oid], target), to: &payloads,
                        retainingPayload: retainingPayloads)
         return entry.mode == "120000" ? .symlink(blob: blob) : .regular(blob: blob, executable: entry.mode == "100755")
@@ -270,7 +275,11 @@ struct WorktreeStateSnapshotter: Sendable {
     private func diskState(path: String, root: URL, tracked: Bool, payloads: inout [String: Data],
                            retainingPayloads: Bool) throws -> CheckpointFileState {
         do {
-            guard try fileSystem.metadata(root: root, relativePath: path) != nil else { return .absent }
+            guard let metadata = try fileSystem.metadata(root: root, relativePath: path) else { return .absent }
+            if !retainingPayloads, metadata.kind == .regular {
+                let url = try fileSystem.validateRelativePath(path, under: root)
+                return .regular(blob: try streamFileReference(at: url), executable: metadata.executable)
+            }
             switch try fileSystem.readLeaf(root: root, relativePath: path) {
             case .regular(let bytes, let executable):
                 return .regular(blob: add(bytes, to: &payloads, retainingPayload: retainingPayloads), executable: executable)
@@ -285,6 +294,21 @@ struct WorktreeStateSnapshotter: Sendable {
             }
             throw CheckpointFileSystemError.unsupportedLeaf
         }
+    }
+
+    private func streamFileReference(at url: URL) throws -> CheckpointBlobReference {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        var byteCount: Int64 = 0
+        while true {
+            let chunk = try handle.read(upToCount: 1024 * 1024) ?? Data()
+            if chunk.isEmpty { break }
+            byteCount += Int64(chunk.count)
+            hasher.update(data: chunk)
+        }
+        let hash = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+        return CheckpointBlobReference(sha256: hash, byteCount: byteCount)
     }
 
     private func add(_ data: Data, to payloads: inout [String: Data], retainingPayload: Bool = true) -> CheckpointBlobReference {

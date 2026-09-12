@@ -271,6 +271,32 @@ struct WorktreeCheckpointStoreTests {
         #expect(!FileManager.default.fileExists(atPath: orphan.path))
     }
 
+    @Test func publishedCatalogSurvivesCleanupFailureAfterRetentionPrune() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = try publication(lineageID: lineageA, label: "First", bytes: Data([1]), createdAt: Date(timeIntervalSince1970: 1))
+        let second = try publication(lineageID: lineageA, label: "Second", bytes: Data([2]), createdAt: Date(timeIntervalSince1970: 2))
+        let limits = WorktreeCheckpointStore.Limits(manualCount: 1, recoveryCount: 5, bytes: 100_000)
+        _ = try await WorktreeCheckpointStore(root: root, limits: limits).publish(first)
+        let fileSystem = RemoveFailingFileSystem(
+            failingLastPathComponent: "manifest.json",
+            failingParentLastPathComponent: first.manifest.id.uuidString.lowercased()
+        )
+        let store = WorktreeCheckpointStore(root: root, fileSystem: fileSystem, limits: limits)
+
+        let catalog = try await store.publish(second)
+        let orphan = root
+            .appendingPathComponent(lineageA)
+            .appendingPathComponent("entries")
+            .appendingPathComponent(first.manifest.id.uuidString.lowercased(), isDirectory: true)
+
+        #expect(catalog.summaries.map(\.label) == ["Second"])
+        #expect(FileManager.default.fileExists(atPath: orphan.path))
+        let reloaded = try await WorktreeCheckpointStore(root: root, limits: limits).catalog(lineageID: lineageA)
+        #expect(reloaded.summaries.map(\.label) == ["Second"])
+        #expect(try await store.catalog(lineageID: lineageA).summaries.map(\.label) == ["Second"])
+    }
+
     @Test func sharedReferencesCountOnceTowardByteLimit() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -645,9 +671,11 @@ private final class RemoveFailingFileSystem: CheckpointFileSystem, @unchecked Se
 
     private let live = LiveCheckpointFileSystem()
     private let failingLastPathComponent: String
+    private let failingParentLastPathComponent: String?
 
-    init(failingLastPathComponent: String) {
+    init(failingLastPathComponent: String, failingParentLastPathComponent: String? = nil) {
         self.failingLastPathComponent = failingLastPathComponent
+        self.failingParentLastPathComponent = failingParentLastPathComponent
     }
 
     func readLeaf(root: URL, relativePath: String) throws -> CheckpointLeafRead {
@@ -683,7 +711,10 @@ private final class RemoveFailingFileSystem: CheckpointFileSystem, @unchecked Se
     }
 
     func removeIfPresent(_ url: URL) throws {
-        if url.lastPathComponent == failingLastPathComponent { throw Failure.remove }
+        if url.lastPathComponent == failingLastPathComponent,
+           failingParentLastPathComponent == nil || url.deletingLastPathComponent().lastPathComponent == failingParentLastPathComponent {
+            throw Failure.remove
+        }
         try live.removeIfPresent(url)
     }
 

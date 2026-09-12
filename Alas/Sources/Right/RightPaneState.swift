@@ -122,6 +122,7 @@ final class RightPaneState: GGSplitCommitServicing {
     var pendingCheckpointDeletion: WorktreeCheckpointSummary? = nil
     var checkpointRestorePreview: CheckpointRestorePreview? = nil
     var nonterminalCheckpointJournals: [CheckpointRestoreJournal] = []
+    private var checkpointJournalDiscoverySucceeded: Bool = false
     private(set) var checkpointOperationInFlight: CheckpointOperationKind? = nil
     var lastCheckpointError: String? = nil
     var lastCheckpointStatus: String? = nil
@@ -132,7 +133,7 @@ final class RightPaneState: GGSplitCommitServicing {
 
     var hasInterruptedCheckpointRestore: Bool { !nonterminalCheckpointJournals.isEmpty }
     var checkpointMutationsDisabled: Bool {
-        checkpointOperationInFlight != nil || hasInterruptedCheckpointRestore
+        checkpointOperationInFlight != nil || !checkpointJournalDiscoverySucceeded || hasInterruptedCheckpointRestore
     }
     var hasOtherGitMutationInFlight: Bool {
         mergeOp.current != nil || stageMutationWorker != nil || stashOperationInFlight || discardOperationInFlight
@@ -717,6 +718,7 @@ final class RightPaneState: GGSplitCommitServicing {
             checkpointSummaries = []
             checkpointStorageUsage = 0
             nonterminalCheckpointJournals = []
+            checkpointJournalDiscoverySucceeded = worktree.path.isRemoteAlasPath
             checkpointLoadError = worktree.path.isRemoteAlasPath ? CheckpointRestoreBlocker.remoteTarget.description : nil
             return
         }
@@ -725,6 +727,7 @@ final class RightPaneState: GGSplitCommitServicing {
             checkpointSummaries = catalog.summaries
             checkpointStorageUsage = catalog.byteCount
             nonterminalCheckpointJournals = journals
+            checkpointJournalDiscoverySucceeded = true
             checkpointLoadError = nil
             let availableCheckpointIDs = Set(catalog.summaries.filter { $0.unavailableReason == nil }.map(\.id))
             expandedCheckpointIDs.formIntersection(availableCheckpointIDs)
@@ -732,6 +735,7 @@ final class RightPaneState: GGSplitCommitServicing {
                 availableCheckpointIDs.contains(id)
             }
         case let .failure(error):
+            checkpointJournalDiscoverySucceeded = false
             checkpointLoadError = error.message
         }
     }
@@ -1225,6 +1229,7 @@ final class RightPaneState: GGSplitCommitServicing {
         let reviewLoopInspection = reviewLoop.beginLocalInspection()
         let snapshotGeneration = snapshotInvalidationGeneration
         let checkpointTarget = checkpointTarget
+        checkpointJournalDiscoverySucceeded = checkpointTarget?.path.isRemoteAlasPath == true
         async let checkpointLoad = loadCheckpointSnapshot(target: checkpointTarget)
         loading = true
         defer { loading = false }
@@ -2547,6 +2552,7 @@ final class RightPaneState: GGSplitCommitServicing {
         loadingStashRefs = []
         pendingStashChanges = false
         pendingStashDrop = nil
+        checkpointJournalDiscoverySucceeded = false
         indexFingerprint = ""
         fileTree = []
         commits = []

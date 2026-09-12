@@ -6244,7 +6244,7 @@ final class AppState {
                     roots[worktree.id] = roots[worktree.id] ?? worktree.path
                 }
             }
-            let errors = await tabs.saveAllAwaitingRemote(worktreeRoots: roots)
+            let errors = await tabs.saveAllAwaitingRemote(worktreeRoots: roots, allowedWorktreeIDs: Set(roots.keys))
             guard !errors.isEmpty else { return }
             showFileActionError(
                 title: "Save All Failed",

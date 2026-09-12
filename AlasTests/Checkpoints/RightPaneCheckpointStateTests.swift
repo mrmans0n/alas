@@ -16,6 +16,7 @@ private actor RecordingCheckpointService: WorktreeCheckpointServicing {
     private var restoreCoordinations: [CheckpointCoordinationSnapshot] = []
     private var recoveryCoordinations: [CheckpointCoordinationSnapshot] = []
     private var createShouldFail = false
+    private var loadShouldFail = false
     private var summaryUnavailable = false
 
     init(target: CheckpointWorktreeTarget) throws {
@@ -49,6 +50,7 @@ private actor RecordingCheckpointService: WorktreeCheckpointServicing {
 
     func summaries(target: CheckpointWorktreeTarget) async throws -> CheckpointCatalogSnapshot {
         callCount += 1
+        guard !loadShouldFail else { throw RecordingCheckpointServiceError.unsupported }
         let currentSummary = summaryUnavailable
             ? WorktreeCheckpointSummary(
                 id: summary.id,
@@ -67,6 +69,7 @@ private actor RecordingCheckpointService: WorktreeCheckpointServicing {
 
     func nonterminalJournals(target: CheckpointWorktreeTarget) async throws -> [CheckpointRestoreJournal] {
         callCount += 1
+        guard !loadShouldFail else { throw RecordingCheckpointServiceError.unsupported }
         return journals
     }
 
@@ -134,6 +137,7 @@ private actor RecordingCheckpointService: WorktreeCheckpointServicing {
 
     func calls() -> Int { callCount }
     func failNextCreate() { createShouldFail = true }
+    func failLoads(_ value: Bool) { loadShouldFail = value }
     func markSummaryUnavailable() {
         created = true
         summaryUnavailable = true
@@ -270,6 +274,25 @@ struct RightPaneCheckpointStateTests {
         #expect(state.hasLoadedSnapshot)
         #expect(state.lastCheckpointError != nil)
         #expect(state.checkpointSummaries.isEmpty)
+    }
+
+    @Test func checkpointMutationsStayBlockedUntilJournalDiscoverySucceeds() async throws {
+        let repository = try await CheckpointTestRepository.make()
+        defer { repository.remove() }
+        let service = try RecordingCheckpointService(target: repository.target)
+        let state = makeState(repository: repository, service: service)
+
+        #expect(state.checkpointMutationsDisabled)
+
+        await service.failLoads(true)
+        await state.refresh()
+        #expect(state.checkpointMutationsDisabled)
+        state.requestCheckpointCreation()
+        #expect(state.pendingCheckpointCreation == nil)
+
+        await service.failLoads(false)
+        await state.refresh()
+        #expect(!state.checkpointMutationsDisabled)
     }
 
     @Test func unavailableCheckpointSummaryEvictsExpandedManifestCache() async throws {

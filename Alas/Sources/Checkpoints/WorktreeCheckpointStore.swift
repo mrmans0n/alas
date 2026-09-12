@@ -151,8 +151,8 @@ actor WorktreeCheckpointStore {
             try? garbageCollect(layout: layout, manifests: existingManifests, journals: activeJournalsUnlocked(lineageID: manifest.lineageID))
             throw error
         }
-        for victim in victims { try removeEntry(victim.id, layout: layout) }
-        try garbageCollect(layout: layout, manifests: candidates, journals: try activeJournalsUnlocked(lineageID: manifest.lineageID))
+        for victim in victims { try? removeEntry(victim.id, layout: layout) }
+        try? garbageCollect(layout: layout, manifests: candidates, journals: (try? activeJournalsUnlocked(lineageID: manifest.lineageID)) ?? [])
         return next
     }
 
