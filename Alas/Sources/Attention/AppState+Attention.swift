@@ -199,8 +199,10 @@ extension AppState {
     }
 
     func dismissAllAttentionItems() {
-        for item in attentionAggregation.items {
-            attentionStore.acknowledge(eventID: item.eventID, at: Date())
+        let items = attentionAggregation.items
+        guard !items.isEmpty else { return }
+        attentionStore.acknowledge(eventIDs: items.map(\.eventID), at: Date())
+        for item in items {
             attentionNavigationErrors[item.eventID] = nil
         }
     }

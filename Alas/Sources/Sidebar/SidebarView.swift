@@ -38,6 +38,8 @@ struct SidebarView: View {
                     attentionCount: attentionAggregation.unresolvedCount,
                     attentionInboxOpen: $state.isAttentionInboxOpen,
                     attentionAggregation: attentionAggregation,
+                    attentionLoadError: state.attentionStore.loadError?.localizedDescription,
+                    attentionWriteError: state.attentionStore.writeError?.localizedDescription,
                     attentionNavigationErrors: state.attentionNavigationErrors,
                     onDismissAttentionItem: { state.dismissAttentionItem($0) },
                     onOpenAttentionItem: { item in _ = await state.openAttentionItem(item) }

@@ -11,6 +11,8 @@ struct SidebarHeaderView: View {
     var attentionCount: Int = 0
     @Binding var attentionInboxOpen: Bool
     var attentionAggregation: AttentionAggregation = AttentionAggregation(items: [], history: [], unresolvedCount: 0, unresolvedCountByProject: [:])
+    var attentionLoadError: String? = nil
+    var attentionWriteError: String? = nil
     var attentionNavigationErrors: [UUID: String] = [:]
     var onDismissAttentionItem: (AttentionItem) -> Void = { _ in }
     var onOpenAttentionItem: (AttentionItem) async -> Void = { _ in }
@@ -24,6 +26,8 @@ struct SidebarHeaderView: View {
          attentionCount: Int = 0,
          attentionInboxOpen: Binding<Bool> = .constant(false),
          attentionAggregation: AttentionAggregation = AttentionAggregation(items: [], history: [], unresolvedCount: 0, unresolvedCountByProject: [:]),
+         attentionLoadError: String? = nil,
+         attentionWriteError: String? = nil,
          attentionNavigationErrors: [UUID: String] = [:],
          onDismissAttentionItem: @escaping (AttentionItem) -> Void = { _ in },
          onOpenAttentionItem: @escaping (AttentionItem) async -> Void = { _ in }) {
@@ -37,6 +41,8 @@ struct SidebarHeaderView: View {
         self.attentionCount = attentionCount
         self._attentionInboxOpen = attentionInboxOpen
         self.attentionAggregation = attentionAggregation
+        self.attentionLoadError = attentionLoadError
+        self.attentionWriteError = attentionWriteError
         self.attentionNavigationErrors = attentionNavigationErrors
         self.onDismissAttentionItem = onDismissAttentionItem
         self.onOpenAttentionItem = onOpenAttentionItem
@@ -68,8 +74,8 @@ struct SidebarHeaderView: View {
         AttentionToolbarButton(count: attentionCount, isOpen: $attentionInboxOpen) {
             AttentionInboxView(
                 aggregation: attentionAggregation,
-                loadError: nil,
-                writeError: nil,
+                loadError: attentionLoadError,
+                writeError: attentionWriteError,
                 navigationErrors: attentionNavigationErrors,
                 onDismiss: onDismissAttentionItem,
                 onOpen: onOpenAttentionItem
