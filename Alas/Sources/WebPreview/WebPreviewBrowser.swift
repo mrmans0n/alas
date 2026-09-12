@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import SwiftUI
 import WebKit
 
@@ -41,7 +42,7 @@ enum WebPreviewHostLookup {
         await withCheckedContinuation { continuation in
             let result = Resolution(continuation: continuation)
             let operation = BlockOperation {
-                let addresses = Host(name: host).addresses
+                let addresses = lookupAddresses(host)
                 Task { @MainActor in result.finish(addresses) }
             }
             queue.addOperation(operation)
@@ -51,6 +52,28 @@ enum WebPreviewHostLookup {
                 result.finish(nil)
             }
         }
+    }
+
+    private static func lookupAddresses(_ host: String) -> [String]? {
+        var hints = addrinfo()
+        hints.ai_family = AF_UNSPEC
+        hints.ai_socktype = SOCK_STREAM
+        var result: UnsafeMutablePointer<addrinfo>?
+        guard getaddrinfo(host, nil, &hints, &result) == 0, let result else { return nil }
+        defer { freeaddrinfo(result) }
+
+        var addresses = Set<String>()
+        var entry: UnsafeMutablePointer<addrinfo>? = result
+        while let current = entry {
+            let info = current.pointee
+            var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            guard let address = info.ai_addr,
+                  getnameinfo(address, info.ai_addrlen, &buffer, socklen_t(buffer.count), nil, 0, NI_NUMERICHOST) == 0
+            else { return nil }
+            addresses.insert(String(cString: buffer))
+            entry = info.ai_next
+        }
+        return Array(addresses)
     }
 
     @MainActor
