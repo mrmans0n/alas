@@ -50,6 +50,19 @@ struct AgentHookSocketServerCLITests {
         guard fd >= 0 else { throw POSIXError(.EIO) }
         defer { close(fd) }
 
+        var timeout = timeval(tv_sec: 5, tv_usec: 0)
+        for option in [SO_RCVTIMEO, SO_SNDTIMEO] {
+            let result = withUnsafePointer(to: &timeout) { pointer in
+                Darwin.setsockopt(
+                    fd,
+                    SOL_SOCKET,
+                    option,
+                    pointer,
+                    socklen_t(MemoryLayout<timeval>.size))
+            }
+            guard result == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        }
+
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
         let pathBytes = path.utf8CString
