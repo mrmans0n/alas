@@ -58,49 +58,51 @@ struct SectionHeader<Trailing: View>: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            HStack(spacing: 6) {
-                // This is a stable section-identity icon, not an expansion
-                // indicator. Expansion state is conveyed by visible content
-                // and the button's accessibility value.
-                SectionHeaderIcon(
-                    role: role,
-                    size: 10,
-                    color: theme.color("fg-faint")
-                )
-                    .frame(width: 14, height: 14)
-                    .accessibilityHidden(true)
-                Text(title.uppercased())
-                    .font(.system(size: 10.5, weight: .semibold))
-                    .tracking(0.5)
-                    .foregroundColor(theme.color("fg-muted"))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                if let count {
-                    Text("\(count)")
-                        .font(.system(size: 9.5, weight: .semibold))
-                        .padding(.horizontal, 6).padding(.vertical, 1)
-                        .background(theme.color("seg-pill-bg"))
-                        .clipShape(Capsule())
+            Button(action: onToggle) {
+                HStack(spacing: 6) {
+                    // This is a stable section-identity icon, not an expansion
+                    // indicator. Expansion state is conveyed by visible content
+                    // and the button's accessibility value.
+                    SectionHeaderIcon(
+                        role: role,
+                        size: 10,
+                        color: theme.color("fg-faint")
+                    )
+                        .frame(width: 14, height: 14)
+                        .accessibilityHidden(true)
+                    Text(title.uppercased())
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .tracking(0.5)
                         .foregroundColor(theme.color("fg-muted"))
-                }
-                Spacer(minLength: 8)
-                if let stats, shouldShowChangeSummary(additions: stats.add, deletions: stats.del) {
-                    HStack(spacing: 6) {
-                        Text("+\(stats.add)").foregroundColor(theme.color("add"))
-                        Text("−\(stats.del)").foregroundColor(theme.color("del"))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    if let count {
+                        Text("\(count)")
+                            .font(.system(size: 9.5, weight: .semibold))
+                            .padding(.horizontal, 6).padding(.vertical, 1)
+                            .background(theme.color("seg-pill-bg"))
+                            .clipShape(Capsule())
+                            .foregroundColor(theme.color("fg-muted"))
                     }
-                    .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                    Spacer(minLength: 8)
+                    if let stats, shouldShowChangeSummary(additions: stats.add, deletions: stats.del) {
+                        HStack(spacing: 6) {
+                            Text("+\(stats.add)").foregroundColor(theme.color("add"))
+                            Text("−\(stats.del)").foregroundColor(theme.color("del"))
+                        }
+                        .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                    }
                 }
+                .contentShape(Rectangle())
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .contentShape(Rectangle())
-            .onTapGesture(perform: onToggle)
+            .buttonStyle(.plain)
+            .accessibilityLabel(title)
+            .accessibilityValue(SectionHeaderRole.accessibilityValue(expanded: expanded))
             trailing()
         }
         .padding(.horizontal, 12).padding(.vertical, 7)
         .background(theme.color("section-head-bg"))
-        .accessibilityLabel(title)
-        .accessibilityValue(SectionHeaderRole.accessibilityValue(expanded: expanded))
-        .accessibilityAddTraits(.isButton)
     }
 }
 

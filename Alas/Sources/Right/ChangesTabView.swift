@@ -499,7 +499,13 @@ struct ChangesTabView: View {
                 let error = rps.checkpointManifestErrors[checkpoint.id]
                 rows.append(appKitRow(
                     id: CheckpointPresentation.rowID(checkpointID: checkpoint.id),
-                    token: "\(checkpoint.id.uuidString)-\(isExpanded)-\(isLoading)-\(String(reflecting: error))",
+                    token: Self.checkpointSummaryRowToken(
+                        summary: checkpoint,
+                        expanded: isExpanded,
+                        loading: isLoading,
+                        manifestError: error,
+                        mutationsDisabled: rps.checkpointMutationsDisabled
+                    ),
                     estimatedHeight: checkpoint.unavailableReason == nil ? 42 : 48
                 ) {
                     CheckpointSummaryRow(
@@ -749,6 +755,20 @@ struct ChangesTabView: View {
             + String(commitsNeedPush)
             + String(reflecting: commitRemote)
             + String(reflecting: primaryCommitRemote)
+    }
+
+    static func checkpointSummaryRowToken(
+        summary: WorktreeCheckpointSummary,
+        expanded: Bool,
+        loading: Bool,
+        manifestError: String?,
+        mutationsDisabled: Bool
+    ) -> String {
+        String(reflecting: summary)
+            + String(expanded)
+            + String(loading)
+            + String(reflecting: manifestError)
+            + String(mutationsDisabled)
     }
 
     private func appKitRow<Token: Equatable, Content: View>(
