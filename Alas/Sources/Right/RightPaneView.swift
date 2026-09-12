@@ -279,7 +279,7 @@ struct RightPaneView: View {
                                 state.config.files.showIgnored.toggle()
                                 state.saveConfig()
                             },
-                            onSearch: { state.search.open() }
+                            onSearch: { state.openSearchOverlay() }
                         )
                         tabContent(rps: rps)
                     }
