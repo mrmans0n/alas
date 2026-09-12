@@ -47,7 +47,9 @@ struct RightPaneRail: View {
         .padding(.horizontal, 3)
         .frame(width: Self.width)
         .frame(maxHeight: .infinity)
-        .background(theme.color("bg-1"))
+        // No opaque fill of its own: the rail sits over the same
+        // `SidebarMaterialBackground` as the rest of the expanded pane, and
+        // an opaque background here would occlude it just for this column.
         .overlay(Divider().opacity(0.5), alignment: .leading)
     }
 
@@ -129,12 +131,14 @@ private struct RightPaneRailButton: View {
     }
 
     /// The collapsed active tab keeps a leading edge marker so the rail still
-    /// records which tab the pane will reopen on.
+    /// records which tab the pane will reopen on. Accent-colored like the
+    /// expanded selection fill, so it still reads as "selected", not just
+    /// "last used."
     @ViewBuilder
     private var collapsedMarker: some View {
         if state == .activeCollapsed {
             RoundedRectangle(cornerRadius: 1)
-                .fill(theme.color("fg-faint"))
+                .fill(theme.color("accent"))
                 .frame(width: 2, height: 12)
                 .offset(x: -3)
         }
