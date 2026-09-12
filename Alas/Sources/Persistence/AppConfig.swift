@@ -50,6 +50,9 @@ struct AppConfig: Codable, Equatable {
     /// Preview gate for the worktree Agent tab. This remains off until the
     /// per-worktree rollup has completed preview testing.
     var agentTabEnabled: Bool = false
+    /// Preview gate for the right pane icon rail. This remains off until the
+    /// rail presentation has completed preview testing.
+    var rightPaneRailEnabled: Bool = false
     var recentProjectIds: [String] = []
     var recentWorktreeIdsByProject: [String: [String]] = [:]
     var recentWorktreeRefs: [RepoSelectorRecents.RecentWorktreeRef] = []
@@ -513,6 +516,7 @@ struct AppConfig: Codable, Equatable {
         workspacesEnabled: false,
         runTabEnabled: false,
         agentTabEnabled: false,
+        rightPaneRailEnabled: false,
         recentProjectIds: [],
         recentWorktreeIdsByProject: [:],
         recentWorktreeRefs: [],
@@ -607,6 +611,7 @@ extension AppConfig {
              workspacesEnabled,
              runTabEnabled,
              agentTabEnabled,
+             rightPaneRailEnabled,
              recentProjectIds, recentWorktreeIdsByProject, recentWorktreeRefs,
              collapsedProjectIds,
              sidebarChromeOverrides,
@@ -848,6 +853,7 @@ extension AppConfig {
         // The Agent tab preview is opt-in. Configs written before it existed
         // continue to load without exposing the sidebar rollup.
         agentTabEnabled = (try? c.decode(Bool.self, forKey: .agentTabEnabled)) ?? false
+        rightPaneRailEnabled = (try? c.decode(Bool.self, forKey: .rightPaneRailEnabled)) ?? false
         recentProjectIds = (try? c.decode([String].self, forKey: .recentProjectIds)) ?? []
         recentWorktreeIdsByProject =
             (try? c.decode([String: [String]].self, forKey: .recentWorktreeIdsByProject)) ?? [:]

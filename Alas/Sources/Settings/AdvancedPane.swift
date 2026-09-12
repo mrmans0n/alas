@@ -53,6 +53,18 @@ struct AdvancedPane: View {
                             }
                         ))
                     }
+                    SettingsRow(
+                        name: "Right pane icon rail",
+                        desc: "Replaces the right pane tab bar with a vertical icon rail (preview)."
+                    ) {
+                        AlasToggle(on: Binding(
+                            get: { state.config.rightPaneRailEnabled },
+                            set: { enabled in
+                                state.config.rightPaneRailEnabled = enabled
+                                state.saveConfig()
+                            }
+                        ))
+                    }
                     if let recovery = state.workspaceRecoveryError {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Workspace recovery required: \(recovery.message)")
