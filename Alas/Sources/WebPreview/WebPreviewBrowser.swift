@@ -48,10 +48,9 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
         handler.receive = { [weak self] value in
             guard let self else { return }
             self.consoleErrors.append(String(value.prefix(2000)))
-            self.consoleErrors = Array(self.consoleErrors.suffix(100))
         }
         consoleHandler = handler
-        configuration.userContentController.add(handler, name: "previewConsole")
+        handler.reset(in: configuration.userContentController)
         configuration.userContentController.addUserScript(WKUserScript(source: Self.consoleScript, injectionTime: .atDocumentStart, forMainFrameOnly: false))
         urlObservation = webView.observe(\.url, options: [.new]) { [weak self] _, _ in
             Task { @MainActor [weak self] in
@@ -125,6 +124,7 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
         loading = true
         error = nil
         consoleErrors = []
+        consoleHandler?.reset(in: webView.configuration.userContentController)
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -217,9 +217,10 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
 
     private static let consoleScript = #"""
     (() => {
-      const send = value => { try { window.webkit.messageHandlers.previewConsole.postMessage(String(value).slice(0, 2000)); } catch (_) {} };
+      let sent = 0;
+      const send = value => { if (sent >= 100) return; sent++; try { window.webkit.messageHandlers.previewConsole.postMessage(String(value).slice(0, 2000)); } catch (_) {} };
       const original = console.error;
-      console.error = function(...args) { send(args.map(v => { try { return String(v); } catch (_) { return '[unavailable]'; } }).join(' ')); return original.apply(this, args); };
+      console.error = function(...args) { if (sent < 100) send(args.map(v => { try { return String(v); } catch (_) { return '[unavailable]'; } }).join(' ')); return original.apply(this, args); };
       window.addEventListener('error', e => send(`${e.message} (${e.filename}:${e.lineno})`));
       window.addEventListener('unhandledrejection', e => send(`Unhandled rejection: ${String(e.reason)}`));
     })();
@@ -243,7 +244,20 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
 @MainActor
 private final class PreviewConsoleHandler: NSObject, WKScriptMessageHandler {
     var receive: ((String) -> Void)?
+    private var remainingMessages = 100
+
+    func reset(in controller: WKUserContentController) {
+        remainingMessages = 100
+        controller.removeScriptMessageHandler(forName: "previewConsole")
+        controller.add(self, name: "previewConsole")
+    }
+
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard remainingMessages > 0 else { return }
+        remainingMessages -= 1
+        if remainingMessages == 0 {
+            userContentController.removeScriptMessageHandler(forName: "previewConsole")
+        }
         guard let text = message.body as? String else { return }
         receive?(text)
     }

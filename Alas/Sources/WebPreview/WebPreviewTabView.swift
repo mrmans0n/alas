@@ -77,6 +77,9 @@ struct WebPreviewTabView: View {
                     .popover(isPresented: $showsConsole) {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Console errors (\(browser.consoleErrors.count))").font(.headline)
+                            if browser.consoleErrors.count == 100 {
+                                Text("Console limit reached.").font(.caption).foregroundStyle(.secondary)
+                            }
                             ScrollView {
                                 Text(browser.consoleErrors.isEmpty ? "No errors recorded for this page." : browser.consoleErrors.joined(separator: "\n\n"))
                                     .font(.system(size: 11, design: .monospaced))

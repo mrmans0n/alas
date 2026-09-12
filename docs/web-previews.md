@@ -11,6 +11,9 @@ reports the rendered DOM and selected computed styles. It does not infer a
 React component or source file. Frame selection reports the frame element,
 not the contents of the embedded document. Console collection includes errors
 observed after navigation, not a complete developer-tools protocol or history.
+Collection stops after the first 100 messages per page load. Reloading starts
+a new collection. Both the page-side console hook and the native message bridge
+enforce a budget so repeated errors cannot keep updating the app's UI.
 
 ## Storage and restoration
 

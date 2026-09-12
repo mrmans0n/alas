@@ -390,6 +390,27 @@ struct TabsManagerTests {
         #expect(state.url == URL(string: "http://devbox:3000/dashboard")!)
     }
 
+    @Test func explicitLocalPreviewTargetClearsRemoteHostAndReplacesBrowser() throws {
+        let manager = TabsManager(store: RestoreMemoryStore())
+        let original = manager.openWebPreview(worktreeId: "owner-a", remoteHost: "devbox")
+        let remote = manager.webPreviewBrowser(ownerKey: "owner-a", remoteHost: "devbox")
+        remote.onNavigate = { _ in }
+        let url = URL(string: "http://127.0.0.1:3000")!
+
+        let updated = manager.openWebPreview(worktreeId: "owner-a", url: url, remoteHost: nil)
+
+        guard case .webPreview(let state) = updated else {
+            Issue.record("Expected web preview tab")
+            return
+        }
+        #expect(updated.id == original.id)
+        #expect(state.remoteHost == nil)
+        #expect(remote.onNavigate == nil)
+        let local = manager.webPreviewBrowser(ownerKey: state.ownerKey, remoteHost: state.remoteHost)
+        #expect(local !== remote)
+        #expect(WebPreviewNavigation.allows(url, remoteHost: local.remoteHost))
+    }
+
     @Test func webPreviewBrowserIsReusedUntilRemoteHostChangesOrTabCloses() {
         let manager = TabsManager(store: RestoreMemoryStore())
         let tab = manager.openWebPreview(worktreeId: "owner-a", remoteHost: "devbox")

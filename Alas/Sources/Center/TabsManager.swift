@@ -957,7 +957,22 @@ final class TabsManager {
     }
 
     @discardableResult
-    func openWebPreview(worktreeId: String, url: URL? = nil, remoteHost: String? = nil) -> Tab {
+    func openWebPreview(worktreeId: String, url: URL? = nil) -> Tab {
+        let existing = tabs(forWorktree: worktreeId).first { tab in
+            guard case .webPreview(let state) = tab else { return false }
+            return state.ownerKey == worktreeId
+        }
+        let remoteHost: String?
+        if case .webPreview(let state) = existing {
+            remoteHost = state.remoteHost
+        } else {
+            remoteHost = nil
+        }
+        return openWebPreview(worktreeId: worktreeId, url: url, remoteHost: remoteHost)
+    }
+
+    @discardableResult
+    func openWebPreview(worktreeId: String, url: URL? = nil, remoteHost: String?) -> Tab {
         let ownerKey = worktreeId
         if var file = byWorktree[ownerKey],
            let idx = file.tabs.firstIndex(where: {
@@ -970,9 +985,10 @@ final class TabsManager {
                 if let url {
                     state.url = url
                 }
-                if let remoteHost {
-                    state.remoteHost = remoteHost
+                if state.remoteHost != remoteHost {
+                    clearWebPreviewBrowser(ownerKey: ownerKey)
                 }
+                state.remoteHost = remoteHost
                 let tab = Tab.webPreview(state)
                 file.tabs[idx] = tab
                 file.activeTabId = tab.id

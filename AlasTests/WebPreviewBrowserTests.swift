@@ -131,6 +131,19 @@ struct WebPreviewBrowserTests {
         let full = try #require(browser.capture)
         #expect(full.region == CGRect(x: 0, y: 0, width: width, height: 600))
         #expect(full.devicePixelRatio >= 1)
+
+        _ = try await browser.webView.callAsyncJavaScript(
+            "for (let i = 0; i < 1000; i++) console.error('burst ' + i); return true;",
+            arguments: [:], in: nil, contentWorld: .page)
+        try await waitUntil { browser.consoleErrors.count == 100 }
+        #expect(browser.consoleErrors.first == "fixture error")
+        let bridgeActive = try await browser.webView.callAsyncJavaScript(
+            "return Boolean(window.webkit?.messageHandlers?.previewConsole);",
+            arguments: [:], in: nil, contentWorld: .page) as? Bool
+        #expect(bridgeActive == false)
+
+        browser.webView.reload()
+        try await waitUntil { !browser.loading && browser.consoleErrors == ["fixture error"] }
     }
 
     private func waitUntil(_ diagnosis: @autoclosure () -> String = "Capture did not complete", condition: @MainActor () -> Bool) async throws {
