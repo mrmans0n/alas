@@ -217,7 +217,8 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
            after.kind == .regular,
            after.byteCount == blob.byteCount,
            try currentFileMatchesBlob(blob, target: target, path: path) {
-            return .text(.init(hunks: []))
+            let afterState = CheckpointFileState.regular(blob: blob, executable: after.executable)
+            return .text(.init(hunks: [], metadataSummary: checkpointDiffMetadataSummary(before: before, after: afterState)))
         }
         return .binary(beforeByteCount: checkpointDiffByteCount(before), afterByteCount: after?.byteCount)
     }

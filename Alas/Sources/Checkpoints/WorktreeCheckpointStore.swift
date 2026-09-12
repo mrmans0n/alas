@@ -148,11 +148,13 @@ actor WorktreeCheckpointStore {
             try writeCatalog(next, layout: layout)
         } catch {
             try? removeEntry(manifest.id, layout: layout)
-            try? garbageCollect(layout: layout, manifests: existingManifests, journals: activeJournalsUnlocked(lineageID: manifest.lineageID))
+            let journals = try activeJournalsUnlocked(lineageID: manifest.lineageID)
+            try? garbageCollect(layout: layout, manifests: existingManifests, journals: journals)
             throw error
         }
         for victim in victims { try? removeEntry(victim.id, layout: layout) }
-        try? garbageCollect(layout: layout, manifests: candidates, journals: (try? activeJournalsUnlocked(lineageID: manifest.lineageID)) ?? [])
+        let journals = try activeJournalsUnlocked(lineageID: manifest.lineageID)
+        try? garbageCollect(layout: layout, manifests: candidates, journals: journals)
         return next
     }
 
@@ -606,7 +608,11 @@ actor WorktreeCheckpointStore {
     private func activeJournalsUnlocked(lineageID: String) throws -> [CheckpointRestoreJournal] {
         let layout = paths(lineageID)
         return try fileSystem.list(layout.journals).compactMap { url in
-            guard let value = try? JSONDecoder.checkpoints.decode(CheckpointRestoreJournal.self, from: fileSystem.fileData(url)), value.lineageID == lineageID else { return nil }
+            guard url.pathExtension == "json",
+                  UUID(uuidString: url.deletingPathExtension().lastPathComponent) != nil
+            else { return nil }
+            let value = try JSONDecoder.checkpoints.decode(CheckpointRestoreJournal.self, from: fileSystem.fileData(url))
+            guard value.lineageID == lineageID else { throw CheckpointStoreError.invalidLineageID }
             if value.phase.isTerminal {
                 try cleanupTerminalJournal(value, url: url)
                 return nil

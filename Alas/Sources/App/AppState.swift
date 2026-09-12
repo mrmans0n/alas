@@ -6518,9 +6518,11 @@ final class AppState {
             }
             Task { @MainActor [weak self] in
                 do {
-                    guard self?.checkpointFileWritesDisabled(worktreeId: worktreeId) == false else { return }
+                    guard let self,
+                          await !self.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId)
+                    else { return }
                     try await context.buffer.saveAsRemote(relativePath: relativePath)
-                    _ = self?.tabs.updateEditorPath(worktreeId: worktreeId, tabId: context.tab.id, relativePath: relativePath)
+                    _ = self.tabs.updateEditorPath(worktreeId: worktreeId, tabId: context.tab.id, relativePath: relativePath)
                 } catch {
                     self?.showFileActionError(title: "Save As Failed", message: error.localizedDescription)
                 }
@@ -6535,17 +6537,21 @@ final class AppState {
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
-        do {
-            guard !checkpointFileWritesDisabled(worktreeId: worktreeId) else { return }
-            let relativePath = try relativePath(for: url, in: worktree.path)
-            guard !tabs.hasEditor(worktreeId: worktreeId, relativePath: relativePath, excluding: context.tab.id) else {
-                showFileActionError(title: "Save As Failed", message: "That file is already open in another editor tab.")
-                return
+        Task { @MainActor [weak self] in
+            guard let self,
+                  await !self.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId)
+            else { return }
+            do {
+                let relativePath = try self.relativePath(for: url, in: worktree.path)
+                guard !self.tabs.hasEditor(worktreeId: worktreeId, relativePath: relativePath, excluding: context.tab.id) else {
+                    self.showFileActionError(title: "Save As Failed", message: "That file is already open in another editor tab.")
+                    return
+                }
+                try context.buffer.saveAs(relativePath: relativePath)
+                _ = self.tabs.updateEditorPath(worktreeId: worktreeId, tabId: context.tab.id, relativePath: relativePath)
+            } catch {
+                self.showFileActionError(title: "Save As Failed", message: error.localizedDescription)
             }
-            try context.buffer.saveAs(relativePath: relativePath)
-            _ = tabs.updateEditorPath(worktreeId: worktreeId, tabId: context.tab.id, relativePath: relativePath)
-        } catch {
-            showFileActionError(title: "Save As Failed", message: error.localizedDescription)
         }
     }
 

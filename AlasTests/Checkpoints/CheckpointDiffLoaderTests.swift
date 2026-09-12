@@ -268,6 +268,47 @@ struct CheckpointDiffLoaderTests {
         #expect(metadataSummary == nil)
     }
 
+    @Test func oversizedEqualCurrentFilePreservesModeOnlySummary() async throws {
+        let repo = try await CheckpointTestRepository.make()
+        defer { repo.remove() }
+        let bytes = Data(repeating: 42, count: 10 * 1024 * 1024 + 1)
+        let blob = CheckpointBlobReference.make(for: bytes)
+        let fileState = CheckpointFileState.regular(blob: blob, executable: false)
+        let pathState = CheckpointPathState(
+            relativePath: "huge.sh",
+            head: fileState,
+            index: fileState,
+            worktree: fileState
+        )
+        let manifest = try WorktreeCheckpointManifest(
+            kind: .manual,
+            label: "Saved",
+            createdAt: Date(timeIntervalSince1970: 1),
+            byteCount: Int64(bytes.count),
+            lineageID: repo.target.lineageID,
+            capturedPath: repo.root.path,
+            repositoryName: "test",
+            branch: "main",
+            headOID: String(repeating: "f", count: 40),
+            exclusions: [],
+            groups: [],
+            paths: [pathState]
+        )
+        try repo.write(bytes, to: "huge.sh")
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: repo.root.appendingPathComponent("huge.sh").path)
+        let store = WorktreeCheckpointStore(root: repo.root.appendingPathComponent(".git/checkpoints"))
+        _ = try await store.publish(.init(manifest: manifest, blobs: [blob: bytes]))
+        let service = WorktreeCheckpointService(store: store)
+
+        guard case .text(let diff) = await service.diffContent(target: repo.target, id: manifest.id, path: "huge.sh") else {
+            Issue.record("Expected equal oversized file with mode change to render as a text metadata summary")
+            return
+        }
+
+        #expect(diff.hunks.isEmpty)
+        #expect(diff.metadataSummary == "File mode changed from 100644 to 100755 — no content changes.")
+    }
+
     private func describe(_ content: CheckpointDiffContent) -> String {
         switch content {
         case .text:

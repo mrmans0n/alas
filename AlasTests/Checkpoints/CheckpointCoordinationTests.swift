@@ -85,6 +85,7 @@ struct CheckpointCoordinationTests {
 
         #expect(state.checkpointFileWritesDisabled(worktreeId: "uncached-worktree"))
         #expect(state.checkpointTerminalAdmissionDisabled(worktreeId: "uncached-worktree"))
+        #expect(DraftCommitTabView.checkpointLeaseActiveForRecovery(rightPane: nil))
     }
 
     @Test func appStateDiscoversCheckpointRecoveryBeforeBlockingKnownWorktreeWrites() async throws {

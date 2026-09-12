@@ -49,7 +49,7 @@ struct DraftCommitTabView: View {
         guard let rps = appState.rightPaneStore.activeState(worktreeId: worktreeId) else { return false }
         return rps.changes.contains { $0.stage == .staged }
     }
-    private var checkpointLeaseActive: Bool { rightPane?.checkpointMutationsDisabled == true }
+    private var checkpointLeaseActive: Bool { Self.checkpointLeaseActiveForRecovery(rightPane: rightPane) }
     private var canCommit: Bool { !checkpointLeaseActive && presentation.commit.isEnabled }
     private var busy: Bool { localBusy || publishSession?.isRunning == true }
     private var publishSession: CommitPublishSession? { appState.tabs.commitPublishSession(tabId: tabState.id) }
@@ -60,6 +60,10 @@ struct DraftCommitTabView: View {
     }
     private var mutationsDisabled: Bool { checkpointLeaseActive || presentation.mutationsDisabled }
     private var rightPane: RightPaneState? { appState.rightPaneStore.activeState(worktreeId: worktreeId) }
+
+    static func checkpointLeaseActiveForRecovery(rightPane: RightPaneState?) -> Bool {
+        rightPane?.checkpointMutationsDisabled ?? true
+    }
 
     private var publicationProbeKey: String {
         guard let rps = rightPane else { return "" }

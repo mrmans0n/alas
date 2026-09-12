@@ -397,6 +397,23 @@ struct WorktreeCheckpointStoreTests {
         #expect(journalNames == ["\(journal.id.uuidString.lowercased()).json"])
     }
 
+    @Test func corruptRecoverableJournalFailsClosed() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = WorktreeCheckpointStore(root: root)
+        _ = try await store.catalog(lineageID: lineageA)
+        let id = UUID()
+        let journal = root
+            .appendingPathComponent(lineageA)
+            .appendingPathComponent("journals")
+            .appendingPathComponent("\(id.uuidString.lowercased()).json")
+        try Data("not json".utf8).write(to: journal)
+
+        await #expect(throws: (any Error).self) {
+            try await store.recoverableJournals(lineageID: lineageA)
+        }
+    }
+
     @Test func catalogReconciliationRemovesAbandonedCheckpointBlobs() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
