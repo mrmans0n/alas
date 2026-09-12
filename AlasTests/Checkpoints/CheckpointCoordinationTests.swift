@@ -47,6 +47,32 @@ struct CheckpointCoordinationTests {
         #expect(!state.checkpointCoordination(for: worktree, selectedPaths: []).otherGitMutationActive)
     }
 
+    @Test func appStateCountsWriterLeasesUsingDurableLineageWhenCachedWorktreeLineageIsMissing() async throws {
+        let repo = try await CheckpointTestRepository.make()
+        defer { repo.remove() }
+        let lineageID = repo.target.lineageID
+        let leases = CheckpointWriterLeaseStore()
+        let sessionID = "external-terminal-\(UUID().uuidString)"
+        leases.acquire(lineageIDs: [lineageID], sessionID: sessionID, instanceID: "other-instance",
+                       zmxSessionName: nil, remoteHost: nil)
+        defer { leases.release(sessionID: sessionID, instanceID: "other-instance") }
+        let state = AppState()
+        let worktree = Worktree(
+            id: repo.target.worktreeID,
+            projectId: repo.target.projectID,
+            name: "main",
+            branch: "main",
+            path: repo.root,
+            status: .clean,
+            lastActivity: .now,
+            lineageID: nil
+        )
+
+        let coordination = state.checkpointCoordination(for: worktree, selectedPaths: [])
+
+        #expect(coordination.activeTerminalCount == 1)
+    }
+
     @Test func appStateBlocksDirtyBuffersBelowSelectedCheckpointPaths() async throws {
         let state = AppState()
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("checkpoint-dirty-descendant-\(UUID().uuidString)")

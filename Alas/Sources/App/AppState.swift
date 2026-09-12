@@ -9262,7 +9262,7 @@ final class AppState {
         for worktree: Worktree,
         selectedPaths: Set<String>
     ) -> CheckpointCoordinationSnapshot {
-        let lineageID = worktree.lineageID
+        let lineageID = worktree.lineageID ?? WorktreeService.existingLocalLineageID(forWorktreeAt: worktree.path)
         var terminalCount = terminal.registry.sessions(forWorktree: worktree.id).count
         if let lineageID {
             terminalCount += checkpointWriterLeases.activeLeaseCount(lineageID: lineageID, excludingInstanceID: instanceId)
