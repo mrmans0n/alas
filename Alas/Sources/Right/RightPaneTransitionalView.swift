@@ -19,6 +19,7 @@ struct RightPaneTransitionalView: View {
     @Bindable var state: AppState
     let worktree: Worktree
     let kind: Kind
+    var collapsed: Bool = false
 
     @State private var activeTab: RightPaneTab = .changes
 

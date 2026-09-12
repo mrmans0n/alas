@@ -5,10 +5,13 @@ struct ThreePaneLayout<Sidebar: View, Center: View, Right: View>: View {
     @Binding var rightWidth: Double
     let sidebarVisible: Bool
     let rightVisible: Bool
+    /// Width of the rail strip drawn in place of a hidden right pane. `nil`
+    /// hides the right pane entirely, which is the long-standing behavior.
+    var rightCollapsedWidth: Double? = nil
     let onWidthsChanged: () -> Void
     @ViewBuilder let sidebar: () -> Sidebar
     @ViewBuilder let center: (_ rightVisible: Bool) -> Center
-    @ViewBuilder let right: () -> Right
+    @ViewBuilder let right: (_ collapsed: Bool) -> Right
 
     // Gutter drags mutate only this transient state, so the drag invalidates
     // just this view. The bindings write into app-wide observable config —
@@ -29,12 +32,13 @@ struct ThreePaneLayout<Sidebar: View, Center: View, Right: View>: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let sizing = ThreePaneSizing.calculate(
+            let railSizing = RightRailSizing.calculate(
                 availableWidth: Double(proxy.size.width),
                 preferredSidebarWidth: transientSidebarWidth ?? sidebarWidth,
                 preferredRightWidth: transientRightWidth ?? rightWidth,
                 sidebarPreferredVisible: sidebarVisible,
                 rightPreferredVisible: rightVisible,
+                railWidth: rightCollapsedWidth,
                 configuration: ThreePaneSizing.Configuration(
                     sidebarMin: sidebarMin,
                     sidebarMax: sidebarMax,
@@ -44,6 +48,7 @@ struct ThreePaneLayout<Sidebar: View, Center: View, Right: View>: View {
                     dividerWidth: dividerWidth
                 )
             )
+            let sizing = railSizing.sizing
 
             // Pixel-align the side panes; the center absorbs the ≤1px
             // rounding remainder so the row still fills the window exactly.
@@ -54,7 +59,7 @@ struct ThreePaneLayout<Sidebar: View, Center: View, Right: View>: View {
                 + (sizing.rightVisible ? dividerWidth : 0)
             let alignedCenterWidth = max(
                 0,
-                Double(proxy.size.width) - dividerTotal
+                Double(proxy.size.width) - dividerTotal - railSizing.railWidth
                     - (sizing.sidebarVisible ? alignedSidebarWidth : 0)
                     - (sizing.rightVisible ? alignedRightWidth : 0)
             )
@@ -116,8 +121,12 @@ struct ThreePaneLayout<Sidebar: View, Center: View, Right: View>: View {
                             rightDragStartWidth = nil
                         }
                     )
-                    right()
+                    right(false)
                         .frame(width: CGFloat(alignedRightWidth))
+                        .frame(maxHeight: .infinity)
+                } else if railSizing.railWidth > 0 {
+                    right(true)
+                        .frame(width: CGFloat(railSizing.railWidth))
                         .frame(maxHeight: .infinity)
                 }
             }

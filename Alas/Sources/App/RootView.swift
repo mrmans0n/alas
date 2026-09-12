@@ -182,12 +182,17 @@ struct RootView: View {
                 rightVisible: state.config.rightPaneVisible
                     && rightPaneSelection.showsRightPane
                     && !state.suppressesRestoredRightPaneAfterAbandonedStartup,
+                rightCollapsedWidth: state.config.rightPaneRailEnabled
+                    && rightPaneSelection.showsRightPane
+                    && !state.suppressesRestoredRightPaneAfterAbandonedStartup
+                    ? Double(RightPaneRail.width)
+                    : nil,
                 onWidthsChanged: { state.saveConfig() },
                 sidebar: { sidebarContent },
                 center: { effectiveRightPaneVisible in
                     centerContent(effectiveRightPaneVisible: effectiveRightPaneVisible)
                 },
-                right: { rightContent(selection: rightPaneSelection) }
+                right: { collapsed in rightContent(selection: rightPaneSelection, collapsed: collapsed) }
             )
         }
     }
@@ -224,7 +229,7 @@ struct RootView: View {
     }
 
     @ViewBuilder
-    private func rightContent(selection: RightPaneSelectionState) -> some View {
+    private func rightContent(selection: RightPaneSelectionState, collapsed: Bool) -> some View {
         switch selection {
         case .empty:
             EmptyView()
@@ -254,11 +259,11 @@ struct RootView: View {
                 }
             )
         case .creating(let wt):
-            RightPaneTransitionalView(state: state, worktree: wt, kind: .creating)
+            RightPaneTransitionalView(state: state, worktree: wt, kind: .creating, collapsed: collapsed)
         case .deleting(let wt):
-            RightPaneTransitionalView(state: state, worktree: wt, kind: .deleting)
+            RightPaneTransitionalView(state: state, worktree: wt, kind: .deleting, collapsed: collapsed)
         case .createFailed(let wt):
-            RightPaneTransitionalView(state: state, worktree: wt, kind: .createFailed)
+            RightPaneTransitionalView(state: state, worktree: wt, kind: .createFailed, collapsed: collapsed)
         }
     }
 

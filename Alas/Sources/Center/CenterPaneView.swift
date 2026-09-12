@@ -355,7 +355,7 @@ struct CenterPaneView: View {
                     state.config.rightPaneVisible = true
                     state.saveConfig()
                 },
-                rightSidebarHidden: !state.config.rightPaneVisible,
+                rightSidebarHidden: !state.config.rightPaneVisible && !state.config.rightPaneRailEnabled,
                 onRevealSidebar: {
                     state.config.sidebarVisible = true
                     state.saveConfig()
