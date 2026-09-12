@@ -422,6 +422,35 @@ struct WorktreeCheckpointStoreTests {
         #expect(journalNames.isEmpty)
     }
 
+    @Test func recoverableJournalsUnlinksDirectoryTargetingSymlinkDuringTerminalCleanup() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let operationID = UUID()
+        let staging = root.appendingPathComponent(".alas-checkpoint-restore-\(operationID.uuidString.lowercased())", isDirectory: true)
+        let target = root.appendingPathComponent("outside-target", isDirectory: true)
+        try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        try Data("keep".utf8).write(to: target.appendingPathComponent("kept.txt"))
+        try FileManager.default.createSymbolicLink(at: staging.appendingPathComponent("backup-link"), withDestinationURL: target)
+        let store = WorktreeCheckpointStore(root: root)
+        let journal = CheckpointRestoreJournal(
+            id: operationID,
+            lineageID: lineageA,
+            checkpointID: UUID(),
+            recoveryCheckpointID: UUID(),
+            phase: .completed,
+            stagingRoot: staging.path,
+            selectedPaths: ["File.swift"],
+            expectedFingerprint: "fingerprint",
+            expectedIndexChecksum: "checksum"
+        )
+        try await store.writeJournal(journal)
+
+        #expect(try await store.recoverableJournals(lineageID: lineageA).isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: staging.path))
+        #expect(try Data(contentsOf: target.appendingPathComponent("kept.txt")) == Data("keep".utf8))
+    }
+
     @Test func recoverableJournalsKeepTerminalJournalWhenStagingCleanupFails() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

@@ -753,14 +753,22 @@ actor WorktreeCheckpointStore {
     private func removeDirectoryTreeIfPresent(_ url: URL) throws {
         guard exists(url) else { return }
         for child in try fileSystem.list(url) {
-            var isDirectory: ObjCBool = false
-            if FileManager.default.fileExists(atPath: child.path, isDirectory: &isDirectory), isDirectory.boolValue {
+            if try isPhysicalDirectory(child) {
                 try removeDirectoryTreeIfPresent(child)
             } else {
                 try fileSystem.removeIfPresent(child)
             }
         }
         try fileSystem.removeIfPresent(url)
+    }
+
+    private func isPhysicalDirectory(_ url: URL) throws -> Bool {
+        var attributes = stat()
+        guard Darwin.lstat(url.path, &attributes) == 0 else {
+            if errno == ENOENT { return false }
+            throw CheckpointFileSystemError.posix(operation: "lstat", code: errno)
+        }
+        return attributes.st_mode & S_IFMT == S_IFDIR
     }
 
     private func quarantine(_ source: URL, in directory: URL, name: String) throws {
