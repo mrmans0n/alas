@@ -171,6 +171,24 @@ struct MinimapTests {
         #expect(drawing.marks.count < 3_000)
     }
 
+    @Test("Editor previews cap detailed marks for dense generated files")
+    func editorPreviewDetailBounded() {
+        let line = String(repeating: "x", count: 512)
+        let text = NSAttributedString(string: Array(repeating: line, count: 4_096).joined(separator: "\n"))
+        #expect(MinimapDrawing.editorText(text).marks.count <= 16_384)
+    }
+
+    @Test("Transcript previews cap detailed marks across sampled messages")
+    @MainActor func transcriptPreviewDetailBounded() throws {
+        let theme = try Theme.loadBundled(id: "cool-slate")
+        let transcript = ACPTranscript()
+        let text = String(repeating: "x", count: 4_096)
+        transcript.messages = (0..<400).map { _ in
+            .agent(id: UUID(), StreamingText(text))
+        }
+        #expect(ACPTranscriptMinimap().drawing(transcript: transcript, theme: theme).marks.count <= 13_000)
+    }
+
     @Test("Character blocks preserve indentation, gaps, and attributed syntax colors")
     func syntaxBlocks() {
         let text = NSMutableAttributedString(string: "  let x\n\t42\n", attributes: [.foregroundColor: NSColor.white])

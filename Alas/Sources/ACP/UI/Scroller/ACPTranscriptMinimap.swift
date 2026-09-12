@@ -2,6 +2,8 @@ import AppKit
 
 @MainActor
 final class ACPTranscriptMinimap {
+    private static let maximumDetailedMarks = 12_288
+
     private struct Entry {
         let message: ACPMessage
         let revision: UInt64
@@ -85,7 +87,9 @@ final class ACPTranscriptMinimap {
             result.marks.append(.init(rect: rect, color: color))
         }
         var retained: [ACPMessage.StableIdentityKey: Entry] = [:]
-        for index in indices.sorted() {
+        let sampledIndices = indices.sorted()
+        var detailedMarksRemaining = Self.maximumDetailedMarks
+        for (samplePosition, index) in sampledIndices.enumerated() {
             let message = transcript.messages[index]
             let revision: UInt64
             switch message {
@@ -102,10 +106,17 @@ final class ACPTranscriptMinimap {
             retained[key] = entry
             let y = CGFloat(transcript.messageIndexOffset + index) * slot
             let scale = min(1, (slot - 4) / max(1, entry.drawing.height))
-            result.marks.append(contentsOf: entry.drawing.marks.map {
-                .init(rect: CGRect(x: $0.rect.minX, y: y + $0.rect.minY * scale,
-                                   width: $0.rect.width, height: $0.rect.height * scale), color: $0.color)
-            })
+            let entriesRemaining = sampledIndices.count - samplePosition
+            let detailLimit = max(1, detailedMarksRemaining / entriesRemaining)
+            let detailStride = max(1, Int(ceil(Double(entry.drawing.marks.count) / Double(detailLimit))))
+            for (detailIndex, mark) in entry.drawing.marks.enumerated() where detailIndex % detailStride == 0 {
+                result.marks.append(.init(
+                    rect: CGRect(x: mark.rect.minX, y: y + mark.rect.minY * scale,
+                                 width: mark.rect.width, height: mark.rect.height * scale),
+                    color: mark.color
+                ))
+                detailedMarksRemaining -= 1
+            }
         }
         entries = retained
         cachedDrawing = result

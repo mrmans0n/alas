@@ -15,6 +15,8 @@ struct MinimapGeometry {
 }
 
 struct MinimapDrawing {
+    private static let maximumEditorDetailMarks = 16_384
+
     struct Mark {
         var rect: CGRect
         let color: NSColor
@@ -42,6 +44,8 @@ struct MinimapDrawing {
         // Keep drawing memory bounded for generated files. CoreText lays out only
         // sampled line prefixes, using the editor's fonts, tab stops and colors.
         let stride = max(1, Int(ceil(Double(lines.count) / 4096)))
+        let sampledLineCount = (lines.count - 1) / stride + 1
+        let marksPerLine = max(1, Self.maximumEditorDetailMarks / sampledLineCount)
         for index in lines.indices where index % stride == 0 || index == lines.count - 1 {
             let range = lines[index]
             guard range.length > 0 else { continue }
@@ -50,16 +54,25 @@ struct MinimapDrawing {
             let font = attributed.attribute(.font, at: 0, effectiveRange: nil) as? NSFont ?? .monospacedSystemFont(ofSize: 13, weight: .regular)
             let cell = max(1, ("M" as NSString).size(withAttributes: [.font: font]).width)
             let line = CTLineCreateWithAttributedString(attributed)
+            let detailStride = max(1, Int(ceil(Double(min(prefix.length, columns)) / Double(marksPerLine))))
             var offset = 0
+            var characterIndex = 0
+            var marksRemaining = marksPerLine
             for character in attributed.string {
                 let length = String(character).utf16.count
-                defer { offset += length }
+                defer {
+                    offset += length
+                    characterIndex += 1
+                }
                 let x = CTLineGetOffsetForStringIndex(line, offset, nil) / cell
                 guard x < CGFloat(columns) else { break }
+                guard characterIndex % detailStride == 0 else { continue }
                 guard !character.isWhitespace else { continue }
+                guard marksRemaining > 0 else { break }
                 let end = CTLineGetOffsetForStringIndex(line, offset + length, nil) / cell
                 let color = attributed.attribute(.foregroundColor, at: offset, effectiveRange: nil) as? NSColor ?? .labelColor
                 result.marks.append(Mark(rect: CGRect(x: x, y: CGFloat(index * 3), width: max(0.5, min(CGFloat(columns) - x, abs(end - x) * 0.85)), height: 2), color: color))
+                marksRemaining -= 1
             }
         }
         return result
