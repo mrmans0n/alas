@@ -47,6 +47,32 @@ struct CheckpointCoordinationTests {
         #expect(!state.checkpointCoordination(for: worktree, selectedPaths: []).otherGitMutationActive)
     }
 
+    @Test func appStateBlocksDirtyBuffersBelowSelectedCheckpointPaths() async throws {
+        let state = AppState()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("checkpoint-dirty-descendant-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("config", isDirectory: true), withIntermediateDirectories: true)
+        try "saved".write(to: root.appendingPathComponent("config/local.json"), atomically: true, encoding: .utf8)
+        let worktree = Worktree(
+            id: "dirty-descendant-worktree",
+            projectId: "project",
+            name: "main",
+            branch: "main",
+            path: root,
+            status: .clean,
+            lastActivity: .now,
+            lineageID: "lineage"
+        )
+        let tab = state.tabs.openEditor(worktreeId: worktree.id, relativePath: "config/local.json", revealLine: nil, revealCharacter: nil)
+        let buffer = state.tabs.buffer(worktreeId: worktree.id, tabId: tab.id, worktreeRoot: root, relativePath: "config/local.json")
+        await buffer.awaitLoadForTesting()
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "dirty ")
+
+        let coordination = state.checkpointCoordination(for: worktree, selectedPaths: ["config"])
+
+        #expect(coordination.dirtyEditorPaths == ["config/local.json"])
+    }
+
     @Test func appStateDisablesEditorFileWritesDuringCheckpointRecoveryLease() async throws {
         let state = AppState()
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("checkpoint-editor-lease-\(UUID().uuidString)")

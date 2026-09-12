@@ -34,6 +34,8 @@ actor WorktreeCheckpointStore {
     private let fileSystem: any CheckpointFileSystem
     private let limits: Limits
     private let lockStaleAge: TimeInterval = 120
+    private var verifiedBlobReferences: [String: Set<CheckpointBlobReference>] = [:]
+    private var blobHashValidationCount = 0
 
     init(root: URL = Paths.checkpointsRoot, fileSystem: any CheckpointFileSystem = LiveCheckpointFileSystem(), limits: Limits = .init()) {
         self.root = root
@@ -47,6 +49,10 @@ actor WorktreeCheckpointStore {
         return try withLineageLock(lineageID: lineageID) {
             try catalogUnlocked(lineageID: lineageID)
         }
+    }
+
+    func blobHashValidationCountForTesting() -> Int {
+        blobHashValidationCount
     }
 
     private func catalogUnlocked(lineageID: String) throws -> CheckpointCatalogSnapshot {
@@ -163,7 +169,7 @@ actor WorktreeCheckpointStore {
         try validate(lineageID)
         try prepare(lineageID)
         let manifest = try readManifest(id: id, lineageID: lineageID)
-        try validate(manifest: manifest, layout: paths(lineageID))
+        try validate(manifest: manifest, layout: paths(lineageID), lineageID: lineageID)
         return manifest
     }
 
@@ -380,7 +386,7 @@ actor WorktreeCheckpointStore {
         Set(manifest.paths.flatMap { [$0.head.blob, $0.index.blob, $0.worktree.blob].compactMap { $0 } })
     }
 
-    private func validate(manifest: WorktreeCheckpointManifest, layout: Layout, verifyBlobs: Bool = true) throws {
+    private func validate(manifest: WorktreeCheckpointManifest, layout: Layout, lineageID: String? = nil, verifyBlobs: Bool = true) throws {
         try manifest.validate()
         for path in manifest.paths { _ = try fileSystem.validateRelativePath(path.relativePath, under: layout.root) }
         for exclusion in manifest.exclusions { _ = try fileSystem.validateRelativePath(exclusion.relativePath, under: layout.root) }
@@ -391,9 +397,20 @@ actor WorktreeCheckpointStore {
         }
         if verifyBlobs {
             for reference in references(in: manifest) {
-                guard try blobMatchesReference(reference, layout: layout) else { throw CheckpointStoreError.blobDoesNotMatchReference }
+                guard try blobIsValid(reference, layout: layout, lineageID: lineageID ?? manifest.lineageID) else {
+                    throw CheckpointStoreError.blobDoesNotMatchReference
+                }
             }
         }
+    }
+
+    private func blobIsValid(_ reference: CheckpointBlobReference, layout: Layout, lineageID: String) throws -> Bool {
+        if verifiedBlobReferences[lineageID]?.contains(reference) == true {
+            return try blobFileSize(reference, layout: layout) == reference.byteCount
+        }
+        guard try blobMatchesReference(reference, layout: layout) else { return false }
+        verifiedBlobReferences[lineageID, default: []].insert(reference)
+        return true
     }
 
     private func readManifest(id: CheckpointID, lineageID: String) throws -> WorktreeCheckpointManifest {
@@ -420,7 +437,7 @@ actor WorktreeCheckpointStore {
             do {
                 let manifest = try readManifest(id: id, lineageID: lineageID)
                 do {
-                    try validate(manifest: manifest, layout: layout)
+                    try validate(manifest: manifest, layout: layout, lineageID: lineageID)
                     result.valid.append(manifest)
                 } catch {
                     result.unavailable.append(unavailableSummary(for: manifest, error: error))
@@ -510,6 +527,7 @@ actor WorktreeCheckpointStore {
     private func blobMatchesReference(_ reference: CheckpointBlobReference, layout: Layout) throws -> Bool {
         let blob = blobURL(reference, layout: layout)
         guard try blobFileSize(reference, layout: layout) == reference.byteCount else { return false }
+        blobHashValidationCount += 1
         let handle = try FileHandle(forReadingFrom: blob)
         defer { try? handle.close() }
 

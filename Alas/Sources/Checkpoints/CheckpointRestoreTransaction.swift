@@ -234,7 +234,9 @@ struct CheckpointRestoreTransaction: Sendable {
         try await validateJournal(journal, target: target)
         if coordination.otherGitMutationActive { throw CheckpointRestoreError.blocked(.otherGitMutation) }
         if coordination.activeTerminalCount > 0 || coordination.activeACPCount > 0 { throw CheckpointRestoreError.blocked(.activeSession) }
-        if !coordination.dirtyEditorPaths.isDisjoint(with: journal.selectedPaths) { throw CheckpointRestoreError.blocked(.dirtyEditorBuffer) }
+        if !coordination.dirtyPathsOverlapping(Set(journal.selectedPaths)).isEmpty {
+            throw CheckpointRestoreError.blocked(.dirtyEditorBuffer)
+        }
         if journal.preparedIndexChecksum == nil && journal.stagingNames.isEmpty && journal.phase == .prepared
             && journal.completedPaths.isEmpty && journal.pendingPath == nil && journal.ownedIndexLockPath == nil
             && journal.pendingIndexLock == nil {

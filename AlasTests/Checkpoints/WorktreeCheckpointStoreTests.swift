@@ -629,6 +629,27 @@ struct WorktreeCheckpointStoreTests {
         #expect(summary?.untrackedFileCount == 1)
     }
 
+    @Test func catalogRefreshCachesSharedBlobIntegrityValidation() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bytes = Data(repeating: 0x41, count: 1024)
+        let first = try publication(lineageID: lineageA, label: "First", bytes: bytes, createdAt: Date(timeIntervalSince1970: 1))
+        let second = try publication(lineageID: lineageA, label: "Second", bytes: bytes, createdAt: Date(timeIntervalSince1970: 2))
+        let publishingStore = WorktreeCheckpointStore(root: root)
+        _ = try await publishingStore.publish(first)
+        _ = try await publishingStore.publish(second)
+
+        let store = WorktreeCheckpointStore(root: root)
+        let before = await store.blobHashValidationCountForTesting()
+        _ = try await store.catalog(lineageID: lineageA)
+        let afterFirstRefresh = await store.blobHashValidationCountForTesting()
+        _ = try await store.catalog(lineageID: lineageA)
+        let afterSecondRefresh = await store.blobHashValidationCountForTesting()
+
+        #expect(afterFirstRefresh - before == 1)
+        #expect(afterSecondRefresh == afterFirstRefresh)
+    }
+
     private func publication(lineageID: String, label: String, bytes: Data, kind: CheckpointKind = .manual, createdAt: Date = Date(timeIntervalSince1970: 1_700_000_000)) throws -> CheckpointPublication {
         let blob = CheckpointBlobReference.make(for: bytes)
         let manifest = try WorktreeCheckpointManifest(

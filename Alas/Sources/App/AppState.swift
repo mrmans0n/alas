@@ -9264,8 +9264,12 @@ final class AppState {
         }
 
         let pane = rightPaneStore.activeState(worktreeId: worktree.id)
+        let dirtyEditorPaths = CheckpointCoordinationSnapshot.overlappingPaths(
+            dirtyPaths: tabs.unsavedRelativePaths(forWorktree: worktree.id),
+            selectedPaths: selectedPaths
+        )
         return .init(
-            dirtyEditorPaths: tabs.unsavedRelativePaths(forWorktree: worktree.id).intersection(selectedPaths),
+            dirtyEditorPaths: dirtyEditorPaths,
             activeTerminalCount: terminalCount,
             activeACPCount: acpCount,
             otherGitMutationActive: (pane?.hasOtherGitMutationInFlight ?? false) || hasCenterGitMutationInFlight(worktreeId: worktree.id),

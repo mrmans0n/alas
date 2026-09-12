@@ -17,6 +17,27 @@ struct CheckpointCoordinationSnapshot: Equatable, Sendable {
         guard let workspaceName else { return "This repository only" }
         return "Only \(repositoryName)'s selected worktree in \(workspaceName) is in scope"
     }
+
+    func dirtyPathsOverlapping(_ selectedPaths: Set<String>) -> Set<String> {
+        Self.overlappingPaths(dirtyPaths: dirtyEditorPaths, selectedPaths: selectedPaths)
+    }
+
+    static func overlappingPaths(dirtyPaths: Set<String>, selectedPaths: Set<String>) -> Set<String> {
+        Set(dirtyPaths.filter { dirtyPath in
+            selectedPaths.contains { pathsOverlap(dirtyPath, $0) }
+        })
+    }
+
+    static func pathsOverlap(_ lhs: String, _ rhs: String) -> Bool {
+        let lhs = normalizedRelativePath(lhs)
+        let rhs = normalizedRelativePath(rhs)
+        guard !lhs.isEmpty, !rhs.isEmpty else { return lhs == rhs }
+        return lhs == rhs || lhs.hasPrefix(rhs + "/") || rhs.hasPrefix(lhs + "/")
+    }
+
+    private static func normalizedRelativePath(_ path: String) -> String {
+        path.split(separator: "/", omittingEmptySubsequences: true).joined(separator: "/")
+    }
 }
 
 enum CheckpointRestoreBlocker: Int, Hashable, Sendable, CaseIterable {
@@ -147,7 +168,7 @@ struct CheckpointRestorePreview: Identifiable, Equatable, Sendable {
         if manifest.lineageID != current.lineageID { blockers.insert(.lineageMismatch) }
         if manifest.headOID != current.headOID { blockers.insert(.changedHEAD) }
         if coordination.otherGitMutationActive { blockers.insert(.otherGitMutation) }
-        if !coordination.dirtyEditorPaths.isDisjoint(with: selectedPaths) { blockers.insert(.dirtyEditorBuffer) }
+        if !coordination.dirtyPathsOverlapping(selectedPaths).isEmpty { blockers.insert(.dirtyEditorBuffer) }
         if coordination.activeTerminalCount > 0 || coordination.activeACPCount > 0 { blockers.insert(.activeSession) }
         return .init(id: UUID(), checkpointID: manifest.id, checkpointLabel: manifest.label, currentFingerprint: current.fingerprint,
                      groups: groups.sorted { $0.primaryPath < $1.primaryPath }, blocker: .highestPriority(in: blockers),
