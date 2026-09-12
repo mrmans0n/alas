@@ -47,7 +47,10 @@ struct AgentSidebarRow: Identifiable, Equatable {
     let contextUsage: ACPUsageInfo?
     let plan: AgentSidebarPlanProgress?
     let host: String?
-    let createdAt: Date
+    /// The timestamp shown in the metadata caption: creation time for active
+    /// rows, last-activity time for history rows (`.distantPast` for
+    /// terminal rows, which hide the segment entirely).
+    let activityAt: Date
     let isLiveACP: Bool
     var delegation: AgentSidebarDelegation?
 
@@ -60,7 +63,7 @@ struct AgentSidebarRow: Identifiable, Equatable {
         contextUsage: ACPUsageInfo? = nil,
         plan: AgentSidebarPlanProgress? = nil,
         host: String? = nil,
-        createdAt: Date,
+        activityAt: Date,
         isLive: Bool,
         delegation: AgentSidebarDelegation? = nil
     ) -> Self {
@@ -73,7 +76,7 @@ struct AgentSidebarRow: Identifiable, Equatable {
             contextUsage: contextUsage,
             plan: plan,
             host: host,
-            createdAt: createdAt,
+            activityAt: activityAt,
             isLiveACP: isLive,
             delegation: delegation
         )
@@ -96,7 +99,7 @@ struct AgentSidebarRow: Identifiable, Equatable {
             contextUsage: nil,
             plan: nil,
             host: host,
-            createdAt: .distantPast,
+            activityAt: .distantPast,
             isLiveACP: false,
             delegation: nil
         )
@@ -226,12 +229,12 @@ struct AgentSidebarRollupBuilder {
             id: session.id,
             agentID: session.agentId,
             title: session.title,
-            model: session.currentModel,
+            model: session.currentModel.map(AgentSidebarModelDisplay.shortName(for:)),
             state: state(for: session),
             contextUsage: session.contextUsage,
             plan: planProgress(for: session.transcript.currentPlan),
             host: remoteHost,
-            createdAt: session.createdAt,
+            activityAt: session.createdAt,
             isLive: true
         )
     }
@@ -241,10 +244,10 @@ struct AgentSidebarRollupBuilder {
             id: row.id,
             agentID: row.agentId,
             title: row.title,
-            model: row.currentModel,
+            model: row.currentModel.map(AgentSidebarModelDisplay.shortName(for:)),
             state: .detached,
             host: remoteHost,
-            createdAt: Date(timeIntervalSince1970: TimeInterval(row.createdAt)),
+            activityAt: Date(timeIntervalSince1970: TimeInterval(row.updatedAt)),
             isLive: false
         )
     }

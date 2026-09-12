@@ -186,21 +186,37 @@ struct AgentSidebarRowView: View {
 
     private var metadata: some View {
         HStack(spacing: 5) {
-            Text(agentName)
-                .fontWeight(.medium)
-            if let model = row.model {
+            // The logo tile already identifies the harness, so the name would
+            // just repeat it; only the SF-symbol fallback needs the caption.
+            if agent == nil {
+                Text(agentName)
+                    .fontWeight(.medium)
+                    .fixedSize(horizontal: true, vertical: false)
                 Text("·")
-                Text(model)
+                    .fixedSize(horizontal: true, vertical: false)
             }
-            if row.createdAt != .distantPast {
+            if let model = row.model {
+                Text(model)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            if row.activityAt != .distantPast {
                 Text("·")
-                Text(row.createdAt, style: .relative)
+                    .fixedSize(horizontal: true, vertical: false)
+                TimelineView(.periodic(from: row.activityAt, by: 60)) { context in
+                    Text(AgentSidebarRelativeTime.compact(from: row.activityAt, to: context.date))
+                }
+                .fixedSize(horizontal: true, vertical: false)
             }
             if let host = row.host {
                 Text("·")
-                Image(systemName: "network")
-                    .accessibilityHidden(true)
-                Text(host)
+                    .fixedSize(horizontal: true, vertical: false)
+                HStack(spacing: 3) {
+                    Image(systemName: "network")
+                        .accessibilityHidden(true)
+                    Text(AgentSidebarHostDisplay.shortName(for: host))
+                }
+                .fixedSize(horizontal: true, vertical: false)
             }
         }
         .font(.system(size: 10))
@@ -382,11 +398,12 @@ struct AgentSidebarRowView: View {
         if let model = row.model {
             values.append(model)
         }
-        if row.createdAt != .distantPast {
-            values.append("created \(row.createdAt.formatted(.relative(presentation: .named)))")
+        if row.activityAt != .distantPast {
+            let verb = row.state == .detached ? "last active" : "created"
+            values.append("\(verb) \(row.activityAt.formatted(.relative(presentation: .named)))")
         }
         if let host = row.host {
-            values.append("host \(host)")
+            values.append("host \(AgentSidebarHostDisplay.shortName(for: host))")
         }
         switch row.delegation {
         case .parent(let childCount):

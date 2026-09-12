@@ -44,7 +44,7 @@ struct AgentSidebarRollupTests {
 
         let row = try! #require(rollup.active.first)
         #expect(row.id == .acp("acp-a"))
-        #expect(row.model == "gpt-5")
+        #expect(row.model == "GPT 5")
         #expect(row.contextUsage?.used == 45_000)
         #expect(row.plan == .init(completed: 1, total: 2, currentStep: "Test isolation"))
         #expect(row.host == "builder.example")
