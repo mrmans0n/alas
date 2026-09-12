@@ -117,6 +117,7 @@ struct CheckpointRestorePreview: Identifiable, Equatable, Sendable {
                 for group in sourceGroups where !members.isDisjoint(with: group.memberPaths) {
                     members.formUnion(group.memberPaths)
                 }
+                members = structuralRestoreMembers(for: members, current: current, saved: saved)
             }
             let savedGroup = manifest.groups.first { !members.isDisjoint(with: $0.memberPaths) }
             let rename = sourceGroups.first { $0.renameSource != nil && !members.isDisjoint(with: $0.memberPaths) }
@@ -131,7 +132,7 @@ struct CheckpointRestorePreview: Identifiable, Equatable, Sendable {
             var effects: [CheckpointRestoreEffect] = []
             for member in members.sorted() {
                 guard let now = current.paths[member] else { throw CheckpointCaptureError.missingSelectedPath(member) }
-                let desired = saved[member] ?? .init(relativePath: member, head: now.head, index: now.head, worktree: now.head)
+                let desired = desiredState(for: member, members: members, saved: saved, current: current)
                 effects.append(.init(relativePath: member, layer: .index, head: desired.head, before: now.index,
                                      after: selected ? desired.index : now.index, removesUntrackedFile: false))
                 effects.append(.init(relativePath: member, layer: .worktree, head: desired.head, before: now.worktree,
@@ -152,6 +153,40 @@ struct CheckpointRestorePreview: Identifiable, Equatable, Sendable {
         return .init(id: UUID(), checkpointID: manifest.id, checkpointLabel: manifest.label, currentFingerprint: current.fingerprint,
                      groups: groups.sorted { $0.primaryPath < $1.primaryPath }, blocker: .highestPriority(in: blockers),
                      scopeDescription: coordination.scopeDescription, selectedGroupIDs: selected)
+    }
+
+    private static func structuralRestoreMembers(for members: Set<String>,
+                                                 current: WorktreeStateSnapshot,
+                                                 saved: [String: CheckpointPathState]) -> Set<String> {
+        var result = members
+        let availablePaths = Set(current.paths.keys).union(saved.keys)
+        for path in members {
+            result.formUnion(availablePaths.filter { $0.hasPrefix(path + "/") })
+            var components = path.split(separator: "/").map(String.init)
+            while components.count > 1 {
+                components.removeLast()
+                let ancestor = components.joined(separator: "/")
+                if current.paths[ancestor] != nil || saved[ancestor] != nil {
+                    result.insert(ancestor)
+                }
+            }
+        }
+        return result
+    }
+
+    private static func desiredState(for path: String,
+                                     members: Set<String>,
+                                     saved: [String: CheckpointPathState],
+                                     current: WorktreeStateSnapshot) -> CheckpointPathState {
+        if let state = saved[path] { return state }
+        guard let now = current.paths[path] else {
+            return .init(relativePath: path, head: .absent, index: .absent, worktree: .absent)
+        }
+        let isSyntheticAncestor = members.contains { $0.hasPrefix(path + "/") }
+            && now.index == now.head
+            && now.worktree == now.head
+        return .init(relativePath: path, head: now.head, index: now.head,
+                     worktree: isSyntheticAncestor ? .absent : now.head)
     }
 }
 

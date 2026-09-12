@@ -1271,6 +1271,12 @@ final class TabsManager {
         commitPublishSessions[tabId]
     }
 
+    func hasRunningCommitPublish(worktreeId: String) -> Bool {
+        tabs(forWorktree: worktreeId).contains { tab in
+            commitPublishSessions[tab.id]?.isRunning == true
+        }
+    }
+
     @discardableResult
     func runCommitPublish(
         worktreeId: String,

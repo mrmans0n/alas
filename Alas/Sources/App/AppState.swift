@@ -114,6 +114,7 @@ final class AppState {
     private(set) var isReopeningClosedTab = false
     var canReopenClosedTab: Bool { !isReopeningClosedTab && !closedTabHistory.isEmpty }
     private var unpersistedGGWorktreeModes: [String: [String: GGWorktreeMode]] = [:]
+    private var centerGitMutationCounts: [String: Int] = [:]
     var spacesManager: SpacesManager
     var workspacesManager: WorkspacesManager
     @ObservationIgnored private let workspaceStore: WorkspaceStore
@@ -153,6 +154,23 @@ final class AppState {
     struct OpenedTerminalSession {
         let id: String
         let foregroundPid: () -> pid_t?
+    }
+
+    func beginCenterGitMutation(worktreeId: String) {
+        centerGitMutationCounts[worktreeId, default: 0] += 1
+    }
+
+    func endCenterGitMutation(worktreeId: String) {
+        let next = max((centerGitMutationCounts[worktreeId] ?? 0) - 1, 0)
+        if next == 0 {
+            centerGitMutationCounts[worktreeId] = nil
+        } else {
+            centerGitMutationCounts[worktreeId] = next
+        }
+    }
+
+    func hasCenterGitMutationInFlight(worktreeId: String) -> Bool {
+        (centerGitMutationCounts[worktreeId] ?? 0) > 0 || tabs.hasRunningCommitPublish(worktreeId: worktreeId)
     }
 
     typealias TerminalSessionOpener = (
@@ -9102,7 +9120,7 @@ final class AppState {
             dirtyEditorPaths: tabs.unsavedRelativePaths(forWorktree: worktree.id).intersection(selectedPaths),
             activeTerminalCount: terminalCount,
             activeACPCount: acpCount,
-            otherGitMutationActive: pane?.hasOtherGitMutationInFlight ?? false,
+            otherGitMutationActive: (pane?.hasOtherGitMutationInFlight ?? false) || hasCenterGitMutationInFlight(worktreeId: worktree.id),
             scopeDescription: CheckpointCoordinationSnapshot.scopeDescription(
                 repositoryName: repositoryName,
                 workspaceName: workspaceName

@@ -46,6 +46,35 @@ struct CheckpointRestorePreviewTests {
         #expect(try repo.disk("unselected.swift") == Data("keep disk\n".utf8))
     }
 
+    @Test func previewShowsStructuralDependenciesForFileDirectoryRestore() async throws {
+        let repo = try await CheckpointTestRepository.make()
+        defer { repo.remove() }
+        let root = URL(fileURLWithPath: "/private/tmp/checkpoint-structural-preview-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try repo.write("baseline config", to: "config")
+        try await repo.commitAll("baseline")
+        try FileManager.default.removeItem(at: repo.root.appendingPathComponent("config"))
+        try repo.write("saved override", to: "config/local.json")
+        let service = WorktreeCheckpointService(store: .init(root: root))
+        let checkpoint = try await service.createManual(target: repo.target, label: "Saved")
+        try await repo.git(["restore", "--source=HEAD", "--worktree", "."])
+
+        let preview = try await service.restorePreview(target: repo.target, id: checkpoint.id, coordination: .clear)
+
+        let group = try #require(preview.groups.first { $0.memberPaths.contains("config/local.json") })
+        #expect(group.memberPaths == ["config", "config/local.json"])
+        #expect(group.effects.map(\.relativePath).contains("config"))
+        #expect(group.effects.map(\.relativePath).contains("config/local.json"))
+
+        let blocked = try await service.restorePreview(
+            target: repo.target,
+            id: checkpoint.id,
+            coordination: .init(dirtyEditorPaths: ["config"], activeTerminalCount: 0, activeACPCount: 0,
+                                otherGitMutationActive: false, scopeDescription: "This repository only")
+        )
+        #expect(blocked.blocker == .dirtyEditorBuffer)
+    }
+
     @Test func blockersHaveDeterministicPriorityAndScope() {
         var blockers: Set<CheckpointRestoreBlocker> = [.corruptCheckpoint, .dirtyEditorBuffer, .activeSession, .otherGitMutation, .indexLock, .gitOperation, .changedHEAD, .lineageMismatch, .interruptedRestore]
         for expected: CheckpointRestoreBlocker in [.interruptedRestore, .lineageMismatch, .changedHEAD, .gitOperation, .indexLock, .otherGitMutation, .dirtyEditorBuffer, .activeSession, .corruptCheckpoint] {

@@ -62,12 +62,14 @@ struct CommitPublishWorkflowTests {
         let originalSession = try #require(manager.commitPublishSession(tabId: draft.id))
         #expect(originalSession.isRunning)
         #expect(originalSession.activity == .pushing)
+        #expect(manager.hasRunningCommitPublish(worktreeId: "remount-publish"))
 
         manager.close(worktreeId: "remount-publish", tabId: draft.id)
         let reopened = manager.openOrFocusDraftCommit(worktreeId: "remount-publish")
         let remountedSession = try #require(manager.commitPublishSession(tabId: reopened.id))
         #expect(remountedSession === originalSession)
         #expect(remountedSession.checkpoint?.nextPhase == .push)
+        #expect(manager.hasRunningCommitPublish(worktreeId: "remount-publish"))
         #expect(manager.runCommitPublish(worktreeId: "remount-publish", tabId: reopened.id,
             subject: "Another subject", body: "", amend: false, operations: operations,
             prepareDestination: { .review(target) }) == nil)
@@ -77,6 +79,7 @@ struct CommitPublishWorkflowTests {
         await gate.release()
         await task.value
         #expect(!remountedSession.isRunning)
+        #expect(!manager.hasRunningCommitPublish(worktreeId: "remount-publish"))
         #expect(remountedSession.checkpoint == nil)
         #expect(manager.commitEditorTab(worktreeId: "remount-publish", currentSha: "committed") != nil)
     }

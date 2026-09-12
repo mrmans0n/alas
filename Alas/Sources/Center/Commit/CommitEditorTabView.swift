@@ -389,9 +389,13 @@ struct CommitEditorTabView: View {
 
         busy = true
         error = nil
+        appState.beginCenterGitMutation(worktreeId: worktreeId)
 
         Task<Void, Never> { @MainActor in
-            defer { busy = false }
+            defer {
+                busy = false
+                appState.endCenterGitMutation(worktreeId: worktreeId)
+            }
             do {
                 let result = try await git.editCommit(
                     worktreePath: worktreePath,

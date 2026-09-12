@@ -23,4 +23,27 @@ struct CheckpointCoordinationTests {
 
         #expect(manager.unsavedRelativePaths(forWorktree: "worktree") == ["live.swift", "restored.swift"])
     }
+
+    @Test func appStateCountsCenterGitMutationsInCheckpointCoordination() async throws {
+        let state = AppState()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("checkpoint-center-mutation-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let worktree = Worktree(
+            id: "center-mutation-worktree",
+            projectId: "project",
+            name: "main",
+            branch: "main",
+            path: root,
+            status: .clean,
+            lastActivity: .now,
+            lineageID: "lineage"
+        )
+
+        #expect(!state.checkpointCoordination(for: worktree, selectedPaths: []).otherGitMutationActive)
+        state.beginCenterGitMutation(worktreeId: worktree.id)
+        #expect(state.checkpointCoordination(for: worktree, selectedPaths: []).otherGitMutationActive)
+        state.endCenterGitMutation(worktreeId: worktree.id)
+        #expect(!state.checkpointCoordination(for: worktree, selectedPaths: []).otherGitMutationActive)
+    }
 }

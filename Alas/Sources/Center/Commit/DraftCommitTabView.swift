@@ -101,7 +101,7 @@ struct DraftCommitTabView: View {
 
     private var publishAction: CommitPrimaryAction? {
         guard let action = presentation.publish else { return nil }
-        return .init(label: action.label, isEnabled: action.isEnabled,
+        return .init(label: action.label, isEnabled: !checkpointLeaseActive && action.isEnabled,
             help: action.help, accessibilityIdentifier: "commit-composer-publish", handler: runPublish)
     }
 
@@ -598,7 +598,9 @@ struct DraftCommitTabView: View {
     }
 
     private func runPublish() {
-        guard presentation.publish?.isEnabled == true, let rps = rightPane
+        guard !checkpointLeaseActive,
+              presentation.publish?.isEnabled == true,
+              let rps = rightPane
         else { return }
         let subjectSnapshot = subject
         let bodySnapshot = bodyText
