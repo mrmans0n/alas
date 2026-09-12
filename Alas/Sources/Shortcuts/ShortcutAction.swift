@@ -15,6 +15,7 @@ enum ShortcutGroup: String, CaseIterable, Sendable {
 enum ShortcutAction: String, CaseIterable, Codable, Sendable {
     // Global
     case searchFiles, switchRepository, findAndReplace, replaceInEditor, toggleSidebar, toggleRightPane,
+         rightPaneChangesTab, rightPaneFilesTab, rightPaneAgentTab, rightPaneRunTab,
          createProject, newWorktree, focusMainWorktree, newTerminalTab,
          launchAgent, launchAgentInTerminal, launchAgentInChat,
          openReviewPalette, runScript, selectPreviousTab, selectNextTab,
@@ -29,6 +30,7 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
     var group: ShortcutGroup {
         switch self {
         case .searchFiles, .switchRepository, .findAndReplace, .replaceInEditor, .toggleSidebar, .toggleRightPane,
+             .rightPaneChangesTab, .rightPaneFilesTab, .rightPaneAgentTab, .rightPaneRunTab,
              .createProject, .newWorktree, .focusMainWorktree, .newTerminalTab,
              .launchAgent, .launchAgentInTerminal, .launchAgentInChat,
              .openReviewPalette, .runScript, .selectPreviousTab, .selectNextTab,
@@ -53,6 +55,10 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         case .replaceInEditor:          return "Find and Replace"
         case .toggleSidebar:            return "Toggle Sidebar"
         case .toggleRightPane:          return "Toggle Right Sidebar"
+        case .rightPaneChangesTab:      return "Right Sidebar: Changes"
+        case .rightPaneFilesTab:        return "Right Sidebar: Files"
+        case .rightPaneAgentTab:        return "Right Sidebar: Agent"
+        case .rightPaneRunTab:          return "Right Sidebar: Run"
         case .createProject:            return "Create Project"
         case .newWorktree:              return "New Worktree"
         case .focusMainWorktree:        return "Focus Main Worktree"
@@ -92,6 +98,8 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         case .launchAgentInChat:      return "Open the agent launcher locked to Chat"
         case .openReviewPalette:   return "Open the review target palette"
         case .runScript:           return "Open the run script palette"
+        case .rightPaneChangesTab, .rightPaneFilesTab, .rightPaneAgentTab, .rightPaneRunTab:
+            return "Opens the right sidebar on this tab; collapses it when the tab is already showing"
         case .commitInComposer:   return "In the draft commit tab"
         default:                  return nil
         }
@@ -119,6 +127,13 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         case .replaceInEditor:          return .init(key: "f",          modifiers: [.command, .option])
         case .toggleSidebar:            return .init(key: "b",          modifiers: [.command])
         case .toggleRightPane:          return .init(key: "b",          modifiers: [.command, .option])
+        // Cmd+digit is the center tab switcher and Cmd+Option+digit selects a
+        // Space, so the right pane's tabs take the one free digit family.
+        // Cmd+Shift+digit is out: 3/4/5 are macOS screen capture.
+        case .rightPaneChangesTab:      return .init(key: "1",          modifiers: [.command, .control])
+        case .rightPaneFilesTab:        return .init(key: "2",          modifiers: [.command, .control])
+        case .rightPaneAgentTab:        return .init(key: "3",          modifiers: [.command, .control])
+        case .rightPaneRunTab:          return .init(key: "4",          modifiers: [.command, .control])
         case .createProject:            return .init(key: "n",          modifiers: [.command, .shift])
         case .newWorktree:              return .init(key: "n",          modifiers: [.command, .option])
         // Cmd+Shift+M is Toggle Markdown Preview; Cmd+Option+M is macOS Minimize All.

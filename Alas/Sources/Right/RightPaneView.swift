@@ -9,6 +9,7 @@ struct RightPaneView: View {
     let onSelectCommit: (CommitInfo) -> Void
     let onEditCommit: (CommitInfo, String) -> Void
     let onReviewCommit: (CommitInfo) -> Void
+    var collapsed: Bool = false
     @Environment(\.theme) var theme
     @State private var rps: RightPaneState?
     @State private var agentManager: ACPSessionManager?
@@ -17,6 +18,7 @@ struct RightPaneView: View {
     init(
         state: AppState,
         worktree: Worktree,
+        collapsed: Bool = false,
         onSelectChangedFile: @escaping (ChangedFile) -> Void,
         onSelectTreeFile: @escaping (FileTreeNode) -> Void,
         onSelectCommit: @escaping (CommitInfo) -> Void,
@@ -25,6 +27,7 @@ struct RightPaneView: View {
     ) {
         self.state = state
         self.worktree = worktree
+        self.collapsed = collapsed
         self.onSelectChangedFile = onSelectChangedFile
         self.onSelectTreeFile = onSelectTreeFile
         self.onSelectCommit = onSelectCommit
@@ -51,94 +54,11 @@ struct RightPaneView: View {
                 backgroundOpacity: override.backgroundOpacity
             )
             if let rps = rps, rps.worktree.id == worktree.id {
-                VStack(spacing: 0) {
-                    RightPaneTabBar(
-                        activeTab: Binding(
-                            get: { rps.activeTab },
-                            set: { rps.activeTab = $0 }
-                        ),
-                        changesCount: rps.displayChanges.count,
-                        totalAdd: rps.displayChanges.reduce(0) { $0 + $1.add },
-                        totalDel: rps.displayChanges.reduce(0) { $0 + $1.del },
-                        onHidePane: {
-                            state.config.rightPaneVisible = false
-                            state.saveConfig()
-                        },
-                        showIgnored: state.config.files.showIgnored,
-                        onToggleShowIgnored: {
-                            state.config.files.showIgnored.toggle()
-                            state.saveConfig()
-                        },
-                        showAgentTab: state.config.agentTabEnabled,
-                        showRunTab: state.config.runTabEnabled,
-                        activeRunCount: state.runRecords
-                            .records(worktreeID: worktree.id)
-                            .count { $0.status.isActive },
-                        activeAgentCount: state.agentSidebarRollup(for: worktree).active.count
-                    )
-
-                    if rps.hasLoadedSnapshot || (rps.activeTab == .agent && state.config.agentTabEnabled) {
-                        switch rps.activeTab {
-                        case .changes:
-                            ChangesTabView(
-                                rps: rps,
-                                appState: state,
-                                onSelect: onSelectChangedFile,
-                                onSelectCommit: onSelectCommit,
-                                onEditCommit: onEditCommit,
-                                onReviewCommit: onReviewCommit
-                            )
-                        case .files:
-                            FilesTabView(
-                                nodes: rps.fileTree,
-                                fileTreeGeneration: rps.fileTreeGeneration,
-                                worktreePath: worktree.path,
-                                openPaths: Binding(
-                                    get: { rps.openPaths },
-                                    set: { rps.openPaths = $0 }
-                                ),
-                                onSelectFile: onSelectTreeFile,
-                                onFileHistory: { node in
-                                    state.openFileHistory(relativePath: node.path, worktreeId: worktree.id)
-                                },
-                                onCreateFile: { path in
-                                    state.newFile(in: worktree.id, directoryPath: path) {
-                                        Task { await rps.refresh() }
-                                    }
-                                },
-                                onCreateFolder: { path in
-                                    state.newFolder(in: worktree.id, directoryPath: path) {
-                                        Task { await rps.refresh() }
-                                    }
-                                },
-                                shouldAutoLoadChildren: { path, childrenState in
-                                    rps.shouldAutoLoadFileTreeChildren(path: path, childrenState: childrenState)
-                                },
-                                onLoadChildren: { rps.loadFileTreeChildren(path: $0) },
-                                showIgnored: state.config.files.showIgnored,
-                                revealPath: rps.revealPath,
-                                revealTick: rps.revealTick,
-                                onClearReveal: { rps.clearReveal() },
-                                worktreeRoot: rps.worktree.path
-                            )
-                        case .agent:
-                            Group {
-                                if let agentManager, agentManager.worktreeId == worktree.id {
-                                    AgentWorktreeTabView(state: state, worktree: worktree, manager: agentManager)
-                                        .id(worktree.id)
-                                } else {
-                                    ProgressView("Loading sessions…")
-                                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                }
-                            }
-                        case .run:
-                            RunTabView(state: state, worktree: worktree)
-                        }
-                    } else {
-                        RightPaneLoadingSkeletonView(activeTab: rps.activeTab)
-                    }
-                }
+                presentation(rps: rps)
                 .sidebarChromeTheme(textContrast: override.textContrast)
+                .onReceive(NotificationCenter.default.publisher(for: .alasSelectRightPaneTab)) { notification in
+                    handleTabShortcut(notification, rps: rps)
+                }
                 .task(id: worktree.id) {
                     agentManager = state.acpManager(for: worktree)
                 }
@@ -277,6 +197,187 @@ struct RightPaneView: View {
         .onDisappear {
             state.rightPaneStore.deactivate()
         }
+    }
+
+    @ViewBuilder
+    private func tabContent(rps: RightPaneState) -> some View {
+        if rps.hasLoadedSnapshot || (rps.activeTab == .agent && state.config.agentTabEnabled) {
+            switch rps.activeTab {
+            case .changes:
+                ChangesTabView(
+                    rps: rps,
+                    appState: state,
+                    onSelect: onSelectChangedFile,
+                    onSelectCommit: onSelectCommit,
+                    onEditCommit: onEditCommit,
+                    onReviewCommit: onReviewCommit
+                )
+            case .files:
+                FilesTabView(
+                    nodes: rps.fileTree,
+                    fileTreeGeneration: rps.fileTreeGeneration,
+                    worktreePath: worktree.path,
+                    openPaths: Binding(
+                        get: { rps.openPaths },
+                        set: { rps.openPaths = $0 }
+                    ),
+                    onSelectFile: onSelectTreeFile,
+                    onFileHistory: { node in
+                        state.openFileHistory(relativePath: node.path, worktreeId: worktree.id)
+                    },
+                    onCreateFile: { path in
+                        state.newFile(in: worktree.id, directoryPath: path) {
+                            Task { await rps.refresh() }
+                        }
+                    },
+                    onCreateFolder: { path in
+                        state.newFolder(in: worktree.id, directoryPath: path) {
+                            Task { await rps.refresh() }
+                        }
+                    },
+                    shouldAutoLoadChildren: { path, childrenState in
+                        rps.shouldAutoLoadFileTreeChildren(path: path, childrenState: childrenState)
+                    },
+                    onLoadChildren: { rps.loadFileTreeChildren(path: $0) },
+                    showIgnored: state.config.files.showIgnored,
+                    revealPath: rps.revealPath,
+                    revealTick: rps.revealTick,
+                    onClearReveal: { rps.clearReveal() },
+                    worktreeRoot: rps.worktree.path
+                )
+            case .agent:
+                Group {
+                    if let agentManager, agentManager.worktreeId == worktree.id {
+                        AgentWorktreeTabView(state: state, worktree: worktree, manager: agentManager)
+                            .id(worktree.id)
+                    } else {
+                        ProgressView("Loading sessions…")
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                }
+            case .run:
+                RunTabView(state: state, worktree: worktree)
+            }
+        } else {
+            RightPaneLoadingSkeletonView(activeTab: rps.activeTab)
+        }
+    }
+
+    @ViewBuilder
+    private func presentation(rps: RightPaneState) -> some View {
+        if state.config.rightPaneRailEnabled {
+            HStack(spacing: 0) {
+                if !collapsed {
+                    VStack(spacing: 0) {
+                        RightPaneToolbar(
+                            tab: rps.activeTab,
+                            branch: rps.currentBranch,
+                            totalAdd: rps.displayChanges.reduce(0) { $0 + $1.add },
+                            totalDel: rps.displayChanges.reduce(0) { $0 + $1.del },
+                            activeAgentCount: agentRollup.active.count,
+                            waitingAgentCount: waitingAgentCount,
+                            runningScriptNames: runningScriptNames,
+                            showIgnored: state.config.files.showIgnored,
+                            onToggleShowIgnored: {
+                                state.config.files.showIgnored.toggle()
+                                state.saveConfig()
+                            },
+                            onSearch: { state.openSearchOverlay() }
+                        )
+                        // Hides the indicators of every SwiftUI ScrollView in
+                        // the tab bodies (Files, Agent, Run). The Changes tab
+                        // scrolls through AppKit, which this cannot reach — it
+                        // opts out via `AppKitDiffScroller.hidesScroller`.
+                        tabContent(rps: rps)
+                            .scrollIndicators(.hidden)
+                    }
+                }
+                RightPaneRail(
+                    activeTab: rps.activeTab,
+                    collapsed: collapsed,
+                    changesCount: rps.displayChanges.count,
+                    activeAgentCount: agentRollup.active.count,
+                    activeRunCount: runningScriptNames.count,
+                    showAgentTab: state.config.agentTabEnabled,
+                    showRunTab: state.config.runTabEnabled,
+                    onAction: { action in handle(action, rps: rps) }
+                )
+            }
+        } else {
+            VStack(spacing: 0) {
+                RightPaneTabBar(
+                    activeTab: Binding(
+                        get: { rps.activeTab },
+                        set: { rps.activeTab = $0 }
+                    ),
+                    changesCount: rps.displayChanges.count,
+                    totalAdd: rps.displayChanges.reduce(0) { $0 + $1.add },
+                    totalDel: rps.displayChanges.reduce(0) { $0 + $1.del },
+                    onHidePane: {
+                        state.config.rightPaneVisible = false
+                        state.saveConfig()
+                    },
+                    showIgnored: state.config.files.showIgnored,
+                    onToggleShowIgnored: {
+                        state.config.files.showIgnored.toggle()
+                        state.saveConfig()
+                    },
+                    showAgentTab: state.config.agentTabEnabled,
+                    showRunTab: state.config.runTabEnabled,
+                    activeRunCount: state.runRecords
+                        .records(worktreeID: worktree.id)
+                        .count { $0.status.isActive },
+                    activeAgentCount: state.agentSidebarRollup(for: worktree).active.count
+                )
+                tabContent(rps: rps)
+            }
+        }
+    }
+
+    /// Keyboard equivalent of tapping a rail tab. Handled here rather than in
+    /// `AppState` because `collapsed` is the layout's *effective* state: when a
+    /// narrow window makes `ThreePaneSizing` auto-collapse the pane it is true
+    /// while `config.rightPaneVisible` is still true, and resolving from the
+    /// preference alone would collapse a pane the user sees as already closed.
+    private func handleTabShortcut(_ notification: Notification, rps: RightPaneState) {
+        guard let raw = notification.object as? String,
+              let tab = RightPaneTab(rawValue: raw),
+              state.acceptsRightPaneTabShortcut(tab)
+        else { return }
+        handle(
+            RightPaneRailAction.resolve(tapped: tab, active: rps.activeTab, collapsed: collapsed),
+            rps: rps
+        )
+    }
+
+    private func handle(_ action: RightPaneRailAction, rps: RightPaneState) {
+        let outcome = RightPaneRailModel.apply(
+            action,
+            currentTab: rps.activeTab,
+            currentVisible: state.config.rightPaneVisible
+        )
+        if rps.activeTab != outcome.tab {
+            rps.activeTab = outcome.tab
+        }
+        if state.config.rightPaneVisible != outcome.visible {
+            state.config.rightPaneVisible = outcome.visible
+            state.saveConfig()
+        }
+    }
+
+    private var agentRollup: AgentSidebarRollup {
+        state.agentSidebarRollup(for: worktree)
+    }
+
+    private var waitingAgentCount: Int {
+        agentRollup.active.count { $0.state == .awaitingInput || $0.state == .permissionRequest }
+    }
+
+    private var runningScriptNames: [String] {
+        state.runRecords
+            .records(worktreeID: worktree.id)
+            .filter { $0.status.isActive }
+            .map(\.scriptName)
     }
 }
 

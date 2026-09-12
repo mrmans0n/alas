@@ -32,6 +32,7 @@ struct AppConfigTests {
         #expect(cfg.workspacesEnabled == false)
         #expect(cfg.agentTabEnabled == false)
         #expect(cfg.runTabEnabled == false)
+        #expect(cfg.rightPaneRailEnabled == false)
     }
 
     @Test func decodeOldConfigDefaultsWorkspacesDisabled() throws {
@@ -65,6 +66,17 @@ struct AppConfigTests {
         let decoded = try JSONDecoder().decode(AppConfig.self, from: oldConfig)
 
         #expect(decoded.agentTabEnabled == false)
+    }
+
+    @Test func decodeOldConfigDefaultsRightPaneRailDisabled() throws {
+        let data = try JSONEncoder().encode(AppConfig.defaults)
+        var object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        object.removeValue(forKey: "rightPaneRailEnabled")
+
+        let oldConfig = try JSONSerialization.data(withJSONObject: object)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: oldConfig)
+
+        #expect(decoded.rightPaneRailEnabled == false)
     }
 
     @Test func decodeOldHarnessConfigDefaultsAwaitingPingOn() throws {

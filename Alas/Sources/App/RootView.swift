@@ -182,12 +182,17 @@ struct RootView: View {
                 rightVisible: state.config.rightPaneVisible
                     && rightPaneSelection.showsRightPane
                     && !state.suppressesRestoredRightPaneAfterAbandonedStartup,
+                rightCollapsedWidth: state.config.rightPaneRailEnabled
+                    && rightPaneSelection.showsRightPane
+                    && !state.suppressesRestoredRightPaneAfterAbandonedStartup
+                    ? Double(RightPaneRail.width)
+                    : nil,
                 onWidthsChanged: { state.saveConfig() },
                 sidebar: { sidebarContent },
                 center: { effectiveRightPaneVisible in
                     centerContent(effectiveRightPaneVisible: effectiveRightPaneVisible)
                 },
-                right: { rightContent(selection: rightPaneSelection) }
+                right: { collapsed in rightContent(selection: rightPaneSelection, collapsed: collapsed) }
             )
         }
     }
@@ -224,7 +229,7 @@ struct RootView: View {
     }
 
     @ViewBuilder
-    private func rightContent(selection: RightPaneSelectionState) -> some View {
+    private func rightContent(selection: RightPaneSelectionState, collapsed: Bool) -> some View {
         switch selection {
         case .empty:
             EmptyView()
@@ -232,6 +237,7 @@ struct RootView: View {
             RightPaneView(
                 state: state,
                 worktree: wt,
+                collapsed: collapsed,
                 onSelectChangedFile: { file in
                     openOrFocusDiff(
                         worktree: wt,
@@ -254,11 +260,11 @@ struct RootView: View {
                 }
             )
         case .creating(let wt):
-            RightPaneTransitionalView(state: state, worktree: wt, kind: .creating)
+            RightPaneTransitionalView(state: state, worktree: wt, kind: .creating, collapsed: collapsed)
         case .deleting(let wt):
-            RightPaneTransitionalView(state: state, worktree: wt, kind: .deleting)
+            RightPaneTransitionalView(state: state, worktree: wt, kind: .deleting, collapsed: collapsed)
         case .createFailed(let wt):
-            RightPaneTransitionalView(state: state, worktree: wt, kind: .createFailed)
+            RightPaneTransitionalView(state: state, worktree: wt, kind: .createFailed, collapsed: collapsed)
         }
     }
 
@@ -902,10 +908,11 @@ private struct RootBaseHandlers: ViewModifier {
             .onReceive(NotificationCenter.default.publisher(for: .alasToggleSidebar)) { _ in
                 state.toggleSidebarVisibility()
             }
-        let a = aSidebar
+        let aRightPane = aSidebar
             .onReceive(NotificationCenter.default.publisher(for: .alasToggleRightPane)) { _ in
                 state.toggleRightPaneVisibility()
             }
+        let a = aRightPane
         let b = a
             .onReceive(NotificationCenter.default.publisher(for: .alasCreateProject)) { _ in
                 showNewProject = true
@@ -1129,6 +1136,8 @@ private struct RootPaneHandlers: ViewModifier {
 extension Notification.Name {
     static let alasToggleSidebar     = Notification.Name("AlasToggleSidebar")
     static let alasToggleRightPane   = Notification.Name("AlasToggleRightPane")
+    /// Object carries the target `RightPaneTab.rawValue`.
+    static let alasSelectRightPaneTab = Notification.Name("AlasSelectRightPaneTab")
     static let alasCreateProject     = Notification.Name("AlasCreateProject")
     static let alasNewWorktree       = Notification.Name("AlasNewWorktree")
     static let alasFocusMainWorktree = Notification.Name("AlasFocusMainWorktree")

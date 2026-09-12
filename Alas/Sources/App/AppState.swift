@@ -1036,6 +1036,18 @@ final class AppState {
         _ = saveConfig()
     }
 
+    /// Whether a rail tab shortcut should act at all. The rail-hosting views
+    /// own the rest of the decision: only they know the *effective* collapsed
+    /// state, which differs from `rightPaneVisible` whenever a narrow window
+    /// made `ThreePaneSizing` auto-collapse the pane.
+    func acceptsRightPaneTabShortcut(_ tab: RightPaneTab) -> Bool {
+        config.rightPaneRailEnabled
+            && RightPaneTab.available(
+                agentTabEnabled: config.agentTabEnabled,
+                runTabEnabled: config.runTabEnabled
+            ).contains(tab)
+    }
+
     func toggleSidebarVisibility() {
         config.sidebarVisible.toggle()
         _ = saveConfig()

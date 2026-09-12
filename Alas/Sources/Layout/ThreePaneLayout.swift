@@ -5,10 +5,13 @@ struct ThreePaneLayout<Sidebar: View, Center: View, Right: View>: View {
     @Binding var rightWidth: Double
     let sidebarVisible: Bool
     let rightVisible: Bool
+    /// Width of the rail strip drawn in place of a hidden right pane. `nil`
+    /// hides the right pane entirely, which is the long-standing behavior.
+    var rightCollapsedWidth: Double? = nil
     let onWidthsChanged: () -> Void
     @ViewBuilder let sidebar: () -> Sidebar
     @ViewBuilder let center: (_ rightVisible: Bool) -> Center
-    @ViewBuilder let right: () -> Right
+    @ViewBuilder let right: (_ collapsed: Bool) -> Right
 
     // Gutter drags mutate only this transient state, so the drag invalidates
     // just this view. The bindings write into app-wide observable config —
@@ -29,12 +32,13 @@ struct ThreePaneLayout<Sidebar: View, Center: View, Right: View>: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let sizing = ThreePaneSizing.calculate(
+            let railSizing = RightRailSizing.calculate(
                 availableWidth: Double(proxy.size.width),
                 preferredSidebarWidth: transientSidebarWidth ?? sidebarWidth,
                 preferredRightWidth: transientRightWidth ?? rightWidth,
                 sidebarPreferredVisible: sidebarVisible,
                 rightPreferredVisible: rightVisible,
+                railWidth: rightCollapsedWidth,
                 configuration: ThreePaneSizing.Configuration(
                     sidebarMin: sidebarMin,
                     sidebarMax: sidebarMax,
@@ -44,6 +48,7 @@ struct ThreePaneLayout<Sidebar: View, Center: View, Right: View>: View {
                     dividerWidth: dividerWidth
                 )
             )
+            let sizing = railSizing.sizing
 
             // Pixel-align the side panes; the center absorbs the ≤1px
             // rounding remainder so the row still fills the window exactly.
@@ -54,7 +59,7 @@ struct ThreePaneLayout<Sidebar: View, Center: View, Right: View>: View {
                 + (sizing.rightVisible ? dividerWidth : 0)
             let alignedCenterWidth = max(
                 0,
-                Double(proxy.size.width) - dividerTotal
+                Double(proxy.size.width) - dividerTotal - railSizing.railWidth
                     - (sizing.sidebarVisible ? alignedSidebarWidth : 0)
                     - (sizing.rightVisible ? alignedRightWidth : 0)
             )
@@ -92,32 +97,43 @@ struct ThreePaneLayout<Sidebar: View, Center: View, Right: View>: View {
                 center(sizing.rightVisible)
                     .frame(width: CGFloat(alignedCenterWidth))
                     .frame(maxHeight: .infinity)
-                if sizing.rightVisible {
-                    DragHandle(
-                        axis: .horizontal,
-                        onDragChanged: { translation in
-                            let start = rightDragStartWidth ?? sizing.rightWidth
-                            rightDragStartWidth = start
-                            // Dragging this gutter right shrinks the right
-                            // pane, hence the negated translation.
-                            transientRightWidth = PaneDragMath.resolvedWidth(
-                                startWidth: start,
-                                translation: -Double(translation),
-                                min: rightMin,
-                                max: rightMax
-                            )
-                        },
-                        onDragEnded: {
-                            if let width = transientRightWidth {
-                                rightWidth = width
-                                onWidthsChanged()
+                // `right(...)` is called from exactly one place, inside a
+                // single `if`, so collapsing or expanding the pane never moves
+                // it between two `_ConditionalContent` branches. Swapping
+                // branches would give the subtree a new identity, tearing down
+                // `RightPaneView`'s state and re-firing `.onAppear` /
+                // `.onDisappear` on every rail click. Only the drag handle's
+                // presence and the frame width vary; an `Optional`-wrapped
+                // sibling appearing or disappearing leaves the stable sibling's
+                // identity untouched.
+                if sizing.rightVisible || railSizing.railWidth > 0 {
+                    if sizing.rightVisible {
+                        DragHandle(
+                            axis: .horizontal,
+                            onDragChanged: { translation in
+                                let start = rightDragStartWidth ?? sizing.rightWidth
+                                rightDragStartWidth = start
+                                // Dragging this gutter right shrinks the right
+                                // pane, hence the negated translation.
+                                transientRightWidth = PaneDragMath.resolvedWidth(
+                                    startWidth: start,
+                                    translation: -Double(translation),
+                                    min: rightMin,
+                                    max: rightMax
+                                )
+                            },
+                            onDragEnded: {
+                                if let width = transientRightWidth {
+                                    rightWidth = width
+                                    onWidthsChanged()
+                                }
+                                transientRightWidth = nil
+                                rightDragStartWidth = nil
                             }
-                            transientRightWidth = nil
-                            rightDragStartWidth = nil
-                        }
-                    )
-                    right()
-                        .frame(width: CGFloat(alignedRightWidth))
+                        )
+                    }
+                    right(!sizing.rightVisible)
+                        .frame(width: CGFloat(sizing.rightVisible ? alignedRightWidth : railSizing.railWidth))
                         .frame(maxHeight: .infinity)
                 }
             }

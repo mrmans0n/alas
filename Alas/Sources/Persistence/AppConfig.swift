@@ -50,6 +50,9 @@ struct AppConfig: Codable, Equatable {
     /// Preview gate for the worktree Agent tab. This remains off until the
     /// per-worktree rollup has completed preview testing.
     var agentTabEnabled: Bool = false
+    /// Preview gate for the right pane icon rail. This remains off until the
+    /// rail presentation has completed preview testing.
+    var rightPaneRailEnabled: Bool = false
     var recentProjectIds: [String] = []
     var recentWorktreeIdsByProject: [String: [String]] = [:]
     var recentWorktreeRefs: [RepoSelectorRecents.RecentWorktreeRef] = []
@@ -518,6 +521,7 @@ struct AppConfig: Codable, Equatable {
         workspacesEnabled: false,
         runTabEnabled: false,
         agentTabEnabled: false,
+        rightPaneRailEnabled: false,
         recentProjectIds: [],
         recentWorktreeIdsByProject: [:],
         recentWorktreeRefs: [],
@@ -612,6 +616,7 @@ extension AppConfig {
              workspacesEnabled,
              runTabEnabled,
              agentTabEnabled,
+             rightPaneRailEnabled,
              recentProjectIds, recentWorktreeIdsByProject, recentWorktreeRefs,
              collapsedProjectIds,
              sidebarChromeOverrides,
@@ -854,6 +859,7 @@ extension AppConfig {
         // The Agent tab preview is opt-in. Configs written before it existed
         // continue to load without exposing the sidebar rollup.
         agentTabEnabled = (try? c.decode(Bool.self, forKey: .agentTabEnabled)) ?? false
+        rightPaneRailEnabled = (try? c.decode(Bool.self, forKey: .rightPaneRailEnabled)) ?? false
         recentProjectIds = (try? c.decode([String].self, forKey: .recentProjectIds)) ?? []
         recentWorktreeIdsByProject =
             (try? c.decode([String: [String]].self, forKey: .recentWorktreeIdsByProject)) ?? [:]
@@ -871,7 +877,7 @@ extension AppConfig {
         migrateLegacyAgentLauncherShortcutOverrides()
         removeShortcutOverridesCollidingWithReservedBindings()
         // Last: it must see the final override set.
-        unbindNewAgentLauncherDefaultsClaimedByOverrides()
+        unbindNewActionDefaultsClaimedByOverrides()
     }
 }
 
@@ -912,16 +918,23 @@ private extension AppConfig {
         }
     }
 
-    /// The split actions introduce defaults (⌘⌥⇧C, and ⌘⌥⇧T for the terminal
-    /// half) that an older config may already have assigned to something else
-    /// — legal at the time, since `conflict(for:excluding:)` only guards
-    /// interactive assignment in Settings, never decode. Without an override
-    /// of their own the new actions would silently claim the same chord and
-    /// both menu items would register it. Leave the user's binding alone and
-    /// start the new action explicitly unbound; Settings can restore its
-    /// default once the chord is free.
-    mutating func unbindNewAgentLauncherDefaultsClaimedByOverrides() {
-        for action in [ShortcutAction.launchAgentInTerminal, .launchAgentInChat] {
+    /// Actions added after the first release ship defaults an older config may
+    /// already have assigned to something else — legal at the time, since
+    /// `conflict(for:excluding:)` only guards interactive assignment in
+    /// Settings, never decode. Without an override of their own the new
+    /// actions would silently claim the same chord and both menu items would
+    /// register it. Leave the user's binding alone and start the new action
+    /// explicitly unbound; Settings can restore its default once the chord is
+    /// free.
+    ///
+    /// Covers the agent-launcher split (⌘⌥⇧C, ⌘⌥⇧T) and the right pane's rail
+    /// tabs (⌘⌃1–4).
+    mutating func unbindNewActionDefaultsClaimedByOverrides() {
+        let newActions: [ShortcutAction] = [
+            .launchAgentInTerminal, .launchAgentInChat,
+            .rightPaneChangesTab, .rightPaneFilesTab, .rightPaneAgentTab, .rightPaneRunTab,
+        ]
+        for action in newActions {
             guard !shortcutOverrides.keys.contains(action.rawValue) else { continue }
             let isClaimed = shortcutOverrides.contains { key, override in
                 key != action.rawValue && override == action.defaultBinding

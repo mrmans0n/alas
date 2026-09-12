@@ -266,6 +266,30 @@ struct AlasApp: App {
                 NotificationCenter.default.post(name: .alasToggleRightPane, object: nil)
             }
             .keyboardShortcut(state.shortcut(for: .toggleRightPane))
+            Button("Right Sidebar: Changes") {
+                NotificationCenter.default.post(name: .alasSelectRightPaneTab,
+                                                object: RightPaneTab.changes.rawValue)
+            }
+            .keyboardShortcut(state.shortcut(for: .rightPaneChangesTab))
+            .disabled(!state.config.rightPaneRailEnabled)
+            Button("Right Sidebar: Files") {
+                NotificationCenter.default.post(name: .alasSelectRightPaneTab,
+                                                object: RightPaneTab.files.rawValue)
+            }
+            .keyboardShortcut(state.shortcut(for: .rightPaneFilesTab))
+            .disabled(!state.config.rightPaneRailEnabled)
+            Button("Right Sidebar: Agent") {
+                NotificationCenter.default.post(name: .alasSelectRightPaneTab,
+                                                object: RightPaneTab.agent.rawValue)
+            }
+            .keyboardShortcut(state.shortcut(for: .rightPaneAgentTab))
+            .disabled(!state.config.rightPaneRailEnabled || !state.config.agentTabEnabled)
+            Button("Right Sidebar: Run") {
+                NotificationCenter.default.post(name: .alasSelectRightPaneTab,
+                                                object: RightPaneTab.run.rawValue)
+            }
+            .keyboardShortcut(state.shortcut(for: .rightPaneRunTab))
+            .disabled(!state.config.rightPaneRailEnabled || !state.config.runTabEnabled)
             Button("New Terminal Tab") {
                 NotificationCenter.default.post(name: .alasNewTerminalTab, object: nil)
             }
