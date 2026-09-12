@@ -34,38 +34,18 @@ struct ACPComposerActionButton: View {
     private var sendCapsule: some View {
         HStack(spacing: 0) {
             Button(action: onPrimary) {
-                HStack(spacing: 5) {
-                    Image(systemName: "arrow.up")
-                        .font(.system(size: 12, weight: .bold))
-                    Text("Send")
-                        .font(.system(size: 11.5, weight: .semibold))
-                }
-                .foregroundStyle(theme.color("bg-0"))
-                .padding(.horizontal, 11)
-                .frame(height: ACPComposerActionButtonMetrics.capsuleHeight)
-                .background(
-                    UnevenRoundedRectangle(
-                        cornerRadii: .init(
-                            topLeading: ACPComposerActionButtonMetrics.cornerRadius,
-                            bottomLeading: ACPComposerActionButtonMetrics.cornerRadius
-                        )
-                    )
-                    .fill(theme.color("accent"))
-                )
-                .overlay(alignment: .trailing) {
+                primaryHalf(
+                    title: "Send",
                     // `line` is a neutral hairline meant for neutral fills; on the
                     // accent half it disappears. Tint the foreground color instead.
-                    segmentDivider(
-                        theme.color("bg-0")
-                            .opacity(ACPComposerActionButtonMetrics.dividerOnAccentOpacity)
-                    )
-                }
-                .overlay(alignment: .topTrailing) { badgeOverlay }
+                    divider: theme.color("bg-0")
+                        .opacity(ACPComposerActionButtonMetrics.dividerOnAccentOpacity)
+                )
             }
             .buttonStyle(.plain)
             .help("Send (⏎)")
 
-            Menu {
+            chevronHalf(help: "Schedule send") {
                 let now = Date()
                 ForEach(ACPSchedulePreset.allCases) { preset in
                     if preset.date(after: now) != nil {
@@ -81,33 +61,12 @@ struct ACPComposerActionButton: View {
                         ?? ACPSchedulePreset.tomorrowMorning.date(after: now)!
                     showsCustomSchedule = true
                 }
-            } label: {
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(theme.color("bg-0"))
-                    .padding(.horizontal, 7)
-                    // Height stays on the label so the whole painted segment is
-                    // clickable — a frame applied after `Menu` grows the layout
-                    // and background but leaves the hit target at label height.
-                    .frame(height: ACPComposerActionButtonMetrics.capsuleHeight)
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            // The fill belongs on the Menu, not on its label: `.borderlessButton`
-            // wraps the label in its own chrome, so a label background stops short
-            // of the control's edges and leaves a gap next to the primary half.
-            .background(
-                UnevenRoundedRectangle(
-                    cornerRadii: .init(
-                        bottomTrailing: ACPComposerActionButtonMetrics.cornerRadius,
-                        topTrailing: ACPComposerActionButtonMetrics.cornerRadius
-                    )
-                )
-                .fill(theme.color("accent"))
-            )
-            .help("Schedule send")
         }
+        .capsuleSurface(
+            foreground: theme.color("bg-0"),
+            fill: theme.color("accent")
+        )
         .popover(isPresented: $showsCustomSchedule) {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Schedule message")
@@ -167,66 +126,79 @@ struct ACPComposerActionButton: View {
     private func queueSplitCapsule(menu: [ComposerMenuItem]) -> some View {
         HStack(spacing: 0) {
             Button(action: onPrimary) {
-                HStack(spacing: 5) {
-                    Image(systemName: "arrow.up")
-                        .font(.system(size: 12, weight: .bold))
-                    Text("Queue")
-                        .font(.system(size: 11.5, weight: .semibold))
-                }
-                .foregroundStyle(theme.color("fg"))
-                .padding(.horizontal, 11)
-                .frame(height: ACPComposerActionButtonMetrics.capsuleHeight)
-                .background(
-                    UnevenRoundedRectangle(
-                        cornerRadii: .init(
-                            topLeading: ACPComposerActionButtonMetrics.cornerRadius,
-                            bottomLeading: ACPComposerActionButtonMetrics.cornerRadius,
-                            bottomTrailing: 0,
-                            topTrailing: 0
-                        )
-                    )
-                    .fill(theme.color("bg-3"))
-                )
-                .overlay(alignment: .trailing) { segmentDivider(theme.color("line")) }
-                .overlay(alignment: .topTrailing) { badgeOverlay }
+                primaryHalf(title: "Queue", divider: theme.color("line"))
             }
             .buttonStyle(.plain)
             .help("Queue (⏎). Hold ⌥ to steer.")
 
-            Menu {
+            chevronHalf(help: "More actions") {
                 ForEach(menu, id: \.self) { item in
                     menuButton(for: item)
                     if item == .steer, menu.contains(.stop) {
                         Divider()
                     }
                 }
-            } label: {
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(theme.color("fg"))
-                    .padding(.horizontal, 7)
-                    .frame(height: ACPComposerActionButtonMetrics.capsuleHeight)
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .background(
-                UnevenRoundedRectangle(
-                    cornerRadii: .init(
-                        topLeading: 0,
-                        bottomLeading: 0,
-                        bottomTrailing: ACPComposerActionButtonMetrics.cornerRadius,
-                        topTrailing: ACPComposerActionButtonMetrics.cornerRadius
-                    )
-                )
-                .fill(theme.color("bg-3"))
-            )
-            .help("More actions")
         }
+        .capsuleSurface(
+            foreground: theme.color("fg"),
+            fill: theme.color("bg-3")
+        )
         .overlay(
             RoundedRectangle(cornerRadius: ACPComposerActionButtonMetrics.cornerRadius)
                 .strokeBorder(theme.color("line"), lineWidth: 1)
         )
+    }
+
+    // MARK: - Split-capsule halves
+
+    /// Primary half: icon + title, the hairline marking the split, and the
+    /// queue badge. It paints no fill of its own — the capsule draws one
+    /// background behind both halves (see `capsuleSurface`), so the two can't
+    /// disagree about height, radius or color.
+    private func primaryHalf(title: String, divider: Color) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: "arrow.up")
+                .font(.system(size: 12, weight: .bold))
+            Text(title)
+                .font(.system(size: 11.5, weight: .semibold))
+        }
+        .padding(.horizontal, 11)
+        .frame(height: ACPComposerActionButtonMetrics.capsuleHeight)
+        .contentShape(Rectangle())
+        .overlay(alignment: .trailing) { segmentDivider(divider) }
+        .overlay(alignment: .topTrailing) { badgeOverlay }
+    }
+
+    /// Chevron half: the menu affordance at the trailing end of the capsule.
+    ///
+    /// `.button` + `.plain`, deliberately not `.borderlessButton`. The
+    /// borderless style hands the label to an `NSPopUpButton`, which draws the
+    /// glyph in its own label color and sizes itself to the label's intrinsic
+    /// ~14pt no matter what frame the label carries. That gave us three bugs at
+    /// once: a chevron tinted differently from the title, a segment background
+    /// shorter than the primary half, and 6pt of dead space at the top and
+    /// bottom of the segment where clicks missed the menu. `.button` keeps the
+    /// label in SwiftUI, where the frame and the inherited foreground style
+    /// both apply.
+    private func chevronHalf<Content: View>(
+        help: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        Menu {
+            content()
+        } label: {
+            Image(systemName: "chevron.down")
+                .font(.system(size: 9, weight: .semibold))
+                .padding(.horizontal, ACPComposerActionButtonMetrics.chevronHorizontalPadding)
+                .frame(height: ACPComposerActionButtonMetrics.capsuleHeight)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help(help)
     }
 
     // MARK: - Segment divider (hairline between the primary half and the chevron)
@@ -283,9 +255,25 @@ struct ACPComposerActionButton: View {
     }
 }
 
+private extension View {
+    /// Paints a split capsule as one surface: a single fill behind both halves
+    /// and a single foreground style inherited by both. Neither half carries a
+    /// background or a color of its own, so they cannot drift out of alignment
+    /// or out of tint.
+    func capsuleSurface(foreground: Color, fill: Color) -> some View {
+        foregroundStyle(foreground)
+            .frame(height: ACPComposerActionButtonMetrics.capsuleHeight)
+            .background(
+                fill,
+                in: RoundedRectangle(cornerRadius: ACPComposerActionButtonMetrics.cornerRadius)
+            )
+    }
+}
+
 enum ACPComposerActionButtonMetrics {
     static let capsuleHeight: CGFloat = 26
     static let cornerRadius: CGFloat = 7
+    static let chevronHorizontalPadding: CGFloat = 7
     static let badgeMinWidth: CGFloat = 16
     static let badgeMinHeight: CGFloat = 14
     static let badgeOffset = CGSize(width: 6, height: -6)
