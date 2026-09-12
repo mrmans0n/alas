@@ -50,6 +50,9 @@ struct AlasCLICommandRouter {
     var workspaceCommand: (AlasCLIRequest.WorkspaceCommand) async -> AlasCLIResponse = { _ in
         .error("Workspace automation is not available yet.")
     }
+    var previewCommand: (WebPreviewCommand, SessionOwnerID, String?) async -> AlasCLIResponse = { _, _, _ in
+        .error("Preview automation is not available.")
+    }
     var activateApp: () -> Void
 
     private var service: AlasActionService {
@@ -82,6 +85,22 @@ struct AlasCLICommandRouter {
     func handle(_ request: AlasCLIRequest) async -> AlasCLIResponse {
         let service = self.service
         switch request.command {
+        case .preview(let command):
+            let owner: SessionOwnerID
+            if let sessionID = request.sessionId {
+                if let resolved = sessionOwner(sessionID) {
+                    owner = resolved
+                } else if let id = sessionWorktreeId(sessionID), originatingWorktree(id) != nil {
+                    owner = .worktree(id)
+                } else {
+                    return .error("Unknown Alas session. Preview commands cannot fall back to another owner.")
+                }
+            } else if let cwd = request.cwd, let worktree = service.resolveWorktree(forDirectory: cwd) {
+                owner = .worktree(worktree.id)
+            } else {
+                return .error("not inside an Alas worktree")
+            }
+            return await previewCommand(command, owner, request.sessionId)
         case .workspace(let command):
             return await workspaceCommand(command)
         case .sessionList, .sessionNew, .sessionSend:
@@ -190,7 +209,7 @@ struct AlasCLICommandRouter {
             return await service.new(origin: origin, branch: branch, base: base)
         case .worktree(.delete(let target, let force, let keepBranch)):
             return await service.delete(target: target, projectWorktrees: projectWorktrees, force: force, keepBranch: keepBranch)
-        case .workspace:
+        case .workspace, .preview:
             preconditionFailure("Workspace commands are handled before generic origin resolution")
         case .review(.localChanges(let worktreeOverride)):
             switch service.reviewOrigin(origin: origin, override: worktreeOverride, projectWorktrees: projectWorktrees) {

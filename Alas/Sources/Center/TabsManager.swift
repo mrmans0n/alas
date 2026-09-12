@@ -952,6 +952,9 @@ final class TabsManager {
         }
         clearWebPreviewBrowser(ownerKey: ownerKey)
         let browser = WebPreviewBrowser(ownerKey: ownerKey, remoteHost: remoteHost)
+        browser.onNavigate = { [weak self] url in
+            self?.updateWebPreviewURL(worktreeId: ownerKey, url: url)
+        }
         webPreviewBrowsers[ownerKey] = browser
         return browser
     }

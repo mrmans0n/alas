@@ -4,8 +4,12 @@
 //! be the largest dependency in the workspace.
 
 use alas_client::{Command, Response, TransportError};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::PathBuf;
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicUsize, Ordering},
+};
 
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
 
@@ -18,6 +22,38 @@ pub struct McpEnv {
     pub session_id: String,
     pub parent_session_id: Option<String>,
     pub workspace_only: bool,
+}
+
+impl Clone for McpEnv {
+    fn clone(&self) -> Self {
+        Self {
+            socket: self.socket.clone(),
+            worktree_dir: self.worktree_dir.clone(),
+            session_id: self.session_id.clone(),
+            parent_session_id: self.parent_session_id.clone(),
+            workspace_only: self.workspace_only,
+        }
+    }
+}
+
+const MAX_MCP_WORKERS: usize = 8;
+const MAX_MCP_PREVIEW_CALLS: usize = MAX_MCP_WORKERS - 1;
+const MAX_HTTP_CONNECTION_WORKERS: usize = 8;
+const HTTP_IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+#[derive(Clone)]
+struct McpRuntime {
+    pending: Arc<Mutex<std::collections::HashMap<String, Command>>>,
+    active_workers: Arc<AtomicUsize>,
+}
+
+impl McpRuntime {
+    fn new() -> Self {
+        Self {
+            pending: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            active_workers: Arc::new(AtomicUsize::new(0)),
+        }
+    }
 }
 
 /// Build the env from a lookup function (`std::env::var` in production,
@@ -95,8 +131,12 @@ fn handle_line_with_parent(
 
 fn initialize_result(parent_session_id: Option<&str>) -> Value {
     let instructions = match parent_session_id {
-        Some(_) => "Tools that drive the user's Alas workspace UI. This session was delegated by a parent session: it cannot create descendants; return results or questions through session_send.",
-        None => "Tools that drive the user's Alas workspace UI: open files for the user to look at, manage linked worktrees, and open reviews. Root ACP sessions may delegate direct child sessions.",
+        Some(_) => {
+            "Tools that drive the user's Alas workspace UI. This session was delegated by a parent session: it cannot create descendants; return results or questions through session_send."
+        }
+        None => {
+            "Tools that drive the user's Alas workspace UI: open files for the user to look at, manage linked worktrees, and open reviews. Root ACP sessions may delegate direct child sessions."
+        }
     };
     json!({
         "protocolVersion": PROTOCOL_VERSION,
@@ -125,7 +165,9 @@ fn tool_definitions_for_mode(workspace_only: bool) -> Vec<Value> {
             .filter(|tool| {
                 tool.get("name")
                     .and_then(Value::as_str)
-                    .is_some_and(|name| name.starts_with("workspace_"))
+                    .is_some_and(|name| {
+                        name.starts_with("workspace_") || name.starts_with("preview_")
+                    })
             })
             .collect();
     }
@@ -133,7 +175,7 @@ fn tool_definitions_for_mode(workspace_only: bool) -> Vec<Value> {
 }
 
 fn all_tool_definitions() -> Vec<Value> {
-    vec![
+    let mut tools = vec![
         json!({
             "name": "open",
             "description": "Open one or more files in Alas. Use path with line/end_line to reveal source; use paths for multiple files.",
@@ -324,6 +366,14 @@ fn all_tool_definitions() -> Vec<Value> {
                 }
             }
         }),
+    ];
+    tools.extend(preview_tool_definitions());
+    tools.extend(workspace_tool_definitions());
+    tools
+}
+
+fn workspace_tool_definitions() -> Vec<Value> {
+    vec![
         json!({
             "name": "workspace_list",
             "description": "List Workspace Checkouts visible in Alas as versioned JSON. This observes Workspace state only and never mutates checkout lifecycle.",
@@ -366,8 +416,186 @@ fn all_tool_definitions() -> Vec<Value> {
     ]
 }
 
+fn preview_tool_definitions() -> Vec<Value> {
+    vec![
+        json!({
+            "name": "preview_list",
+            "description": "List open web previews in Alas as versioned JSON. Read-only.",
+            "annotations": { "readOnlyHint": true },
+            "inputSchema": { "type": "object", "properties": {} }
+        }),
+        json!({
+            "name": "preview_open",
+            "description": "Open or focus a web preview in Alas. May navigate to an external URL or configured script endpoint.",
+            "annotations": { "destructiveHint": true },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "url": { "type": "string", "description": "Optional URL to open. Mutually exclusive with script_key." },
+                    "script_key": { "type": "string", "description": "Optional configured preview endpoint key. Mutually exclusive with url." }
+                }
+            }
+        }),
+        json!({
+            "name": "preview_navigate",
+            "description": "Navigate an existing Alas web preview. This can trigger external side effects from page loading.",
+            "annotations": { "destructiveHint": true },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "preview_id": { "type": "string" },
+                    "url": { "type": "string" }
+                },
+                "required": ["preview_id", "url"]
+            }
+        }),
+        simple_preview_tool(
+            "preview_reload",
+            "Reload an Alas web preview. Page loading can trigger external side effects.",
+        ),
+        simple_preview_tool(
+            "preview_back",
+            "Move an Alas web preview backward in history. Navigation can trigger external side effects.",
+        ),
+        simple_preview_tool(
+            "preview_forward",
+            "Move an Alas web preview forward in history. Navigation can trigger external side effects.",
+        ),
+        json!({
+            "name": "preview_inspect",
+            "description": "Inspect bounded main-frame DOM metadata from an Alas web preview. Password and file inputs are not read.",
+            "annotations": { "readOnlyHint": true },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "preview_id": { "type": "string" },
+                    "selector": { "type": "string", "description": "Optional CSS selector. Defaults to interactive elements." },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Default: 50." }
+                },
+                "required": ["preview_id"]
+            }
+        }),
+        json!({
+            "name": "preview_capture",
+            "description": "Capture a PNG screenshot from an Alas web preview. Returns native MCP image content plus JSON metadata.",
+            "annotations": { "readOnlyHint": true },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "preview_id": { "type": "string" },
+                    "element_id": { "type": "string", "description": "Optional inspected element reference. Mutually exclusive with region." },
+                    "region": {
+                        "type": "object",
+                        "properties": {
+                            "x": { "type": "number" },
+                            "y": { "type": "number" },
+                            "width": { "type": "number", "exclusiveMinimum": 0 },
+                            "height": { "type": "number", "exclusiveMinimum": 0 }
+                        },
+                        "required": ["x", "y", "width", "height"]
+                    }
+                },
+                "required": ["preview_id"]
+            }
+        }),
+        json!({
+            "name": "preview_console",
+            "description": "Read console metadata from an Alas web preview; optionally clear stored entries after returning them. By default this is read-only, but clear resets stored history.",
+            "annotations": { "readOnlyHint": false, "destructiveHint": true },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "preview_id": { "type": "string" },
+                    "clear": { "type": "boolean", "description": "Return current console metadata, then clear stored entries. This is destructive." }
+                },
+                "required": ["preview_id"]
+            }
+        }),
+        json!({
+            "name": "preview_click",
+            "description": "Click an inspected element in an Alas web preview using DOM interaction. Trusted user gestures are unsupported and page code may have external side effects.",
+            "annotations": { "destructiveHint": true },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "preview_id": { "type": "string" },
+                    "element_id": { "type": "string" }
+                },
+                "required": ["preview_id", "element_id"]
+            }
+        }),
+        json!({
+            "name": "preview_type",
+            "description": "Type text into an inspected element in an Alas web preview using DOM interaction. Trusted user gestures are unsupported; file inputs cannot be populated.",
+            "annotations": { "destructiveHint": true },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "preview_id": { "type": "string" },
+                    "element_id": { "type": "string" },
+                    "text": { "type": "string", "maxLength": 10000 },
+                    "append": { "type": "boolean", "description": "Default: false." }
+                },
+                "required": ["preview_id", "element_id", "text"]
+            }
+        }),
+        json!({
+            "name": "preview_scroll",
+            "description": "Scroll an Alas web preview by CSS pixel deltas. Scrolling can trigger page side effects such as lazy loading.",
+            "annotations": { "destructiveHint": true },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "preview_id": { "type": "string" },
+                    "x": { "type": "number", "minimum": -100000, "maximum": 100000 },
+                    "y": { "type": "number", "minimum": -100000, "maximum": 100000 }
+                },
+                "required": ["preview_id", "x", "y"]
+            }
+        }),
+        json!({
+            "name": "preview_wait",
+            "description": "Wait for loaded state or selector visibility in an Alas web preview. Deadlines are bounded.",
+            "annotations": { "readOnlyHint": true },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "preview_id": { "type": "string" },
+                    "condition": { "type": "string", "enum": ["loaded", "visible", "hidden"] },
+                    "selector": { "type": "string", "description": "Required for visible/hidden; forbidden for loaded." },
+                    "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 20000, "description": "Default: 5000." }
+                },
+                "required": ["preview_id", "condition"]
+            }
+        }),
+        json!({
+            "name": "preview_cancel",
+            "description": "Cancel the active operation for this preview owner without closing the tab.",
+            "annotations": { "destructiveHint": true },
+            "inputSchema": {
+                "type": "object",
+                "properties": { "preview_id": { "type": "string" } },
+                "required": ["preview_id"]
+            }
+        }),
+    ]
+}
+
+fn simple_preview_tool(name: &str, description: &str) -> Value {
+    json!({
+        "name": name,
+        "description": description,
+        "annotations": { "destructiveHint": true },
+        "inputSchema": {
+            "type": "object",
+            "properties": { "preview_id": { "type": "string" } },
+            "required": ["preview_id"]
+        }
+    })
+}
+
 fn is_workspace_tool(name: &str) -> bool {
-    name.starts_with("workspace_")
+    name.starts_with("workspace_") || name.starts_with("preview_")
 }
 
 /// Translate a tool call into the CLI command it mirrors. Relative `open`
@@ -593,6 +821,119 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
             checkout_id: required_uuid(args, "checkout_id")?,
             member_id: required_uuid(args, "member_id")?,
         }),
+        "preview_list" => Ok(Command::Preview(alas_client::PreviewCommand::List)),
+        "preview_open" => {
+            let url = optional_limited_string(args, "url", 8192)?;
+            let script_key = optional_limited_string(args, "script_key", 4096)?;
+            if url.is_some() && script_key.is_some() {
+                return Err("preview_open accepts either 'url' or 'script_key', not both".into());
+            }
+            Ok(Command::Preview(alas_client::PreviewCommand::Open {
+                url,
+                script_key,
+            }))
+        }
+        "preview_navigate" => Ok(Command::Preview(alas_client::PreviewCommand::Navigate {
+            preview_id: required_limited_string(args, "preview_id", 4096)?,
+            url: required_limited_string(args, "url", 8192)?,
+        })),
+        "preview_reload" => preview_id_command(args, |preview_id| {
+            alas_client::PreviewCommand::Reload { preview_id }
+        }),
+        "preview_back" => preview_id_command(args, |preview_id| {
+            alas_client::PreviewCommand::Back { preview_id }
+        }),
+        "preview_forward" => preview_id_command(args, |preview_id| {
+            alas_client::PreviewCommand::Forward { preview_id }
+        }),
+        "preview_inspect" => Ok(Command::Preview(alas_client::PreviewCommand::Inspect {
+            preview_id: required_limited_string(args, "preview_id", 4096)?,
+            selector: optional_limited_string(args, "selector", 4096)?,
+            limit: optional_bounded_u64(args, "limit", 1, 100)?.unwrap_or(50),
+        })),
+        "preview_capture" => {
+            let preview_id = required_limited_string(args, "preview_id", 4096)?;
+            let element_id = optional_limited_string(args, "element_id", 4096)?;
+            let region = optional_region(args)?;
+            if element_id.is_some() && region.is_some() {
+                return Err(
+                    "preview_capture accepts either 'element_id' or 'region', not both".into(),
+                );
+            }
+            let target = match (element_id, region) {
+                (Some(element_id), None) => {
+                    alas_client::PreviewCaptureTarget::Element { element_id }
+                }
+                (None, Some(region)) => region,
+                (None, None) => alas_client::PreviewCaptureTarget::Viewport,
+                (Some(_), Some(_)) => unreachable!("mutual exclusion checked above"),
+            };
+            Ok(Command::Preview(alas_client::PreviewCommand::Capture {
+                preview_id,
+                target,
+            }))
+        }
+        "preview_console" => Ok(Command::Preview(alas_client::PreviewCommand::Console {
+            preview_id: required_limited_string(args, "preview_id", 4096)?,
+            clear: optional_bool(args, "clear")?.unwrap_or(false),
+        })),
+        "preview_click" => Ok(Command::Preview(alas_client::PreviewCommand::Click {
+            preview_id: required_limited_string(args, "preview_id", 4096)?,
+            element_id: required_limited_string(args, "element_id", 4096)?,
+        })),
+        "preview_type" => {
+            let text = required_exact_string(args, "text")?;
+            if text.chars().count() > 10_000 || text.len() > 40_000 {
+                return Err(
+                    "preview_type 'text' must be at most 10000 characters and 40000 bytes".into(),
+                );
+            }
+            Ok(Command::Preview(alas_client::PreviewCommand::Type {
+                preview_id: required_limited_string(args, "preview_id", 4096)?,
+                element_id: required_limited_string(args, "element_id", 4096)?,
+                text,
+                append: optional_bool(args, "append")?.unwrap_or(false),
+            }))
+        }
+        "preview_scroll" => Ok(Command::Preview(alas_client::PreviewCommand::Scroll {
+            preview_id: required_limited_string(args, "preview_id", 4096)?,
+            x: required_bounded_f64(args, "x", -100_000.0, 100_000.0)?,
+            y: required_bounded_f64(args, "y", -100_000.0, 100_000.0)?,
+        })),
+        "preview_wait" => {
+            let condition = match required_non_blank_string(args, "condition")?.as_str() {
+                "loaded" => alas_client::PreviewWaitCondition::Loaded,
+                "visible" => alas_client::PreviewWaitCondition::Visible,
+                "hidden" => alas_client::PreviewWaitCondition::Hidden,
+                _ => {
+                    return Err(
+                        "preview_wait 'condition' must be loaded, visible, or hidden".into(),
+                    );
+                }
+            };
+            let selector = optional_limited_string(args, "selector", 4096)?;
+            match condition {
+                alas_client::PreviewWaitCondition::Loaded if selector.is_some() => {
+                    return Err("preview_wait 'loaded' does not accept 'selector'".into());
+                }
+                alas_client::PreviewWaitCondition::Visible
+                | alas_client::PreviewWaitCondition::Hidden
+                    if selector.is_none() =>
+                {
+                    return Err("preview_wait 'selector' is required for visible and hidden".into());
+                }
+                _ => {}
+            }
+            Ok(Command::Preview(alas_client::PreviewCommand::Wait {
+                preview_id: required_limited_string(args, "preview_id", 4096)?,
+                condition,
+                selector,
+                timeout_ms: optional_bounded_u64(args, "timeout_ms", 1, 20_000)?.unwrap_or(5_000),
+            }))
+        }
+        "preview_cancel" => preview_id_command(args, |preview_id| {
+            alas_client::PreviewCommand::Cancel { preview_id }
+        }),
         other => Err(format!("unknown tool: {other}")),
     }
 }
@@ -618,6 +959,24 @@ fn review_target(args: &Value) -> Result<Option<String>, String> {
 
 fn required_string(args: &Value, key: &str) -> Result<String, String> {
     optional_string(args, key).ok_or_else(|| format!("missing required argument '{key}'"))
+}
+
+fn required_non_blank_string(args: &Value, key: &str) -> Result<String, String> {
+    optional_non_blank_string(args, key)?
+        .ok_or_else(|| format!("missing required argument '{key}'"))
+}
+
+fn required_limited_string(args: &Value, key: &str, max_bytes: usize) -> Result<String, String> {
+    optional_limited_string(args, key, max_bytes)?
+        .ok_or_else(|| format!("missing required argument '{key}'"))
+}
+
+fn required_exact_string(args: &Value, key: &str) -> Result<String, String> {
+    match args.get(key) {
+        Some(Value::String(value)) => Ok(value.clone()),
+        Some(_) => Err(format!("{key} must be a string")),
+        None => Err(format!("missing required argument '{key}'")),
+    }
 }
 
 fn required_uuid(args: &Value, key: &str) -> Result<String, String> {
@@ -648,6 +1007,99 @@ fn optional_string(args: &Value, key: &str) -> Option<String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(String::from)
+}
+
+fn optional_bool(args: &Value, key: &str) -> Result<Option<bool>, String> {
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Bool(value)) => Ok(Some(*value)),
+        Some(_) => Err(format!("{key} must be a boolean")),
+    }
+}
+
+fn optional_bounded_u64(
+    args: &Value,
+    key: &str,
+    min: u64,
+    max: u64,
+) -> Result<Option<u64>, String> {
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value
+            .as_u64()
+            .filter(|value| *value >= min && *value <= max)
+            .map(Some)
+            .ok_or_else(|| format!("{key} must be an integer from {min} to {max}")),
+    }
+}
+
+fn required_bounded_f64(args: &Value, key: &str, min: f64, max: f64) -> Result<f64, String> {
+    args.get(key)
+        .and_then(Value::as_f64)
+        .filter(|value| value.is_finite() && *value >= min && *value <= max)
+        .ok_or_else(|| format!("{key} must be a number from {min} to {max}"))
+}
+
+fn optional_region(args: &Value) -> Result<Option<alas_client::PreviewCaptureTarget>, String> {
+    let Some(value) = args.get("region") else {
+        return Ok(None);
+    };
+    let Value::Object(region) = value else {
+        return Err("preview_capture 'region' must be an object".into());
+    };
+    let x = required_region_number(region, "x", false)?;
+    let y = required_region_number(region, "y", false)?;
+    let width = required_region_number(region, "width", true)?;
+    let height = required_region_number(region, "height", true)?;
+    Ok(Some(alas_client::PreviewCaptureTarget::Region {
+        x,
+        y,
+        width,
+        height,
+    }))
+}
+
+fn required_region_number(
+    region: &serde_json::Map<String, Value>,
+    key: &str,
+    positive: bool,
+) -> Result<f64, String> {
+    let value = region
+        .get(key)
+        .and_then(Value::as_f64)
+        .filter(|value| value.is_finite() && value.abs() <= 100_000.0)
+        .ok_or_else(|| format!("preview_capture 'region.{key}' must be a number"))?;
+    if positive && value <= 0.0 {
+        Err(format!(
+            "preview_capture 'region.{key}' must be greater than 0"
+        ))
+    } else {
+        Ok(value)
+    }
+}
+
+fn preview_id_command(
+    args: &Value,
+    build: impl FnOnce(String) -> alas_client::PreviewCommand,
+) -> Result<Command, String> {
+    Ok(Command::Preview(build(required_limited_string(
+        args,
+        "preview_id",
+        4096,
+    )?)))
+}
+
+fn optional_limited_string(
+    args: &Value,
+    key: &str,
+    max_bytes: usize,
+) -> Result<Option<String>, String> {
+    match optional_non_blank_string(args, key)? {
+        Some(value) if value.len() > max_bytes => {
+            Err(format!("{key} must be at most {max_bytes} bytes"))
+        }
+        value => Ok(value),
+    }
 }
 
 fn optional_non_blank_string(args: &Value, key: &str) -> Result<Option<String>, String> {
@@ -742,6 +1194,14 @@ fn tool_result(command: &Command, resp: Response) -> Value {
     if !resp.ok {
         return text_result(resp.error.unwrap_or_else(|| "request failed".into()), true);
     }
+    if matches!(
+        command,
+        Command::Preview(alas_client::PreviewCommand::Capture { .. })
+    ) {
+        if let Some(result) = capture_tool_result(resp.lines.as_ref()) {
+            return result;
+        }
+    }
     match resp.lines.filter(|lines| !lines.is_empty()) {
         Some(lines) => text_result(lines.join("\n"), false),
         None => text_result(success_message(command), false),
@@ -776,6 +1236,7 @@ fn success_message(command: &Command) -> String {
         Command::WorkspaceShow { .. } => "Workspace Checkout shown.".into(),
         Command::WorkspaceSwitch { .. } => "Switched Alas to Workspace Checkout.".into(),
         Command::WorkspaceFocus { .. } => "Focused Workspace Checkout member.".into(),
+        Command::Preview(_) => "Preview command completed.".into(),
         Command::WtList | Command::Resolve => "OK".into(),
     }
 }
@@ -784,6 +1245,7 @@ fn transport_error_result(err: &TransportError) -> Value {
     // Mirrors describe() in main.rs so agents and humans read the same words.
     let message = match err {
         TransportError::Malformed => "malformed response from Alas",
+        TransportError::ResponseTooLarge => "response from Alas exceeded 12 MiB",
         TransportError::Connect | TransportError::Io => "could not reach Alas",
     };
     text_result(message.into(), true)
@@ -791,6 +1253,161 @@ fn transport_error_result(err: &TransportError) -> Value {
 
 fn text_result(text: String, is_error: bool) -> Value {
     json!({ "content": [{ "type": "text", "text": text }], "isError": is_error })
+}
+
+fn capture_tool_result(lines: Option<&Vec<String>>) -> Option<Value> {
+    let first = lines?.first()?;
+    let mut metadata: Value = serde_json::from_str(first).ok()?;
+    let image = metadata.get("image")?;
+    let mime_type = image.get("mime_type").and_then(Value::as_str)?.to_string();
+    let data = image.get("data").and_then(Value::as_str)?.to_string();
+    metadata.as_object_mut()?.remove("image");
+    let metadata_text =
+        serde_json::to_string_pretty(&metadata).unwrap_or_else(|_| metadata.to_string());
+    let mut content = vec![
+        json!({ "type": "image", "mimeType": mime_type, "data": data }),
+        json!({ "type": "text", "text": metadata_text }),
+    ];
+    if let Some(extra_lines) = lines {
+        if extra_lines.len() > 1 {
+            content.push(json!({ "type": "text", "text": extra_lines[1..].join("\n") }));
+        }
+    }
+    Some(json!({ "content": content, "isError": false }))
+}
+
+fn tools_call_command(
+    msg: &Value,
+    worktree_dir: &str,
+    workspace_only: bool,
+) -> Result<Option<(Value, Command)>, Value> {
+    if msg.get("method").and_then(Value::as_str) != Some("tools/call") {
+        return Ok(None);
+    }
+    let id = msg.get("id").cloned().unwrap_or(Value::Null);
+    let params = msg.get("params").cloned().unwrap_or(Value::Null);
+    let name = match params.get("name").and_then(Value::as_str) {
+        Some(name) => name,
+        None => {
+            return Err(error_reply(id, -32602, "tools/call requires a tool name"));
+        }
+    };
+    if workspace_only && !is_workspace_tool(name) {
+        return Err(error_reply(
+            id,
+            -32602,
+            &format!("tool unavailable in Workspace Checkout context: {name}"),
+        ));
+    }
+    let args = params
+        .get("arguments")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    match command_for_tool(name, &args, worktree_dir) {
+        Ok(command) => Ok(Some((id, command))),
+        Err(message) => Err(error_reply(id, -32602, &message)),
+    }
+}
+
+fn request_key(id: &Value) -> String {
+    id.to_string()
+}
+
+fn preview_id_for_cancel(command: &Command) -> Option<String> {
+    match command {
+        Command::Preview(alas_client::PreviewCommand::Navigate { preview_id, .. })
+        | Command::Preview(alas_client::PreviewCommand::Reload { preview_id })
+        | Command::Preview(alas_client::PreviewCommand::Back { preview_id })
+        | Command::Preview(alas_client::PreviewCommand::Forward { preview_id })
+        | Command::Preview(alas_client::PreviewCommand::Inspect { preview_id, .. })
+        | Command::Preview(alas_client::PreviewCommand::Capture { preview_id, .. })
+        | Command::Preview(alas_client::PreviewCommand::Console { preview_id, .. })
+        | Command::Preview(alas_client::PreviewCommand::Click { preview_id, .. })
+        | Command::Preview(alas_client::PreviewCommand::Type { preview_id, .. })
+        | Command::Preview(alas_client::PreviewCommand::Scroll { preview_id, .. })
+        | Command::Preview(alas_client::PreviewCommand::Wait { preview_id, .. })
+        | Command::Preview(alas_client::PreviewCommand::Cancel { preview_id }) => {
+            Some(preview_id.clone())
+        }
+        Command::Preview(alas_client::PreviewCommand::List)
+        | Command::Preview(alas_client::PreviewCommand::Open { .. }) => None,
+        _ => None,
+    }
+}
+
+fn is_preview_command(command: &Command) -> bool {
+    matches!(command, Command::Preview(_))
+}
+
+fn is_preview_cancel_command(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::Preview(alas_client::PreviewCommand::Cancel { .. })
+    )
+}
+
+fn register_pending_preview(
+    pending: &Mutex<std::collections::HashMap<String, Command>>,
+    id: &Value,
+    command: &Command,
+) -> Option<String> {
+    if preview_id_for_cancel(command).is_none() {
+        return None;
+    }
+    let key = request_key(id);
+    if let Ok(mut pending) = pending.lock() {
+        pending.insert(key.clone(), command.clone());
+        Some(key)
+    } else {
+        None
+    }
+}
+
+fn remove_pending_preview(
+    pending: &Mutex<std::collections::HashMap<String, Command>>,
+    key: Option<&str>,
+) {
+    if let Some(key) = key {
+        if let Ok(mut pending) = pending.lock() {
+            pending.remove(key);
+        }
+    }
+}
+
+fn try_reserve_worker(active_workers: &AtomicUsize, limit: usize) -> bool {
+    active_workers
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
+            (count < limit).then_some(count + 1)
+        })
+        .is_ok()
+}
+
+fn release_worker(active_workers: &AtomicUsize) {
+    active_workers.fetch_sub(1, Ordering::SeqCst);
+}
+
+fn cancellation_request_key(msg: &Value) -> Option<String> {
+    if msg.get("id").is_some() {
+        return None;
+    }
+    let method = msg.get("method").and_then(Value::as_str)?;
+    if method != "notifications/cancelled" && method != "$/cancelRequest" {
+        return None;
+    }
+    let request_id = msg.get("params")?.get("requestId")?;
+    Some(request_key(request_id))
+}
+
+fn cancellation_command_for_message(
+    msg: &Value,
+    pending: &Mutex<std::collections::HashMap<String, Command>>,
+) -> Option<Command> {
+    let key = cancellation_request_key(msg)?;
+    let command = pending.lock().ok()?.get(&key).cloned()?;
+    let preview_id = preview_id_for_cancel(&command)?;
+    Some(Command::Preview(alas_client::PreviewCommand::Cancel {
+        preview_id,
+    }))
 }
 
 /// Blocking stdio server loop: one JSON-RPC message per line in, one per
@@ -804,25 +1421,131 @@ pub fn serve(env: &McpEnv) -> std::io::Result<()> {
 
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
+    let (reply_tx, reply_rx) = std::sync::mpsc::channel::<Value>();
+    let writer = std::thread::spawn(move || -> std::io::Result<()> {
+        let mut out = stdout.lock();
+        for reply in reply_rx {
+            out.write_all(reply.to_string().as_bytes())?;
+            out.write_all(b"\n")?;
+            out.flush()?;
+        }
+        Ok(())
+    });
+    let runtime = McpRuntime::new();
+
     for line in stdin.lock().lines() {
         let line = line?;
         if line.trim().is_empty() {
             continue;
         }
-        if let Some(reply) = handle_line_with_parent(
-            &line,
-            &env.worktree_dir,
-            env.parent_session_id.as_deref(),
-            env.workspace_only,
-            |cmd| dispatch(env, cmd),
-        ) {
-            let mut out = stdout.lock();
-            out.write_all(reply.to_string().as_bytes())?;
-            out.write_all(b"\n")?;
-            out.flush()?;
+        let msg = match serde_json::from_str::<Value>(&line) {
+            Ok(Value::Object(_)) => serde_json::from_str::<Value>(&line).unwrap(),
+            Ok(_) => {
+                let _ = reply_tx.send(error_reply(Value::Null, -32600, "invalid request"));
+                continue;
+            }
+            Err(_) => {
+                let _ = reply_tx.send(error_reply(Value::Null, -32700, "parse error"));
+                continue;
+            }
+        };
+        if let Some(cancel) = cancellation_command_for_message(&msg, &runtime.pending) {
+            if !try_reserve_worker(&runtime.active_workers, MAX_MCP_WORKERS) {
+                continue;
+            }
+            let env = env.clone();
+            let active_workers = Arc::clone(&runtime.active_workers);
+            let spawn = std::thread::Builder::new()
+                .name("alas-mcp-cancel".into())
+                .spawn(move || {
+                    let _ = dispatch(&env, &cancel);
+                    release_worker(&active_workers);
+                });
+            if spawn.is_err() {
+                release_worker(&runtime.active_workers);
+            }
+            continue;
+        }
+        match tools_call_command(&msg, &env.worktree_dir, env.workspace_only) {
+            Ok(Some((id, command))) => {
+                if !is_preview_command(&command) {
+                    let result = match dispatch(env, &command) {
+                        Ok(resp) => tool_result(&command, resp),
+                        Err(err) => transport_error_result(&err),
+                    };
+                    let _ = reply_tx.send(json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": result
+                    }));
+                    continue;
+                }
+                let limit = if is_preview_cancel_command(&command) {
+                    MAX_MCP_WORKERS
+                } else {
+                    MAX_MCP_PREVIEW_CALLS
+                };
+                if !try_reserve_worker(&runtime.active_workers, limit) {
+                    let _ = reply_tx.send(error_reply(
+                        id,
+                        -32000,
+                        "too many concurrent Alas MCP preview calls",
+                    ));
+                    continue;
+                }
+                let key = register_pending_preview(&runtime.pending, &id, &command);
+                let env = env.clone();
+                let reply_tx = reply_tx.clone();
+                let pending = Arc::clone(&runtime.pending);
+                let active_workers = Arc::clone(&runtime.active_workers);
+                let fallback_id = id.clone();
+                let fallback_key = key.clone();
+                let worker_reply_tx = reply_tx.clone();
+                let spawn = std::thread::Builder::new()
+                    .name("alas-mcp-preview-tool".into())
+                    .spawn(move || {
+                        let result = match dispatch(&env, &command) {
+                            Ok(resp) => tool_result(&command, resp),
+                            Err(err) => transport_error_result(&err),
+                        };
+                        remove_pending_preview(&pending, key.as_deref());
+                        release_worker(&active_workers);
+                        let _ = worker_reply_tx.send(json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": result
+                        }));
+                    });
+                if spawn.is_err() {
+                    remove_pending_preview(&runtime.pending, fallback_key.as_deref());
+                    release_worker(&runtime.active_workers);
+                    let _ = reply_tx.send(error_reply(
+                        fallback_id,
+                        -32000,
+                        "could not start preview tool worker",
+                    ));
+                }
+            }
+            Ok(None) => {
+                if let Some(reply) = handle_line_with_parent(
+                    &line,
+                    &env.worktree_dir,
+                    env.parent_session_id.as_deref(),
+                    env.workspace_only,
+                    |cmd| dispatch(env, cmd),
+                ) {
+                    let _ = reply_tx.send(reply);
+                }
+            }
+            Err(reply) => {
+                let _ = reply_tx.send(reply);
+            }
         }
     }
-    Ok(())
+    drop(reply_tx);
+    writer
+        .join()
+        .unwrap_or_else(|_| Err(std::io::Error::other("mcp writer thread panicked")))
 }
 
 /// A parsed HTTP/1.1 request. Only the fields the MCP transport needs are
@@ -895,6 +1618,7 @@ fn http_response(status: u16, content_type: &str, body: &str) -> String {
         400 => "Bad Request",
         401 => "Unauthorized",
         404 => "Not Found",
+        503 => "Service Unavailable",
         _ => "OK",
     };
     format!(
@@ -906,13 +1630,14 @@ fn http_response(status: u16, content_type: &str, body: &str) -> String {
 /// HTTP transport for the same MCP server as `serve`. Binds an ephemeral
 /// localhost port, prints `PORT <n>` on stdout so the app can wire up
 /// `http://localhost:<n>/mcp`, and requires a bearer token matching
-/// `ALAS_MCP_HTTP_TOKEN` on every request. Single-threaded: alas tool calls
-/// are quick and connections are served one at a time with `Connection: close`.
+/// `ALAS_MCP_HTTP_TOKEN` on every request.
 pub fn serve_http(env: &McpEnv) -> std::io::Result<()> {
     use std::io::Write;
     use std::net::TcpListener;
 
     let token = std::env::var("ALAS_MCP_HTTP_TOKEN").unwrap_or_default();
+    let runtime = McpRuntime::new();
+    let active_connections = Arc::new(AtomicUsize::new(0));
 
     // Bind IPv4 loopback first so the OS picks the port, then reuse that same
     // port for IPv6 loopback. We advertise `http://localhost:<port>` (the
@@ -936,13 +1661,39 @@ pub fn serve_http(env: &McpEnv) -> std::io::Result<()> {
     println!("PORT {port}");
     std::io::stdout().flush()?;
 
-    fn serve_one(env: &McpEnv, listener: TcpListener, token: &str) {
+    fn serve_one(
+        env: McpEnv,
+        listener: TcpListener,
+        token: String,
+        runtime: McpRuntime,
+        active_connections: Arc<AtomicUsize>,
+    ) {
         for stream in listener.incoming() {
             match stream {
-                Ok(mut stream) => {
-                    if let Err(err) = handle_http_connection(env, &mut stream, token) {
-                        // A single bad connection must not take down the server.
-                        eprintln!("alas: mcp http connection error: {err}");
+                Ok(stream) => {
+                    if !try_reserve_worker(&active_connections, MAX_HTTP_CONNECTION_WORKERS) {
+                        reject_http_connection(stream);
+                        continue;
+                    }
+                    let env = env.clone();
+                    let token = token.clone();
+                    let runtime = runtime.clone();
+                    let active_connections = Arc::clone(&active_connections);
+                    let worker_active_connections = Arc::clone(&active_connections);
+                    let spawn = std::thread::Builder::new()
+                        .name("alas-mcp-http-connection".into())
+                        .spawn(move || {
+                            let mut stream = stream;
+                            if let Err(err) =
+                                handle_http_connection(&env, &mut stream, &token, &runtime)
+                            {
+                                // A single bad connection must not take down the server.
+                                eprintln!("alas: mcp http connection error: {err}");
+                            }
+                            release_worker(&worker_active_connections);
+                        });
+                    if spawn.is_err() {
+                        release_worker(&active_connections);
                     }
                 }
                 Err(err) => eprintln!("alas: mcp http accept error: {err}"),
@@ -950,27 +1701,42 @@ pub fn serve_http(env: &McpEnv) -> std::io::Result<()> {
         }
     }
 
-    std::thread::scope(|scope| {
-        scope.spawn(|| serve_one(env, v4_listener, &token));
-        if let Some(v6) = v6_listener {
-            scope.spawn(|| serve_one(env, v6, &token));
-        }
-    });
+    if let Some(v6) = v6_listener {
+        let env = env.clone();
+        let token = token.clone();
+        let runtime = runtime.clone();
+        let active_connections = Arc::clone(&active_connections);
+        let _ = std::thread::Builder::new()
+            .name("alas-mcp-http-v6".into())
+            .spawn(move || serve_one(env, v6, token, runtime, active_connections));
+    }
+    serve_one(env.clone(), v4_listener, token, runtime, active_connections);
     Ok(())
+}
+
+fn reject_http_connection(mut stream: std::net::TcpStream) {
+    use std::io::Write;
+
+    let response = http_response(
+        503,
+        "text/plain",
+        "too many concurrent MCP HTTP connections",
+    );
+    let _ = stream.write_all(response.as_bytes());
+    let _ = stream.flush();
 }
 
 fn handle_http_connection(
     env: &McpEnv,
     stream: &mut std::net::TcpStream,
     token: &str,
+    runtime: &McpRuntime,
 ) -> std::io::Result<()> {
     use std::io::{ErrorKind, Read, Write};
-    use std::time::Duration;
-
     // The accept loop is single-threaded, so a client that connects and never
     // sends a complete request must not wedge every other session. Bound the
     // (pre-auth) read with a timeout; on timeout we answer 400 and move on.
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(15)));
+    let _ = stream.set_read_timeout(Some(HTTP_IO_TIMEOUT));
 
     const MAX_REQUEST_BYTES: usize = 1024 * 1024;
     let mut buf: Vec<u8> = Vec::new();
@@ -1000,10 +1766,11 @@ fn handle_http_connection(
     };
 
     let response = match request {
-        Ok(Some(req)) => build_http_response(env, &req, token),
+        Ok(Some(req)) => build_http_response(env, &req, token, runtime),
         Ok(None) => http_response(400, "text/plain", "bad request"),
         Err(message) => http_response(400, "text/plain", message),
     };
+    let _ = stream.set_write_timeout(Some(HTTP_IO_TIMEOUT));
     stream.write_all(response.as_bytes())?;
     stream.flush()?;
     Ok(())
@@ -1022,7 +1789,12 @@ fn is_initialize_message(body: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn build_http_response(env: &McpEnv, req: &HttpRequest, token: &str) -> String {
+fn build_http_response(
+    env: &McpEnv,
+    req: &HttpRequest,
+    token: &str,
+    runtime: &McpRuntime,
+) -> String {
     // No token configured, or a mismatch, is a flat 401 with no detail so the
     // response never distinguishes "no token here" from "wrong token".
     if token.is_empty() || req.bearer.as_deref() != Some(token) {
@@ -1038,6 +1810,61 @@ fn build_http_response(env: &McpEnv, req: &HttpRequest, token: &str) -> String {
     // reconnects and re-sends `initialize`. `recordHello` is idempotent.
     if is_initialize_message(&req.body) {
         alas_client::send_hello(&env.socket, &env.session_id, "http");
+    }
+
+    let msg = match serde_json::from_str::<Value>(&req.body) {
+        Ok(Value::Object(_)) => serde_json::from_str::<Value>(&req.body).ok(),
+        Ok(_) => {
+            return http_response(
+                200,
+                "application/json",
+                &error_reply(Value::Null, -32600, "invalid request").to_string(),
+            );
+        }
+        Err(_) => {
+            return http_response(
+                200,
+                "application/json",
+                &error_reply(Value::Null, -32700, "parse error").to_string(),
+            );
+        }
+    };
+    if let Some(msg) = msg {
+        if let Some(cancel) = cancellation_command_for_message(&msg, &runtime.pending) {
+            let _ = dispatch(env, &cancel);
+            return http_response(202, "application/json", "");
+        }
+        match tools_call_command(&msg, &env.worktree_dir, env.workspace_only) {
+            Ok(Some((id, command))) if is_preview_command(&command) => {
+                let limit = if is_preview_cancel_command(&command) {
+                    MAX_MCP_WORKERS
+                } else {
+                    MAX_MCP_PREVIEW_CALLS
+                };
+                if !try_reserve_worker(&runtime.active_workers, limit) {
+                    return http_response(
+                        200,
+                        "application/json",
+                        &error_reply(id, -32000, "too many concurrent Alas MCP preview calls")
+                            .to_string(),
+                    );
+                }
+                let key = register_pending_preview(&runtime.pending, &id, &command);
+                let result = match dispatch(env, &command) {
+                    Ok(resp) => tool_result(&command, resp),
+                    Err(err) => transport_error_result(&err),
+                };
+                remove_pending_preview(&runtime.pending, key.as_deref());
+                release_worker(&runtime.active_workers);
+                let reply = json!({ "jsonrpc": "2.0", "id": id, "result": result });
+                return http_response(200, "application/json", &reply.to_string());
+            }
+            Ok(Some(_)) => {}
+            Ok(None) => {}
+            Err(reply) => {
+                return http_response(200, "application/json", &reply.to_string());
+            }
+        }
     }
 
     match handle_line_with_parent(
@@ -1056,11 +1883,13 @@ fn build_http_response(env: &McpEnv, req: &HttpRequest, token: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        command_for_tool, dispatch, env_from, handle_line, handle_line_with_parent, http_response,
-        is_initialize_message, parse_http_request, McpEnv, PROTOCOL_VERSION,
+        HttpRequest, McpEnv, McpRuntime, PROTOCOL_VERSION, build_http_response,
+        cancellation_command_for_message, command_for_tool, dispatch, env_from, handle_line,
+        handle_line_with_parent, http_response, is_initialize_message, parse_http_request,
+        tools_call_command,
     };
     use alas_client::{Command, Response};
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     #[test]
     fn detects_initialize_messages() {
@@ -1117,27 +1946,35 @@ mod tests {
 
     #[test]
     fn env_from_requires_both_vars() {
-        assert!(env_from(env(&[
-            ("ALAS_WORKTREE_DIR", "/wt"),
-            ("ALAS_SESSION_ID", "s1")
-        ]))
-        .is_err());
-        assert!(env_from(env(&[
-            ("ALAS_SOCKET_PATH", "/tmp/s"),
-            ("ALAS_SESSION_ID", "s1")
-        ]))
-        .is_err());
-        assert!(env_from(env(&[
-            ("ALAS_SOCKET_PATH", "/tmp/s"),
-            ("ALAS_WORKTREE_DIR", "/wt")
-        ]))
-        .is_err());
-        assert!(env_from(env(&[
-            ("ALAS_SOCKET_PATH", ""),
-            ("ALAS_WORKTREE_DIR", "/wt"),
-            ("ALAS_SESSION_ID", "s1")
-        ]))
-        .is_err());
+        assert!(
+            env_from(env(&[
+                ("ALAS_WORKTREE_DIR", "/wt"),
+                ("ALAS_SESSION_ID", "s1")
+            ]))
+            .is_err()
+        );
+        assert!(
+            env_from(env(&[
+                ("ALAS_SOCKET_PATH", "/tmp/s"),
+                ("ALAS_SESSION_ID", "s1")
+            ]))
+            .is_err()
+        );
+        assert!(
+            env_from(env(&[
+                ("ALAS_SOCKET_PATH", "/tmp/s"),
+                ("ALAS_WORKTREE_DIR", "/wt")
+            ]))
+            .is_err()
+        );
+        assert!(
+            env_from(env(&[
+                ("ALAS_SOCKET_PATH", ""),
+                ("ALAS_WORKTREE_DIR", "/wt"),
+                ("ALAS_SESSION_ID", "s1")
+            ]))
+            .is_err()
+        );
         let ok = env_from(env(&[
             ("ALAS_SOCKET_PATH", "/tmp/s"),
             ("ALAS_WORKTREE_DIR", "/wt"),
@@ -1160,12 +1997,14 @@ mod tests {
 
     #[test]
     fn env_from_rejects_relative_worktree_dir() {
-        assert!(env_from(env(&[
-            ("ALAS_SOCKET_PATH", "/tmp/s"),
-            ("ALAS_WORKTREE_DIR", "wt"),
-            ("ALAS_SESSION_ID", "s1")
-        ]))
-        .is_err());
+        assert!(
+            env_from(env(&[
+                ("ALAS_SOCKET_PATH", "/tmp/s"),
+                ("ALAS_WORKTREE_DIR", "wt"),
+                ("ALAS_SESSION_ID", "s1")
+            ]))
+            .is_err()
+        );
     }
 
     #[test]
@@ -1210,12 +2049,14 @@ mod tests {
             }
         );
 
-        assert!(command_for_tool(
-            "notify",
-            &json!({ "body": "Done", "level": "urgent" }),
-            "/wt"
-        )
-        .is_err());
+        assert!(
+            command_for_tool(
+                "notify",
+                &json!({ "body": "Done", "level": "urgent" }),
+                "/wt"
+            )
+            .is_err()
+        );
         assert!(command_for_tool("notify", &json!({ "title": "Missing body" }), "/wt").is_err());
     }
 
@@ -1266,6 +2107,20 @@ mod tests {
                 "review_resolve",
                 "review_comment_add",
                 "review_finish",
+                "preview_list",
+                "preview_open",
+                "preview_navigate",
+                "preview_reload",
+                "preview_back",
+                "preview_forward",
+                "preview_inspect",
+                "preview_capture",
+                "preview_console",
+                "preview_click",
+                "preview_type",
+                "preview_scroll",
+                "preview_wait",
+                "preview_cancel",
                 "workspace_list",
                 "workspace_show",
                 "workspace_switch",
@@ -1321,12 +2176,14 @@ mod tests {
                 member_id: member.into()
             }
         );
-        assert!(command_for_tool(
-            "workspace_focus",
-            &json!({ "checkout_id": checkout }),
-            "/wt"
-        )
-        .is_err());
+        assert!(
+            command_for_tool(
+                "workspace_focus",
+                &json!({ "checkout_id": checkout }),
+                "/wt"
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -1348,6 +2205,20 @@ mod tests {
         assert_eq!(
             names,
             vec![
+                "preview_list",
+                "preview_open",
+                "preview_navigate",
+                "preview_reload",
+                "preview_back",
+                "preview_forward",
+                "preview_inspect",
+                "preview_capture",
+                "preview_console",
+                "preview_click",
+                "preview_type",
+                "preview_scroll",
+                "preview_wait",
+                "preview_cancel",
                 "workspace_list",
                 "workspace_show",
                 "workspace_switch",
@@ -1377,6 +2248,328 @@ mod tests {
         )
         .unwrap();
         assert!(workspace.get("error").is_none());
+
+        let preview = handle_line_with_parent(
+            r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"preview_list","arguments":{}}}"#,
+            "/checkout",
+            None,
+            true,
+            |command| {
+                assert_eq!(*command, Command::Preview(alas_client::PreviewCommand::List));
+                Ok(Response {
+                    ok: true,
+                    lines: Some(vec![r#"{"version":1,"previews":[]}"#.into()]),
+                    error: None,
+                    exit_code: None,
+                })
+            },
+        )
+        .unwrap();
+        assert!(preview.get("error").is_none());
+
+        let preview_open = handle_line_with_parent(
+            r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"preview_open","arguments":{"url":"http://127.0.0.1:5173"}}}"#,
+            "/checkout",
+            None,
+            true,
+            |command| {
+                assert_eq!(
+                    *command,
+                    Command::Preview(alas_client::PreviewCommand::Open {
+                        url: Some("http://127.0.0.1:5173".into()),
+                        script_key: None,
+                    })
+                );
+                Ok(Response {
+                    ok: true,
+                    lines: Some(vec![r#"{"version":1,"preview_id":"p1"}"#.into()]),
+                    error: None,
+                    exit_code: None,
+                })
+            },
+        )
+        .unwrap();
+        assert!(preview_open.get("error").is_none());
+    }
+
+    #[test]
+    fn workspace_only_preparsed_tool_call_accepts_preview_tools() {
+        let msg: Value = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"preview_open","arguments":{"url":"http://127.0.0.1:5173"}}}"#,
+        )
+        .unwrap();
+        let (id, command) = tools_call_command(&msg, "/checkout", true)
+            .unwrap()
+            .expect("preview tool call");
+        assert_eq!(id, json!(9));
+        assert_eq!(
+            command,
+            Command::Preview(alas_client::PreviewCommand::Open {
+                url: Some("http://127.0.0.1:5173".into()),
+                script_key: None,
+            })
+        );
+    }
+
+    #[test]
+    fn workspace_only_mode_exposes_preview_tools_too() {
+        let list = handle_line_with_parent(
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
+            "/checkout",
+            None,
+            true,
+            |_| unreachable!(),
+        )
+        .unwrap();
+        let names: Vec<_> = list["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"workspace_list"));
+        assert!(names.contains(&"preview_capture"));
+        assert!(!names.contains(&"open"));
+    }
+
+    #[test]
+    fn preview_tools_validate_arguments_and_map_to_commands() {
+        assert_eq!(
+            command_for_tool(
+                "preview_open",
+                &json!({ "url": "http://127.0.0.1:5173" }),
+                "/wt"
+            )
+            .unwrap(),
+            alas_client::Command::Preview(alas_client::PreviewCommand::Open {
+                url: Some("http://127.0.0.1:5173".into()),
+                script_key: None
+            })
+        );
+        assert_eq!(
+            command_for_tool(
+                "preview_capture",
+                &json!({ "preview_id": "p1", "element_id": "e1" }),
+                "/wt"
+            )
+            .unwrap(),
+            alas_client::Command::Preview(alas_client::PreviewCommand::Capture {
+                preview_id: "p1".into(),
+                target: alas_client::PreviewCaptureTarget::Element {
+                    element_id: "e1".into()
+                }
+            })
+        );
+        assert!(
+            command_for_tool(
+                "preview_open",
+                &json!({ "url": "http://localhost", "script_key": "web" }),
+                "/wt"
+            )
+            .is_err()
+        );
+        assert!(
+            command_for_tool(
+                "preview_inspect",
+                &json!({ "preview_id": "p1", "limit": 101 }),
+                "/wt"
+            )
+            .is_err()
+        );
+        assert!(
+            command_for_tool(
+                "preview_scroll",
+                &json!({ "preview_id": "p1", "x": 0, "y": -100001 }),
+                "/wt"
+            )
+            .is_err()
+        );
+        assert!(
+            command_for_tool(
+                "preview_wait",
+                &json!({ "preview_id": "p1", "condition": "hidden" }),
+                "/wt"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn preview_tools_validate_swift_schema_bounds() {
+        assert!(
+            command_for_tool("preview_open", &json!({ "url": "h".repeat(8193) }), "/wt").is_err()
+        );
+        assert!(
+            command_for_tool(
+                "preview_inspect",
+                &json!({ "preview_id": "p".repeat(4097) }),
+                "/wt"
+            )
+            .is_err()
+        );
+        assert!(
+            command_for_tool(
+                "preview_type",
+                &json!({ "preview_id": "p1", "element_id": "e1", "text": "é".repeat(20_001) }),
+                "/wt"
+            )
+            .is_err()
+        );
+        assert!(
+            command_for_tool(
+                "preview_capture",
+                &json!({ "preview_id": "p1", "region": { "x": 100001.0, "y": 0, "width": 1, "height": 1 } }),
+                "/wt"
+            )
+            .is_err()
+        );
+        assert_eq!(
+            command_for_tool(
+                "preview_scroll",
+                &json!({ "preview_id": "p1", "x": 0.5, "y": -1.25 }),
+                "/wt"
+            )
+            .unwrap(),
+            Command::Preview(alas_client::PreviewCommand::Scroll {
+                preview_id: "p1".into(),
+                x: 0.5,
+                y: -1.25
+            })
+        );
+    }
+
+    #[test]
+    fn cancellation_notification_maps_pending_preview_request_to_cancel_command() {
+        let pending = std::sync::Mutex::new(std::collections::HashMap::from([(
+            json!(7).to_string(),
+            Command::Preview(alas_client::PreviewCommand::Wait {
+                preview_id: "runtime-preview-id".into(),
+                condition: alas_client::PreviewWaitCondition::Loaded,
+                selector: None,
+                timeout_ms: 20_000,
+            }),
+        )]));
+        let msg: Value = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":7,"reason":"user requested cancellation"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            cancellation_command_for_message(&msg, &pending),
+            Some(Command::Preview(alas_client::PreviewCommand::Cancel {
+                preview_id: "runtime-preview-id".into()
+            }))
+        );
+    }
+
+    #[test]
+    fn http_cancellation_notification_uses_pending_preview_map() {
+        let runtime = McpRuntime::new();
+        runtime.pending.lock().unwrap().insert(
+            json!("wait-1").to_string(),
+            Command::Preview(alas_client::PreviewCommand::Wait {
+                preview_id: "runtime-preview-id".into(),
+                condition: alas_client::PreviewWaitCondition::Loaded,
+                selector: None,
+                timeout_ms: 20_000,
+            }),
+        );
+        let env = McpEnv {
+            socket: "/tmp/alas-no-such-socket-for-cancel-test".into(),
+            worktree_dir: "/wt".into(),
+            session_id: "s1".into(),
+            parent_session_id: None,
+            workspace_only: false,
+        };
+        let req = HttpRequest {
+            method: "POST".into(),
+            path: "/mcp".into(),
+            bearer: Some("tok".into()),
+            body: r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":"wait-1"}}"#.into(),
+        };
+
+        let response = build_http_response(&env, &req, "tok", &runtime);
+
+        assert!(response.starts_with("HTTP/1.1 202 Accepted"));
+    }
+
+    #[test]
+    fn preview_capture_result_extracts_mcp_image_and_keeps_metadata_text() {
+        let line = json!({
+            "version": 1,
+            "url": "http://127.0.0.1:5173/",
+            "captured_at": "2026-09-12T10:00:00Z",
+            "viewport": { "width": 800, "height": 600 },
+            "image": { "mime_type": "image/png", "data": "iVBORw0KGgo=" }
+        })
+        .to_string();
+        let reply = handle_line(
+            r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"preview_capture","arguments":{"preview_id":"p1"}}}"#,
+            "/wt",
+            |command| {
+                assert!(matches!(
+                    command,
+                    Command::Preview(alas_client::PreviewCommand::Capture { .. })
+                ));
+                Ok(Response {
+                    ok: true,
+                    lines: Some(vec![line.clone()]),
+                    error: None,
+                    exit_code: None,
+                })
+            },
+        )
+        .unwrap();
+
+        let content = reply["result"]["content"].as_array().unwrap();
+        assert_eq!(content[0]["type"], json!("image"));
+        assert_eq!(content[0]["mimeType"], json!("image/png"));
+        assert_eq!(content[0]["data"], json!("iVBORw0KGgo="));
+        assert_eq!(content[1]["type"], json!("text"));
+        assert!(content[1]["text"].as_str().unwrap().contains("\"url\""));
+        assert!(!content[1]["text"].as_str().unwrap().contains("\"image\""));
+    }
+
+    #[test]
+    fn preview_tool_schemas_include_security_hints() {
+        let reply = handle_line(
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
+            "/wt",
+            |_| unreachable!(),
+        )
+        .unwrap();
+        let tools = reply["result"]["tools"].as_array().unwrap();
+        let by_name = |name: &str| {
+            tools
+                .iter()
+                .find(|tool| tool["name"] == json!(name))
+                .expect("tool exists")
+        };
+        assert_eq!(
+            by_name("preview_list")["annotations"]["readOnlyHint"],
+            json!(true)
+        );
+        assert_eq!(
+            by_name("preview_click")["annotations"]["destructiveHint"],
+            json!(true)
+        );
+        assert_eq!(
+            by_name("preview_type")["annotations"]["destructiveHint"],
+            json!(true)
+        );
+        assert_eq!(
+            by_name("preview_console")["annotations"]["readOnlyHint"],
+            json!(false)
+        );
+        assert_eq!(
+            by_name("preview_console")["annotations"]["destructiveHint"],
+            json!(true)
+        );
+        assert_eq!(
+            by_name("preview_console")["inputSchema"]["properties"]["clear"]["description"],
+            json!(
+                "Return current console metadata, then clear stored entries. This is destructive."
+            )
+        );
     }
 
     #[test]
@@ -1435,12 +2628,14 @@ mod tests {
             "/wt"
         )
         .is_err());
-        assert!(command_for_tool(
-            "session_send",
-            &json!({ "session_id": "child", "prompt": "  " }),
-            "/wt"
-        )
-        .is_err());
+        assert!(
+            command_for_tool(
+                "session_send",
+                &json!({ "session_id": "child", "prompt": "  " }),
+                "/wt"
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -1476,12 +2671,14 @@ mod tests {
     fn open_rejects_invalid_line_targets() {
         assert!(command_for_tool("open", &json!({"path": "a", "line": 0}), "/wt").is_err());
         assert!(command_for_tool("open", &json!({"path": "a", "end_line": 2}), "/wt").is_err());
-        assert!(command_for_tool(
-            "open",
-            &json!({"path": "a", "line": 3, "end_line": 2}),
-            "/wt"
-        )
-        .is_err());
+        assert!(
+            command_for_tool(
+                "open",
+                &json!({"path": "a", "line": 3, "end_line": 2}),
+                "/wt"
+            )
+            .is_err()
+        );
         assert!(command_for_tool("open", &json!({"paths": ["a", "b"], "line": 2}), "/wt").is_err());
         assert!(command_for_tool("open", &json!({"path": "a", "paths": ["a"]}), "/wt").is_err());
     }
@@ -1696,12 +2893,14 @@ mod tests {
                 reopen: true
             }
         );
-        assert!(command_for_tool(
-            "review_resolve",
-            &json!({"comment_id": "c1", "state": "bogus"}),
-            "/wt"
-        )
-        .is_err());
+        assert!(
+            command_for_tool(
+                "review_resolve",
+                &json!({"comment_id": "c1", "state": "bogus"}),
+                "/wt"
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -1722,24 +2921,30 @@ mod tests {
                 session_id: None,
             }
         );
-        assert!(command_for_tool(
-            "review_comment_add",
-            &json!({"path": "a.swift", "body": "hm"}),
-            "/wt"
-        )
-        .is_err());
-        assert!(command_for_tool(
-            "review_comment_add",
-            &json!({"path": "a.swift", "start_line": 0, "body": "hm"}),
-            "/wt"
-        )
-        .is_err());
-        assert!(command_for_tool(
-            "review_comment_add",
-            &json!({"path": "a.swift", "start_line": 3, "body": "hm", "side": "sideways"}),
-            "/wt"
-        )
-        .is_err());
+        assert!(
+            command_for_tool(
+                "review_comment_add",
+                &json!({"path": "a.swift", "body": "hm"}),
+                "/wt"
+            )
+            .is_err()
+        );
+        assert!(
+            command_for_tool(
+                "review_comment_add",
+                &json!({"path": "a.swift", "start_line": 0, "body": "hm"}),
+                "/wt"
+            )
+            .is_err()
+        );
+        assert!(
+            command_for_tool(
+                "review_comment_add",
+                &json!({"path": "a.swift", "start_line": 3, "body": "hm", "side": "sideways"}),
+                "/wt"
+            )
+            .is_err()
+        );
     }
 
     #[test]

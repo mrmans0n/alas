@@ -6,6 +6,57 @@ import Testing
 /// shell lifetime, worktree isolation, and interrupted execution.
 @MainActor
 struct AppStateRunRecordTests {
+    @Test func previewAutomationResolvesConfiguredRunHost() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let scripts = RunScriptStore.repoScriptsDir(worktreeRoot: fixture.directory)
+        try FileManager.default.createDirectory(at: scripts, withIntermediateDirectories: true)
+        try "# alas-url: http://devbox:5173\necho hi\n".write(
+            to: scripts.appendingPathComponent("dev.sh"), atomically: true, encoding: .utf8
+        )
+        fixture.state.runRecords.begin(RunRecord(
+            id: "remote-run", scriptKey: "repo:dev.sh", scriptName: "Dev",
+            worktreeID: fixture.worktree.id, branch: fixture.worktree.branch,
+            target: .init(host: "devbox", workingDirectory: "/srv/repo"),
+            endpoint: URL(string: "http://devbox:5173"), status: .running, startedAt: .now
+        ))
+        let target = try await fixture.state.previewOpenTarget(
+            .init(action: .open, scriptKey: "repo:dev.sh"), owner: .worktree(fixture.worktree.id)
+        )
+        #expect(target.remoteHost == "devbox")
+        #expect(target.url?.host == "devbox")
+        await #expect(throws: WebPreviewAutomationError.self) {
+            try await fixture.state.previewOpenTarget(
+                .init(action: .open, scriptKey: "missing"), owner: .worktree(fixture.worktree.id)
+            )
+        }
+    }
+
+    @Test func previewAutomationRequiresWritableOpenSession() async throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let owner = SessionOwnerID.worktree(fixture.worktree.id)
+        let manager = try #require(fixture.state.acpManager(for: fixture.worktree))
+        let session = manager.createSession(id: "preview-caller-\(UUID())", agentId: "test")
+        let router = fixture.state.makeCLICommandRouter(
+            sessionWorktreeLookup: { _ in fixture.worktree.id }, sessionOwnerLookup: { _ in owner }
+        )
+        let request = AlasCLIRequest(version: 1, sessionId: session.id, cwd: nil, command: .preview(.init(action: .list)))
+        let denied = await router.handle(request)
+        guard case .error = denied else { Issue.record("Read-only session must be denied")
+        return }
+        _ = await manager.acquireWriterLease(sessionId: session.id)
+        fixture.state.tabs.append(acpSession: .init(sessionId: session.id, title: "Caller"), to: owner)
+        let allowed = await router.handle(request)
+        guard case .text(let lines) = allowed else { Issue.record("Writable open session must be accepted")
+        return }
+        #expect(lines.first?.contains("previews") == true)
+        fixture.state.tabs.closeAll(worktreeId: owner.storageKey)
+        let closed = await router.handle(request)
+        guard case .error = closed else { Issue.record("Closed session tab must be denied")
+        return }
+    }
+
     @Test func endpointLaunchOpensOnlyItsOwningPreview() throws {
         let endpoint = URL(string: "http://localhost:5173")!
         let fixture = try makeFixture(endpoint: endpoint)

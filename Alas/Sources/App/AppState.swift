@@ -5050,6 +5050,27 @@ final class AppState {
                 guard let self else { return .error("Alas is not available.") }
                 return await self.cliWorkspace(command)
             },
+            previewCommand: { [weak self] command, owner, sessionID in
+                guard let self else { return .error("Alas is not available.") }
+                return await self.cliPreview(command, owner: owner, isAuthorized: { [weak self] in
+                    guard let self, self.previewOwnerIsAvailable(owner) else { return false }
+                    guard let sessionID else { return true }
+                    let currentOwner = sessionOwnerLookup(sessionID)
+                        ?? sessionWorktreeLookup(sessionID).map(SessionOwnerID.worktree)
+                    guard currentOwner == owner else { return false }
+                    if let session = self.session(for: sessionID) {
+                        return session.owner == owner && self.isWriter(for: sessionID)
+                            && self.tabs.tabs(for: owner).contains {
+                                guard case .acpSession(let tab) = $0 else { return false }
+                                return tab.sessionId == sessionID
+                            }
+                    }
+                    return self.tabs.tabs(for: owner).contains {
+                        guard case .terminal(let tab) = $0 else { return false }
+                        return tab.root.leaves().contains { $0.id == sessionID || $0.sessionId == sessionID }
+                    }
+                })
+            },
             activateApp: {
                 NSApp.activate(ignoringOtherApps: true)
             }

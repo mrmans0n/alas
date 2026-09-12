@@ -200,7 +200,98 @@ pub enum Command {
         checkout_id: String,
         member_id: String,
     },
+    Preview(PreviewCommand),
     Resolve,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PreviewCommand {
+    List,
+    Open {
+        url: Option<String>,
+        script_key: Option<String>,
+    },
+    Navigate {
+        preview_id: String,
+        url: String,
+    },
+    Reload {
+        preview_id: String,
+    },
+    Back {
+        preview_id: String,
+    },
+    Forward {
+        preview_id: String,
+    },
+    Inspect {
+        preview_id: String,
+        selector: Option<String>,
+        limit: u64,
+    },
+    Capture {
+        preview_id: String,
+        target: PreviewCaptureTarget,
+    },
+    Console {
+        preview_id: String,
+        clear: bool,
+    },
+    Click {
+        preview_id: String,
+        element_id: String,
+    },
+    Type {
+        preview_id: String,
+        element_id: String,
+        text: String,
+        append: bool,
+    },
+    Scroll {
+        preview_id: String,
+        x: f64,
+        y: f64,
+    },
+    Wait {
+        preview_id: String,
+        condition: PreviewWaitCondition,
+        selector: Option<String>,
+        timeout_ms: u64,
+    },
+    Cancel {
+        preview_id: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PreviewCaptureTarget {
+    Viewport,
+    Element {
+        element_id: String,
+    },
+    Region {
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PreviewWaitCondition {
+    Loaded,
+    Visible,
+    Hidden,
+}
+
+impl PreviewWaitCondition {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PreviewWaitCondition::Loaded => "loaded",
+            PreviewWaitCondition::Visible => "visible",
+            PreviewWaitCondition::Hidden => "hidden",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -463,11 +554,161 @@ pub fn build_request(
                 Some(serde_json::json!({ "checkout_id": checkout_id, "member_id": member_id }));
             r
         }
+        Command::Preview(preview) => preview_request(preview),
         Command::Resolve => Request::new("resolve"),
     };
     req.session_id = session_id;
     req.cwd = cwd;
     req
+}
+
+fn preview_request(command: &PreviewCommand) -> Request {
+    match command {
+        PreviewCommand::List => {
+            let mut request = Request::new("preview_list");
+            request.params = Some(serde_json::json!({}));
+            request
+        }
+        PreviewCommand::Open { url, script_key } => {
+            let mut request = Request::new("preview_open");
+            let mut params = serde_json::Map::new();
+            if let Some(url) = url {
+                params.insert("url".into(), serde_json::Value::String(url.clone()));
+            }
+            if let Some(script_key) = script_key {
+                params.insert(
+                    "script_key".into(),
+                    serde_json::Value::String(script_key.clone()),
+                );
+            }
+            request.params = Some(serde_json::Value::Object(params));
+            request
+        }
+        PreviewCommand::Navigate { preview_id, url } => {
+            preview_request_with_params("preview_navigate", preview_id, |params| {
+                params.insert("url".into(), serde_json::Value::String(url.clone()));
+            })
+        }
+        PreviewCommand::Reload { preview_id } => {
+            preview_request_with_params("preview_reload", preview_id, |_| {})
+        }
+        PreviewCommand::Back { preview_id } => {
+            preview_request_with_params("preview_back", preview_id, |_| {})
+        }
+        PreviewCommand::Forward { preview_id } => {
+            preview_request_with_params("preview_forward", preview_id, |_| {})
+        }
+        PreviewCommand::Inspect {
+            preview_id,
+            selector,
+            limit,
+        } => preview_request_with_params("preview_inspect", preview_id, |params| {
+            if let Some(selector) = selector {
+                params.insert(
+                    "selector".into(),
+                    serde_json::Value::String(selector.clone()),
+                );
+            }
+            params.insert("limit".into(), serde_json::Value::from(*limit));
+        }),
+        PreviewCommand::Capture { preview_id, target } => {
+            preview_request_with_params("preview_capture", preview_id, |params| match target {
+                PreviewCaptureTarget::Viewport => {}
+                PreviewCaptureTarget::Element { element_id } => {
+                    params.insert(
+                        "element_id".into(),
+                        serde_json::Value::String(element_id.clone()),
+                    );
+                }
+                PreviewCaptureTarget::Region {
+                    x,
+                    y,
+                    width,
+                    height,
+                } => {
+                    params.insert(
+                        "region".into(),
+                        serde_json::json!({
+                            "x": x,
+                            "y": y,
+                            "width": width,
+                            "height": height
+                        }),
+                    );
+                }
+            })
+        }
+        PreviewCommand::Console { preview_id, clear } => {
+            preview_request_with_params("preview_console", preview_id, |params| {
+                params.insert("clear".into(), serde_json::Value::Bool(*clear));
+            })
+        }
+        PreviewCommand::Click {
+            preview_id,
+            element_id,
+        } => preview_request_with_params("preview_click", preview_id, |params| {
+            params.insert(
+                "element_id".into(),
+                serde_json::Value::String(element_id.clone()),
+            );
+        }),
+        PreviewCommand::Type {
+            preview_id,
+            element_id,
+            text,
+            append,
+        } => preview_request_with_params("preview_type", preview_id, |params| {
+            params.insert(
+                "element_id".into(),
+                serde_json::Value::String(element_id.clone()),
+            );
+            params.insert("text".into(), serde_json::Value::String(text.clone()));
+            params.insert("append".into(), serde_json::Value::Bool(*append));
+        }),
+        PreviewCommand::Scroll { preview_id, x, y } => {
+            preview_request_with_params("preview_scroll", preview_id, |params| {
+                params.insert("x".into(), serde_json::Value::from(*x));
+                params.insert("y".into(), serde_json::Value::from(*y));
+            })
+        }
+        PreviewCommand::Wait {
+            preview_id,
+            condition,
+            selector,
+            timeout_ms,
+        } => preview_request_with_params("preview_wait", preview_id, |params| {
+            params.insert(
+                "condition".into(),
+                serde_json::Value::String(condition.as_str().into()),
+            );
+            if let Some(selector) = selector {
+                params.insert(
+                    "selector".into(),
+                    serde_json::Value::String(selector.clone()),
+                );
+            }
+            params.insert("timeout_ms".into(), serde_json::Value::from(*timeout_ms));
+        }),
+        PreviewCommand::Cancel { preview_id } => {
+            preview_request_with_params("preview_cancel", preview_id, |_| {})
+        }
+    }
+}
+
+fn preview_request_with_params(
+    name: &'static str,
+    preview_id: &str,
+    add: impl FnOnce(&mut serde_json::Map<String, serde_json::Value>),
+) -> Request {
+    let mut request = Request::new(name);
+    let mut params = serde_json::Map::new();
+    params.insert(
+        "preview_id".into(),
+        serde_json::Value::String(preview_id.to_string()),
+    );
+    add(&mut params);
+    request.params = Some(serde_json::Value::Object(params));
+    request
 }
 
 pub fn build_session_request(command: &Command, session_id: String, cwd: String) -> Request {
@@ -547,6 +788,7 @@ pub enum TransportError {
     Connect,
     Io,
     Malformed,
+    ResponseTooLarge,
 }
 
 /// Bound on how long `send` will wait for a reply. Comfortably covers the
@@ -554,6 +796,7 @@ pub enum TransportError {
 /// bounded the same way, while keeping a wedged app from hanging the shell
 /// forever.
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_RESPONSE_BYTES: usize = 12 * 1024 * 1024;
 
 /// Bound on how long a single non-mutating `resolve` probe (used to find the
 /// owning instance among several live sockets) may take. Kept short and
@@ -583,9 +826,17 @@ fn send_with_timeout(
     stream.write_all(&payload).map_err(|_| TransportError::Io)?;
     stream.flush().map_err(|_| TransportError::Io)?;
     let mut buf = Vec::new();
-    stream
-        .read_to_end(&mut buf)
-        .map_err(|_| TransportError::Io)?;
+    let mut chunk = [0u8; 8192];
+    loop {
+        let read = stream.read(&mut chunk).map_err(|_| TransportError::Io)?;
+        if read == 0 {
+            break;
+        }
+        if buf.len() + read > MAX_RESPONSE_BYTES {
+            return Err(TransportError::ResponseTooLarge);
+        }
+        buf.extend_from_slice(&chunk[..read]);
+    }
     serde_json::from_slice(&buf).map_err(|_| TransportError::Malformed)
 }
 
@@ -793,10 +1044,8 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let socket = std::env::temp_dir().join(format!(
-            "alas-hello-{}-{unique}.sock",
-            std::process::id()
-        ));
+        let socket =
+            std::env::temp_dir().join(format!("alas-hello-{}-{unique}.sock", std::process::id()));
         let server_socket = socket.clone();
         let server = thread::spawn(move || {
             thread::sleep(Duration::from_millis(2_500));
@@ -832,10 +1081,8 @@ mod tests {
 
     #[test]
     fn send_hello_does_not_block_when_ack_is_delayed() {
-        let socket = std::env::temp_dir().join(format!(
-            "alas-hello-{}-delayed.sock",
-            std::process::id()
-        ));
+        let socket =
+            std::env::temp_dir().join(format!("alas-hello-{}-delayed.sock", std::process::id()));
         let listener = UnixListener::bind(&socket).unwrap();
         let (accepted_tx, accepted_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
@@ -850,7 +1097,9 @@ mod tests {
         let started = Instant::now();
         send_hello(&socket, "SID-delayed", "stdio");
         assert!(started.elapsed() < Duration::from_millis(100));
-        accepted_rx.recv_timeout(Duration::from_millis(300)).unwrap();
+        accepted_rx
+            .recv_timeout(Duration::from_millis(300))
+            .unwrap();
 
         release_tx.send(()).unwrap();
         server.join().unwrap();
@@ -1228,6 +1477,123 @@ mod tests {
     }
 
     #[test]
+    fn preview_commands_serialize_as_versioned_params_only_requests() {
+        let open = build_request(
+            &Command::Preview(PreviewCommand::Open {
+                url: Some("http://127.0.0.1:5173".into()),
+                script_key: None,
+            }),
+            Some("s1".into()),
+            None,
+        );
+        assert_eq!(open.command, "preview_open");
+        assert_eq!(open.session_id.as_deref(), Some("s1"));
+        assert_eq!(
+            open.params,
+            Some(serde_json::json!({ "url": "http://127.0.0.1:5173" }))
+        );
+        assert!(open.subcommand.is_none());
+        assert!(open.target.is_none());
+
+        let inspect = build_request(
+            &Command::Preview(PreviewCommand::Inspect {
+                preview_id: "p1".into(),
+                selector: Some("button.primary".into()),
+                limit: 25,
+            }),
+            None,
+            Some("/repo".into()),
+        );
+        assert_eq!(inspect.command, "preview_inspect");
+        assert_eq!(inspect.cwd.as_deref(), Some("/repo"));
+        assert_eq!(
+            inspect.params,
+            Some(serde_json::json!({
+                "preview_id": "p1",
+                "selector": "button.primary",
+                "limit": 25
+            }))
+        );
+
+        let capture = build_request(
+            &Command::Preview(PreviewCommand::Capture {
+                preview_id: "p1".into(),
+                target: PreviewCaptureTarget::Region {
+                    x: 1.0,
+                    y: 2.0,
+                    width: 300.0,
+                    height: 200.0,
+                },
+            }),
+            None,
+            None,
+        );
+        assert_eq!(capture.command, "preview_capture");
+        assert_eq!(
+            capture.params,
+            Some(serde_json::json!({
+                "preview_id": "p1",
+                "region": { "x": 1.0, "y": 2.0, "width": 300.0, "height": 200.0 }
+            }))
+        );
+    }
+
+    #[test]
+    fn preview_wait_type_scroll_and_console_defaults_serialize() {
+        let wait = build_request(
+            &Command::Preview(PreviewCommand::Wait {
+                preview_id: "p1".into(),
+                condition: PreviewWaitCondition::Loaded,
+                selector: None,
+                timeout_ms: 5_000,
+            }),
+            None,
+            None,
+        );
+        assert_eq!(
+            wait.params,
+            Some(serde_json::json!({
+                "preview_id": "p1",
+                "condition": "loaded",
+                "timeout_ms": 5000
+            }))
+        );
+
+        let typed = build_request(
+            &Command::Preview(PreviewCommand::Type {
+                preview_id: "p1".into(),
+                element_id: "e1".into(),
+                text: "hello".into(),
+                append: false,
+            }),
+            None,
+            None,
+        );
+        assert_eq!(
+            typed.params,
+            Some(serde_json::json!({
+                "preview_id": "p1",
+                "element_id": "e1",
+                "text": "hello",
+                "append": false
+            }))
+        );
+
+        let console = build_request(
+            &Command::Preview(PreviewCommand::Console {
+                preview_id: "p1".into(),
+                clear: true,
+            }),
+            None,
+            None,
+        );
+        assert_eq!(
+            console.params,
+            Some(serde_json::json!({ "preview_id": "p1", "clear": true }))
+        );
+    }
+
+    #[test]
     fn discovers_only_live_pid_sockets() {
         let root = std::env::temp_dir().join(format!("alas-cli-disc-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
@@ -1330,6 +1696,31 @@ mod tests {
             started.elapsed() < std::time::Duration::from_secs(1),
             "send_with_timeout should give up around the configured timeout, not hang"
         );
+
+        let _ = handle.join();
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn send_rejects_response_over_twelve_mib() {
+        let path = std::env::temp_dir().join(format!(
+            "alas-cli-large-{}-{}.sock",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 1024];
+            let _ = stream.read(&mut buf).unwrap();
+            let oversized = vec![b' '; MAX_RESPONSE_BYTES + 1];
+            stream.write_all(&oversized).unwrap();
+        });
+
+        let req = Request::new("preview_capture");
+        let result = send_with_timeout(&path, &req, Duration::from_secs(2));
+        assert!(matches!(result, Err(TransportError::ResponseTooLarge)));
 
         let _ = handle.join();
         let _ = std::fs::remove_file(&path);

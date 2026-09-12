@@ -68,6 +68,9 @@ fn describe(err: &DispatchError) -> (String, u8) {
         DispatchError::Transport(TransportError::Malformed) => {
             ("malformed response from Alas".into(), 1)
         }
+        DispatchError::Transport(TransportError::ResponseTooLarge) => {
+            ("response from Alas exceeded 12 MiB".into(), 1)
+        }
         DispatchError::Transport(_) => ("could not reach Alas".into(), 1),
     }
 }

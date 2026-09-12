@@ -11,11 +11,14 @@ final class AgentHookSocketServer {
     /// value as `socketPath` when callers passed an explicit path.
     private var bindPath: String?
     private var listenTask: Task<Void, Never>?
+    private let clientTasks = ClientTaskRegistry(limit: AgentHookSocketServer.maxConcurrentClientTasks)
     var onEvent: ((AgentHookEvent) -> Void)?
     var onCLIRequest: ((AlasCLIRequest) async -> AlasCLIResponse)?
     var onMCPHello: ((MCPHelloEvent) -> Void)?
 
     static let maxPayloadSize = 65_536
+    private static let maxConcurrentClientTasks = 16
+    private static let clientIOTimeout = timeval(tv_sec: 5, tv_usec: 0)
 
     init(socketPath: String) {
         unlink(socketPath)
@@ -93,13 +96,13 @@ final class AgentHookSocketServer {
     }
 
     deinit {
-        listenTask?.cancel()
-        if let bindPath { unlink(bindPath) }
+        shutdown()
     }
 
     func shutdown() {
         listenTask?.cancel()
         listenTask = nil
+        clientTasks.cancelAll()
         if let bindPath { unlink(bindPath) }
         socketPath = nil
         bindPath = nil
@@ -119,20 +122,34 @@ final class AgentHookSocketServer {
                     continue
                 }
                 guard ready > 0 else { continue }
-                await self?.acceptAndHandle(socketFD: socketFD)
+                self?.acceptAndHandle(socketFD: socketFD)
             }
         }
         return true
     }
 
-    private func acceptAndHandle(socketFD: Int32) async {
+    private func acceptAndHandle(socketFD: Int32) {
         let clientFD = accept(socketFD, nil, nil)
         guard clientFD >= 0 else { return }
 
         Self.configureClientSocket(clientFD)
 
+        let registry = clientTasks
+        let started = registry.start(fd: clientFD) { [weak self] token in
+            defer { registry.finish(token) }
+            guard let self else {
+                return
+            }
+            await self.handle(clientFD: clientFD)
+        }
+        if !started {
+            defer { close(clientFD) }
+            Self.sendResponse(clientFD: clientFD, ok: false, error: "Alas socket is busy.")
+        }
+    }
+
+    private func handle(clientFD: Int32) async {
         guard let data = Self.readPayload(from: clientFD) else {
-            close(clientFD)
             return
         }
 
@@ -141,12 +158,7 @@ final class AgentHookSocketServer {
                 Self.sendResponse(clientFD: clientFD, ok: false, error: "Malformed request.")
                 return
             }
-            let response: AlasCLIResponse
-            if let handler = onCLIRequest {
-                response = await handler(request)
-            } else {
-                response = .error("Alas CLI is not available.")
-            }
+            let response = await cliResponse(for: request)
             Self.sendResponse(clientFD: clientFD, response: response)
             return
         }
@@ -172,6 +184,26 @@ final class AgentHookSocketServer {
         } catch {
             Self.sendResponse(clientFD: clientFD, ok: false, error: "Malformed request.")
         }
+    }
+
+    private func cliResponse(for request: AlasCLIRequest) async -> AlasCLIResponse {
+        guard let handler = onCLIRequest else {
+            return .error("Alas CLI is not available.")
+        }
+
+        let box = CLIResponseContinuation()
+        return await withTaskCancellationHandler(operation: {
+            await withCheckedContinuation { continuation in
+                box.setContinuation(continuation)
+                let task = Task {
+                    let response = await handler(request)
+                    box.resume(returning: response)
+                }
+                box.setTask(task)
+            }
+        }, onCancel: {
+            box.cancel()
+        })
     }
 
     private static func payloadKind(_ data: Data) -> String? {
@@ -208,8 +240,9 @@ final class AgentHookSocketServer {
     }
 
     static func configureClientSocket(_ clientFD: Int32) {
-        var timeout = timeval(tv_sec: 5, tv_usec: 0)
+        var timeout = clientIOTimeout
         setsockopt(clientFD, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        setsockopt(clientFD, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
 
         var noSigPipe: Int32 = 1
         setsockopt(clientFD, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
@@ -219,31 +252,35 @@ final class AgentHookSocketServer {
         var json: [String: Any] = ["ok": ok]
         if let error { json["error"] = error }
         guard let data = try? JSONSerialization.data(withJSONObject: json) else {
-            close(clientFD)
             return
         }
-        data.withUnsafeBytes { buffer in
-            guard let base = buffer.baseAddress else { return }
-            _ = Darwin.write(clientFD, base, data.count)
-        }
-        close(clientFD)
+        sendData(clientFD: clientFD, data: data)
     }
 
     private static func sendResponse(clientFD: Int32, response: AlasCLIResponse) {
         do {
             let data = try response.encode()
-            data.withUnsafeBytes { buffer in
-                guard let base = buffer.baseAddress else { return }
-                _ = Darwin.write(clientFD, base, data.count)
-            }
+            sendData(clientFD: clientFD, data: data)
         } catch {
             let fallback = #"{"ok":false,"error":"Malformed response."}"#.data(using: .utf8)!
-            fallback.withUnsafeBytes { buffer in
-                guard let base = buffer.baseAddress else { return }
-                _ = Darwin.write(clientFD, base, fallback.count)
+            sendData(clientFD: clientFD, data: fallback)
+        }
+    }
+
+    private static func sendData(clientFD: Int32, data: Data) {
+        data.withUnsafeBytes { buffer in
+            guard let base = buffer.baseAddress else { return }
+            var written = 0
+            while written < data.count {
+                let result = Darwin.write(clientFD, base.advanced(by: written), data.count - written)
+                if result < 0 {
+                    if errno == EINTR { continue }
+                    return
+                }
+                if result == 0 { return }
+                written += result
             }
         }
-        close(clientFD)
     }
 
     // Serialises chdir-based socket binding to prevent races when multiple
@@ -257,7 +294,7 @@ final class AgentHookSocketServer {
         let bindResult = Self.bindSocket(socketFD, toPath: path)
         guard bindResult == 0 else { close(socketFD)
         return -1 }
-        guard listen(socketFD, 8) == 0 else { close(socketFD)
+        guard listen(socketFD, Int32(Self.maxConcurrentClientTasks)) == 0 else { close(socketFD)
         return -1 }
         return socketFD
     }
@@ -301,6 +338,138 @@ final class AgentHookSocketServer {
         let result = doBind(filenameBytes)
         FileManager.default.changeCurrentDirectoryPath(savedCWD)
         return result
+    }
+}
+
+private final class ClientTaskRegistry: @unchecked Sendable {
+    private struct Entry {
+        var fd: Int32
+        var task: Task<Void, Never>?
+    }
+
+    private let limit: Int
+    private let lock = NSLock()
+    private var entries: [UUID: Entry] = [:]
+    private var stopped = false
+
+    init(limit: Int) {
+        self.limit = limit
+    }
+
+    func start(fd: Int32, operation: @escaping @Sendable (UUID) async -> Void) -> Bool {
+        lock.lock()
+        if stopped || entries.count >= limit {
+            lock.unlock()
+            return false
+        }
+        let token = UUID()
+        entries[token] = Entry(fd: fd)
+        lock.unlock()
+
+        let task = Task.detached {
+            await operation(token)
+        }
+
+        lock.lock()
+        if stopped, entries[token] != nil {
+            entries[token]?.task = task
+            shutdown(fd, SHUT_RDWR)
+            lock.unlock()
+            task.cancel()
+            return true
+        }
+        if entries[token] == nil {
+            lock.unlock()
+            task.cancel()
+            return true
+        }
+        entries[token]?.task = task
+        lock.unlock()
+        return true
+    }
+
+    func finish(_ token: UUID) {
+        lock.lock()
+        let entry = entries.removeValue(forKey: token)
+        if let entry {
+            close(entry.fd)
+        }
+        lock.unlock()
+    }
+
+    func cancelAll() {
+        lock.lock()
+        stopped = true
+        let active = Array(entries.values)
+        for entry in active {
+            shutdown(entry.fd, SHUT_RDWR)
+        }
+        lock.unlock()
+
+        for entry in active {
+            entry.task?.cancel()
+        }
+    }
+}
+
+private final class CLIResponseContinuation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<AlasCLIResponse, Never>?
+    private var task: Task<Void, Never>?
+    private var completed = false
+
+    func setContinuation(_ continuation: CheckedContinuation<AlasCLIResponse, Never>) {
+        lock.lock()
+        if completed {
+            lock.unlock()
+            continuation.resume(returning: .error("Alas CLI request cancelled."))
+            return
+        }
+        self.continuation = continuation
+        lock.unlock()
+    }
+
+    func setTask(_ task: Task<Void, Never>) {
+        lock.lock()
+        if completed {
+            lock.unlock()
+            task.cancel()
+            return
+        }
+        self.task = task
+        lock.unlock()
+    }
+
+    func resume(returning response: AlasCLIResponse) {
+        lock.lock()
+        guard !completed else {
+            lock.unlock()
+            return
+        }
+        completed = true
+        let continuation = continuation
+        self.continuation = nil
+        task = nil
+        lock.unlock()
+
+        continuation?.resume(returning: response)
+    }
+
+    func cancel() {
+        lock.lock()
+        guard !completed else {
+            lock.unlock()
+            return
+        }
+        completed = true
+        let continuation = continuation
+        let task = task
+        self.continuation = nil
+        self.task = nil
+        lock.unlock()
+
+        task?.cancel()
+        continuation?.resume(returning: .error("Alas CLI request cancelled."))
     }
 }
 
