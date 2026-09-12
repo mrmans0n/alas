@@ -445,7 +445,13 @@ struct CenterPaneView: View {
                                             revealCharacter: s.revealCharacter,
                                             revealRevision: s.revealRevision,
                                             appState: state,
-                                            onRevealInFiles: { path in state.revealInFiles(worktreeId: worktree.id, path: path) },
+                                            onRevealInFiles: { path in
+                                                state.revealInFiles(
+                                                    worktreeId: worktree.id,
+                                                    path: path,
+                                                    opensPane: !effectiveRightPaneVisible
+                                                )
+                                            },
                                             onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) })
                         } else {
                             EditorTabView(worktree: worktree,
@@ -461,7 +467,13 @@ struct CenterPaneView: View {
                                           externalAbsolutePath: s.externalAbsolutePath,
                                           externalEditable: s.isExternalEditable,
                                           originatingRelativePath: s.originatingRelativePath,
-                                          onRevealInFiles: { path in state.revealInFiles(worktreeId: worktree.id, path: path) },
+                                          onRevealInFiles: { path in
+                                              state.revealInFiles(
+                                                  worktreeId: worktree.id,
+                                                  path: path,
+                                                  opensPane: !effectiveRightPaneVisible
+                                              )
+                                          },
                                           onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) })
                         }
                     case .diff(let s):
@@ -573,12 +585,24 @@ struct CenterPaneView: View {
                     case .imagePreview(let s):
                         ImagePreviewTabView(worktreePath: worktree.path,
                                              relativePath: s.relativePath,
-                                             onRevealInFiles: { path in state.revealInFiles(worktreeId: worktree.id, path: path) },
+                                             onRevealInFiles: { path in
+                                                 state.revealInFiles(
+                                                     worktreeId: worktree.id,
+                                                     path: path,
+                                                     opensPane: !effectiveRightPaneVisible
+                                                 )
+                                             },
                                              onStartupRecoveryReady: { completeStartupRecoveryIfActive(s.id) })
                     case .binaryPreview(let s):
                         BinaryPreviewTabView(worktreePath: worktree.path,
                                              relativePath: s.relativePath,
-                                             onRevealInFiles: { path in state.revealInFiles(worktreeId: worktree.id, path: path) })
+                                             onRevealInFiles: { path in
+                                                 state.revealInFiles(
+                                                     worktreeId: worktree.id,
+                                                     path: path,
+                                                     opensPane: !effectiveRightPaneVisible
+                                                 )
+                                             })
                     case .mergeConflict(let s):
                         MergeConflictTabView(
                             state: state,
