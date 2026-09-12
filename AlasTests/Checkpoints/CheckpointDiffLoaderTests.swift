@@ -73,6 +73,31 @@ struct CheckpointDiffLoaderTests {
         #expect(deletion.metadataSummary == "Empty file deleted.")
     }
 
+    @Test func currentOnlyDiffSnapshotsOnlyRequestedPath() async throws {
+        let repo = try await CheckpointTestRepository.make()
+        defer { repo.remove() }
+        try repo.write("baseline\n", to: "unrelated.txt")
+        try await repo.commitAll("baseline")
+        let store = WorktreeCheckpointStore(root: repo.root.appendingPathComponent(".git/checkpoints"))
+        let captureService = WorktreeCheckpointService(store: store)
+        let checkpoint = try await captureService.createManual(target: repo.target, label: "Before new file")
+        try repo.write("dirty but unrelated\n", to: "unrelated.txt")
+        try repo.write("new\n", to: "new.txt")
+        let diffService = WorktreeCheckpointService(
+            store: store,
+            snapshotter: .init(fileSystem: PathReadFailingFileSystem(failingRelativePath: "unrelated.txt"))
+        )
+
+        guard case .text(let diff) = await diffService.diffContent(target: repo.target, id: checkpoint.id, path: "new.txt") else {
+            Issue.record("Expected current-only text diff")
+            return
+        }
+
+        let lines = diff.hunks.flatMap(\.lines)
+        let additions = lines.filter { $0.kind == .add }.map(\.text)
+        #expect(additions == ["new"])
+    }
+
     @Test func modeOnlyDiffRemainsVisible() async throws {
         let repo = try await CheckpointTestRepository.make()
         defer { repo.remove() }
@@ -150,5 +175,62 @@ struct CheckpointDiffLoaderTests {
         let bitmap = try #require(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: 1, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
         for x in 0..<width { bitmap.setColor(.red, atX: x, y: 0) }
         return try #require(bitmap.representation(using: .png, properties: [:]))
+    }
+}
+
+private struct PathReadFailingFileSystem: CheckpointFileSystem {
+    enum Failure: Error { case unexpectedRead(String) }
+
+    let failingRelativePath: String
+    private let live = LiveCheckpointFileSystem()
+
+    func readLeaf(root: URL, relativePath: String) throws -> CheckpointLeafRead {
+        if relativePath == failingRelativePath { throw Failure.unexpectedRead(relativePath) }
+        return try live.readLeaf(root: root, relativePath: relativePath)
+    }
+
+    func metadata(root: URL, relativePath: String) throws -> CheckpointLeafMetadata? {
+        if relativePath == failingRelativePath { throw Failure.unexpectedRead(relativePath) }
+        return try live.metadata(root: root, relativePath: relativePath)
+    }
+
+    func validateRelativePath(_ relativePath: String, under root: URL) throws -> URL {
+        try live.validateRelativePath(relativePath, under: root)
+    }
+
+    func createDirectoryExclusively(_ url: URL, mode: mode_t) throws {
+        try live.createDirectoryExclusively(url, mode: mode)
+    }
+
+    func writeDurable(_ data: Data, to url: URL, mode: mode_t) throws {
+        try live.writeDurable(data, to: url, mode: mode)
+    }
+
+    func createSymlink(target: Data, at url: URL) throws {
+        try live.createSymlink(target: target, at: url)
+    }
+
+    func move(_ source: URL, to destination: URL) throws {
+        try live.move(source, to: destination)
+    }
+
+    func moveExclusively(_ source: URL, to destination: URL) throws {
+        try live.moveExclusively(source, to: destination)
+    }
+
+    func removeIfPresent(_ url: URL) throws {
+        try live.removeIfPresent(url)
+    }
+
+    func list(_ url: URL) throws -> [URL] {
+        try live.list(url)
+    }
+
+    func fileData(_ url: URL) throws -> Data {
+        try live.fileData(url)
+    }
+
+    func synchronizeDirectory(_ url: URL) throws {
+        try live.synchronizeDirectory(url)
     }
 }

@@ -210,6 +210,38 @@ struct CheckpointRestoreInterruptionTests {
         #expect(!FileManager.default.fileExists(atPath: fixture.repo.root.appendingPathComponent(".git/index.lock").path))
     }
 
+    @Test func rollbackRemovesRestoreCreatedDirectoryBeforeRestoringOriginalFile() async throws {
+        let serviceFault = CheckpointRestoreFaultInjector {
+            if $0 == .beforeIndexInstall { throw CheckpointRestoreFixture.Fault.injected }
+        }
+        let repo = try await CheckpointTestRepository.make()
+        defer { repo.remove() }
+        let storeRoot = URL(fileURLWithPath: "/private/tmp/checkpoint-apply-store-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: storeRoot) }
+        let store = WorktreeCheckpointStore(root: storeRoot)
+        let service = WorktreeCheckpointService(store: store, restoreFaultInjector: serviceFault)
+        try repo.write("current file\n", to: "config")
+        try await repo.commitAll("baseline")
+        try FileManager.default.removeItem(at: repo.root.appendingPathComponent("config"))
+        try repo.write("checkpoint child\n", to: "config/local.json")
+        let checkpoint = try await service.createManual(target: repo.target, label: "Directory checkpoint")
+        try await repo.git(["restore", "--staged", "--worktree", "."])
+        try await repo.git(["clean", "-fd"])
+        let before = try await WorktreeStateSnapshotter.live.snapshot(target: repo.target, includingPaths: ["config", "config/local.json"])
+        let preview = try await service.restorePreview(target: repo.target, id: checkpoint.id, coordination: .clear)
+
+        await #expect(throws: CheckpointRestoreError.restoreFailedButRecovered) {
+            try await service.restore(target: repo.target, preview: preview,
+                                      selectedGroupIDs: preview.selectedGroupIDs, coordination: .clear)
+        }
+
+        let after = try await WorktreeStateSnapshotter.live.snapshot(target: repo.target, includingPaths: ["config", "config/local.json"])
+        #expect(after.paths == before.paths)
+        #expect(try repo.disk("config") == Data("current file\n".utf8))
+        #expect(!FileManager.default.fileExists(atPath: repo.root.appendingPathComponent("config/local.json").path))
+        #expect(try await store.recoverableJournals(lineageID: repo.target.lineageID).isEmpty)
+    }
+
     @Test(arguments: [false, true], [CheckpointRestoreFaultPoint.beforeIndexInstall, .afterIndexInstall])
     func relaunchRecoversUnlessOwnedLockChanged(tamper: Bool, point: CheckpointRestoreFaultPoint) async throws {
         let fixture = try await CheckpointRestoreFixture.make(faultInjector: .init {

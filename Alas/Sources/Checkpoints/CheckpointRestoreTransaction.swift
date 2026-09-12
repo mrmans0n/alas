@@ -296,6 +296,9 @@ struct CheckpointRestoreTransaction: Sendable {
                 guard try leafState(displaced.lastPathComponent, root: root) == actual else { throw CheckpointRestoreError.stalePreview }
             }
             if before.worktree.kind != .absent {
+                if actual.kind == .absent {
+                    try removeEmptyDirectoryIfPresent(destination)
+                }
                 try moveLeaf(replacement, to: destination)
             }
             try await store.writeJournal(journal)

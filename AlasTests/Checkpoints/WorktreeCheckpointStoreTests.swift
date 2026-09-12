@@ -143,6 +143,20 @@ struct WorktreeCheckpointStoreTests {
         #expect(catalog.summaries.first { $0.label == "Damaged" }?.unavailableReason != nil)
     }
 
+    @Test func publishingReusedBlobValidatesExistingFileWithoutReadingItIntoMemory() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bytes = Data("shared payload".utf8)
+        let first = try publication(lineageID: lineageA, label: "First", bytes: bytes, createdAt: Date(timeIntervalSince1970: 1))
+        let second = try publication(lineageID: lineageA, label: "Second", bytes: bytes, createdAt: Date(timeIntervalSince1970: 2))
+        _ = try await WorktreeCheckpointStore(root: root).publish(first)
+        let store = WorktreeCheckpointStore(root: root, fileSystem: BlobFileDataFailingFileSystem())
+
+        let catalog = try await store.publish(second)
+
+        #expect(catalog.summaries.map(\.label) == ["Second", "First"])
+    }
+
     @Test func undecodableManifestRetainsUnavailableSummaryFromPreviousCatalog() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -632,6 +646,63 @@ private final class RemoveFailingFileSystem: CheckpointFileSystem, @unchecked Se
 
     func fileData(_ url: URL) throws -> Data {
         try live.fileData(url)
+    }
+
+    func synchronizeDirectory(_ url: URL) throws {
+        try live.synchronizeDirectory(url)
+    }
+}
+
+private final class BlobFileDataFailingFileSystem: CheckpointFileSystem, @unchecked Sendable {
+    enum Failure: Error { case blobFileData(URL) }
+
+    private let live = LiveCheckpointFileSystem()
+
+    func readLeaf(root: URL, relativePath: String) throws -> CheckpointLeafRead {
+        try live.readLeaf(root: root, relativePath: relativePath)
+    }
+
+    func metadata(root: URL, relativePath: String) throws -> CheckpointLeafMetadata? {
+        try live.metadata(root: root, relativePath: relativePath)
+    }
+
+    func validateRelativePath(_ relativePath: String, under root: URL) throws -> URL {
+        try live.validateRelativePath(relativePath, under: root)
+    }
+
+    func createDirectoryExclusively(_ url: URL, mode: mode_t) throws {
+        try live.createDirectoryExclusively(url, mode: mode)
+    }
+
+    func writeDurable(_ data: Data, to url: URL, mode: mode_t) throws {
+        try live.writeDurable(data, to: url, mode: mode)
+    }
+
+    func createSymlink(target: Data, at url: URL) throws {
+        try live.createSymlink(target: target, at: url)
+    }
+
+    func move(_ source: URL, to destination: URL) throws {
+        try live.move(source, to: destination)
+    }
+
+    func moveExclusively(_ source: URL, to destination: URL) throws {
+        try live.moveExclusively(source, to: destination)
+    }
+
+    func removeIfPresent(_ url: URL) throws {
+        try live.removeIfPresent(url)
+    }
+
+    func list(_ url: URL) throws -> [URL] {
+        try live.list(url)
+    }
+
+    func fileData(_ url: URL) throws -> Data {
+        if url.deletingLastPathComponent().lastPathComponent == "blobs" {
+            throw Failure.blobFileData(url)
+        }
+        return try live.fileData(url)
     }
 
     func synchronizeDirectory(_ url: URL) throws {

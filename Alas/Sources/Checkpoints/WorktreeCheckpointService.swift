@@ -128,7 +128,8 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
             if let state = saved.paths.first(where: { $0.relativePath == path })?.worktree {
                 before = .init(state: state, data: try await checkpointDiffPayload(state, lineageID: target.lineageID))
             } else {
-                let current = try await snapshotter.snapshot(target: target, includingPaths: [path])
+                let current = try await snapshotter.snapshot(target: target, includingPaths: [path],
+                                                             onlyIncludedPaths: true)
                 guard current.headOID == saved.headOID, let state = current.paths[path] else {
                     return .unavailable("The checkpoint baseline is unavailable for this path.")
                 }

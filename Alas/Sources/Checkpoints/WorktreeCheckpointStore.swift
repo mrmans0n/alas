@@ -118,7 +118,7 @@ actor WorktreeCheckpointStore {
         for (reference, data) in publication.blobs {
             let blob = blobURL(reference, layout: layout)
             if exists(blob) {
-                if CheckpointBlobReference.make(for: try fileSystem.fileData(blob)) == reference {
+                if try blobMatchesReference(reference, layout: layout) {
                     continue
                 }
                 try fileSystem.removeIfPresent(blob)
