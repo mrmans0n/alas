@@ -127,6 +127,7 @@ struct CodeEditorView: NSViewRepresentable {
     let fontFamily: String
     let fontSize: Int
     let showLineNumbers: Bool
+    var showMinimap: Bool = false
     let textRendering: CodeEditorTextRenderingConfiguration
     var onTextViewAttached: (CodeTextView) -> Void = { _ in }
     var onTextViewDetached: (CodeTextView?) -> Void = { _ in }
@@ -138,7 +139,7 @@ struct CodeEditorView: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scroll = NSScrollView()
+        let scroll = CodeEditorScrollView()
         scroll.hasVerticalScroller = true
         scroll.hasHorizontalScroller = true
         scroll.borderType = .noBorder
@@ -229,6 +230,7 @@ struct CodeEditorView: NSViewRepresentable {
             originatingRelativePath: originatingRelativePath,
             externalEditable: externalEditable
         )
+        scroll.configureMinimap(shown: showMinimap, theme: theme)
         return scroll
     }
 
@@ -258,6 +260,7 @@ struct CodeEditorView: NSViewRepresentable {
                 rendersTextDecorations: !context.coordinator.currentBufferReadOnly
             )
         }
+        (nsView as? CodeEditorScrollView)?.configureMinimap(shown: showMinimap, theme: theme)
     }
 
     static func dismantleNSView(_ nsView: NSScrollView, coordinator: CodeEditorCoordinator) {

@@ -38,6 +38,9 @@ struct CodePane: View {
                                 desc: "Display a non-selectable gutter in editor panes.") {
                         AlasToggle(on: state.bind(\.code.showLineNumbers))
                     }
+                    SettingsRow(name: "Show minimap") {
+                        AlasToggle(on: state.bind(\.code.showMinimap))
+                    }
                     SettingsRow(name: "Format on save",
                                 desc: "Request document formatting from the language server before writing to disk.") {
                         AlasToggle(on: state.bind(\.code.formatOnSave))

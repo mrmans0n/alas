@@ -41,7 +41,13 @@ final class ACPTranscriptLogicalScroller: NSScroller {
 /// older rows graft in with zero visible movement and live trackpad
 /// momentum keeps working against the same scroll view.
 @MainActor
-final class ACPTranscriptScrollerView: NSScrollView {
+final class ACPTranscriptScrollerView: MinimapScrollView {
+    nonisolated static let minimapMinimumWidth: CGFloat = 720
+
+    nonisolated static func shouldShowMinimap(preferred: Bool, availableWidth: CGFloat) -> Bool {
+        preferred && availableWidth >= minimapMinimumWidth
+    }
+
     let flippedDocumentView = ACPTranscriptDocumentView()
     var onScroll: ((_ previousY: CGFloat?, _ newY: CGFloat, _ viewportHeight: CGFloat, _ contentHeight: CGFloat, _ isProgrammatic: Bool) -> Void)?
     var onLogicalScrollCommit: ((Double) -> Void)?
@@ -61,6 +67,9 @@ final class ACPTranscriptScrollerView: NSScrollView {
     /// the sole subscriber.
     var onContentWidthChange: (() -> Void)?
     private var lastReportedContentWidth: CGFloat?
+    var minimapPreferred = false {
+        didSet { updateMinimapVisibility() }
+    }
 
     /// Fired from `layout()` whenever `contentView.bounds.height` differs
     /// from the last height reported, PROVIDED the width did NOT also
@@ -220,6 +229,7 @@ final class ACPTranscriptScrollerView: NSScrollView {
     }
 
     override func layout() {
+        updateMinimapVisibility()
         super.layout()
         // `super.layout()` runs AppKit's own scroll-view tiling first, so
         // `contentView.bounds` already reflects any scroller-visibility
@@ -242,6 +252,13 @@ final class ACPTranscriptScrollerView: NSScrollView {
             onViewportHeightChange?()
         }
         applyLogicalScrollerMetrics()
+    }
+
+    private func updateMinimapVisibility() {
+        showsMinimap = Self.shouldShowMinimap(
+            preferred: minimapPreferred,
+            availableWidth: bounds.width
+        )
     }
 
     override func reflectScrolledClipView(_ cView: NSClipView) {
