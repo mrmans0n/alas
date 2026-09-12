@@ -51,6 +51,13 @@ struct AppConfig: Codable, Equatable {
     /// fallback switch so a user can revert to the legacy tab bar; it is not
     /// gating an in-progress feature the way the flags above are.
     var rightPaneRailEnabled: Bool = true
+    /// One-time migration marker for `rightPaneRailEnabled` graduating from
+    /// preview to default. A config saved during #1200's preview window
+    /// already has an explicit `false` on disk from the old default, which
+    /// is indistinguishable from a deliberate opt-out — this flag lets the
+    /// decoder force the new default exactly once, then respect whatever the
+    /// user sets afterward. See `init(from:)`.
+    var rightPaneRailDefaultApplied: Bool = true
     var recentProjectIds: [String] = []
     var recentWorktreeIdsByProject: [String: [String]] = [:]
     var recentWorktreeRefs: [RepoSelectorRecents.RecentWorktreeRef] = []
@@ -519,6 +526,7 @@ struct AppConfig: Codable, Equatable {
         workspacesEnabled: false,
         runTabEnabled: false,
         rightPaneRailEnabled: true,
+        rightPaneRailDefaultApplied: true,
         recentProjectIds: [],
         recentWorktreeIdsByProject: [:],
         recentWorktreeRefs: [],
@@ -613,6 +621,7 @@ extension AppConfig {
              workspacesEnabled,
              runTabEnabled,
              rightPaneRailEnabled,
+             rightPaneRailDefaultApplied,
              recentProjectIds, recentWorktreeIdsByProject, recentWorktreeRefs,
              collapsedProjectIds,
              sidebarChromeOverrides,
@@ -852,10 +861,21 @@ extension AppConfig {
         // The Run tab preview is opt-in. Configs written before it existed
         // continue to load without exposing unfinished command controls.
         runTabEnabled = (try? c.decode(Bool.self, forKey: .runTabEnabled)) ?? false
-        // The rail is on by default now, so a config written before it
-        // existed — or before it graduated from preview — must decode with
-        // it enabled rather than falling back to the legacy tab bar.
-        rightPaneRailEnabled = (try? c.decode(Bool.self, forKey: .rightPaneRailEnabled)) ?? true
+        // The rail is on by default now. A config saved during #1200's
+        // preview window has an explicit `rightPaneRailEnabled: false` on
+        // disk from the old default — indistinguishable, on its own, from a
+        // deliberate opt-out. `rightPaneRailDefaultApplied` disambiguates:
+        // its absence means this config predates the migration, so force the
+        // new default once and record that the migration ran. Once present,
+        // later loads respect whatever the user has set.
+        let hasMigratedRailDefault =
+            (try? c.decode(Bool.self, forKey: .rightPaneRailDefaultApplied)) ?? false
+        if hasMigratedRailDefault {
+            rightPaneRailEnabled = (try? c.decode(Bool.self, forKey: .rightPaneRailEnabled)) ?? true
+        } else {
+            rightPaneRailEnabled = true
+        }
+        rightPaneRailDefaultApplied = true
         recentProjectIds = (try? c.decode([String].self, forKey: .recentProjectIds)) ?? []
         recentWorktreeIdsByProject =
             (try? c.decode([String: [String]].self, forKey: .recentWorktreeIdsByProject)) ?? [:]
