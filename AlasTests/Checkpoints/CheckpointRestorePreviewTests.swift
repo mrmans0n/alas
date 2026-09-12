@@ -3,7 +3,7 @@ import Testing
 @testable import Alas
 
 struct CheckpointRestorePreviewTests {
-    @Test func previewUnionsPathsAndPreservesDeselectedStates() async throws {
+    @Test func previewUnionsPathsAndPreservesDeselectionWithRestoreEffects() async throws {
         let repo = try await CheckpointTestRepository.make()
         defer { repo.remove() }
         for path in ["a.swift", "b.swift", "old.swift", "clean-at-capture.swift", "unselected.swift"] {
@@ -39,8 +39,8 @@ struct CheckpointRestorePreviewTests {
         let selected = preview.selectedGroupIDs.subtracting([omitted.id])
         let selective = try await service.restorePreview(target: repo.target, id: checkpoint.id, coordination: .clear, selectedGroupIDs: selected)
         let preserved = try #require(selective.groups.first { $0.id == omitted.id })
-        #expect(preserved.effects.map(\.description) == ["index: unchanged", "working tree: unchanged"])
-        #expect(preserved.effects.allSatisfy { $0.before == $0.after })
+        #expect(!selective.selectedGroupIDs.contains(omitted.id))
+        #expect(preserved.effects.map(\.description) == ["index: staged modification -> clean", "working tree: modified -> checkpoint contents"])
         #expect(try await repo.status() == before)
         #expect(try await repo.index("unselected.swift") == Data("keep\n".utf8))
         #expect(try repo.disk("unselected.swift") == Data("keep disk\n".utf8))

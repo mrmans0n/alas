@@ -57,6 +57,51 @@ struct CheckpointRestorePresentationTests {
         #expect(lines.contains("File.swift · working tree: clean -> removed"))
     }
 
+    @Test func effectLinesDescribeRestoreEvenWhenPreviewWasBuiltWithGroupDeselected() throws {
+        let blob = CheckpointBlobReference(sha256: String(repeating: "b", count: 64), byteCount: 5)
+        let current = CheckpointFileState.regular(blob: blob, executable: false)
+        let checkpoint = CheckpointFileState.absent
+        let groupID = UUID(uuidString: "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")!
+        let manifest = try WorktreeCheckpointManifest(
+            id: UUID(uuidString: "ffffffff-ffff-ffff-ffff-ffffffffffff")!,
+            kind: .manual,
+            label: "Before cleanup",
+            createdAt: Date(timeIntervalSince1970: 1),
+            byteCount: 0,
+            lineageID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            capturedPath: "/tmp/repository",
+            repositoryName: "Alas",
+            branch: "main",
+            headOID: String(repeating: "f", count: 40),
+            exclusions: [],
+            groups: [.init(id: groupID, primaryPath: "File.swift", renameSource: nil, memberPaths: ["File.swift"])],
+            paths: [.init(relativePath: "File.swift", head: current, index: checkpoint, worktree: checkpoint)]
+        )
+        let currentSnapshot = WorktreeStateSnapshot(
+            lineageID: manifest.lineageID,
+            headOID: manifest.headOID,
+            branch: "main",
+            indexChecksum: "index",
+            paths: ["File.swift": .init(relativePath: "File.swift", head: current, index: current, worktree: current)],
+            groups: manifest.groups,
+            exclusions: [],
+            payloads: [:],
+            fingerprint: "fingerprint"
+        )
+
+        let preview = try CheckpointRestorePreview.make(
+            manifest: manifest,
+            current: currentSnapshot,
+            coordination: .clear,
+            selectedGroupIDs: []
+        )
+        let group = try #require(preview.groups.first)
+
+        #expect(!preview.selectedGroupIDs.contains(groupID))
+        #expect(RestoreCheckpointSheetModel.effectLines(for: group).contains("File.swift · index: clean -> staged deletion"))
+        #expect(RestoreCheckpointSheetModel.effectLines(for: group).contains("File.swift · working tree: clean -> removed"))
+    }
+
     @Test func blockerMessagesCoverEveryRestoreBlocker() {
         for blocker in CheckpointRestoreBlocker.allCases {
             #expect(RestoreCheckpointSheetModel.blockerMessage(blocker) == blocker.description)

@@ -173,6 +173,10 @@ final class AppState {
         (centerGitMutationCounts[worktreeId] ?? 0) > 0 || tabs.hasRunningCommitPublish(worktreeId: worktreeId)
     }
 
+    func checkpointFileWritesDisabled(worktreeId: String) -> Bool {
+        rightPaneStore.activeState(worktreeId: worktreeId)?.checkpointMutationsDisabled == true
+    }
+
     typealias TerminalSessionOpener = (
         Worktree,
         ProjectConfig,
@@ -6203,7 +6207,9 @@ final class AppState {
     }
 
     func saveActiveTab(worktreeId: String) {
+        guard !checkpointFileWritesDisabled(worktreeId: worktreeId) else { return }
         Task {
+            guard !self.checkpointFileWritesDisabled(worktreeId: worktreeId) else { return }
             _ = await tabs.saveActiveAsync(worktreeId: worktreeId, config: config.code)
         }
     }
@@ -6213,6 +6219,7 @@ final class AppState {
             var roots: [String: URL] = [:]
             for project in projects {
                 for worktree in projectsManager.worktrees(projectId: project.id) {
+                    guard !self.checkpointFileWritesDisabled(worktreeId: worktree.id) else { continue }
                     roots[worktree.id] = roots[worktree.id] ?? worktree.path
                 }
             }
@@ -6417,6 +6424,7 @@ final class AppState {
     }
 
     func saveActiveTabAs(worktreeId: String) {
+        guard !checkpointFileWritesDisabled(worktreeId: worktreeId) else { return }
         guard let worktree = worktree(withId: worktreeId),
               let context = tabs.activeEditorContext(worktreeId: worktreeId) else { return }
         let currentURL = worktree.path.appendingPathComponent(context.tab.relativePath)
@@ -6434,6 +6442,7 @@ final class AppState {
             }
             Task { @MainActor [weak self] in
                 do {
+                    guard self?.checkpointFileWritesDisabled(worktreeId: worktreeId) == false else { return }
                     try await context.buffer.saveAsRemote(relativePath: relativePath)
                     _ = self?.tabs.updateEditorPath(worktreeId: worktreeId, tabId: context.tab.id, relativePath: relativePath)
                 } catch {
@@ -6451,6 +6460,7 @@ final class AppState {
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
         do {
+            guard !checkpointFileWritesDisabled(worktreeId: worktreeId) else { return }
             let relativePath = try relativePath(for: url, in: worktree.path)
             guard !tabs.hasEditor(worktreeId: worktreeId, relativePath: relativePath, excluding: context.tab.id) else {
                 showFileActionError(title: "Save As Failed", message: "That file is already open in another editor tab.")

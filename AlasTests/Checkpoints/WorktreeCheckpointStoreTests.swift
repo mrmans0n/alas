@@ -315,6 +315,41 @@ struct WorktreeCheckpointStoreTests {
         #expect(FileManager.default.fileExists(atPath: unrelated.path))
     }
 
+    @Test func concurrentStoreInstancesSerializePublicationForSameLineage() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = try publication(lineageID: lineageA, label: "First", bytes: Data([1]), createdAt: Date(timeIntervalSince1970: 1))
+        let second = try publication(lineageID: lineageA, label: "Second", bytes: Data([2]), createdAt: Date(timeIntervalSince1970: 2))
+        let gatedFileSystem = CatalogWriteGateFileSystem()
+        let firstStore = WorktreeCheckpointStore(root: root, fileSystem: gatedFileSystem)
+        let secondStore = WorktreeCheckpointStore(root: root)
+
+        let firstTask = Task {
+            try await firstStore.publish(first)
+        }
+        gatedFileSystem.waitUntilCatalogWriteIsBlocked()
+
+        let secondTask = Task {
+            try await secondStore.publish(second)
+        }
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        let secondEntry = root
+            .appendingPathComponent(lineageA)
+            .appendingPathComponent("entries")
+            .appendingPathComponent(second.manifest.id.uuidString.lowercased())
+        #expect(!FileManager.default.fileExists(atPath: secondEntry.path))
+
+        gatedFileSystem.unblockCatalogWrite()
+        _ = try await firstTask.value
+        _ = try await secondTask.value
+
+        let catalog = try await WorktreeCheckpointStore(root: root).catalog(lineageID: lineageA)
+        #expect(catalog.summaries.map(\.label) == ["Second", "First"])
+        #expect(try await WorktreeCheckpointStore(root: root).readBlob(first.blobs.keys.first!, lineageID: lineageA) == Data([1]))
+        #expect(try await WorktreeCheckpointStore(root: root).readBlob(second.blobs.keys.first!, lineageID: lineageA) == Data([2]))
+    }
+
     @Test func stagedAdditionIsNotCountedAsUntracked() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -340,6 +375,33 @@ struct WorktreeCheckpointStoreTests {
         #expect(summary?.stagedFileCount == 1)
         #expect(summary?.unstagedFileCount == 0)
         #expect(summary?.untrackedFileCount == 0)
+    }
+
+    @Test func ordinaryUntrackedFileIsNotDoubleCountedAsUnstaged() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bytes = Data("scratch".utf8)
+        let blob = CheckpointBlobReference.make(for: bytes)
+        let manifest = try WorktreeCheckpointManifest(
+            kind: .manual,
+            label: "Untracked",
+            createdAt: Date(timeIntervalSince1970: 1),
+            byteCount: Int64(bytes.count),
+            lineageID: lineageA,
+            capturedPath: "/tmp/repository",
+            repositoryName: "Alas",
+            branch: "main",
+            headOID: String(repeating: "f", count: 40),
+            exclusions: [], groups: [],
+            paths: [.init(relativePath: "Scratch.swift", head: .absent, index: .absent, worktree: .regular(blob: blob, executable: false))]
+        )
+        let store = WorktreeCheckpointStore(root: root)
+
+        let summary = try await store.publish(.init(manifest: manifest, blobs: [blob: bytes])).summaries.first
+
+        #expect(summary?.stagedFileCount == 0)
+        #expect(summary?.unstagedFileCount == 0)
+        #expect(summary?.untrackedFileCount == 1)
     }
 
     private func publication(lineageID: String, label: String, bytes: Data, kind: CheckpointKind = .manual, createdAt: Date = Date(timeIntervalSince1970: 1_700_000_000)) throws -> CheckpointPublication {
@@ -483,6 +545,80 @@ private final class RemoveFailingFileSystem: CheckpointFileSystem, @unchecked Se
 
     func removeIfPresent(_ url: URL) throws {
         if url.lastPathComponent == failingLastPathComponent { throw Failure.remove }
+        try live.removeIfPresent(url)
+    }
+
+    func list(_ url: URL) throws -> [URL] {
+        try live.list(url)
+    }
+
+    func fileData(_ url: URL) throws -> Data {
+        try live.fileData(url)
+    }
+
+    func synchronizeDirectory(_ url: URL) throws {
+        try live.synchronizeDirectory(url)
+    }
+}
+
+private final class CatalogWriteGateFileSystem: CheckpointFileSystem, @unchecked Sendable {
+    private let live = LiveCheckpointFileSystem()
+    private let didBlock = DispatchSemaphore(value: 0)
+    private let unblock = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var hasBlocked = false
+
+    func waitUntilCatalogWriteIsBlocked() {
+        didBlock.wait()
+    }
+
+    func unblockCatalogWrite() {
+        unblock.signal()
+    }
+
+    func readLeaf(root: URL, relativePath: String) throws -> CheckpointLeafRead {
+        try live.readLeaf(root: root, relativePath: relativePath)
+    }
+
+    func metadata(root: URL, relativePath: String) throws -> CheckpointLeafMetadata? {
+        try live.metadata(root: root, relativePath: relativePath)
+    }
+
+    func validateRelativePath(_ relativePath: String, under root: URL) throws -> URL {
+        try live.validateRelativePath(relativePath, under: root)
+    }
+
+    func createDirectoryExclusively(_ url: URL, mode: mode_t) throws {
+        try live.createDirectoryExclusively(url, mode: mode)
+    }
+
+    func writeDurable(_ data: Data, to url: URL, mode: mode_t) throws {
+        if url.lastPathComponent == "catalog.json" {
+            lock.lock()
+            let shouldBlock = !hasBlocked
+            if shouldBlock { hasBlocked = true }
+            lock.unlock()
+            if shouldBlock {
+                didBlock.signal()
+                unblock.wait()
+            }
+        }
+        try live.writeDurable(data, to: url, mode: mode)
+    }
+
+    func createSymlink(target: Data, at url: URL) throws {
+        try live.createSymlink(target: target, at: url)
+    }
+
+    func move(_ source: URL, to destination: URL) throws {
+        try live.move(source, to: destination)
+    }
+
+    func moveExclusively(_ source: URL, to destination: URL) throws {
+        try live.moveExclusively(source, to: destination)
+    }
+
+    func removeIfPresent(_ url: URL) throws {
         try live.removeIfPresent(url)
     }
 

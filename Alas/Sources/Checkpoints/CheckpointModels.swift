@@ -128,15 +128,14 @@ struct CheckpointRestorePreview: Identifiable, Equatable, Sendable {
             let hash = Array(SHA256.hash(data: identity))
             let stableID = UUID(uuid: (hash[0], hash[1], hash[2], hash[3], hash[4], hash[5], hash[6], hash[7], hash[8], hash[9], hash[10], hash[11], hash[12], hash[13], hash[14], hash[15]))
             let id = savedGroup?.id ?? stableID
-            let selected = selectedGroupIDs?.contains(id) ?? true
             var effects: [CheckpointRestoreEffect] = []
             for member in members.sorted() {
                 guard let now = current.paths[member] else { throw CheckpointCaptureError.missingSelectedPath(member) }
                 let desired = desiredState(for: member, members: members, saved: saved, current: current)
                 effects.append(.init(relativePath: member, layer: .index, head: desired.head, before: now.index,
-                                     after: selected ? desired.index : now.index, removesUntrackedFile: false))
+                                     after: desired.index, removesUntrackedFile: false))
                 effects.append(.init(relativePath: member, layer: .worktree, head: desired.head, before: now.worktree,
-                                     after: selected ? desired.worktree : now.worktree,
+                                     after: desired.worktree,
                                      removesUntrackedFile: now.head.kind == .absent && now.index.kind == .absent && desired.worktree.kind == .absent))
             }
             groups.append(.init(id: id, primaryPath: primary, memberPaths: members.sorted(), renameSource: rename?.renameSource, effects: effects))

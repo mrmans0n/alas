@@ -9,6 +9,7 @@ enum CheckpointStoreError: Error, Equatable, Sendable {
     case blobDoesNotMatchReference
     case byteLimitExceeded
     case operationReferencesCheckpoint
+    case lineageLockUnavailable
 }
 
 struct CheckpointPublication: Sendable {
@@ -36,6 +37,12 @@ actor WorktreeCheckpointStore {
     func catalog(lineageID: String) throws -> CheckpointCatalogSnapshot {
         try validate(lineageID)
         try prepare(lineageID)
+        return try withLineageLock(lineageID: lineageID) {
+            try catalogUnlocked(lineageID: lineageID)
+        }
+    }
+
+    private func catalogUnlocked(lineageID: String) throws -> CheckpointCatalogSnapshot {
         let catalogURL = paths(lineageID).catalog
         guard exists(catalogURL) else { return try rebuildCatalog(lineageID: lineageID) }
         do {
@@ -54,7 +61,7 @@ actor WorktreeCheckpointStore {
                 byteCount: try byteCount(Set(reconciliation.valid.flatMap { references(in: $0) }), layout: paths(lineageID), incoming: [:])
             )
             if rebuilt != catalog { try writeCatalog(rebuilt, layout: paths(lineageID)) }
-            try garbageCollect(layout: paths(lineageID), manifests: reconciliation.valid, journals: try activeJournals(lineageID: lineageID))
+            try garbageCollect(layout: paths(lineageID), manifests: reconciliation.valid, journals: try activeJournalsUnlocked(lineageID: lineageID))
             return rebuilt
         } catch {
             try quarantine(catalogURL, in: paths(lineageID).quarantine, name: "catalog")
@@ -67,8 +74,15 @@ actor WorktreeCheckpointStore {
         try validate(manifest.lineageID)
         try manifest.validate()
         try prepare(manifest.lineageID)
+        return try withLineageLock(lineageID: manifest.lineageID) {
+            try publishUnlocked(publication, protecting: additionalProtectedIDs)
+        }
+    }
+
+    private func publishUnlocked(_ publication: CheckpointPublication, protecting additionalProtectedIDs: Set<CheckpointID>) throws -> CheckpointCatalogSnapshot {
+        let manifest = publication.manifest
         let layout = paths(manifest.lineageID)
-        let currentCatalog = try catalog(lineageID: manifest.lineageID)
+        let currentCatalog = try catalogUnlocked(lineageID: manifest.lineageID)
         let manifestReferences = references(in: manifest)
         guard manifestReferences == Set(publication.blobs.keys) else { throw CheckpointStoreError.blobDoesNotMatchReference }
         for (reference, data) in publication.blobs {
@@ -77,7 +91,7 @@ actor WorktreeCheckpointStore {
 
         let existingManifests = try validManifests(lineageID: manifest.lineageID).valid
         var candidates = existingManifests + [manifest]
-        let protected = try protectedIDs(lineageID: manifest.lineageID).union(additionalProtectedIDs)
+        let protected = try protectedIDsUnlocked(lineageID: manifest.lineageID).union(additionalProtectedIDs)
         var victims = retentionVictims(from: candidates, protected: protected)
         candidates.removeAll { candidate in victims.contains(where: { $0.id == candidate.id }) }
         let incomingByteCount = try byteCount(references(in: manifest), layout: layout, incoming: publication.blobs)
@@ -124,11 +138,11 @@ actor WorktreeCheckpointStore {
             try writeCatalog(next, layout: layout)
         } catch {
             try? removeEntry(manifest.id, layout: layout)
-            try? garbageCollect(layout: layout, manifests: existingManifests, journals: activeJournals(lineageID: manifest.lineageID))
+            try? garbageCollect(layout: layout, manifests: existingManifests, journals: activeJournalsUnlocked(lineageID: manifest.lineageID))
             throw error
         }
         for victim in victims { try removeEntry(victim.id, layout: layout) }
-        try garbageCollect(layout: layout, manifests: candidates, journals: try activeJournals(lineageID: manifest.lineageID))
+        try garbageCollect(layout: layout, manifests: candidates, journals: try activeJournalsUnlocked(lineageID: manifest.lineageID))
         return next
     }
 
@@ -163,8 +177,14 @@ actor WorktreeCheckpointStore {
     func delete(id: CheckpointID, lineageID: String) throws -> CheckpointCatalogSnapshot {
         try validate(lineageID)
         try prepare(lineageID)
-        guard !(try protectedIDs(lineageID: lineageID).contains(id)) else { throw CheckpointStoreError.operationReferencesCheckpoint }
-        let currentCatalog = try catalog(lineageID: lineageID)
+        return try withLineageLock(lineageID: lineageID) {
+            try deleteUnlocked(id: id, lineageID: lineageID)
+        }
+    }
+
+    private func deleteUnlocked(id: CheckpointID, lineageID: String) throws -> CheckpointCatalogSnapshot {
+        guard !(try protectedIDsUnlocked(lineageID: lineageID).contains(id)) else { throw CheckpointStoreError.operationReferencesCheckpoint }
+        let currentCatalog = try catalogUnlocked(lineageID: lineageID)
         let manifests = try validManifests(lineageID: lineageID).valid
         let unavailable = currentCatalog.summaries.filter { $0.unavailableReason != nil }
         guard manifests.contains(where: { $0.id == id }) || unavailable.contains(where: { $0.id == id }) else { throw CheckpointStoreError.checkpointNotFound }
@@ -175,15 +195,17 @@ actor WorktreeCheckpointStore {
         try writeCatalog(next, layout: layout)
         try removeEntry(id, layout: layout)
         try removeQuarantinedEntry(id, layout: layout)
-        try garbageCollect(layout: layout, manifests: remaining, journals: try activeJournals(lineageID: lineageID))
+        try garbageCollect(layout: layout, manifests: remaining, journals: try activeJournalsUnlocked(lineageID: lineageID))
         return next
     }
 
     func writeJournal(_ journal: CheckpointRestoreJournal) throws {
         try validate(journal.lineageID)
         try prepare(journal.lineageID)
-        let layout = paths(journal.lineageID)
-        try fileSystem.writeDurable(JSONEncoder.checkpoints.encode(journal), to: layout.journals.appendingPathComponent("\(journal.id.uuidString.lowercased()).json"), mode: 0o600)
+        try withLineageLock(lineageID: journal.lineageID) {
+            let layout = paths(journal.lineageID)
+            try fileSystem.writeDurable(JSONEncoder.checkpoints.encode(journal), to: layout.journals.appendingPathComponent("\(journal.id.uuidString.lowercased()).json"), mode: 0o600)
+        }
     }
 
     func journal(id: UUID, lineageID: String) throws -> CheckpointRestoreJournal? {
@@ -196,17 +218,29 @@ actor WorktreeCheckpointStore {
     }
 
     func recoverableJournals(lineageID: String) throws -> [CheckpointRestoreJournal] {
-        try activeJournals(lineageID: lineageID)
+        try validate(lineageID)
+        try prepare(lineageID)
+        return try withLineageLock(lineageID: lineageID) {
+            try activeJournalsUnlocked(lineageID: lineageID)
+        }
     }
 
     func finishJournal(id: UUID, lineageID: String) throws {
-        guard let value = try journal(id: id, lineageID: lineageID), value.phase.isTerminal else { return }
-        try fileSystem.removeIfPresent(paths(lineageID).journals.appendingPathComponent("\(id.uuidString.lowercased()).json"))
+        try validate(lineageID)
+        try prepare(lineageID)
+        try withLineageLock(lineageID: lineageID) {
+            guard let value = try journal(id: id, lineageID: lineageID), value.phase.isTerminal else { return }
+            try fileSystem.removeIfPresent(paths(lineageID).journals.appendingPathComponent("\(id.uuidString.lowercased()).json"))
+        }
     }
 
     func discardPreparedJournal(id: UUID, lineageID: String) throws {
-        guard let value = try journal(id: id, lineageID: lineageID), value.phase == .prepared else { return }
-        try fileSystem.removeIfPresent(paths(lineageID).journals.appendingPathComponent("\(id.uuidString.lowercased()).json"))
+        try validate(lineageID)
+        try prepare(lineageID)
+        try withLineageLock(lineageID: lineageID) {
+            guard let value = try journal(id: id, lineageID: lineageID), value.phase == .prepared else { return }
+            try fileSystem.removeIfPresent(paths(lineageID).journals.appendingPathComponent("\(id.uuidString.lowercased()).json"))
+        }
     }
 
     private struct Layout {
@@ -229,11 +263,40 @@ actor WorktreeCheckpointStore {
 
     private func prepare(_ lineageID: String) throws {
         let layout = paths(lineageID)
-        if !exists(root) { try fileSystem.createDirectoryExclusively(root, mode: 0o700) }
+        if !exists(root) { try createDirectoryIfNeeded(root, mode: 0o700) }
         for directory in [layout.root, layout.blobs, layout.entries, layout.journals, layout.quarantine] where !exists(directory) {
-            try fileSystem.createDirectoryExclusively(directory, mode: 0o700)
+            try createDirectoryIfNeeded(directory, mode: 0o700)
         }
+    }
+
+    private func createDirectoryIfNeeded(_ url: URL, mode: mode_t) throws {
+        do {
+            try fileSystem.createDirectoryExclusively(url, mode: mode)
+        } catch CheckpointFileSystemError.posix(operation: "mkdir", code: EEXIST) {
+            return
+        }
+    }
+
+    private func withLineageLock<T>(lineageID: String, _ body: () throws -> T) throws -> T {
+        let layout = paths(lineageID)
+        let lock = try acquireLineageLock(layout: layout)
+        defer { try? fileSystem.removeIfPresent(lock) }
         try removeAbandonedBlobTemporaries(layout: layout)
+        return try body()
+    }
+
+    private func acquireLineageLock(layout: Layout) throws -> URL {
+        let lock = layout.root.appendingPathComponent(".store.lock", isDirectory: true)
+        let deadline = Date().addingTimeInterval(30)
+        while true {
+            do {
+                try fileSystem.createDirectoryExclusively(lock, mode: 0o700)
+                return lock
+            } catch CheckpointFileSystemError.posix(operation: "mkdir", code: EEXIST) {
+                guard Date() < deadline else { throw CheckpointStoreError.lineageLockUnavailable }
+                usleep(10_000)
+            }
+        }
     }
 
     private func exists(_ url: URL) -> Bool { FileManager.default.fileExists(atPath: url.path) }
@@ -299,13 +362,13 @@ actor WorktreeCheckpointStore {
         let layout = paths(lineageID)
         let next = snapshot(lineageID: lineageID, manifests: manifests.valid, unavailable: manifests.unavailable, byteCount: try byteCount(Set(manifests.valid.flatMap { references(in: $0) }), layout: layout, incoming: [:]))
         try writeCatalog(next, layout: layout)
-        try garbageCollect(layout: layout, manifests: manifests.valid, journals: try activeJournals(lineageID: lineageID))
+        try garbageCollect(layout: layout, manifests: manifests.valid, journals: try activeJournalsUnlocked(lineageID: lineageID))
         return next
     }
 
     private func snapshot(lineageID: String, manifests: [WorktreeCheckpointManifest], unavailable: [WorktreeCheckpointSummary] = [], byteCount: Int64) -> CheckpointCatalogSnapshot {
         let summaries = (manifests.sorted { $0.createdAt > $1.createdAt }.map { manifest in
-            WorktreeCheckpointSummary(id: manifest.id, kind: manifest.kind, label: manifest.label, createdAt: manifest.createdAt, byteCount: manifest.byteCount, stagedFileCount: manifest.paths.filter { $0.index != $0.head }.count, unstagedFileCount: manifest.paths.filter { $0.worktree != $0.index }.count, untrackedFileCount: manifest.paths.filter { $0.head.kind == .absent && $0.index.kind == .absent && $0.worktree.kind != .absent }.count, unavailableReason: nil)
+            WorktreeCheckpointSummary(id: manifest.id, kind: manifest.kind, label: manifest.label, createdAt: manifest.createdAt, byteCount: manifest.byteCount, stagedFileCount: manifest.paths.filter { $0.index != $0.head }.count, unstagedFileCount: manifest.paths.filter { $0.worktree != $0.index && !($0.head.kind == .absent && $0.index.kind == .absent) }.count, untrackedFileCount: manifest.paths.filter { $0.head.kind == .absent && $0.index.kind == .absent && $0.worktree.kind != .absent }.count, unavailableReason: nil)
         } + unavailable).sorted { $0.createdAt > $1.createdAt }
         return .init(lineageID: lineageID, summaries: summaries, byteCount: byteCount)
     }
@@ -365,6 +428,12 @@ actor WorktreeCheckpointStore {
     private func activeJournals(lineageID: String) throws -> [CheckpointRestoreJournal] {
         try validate(lineageID)
         try prepare(lineageID)
+        return try withLineageLock(lineageID: lineageID) {
+            try activeJournalsUnlocked(lineageID: lineageID)
+        }
+    }
+
+    private func activeJournalsUnlocked(lineageID: String) throws -> [CheckpointRestoreJournal] {
         let layout = paths(lineageID)
         return try fileSystem.list(layout.journals).compactMap { url in
             guard let value = try? JSONDecoder.checkpoints.decode(CheckpointRestoreJournal.self, from: fileSystem.fileData(url)), value.lineageID == lineageID else { return nil }
@@ -378,6 +447,10 @@ actor WorktreeCheckpointStore {
 
     private func protectedIDs(lineageID: String) throws -> Set<CheckpointID> {
         Set(try activeJournals(lineageID: lineageID).flatMap { [$0.checkpointID, $0.recoveryCheckpointID] })
+    }
+
+    private func protectedIDsUnlocked(lineageID: String) throws -> Set<CheckpointID> {
+        Set(try activeJournalsUnlocked(lineageID: lineageID).flatMap { [$0.checkpointID, $0.recoveryCheckpointID] })
     }
 
     private func garbageCollect(layout: Layout, manifests: [WorktreeCheckpointManifest], journals: [CheckpointRestoreJournal]) throws {

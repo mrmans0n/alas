@@ -46,4 +46,38 @@ struct CheckpointCoordinationTests {
         state.endCenterGitMutation(worktreeId: worktree.id)
         #expect(!state.checkpointCoordination(for: worktree, selectedPaths: []).otherGitMutationActive)
     }
+
+    @Test func appStateDisablesEditorFileWritesDuringCheckpointRecoveryLease() async throws {
+        let state = AppState()
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("checkpoint-editor-lease-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let worktree = Worktree(
+            id: "editor-lease-worktree",
+            projectId: "project",
+            name: "main",
+            branch: "main",
+            path: root,
+            status: .clean,
+            lastActivity: .now,
+            lineageID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        )
+        let pane = state.rightPaneStore.state(for: worktree, baseBranch: "main", comparisonMode: .auto)
+
+        #expect(!state.checkpointFileWritesDisabled(worktreeId: worktree.id))
+        pane.nonterminalCheckpointJournals = [
+            CheckpointRestoreJournal(
+                lineageID: try #require(worktree.lineageID),
+                checkpointID: UUID(),
+                recoveryCheckpointID: UUID(),
+                phase: .prepared,
+                stagingRoot: root.appendingPathComponent("staging").path,
+                selectedPaths: ["File.swift"],
+                expectedFingerprint: "fingerprint",
+                expectedIndexChecksum: "checksum"
+            )
+        ]
+
+        #expect(state.checkpointFileWritesDisabled(worktreeId: worktree.id))
+    }
 }
