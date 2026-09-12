@@ -372,6 +372,13 @@ struct ACPComposer: View {
                     onSchedule: { actions.submitWithIntent?(.schedule($0)) },
                     queueBadgeCount: session.visibleQueueCount
                 )
+                // Send/Queue/Stop is the row's primary action, so it must never
+                // be the thing that ellipsizes when the composer is narrow.
+                // `fixedSize` stops it compressing below its ideal width;
+                // `layoutPriority` makes the stack hand it space before the
+                // chips, which truncate instead.
+                .fixedSize(horizontal: true, vertical: false)
+                .layoutPriority(1)
             }
             .padding(.horizontal, 2)
         }
