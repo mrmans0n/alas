@@ -114,10 +114,12 @@ final class AppState {
     private(set) var isReopeningClosedTab = false
     var canReopenClosedTab: Bool { !isReopeningClosedTab && !closedTabHistory.isEmpty }
     private var unpersistedGGWorktreeModes: [String: [String: GGWorktreeMode]] = [:]
+    private var centerGitMutationCounts: [String: Int] = [:]
     var spacesManager: SpacesManager
     var workspacesManager: WorkspacesManager
     @ObservationIgnored private let workspaceStore: WorkspaceStore
     @ObservationIgnored private let workspaceRemoteTransport: WorkspaceRemoteTransport
+    @ObservationIgnored private let checkpointWriterLeases = CheckpointWriterLeaseStore()
     @ObservationIgnored private var workspaceCheckoutCoordinator: WorkspaceCheckoutCoordinator?
     /// Recovery information for a Workspace state file that could not be read.
     /// Observable so Settings and future Workspace navigation can keep the
@@ -153,6 +155,93 @@ final class AppState {
     struct OpenedTerminalSession {
         let id: String
         let foregroundPid: () -> pid_t?
+    }
+
+    func beginCenterGitMutation(worktreeId: String) {
+        centerGitMutationCounts[worktreeId, default: 0] += 1
+    }
+
+    func endCenterGitMutation(worktreeId: String) {
+        let next = max((centerGitMutationCounts[worktreeId] ?? 0) - 1, 0)
+        if next == 0 {
+            centerGitMutationCounts[worktreeId] = nil
+        } else {
+            centerGitMutationCounts[worktreeId] = next
+        }
+    }
+
+    func hasCenterGitMutationInFlight(worktreeId: String) -> Bool {
+        (centerGitMutationCounts[worktreeId] ?? 0) > 0 || tabs.hasRunningCommitPublish(worktreeId: worktreeId)
+    }
+
+    func checkpointFileWritesDisabled(worktreeId: String) -> Bool {
+        rightPaneStore.activeState(worktreeId: worktreeId)?.checkpointMutationsDisabled ?? true
+    }
+
+    func checkpointFileWritesDisabledAfterDiscovery(worktreeId: String) async -> Bool {
+        await checkpointMutationsDisabledAfterDiscovery(worktreeId: worktreeId)
+    }
+
+    func checkpointTerminalAdmissionDisabled(worktreeId: String) -> Bool {
+        rightPaneStore.activeState(worktreeId: worktreeId)?.checkpointRestoreBlocksWriters ?? false
+    }
+
+    func checkpointTerminalAdmissionDisabledAfterDiscovery(worktreeId: String) async -> Bool {
+        await checkpointRestoreBlocksWritersAfterDiscovery(worktreeId: worktreeId)
+    }
+
+    func checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: String) async -> Bool {
+        await checkpointMutationsDisabledAfterDiscovery(worktreeId: worktreeId)
+    }
+
+    func checkpointACPAdmissionDisabledAfterDiscovery(owner: SessionOwnerID?, fallbackWorktree: Worktree?) async -> Bool {
+        switch owner ?? fallbackWorktree.map({ .worktree($0.id) }) {
+        case .worktree(let worktreeID):
+            return await checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: worktreeID)
+        case .workspaceCheckout(let checkoutID, let location):
+            guard let checkout = workspacesManager.checkout(id: checkoutID),
+                  checkout.executionLocation.normalized == location.normalized
+            else { return true }
+            return await checkpointTerminalAdmissionDisabledAfterDiscovery(for: checkout)
+        case nil:
+            return true
+        }
+    }
+
+    func checkpointWorktreeRemovalDisabledAfterDiscovery(_ worktree: Worktree) async -> Bool {
+        await checkpointMutationsDisabledAfterDiscovery(for: worktree)
+    }
+
+    private func checkpointMutationsDisabledAfterDiscovery(worktreeId: String) async -> Bool {
+        guard let (_, worktree) = projectAndWorktree(withWorktreeId: worktreeId) else {
+            return true
+        }
+        return await checkpointMutationsDisabledAfterDiscovery(for: worktree)
+    }
+
+    private func checkpointRestoreBlocksWritersAfterDiscovery(worktreeId: String) async -> Bool {
+        guard let (_, worktree) = projectAndWorktree(withWorktreeId: worktreeId) else {
+            return false
+        }
+        return await checkpointRestoreBlocksWritersAfterDiscovery(for: worktree)
+    }
+
+    private func checkpointMutationsDisabledAfterDiscovery(for worktree: Worktree) async -> Bool {
+        let pane = rightPaneStore.state(
+            for: worktree,
+            baseBranch: config.worktrees.baseBranch,
+            comparisonMode: config.changes.comparisonMode
+        )
+        return await pane.checkpointMutationsDisabledAfterJournalRevalidation()
+    }
+
+    private func checkpointRestoreBlocksWritersAfterDiscovery(for worktree: Worktree) async -> Bool {
+        let pane = rightPaneStore.state(
+            for: worktree,
+            baseBranch: config.worktrees.baseBranch,
+            comparisonMode: config.changes.comparisonMode
+        )
+        return await pane.checkpointRestoreBlocksWritersAfterJournalRevalidation()
     }
 
     typealias TerminalSessionOpener = (
@@ -620,6 +709,9 @@ final class AppState {
             }
         }
     }
+
+    private static let checkpointRecoveryBlocksWorktreeRemovalMessage = "An interrupted checkpoint restore needs recovery before this worktree can be deleted."
+    static let checkpointRecoveryBlocksACPMessage = "An interrupted checkpoint restore needs recovery before an agent session can start."
 
     /// Set when a worktree deletion fails because Git requires `--force`.
     /// The UI presents a confirmation dialog; confirming retries with force.
@@ -1750,6 +1842,9 @@ final class AppState {
         guard let authoritative = await authoritativeCheckoutForWorkspaceTerminal(checkout) else {
             throw NSError(domain: "AppState", code: 3, userInfo: [NSLocalizedDescriptionKey: "The Workspace checkout root is not owned by this checkout."])
         }
+        guard await !checkpointTerminalAdmissionDisabledAfterDiscovery(for: authoritative) else {
+            throw TerminalLaunchError.checkpointRecoveryRequired
+        }
         let context = WorkspaceTerminalContext(
             checkoutID: authoritative.id,
             executionLocation: authoritative.executionLocation,
@@ -1784,6 +1879,9 @@ final class AppState {
               let project = projects.first(where: { $0.id == focusedMember.projectID })
         else {
             throw AgentTerminalLaunchError.projectUnavailable
+        }
+        guard await !checkpointTerminalAdmissionDisabledAfterDiscovery(for: authoritative) else {
+            throw TerminalLaunchError.checkpointRecoveryRequired
         }
         guard let agent = agentRegistry.enabled().first(where: { $0.id == agentId }) else {
             throw AgentTerminalLaunchError.agentUnavailable
@@ -2363,6 +2461,9 @@ final class AppState {
         guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
         let resolvedWorktree = try await resolveDirtyBuffersBeforeWorkspaceMemberDeletion(checkoutID: checkoutID, memberID: memberID)
         guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        if let resolvedWorktree {
+            try await requireCheckpointWorktreeRemovalAllowedAfterDiscovery(resolvedWorktree)
+        }
         let checkout = try await workspaceCoordinator().deleteMember(checkoutID: checkoutID, memberID: memberID, confirmingRisks: confirmingRisks)
         if let resolvedWorktree,
            checkout.members.first(where: { $0.id == memberID })?.availability == .explicitlyDeleted {
@@ -2387,6 +2488,7 @@ final class AppState {
             keepBranch: true
         ) {
         case .save:
+            try await requireCheckpointWorktreeRemovalAllowedAfterDiscovery(worktree)
             guard await saveDirtyBuffers(in: worktree) else { throw CocoaError(.userCancelled) }
         case .discard:
             return worktree
@@ -2514,6 +2616,9 @@ final class AppState {
             }
         }
         guard workspaceMutationAvailable else { throw WorkspaceStoreError.recoveryRequired }
+        for worktree in resolvedWorktrees.values {
+            try await requireCheckpointWorktreeRemovalAllowedAfterDiscovery(worktree)
+        }
         let checkout = try await workspaceCoordinator().deleteCheckout(checkoutID: id, confirmingRisks: confirmingRisks)
         for member in checkout.members where member.availability == .explicitlyDeleted {
             if let worktree = resolvedWorktrees[member.id] {
@@ -2523,6 +2628,12 @@ final class AppState {
         await workspacesManager.refreshCheckoutSnapshots()
         selectWorkspaceCheckout(id: id)
         return checkout
+    }
+
+    private func requireCheckpointWorktreeRemovalAllowedAfterDiscovery(_ worktree: Worktree) async throws {
+        guard await !checkpointWorktreeRemovalDisabledAfterDiscovery(worktree) else {
+            throw WorkspaceStoreError.recoveryRequired
+        }
     }
 
     func forgetWorkspaceCheckout(id: UUID, confirmedPreserveArtifacts: Bool = false) async throws {
@@ -3156,6 +3267,17 @@ final class AppState {
             switch self {
             case .invalidEnvKey(let key):
                 return "Invalid auth environment variable name: \(key)"
+            }
+        }
+    }
+
+    enum TerminalLaunchError: LocalizedError, Equatable {
+        case checkpointRecoveryRequired
+
+        var errorDescription: String? {
+            switch self {
+            case .checkpointRecoveryRequired:
+                return "Recover the interrupted checkpoint restore before opening terminals."
             }
         }
     }
@@ -4660,6 +4782,13 @@ final class AppState {
         terminal.socketReleaseHandler = { [weak self] leafId in
             self?.harness.socketServer.unlinkSession(leafId: leafId)
         }
+        terminal.onSessionRegistered = { [weak self] session in
+            self?.acquireCheckpointTerminalLease(for: session)
+        }
+        terminal.onSessionUnregistered = { [weak self] session in
+            guard let self else { return }
+            self.checkpointWriterLeases.release(sessionID: session.id, instanceID: self.instanceId)
+        }
         terminal.onSessionProcessExited = { [weak self] leafId, owner, processAlive in
             self?.handleTerminalProcessExited(
                 owner: owner,
@@ -5284,6 +5413,9 @@ final class AppState {
         titleOverride: String? = nil,
         runScriptKey: String? = nil
     ) async throws -> Tab {
+        guard await !checkpointTerminalAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) else {
+            throw TerminalLaunchError.checkpointRecoveryRequired
+        }
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             throw NSError(domain: "AppState", code: 2)
         }
@@ -5349,6 +5481,9 @@ final class AppState {
         titleOverride: String? = nil,
         runScriptKey: String? = nil
     ) throws -> Tab {
+        guard !checkpointTerminalAdmissionDisabled(worktreeId: worktree.id) else {
+            throw TerminalLaunchError.checkpointRecoveryRequired
+        }
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             throw NSError(domain: "AppState", code: 2)
         }
@@ -6022,6 +6157,9 @@ final class AppState {
 
     @discardableResult
     func restoreTerminalTabIfNeededAsync(worktreeId: String, tabId: TabID) async throws -> Tab? {
+        guard await !checkpointTerminalAdmissionDisabledAfterDiscovery(worktreeId: worktreeId) else {
+            throw TerminalLaunchError.checkpointRecoveryRequired
+        }
         let legacySessionInfos = await legacySessionInfosForTerminalRestore(
             worktreeId: worktreeId,
             tabId: tabId
@@ -6054,6 +6192,9 @@ final class AppState {
               checkout.operation == .idle,
               owner == SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
         else { return nil }
+        guard await !checkpointTerminalAdmissionDisabledAfterDiscovery(for: checkout) else {
+            throw TerminalLaunchError.checkpointRecoveryRequired
+        }
         guard let tab = tabs.tabs(for: owner).first(where: { $0.id == tabID }),
               case .terminal(let state) = tab else { return nil }
         guard await workspaceCheckoutManifestMatches(checkout) else { return nil }
@@ -6183,6 +6324,7 @@ final class AppState {
 
     func saveActiveTab(worktreeId: String) {
         Task {
+            guard await !self.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId) else { return }
             _ = await tabs.saveActiveAsync(worktreeId: worktreeId, config: config.code)
         }
     }
@@ -6192,10 +6334,11 @@ final class AppState {
             var roots: [String: URL] = [:]
             for project in projects {
                 for worktree in projectsManager.worktrees(projectId: project.id) {
+                    guard await !self.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktree.id) else { continue }
                     roots[worktree.id] = roots[worktree.id] ?? worktree.path
                 }
             }
-            let errors = await tabs.saveAllAwaitingRemote(worktreeRoots: roots)
+            let errors = await tabs.saveAllAwaitingRemote(worktreeRoots: roots, allowedWorktreeIDs: Set(roots.keys))
             guard !errors.isEmpty else { return }
             showFileActionError(
                 title: "Save All Failed",
@@ -6223,11 +6366,14 @@ final class AppState {
                 return
             }
             Task { @MainActor [weak self] in
+                guard let self,
+                      await !self.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId)
+                else { return }
                 do {
                     try await Self.createRemoteEmptyFile(host: host, worktreeRoot: worktree.path, relativePath: relativePath)
-                    self?.openFile(relativePath: relativePath, worktreeId: worktreeId)
+                    self.openFile(relativePath: relativePath, worktreeId: worktreeId)
                 } catch {
-                    self?.showFileActionError(title: "New File Failed", message: error.localizedDescription)
+                    self.showFileActionError(title: "New File Failed", message: error.localizedDescription)
                 }
             }
             return
@@ -6240,16 +6386,21 @@ final class AppState {
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
-        do {
-            let relativePath = try relativePath(for: url, in: worktree.path)
-            if FileManager.default.fileExists(atPath: url.path) {
-                throw CocoaError(.fileWriteFileExists)
+        Task { @MainActor [weak self] in
+            guard let self,
+                  await !self.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId)
+            else { return }
+            do {
+                let relativePath = try self.relativePath(for: url, in: worktree.path)
+                if FileManager.default.fileExists(atPath: url.path) {
+                    throw CocoaError(.fileWriteFileExists)
+                }
+                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try Data().write(to: url, options: .withoutOverwriting)
+                self.openFile(relativePath: relativePath, worktreeId: worktreeId)
+            } catch {
+                self.showFileActionError(title: "New File Failed", message: error.localizedDescription)
             }
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try Data().write(to: url, options: .withoutOverwriting)
-            openFile(relativePath: relativePath, worktreeId: worktreeId)
-        } catch {
-            showFileActionError(title: "New File Failed", message: error.localizedDescription)
         }
     }
 
@@ -6265,28 +6416,36 @@ final class AppState {
 
         if let host = project.host {
             Task { @MainActor [weak self] in
+                guard let self,
+                      await !self.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId)
+                else { return }
                 do {
                     try await Self.createRemoteEmptyFile(
                         host: host,
                         worktreeRoot: worktree.path,
                         relativePath: relativePath
                     )
-                    self?.openFile(relativePath: relativePath, worktreeId: worktreeId)
+                    self.openFile(relativePath: relativePath, worktreeId: worktreeId)
                     onCreated()
                 } catch {
-                    self?.showFileActionError(title: "New File Failed", message: error.localizedDescription)
+                    self.showFileActionError(title: "New File Failed", message: error.localizedDescription)
                 }
             }
             return
         }
 
         let url = worktree.path.appendingPathComponent(relativePath)
-        do {
-            try Data().write(to: url, options: .withoutOverwriting)
-            openFile(relativePath: relativePath, worktreeId: worktreeId)
-            onCreated()
-        } catch {
-            showFileActionError(title: "New File Failed", message: error.localizedDescription)
+        Task { @MainActor [weak self] in
+            guard let self,
+                  await !self.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId)
+            else { return }
+            do {
+                try Data().write(to: url, options: .withoutOverwriting)
+                self.openFile(relativePath: relativePath, worktreeId: worktreeId)
+                onCreated()
+            } catch {
+                self.showFileActionError(title: "New File Failed", message: error.localizedDescription)
+            }
         }
     }
 
@@ -6302,6 +6461,9 @@ final class AppState {
 
         if let host = project.host {
             Task { @MainActor [weak self] in
+                guard let self,
+                      await !self.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId)
+                else { return }
                 do {
                     try await Self.createRemoteDirectory(
                         host: host,
@@ -6310,20 +6472,25 @@ final class AppState {
                     )
                     onCreated()
                 } catch {
-                    self?.showFileActionError(title: "New Folder Failed", message: error.localizedDescription)
+                    self.showFileActionError(title: "New Folder Failed", message: error.localizedDescription)
                 }
             }
             return
         }
 
-        do {
-            try FileManager.default.createDirectory(
-                at: worktree.path.appendingPathComponent(relativePath, isDirectory: true),
-                withIntermediateDirectories: false
-            )
-            onCreated()
-        } catch {
-            showFileActionError(title: "New Folder Failed", message: error.localizedDescription)
+        Task { @MainActor [weak self] in
+            guard let self,
+                  await !self.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId)
+            else { return }
+            do {
+                try FileManager.default.createDirectory(
+                    at: worktree.path.appendingPathComponent(relativePath, isDirectory: true),
+                    withIntermediateDirectories: false
+                )
+                onCreated()
+            } catch {
+                self.showFileActionError(title: "New Folder Failed", message: error.localizedDescription)
+            }
         }
     }
 
@@ -6396,6 +6563,7 @@ final class AppState {
     }
 
     func saveActiveTabAs(worktreeId: String) {
+        guard !checkpointFileWritesDisabled(worktreeId: worktreeId) else { return }
         guard let worktree = worktree(withId: worktreeId),
               let context = tabs.activeEditorContext(worktreeId: worktreeId) else { return }
         let currentURL = worktree.path.appendingPathComponent(context.tab.relativePath)
@@ -6413,8 +6581,11 @@ final class AppState {
             }
             Task { @MainActor [weak self] in
                 do {
+                    guard let self,
+                          await !self.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId)
+                    else { return }
                     try await context.buffer.saveAsRemote(relativePath: relativePath)
-                    _ = self?.tabs.updateEditorPath(worktreeId: worktreeId, tabId: context.tab.id, relativePath: relativePath)
+                    _ = self.tabs.updateEditorPath(worktreeId: worktreeId, tabId: context.tab.id, relativePath: relativePath)
                 } catch {
                     self?.showFileActionError(title: "Save As Failed", message: error.localizedDescription)
                 }
@@ -6429,16 +6600,21 @@ final class AppState {
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
-        do {
-            let relativePath = try relativePath(for: url, in: worktree.path)
-            guard !tabs.hasEditor(worktreeId: worktreeId, relativePath: relativePath, excluding: context.tab.id) else {
-                showFileActionError(title: "Save As Failed", message: "That file is already open in another editor tab.")
-                return
+        Task { @MainActor [weak self] in
+            guard let self,
+                  await !self.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId)
+            else { return }
+            do {
+                let relativePath = try self.relativePath(for: url, in: worktree.path)
+                guard !self.tabs.hasEditor(worktreeId: worktreeId, relativePath: relativePath, excluding: context.tab.id) else {
+                    self.showFileActionError(title: "Save As Failed", message: "That file is already open in another editor tab.")
+                    return
+                }
+                try context.buffer.saveAs(relativePath: relativePath)
+                _ = self.tabs.updateEditorPath(worktreeId: worktreeId, tabId: context.tab.id, relativePath: relativePath)
+            } catch {
+                self.showFileActionError(title: "Save As Failed", message: error.localizedDescription)
             }
-            try context.buffer.saveAs(relativePath: relativePath)
-            _ = tabs.updateEditorPath(worktreeId: worktreeId, tabId: context.tab.id, relativePath: relativePath)
-        } catch {
-            showFileActionError(title: "Save As Failed", message: error.localizedDescription)
         }
     }
 
@@ -6498,11 +6674,14 @@ final class AppState {
             ) else { return }
             guard relativePath != context.tab.relativePath else { return }
             Task { @MainActor [weak self] in
+                guard let self,
+                      await !self.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId)
+                else { return }
                 do {
                     try await context.buffer.moveToRemote(relativePath: relativePath)
-                    _ = self?.tabs.updateEditorPath(worktreeId: worktreeId, tabId: context.tab.id, relativePath: relativePath)
+                    _ = self.tabs.updateEditorPath(worktreeId: worktreeId, tabId: context.tab.id, relativePath: relativePath)
                 } catch {
-                    self?.showFileActionError(title: "Rename File Failed", message: error.localizedDescription)
+                    self.showFileActionError(title: "Rename File Failed", message: error.localizedDescription)
                 }
             }
             return
@@ -6515,13 +6694,18 @@ final class AppState {
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
-        do {
-            let relativePath = try relativePath(for: url, in: worktree.path)
-            guard relativePath != context.tab.relativePath else { return }
-            try context.buffer.moveTo(relativePath: relativePath)
-            _ = tabs.updateEditorPath(worktreeId: worktreeId, tabId: context.tab.id, relativePath: relativePath)
-        } catch {
-            showFileActionError(title: "Rename File Failed", message: error.localizedDescription)
+        Task { @MainActor [weak self] in
+            guard let self,
+                  await !self.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId)
+            else { return }
+            do {
+                let relativePath = try self.relativePath(for: url, in: worktree.path)
+                guard relativePath != context.tab.relativePath else { return }
+                try context.buffer.moveTo(relativePath: relativePath)
+                _ = self.tabs.updateEditorPath(worktreeId: worktreeId, tabId: context.tab.id, relativePath: relativePath)
+            } catch {
+                self.showFileActionError(title: "Rename File Failed", message: error.localizedDescription)
+            }
         }
     }
 
@@ -7859,6 +8043,13 @@ final class AppState {
         }
         if saveBuffersFirst {
             Task { @MainActor in
+                guard await !checkpointWorktreeRemovalDisabledAfterDiscovery(worktree) else {
+                    projectsManager.setOperationState(
+                        id: worktree.id,
+                        state: .deleteFailed(message: Self.checkpointRecoveryBlocksWorktreeRemovalMessage)
+                    )
+                    return
+                }
                 guard await saveDirtyBuffers(in: worktree) else { return }
                 beginDeleteWorktree(worktree, keepBranch: keepBranch)
             }
@@ -8246,6 +8437,9 @@ final class AppState {
         if projectsManager.operationState(for: worktree.id) == .deleting {
             return .ok
         }
+        guard await !checkpointWorktreeRemovalDisabledAfterDiscovery(worktree) else {
+            return .error(Self.checkpointRecoveryBlocksWorktreeRemovalMessage)
+        }
         let dirty = dirtyEditorTabIds(worktreeId: worktree.id)
         if !dirty.isEmpty && !force {
             return .error("worktree has unsaved editor changes; save them or rerun with --force to delete")
@@ -8584,6 +8778,13 @@ final class AppState {
         promptsForForce: Bool = true,
         verifiedMergedBranchSHA: String? = nil
     ) async -> WorktreeBatchOutcome {
+        guard await !checkpointWorktreeRemovalDisabledAfterDiscovery(worktree) else {
+            projectsManager.setOperationState(
+                id: worktree.id,
+                state: .deleteFailed(message: Self.checkpointRecoveryBlocksWorktreeRemovalMessage)
+            )
+            return .failed(message: Self.checkpointRecoveryBlocksWorktreeRemovalMessage)
+        }
         let outcome: WorktreeRemovalOutcome
         do {
             outcome = try await Self.performRemoveWorktree(
@@ -8675,19 +8876,8 @@ final class AppState {
         guard let pending = pendingForceDeleteWorktree else { return }
         pendingForceDeleteWorktree = nil
 
-        guard let project = projects.first(where: { $0.id == pending.projectId }),
-              projectsManager.worktrees(projectId: pending.projectId).contains(where: { $0.id == pending.id })
+        guard let worktree = projectsManager.worktrees(projectId: pending.projectId).first(where: { $0.id == pending.id })
         else { return }
-
-        let worktree = Worktree(
-            id: pending.id,
-            projectId: pending.projectId,
-            name: pending.branch,
-            branch: pending.branch,
-            path: pending.worktreePath,
-            status: .clean,
-            lastActivity: Date()
-        )
 
         projectsManager.setOperationState(id: pending.id, state: .deleting)
 
@@ -9059,6 +9249,142 @@ final class AppState {
     func editorLiveBufferText(for absolutePath: String, worktreeId: String) -> String? {
         guard let relativePath = relativePath(for: absolutePath, in: worktreeId) else { return nil }
         return tabs.dirtyBufferText(worktreeId: worktreeId, relativePath: relativePath)
+    }
+
+    /// Read-only facts used by checkpoint preview and restore preflight. A
+    /// Workspace checkout remains a shared session owner. Count checkout-owned
+    /// writers for every checkout that contains this member worktree, even
+    /// when the user has navigated away from that checkout.
+    func checkpointCoordination(
+        for worktree: Worktree,
+        selectedPaths: Set<String>
+    ) -> CheckpointCoordinationSnapshot {
+        let lineageID = worktree.lineageID ?? WorktreeService.existingLocalLineageID(forWorktreeAt: worktree.path)
+        var terminalCount = terminal.registry.sessions(forWorktree: worktree.id).count
+        if let lineageID {
+            terminalCount += checkpointWriterLeases.activeLeaseCount(lineageID: lineageID, excludingInstanceID: instanceId)
+        }
+        var acpCount = checkpointACPLeaseCount(owner: .worktree(worktree.id))
+        var workspaceName: String?
+        var repositoryName = projects.first(where: { $0.id == worktree.projectId })?.name ?? worktree.name
+
+        let worktreePath = worktree.path.standardizedFileURL.path
+        let matchingCheckouts = workspacesManager.checkouts.compactMap { checkout -> (WorkspaceCheckout, WorkspaceCheckoutMember)? in
+            guard checkout.archivedAt == nil,
+                  let member = checkout.members.first(where: {
+                      $0.projectID == worktree.projectId &&
+                          URL(fileURLWithPath: $0.worktreePath).standardizedFileURL.path == worktreePath
+                  })
+            else { return nil }
+            return (checkout, member)
+        }
+        for (checkout, member) in matchingCheckouts {
+            let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+            terminalCount += terminal.registry.sessions(forWorktree: owner.storageKey).count
+            acpCount += checkpointACPLeaseCount(owner: owner)
+            if checkout.id == selectedWorkspaceCheckout?.id {
+                workspaceName = checkout.fallbackWorkspaceName
+            }
+            repositoryName = projects.first(where: { $0.id == member.projectID })?.name ?? member.fallbackProjectName
+        }
+
+        let pane = rightPaneStore.activeState(worktreeId: worktree.id)
+        let dirtyEditorPaths = CheckpointCoordinationSnapshot.overlappingPaths(
+            dirtyPaths: tabs.unsavedRelativePaths(forWorktree: worktree.id),
+            selectedPaths: selectedPaths
+        )
+        return .init(
+            dirtyEditorPaths: dirtyEditorPaths,
+            activeTerminalCount: terminalCount,
+            activeACPCount: acpCount,
+            otherGitMutationActive: (pane?.hasOtherGitMutationInFlight ?? false) || hasCenterGitMutationInFlight(worktreeId: worktree.id),
+            scopeDescription: CheckpointCoordinationSnapshot.scopeDescription(
+                repositoryName: repositoryName,
+                workspaceName: workspaceName
+            )
+        )
+    }
+
+    private func acquireCheckpointTerminalLease(for session: TerminalSession) {
+        let lineageIDs = checkpointTerminalLeaseLineageIDs(for: session)
+        checkpointWriterLeases.acquire(
+            lineageIDs: lineageIDs,
+            sessionID: session.id,
+            instanceID: instanceId,
+            zmxSessionName: session.zmxSessionName,
+            remoteHost: session.remoteHost
+        )
+    }
+
+    private func checkpointTerminalLeaseLineageIDs(for session: TerminalSession) -> Set<String> {
+        switch session.owner {
+        case .worktree(let worktreeID):
+            return worktree(withId: worktreeID).flatMap(\.lineageID).map { [$0] } ?? []
+        case .workspaceCheckout(let checkoutID, let location):
+            guard let checkout = workspacesManager.checkout(id: checkoutID),
+                  checkout.executionLocation.normalized == location.normalized
+            else { return [] }
+            return Set(checkout.members.compactMap { member in
+                checkpointMemberWorktree(for: member)?.lineageID
+            })
+        }
+    }
+
+    private func checkpointACPLeaseCount(owner: SessionOwnerID) -> Int {
+        do {
+            return try ACPSessionStore(path: Paths.acpSessionsDB(for: owner).path).activeLeaseCount(
+                now: Int64(Date().timeIntervalSince1970),
+                staleAfter: ACPSessionManager.leaseStaleAfter
+            )
+        } catch {
+            return acpManager(for: owner)?.hasActiveCheckpointWriter == true ? 1 : 0
+        }
+    }
+
+    private func checkpointTerminalAdmissionDisabled(for checkout: WorkspaceCheckout) -> Bool {
+        for member in checkout.members where member.availability == .available {
+            guard let worktree = checkpointMemberWorktree(for: member) else { continue }
+            if checkpointTerminalAdmissionDisabled(worktreeId: worktree.id) { return true }
+        }
+        return false
+    }
+
+    private func checkpointTerminalAdmissionDisabledAfterDiscovery(for checkout: WorkspaceCheckout) async -> Bool {
+        for member in checkout.members where member.availability == .available {
+            guard let worktree = checkpointMemberWorktree(for: member) else { continue }
+            if await checkpointTerminalAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) { return true }
+        }
+        return false
+    }
+
+    private func checkpointMemberWorktree(for member: WorkspaceCheckoutMember) -> Worktree? {
+        let liveWorktrees = projectsManager.worktrees(projectId: member.projectID)
+        let cachedWorktrees = projects.first(where: { $0.id == member.projectID })?.cachedWorktrees ?? []
+        return (liveWorktrees + cachedWorktrees).first(where: {
+                Self.canonicalWorktreePath($0.path.path) == Self.canonicalWorktreePath(member.worktreePath)
+        })
+    }
+
+    func checkpointTarget(for worktree: Worktree) -> CheckpointWorktreeTarget? {
+        guard !worktree.path.isRemoteAlasPath,
+              let lineageID = worktree.lineageID ?? WorktreeService.existingLocalLineageID(forWorktreeAt: worktree.path)
+        else { return nil }
+        let project = projects.first(where: { $0.id == worktree.projectId })
+        let workspaceName: String?
+        if workspaceNavigationState.repositoryFocusWorktreeID == worktree.id {
+            workspaceName = selectedWorkspaceCheckout?.fallbackWorkspaceName
+        } else {
+            workspaceName = nil
+        }
+        return .init(
+            worktreeID: worktree.id,
+            projectID: worktree.projectId,
+            path: worktree.path,
+            lineageID: lineageID,
+            branch: worktree.branch,
+            repositoryName: project?.name ?? worktree.name,
+            workspaceName: workspaceName
+        )
     }
 
     private func relativePath(for absolutePath: String, in worktreeId: String) -> String? {
@@ -9791,6 +10117,7 @@ final class AppState {
         initialPrompt: String? = nil
     ) async -> ACPSessionTabState? {
         guard let checkout = await authoritativeCheckoutForWorkspaceACPSessionCreation(checkout) else { return nil }
+        guard await !checkpointACPAdmissionDisabledAfterDiscovery(owner: .workspaceCheckout(checkout.id, checkout.executionLocation), fallbackWorktree: nil) else { return nil }
         let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
         guard case let .ready(manager) = await workspaceACPManager(for: checkout) else { return nil }
         guard await authoritativeCheckoutForWorkspaceACPSessionCreation(checkout) != nil else {
@@ -9822,6 +10149,7 @@ final class AppState {
     func restoreWorkspaceCheckoutACPSessions(_ checkout: WorkspaceCheckout) async -> Bool {
         guard let checkout = await authoritativeCheckoutForWorkspaceACPSessionCreation(checkout) else { return false }
         let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+        guard await !checkpointACPAdmissionDisabledAfterDiscovery(owner: owner, fallbackWorktree: nil) else { return false }
         tabs.load(owner: owner, restoringActiveTabs: true)
         guard case let .ready(manager) = await workspaceACPManager(for: checkout) else { return false }
         guard await authoritativeCheckoutForWorkspaceACPSessionCreation(checkout) != nil else {
@@ -9844,6 +10172,9 @@ final class AppState {
         promptID: UUID,
         prompt: String?
     ) async throws -> ACPSession.ID {
+        guard await !checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) else {
+            throw ACPWorktreeSessionBootstrapError(message: Self.checkpointRecoveryBlocksACPMessage)
+        }
         guard let manager = acpManager(for: worktree) else {
             throw ACPWorktreeSessionBootstrapError(message: "Could not create ACP session manager.")
         }
@@ -9871,6 +10202,10 @@ final class AppState {
                 await manager.enqueuePrompt(id: promptID, text: text, into: id)
             },
             attach: { _, id, freshlyCreated in
+                guard await !self.checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) else {
+                    manager.liveSession(for: id)?.lastError = Self.checkpointRecoveryBlocksACPMessage
+                    return
+                }
                 await manager.attach(to: id, freshlyCreated: freshlyCreated)
             },
             readyState: { _, id in
@@ -9891,6 +10226,7 @@ final class AppState {
         agentID: String,
         preparedPrompt: PreparedWorktreeACPPrompt
     ) async {
+        guard await !checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) else { return }
         guard let manager = acpManager(for: worktree) else { return }
         let session = manager.createSession(
             id: preparedPrompt.sessionID,
@@ -9947,6 +10283,10 @@ final class AppState {
         guard let manager = acpManager(for: worktree) else { return }
         Task { @MainActor in
             do {
+                guard await !self.checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) else {
+                    manager.liveSession(for: sourceSessionID)?.lastError = Self.checkpointRecoveryBlocksACPMessage
+                    return
+                }
                 let target = try await manager.createFork(
                     sourceSessionID: sourceSessionID,
                     boundary: boundary,
@@ -9976,6 +10316,10 @@ final class AppState {
         guard let manager = acpManager(for: owner) else { return }
         Task { @MainActor in
             do {
+                guard await !self.checkpointACPAdmissionDisabledAfterDiscovery(owner: owner, fallbackWorktree: nil) else {
+                    manager.liveSession(for: sourceSessionID)?.lastError = Self.checkpointRecoveryBlocksACPMessage
+                    return
+                }
                 let target = try await manager.createFork(
                     sourceSessionID: sourceSessionID,
                     boundary: boundary,
@@ -10086,6 +10430,7 @@ final class AppState {
         await awaitPendingACPDetach(owner: .worktree(worktree.id), sessionId: sessionId)
         guard let mgr = acpManager(for: worktree) else { return }
         cancelRetainedACPSessionCleanup(owner: .worktree(worktree.id), sessionId: sessionId)
+        guard await !checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) else { return }
 
         // Focus the tab if it's already there.
         let tabIdToFocus: TabID? = tabs.tabs(forWorktree: worktree.id).compactMap { tab -> TabID? in
@@ -10121,6 +10466,7 @@ final class AppState {
         await awaitPendingACPDetach(owner: owner, sessionId: sessionId)
         guard let mgr = acpManager(for: owner) else { return }
         cancelRetainedACPSessionCleanup(owner: owner, sessionId: sessionId)
+        guard await !checkpointACPAdmissionDisabledAfterDiscovery(owner: owner, fallbackWorktree: nil) else { return }
 
         let tabIdToFocus: TabID? = tabs.tabs(for: owner).compactMap { tab -> TabID? in
             if case .acpSession(let state) = tab, state.sessionId == sessionId { return tab.id }
@@ -10359,6 +10705,38 @@ final class AppState {
         }
         let tab = tabs.appendStashDiff(worktreeId: worktreeId, stash: stash, file: file)
         activateWorktreeCenterTab(worktreeId: worktreeId, tabId: tab.id)
+    }
+
+    func openCheckpointDiffTab(
+        worktree: Worktree,
+        checkpointID: CheckpointID,
+        groupID: UUID,
+        primaryPath: String,
+        memberPaths: [String]? = nil,
+        checkpointLabel: String
+    ) {
+        let worktreeID = worktree.id
+        let existing = tabs.tabs(forWorktree: worktreeID).first { tab in
+            if case .checkpointDiff(let state) = tab {
+                return state.worktreeID == worktreeID
+                    && state.checkpointID == checkpointID
+                    && state.groupID == groupID
+            }
+            return false
+        }
+        if let existing {
+            activateWorktreeCenterTab(worktreeId: worktreeID, tabId: existing.id)
+            return
+        }
+        let tab = tabs.appendCheckpointDiff(
+            worktreeID: worktreeID,
+            checkpointID: checkpointID,
+            groupID: groupID,
+            primaryPath: primaryPath,
+            memberPaths: memberPaths,
+            checkpointLabel: checkpointLabel
+        )
+        activateWorktreeCenterTab(worktreeId: worktreeID, tabId: tab.id)
     }
 
     func openCommitTab(worktreeId: String, commit: CommitInfo) {
@@ -10984,6 +11362,9 @@ extension AppState: RemoteSessionsProvider {
               projectsManager.visibleWorktrees(projectId: resolved.project.id).contains(where: { $0.id == worktreeId })
         else {
             return .failure("Worktree is no longer available.")
+        }
+        guard await !checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: resolved.worktree.id) else {
+            return .failure(Self.checkpointRecoveryBlocksACPMessage)
         }
         switch projectsManager.operationState(for: worktreeId) {
         case .creating, .deleting, .createFailed:

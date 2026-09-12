@@ -189,6 +189,57 @@ struct AgentTerminalLaunchTests {
         }
     }
 
+    @Test func interruptedCheckpointRestoreBlocksTerminalAndAgentAdmission() throws {
+        var openCount = 0
+        let project = project(mode: .useGlobal, useBypass: false)
+        let worktree = Worktree(
+            id: "wt",
+            projectId: project.id,
+            name: "main",
+            branch: "main",
+            path: URL(fileURLWithPath: "/tmp/project"),
+            status: .clean,
+            lastActivity: Date(),
+            lineageID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        )
+        let state = AppState(
+            store: MemoryStore(),
+            fileActionErrorHandler: { _, _ in },
+            terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
+                openCount += 1
+                return AppState.OpenedTerminalSession(id: "session-\(openCount)", foregroundPid: { nil })
+            }
+        )
+        state.projectsManager = ProjectsManager(persistedProjects: [project])
+        state.agentRegistry = AgentRegistry(
+            builtinState: [:],
+            customs: [agent()],
+            installedIds: ["test-agent"]
+        )
+        let pane = state.rightPaneStore.state(for: worktree, baseBranch: "main", comparisonMode: .auto)
+        pane.nonterminalCheckpointJournals = [
+            CheckpointRestoreJournal(
+                lineageID: try #require(worktree.lineageID),
+                checkpointID: UUID(),
+                recoveryCheckpointID: UUID(),
+                phase: .prepared,
+                stagingRoot: "/tmp/project/.alas-checkpoint-restore",
+                selectedPaths: ["File.swift"],
+                expectedFingerprint: "fingerprint",
+                expectedIndexChecksum: "checksum"
+            )
+        ]
+
+        #expect(throws: AppState.TerminalLaunchError.checkpointRecoveryRequired) {
+            _ = try state.openTerminalTab(for: worktree)
+        }
+        #expect(throws: AppState.TerminalLaunchError.checkpointRecoveryRequired) {
+            _ = try state.openAgentTerminalTab(for: worktree, agentId: "test-agent")
+        }
+        #expect(openCount == 0)
+        #expect(state.tabs.tabs(forWorktree: worktree.id).isEmpty)
+    }
+
     @Test func acpAuthLaunchAppendsQuotedCommandAndEnvPrefix() throws {
         var capturedSuffix: String?
         var capturedIncludeUserStartupScript: Bool?

@@ -416,12 +416,149 @@ struct ChangesTabView: View {
             }
         }
 
+        appendCheckpointRows(to: &rows)
         appendStashRows(to: &rows)
         rows.append(appKitRow(id: "changes-commit-divider", token: 0, estimatedHeight: 1) {
             Divider().opacity(0.4)
         })
         appendCommitRows(commits, to: &rows)
         return AppKitDiffRowPlan(rows: rows)
+    }
+
+    private func appendCheckpointRows(to rows: inout [AppKitDiffRowSpec]) {
+        let summaries = rps.checkpointSummaries
+        rows.append(appKitRow(
+            id: "checkpoints-header",
+            token: "\(String(reflecting: summaries))\(rps.checkpointsExpanded)\(rps.checkpointMutationsDisabled)\(String(reflecting: rps.checkpointLoadError))\(String(reflecting: rps.nonterminalCheckpointJournals))\(String(reflecting: rps.lastCheckpointStatus))",
+            estimatedHeight: 32,
+            retention: .sticky
+        ) {
+            SectionHeader(
+                role: .checkpoints,
+                title: "Checkpoints",
+                count: summaries.count,
+                expanded: rps.checkpointsExpanded,
+                onToggle: { rps.checkpointsExpanded.toggle() }
+            ) {
+                Button {
+                    rps.requestCheckpointCreation()
+                } label: {
+                    Icon(name: "plus", size: 11, color: theme.color("fg-muted"))
+                        .frame(width: 22, height: 20)
+                }
+                .buttonStyle(.borderless)
+                .disabled(rps.checkpointMutationsDisabled || rps.checkpointLoadError != nil)
+                .accessibilityLabel("Create checkpoint")
+            }
+        })
+
+        if let journal = rps.nonterminalCheckpointJournals.first {
+            rows.append(appKitRow(
+                id: "checkpoint-recovery-\(journal.id.uuidString)",
+                token: "\(String(reflecting: journal))\(String(reflecting: rps.checkpointOperationInFlight))\(String(reflecting: rps.lastCheckpointError))",
+                estimatedHeight: 118
+            ) {
+                CheckpointRecoveryCard(
+                    journal: journal,
+                    inFlight: rps.checkpointOperationInFlight != nil,
+                    error: rps.lastCheckpointError,
+                    status: nil,
+                    onRecover: { Task { await rps.recoverCheckpointRestore(operationID: journal.id) } }
+                )
+            })
+        } else if let status = rps.lastCheckpointStatus {
+            rows.append(appKitRow(
+                id: "checkpoint-recovery-status",
+                token: status,
+                estimatedHeight: 32
+            ) {
+                Text(status)
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("add"))
+                    .padding(.horizontal, 12).padding(.vertical, 7)
+            })
+        }
+
+        guard rps.checkpointsExpanded else { return }
+        if let error = rps.checkpointLoadError {
+            rows.append(appKitRow(id: "checkpoints-error", token: error, estimatedHeight: 32) {
+                Text(error)
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("fg-muted"))
+                    .padding(.horizontal, 12).padding(.vertical, 7)
+            })
+        } else if summaries.isEmpty {
+            rows.append(appKitRow(id: "checkpoints-empty", token: 0, estimatedHeight: 32) {
+                ChangesEmptyRow(text: "no checkpoints")
+            })
+        } else {
+            for checkpoint in summaries {
+                let isExpanded = rps.expandedCheckpointIDs.contains(checkpoint.id)
+                let isLoading = rps.loadingCheckpointManifestIDs.contains(checkpoint.id)
+                let manifest = rps.checkpointManifests[checkpoint.id]
+                let error = rps.checkpointManifestErrors[checkpoint.id]
+                rows.append(appKitRow(
+                    id: CheckpointPresentation.rowID(checkpointID: checkpoint.id),
+                    token: Self.checkpointSummaryRowToken(
+                        summary: checkpoint,
+                        expanded: isExpanded,
+                        loading: isLoading,
+                        manifestError: error,
+                        mutationsDisabled: rps.checkpointMutationsDisabled
+                    ),
+                    estimatedHeight: checkpoint.unavailableReason == nil ? 42 : 48
+                ) {
+                    CheckpointSummaryRow(
+                        checkpoint: checkpoint,
+                        expanded: isExpanded,
+                        mutationsDisabled: rps.checkpointMutationsDisabled,
+                        onToggle: { rps.toggleCheckpointExpanded(checkpoint.id) },
+                        onRestore: { Task { await rps.previewCheckpointRestore(id: checkpoint.id) } },
+                        onDelete: { rps.pendingCheckpointDeletion = checkpoint }
+                    )
+                })
+                guard isExpanded else { continue }
+                if isLoading || error != nil || manifest == nil {
+                    rows.append(appKitRow(
+                        id: "checkpoint-\(checkpoint.id.uuidString)-detail",
+                        token: "\(isLoading)-\(String(reflecting: error))",
+                        estimatedHeight: 30
+                    ) {
+                        CheckpointManifestRows(checkpointID: checkpoint.id, manifest: manifest, loading: isLoading, error: error)
+                    })
+                } else if let manifest {
+                    for group in manifest.groups {
+                        rows.append(appKitRow(
+                            id: CheckpointPresentation.groupRowID(checkpointID: checkpoint.id, groupID: group.id),
+                            token: "\(checkpoint.id.uuidString)-\(group.id.uuidString)",
+                            estimatedHeight: 30
+                        ) {
+                            CheckpointFileGroupRow(group: group, manifest: manifest) {
+                                appState.openCheckpointDiffTab(
+                                    worktree: rps.worktree,
+                                    checkpointID: checkpoint.id,
+                                    groupID: group.id,
+                                    primaryPath: group.primaryPath,
+                                    memberPaths: group.memberPaths,
+                                    checkpointLabel: checkpoint.label
+                                )
+                            }
+                        })
+                    }
+                    if !manifest.exclusions.isEmpty {
+                        rows.append(appKitRow(
+                            id: "checkpoint-\(checkpoint.id.uuidString)-exclusions",
+                            token: String(reflecting: manifest.exclusions), estimatedHeight: 32
+                        ) {
+                            CheckpointExclusionsRow(exclusions: manifest.exclusions)
+                        })
+                    }
+                }
+            }
+        }
+        rows.append(appKitRow(
+            id: "checkpoints-footer", token: rps.checkpointStorageUsage, estimatedHeight: 30
+        ) { CheckpointFooterRow(storageUsage: rps.checkpointStorageUsage) })
     }
 
     private func appendStashRows(to rows: inout [AppKitDiffRowSpec]) {
@@ -618,6 +755,20 @@ struct ChangesTabView: View {
             + String(commitsNeedPush)
             + String(reflecting: commitRemote)
             + String(reflecting: primaryCommitRemote)
+    }
+
+    static func checkpointSummaryRowToken(
+        summary: WorktreeCheckpointSummary,
+        expanded: Bool,
+        loading: Bool,
+        manifestError: String?,
+        mutationsDisabled: Bool
+    ) -> String {
+        String(reflecting: summary)
+            + String(expanded)
+            + String(loading)
+            + String(reflecting: manifestError)
+            + String(mutationsDisabled)
     }
 
     private func appKitRow<Token: Equatable, Content: View>(

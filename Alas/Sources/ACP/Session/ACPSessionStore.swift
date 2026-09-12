@@ -972,6 +972,17 @@ extension ACPSessionStore {
             token: r["lease_token"] as? String ?? "")
     }
 
+    func activeLeaseCount(now: Int64, staleAfter: Int64) throws -> Int {
+        let staleCutoff = now - staleAfter
+        let rows = try db.query("SELECT * FROM session_leases")
+        return rows.reduce(into: 0) { count, row in
+            let heartbeatAt = (row["heartbeat_at"] as? Int64) ?? 0
+            if heartbeatAt >= staleCutoff {
+                count += 1
+            }
+        }
+    }
+
     /// Atomically claim the writer role for `sessionId`. Returns true if
     /// this instance owns the lease afterwards.
     ///

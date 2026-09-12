@@ -748,6 +748,10 @@ private struct ACPSessionView: View {
     }
 
     private func reattach() async {
+        guard await !state.checkpointACPAdmissionDisabledAfterDiscovery(owner: owner, fallbackWorktree: worktree) else {
+            session.lastError = AppState.checkpointRecoveryBlocksACPMessage
+            return
+        }
         // Drop any half-attached connection state, clear the prior error,
         // then re-run attach with the session's persisted-origin state.
         await manager.detach(sessionId: sessionId)
@@ -852,6 +856,10 @@ private struct ACPSessionView: View {
     private func hydrateAndAttach() async {
         await manager.hydrateIfNeeded(id: sessionId)
         if case .failed = session.hydrationState { return }
+        guard await !state.checkpointACPAdmissionDisabledAfterDiscovery(owner: owner, fallbackWorktree: worktree) else {
+            session.lastError = AppState.checkpointRecoveryBlocksACPMessage
+            return
+        }
         let freshlyCreated = manager.runners[sessionId] == nil
             && ACPSessionAttachFreshness.isFresh(
                 restoredFromPersistence: session.restoredFromPersistence,

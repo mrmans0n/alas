@@ -32,6 +32,8 @@ final class TerminalService {
     /// `processAlive == true` means a manual-close path is already in flight
     /// and the receiver should no-op. Always invoked on the main thread.
     @ObservationIgnored var onSessionProcessExited: ((_ leafId: String, _ owner: SessionOwnerID, _ processAlive: Bool) -> Void)?
+    @ObservationIgnored var onSessionRegistered: ((TerminalSession) -> Void)?
+    @ObservationIgnored var onSessionUnregistered: ((TerminalSession) -> Void)?
     @ObservationIgnored let zmxClient: ZmxClient
 
     /// In-flight zmx kill tasks. Tracked so `waitForPendingKills` can drain
@@ -333,6 +335,7 @@ final class TerminalService {
             remoteHost: remoteHost
         )
         registry.register(session)
+        onSessionRegistered?(session)
         return session
     }
 
@@ -439,6 +442,7 @@ final class TerminalService {
             remoteHost: remoteHost
         )
         registry.register(session)
+        onSessionRegistered?(session)
         return session
     }
 
@@ -454,6 +458,7 @@ final class TerminalService {
     func unregisterSessions(owner: SessionOwnerID) {
         for session in registry.all where session.owner == owner {
             session.surface.removeFromSuperview()
+            onSessionUnregistered?(session)
             registry.unregister(id: session.id)
             socketReleaseHandler?(session.id)
             cleanupRcfile(sessionId: session.id)
@@ -474,6 +479,7 @@ final class TerminalService {
         let existing = registry.session(for: id)
         if let s = existing {
             s.surface.removeFromSuperview()
+            onSessionUnregistered?(s)
         }
         registry.unregister(id: id)
         // `zmxClient.killSession` blocks up to ~5s on a hung daemon. We're

@@ -971,6 +971,70 @@ struct TabsManagerBufferTests {
         #expect(try String(contentsOf: root.appendingPathComponent("a.txt"), encoding: .utf8) == "edited\n")
     }
 
+    @Test func saveAllAwaitingRemoteSkipsLiveBuffersOutsideAllowedWorktrees() async throws {
+        let allowedRoot = tempWorktree()
+        let blockedRoot = tempWorktree()
+        try "allowed\n".write(to: allowedRoot.appendingPathComponent("file.txt"), atomically: true, encoding: .utf8)
+        try "blocked\n".write(to: blockedRoot.appendingPathComponent("file.txt"), atomically: true, encoding: .utf8)
+        let (manager, _, _) = makeManager()
+        let allowedTab = manager.appendEditor(worktreeId: "allowed", title: "file.txt", relativePath: "file.txt")
+        let blockedTab = manager.appendEditor(worktreeId: "blocked", title: "file.txt", relativePath: "file.txt")
+        let allowedBuffer = manager.buffer(worktreeId: "allowed", tabId: allowedTab.id, worktreeRoot: allowedRoot, relativePath: "file.txt")
+        let blockedBuffer = manager.buffer(worktreeId: "blocked", tabId: blockedTab.id, worktreeRoot: blockedRoot, relativePath: "file.txt")
+        await allowedBuffer.awaitLoadForTesting()
+        await blockedBuffer.awaitLoadForTesting()
+        allowedBuffer.storage.replaceCharacters(in: NSRange(location: 0, length: allowedBuffer.storage.length), with: "saved\n")
+        blockedBuffer.storage.replaceCharacters(in: NSRange(location: 0, length: blockedBuffer.storage.length), with: "unsaved\n")
+
+        let errors = await manager.saveAllAwaitingRemote(
+            worktreeRoots: ["allowed": allowedRoot],
+            allowedWorktreeIDs: ["allowed"]
+        )
+
+        #expect(errors.isEmpty)
+        #expect(try String(contentsOf: allowedRoot.appendingPathComponent("file.txt"), encoding: .utf8) == "saved\n")
+        #expect(try String(contentsOf: blockedRoot.appendingPathComponent("file.txt"), encoding: .utf8) == "blocked\n")
+        #expect(!allowedBuffer.dirty)
+        #expect(blockedBuffer.dirty)
+    }
+
+    @Test func saveAllSkipsUnloadedSnapshotsOutsideAllowedWorktrees() throws {
+        let allowedRoot = tempWorktree()
+        let blockedRoot = tempWorktree()
+        try "allowed\n".write(to: allowedRoot.appendingPathComponent("file.txt"), atomically: true, encoding: .utf8)
+        try "blocked\n".write(to: blockedRoot.appendingPathComponent("file.txt"), atomically: true, encoding: .utf8)
+        let allowedAttrs = try FileManager.default.attributesOfItem(atPath: allowedRoot.appendingPathComponent("file.txt").path)
+        let blockedAttrs = try FileManager.default.attributesOfItem(atPath: blockedRoot.appendingPathComponent("file.txt").path)
+        let (manager, store, _) = makeManager()
+        let allowedTab = manager.appendEditor(worktreeId: "allowed", title: "file.txt", relativePath: "file.txt")
+        let blockedTab = manager.appendEditor(worktreeId: "blocked", title: "file.txt", relativePath: "file.txt")
+        try store.write(.init(
+            relativePath: "file.txt",
+            content: "saved\n",
+            originalText: "allowed\n",
+            originalMtime: (allowedAttrs[.modificationDate] as? Date) ?? Date(),
+            lineEnding: .lf
+        ), worktreeId: "allowed", tabId: allowedTab.id)
+        try store.write(.init(
+            relativePath: "file.txt",
+            content: "unsaved\n",
+            originalText: "blocked\n",
+            originalMtime: (blockedAttrs[.modificationDate] as? Date) ?? Date(),
+            lineEnding: .lf
+        ), worktreeId: "blocked", tabId: blockedTab.id)
+
+        let errors = manager.saveAll(
+            worktreeRoots: ["allowed": allowedRoot],
+            allowedWorktreeIDs: ["allowed"]
+        )
+
+        #expect(errors.isEmpty)
+        #expect(try String(contentsOf: allowedRoot.appendingPathComponent("file.txt"), encoding: .utf8) == "saved\n")
+        #expect(try String(contentsOf: blockedRoot.appendingPathComponent("file.txt"), encoding: .utf8) == "blocked\n")
+        #expect(try store.read(worktreeId: "allowed", tabId: allowedTab.id) == nil)
+        #expect(try store.read(worktreeId: "blocked", tabId: blockedTab.id) != nil)
+    }
+
     @Test func saveAllUpdatesTabWhenUnloadedSnapshotRestoresMovedPath() throws {
         let root = tempWorktree()
         try "old\n".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
