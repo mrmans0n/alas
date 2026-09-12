@@ -64,7 +64,6 @@ struct CheckpointCoordinationTests {
         )
         let pane = state.rightPaneStore.state(for: worktree, baseBranch: "main", comparisonMode: .auto)
 
-        #expect(!state.checkpointFileWritesDisabled(worktreeId: worktree.id))
         pane.nonterminalCheckpointJournals = [
             CheckpointRestoreJournal(
                 lineageID: try #require(worktree.lineageID),
@@ -79,5 +78,12 @@ struct CheckpointCoordinationTests {
         ]
 
         #expect(state.checkpointFileWritesDisabled(worktreeId: worktree.id))
+    }
+
+    @Test func appStateTreatsMissingCheckpointPaneStateAsRecoveryUnknown() async throws {
+        let state = AppState()
+
+        #expect(state.checkpointFileWritesDisabled(worktreeId: "uncached-worktree"))
+        #expect(state.checkpointTerminalAdmissionDisabled(worktreeId: "uncached-worktree"))
     }
 }

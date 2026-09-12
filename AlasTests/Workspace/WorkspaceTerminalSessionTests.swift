@@ -345,6 +345,100 @@ struct WorkspaceTerminalSessionTests {
     }
 
     @MainActor
+    @Test func checkoutTerminalLaunchBlockedByMemberCheckpointRecoveryLease() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("workspace-terminal-checkpoint-lease-\(UUID().uuidString)")
+        let memberPath = root.appendingPathComponent("member")
+        let workspaceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("workspace-terminal-checkpoint-store-\(UUID().uuidString).json")
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: workspaceURL)
+        }
+        try FileManager.default.createDirectory(at: memberPath, withIntermediateDirectories: true)
+        let member = WorkspaceCheckoutMember(
+            id: UUID(),
+            workspaceMemberID: UUID(),
+            projectID: "project-a",
+            fallbackProjectName: "Project A",
+            fallbackRepositoryRoot: memberPath.path,
+            worktreePath: memberPath.path,
+            availability: .available,
+            checkpoint: .setupComplete
+        )
+        let checkout = WorkspaceCheckout(
+            id: checkoutID,
+            workspaceID: nil,
+            fallbackWorkspaceName: "Shared",
+            executionLocation: .local,
+            branch: "feature/shared",
+            rootPath: root.path,
+            operation: .idle,
+            members: [member]
+        )
+        let manifest = WorkspaceCheckoutManifest(
+            checkoutID: checkout.id,
+            rootPath: checkout.rootPath,
+            branch: checkout.branch,
+            members: [.init(id: member.id, projectID: member.projectID, path: member.worktreePath, availability: member.availability)]
+        )
+        try JSONEncoder().encode(manifest)
+            .write(to: root.appendingPathComponent(WorkspaceCheckoutManifest.fileName))
+        let worktree = Worktree(
+            id: "member-worktree",
+            projectId: member.projectID,
+            name: "main",
+            branch: "main",
+            path: memberPath,
+            status: .clean,
+            lastActivity: .distantPast,
+            lineageID: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+        )
+        let project = ProjectConfig(
+            id: member.projectID,
+            name: "Project A",
+            path: member.fallbackRepositoryRoot,
+            color: "#000000",
+            addedAt: .distantPast,
+            cachedWorktrees: [worktree]
+        )
+        let workspaceStore = WorkspaceStore(url: workspaceURL)
+        try await workspaceStore.checkpoint(.init(checkouts: [checkout]))
+        let tabs = TabsManager(store: WorkspaceTerminalMemoryStore())
+        let state = AppState(
+            store: WorkspaceTerminalMemoryStore(projectsFile: .init(projects: [project])),
+            tabsManager: tabs,
+            workspaceStore: workspaceStore
+        )
+        state.config.workspacesEnabled = true
+        let pane = state.rightPaneStore.state(for: worktree, baseBranch: "main", comparisonMode: .auto)
+        pane.nonterminalCheckpointJournals = [
+            CheckpointRestoreJournal(
+                lineageID: try #require(worktree.lineageID),
+                checkpointID: UUID(),
+                recoveryCheckpointID: UUID(),
+                phase: .prepared,
+                stagingRoot: root.appendingPathComponent("staging").path,
+                selectedPaths: ["File.swift"],
+                expectedFingerprint: "fingerprint",
+                expectedIndexChecksum: "checksum"
+            )
+        ]
+        let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+
+        await #expect(throws: AppState.TerminalLaunchError.checkpointRecoveryRequired) {
+            try await state.openWorkspaceCheckoutTerminalTab(checkout)
+        }
+        await #expect(throws: AppState.TerminalLaunchError.checkpointRecoveryRequired) {
+            try await state.openWorkspaceCheckoutAgentTerminalTab(
+                checkout,
+                focusedMemberWorktree: worktree,
+                agentId: "test-agent"
+            )
+        }
+        #expect(tabs.tabs(for: owner).isEmpty)
+    }
+
+    @MainActor
     @Test func archivingCheckoutStopsItsOwnedSessionsAndArchivesSavedTabs() async throws {
         let tabs = TabsManager(store: WorkspaceTerminalMemoryStore())
         let state = AppState(store: WorkspaceTerminalMemoryStore(), tabsManager: tabs)

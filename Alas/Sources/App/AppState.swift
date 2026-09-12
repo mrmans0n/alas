@@ -174,11 +174,11 @@ final class AppState {
     }
 
     func checkpointFileWritesDisabled(worktreeId: String) -> Bool {
-        rightPaneStore.activeState(worktreeId: worktreeId)?.checkpointMutationsDisabled == true
+        rightPaneStore.activeState(worktreeId: worktreeId)?.checkpointMutationsDisabled ?? true
     }
 
     func checkpointTerminalAdmissionDisabled(worktreeId: String) -> Bool {
-        rightPaneStore.activeState(worktreeId: worktreeId)?.checkpointMutationsDisabled == true
+        rightPaneStore.activeState(worktreeId: worktreeId)?.checkpointMutationsDisabled ?? true
     }
 
     typealias TerminalSessionOpener = (
@@ -1779,6 +1779,9 @@ final class AppState {
         guard let authoritative = await authoritativeCheckoutForWorkspaceTerminal(checkout) else {
             throw NSError(domain: "AppState", code: 3, userInfo: [NSLocalizedDescriptionKey: "The Workspace checkout root is not owned by this checkout."])
         }
+        guard !checkpointTerminalAdmissionDisabled(for: authoritative) else {
+            throw TerminalLaunchError.checkpointRecoveryRequired
+        }
         let context = WorkspaceTerminalContext(
             checkoutID: authoritative.id,
             executionLocation: authoritative.executionLocation,
@@ -1813,6 +1816,9 @@ final class AppState {
               let project = projects.first(where: { $0.id == focusedMember.projectID })
         else {
             throw AgentTerminalLaunchError.projectUnavailable
+        }
+        guard !checkpointTerminalAdmissionDisabled(for: authoritative) else {
+            throw TerminalLaunchError.checkpointRecoveryRequired
         }
         guard let agent = agentRegistry.enabled().first(where: { $0.id == agentId }) else {
             throw AgentTerminalLaunchError.agentUnavailable
@@ -9157,6 +9163,22 @@ final class AppState {
                 workspaceName: workspaceName
             )
         )
+    }
+
+    private func checkpointTerminalAdmissionDisabled(for checkout: WorkspaceCheckout) -> Bool {
+        for member in checkout.members where member.availability == .available {
+            guard let worktree = checkpointMemberWorktree(for: member) else { continue }
+            if checkpointTerminalAdmissionDisabled(worktreeId: worktree.id) { return true }
+        }
+        return false
+    }
+
+    private func checkpointMemberWorktree(for member: WorkspaceCheckoutMember) -> Worktree? {
+        let liveWorktrees = projectsManager.worktrees(projectId: member.projectID)
+        let cachedWorktrees = projects.first(where: { $0.id == member.projectID })?.cachedWorktrees ?? []
+        return (liveWorktrees + cachedWorktrees).first(where: {
+                Self.canonicalWorktreePath($0.path.path) == Self.canonicalWorktreePath(member.worktreePath)
+        })
     }
 
     func checkpointTarget(for worktree: Worktree) -> CheckpointWorktreeTarget? {
