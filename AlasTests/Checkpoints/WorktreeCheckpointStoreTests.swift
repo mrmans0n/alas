@@ -39,8 +39,8 @@ struct WorktreeCheckpointStoreTests {
     @Test func publicationOverByteLimitLeavesPreviousCatalogUntouched() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = WorktreeCheckpointStore(root: root, limits: .init(manualCount: 20, recoveryCount: 5, bytes: 3))
         let first = try publication(lineageID: lineageA, label: "Small", bytes: Data([1, 2, 3]))
+        let store = WorktreeCheckpointStore(root: root, limits: .init(manualCount: 20, recoveryCount: 5, bytes: try storageCost([first])))
         _ = try await store.publish(first)
         let tooLarge = try publication(lineageID: lineageA, label: "Large", bytes: Data([1, 2, 3, 4]))
 
@@ -58,16 +58,16 @@ struct WorktreeCheckpointStoreTests {
     @Test func byteLimitPrunesOldestRecoveryBeforeManualCheckpoint() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = WorktreeCheckpointStore(root: root, limits: .init(manualCount: 20, recoveryCount: 5, bytes: 6))
         let recovery = try publication(lineageID: lineageA, label: "Recovery old", bytes: Data([1, 1, 1]), kind: .recovery, createdAt: Date(timeIntervalSince1970: 1))
         let manual = try publication(lineageID: lineageA, label: "Manual old", bytes: Data([2, 2, 2]), createdAt: Date(timeIntervalSince1970: 2))
         let incoming = try publication(lineageID: lineageA, label: "Manual new", bytes: Data([3, 3, 3]), createdAt: Date(timeIntervalSince1970: 3))
+        let store = WorktreeCheckpointStore(root: root, limits: .init(manualCount: 20, recoveryCount: 5, bytes: try storageCost([manual, incoming])))
 
         _ = try await store.publish(recovery)
         _ = try await store.publish(manual)
         let catalog = try await store.publish(incoming)
 
-        #expect(catalog.byteCount == 6)
+        #expect(catalog.byteCount == (try storageCost([manual, incoming])))
         #expect(catalog.summaries.map(\.label) == ["Manual new", "Manual old"])
         await #expect(throws: CheckpointStoreError.checkpointNotFound) {
             try await store.load(id: recovery.manifest.id, lineageID: lineageA)
@@ -195,7 +195,7 @@ struct WorktreeCheckpointStoreTests {
     @Test func retentionPrunesOldestRecoveryAndManualCheckpoints() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = WorktreeCheckpointStore(root: root, limits: .init(manualCount: 20, recoveryCount: 5, bytes: 1_000))
+        let store = WorktreeCheckpointStore(root: root, limits: .init(manualCount: 20, recoveryCount: 5, bytes: 100_000))
         for index in 0 ..< 6 {
             _ = try await store.publish(publication(lineageID: lineageA, label: "Recovery \(index)", bytes: Data([UInt8(index)]), kind: .recovery, createdAt: Date(timeIntervalSince1970: Double(index))))
         }
@@ -213,12 +213,13 @@ struct WorktreeCheckpointStoreTests {
     @Test func sharedReferencesCountOnceTowardByteLimit() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = WorktreeCheckpointStore(root: root, limits: .init(manualCount: 20, recoveryCount: 5, bytes: 3))
         let first = try publication(lineageID: lineageA, label: "One", bytes: Data([7, 8, 9]))
         let second = try publication(lineageID: lineageA, label: "Two", bytes: Data([7, 8, 9]))
+        let expectedByteCount = try storageCost([first, second])
+        let store = WorktreeCheckpointStore(root: root, limits: .init(manualCount: 20, recoveryCount: 5, bytes: expectedByteCount))
 
         _ = try await store.publish(first)
-        #expect(try await store.publish(second).byteCount == 3)
+        #expect(try await store.publish(second).byteCount == expectedByteCount)
     }
 
     @Test func failedCatalogPublicationRemovesPromotedEntry() async throws {
@@ -461,6 +462,22 @@ struct WorktreeCheckpointStoreTests {
             paths: [.init(relativePath: "File.swift", head: .regular(blob: blob, executable: false), index: .regular(blob: blob, executable: false), worktree: .regular(blob: blob, executable: false))]
         )
         return CheckpointPublication(manifest: manifest, blobs: [blob: bytes])
+    }
+
+    private func storageCost(_ publications: [CheckpointPublication]) throws -> Int64 {
+        let manifestBytes = try publications.reduce(into: Int64(0)) { total, publication in
+            total += Int64(try JSONEncoder.checkpoints.encode(publication.manifest).count)
+        }
+        var uniqueBlobs: [CheckpointBlobReference: Data] = [:]
+        for publication in publications {
+            for (reference, data) in publication.blobs {
+                uniqueBlobs[reference] = data
+            }
+        }
+        let blobBytes = uniqueBlobs.values.reduce(into: Int64(0)) { total, data in
+            total += Int64(data.count)
+        }
+        return manifestBytes + blobBytes
     }
 
     private func temporaryDirectory() throws -> URL {

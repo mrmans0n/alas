@@ -64,7 +64,7 @@ actor WorktreeCheckpointStore {
                 lineageID: lineageID,
                 manifests: reconciliation.valid,
                 unavailable: unavailable,
-                byteCount: try byteCount(Set(reconciliation.valid.flatMap { references(in: $0) }), layout: paths(lineageID), incoming: [:])
+                byteCount: try storageByteCount(manifests: reconciliation.valid, layout: paths(lineageID), incoming: [:])
             )
             if rebuilt != catalog { try writeCatalog(rebuilt, layout: paths(lineageID)) }
             try garbageCollect(layout: paths(lineageID), manifests: reconciliation.valid, journals: try activeJournalsUnlocked(lineageID: lineageID))
@@ -100,16 +100,16 @@ actor WorktreeCheckpointStore {
         let protected = try protectedIDsUnlocked(lineageID: manifest.lineageID).union(additionalProtectedIDs)
         var victims = retentionVictims(from: candidates, protected: protected)
         candidates.removeAll { candidate in victims.contains(where: { $0.id == candidate.id }) }
-        let incomingByteCount = try byteCount(references(in: manifest), layout: layout, incoming: publication.blobs)
+        let incomingByteCount = try storageByteCount(manifests: [manifest], layout: layout, incoming: publication.blobs)
         guard incomingByteCount <= limits.bytes else { throw CheckpointStoreError.byteLimitExceeded }
         var reachable = Set(candidates.flatMap { references(in: $0) })
-        var bytes = try byteCount(reachable, layout: layout, incoming: publication.blobs)
+        var bytes = try storageByteCount(manifests: candidates, reachable: reachable, layout: layout, incoming: publication.blobs)
         if bytes > limits.bytes {
             for victim in byteLimitVictims(from: candidates, protected: protected, incomingID: manifest.id) {
                 victims.append(victim)
                 candidates.removeAll { $0.id == victim.id }
                 reachable = Set(candidates.flatMap { references(in: $0) })
-                bytes = try byteCount(reachable, layout: layout, incoming: publication.blobs)
+                bytes = try storageByteCount(manifests: candidates, reachable: reachable, layout: layout, incoming: publication.blobs)
                 if bytes <= limits.bytes { break }
             }
         }
@@ -197,7 +197,7 @@ actor WorktreeCheckpointStore {
         let remaining = manifests.filter { $0.id != id }
         let layout = paths(lineageID)
         let remainingUnavailable = unavailable.filter { $0.id != id }
-        let next = snapshot(lineageID: lineageID, manifests: remaining, unavailable: remainingUnavailable, byteCount: try byteCount(Set(remaining.flatMap { references(in: $0) }), layout: layout, incoming: [:]))
+        let next = snapshot(lineageID: lineageID, manifests: remaining, unavailable: remainingUnavailable, byteCount: try storageByteCount(manifests: remaining, layout: layout, incoming: [:]))
         try writeCatalog(next, layout: layout)
         try removeEntry(id, layout: layout)
         try removeQuarantinedEntry(id, layout: layout)
@@ -352,7 +352,9 @@ actor WorktreeCheckpointStore {
             for memberPath in group.memberPaths { _ = try fileSystem.validateRelativePath(memberPath, under: layout.root) }
         }
         if verifyBlobs {
-            for reference in references(in: manifest) { _ = try readBlob(reference, lineageID: manifest.lineageID) }
+            for reference in references(in: manifest) {
+                guard try blobMatchesReference(reference, layout: layout) else { throw CheckpointStoreError.blobDoesNotMatchReference }
+            }
         }
     }
 
@@ -397,7 +399,7 @@ actor WorktreeCheckpointStore {
     private func rebuildCatalog(lineageID: String) throws -> CheckpointCatalogSnapshot {
         let manifests = try validManifests(lineageID: lineageID)
         let layout = paths(lineageID)
-        let next = snapshot(lineageID: lineageID, manifests: manifests.valid, unavailable: manifests.unavailable, byteCount: try byteCount(Set(manifests.valid.flatMap { references(in: $0) }), layout: layout, incoming: [:]))
+        let next = snapshot(lineageID: lineageID, manifests: manifests.valid, unavailable: manifests.unavailable, byteCount: try storageByteCount(manifests: manifests.valid, layout: layout, incoming: [:]))
         try writeCatalog(next, layout: layout)
         try garbageCollect(layout: layout, manifests: manifests.valid, journals: try activeJournalsUnlocked(lineageID: lineageID))
         return next
@@ -433,11 +435,52 @@ actor WorktreeCheckpointStore {
         try fileSystem.synchronizeDirectory(layout.root)
     }
 
-    private func byteCount(_ references: Set<CheckpointBlobReference>, layout: Layout, incoming: [CheckpointBlobReference: Data]) throws -> Int64 {
+    private func storageByteCount(manifests: [WorktreeCheckpointManifest], layout: Layout, incoming: [CheckpointBlobReference: Data]) throws -> Int64 {
+        try storageByteCount(manifests: manifests, reachable: Set(manifests.flatMap { references(in: $0) }), layout: layout, incoming: incoming)
+    }
+
+    private func storageByteCount(manifests: [WorktreeCheckpointManifest], reachable: Set<CheckpointBlobReference>, layout: Layout, incoming: [CheckpointBlobReference: Data]) throws -> Int64 {
+        try blobByteCount(reachable, layout: layout, incoming: incoming) + manifestByteCount(manifests)
+    }
+
+    private func blobByteCount(_ references: Set<CheckpointBlobReference>, layout: Layout, incoming: [CheckpointBlobReference: Data]) throws -> Int64 {
         try references.reduce(into: Int64(0)) { total, reference in
-            if let data = incoming[reference] { total += Int64(data.count) }
-            else { total += Int64(try fileSystem.fileData(blobURL(reference, layout: layout)).count) }
+            if let data = incoming[reference] {
+                total += Int64(data.count)
+            } else {
+                total += try blobFileSize(reference, layout: layout)
+            }
         }
+    }
+
+    private func manifestByteCount(_ manifests: [WorktreeCheckpointManifest]) throws -> Int64 {
+        try manifests.reduce(into: Int64(0)) { total, manifest in
+            total += Int64(try JSONEncoder.checkpoints.encode(manifest).count)
+        }
+    }
+
+    private func blobFileSize(_ reference: CheckpointBlobReference, layout: Layout) throws -> Int64 {
+        let blob = blobURL(reference, layout: layout)
+        guard exists(blob) else { throw CheckpointStoreError.blobNotFound }
+        let attributes = try FileManager.default.attributesOfItem(atPath: blob.path)
+        guard let size = attributes[.size] as? NSNumber else { throw CheckpointStoreError.blobNotFound }
+        return size.int64Value
+    }
+
+    private func blobMatchesReference(_ reference: CheckpointBlobReference, layout: Layout) throws -> Bool {
+        let blob = blobURL(reference, layout: layout)
+        guard try blobFileSize(reference, layout: layout) == reference.byteCount else { return false }
+        let handle = try FileHandle(forReadingFrom: blob)
+        defer { try? handle.close() }
+
+        var hasher = SHA256()
+        while true {
+            let chunk = try handle.read(upToCount: 1024 * 1024) ?? Data()
+            if chunk.isEmpty { break }
+            hasher.update(data: chunk)
+        }
+        let hash = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+        return hash == reference.sha256
     }
 
     private func retentionVictims(from manifests: [WorktreeCheckpointManifest], protected: Set<CheckpointID>) -> [WorktreeCheckpointManifest] {

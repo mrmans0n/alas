@@ -51,10 +51,10 @@ struct CheckpointRestorePreparationTests {
         try repo.write("baseline", to: "file.txt")
         try await repo.commitAll("baseline")
         try repo.write("saved", to: "file.txt")
-        let store = WorktreeCheckpointStore(root: root, limits: .init(manualCount: 20, recoveryCount: 5, bytes: 100))
+        let store = WorktreeCheckpointStore(root: root, limits: .init(manualCount: 20, recoveryCount: 5, bytes: 2_000))
         let service = WorktreeCheckpointService(store: store)
         let checkpoint = try await service.createManual(target: repo.target, label: "Saved")
-        try repo.write(String(repeating: "later", count: 50), to: "file.txt")
+        try repo.write(String(repeating: "later", count: 1_000), to: "file.txt")
         let preview = try await service.restorePreview(target: repo.target, id: checkpoint.id, coordination: .clear)
 
         await #expect(throws: CheckpointStoreError.byteLimitExceeded) {

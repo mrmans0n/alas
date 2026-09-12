@@ -114,16 +114,18 @@ struct LiveCheckpointFileSystem: CheckpointFileSystem, Sendable {
         let temporary = url.deletingLastPathComponent().appendingPathComponent(".alas-checkpoint-\(UUID().uuidString)")
         let descriptor = Darwin.open(temporary.path, O_WRONLY | O_CREAT | O_EXCL, mode)
         guard descriptor >= 0 else { throw posixError("open") }
+        var descriptorIsOpen = true
 
         do {
             try writeAll(data, descriptor: descriptor)
             guard Darwin.fchmod(descriptor, mode) == 0 else { throw posixError("fchmod") }
             guard Darwin.fsync(descriptor) == 0 else { throw posixError("fsync") }
             guard Darwin.close(descriptor) == 0 else { throw posixError("close") }
+            descriptorIsOpen = false
             guard Darwin.rename(temporary.path, url.path) == 0 else { throw posixError("rename") }
             try synchronizeDirectory(url.deletingLastPathComponent())
         } catch {
-            _ = Darwin.close(descriptor)
+            if descriptorIsOpen { _ = Darwin.close(descriptor) }
             _ = Darwin.unlink(temporary.path)
             throw error
         }
