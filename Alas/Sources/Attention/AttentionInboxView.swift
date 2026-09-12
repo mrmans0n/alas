@@ -34,6 +34,10 @@ struct AttentionInboxRowPresentation: Identifiable {
         if item.jumpTarget == .none { return "This event has no destination." }
         return nil
     }
+    var dismissAccessibilityLabel: String? {
+        guard item.acknowledgedAt == nil else { return nil }
+        return "Dismiss, \(title), \(attribution)"
+    }
 
     static func timestamp(_ date: Date, now: Date, calendar: Calendar = .current) -> String {
         date.formatted(Date.FormatStyle(
@@ -70,7 +74,7 @@ struct AttentionInboxView: View {
     let loadError: String?
     let writeError: String?
     let navigationErrors: [UUID: String]
-    let onClose: () -> Void
+    let onDismiss: (AttentionItem) -> Void
     let onOpen: (AttentionItem) async -> Void
     @Environment(\.theme) private var theme
 
@@ -82,65 +86,64 @@ struct AttentionInboxView: View {
             VStack(spacing: 0) {
                 HStack(spacing: 9) {
                     Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 12))
                         .foregroundStyle(theme.color("warn"))
                         .accessibilityHidden(true)
                     Text("Needs attention")
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.system(size: 13, weight: .semibold))
                     Text("\(aggregation.unresolvedCount)")
                         .font(.system(size: 11, weight: .medium))
                         .monospacedDigit()
                         .foregroundStyle(theme.color("fg-muted"))
                         .accessibilityLabel("\(aggregation.unresolvedCount) unresolved items")
                     Spacer()
-                    Button(action: onClose) {
-                        Image(systemName: "xmark")
-                            .frame(width: 24, height: 24)
-                            .contentShape(Rectangle())
+                    if !presentation.activeRows.isEmpty {
+                        Button("Dismiss all") {
+                            for item in presentation.activeRows { onDismiss(item.item) }
+                        }
+                        .controlSize(.small)
+                        .accessibilityLabel("Dismiss all \(aggregation.unresolvedCount) unresolved items")
                     }
-                    .buttonStyle(.plain)
-                    .help("Close attention inbox")
-                    .accessibilityLabel("Close attention inbox")
-                    .keyboardShortcut(.cancelAction)
                 }
                 .foregroundStyle(theme.color("fg"))
-                .padding(.horizontal, 20)
-                .padding(.vertical, 12)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
                 Divider()
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
+                    LazyVStack(alignment: .leading, spacing: 10) {
                         ForEach(presentation.errors) { error in
                             AttentionInboxErrorRow(title: error.title, message: error.message)
                         }
                         if let emptyTitle = presentation.emptyTitle {
                             VStack(alignment: .leading, spacing: 6) {
-                                Text(emptyTitle).font(.system(size: 14, weight: .medium))
+                                Text(emptyTitle).font(.system(size: 13, weight: .medium))
                                 Text("New requests will appear here. Earlier events stay below.")
                                     .font(.system(size: 12))
                                     .foregroundStyle(theme.color("fg-muted"))
                             }
-                            .padding(.vertical, 20)
+                            .padding(.vertical, 16)
                         }
                         ForEach(presentation.activeRows) { row in
                             AttentionInboxRow(presentation: row, isHistory: false,
-                                              navigationError: navigationErrors[row.id], onOpen: onOpen)
+                                              navigationError: navigationErrors[row.id], onDismiss: onDismiss, onOpen: onOpen)
                         }
                         if !presentation.historyRows.isEmpty {
                             Text("Earlier")
-                                .font(.system(size: 12, weight: .semibold))
+                                .font(.system(size: 11, weight: .semibold))
                                 .foregroundStyle(theme.color("fg-muted"))
-                                .padding(.top, 16)
+                                .padding(.top, 10)
                                 .accessibilityAddTraits(.isHeader)
                             ForEach(presentation.historyRows) { row in
                                 AttentionInboxRow(presentation: row, isHistory: true,
-                                                  navigationError: navigationErrors[row.id], onOpen: onOpen)
+                                                  navigationError: navigationErrors[row.id], onDismiss: onDismiss, onOpen: onOpen)
                             }
                         }
                     }
-                    .frame(maxWidth: 780, alignment: .leading)
-                    .padding(20)
-                    .frame(maxWidth: .infinity)
+                    .padding(14)
                 }
             }
+            .frame(width: 400)
+            .frame(maxHeight: 520)
             .background(theme.color("bg-1"))
             .foregroundStyle(theme.color("fg"))
         }
@@ -151,6 +154,7 @@ struct AttentionInboxRow: View {
     let presentation: AttentionInboxRowPresentation
     let isHistory: Bool
     let navigationError: String?
+    let onDismiss: (AttentionItem) -> Void
     let onOpen: (AttentionItem) async -> Void
     @Environment(\.theme) private var theme
     @State private var opening = false
@@ -195,6 +199,11 @@ struct AttentionInboxRow: View {
                         .accessibilityLabel(presentation.acknowledgmentHelp ?? acknowledgment)
                 }
                 Spacer(minLength: 0)
+                if !isHistory {
+                    Button("Dismiss") { onDismiss(presentation.item) }
+                        .controlSize(.small)
+                        .accessibilityLabel(presentation.dismissAccessibilityLabel ?? "Dismiss")
+                }
                 if !isHistory || presentation.item.jumpTarget != .none {
                     Button(presentation.actionTitle) {
                         opening = true

@@ -103,7 +103,6 @@ final class AppState {
     @ObservationIgnored var attentionNavigationDepth = 0
     var attentionNavigationErrors: [UUID: String] = [:]
     @ObservationIgnored var attentionNavigationEnvironment: AttentionNavigationEnvironment?
-    @ObservationIgnored var attentionReturnDestination: AttentionReturnDestination?
     @ObservationIgnored var attentionSuppressedStartupSignals: [AttentionSourceKey: String] = [:]
     @ObservationIgnored var attentionInitializedSnapshotSources: Set<String> = []
     @ObservationIgnored var attentionPendingReviewReveal: AttentionPendingReviewReveal?

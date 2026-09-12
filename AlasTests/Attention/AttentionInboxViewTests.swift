@@ -48,6 +48,16 @@ struct AttentionInboxViewTests {
         #expect(presentation.activeRows.isEmpty)
     }
 
+    @Test func activeRowsExposeDismissActionButHistoryRowsDoNot() {
+        let active = makeItem()
+        let acknowledged = makeItem(acknowledgedAt: Date(timeIntervalSince1970: 200))
+        let presentation = AttentionInboxPresentation(
+            aggregation: aggregation(items: [active], history: [acknowledged]), loadError: nil
+        )
+        #expect(presentation.activeRows[0].dismissAccessibilityLabel == "Dismiss, \(active.title), Alas · feature/inbox · build-host")
+        #expect(presentation.historyRows[0].dismissAccessibilityLabel == nil)
+    }
+
     @Test func compactTimestampIncludesDateOnlyForOlderEvents() {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
@@ -85,7 +95,7 @@ struct AttentionInboxViewTests {
     private func historyRowHeight(ownerAvailable: Bool) throws -> CGFloat {
         let item = makeItem(acknowledgedAt: Date(timeIntervalSince1970: 200), ownerAvailable: ownerAvailable)
         let view = AttentionInboxRow(presentation: .init(item: item, now: Date()), isHistory: true,
-                                    navigationError: nil, onOpen: { _ in })
+                                    navigationError: nil, onDismiss: { _ in }, onOpen: { _ in })
             .environment(\.theme, try ThemeStore().current)
         let controller = NSHostingController(rootView: view)
         return controller.sizeThatFits(in: NSSize(width: 700, height: CGFloat.greatestFiniteMagnitude)).height
@@ -95,7 +105,7 @@ struct AttentionInboxViewTests {
         let view = SidebarHeaderView(worktreeSortMode: .lastUpdateDesc, onSetWorktreeSortMode: { _ in },
                                      onSettings: {}, onAddProject: {}, onSearch: {}, onHideSidebar: {},
                                      onNewWorkspace: workspacesEnabled ? {} : nil,
-                                     attentionCount: count, attentionInboxOpen: false, onOpenAttentionInbox: {})
+                                     attentionCount: count, attentionInboxOpen: .constant(false))
             .environment(\.theme, try ThemeStore().current)
         let controller = NSHostingController(rootView: view)
         return controller.sizeThatFits(in: NSSize(width: width, height: CGFloat.greatestFiniteMagnitude))

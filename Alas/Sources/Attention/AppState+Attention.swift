@@ -1,14 +1,5 @@
 import Foundation
 
-struct AttentionReturnDestination {
-    let spaceID: String
-    let worktreeID: String?
-    let activeTabID: TabID?
-    let workspaceNavigationState: WorkspaceNavigationState
-    let sharedSessionOwner: SessionOwnerID?
-    let sharedActiveTabID: TabID?
-}
-
 enum AttentionNavigationResult: Equatable {
     case opened
     case opening
@@ -167,7 +158,6 @@ extension AppState {
         guard opened else { return unavailable(failure) }
         attentionNavigationErrors[item.eventID] = nil
         isAttentionInboxOpen = false
-        attentionReturnDestination = nil
         if attentionPendingReviewReveal?.eventIDs == [item.eventID] { return .opening }
         attentionStore.acknowledge(eventID: item.eventID, at: Date())
         return .opened
@@ -200,6 +190,18 @@ extension AppState {
             } else {
                 attentionNavigationErrors[eventID] = "The review comment could not be revealed."
             }
+        }
+    }
+
+    func dismissAttentionItem(_ item: AttentionItem) {
+        attentionStore.acknowledge(eventID: item.eventID, at: Date())
+        attentionNavigationErrors[item.eventID] = nil
+    }
+
+    func dismissAllAttentionItems() {
+        for item in attentionAggregation.items {
+            attentionStore.acknowledge(eventID: item.eventID, at: Date())
+            attentionNavigationErrors[item.eventID] = nil
         }
     }
 
@@ -457,42 +459,12 @@ extension AppState {
     func openAttentionInbox() {
         guard !isAttentionInboxOpen else { return }
         if let selectedWorktreeId { rightPaneStore.activeState(worktreeId: selectedWorktreeId)?.endAttentionReveal() }
-        attentionReturnDestination = AttentionReturnDestination(
-            spaceID: spacesManager.activeSpaceId,
-            worktreeID: selectedWorktreeId,
-            activeTabID: selectedWorktreeId.flatMap { tabs.activeTabId(forWorktree: $0) },
-            workspaceNavigationState: workspaceNavigationState,
-            sharedSessionOwner: selectedWorkspaceCheckout.map { .workspaceCheckout($0.id, $0.executionLocation) },
-            sharedActiveTabID: selectedWorkspaceCheckout.map { .workspaceCheckout($0.id, $0.executionLocation) }.flatMap { tabs.activeTabId(for: $0) }
-        )
         isAttentionInboxOpen = true
     }
 
     func closeAttentionInbox() {
         guard isAttentionInboxOpen else { return }
         isAttentionInboxOpen = false
-        guard let destination = attentionReturnDestination else { return }
-        attentionReturnDestination = nil
-        guard canRestoreAttentionReturnDestination(destination) else { return }
-        _ = switchToSpace(id: destination.spaceID)
-        workspaceNavigationState = destination.workspaceNavigationState
-        selectedWorktreeId = destination.worktreeID
-        if let worktreeID = destination.worktreeID {
-            if let tabID = destination.activeTabID,
-               tabs.tabs(forWorktree: worktreeID).contains(where: { $0.id == tabID }) {
-                tabs.activate(worktreeId: worktreeID, tabId: tabID)
-            } else if destination.activeTabID == nil {
-                tabs.clearActiveTab(worktreeId: worktreeID)
-            }
-        }
-        if let owner = destination.sharedSessionOwner {
-            if let tabID = destination.sharedActiveTabID,
-               tabs.tabs(for: owner).contains(where: { $0.id == tabID }) {
-                tabs.activate(owner: owner, tabId: tabID)
-            } else if destination.sharedActiveTabID == nil {
-                tabs.clearActiveTab(owner: owner)
-            }
-        }
     }
 
     /// Snapshot reconciliation cannot invent events when previous acknowledgments are unknown.
@@ -894,48 +866,11 @@ extension AppState {
         return nil
     }
 
-    private func canRestoreAttentionReturnDestination(_ destination: AttentionReturnDestination) -> Bool {
-        guard spacesManager.space(id: destination.spaceID) != nil else { return false }
-        if let worktreeID = destination.worktreeID {
-            guard isRestorableAttentionWorktree(id: worktreeID) else { return false }
-            if let tabID = destination.activeTabID,
-               !tabs.tabs(forWorktree: worktreeID).contains(where: { $0.id == tabID }) {
-                return false
-            }
-        }
-        if let checkoutID = destination.workspaceNavigationState.selectedCheckoutID {
-            guard let checkout = workspacesManager.checkout(id: checkoutID),
-                  checkout.archivedAt == nil else { return false }
-            if let memberID = destination.workspaceNavigationState.focusedCheckoutMemberID {
-                let memberWorktreeIDs = attentionWorkspaceMemberWorktreeIDs(checkout)
-                guard let worktreeID = memberWorktreeIDs[memberID],
-                      isRestorableAttentionWorktree(id: worktreeID),
-                      destination.worktreeID == nil || destination.worktreeID == worktreeID else { return false }
-            }
-            if case .workspaceCheckout(let ownerCheckoutID, let location)? = destination.sharedSessionOwner,
-               ownerCheckoutID != checkoutID || checkout.executionLocation.normalized != location.normalized {
-                return false
-            }
-        }
-        if let owner = destination.sharedSessionOwner,
-           let tabID = destination.sharedActiveTabID,
-           !tabs.tabs(for: owner).contains(where: { $0.id == tabID }) {
-            return false
-        }
-        return true
-    }
-
     private func attentionWorkspaceMemberWorktreeIDs(_ checkout: WorkspaceCheckout) -> [UUID: String] {
         WorkspaceMemberWorktreeResolver.resolvedWorktreeIDs(
             checkout: checkout,
             worktrees: projects.flatMap { projectsManager.worktrees(projectId: $0.id) }
         )
-    }
-
-    private func isRestorableAttentionWorktree(id: String) -> Bool {
-        guard let worktree = attentionWorktrees.first(where: { $0.worktree.id == id })?.worktree,
-              let project = projects.first(where: { $0.id == worktree.projectId }) else { return false }
-        return !projectsManager.isWorktreeHidden(projectId: project.id, path: worktree.path)
     }
 
     private func isSuppressedAttentionFingerprintShrink(
