@@ -107,6 +107,44 @@ struct WorktreeCheckpointStoreTests {
         #expect(try await store.recoverableJournals(lineageID: lineageA) == [journal])
     }
 
+    @Test func failedJournalLockAttemptPreservesExistingOwner() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = WorktreeCheckpointStore(root: root)
+        var journal = CheckpointRestoreJournal(
+            lineageID: lineageA,
+            checkpointID: UUID(),
+            recoveryCheckpointID: UUID(),
+            phase: .prepared,
+            stagingRoot: "/tmp/staging",
+            selectedPaths: [],
+            expectedFingerprint: "fingerprint",
+            expectedIndexChecksum: "checksum"
+        )
+        journal.ownedIndexLockPath = "/tmp/repo/.git/index.lock"
+        journal.ownedIndexLockChecksum = "winner"
+        journal.ownedIndexLockDevice = 10
+        journal.ownedIndexLockInode = 20
+        try await store.writeJournal(journal)
+
+        await #expect(throws: CheckpointRestoreError.self) {
+            try await store.updateJournalWhileLocked(id: journal.id, lineageID: lineageA) { durable, persist in
+                let previousOwner = durable
+                durable.ownedIndexLockChecksum = "loser"
+                durable.ownedIndexLockDevice = 30
+                durable.ownedIndexLockInode = 40
+                durable.pendingIndexLock = .init(path: "/tmp/repo/.git/.alas-checkpoint-index-lock-\(journal.id.uuidString.lowercased())-candidate",
+                                                 checksum: "loser", device: 30, inode: 40)
+                try persist(durable)
+                durable = previousOwner
+                try persist(durable)
+                throw CheckpointRestoreError.blocked(.indexLock)
+            }
+        }
+
+        #expect(try await store.journal(id: journal.id, lineageID: lineageA) == journal)
+    }
+
     @Test func corruptBlobQuarantinesManifestAndRetainsUnavailableSummary() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

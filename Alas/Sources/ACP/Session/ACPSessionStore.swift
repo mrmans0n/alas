@@ -973,11 +973,11 @@ extension ACPSessionStore {
     }
 
     func activeLeaseCount(now: Int64, staleAfter: Int64) throws -> Int {
+        let staleCutoff = now - staleAfter
         let rows = try db.query("SELECT * FROM session_leases")
         return rows.reduce(into: 0) { count, row in
-            let pid = (row["pid"] as? Int64) ?? 0
             let heartbeatAt = (row["heartbeat_at"] as? Int64) ?? 0
-            if ACPProcessLiveness.pidAlive(pid) || heartbeatAt >= now - staleAfter {
+            if heartbeatAt >= staleCutoff {
                 count += 1
             }
         }

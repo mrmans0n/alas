@@ -236,17 +236,53 @@ actor WorktreeCheckpointStore {
         try prepare(journal.lineageID)
         try withLineageLock(lineageID: journal.lineageID) {
             let layout = paths(journal.lineageID)
-            try fileSystem.writeDurable(JSONEncoder.checkpoints.encode(journal), to: layout.journals.appendingPathComponent("\(journal.id.uuidString.lowercased()).json"), mode: 0o600)
+            try writeJournalUnlocked(journal, layout: layout)
         }
     }
 
     func journal(id: UUID, lineageID: String) throws -> CheckpointRestoreJournal? {
         try validate(lineageID)
         try prepare(lineageID)
-        let url = paths(lineageID).journals.appendingPathComponent("\(id.uuidString.lowercased()).json")
+        return try readJournalUnlocked(id: id, lineageID: lineageID, layout: paths(lineageID))
+    }
+
+    func updateJournalWhileLocked(
+        id: UUID,
+        lineageID: String,
+        _ body: (inout CheckpointRestoreJournal, (CheckpointRestoreJournal) throws -> Void) throws -> Void
+    ) throws -> CheckpointRestoreJournal {
+        try validate(lineageID)
+        try prepare(lineageID)
+        return try withLineageLock(lineageID: lineageID) {
+            let layout = paths(lineageID)
+            guard var value = try readJournalUnlocked(id: id, lineageID: lineageID, layout: layout) else {
+                throw CheckpointStoreError.invalidRestoreJournal
+            }
+            let persist: (CheckpointRestoreJournal) throws -> Void = { updated in
+                guard updated.id == id, updated.lineageID == lineageID else {
+                    throw CheckpointStoreError.invalidRestoreJournal
+                }
+                try self.writeJournalUnlocked(updated, layout: layout)
+            }
+            try body(&value, persist)
+            try persist(value)
+            return value
+        }
+    }
+
+    private func readJournalUnlocked(id: UUID, lineageID: String, layout: Layout) throws -> CheckpointRestoreJournal? {
+        let url = layout.journals.appendingPathComponent("\(id.uuidString.lowercased()).json")
         guard exists(url) else { return nil }
         let value = try JSONDecoder.checkpoints.decode(CheckpointRestoreJournal.self, from: fileSystem.fileData(url))
         return value.lineageID == lineageID ? value : nil
+    }
+
+    private func writeJournalUnlocked(_ journal: CheckpointRestoreJournal, layout: Layout) throws {
+        try fileSystem.writeDurable(
+            JSONEncoder.checkpoints.encode(journal),
+            to: layout.journals.appendingPathComponent("\(journal.id.uuidString.lowercased()).json"),
+            mode: 0o600
+        )
     }
 
     func recoverableJournals(lineageID: String) throws -> [CheckpointRestoreJournal] {

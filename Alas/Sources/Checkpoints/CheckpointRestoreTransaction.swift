@@ -408,28 +408,34 @@ struct CheckpointRestoreTransaction: Sendable {
         let lock = try await gitPath("index.lock", target: target)
         _ = try fileSystem.list(lock.deletingLastPathComponent())
         let candidate = try makeEmptyIndexLockCandidate(index: index, operationID: journal.id)
-        journal.ownedIndexLockPath = lock.path
-        journal.ownedIndexLockChecksum = candidate.checksum
-        journal.ownedIndexLockDevice = candidate.device
-        journal.ownedIndexLockInode = candidate.inode
-        journal.pendingIndexLock = candidate
-        try await store.writeJournal(journal)
-        try faultInjector.hit(.afterIndexLockIntentJournaled)
-        guard Darwin.link(candidate.path, lock.path) == 0 else {
-            try? fileSystem.removeIfPresent(URL(fileURLWithPath: candidate.path))
-            journal.ownedIndexLockPath = nil
-            journal.ownedIndexLockChecksum = nil
-            journal.ownedIndexLockDevice = nil
-            journal.ownedIndexLockInode = nil
-            journal.pendingIndexLock = nil
-            try await store.writeJournal(journal)
-            throw CheckpointRestoreError.blocked(.indexLock)
+        do {
+            journal = try await store.updateJournalWhileLocked(id: journal.id, lineageID: target.lineageID) { durable, persist in
+                let beforeIntent = durable
+                durable.ownedIndexLockPath = lock.path
+                durable.ownedIndexLockChecksum = candidate.checksum
+                durable.ownedIndexLockDevice = candidate.device
+                durable.ownedIndexLockInode = candidate.inode
+                durable.pendingIndexLock = candidate
+                try persist(durable)
+                try faultInjector.hit(.afterIndexLockIntentJournaled)
+                guard Darwin.link(candidate.path, lock.path) == 0 else {
+                    try? fileSystem.removeIfPresent(URL(fileURLWithPath: candidate.path))
+                    durable = beforeIntent
+                    try persist(durable)
+                    throw CheckpointRestoreError.blocked(.indexLock)
+                }
+                try fileSystem.removeIfPresent(URL(fileURLWithPath: candidate.path))
+                try fileSystem.synchronizeDirectory(lock.deletingLastPathComponent())
+                durable.pendingIndexLock = nil
+                try persist(durable)
+                try faultInjector.hit(.afterIndexLockJournaled)
+            }
+        } catch {
+            if let latest = try? await store.journal(id: journal.id, lineageID: target.lineageID) {
+                journal = latest
+            }
+            throw error
         }
-        try fileSystem.removeIfPresent(URL(fileURLWithPath: candidate.path))
-        try fileSystem.synchronizeDirectory(lock.deletingLastPathComponent())
-        journal.pendingIndexLock = nil
-        try await store.writeJournal(journal)
-        try faultInjector.hit(.afterIndexLockJournaled)
         try validateLock(journal)
     }
 
