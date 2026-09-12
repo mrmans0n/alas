@@ -23,6 +23,16 @@ private struct CheckpointStoreLockOwner: Codable {
     let createdAt: Date
 }
 
+private struct VerifiedBlobIdentity: Equatable, Sendable {
+    let device: UInt64
+    let inode: UInt64
+    let byteCount: Int64
+    let modifiedSeconds: Int64
+    let modifiedNanoseconds: Int64
+    let changedSeconds: Int64
+    let changedNanoseconds: Int64
+}
+
 actor WorktreeCheckpointStore {
     struct Limits: Equatable, Sendable {
         var manualCount = 20
@@ -34,7 +44,7 @@ actor WorktreeCheckpointStore {
     private let fileSystem: any CheckpointFileSystem
     private let limits: Limits
     private let lockStaleAge: TimeInterval = 120
-    private var verifiedBlobReferences: [String: Set<CheckpointBlobReference>] = [:]
+    private var verifiedBlobReferences: [String: [CheckpointBlobReference: VerifiedBlobIdentity]] = [:]
     private var blobHashValidationCount = 0
 
     init(root: URL = Paths.checkpointsRoot, fileSystem: any CheckpointFileSystem = LiveCheckpointFileSystem(), limits: Limits = .init()) {
@@ -441,11 +451,12 @@ actor WorktreeCheckpointStore {
     }
 
     private func blobIsValid(_ reference: CheckpointBlobReference, layout: Layout, lineageID: String) throws -> Bool {
-        if verifiedBlobReferences[lineageID]?.contains(reference) == true {
-            return try blobFileSize(reference, layout: layout) == reference.byteCount
+        let identity = try blobIdentity(reference, layout: layout)
+        if verifiedBlobReferences[lineageID]?[reference] == identity {
+            return true
         }
         guard try blobMatchesReference(reference, layout: layout) else { return false }
-        verifiedBlobReferences[lineageID, default: []].insert(reference)
+        verifiedBlobReferences[lineageID, default: [:]][reference] = try blobIdentity(reference, layout: layout)
         return true
     }
 
@@ -558,6 +569,27 @@ actor WorktreeCheckpointStore {
         let attributes = try FileManager.default.attributesOfItem(atPath: blob.path)
         guard let size = attributes[.size] as? NSNumber else { throw CheckpointStoreError.blobNotFound }
         return size.int64Value
+    }
+
+    private func blobIdentity(_ reference: CheckpointBlobReference, layout: Layout) throws -> VerifiedBlobIdentity {
+        let blob = blobURL(reference, layout: layout)
+        var attributes = stat()
+        guard Darwin.lstat(blob.path, &attributes) == 0 else {
+            if errno == ENOENT { throw CheckpointStoreError.blobNotFound }
+            throw CheckpointFileSystemError.posix(operation: "lstat", code: errno)
+        }
+        guard attributes.st_mode & S_IFMT == S_IFREG else {
+            throw CheckpointStoreError.blobDoesNotMatchReference
+        }
+        return VerifiedBlobIdentity(
+            device: UInt64(attributes.st_dev),
+            inode: UInt64(attributes.st_ino),
+            byteCount: attributes.st_size,
+            modifiedSeconds: Int64(attributes.st_mtimespec.tv_sec),
+            modifiedNanoseconds: Int64(attributes.st_mtimespec.tv_nsec),
+            changedSeconds: Int64(attributes.st_ctimespec.tv_sec),
+            changedNanoseconds: Int64(attributes.st_ctimespec.tv_nsec)
+        )
     }
 
     private func blobMatchesReference(_ reference: CheckpointBlobReference, layout: Layout) throws -> Bool {

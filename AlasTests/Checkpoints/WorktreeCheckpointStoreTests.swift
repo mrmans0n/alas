@@ -717,6 +717,28 @@ struct WorktreeCheckpointStoreTests {
         #expect(afterSecondRefresh == afterFirstRefresh)
     }
 
+    @Test func catalogRefreshRevalidatesSameSizedBlobReplacement() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bytes = Data("AAAA".utf8)
+        let checkpoint = try publication(lineageID: lineageA, label: "Cached", bytes: bytes)
+        let store = WorktreeCheckpointStore(root: root)
+        _ = try await store.publish(checkpoint)
+        _ = try await store.catalog(lineageID: lineageA)
+        let afterInitialRefresh = await store.blobHashValidationCountForTesting()
+        let blob = try #require(checkpoint.blobs.keys.first)
+        let url = blobURL(root: root, lineageID: lineageA, blob: blob)
+        try FileManager.default.removeItem(at: url)
+        try Data("BBBB".utf8).write(to: url)
+
+        let catalog = try await store.catalog(lineageID: lineageA)
+
+        #expect(await store.blobHashValidationCountForTesting() == afterInitialRefresh + 1)
+        #expect(catalog.summaries.count == 1)
+        #expect(catalog.summaries[0].label == "Cached")
+        #expect(catalog.summaries[0].unavailableReason != nil)
+    }
+
     private func publication(lineageID: String, label: String, bytes: Data, kind: CheckpointKind = .manual, createdAt: Date = Date(timeIntervalSince1970: 1_700_000_000)) throws -> CheckpointPublication {
         let blob = CheckpointBlobReference.make(for: bytes)
         let manifest = try WorktreeCheckpointManifest(
