@@ -85,7 +85,7 @@ struct AttentionInboxView: View {
             )
             VStack(spacing: 0) {
                 HStack(spacing: 9) {
-                    Image(systemName: "exclamationmark.triangle")
+                    Image(systemName: "bell")
                         .font(.system(size: 12))
                         .foregroundStyle(theme.color("warn"))
                         .accessibilityHidden(true)

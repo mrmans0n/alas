@@ -175,9 +175,9 @@ private struct AttentionToolbarButton<Content: View>: View {
         Button {
             isOpen.toggle()
         } label: {
-            Image(systemName: "exclamationmark.triangle")
+            Image(systemName: "bell")
                 .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(theme.color(count > 0 ? "warn" : (hovering ? "fg" : "fg-muted")))
+                .foregroundStyle(theme.color(hovering || isOpen ? "fg" : "fg-muted"))
                 .frame(width: 26, height: 22)
                 .contentShape(Rectangle())
                 .background(theme.color("bg-3").opacity(hovering || isOpen ? 1 : 0))
