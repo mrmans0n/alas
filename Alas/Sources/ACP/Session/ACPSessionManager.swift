@@ -554,6 +554,17 @@ final class ACPSessionManager: ObservableObject {
         !runners.isEmpty || !attachingSessions.isEmpty
     }
 
+    func activeCheckpointWriterLeaseCount() -> Int {
+        do {
+            return try ACPSessionStore(path: persistence.path).activeLeaseCount(
+                now: Int64(Date().timeIntervalSince1970),
+                staleAfter: Self.leaseStaleAfter
+            )
+        } catch {
+            return hasActiveCheckpointWriter ? 1 : 0
+        }
+    }
+
     init(worktreeId: String, worktreePath: String, owner: SessionOwnerID? = nil, store: ACPSessionStore? = nil,
          persistence: ACPSessionPersistence? = nil,
          instanceId: String = UUID().uuidString,

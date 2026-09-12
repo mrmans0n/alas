@@ -588,6 +588,10 @@ actor ACPSessionPersistence {
         try openedStore().loadLease(sessionId: sessionId)
     }
 
+    func activeLeaseCount(now: Int64, staleAfter: Int64) throws -> Int {
+        try openedStore().activeLeaseCount(now: now, staleAfter: staleAfter)
+    }
+
     func claimLease(
         sessionId: String,
         instanceId: String,

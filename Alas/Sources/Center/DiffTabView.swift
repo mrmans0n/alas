@@ -408,6 +408,7 @@ struct DiffTabView: View {
         guard !checkpointLeaseActive else { return }
         Task {
             guard !checkpointLeaseActive else { return }
+            guard await !appState.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId) else { return }
             let tracked = isFileTracked
             // For untracked files we need the real file mode so `git apply
             // --cached` doesn't drop the +x bit or rewrite a symlink as a
@@ -458,6 +459,7 @@ struct DiffTabView: View {
         guard !checkpointLeaseActive else { return }
         Task {
             guard !checkpointLeaseActive else { return }
+            guard await !appState.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId) else { return }
             let patch = HunkPatchBuilder.patch(file: relativePath, hunk: hunk, tracked: true)
             var didFail = false
             do {

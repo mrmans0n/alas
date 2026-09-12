@@ -67,6 +67,60 @@ struct ACPSessionStoreSchemaTests {
         #expect(try store.currentSchemaVersion() == ACPSessionStore.targetSchemaVersion)
     }
 
+    @Test("counts active writer leases across processes")
+    func activeLeaseCountCountsLiveRows() throws {
+        let store = try tmpStore()
+        let now = Int64(Date().timeIntervalSince1970)
+        try store.upsertSession(.init(
+            id: "live",
+            agentId: "codex",
+            title: "Live",
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: false,
+            createdAt: now,
+            updatedAt: now,
+            lastOpenedAt: now,
+            archived: false
+        ))
+        try store.upsertSession(.init(
+            id: "dead",
+            agentId: "codex",
+            title: "Dead",
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: false,
+            createdAt: now,
+            updatedAt: now,
+            lastOpenedAt: now,
+            archived: false
+        ))
+        try store.db.exec("""
+        INSERT INTO session_leases (session_id, owner_instance, pid, heartbeat_at, status, lease_token)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """, bindings: [
+            "live",
+            "other",
+            Int64(ProcessInfo.processInfo.processIdentifier),
+            now,
+            "busy",
+            "token",
+        ])
+        try store.db.exec("""
+        INSERT INTO session_leases (session_id, owner_instance, pid, heartbeat_at, status, lease_token)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """, bindings: [
+            "dead",
+            "other",
+            Int64(-1),
+            now - 100,
+            "busy",
+            "token-2",
+        ])
+
+        #expect(try store.activeLeaseCount(now: now, staleAfter: 15) == 1)
+    }
+
     @Test("migrates schema version 1 to current target")
     func migratesV1ToCurrent() throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("acp-store-\(UUID()).sqlite")

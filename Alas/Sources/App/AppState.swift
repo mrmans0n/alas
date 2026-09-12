@@ -119,6 +119,7 @@ final class AppState {
     var workspacesManager: WorkspacesManager
     @ObservationIgnored private let workspaceStore: WorkspaceStore
     @ObservationIgnored private let workspaceRemoteTransport: WorkspaceRemoteTransport
+    @ObservationIgnored private let checkpointWriterLeases = CheckpointWriterLeaseStore()
     @ObservationIgnored private var workspaceCheckoutCoordinator: WorkspaceCheckoutCoordinator?
     /// Recovery information for a Workspace state file that could not be read.
     /// Observable so Settings and future Workspace navigation can keep the
@@ -4768,6 +4769,12 @@ final class AppState {
         terminal.socketReleaseHandler = { [weak self] leafId in
             self?.harness.socketServer.unlinkSession(leafId: leafId)
         }
+        terminal.onSessionRegistered = { [weak self] session in
+            self?.acquireCheckpointTerminalLease(for: session)
+        }
+        terminal.onSessionUnregistered = { [weak self] session in
+            self?.checkpointWriterLeases.release(sessionID: session.id)
+        }
         terminal.onSessionProcessExited = { [weak self] leafId, owner, processAlive in
             self?.handleTerminalProcessExited(
                 owner: owner,
@@ -9238,8 +9245,12 @@ final class AppState {
         for worktree: Worktree,
         selectedPaths: Set<String>
     ) -> CheckpointCoordinationSnapshot {
+        let lineageID = worktree.lineageID
         var terminalCount = terminal.registry.sessions(forWorktree: worktree.id).count
-        var acpCount = acpManager(forWorktreeId: worktree.id)?.hasActiveCheckpointWriter == true ? 1 : 0
+        if let lineageID {
+            terminalCount += checkpointWriterLeases.activeLeaseCount(lineageID: lineageID, excludingInstanceID: instanceId)
+        }
+        var acpCount = checkpointACPLeaseCount(owner: .worktree(worktree.id))
         var workspaceName: String?
         var repositoryName = projects.first(where: { $0.id == worktree.projectId })?.name ?? worktree.name
 
@@ -9256,7 +9267,7 @@ final class AppState {
         for (checkout, member) in matchingCheckouts {
             let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
             terminalCount += terminal.registry.sessions(forWorktree: owner.storageKey).count
-            if acpManager(for: owner)?.hasActiveCheckpointWriter == true { acpCount += 1 }
+            acpCount += checkpointACPLeaseCount(owner: owner)
             if checkout.id == selectedWorkspaceCheckout?.id {
                 workspaceName = checkout.fallbackWorkspaceName
             }
@@ -9278,6 +9289,40 @@ final class AppState {
                 workspaceName: workspaceName
             )
         )
+    }
+
+    private func acquireCheckpointTerminalLease(for session: TerminalSession) {
+        let lineageIDs = checkpointTerminalLeaseLineageIDs(for: session)
+        checkpointWriterLeases.acquire(
+            lineageIDs: lineageIDs,
+            sessionID: session.id,
+            instanceID: instanceId
+        )
+    }
+
+    private func checkpointTerminalLeaseLineageIDs(for session: TerminalSession) -> Set<String> {
+        switch session.owner {
+        case .worktree(let worktreeID):
+            return worktree(withId: worktreeID).flatMap(\.lineageID).map { [$0] } ?? []
+        case .workspaceCheckout(let checkoutID, let location):
+            guard let checkout = workspacesManager.checkout(id: checkoutID),
+                  checkout.executionLocation.normalized == location.normalized
+            else { return [] }
+            return Set(checkout.members.compactMap { member in
+                checkpointMemberWorktree(for: member)?.lineageID
+            })
+        }
+    }
+
+    private func checkpointACPLeaseCount(owner: SessionOwnerID) -> Int {
+        do {
+            return try ACPSessionStore(path: Paths.acpSessionsDB(for: owner).path).activeLeaseCount(
+                now: Int64(Date().timeIntervalSince1970),
+                staleAfter: ACPSessionManager.leaseStaleAfter
+            )
+        } catch {
+            return acpManager(for: owner)?.hasActiveCheckpointWriter == true ? 1 : 0
+        }
     }
 
     private func checkpointTerminalAdmissionDisabled(for checkout: WorkspaceCheckout) -> Bool {
