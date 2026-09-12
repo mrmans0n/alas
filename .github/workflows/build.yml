@@ -312,6 +312,23 @@ jobs:
             -parallel-testing-enabled NO \
             test-without-building
 
+      - name: Test - web previews
+        timeout-minutes: 8
+        run: |
+          xcodebuild -project Alas.xcodeproj -scheme Alas \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath .build/xcode/DerivedData \
+            -clonedSourcePackagesDirPath .build/xcode/SourcePackages \
+            -only-testing AlasTests/WebPreviewBrowserTests \
+            -only-testing AlasTests/WebPreviewFeedbackTests \
+            -only-testing AlasTests/AppStateRunRecordTests \
+            -only-testing 'AlasTests/OwnerTabsManagerTests/checkoutCompositionKeepsMemberPreviewsVisible()' \
+            -only-testing 'AlasTests/OwnerTabsManagerTests/checkoutOwnerWebPreviewComposesWithSharedTabs()' \
+            -only-testing 'AlasTests/OwnerTabsManagerTests/checkoutOwnerWebPreviewUsesCheckoutRemoteHostAndClearsBrowserOnArchive()' \
+            -skipMacroValidation \
+            -parallel-testing-enabled NO \
+            test-without-building
+
       - name: Test — ProcessGitTests
         timeout-minutes: 8
         run: |

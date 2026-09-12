@@ -76,6 +76,9 @@ struct RunTabView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            previewHeader
+        }
         .task(id: worktree.id) {
             let startedWorktreeID = worktree.id
             activeWorktreeID = startedWorktreeID
@@ -324,6 +327,31 @@ struct RunTabView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
     }
+
+    private var previewHeader: some View {
+        HStack(spacing: 0) {
+            Button {
+                state.openWebPreview(in: worktree)
+            } label: {
+                HStack(spacing: 5) {
+                    Icon(name: "globe", size: 11)
+                    Text("Preview")
+                        .font(.system(size: 11, weight: .medium))
+                        .lineLimit(1)
+                }
+                .frame(height: 24)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .controlSize(.small)
+            .help("Open web preview")
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(theme.color("bg-2"))
+        .overlay(Divider().opacity(0.45), alignment: .bottom)
+    }
 }
 
 private struct RunTabLoadingView: View {
@@ -331,13 +359,6 @@ private struct RunTabLoadingView: View {
         VStack(alignment: .leading, spacing: 0) {
             RunLoadingSection(rowWidths: [0.58, 0.72, 0.46])
             RunLoadingSection(rowWidths: [0.64, 0.50])
-            HStack(spacing: 8) {
-                RunLoadingBar(width: 88, height: 18)
-                RunLoadingBar(width: 96, height: 18)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
