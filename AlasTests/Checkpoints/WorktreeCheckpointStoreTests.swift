@@ -346,11 +346,13 @@ struct WorktreeCheckpointStoreTests {
     @Test func recoverableJournalsCleanTerminalJournalStaging() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
-        let staging = root.appendingPathComponent("staging", isDirectory: true)
+        let operationID = UUID()
+        let staging = root.appendingPathComponent(".alas-checkpoint-restore-\(operationID.uuidString.lowercased())", isDirectory: true)
         try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
         try Data("backup".utf8).write(to: staging.appendingPathComponent("backup"))
         let store = WorktreeCheckpointStore(root: root)
         let journal = CheckpointRestoreJournal(
+            id: operationID,
             lineageID: lineageA,
             checkpointID: UUID(),
             recoveryCheckpointID: UUID(),
@@ -371,12 +373,14 @@ struct WorktreeCheckpointStoreTests {
     @Test func recoverableJournalsKeepTerminalJournalWhenStagingCleanupFails() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
-        let staging = root.appendingPathComponent("staging", isDirectory: true)
+        let operationID = UUID()
+        let staging = root.appendingPathComponent(".alas-checkpoint-restore-\(operationID.uuidString.lowercased())", isDirectory: true)
         try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
         try Data("backup".utf8).write(to: staging.appendingPathComponent("backup"))
         let fileSystem = RemoveFailingFileSystem(failingLastPathComponent: "backup")
         let store = WorktreeCheckpointStore(root: root, fileSystem: fileSystem)
         let journal = CheckpointRestoreJournal(
+            id: operationID,
             lineageID: lineageA,
             checkpointID: UUID(),
             recoveryCheckpointID: UUID(),
@@ -395,6 +399,32 @@ struct WorktreeCheckpointStoreTests {
         #expect(FileManager.default.fileExists(atPath: staging.appendingPathComponent("backup").path))
         let journalNames = try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent(lineageA).appendingPathComponent("journals").path)
         #expect(journalNames == ["\(journal.id.uuidString.lowercased()).json"])
+    }
+
+    @Test func terminalJournalWithUnexpectedStagingPathFailsClosed() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let keep = root.appendingPathComponent("keep", isDirectory: true)
+        try FileManager.default.createDirectory(at: keep, withIntermediateDirectories: true)
+        try Data("do not delete".utf8).write(to: keep.appendingPathComponent("file.txt"))
+        let store = WorktreeCheckpointStore(root: root)
+        let journal = CheckpointRestoreJournal(
+            lineageID: lineageA,
+            checkpointID: UUID(),
+            recoveryCheckpointID: UUID(),
+            phase: .completed,
+            stagingRoot: keep.path,
+            selectedPaths: ["File.swift"],
+            expectedFingerprint: "fingerprint",
+            expectedIndexChecksum: "checksum"
+        )
+        try await store.writeJournal(journal)
+
+        await #expect(throws: CheckpointStoreError.invalidRestoreJournal) {
+            try await store.recoverableJournals(lineageID: lineageA)
+        }
+
+        #expect(FileManager.default.fileExists(atPath: keep.appendingPathComponent("file.txt").path))
     }
 
     @Test func corruptRecoverableJournalFailsClosed() async throws {

@@ -100,4 +100,40 @@ struct CheckpointCoordinationTests {
         #expect(await !state.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktree.id))
         #expect(await !state.checkpointTerminalAdmissionDisabledAfterDiscovery(worktreeId: worktree.id))
     }
+
+    @Test func appStateBlocksACPAdmissionDuringCheckpointRecoveryLease() async throws {
+        let repo = try await CheckpointTestRepository.make()
+        defer { repo.remove() }
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(path: repo.root, displayName: "test", color: "#000000")
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let worktree = try #require(state.projectsManager.worktrees(projectId: project.id).first)
+        let lineageID = try #require(worktree.lineageID)
+        let store = WorktreeCheckpointStore()
+        let operationID = UUID()
+        let journal = CheckpointRestoreJournal(
+            id: operationID,
+            lineageID: lineageID,
+            checkpointID: UUID(),
+            recoveryCheckpointID: UUID(),
+            phase: .prepared,
+            stagingRoot: worktree.path.appendingPathComponent(".alas-checkpoint-restore-\(operationID.uuidString.lowercased())").path,
+            selectedPaths: ["File.swift"],
+            expectedFingerprint: "fingerprint",
+            expectedIndexChecksum: "checksum"
+        )
+        try await store.writeJournal(journal)
+        defer { try? FileManager.default.removeItem(at: Paths.checkpointsRoot.appendingPathComponent(lineageID, isDirectory: true)) }
+
+        #expect(await state.checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: worktree.id))
+        await #expect(throws: (any Error).self) {
+            try await state.startACPSession(
+                worktree: worktree,
+                sessionID: UUID().uuidString,
+                agentID: "test-agent",
+                promptID: UUID(),
+                prompt: "hello"
+            )
+        }
+    }
 }

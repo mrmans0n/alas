@@ -189,6 +189,24 @@ final class AppState {
         await checkpointMutationsDisabledAfterDiscovery(worktreeId: worktreeId)
     }
 
+    func checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: String) async -> Bool {
+        await checkpointMutationsDisabledAfterDiscovery(worktreeId: worktreeId)
+    }
+
+    func checkpointACPAdmissionDisabledAfterDiscovery(owner: SessionOwnerID?, fallbackWorktree: Worktree?) async -> Bool {
+        switch owner ?? fallbackWorktree.map({ .worktree($0.id) }) {
+        case .worktree(let worktreeID):
+            return await checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: worktreeID)
+        case .workspaceCheckout(let checkoutID, let location):
+            guard let checkout = workspacesManager.checkout(id: checkoutID),
+                  checkout.executionLocation.normalized == location.normalized
+            else { return true }
+            return await checkpointTerminalAdmissionDisabledAfterDiscovery(for: checkout)
+        case nil:
+            return true
+        }
+    }
+
     func checkpointWorktreeRemovalDisabledAfterDiscovery(_ worktree: Worktree) async -> Bool {
         await checkpointMutationsDisabledAfterDiscovery(for: worktree)
     }
@@ -676,6 +694,7 @@ final class AppState {
     }
 
     private static let checkpointRecoveryBlocksWorktreeRemovalMessage = "An interrupted checkpoint restore needs recovery before this worktree can be deleted."
+    static let checkpointRecoveryBlocksACPMessage = "An interrupted checkpoint restore needs recovery before an agent session can start."
 
     /// Set when a worktree deletion fails because Git requires `--force`.
     /// The UI presents a confirmation dialog; confirming retries with force.
@@ -2455,6 +2474,7 @@ final class AppState {
             keepBranch: true
         ) {
         case .save:
+            try await requireCheckpointWorktreeRemovalAllowedAfterDiscovery(worktree)
             guard await saveDirtyBuffers(in: worktree) else { throw CocoaError(.userCancelled) }
         case .discard:
             return worktree
@@ -8002,6 +8022,13 @@ final class AppState {
         }
         if saveBuffersFirst {
             Task { @MainActor in
+                guard await !checkpointWorktreeRemovalDisabledAfterDiscovery(worktree) else {
+                    projectsManager.setOperationState(
+                        id: worktree.id,
+                        state: .deleteFailed(message: Self.checkpointRecoveryBlocksWorktreeRemovalMessage)
+                    )
+                    return
+                }
                 guard await saveDirtyBuffers(in: worktree) else { return }
                 beginDeleteWorktree(worktree, keepBranch: keepBranch)
             }
@@ -10025,6 +10052,7 @@ final class AppState {
         initialPrompt: String? = nil
     ) async -> ACPSessionTabState? {
         guard let checkout = await authoritativeCheckoutForWorkspaceACPSessionCreation(checkout) else { return nil }
+        guard await !checkpointACPAdmissionDisabledAfterDiscovery(owner: .workspaceCheckout(checkout.id, checkout.executionLocation), fallbackWorktree: nil) else { return nil }
         let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
         guard case let .ready(manager) = await workspaceACPManager(for: checkout) else { return nil }
         guard await authoritativeCheckoutForWorkspaceACPSessionCreation(checkout) != nil else {
@@ -10056,6 +10084,7 @@ final class AppState {
     func restoreWorkspaceCheckoutACPSessions(_ checkout: WorkspaceCheckout) async -> Bool {
         guard let checkout = await authoritativeCheckoutForWorkspaceACPSessionCreation(checkout) else { return false }
         let owner = SessionOwnerID.workspaceCheckout(checkout.id, checkout.executionLocation)
+        guard await !checkpointACPAdmissionDisabledAfterDiscovery(owner: owner, fallbackWorktree: nil) else { return false }
         tabs.load(owner: owner, restoringActiveTabs: true)
         guard case let .ready(manager) = await workspaceACPManager(for: checkout) else { return false }
         guard await authoritativeCheckoutForWorkspaceACPSessionCreation(checkout) != nil else {
@@ -10078,6 +10107,9 @@ final class AppState {
         promptID: UUID,
         prompt: String?
     ) async throws -> ACPSession.ID {
+        guard await !checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) else {
+            throw ACPWorktreeSessionBootstrapError(message: Self.checkpointRecoveryBlocksACPMessage)
+        }
         guard let manager = acpManager(for: worktree) else {
             throw ACPWorktreeSessionBootstrapError(message: "Could not create ACP session manager.")
         }
@@ -10105,6 +10137,10 @@ final class AppState {
                 await manager.enqueuePrompt(id: promptID, text: text, into: id)
             },
             attach: { _, id, freshlyCreated in
+                guard await !self.checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) else {
+                    manager.liveSession(for: id)?.lastError = Self.checkpointRecoveryBlocksACPMessage
+                    return
+                }
                 await manager.attach(to: id, freshlyCreated: freshlyCreated)
             },
             readyState: { _, id in
@@ -10125,6 +10161,7 @@ final class AppState {
         agentID: String,
         preparedPrompt: PreparedWorktreeACPPrompt
     ) async {
+        guard await !checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) else { return }
         guard let manager = acpManager(for: worktree) else { return }
         let session = manager.createSession(
             id: preparedPrompt.sessionID,
@@ -10181,6 +10218,10 @@ final class AppState {
         guard let manager = acpManager(for: worktree) else { return }
         Task { @MainActor in
             do {
+                guard await !self.checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) else {
+                    manager.liveSession(for: sourceSessionID)?.lastError = Self.checkpointRecoveryBlocksACPMessage
+                    return
+                }
                 let target = try await manager.createFork(
                     sourceSessionID: sourceSessionID,
                     boundary: boundary,
@@ -10210,6 +10251,10 @@ final class AppState {
         guard let manager = acpManager(for: owner) else { return }
         Task { @MainActor in
             do {
+                guard await !self.checkpointACPAdmissionDisabledAfterDiscovery(owner: owner, fallbackWorktree: nil) else {
+                    manager.liveSession(for: sourceSessionID)?.lastError = Self.checkpointRecoveryBlocksACPMessage
+                    return
+                }
                 let target = try await manager.createFork(
                     sourceSessionID: sourceSessionID,
                     boundary: boundary,
@@ -10320,6 +10365,7 @@ final class AppState {
         await awaitPendingACPDetach(owner: .worktree(worktree.id), sessionId: sessionId)
         guard let mgr = acpManager(for: worktree) else { return }
         cancelRetainedACPSessionCleanup(owner: .worktree(worktree.id), sessionId: sessionId)
+        guard await !checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) else { return }
 
         // Focus the tab if it's already there.
         let tabIdToFocus: TabID? = tabs.tabs(forWorktree: worktree.id).compactMap { tab -> TabID? in
@@ -10355,6 +10401,7 @@ final class AppState {
         await awaitPendingACPDetach(owner: owner, sessionId: sessionId)
         guard let mgr = acpManager(for: owner) else { return }
         cancelRetainedACPSessionCleanup(owner: owner, sessionId: sessionId)
+        guard await !checkpointACPAdmissionDisabledAfterDiscovery(owner: owner, fallbackWorktree: nil) else { return }
 
         let tabIdToFocus: TabID? = tabs.tabs(for: owner).compactMap { tab -> TabID? in
             if case .acpSession(let state) = tab, state.sessionId == sessionId { return tab.id }
@@ -11250,6 +11297,9 @@ extension AppState: RemoteSessionsProvider {
               projectsManager.visibleWorktrees(projectId: resolved.project.id).contains(where: { $0.id == worktreeId })
         else {
             return .failure("Worktree is no longer available.")
+        }
+        guard await !checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: resolved.worktree.id) else {
+            return .failure(Self.checkpointRecoveryBlocksACPMessage)
         }
         switch projectsManager.operationState(for: worktreeId) {
         case .creating, .deleting, .createFailed:
