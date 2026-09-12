@@ -422,6 +422,31 @@ struct WorktreeCheckpointStoreTests {
         #expect(journalNames.isEmpty)
     }
 
+    @Test func recoverableJournalsRetainTerminalJournalWhenStagingRootIsMissing() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let operationID = UUID()
+        let movedWorktree = root.appendingPathComponent("moved-worktree", isDirectory: true)
+        let staging = movedWorktree.appendingPathComponent(".alas-checkpoint-restore-\(operationID.uuidString.lowercased())", isDirectory: true)
+        let store = WorktreeCheckpointStore(root: root)
+        let journal = CheckpointRestoreJournal(
+            id: operationID,
+            lineageID: lineageA,
+            checkpointID: UUID(),
+            recoveryCheckpointID: UUID(),
+            phase: .completed,
+            stagingRoot: staging.path,
+            selectedPaths: ["File.swift"],
+            expectedFingerprint: "fingerprint",
+            expectedIndexChecksum: "checksum"
+        )
+        try await store.writeJournal(journal)
+
+        #expect(try await store.recoverableJournals(lineageID: lineageA) == [journal])
+        let journalNames = try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent(lineageA).appendingPathComponent("journals").path)
+        #expect(journalNames == ["\(journal.id.uuidString.lowercased()).json"])
+    }
+
     @Test func recoverableJournalsUnlinksDirectoryTargetingSymlinkDuringTerminalCleanup() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

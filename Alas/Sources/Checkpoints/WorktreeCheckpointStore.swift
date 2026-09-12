@@ -704,8 +704,7 @@ actor WorktreeCheckpointStore {
             guard value.lineageID == lineageID else { throw CheckpointStoreError.invalidLineageID }
             guard value.id == fileID else { throw CheckpointStoreError.invalidRestoreJournal }
             if value.phase.isTerminal {
-                try cleanupTerminalJournal(value, url: url)
-                return nil
+                return try cleanupTerminalJournal(value, url: url) ? nil : value
             }
             return value
         }
@@ -772,14 +771,16 @@ actor WorktreeCheckpointStore {
         }
     }
 
-    private func cleanupTerminalJournal(_ journal: CheckpointRestoreJournal, url: URL) throws {
+    private func cleanupTerminalJournal(_ journal: CheckpointRestoreJournal, url: URL) throws -> Bool {
         let staging = URL(fileURLWithPath: journal.stagingRoot, isDirectory: true)
         let expectedName = ".alas-checkpoint-restore-\(journal.id.uuidString.lowercased())"
         guard staging.lastPathComponent == expectedName else {
             throw CheckpointStoreError.invalidRestoreJournal
         }
+        guard exists(staging) else { return false }
         try removeDirectoryTreeIfPresent(staging)
         try fileSystem.removeIfPresent(url)
+        return true
     }
 
     private func removeDirectoryTreeIfPresent(_ url: URL) throws {
