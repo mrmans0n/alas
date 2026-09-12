@@ -183,11 +183,11 @@ final class AppState {
     }
 
     func checkpointTerminalAdmissionDisabled(worktreeId: String) -> Bool {
-        rightPaneStore.activeState(worktreeId: worktreeId)?.checkpointMutationsDisabled ?? true
+        rightPaneStore.activeState(worktreeId: worktreeId)?.checkpointRestoreBlocksWriters ?? false
     }
 
     func checkpointTerminalAdmissionDisabledAfterDiscovery(worktreeId: String) async -> Bool {
-        await checkpointMutationsDisabledAfterDiscovery(worktreeId: worktreeId)
+        await checkpointRestoreBlocksWritersAfterDiscovery(worktreeId: worktreeId)
     }
 
     func checkpointACPAdmissionDisabledAfterDiscovery(worktreeId: String) async -> Bool {
@@ -219,6 +219,13 @@ final class AppState {
         return await checkpointMutationsDisabledAfterDiscovery(for: worktree)
     }
 
+    private func checkpointRestoreBlocksWritersAfterDiscovery(worktreeId: String) async -> Bool {
+        guard let (_, worktree) = projectAndWorktree(withWorktreeId: worktreeId) else {
+            return false
+        }
+        return await checkpointRestoreBlocksWritersAfterDiscovery(for: worktree)
+    }
+
     private func checkpointMutationsDisabledAfterDiscovery(for worktree: Worktree) async -> Bool {
         let pane = rightPaneStore.state(
             for: worktree,
@@ -226,6 +233,15 @@ final class AppState {
             comparisonMode: config.changes.comparisonMode
         )
         return await pane.checkpointMutationsDisabledAfterJournalRevalidation()
+    }
+
+    private func checkpointRestoreBlocksWritersAfterDiscovery(for worktree: Worktree) async -> Bool {
+        let pane = rightPaneStore.state(
+            for: worktree,
+            baseBranch: config.worktrees.baseBranch,
+            comparisonMode: config.changes.comparisonMode
+        )
+        return await pane.checkpointRestoreBlocksWritersAfterJournalRevalidation()
     }
 
     typealias TerminalSessionOpener = (

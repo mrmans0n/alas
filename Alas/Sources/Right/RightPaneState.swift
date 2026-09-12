@@ -135,6 +135,9 @@ final class RightPaneState: GGSplitCommitServicing {
     var checkpointMutationsDisabled: Bool {
         checkpointOperationInFlight != nil || !checkpointJournalDiscoverySucceeded || hasInterruptedCheckpointRestore
     }
+    var checkpointRestoreBlocksWriters: Bool {
+        checkpointOperationInFlight != nil || hasInterruptedCheckpointRestore
+    }
     var hasOtherGitMutationInFlight: Bool {
         mergeOp.current != nil || stageMutationWorker != nil || stashOperationInFlight || discardOperationInFlight
             || pullInFlight || ggActionState.inFlightAction != nil
@@ -757,6 +760,23 @@ final class RightPaneState: GGSplitCommitServicing {
             checkpointLoadError = error.localizedDescription
         }
         return checkpointMutationsDisabled
+    }
+
+    func checkpointRestoreBlocksWritersAfterJournalRevalidation() async -> Bool {
+        guard checkpointOperationInFlight == nil else { return true }
+        guard let target = checkpointTarget else {
+            nonterminalCheckpointJournals = []
+            return false
+        }
+        do {
+            nonterminalCheckpointJournals = try await checkpointService.nonterminalJournals(target: target)
+            checkpointJournalDiscoverySucceeded = true
+            checkpointLoadError = nil
+        } catch {
+            checkpointJournalDiscoverySucceeded = false
+            checkpointLoadError = error.localizedDescription
+        }
+        return checkpointRestoreBlocksWriters
     }
 
     private func checkpointMutationAllowedAfterJournalRevalidation() async -> Bool {
