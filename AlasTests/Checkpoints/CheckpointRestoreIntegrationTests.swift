@@ -58,6 +58,29 @@ struct CheckpointRestoreIntegrationTests {
         #expect(!FileManager.default.fileExists(atPath: repo.root.appendingPathComponent("config/local.json").path))
     }
 
+    @Test func restoreReplacesTrackedFileWithSavedDirectoryTransition() async throws {
+        let repo = try await CheckpointTestRepository.make()
+        defer { repo.remove() }
+        let root = URL(fileURLWithPath: "/private/tmp/checkpoint-dir-file-store-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try repo.write("baseline config", to: "config")
+        try await repo.commitAll("baseline")
+        try FileManager.default.removeItem(at: repo.root.appendingPathComponent("config"))
+        try repo.write("saved override", to: "config/local.json")
+        let service = WorktreeCheckpointService(store: .init(root: root))
+        let checkpoint = try await service.createManual(target: repo.target, label: "Saved")
+        try await repo.git(["restore", "--source=HEAD", "--worktree", "."])
+
+        let preview = try await service.restorePreview(target: repo.target, id: checkpoint.id, coordination: .clear)
+        _ = try await service.restore(target: repo.target, preview: preview,
+                                      selectedGroupIDs: preview.selectedGroupIDs, coordination: .clear)
+
+        #expect(try repo.disk("config/local.json") == Data("saved override".utf8))
+        var isDirectory: ObjCBool = false
+        #expect(FileManager.default.fileExists(atPath: repo.root.appendingPathComponent("config").path, isDirectory: &isDirectory))
+        #expect(isDirectory.boolValue)
+    }
+
     @Test func fullRestorePreservesEverySavedLayerAndPublishesRecovery() async throws {
         let fixture = try await CheckpointRestoreFixture.make()
         defer { fixture.remove() }

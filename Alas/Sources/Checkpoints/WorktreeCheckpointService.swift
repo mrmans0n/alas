@@ -222,17 +222,25 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
         let selected = selectedGroupIDs.isEmpty ? preview.selectedGroupIDs : selectedGroupIDs
         let groups = Dictionary(uniqueKeysWithValues: refreshed.groups.map { ($0.id, $0) })
         for id in selected where groups[id] == nil { throw CheckpointRestoreError.missingPreviewGroup(id) }
-        let selectedPaths = Set(selected.compactMap { groups[$0] }.flatMap(\.memberPaths))
         let current = try await snapshotter.snapshot(target: target, includingPaths: Set(manifest.paths.map(\.relativePath)))
         guard current.fingerprint == preview.currentFingerprint else { throw CheckpointRestoreError.stalePreview }
+        let savedByPath = Dictionary(uniqueKeysWithValues: manifest.paths.map { ($0.relativePath, $0) })
+        let selectedPaths = requiredRestorePaths(
+            for: Set(selected.compactMap { groups[$0] }.flatMap(\.memberPaths)),
+            current: current,
+            saved: savedByPath
+        )
         let recovery = try await createRecovery(target: target, current: current, selectedPaths: selectedPaths,
                                                 protecting: manifest.id)
         _ = try await store.load(id: recovery.id, lineageID: target.lineageID)
         try faultInjector.hit(.afterRecoveryPublication)
+        let orderedSelectedPaths = selectedPaths.sorted { lhs, rhs in
+            restoreApplicationOrder(lhs, rhs, current: current, saved: savedByPath)
+        }
         return try await CheckpointRestoreTransaction(store: store, git: snapshotter.git, fileSystem: snapshotter.fileSystem,
                                                        faultInjector: faultInjector)
             .prepare(target: target, preview: preview, manifest: manifest, current: current,
-                     selectedPaths: selectedPaths.sorted(by: restoreApplicationOrder), recoveryCheckpointID: recovery.id)
+                     selectedPaths: orderedSelectedPaths, recoveryCheckpointID: recovery.id)
     }
 
     func restore(target: CheckpointWorktreeTarget, preview: CheckpointRestorePreview, selectedGroupIDs: Set<UUID>,
@@ -258,11 +266,56 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
         }
     }
 
-    private func restoreApplicationOrder(_ lhs: String, _ rhs: String) -> Bool {
+    private func restoreApplicationOrder(_ lhs: String, _ rhs: String,
+                                         current: WorktreeStateSnapshot,
+                                         saved: [String: CheckpointPathState]) -> Bool {
+        if rhs.hasPrefix(lhs + "/") {
+            return restoreParentBeforeChild(lhs, current: current, saved: saved)
+        }
+        if lhs.hasPrefix(rhs + "/") {
+            return !restoreParentBeforeChild(rhs, current: current, saved: saved)
+        }
         let lhsDepth = lhs.split(separator: "/").count
         let rhsDepth = rhs.split(separator: "/").count
         if lhsDepth != rhsDepth { return lhsDepth > rhsDepth }
         return lhs < rhs
+    }
+
+    private func restoreParentBeforeChild(_ parent: String,
+                                          current: WorktreeStateSnapshot,
+                                          saved: [String: CheckpointPathState]) -> Bool {
+        let currentParent = current.paths[parent]?.worktree ?? .absent
+        let desiredParent: CheckpointFileState
+        if let savedParent = saved[parent] {
+            desiredParent = savedParent.worktree
+        } else if let currentState = current.paths[parent],
+                  currentState.index != currentState.head || currentState.worktree != currentState.head {
+            desiredParent = currentState.head
+        } else {
+            desiredParent = .absent
+        }
+        if currentParent.kind != .absent, desiredParent.kind == .absent { return true }
+        if currentParent.kind == .absent, desiredParent.kind != .absent { return false }
+        return false
+    }
+
+    private func requiredRestorePaths(for selectedPaths: Set<String>,
+                                      current: WorktreeStateSnapshot,
+                                      saved: [String: CheckpointPathState]) -> Set<String> {
+        var paths = selectedPaths
+        let availablePaths = Set(current.paths.keys).union(saved.keys)
+        for path in selectedPaths {
+            paths.formUnion(availablePaths.filter { $0.hasPrefix(path + "/") })
+            var components = path.split(separator: "/").map(String.init)
+            while components.count > 1 {
+                components.removeLast()
+                let ancestor = components.joined(separator: "/")
+                if current.paths[ancestor] != nil || saved[ancestor] != nil {
+                    paths.insert(ancestor)
+                }
+            }
+        }
+        return paths
     }
 
     private func previewHeadOID(target: CheckpointWorktreeTarget) async throws -> String {

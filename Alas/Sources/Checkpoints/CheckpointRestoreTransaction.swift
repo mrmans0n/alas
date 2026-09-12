@@ -98,8 +98,7 @@ struct CheckpointRestoreTransaction: Sendable {
             var stagingNames: [String: String] = [:]
             let saved = Dictionary(uniqueKeysWithValues: manifest.paths.map { ($0.relativePath, $0) })
             for path in selectedPaths {
-                guard let now = current.paths[path] else { throw CheckpointRestoreError.missingCurrentPath(path) }
-                let desired = saved[path] ?? .init(relativePath: path, head: now.head, index: now.head, worktree: now.head)
+                let desired = try desiredState(for: path, saved: saved, current: current, selectedPaths: selectedPaths)
                 let name = UUID().uuidString.lowercased()
                 stagingNames[path] = name
                 try await materialize(desired.worktree, at: replacementsRoot.appendingPathComponent(name), target: target)
@@ -191,11 +190,12 @@ struct CheckpointRestoreTransaction: Sendable {
             try faultInjector.hit(.beforeVerification)
             let after = try await snapshot(target, journal: journal, including: Set(journal.selectedPaths))
             guard after.headOID == desired.headOID else { throw CheckpointRestoreError.stalePreview }
+            let saved = Dictionary(uniqueKeysWithValues: desired.paths.map { ($0.relativePath, $0) })
             for path in journal.selectedPaths {
-                let expected = desired.paths.first { $0.relativePath == path }
+                let expected = try desiredState(for: path, saved: saved, current: current, selectedPaths: journal.selectedPaths)
                 guard let actual = after.paths[path],
-                      actual.index == (expected?.index ?? actual.head),
-                      actual.worktree == (expected?.worktree ?? actual.head) else { throw CheckpointRestoreError.invalidGitOutput }
+                      actual.index == expected.index,
+                      actual.worktree == expected.worktree else { throw CheckpointRestoreError.invalidGitOutput }
             }
             try await finish(&journal, target: target, phase: .completed)
             return .init(recoveryCheckpointID: journal.recoveryCheckpointID, restoredPaths: journal.selectedPaths)
@@ -262,7 +262,8 @@ struct CheckpointRestoreTransaction: Sendable {
             try faultInjector.hit(.duringRollback(path: path))
             try validateLock(journal)
             let before = try requiredState(path, in: recovery)
-            let expected = desired.paths.first { $0.relativePath == path }?.worktree ?? before.head
+            let saved = Dictionary(uniqueKeysWithValues: desired.paths.map { ($0.relativePath, $0) })
+            let expected = try desiredState(for: path, saved: saved, current: current, selectedPaths: journal.selectedPaths).worktree
             let actual = try leafState(path, root: target.path)
             if actual == before.worktree { continue }
             let name = try stagingName(path, journal: journal)
@@ -314,7 +315,7 @@ struct CheckpointRestoreTransaction: Sendable {
         _ = try fileSystem.list(root.appendingPathComponent("replacements"))
         guard Set(journal.stagingNames.values).count == journal.selectedPaths.count else { throw CheckpointRestoreError.invalidJournal }
         for path in journal.selectedPaths {
-            _ = try fileSystem.validateRelativePath(path, under: target.path)
+            try validateRestorePath(path, selectedPaths: journal.selectedPaths, under: target.path)
             guard !path.split(separator: "/").contains(".git"), !path.hasPrefix(".alas-checkpoint-restore-") else {
                 throw CheckpointRestoreError.invalidJournal
             }
@@ -612,6 +613,32 @@ struct CheckpointRestoreTransaction: Sendable {
     private func requiredState(_ path: String, in manifest: WorktreeCheckpointManifest) throws -> CheckpointPathState {
         guard let state = manifest.paths.first(where: { $0.relativePath == path }) else { throw CheckpointRestoreError.invalidJournal }
         return state
+    }
+
+    private func validateRestorePath(_ path: String, selectedPaths: [String], under root: URL) throws {
+        do {
+            _ = try fileSystem.validateRelativePath(path, under: root)
+        } catch CheckpointFileSystemError.unsafePath {
+            guard let ancestor = selectedPaths
+                .filter({ path.hasPrefix($0 + "/") })
+                .max(by: { $0.count < $1.count }) else {
+                throw CheckpointFileSystemError.unsafePath
+            }
+            _ = try fileSystem.validateRelativePath(ancestor, under: root)
+        }
+    }
+
+    private func desiredState(for path: String,
+                              saved: [String: CheckpointPathState],
+                              current: WorktreeStateSnapshot,
+                              selectedPaths: [String]) throws -> CheckpointPathState {
+        if let state = saved[path] { return state }
+        guard let now = current.paths[path] else { throw CheckpointRestoreError.missingCurrentPath(path) }
+        let isSyntheticAncestor = selectedPaths.contains { $0.hasPrefix(path + "/") }
+            && now.index == now.head
+            && now.worktree == now.head
+        return .init(relativePath: path, head: now.head, index: now.head,
+                     worktree: isSyntheticAncestor ? .absent : now.head)
     }
 
     private func exists(_ url: URL) throws -> Bool {

@@ -49,7 +49,8 @@ struct DraftCommitTabView: View {
         guard let rps = appState.rightPaneStore.activeState(worktreeId: worktreeId) else { return false }
         return rps.changes.contains { $0.stage == .staged }
     }
-    private var canCommit: Bool { presentation.commit.isEnabled }
+    private var checkpointLeaseActive: Bool { rightPane?.checkpointMutationsDisabled == true }
+    private var canCommit: Bool { !checkpointLeaseActive && presentation.commit.isEnabled }
     private var busy: Bool { localBusy || publishSession?.isRunning == true }
     private var publishSession: CommitPublishSession? { appState.tabs.commitPublishSession(tabId: tabState.id) }
     private var publishError: String? { publishSession?.lastError?.localizedDescription }
@@ -57,7 +58,7 @@ struct DraftCommitTabView: View {
         if let publishSession { return publishSession.checkpoint }
         return tabState.publishCheckpoint
     }
-    private var mutationsDisabled: Bool { presentation.mutationsDisabled }
+    private var mutationsDisabled: Bool { checkpointLeaseActive || presentation.mutationsDisabled }
     private var rightPane: RightPaneState? { appState.rightPaneStore.activeState(worktreeId: worktreeId) }
 
     private var publicationProbeKey: String {
@@ -543,6 +544,7 @@ struct DraftCommitTabView: View {
 
     private func runCommit() {
         guard canCommit else { return }
+        guard !checkpointLeaseActive else { return }
         let subjectSnapshot = trimmedSubject
         let bodySnapshot = bodyText
         let amendSnapshot = amend

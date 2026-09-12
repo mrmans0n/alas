@@ -38,6 +38,10 @@ struct CommitEditorTabView: View {
     private let git = GitService()
 
     private static let minPaneWidth: CGFloat = 140
+    private var checkpointLeaseActive: Bool {
+        appState.rightPaneStore.activeState(worktreeId: worktreeId)?.checkpointMutationsDisabled == true
+    }
+
     private var diffPreferences: DiffPreferenceBindings {
         DiffPreferenceBindings(
             appState: appState,
@@ -375,6 +379,10 @@ struct CommitEditorTabView: View {
 
     private func runEdit(action: CommitEditAction) {
         guard !busy else { return }
+        guard !checkpointLeaseActive else {
+            error = "Recover the interrupted checkpoint restore before editing commits."
+            return
+        }
         let targetSha = tabState.currentSha
         let tabId = tabState.id
         let baseRef = appState.rightPaneStore.commitEditorComparisonRef(worktreeId: worktreeId) ?? tabState.baseRef
