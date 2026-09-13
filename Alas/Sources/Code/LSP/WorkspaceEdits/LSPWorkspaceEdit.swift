@@ -1,6 +1,11 @@
 import Foundation
 
-/// A JSON value that preserves numeric tokens exactly for opaque protocol payloads.
+/// A JSON value for opaque protocol payloads.
+///
+/// ``decode(from:)`` and ``encodedData()`` preserve arbitrary numeric tokens
+/// exactly. Generic `Codable` preserves Foundation-representable numeric values,
+/// but may canonicalize their spelling because `Decoder` does not expose the
+/// original JSON token.
 indirect enum LSPJSONValue: Codable, Equatable, Sendable {
     case null
     case bool(Bool)
@@ -15,13 +20,8 @@ indirect enum LSPJSONValue: Codable, Equatable, Sendable {
             self = .null
         } else if let value = try? container.decode(Bool.self) {
             self = .bool(value)
-        } else if (try? container.decode(Decimal.self)) != nil {
-            // Generic Codable decoders do not expose a JSON number's original
-            // token. Refuse this path rather than silently narrowing it.
-            throw DecodingError.dataCorruptedError(
-                in: container,
-                debugDescription: "Use LSPJSONValue.decode(from:) for JSON numbers"
-            )
+        } else if let value = try? container.decode(Decimal.self) {
+            self = .number(NSDecimalNumber(decimal: value).stringValue)
         } else if let value = try? container.decode(String.self) {
             self = .string(value)
         } else if let value = try? container.decode([LSPJSONValue].self) {
@@ -39,10 +39,13 @@ indirect enum LSPJSONValue: Codable, Equatable, Sendable {
         case .null: try container.encodeNil()
         case .bool(let value): try container.encode(value)
         case .number(let value):
-            throw EncodingError.invalidValue(value, .init(
-                codingPath: encoder.codingPath,
-                debugDescription: "Use encodedData() to preserve this JSON number token"
-            ))
+            guard let number = Decimal(string: value, locale: Locale(identifier: "en_US_POSIX")) else {
+                throw EncodingError.invalidValue(value, .init(
+                    codingPath: encoder.codingPath,
+                    debugDescription: "Invalid JSON number token"
+                ))
+            }
+            try container.encode(number)
         case .string(let value): try container.encode(value)
         case .array(let value): try container.encode(value)
         case .object(let value): try container.encode(value)

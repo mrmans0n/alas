@@ -116,7 +116,7 @@ struct WorkspaceEditPlannerTests {
 
         #expect(plan.requiresPreview)
         #expect(plan.steps.map(\.kind) == [.text, .rename, .text])
-        #expect(plan.steps.last?.after.content == Data("ABy".utf8))
+        #expect(plan.steps.last?.after.content == Data("AB".utf8))
     }
 
     @Test func honorsOverwriteAndIgnoreOptions() throws {
@@ -275,6 +275,35 @@ struct WorkspaceEditPlannerTests {
 
         #expect(value == .number(token))
         #expect(try value.encodedData() == Data(token.utf8))
+    }
+
+    @Test func genericCodableSupportsNumbersInsideNestedValues() throws {
+        let source = Data(#"[42,{"fraction":12.5,"negative":-7}]"#.utf8)
+        let value = try JSONDecoder().decode(LSPJSONValue.self, from: source)
+
+        #expect(value == .array([
+            .number("42"),
+            .object(["fraction": .number("12.5"), "negative": .number("-7")])
+        ]))
+
+        let encoded = try JSONEncoder().encode(value)
+        let roundTripped = try JSONDecoder().decode(LSPJSONValue.self, from: encoded)
+        #expect(roundTripped == value)
+    }
+
+    @Test func genericCodablePreservesFoundationRepresentableStandaloneNumber() throws {
+        let token = "12345678901234567890123456789012345678"
+        let value = try JSONDecoder().decode(LSPJSONValue.self, from: Data(token.utf8))
+
+        #expect(value == .number(token))
+        #expect(try JSONDecoder().decode(LSPJSONValue.self, from: JSONEncoder().encode(value)) == value)
+    }
+
+    @Test func genericCodableCanonicalizesNumberFormatting() throws {
+        let value = try JSONDecoder().decode(LSPJSONValue.self, from: Data("1.2300e+2".utf8))
+
+        #expect(value == .number("123"))
+        #expect(try JSONEncoder().encode(value) == Data("123".utf8))
     }
 
     @Test func keepsMixedAnnotationsAndMapsRemoteHost() throws {
