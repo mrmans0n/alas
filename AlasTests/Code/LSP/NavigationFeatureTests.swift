@@ -87,7 +87,7 @@ struct NavigationFeatureTests {
             textView: textView,
             getClient: { nil },
             getURI: { "file:///tmp/current.swift" },
-            openTarget: { _, _, _ in },
+            openTarget: { _, _, _, _ in },
             cancelPendingNavigation: { navigation.cancelPendingRequest() }
         )
 

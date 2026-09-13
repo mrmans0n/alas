@@ -17,7 +17,7 @@ final class DefinitionFeature {
     private weak var textView: CodeTextView?
     private let getClient: () -> LSPClient?
     private let getURI: () -> String?
-    private let openTarget: (URL, Int, Int) -> Void
+    private let openTarget: (URL, Int, Int, LSPPosition) -> Void
     private let cancelPendingNavigation: () -> Void
     private let synchronizeRequest: SynchronizeRequest?
     private let isContextCurrent: (EditorRequestContext) -> Bool
@@ -30,7 +30,7 @@ final class DefinitionFeature {
         textView: CodeTextView,
         getClient: @escaping () -> LSPClient?,
         getURI: @escaping () -> String?,
-        openTarget: @escaping (URL, Int, Int) -> Void,
+        openTarget: @escaping (URL, Int, Int, LSPPosition) -> Void,
         cancelPendingNavigation: @escaping () -> Void = {},
         synchronizeRequest: SynchronizeRequest? = nil,
         isContextCurrent: @escaping (EditorRequestContext) -> Bool = { _ in true }
@@ -139,26 +139,38 @@ final class DefinitionFeature {
                       context.map(self.isContextCurrent) ?? true,
                       self.textView?.lspPosition(at: anchorPoint) == position
                 else { return }
-                self.handle(locations: locations, anchorPoint: anchorPoint)
+                self.handle(
+                    locations: locations,
+                    anchorPoint: anchorPoint,
+                    sourcePosition: context?.range.start ?? position
+                )
             }
         }
     }
 
-    private func handle(locations: [LSPLocation], anchorPoint: NSPoint) {
+    private func handle(
+        locations: [LSPLocation],
+        anchorPoint: NSPoint,
+        sourcePosition: LSPPosition
+    ) {
         switch locations.count {
         case 0: return
-        case 1: openLocation(locations[0])
-        default: presentPicker(locations: locations, anchor: anchorPoint)
+        case 1: openLocation(locations[0], sourcePosition: sourcePosition)
+        default: presentPicker(locations: locations, anchor: anchorPoint, sourcePosition: sourcePosition)
         }
     }
 
-    private func openLocation(_ target: LSPLocation) {
+    private func openLocation(_ target: LSPLocation, sourcePosition: LSPPosition) {
         let url = URL(string: target.uri)
             ?? URL(fileURLWithPath: target.uri.removingPercentEncoding ?? target.uri)
-        openTarget(url, target.range.start.line, target.range.start.character)
+        openTarget(url, target.range.start.line, target.range.start.character, sourcePosition)
     }
 
-    private func presentPicker(locations: [LSPLocation], anchor point: NSPoint) {
+    private func presentPicker(
+        locations: [LSPLocation],
+        anchor point: NSPoint,
+        sourcePosition: LSPPosition
+    ) {
         guard let textView else { return }
         let entries = locations.map { loc -> DefinitionPickerEntry in
             let url = URL(string: loc.uri)
@@ -178,7 +190,7 @@ final class DefinitionFeature {
             rootView: DefinitionPicker(entries: entries) { [weak self, weak popover] choice in
                 popover?.close()
                 guard let self, let choice else { return }
-                self.openLocation(locations[choice])
+                self.openLocation(locations[choice], sourcePosition: sourcePosition)
             }
         )
         popover.contentViewController = host

@@ -44,6 +44,7 @@ final class EditorCommandRouter {
     private var capabilities: LSPCapabilities
     private var isServerReady: Bool
     private var handlers: [EditorCommandID: Handler]
+    private var availabilityChecks: [EditorCommandID: () -> Bool] = [:]
 
     init(
         capabilities: LSPCapabilities = .empty,
@@ -61,14 +62,22 @@ final class EditorCommandRouter {
         EditorCommandAvailability.shared.refresh(self)
     }
 
-    func register(_ command: EditorCommandID, handler: @escaping Handler) {
+    func register(
+        _ command: EditorCommandID,
+        isAvailable: @escaping () -> Bool = { true },
+        handler: @escaping Handler
+    ) {
         handlers[command] = handler
+        availabilityChecks[command] = isAvailable
         EditorCommandAvailability.shared.refresh(self)
     }
 
     func availableCommands() -> [EditorCommandID] {
         EditorCommandID.allCases.filter { command in
-            isServerReady && capabilities.supports(command) && handlers[command] != nil
+            guard handlers[command] != nil else { return false }
+            guard availabilityChecks[command]?() ?? true else { return false }
+            if Self.localCommands.contains(command) { return true }
+            return isServerReady && capabilities.supports(command)
         }
     }
 
@@ -77,6 +86,10 @@ final class EditorCommandRouter {
     }
 
     var serverIsReady: Bool { isServerReady }
+
+    func refreshAvailability() {
+        EditorCommandAvailability.shared.refresh(self)
+    }
 
     func invoke(_ command: EditorCommandID, range: NSRange) {
         guard availableCommands().contains(command) else { return }
@@ -91,4 +104,6 @@ final class EditorCommandRouter {
         }
         return selection
     }
+
+    private static let localCommands: Set<EditorCommandID> = [.back, .forward]
 }

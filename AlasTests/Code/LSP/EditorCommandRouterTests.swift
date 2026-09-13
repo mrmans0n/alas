@@ -46,6 +46,18 @@ struct EditorCommandRouterTests {
         #expect(router.availableCommands().isEmpty)
     }
 
+    @Test("local history commands do not wait for a language server")
+    func localHistoryCommandsUseTheirOwnAvailability() {
+        var canGoBack = false
+        let router = EditorCommandRouter()
+        router.register(.back, isAvailable: { canGoBack }) { _ in }
+
+        #expect(!router.availableCommands().contains(.back))
+
+        canGoBack = true
+        #expect(router.availableCommands().contains(.back))
+    }
+
     @Test("app command availability exposes only registered active commands")
     func appCommandAvailabilityGatesFutureCommands() throws {
         let capabilities = try LSPCapabilities(json: Data(#"{"definitionProvider":true,"renameProvider":true}"#.utf8))

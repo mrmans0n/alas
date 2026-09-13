@@ -152,8 +152,9 @@ final class CodeEditorCoordinator {
                 guard let root = self.currentRoot, let rel = self.currentRelativePath else { return nil }
                 return root.appendingPathComponent(rel).lspURI
             },
-            openTarget: { [weak self] url, line, character in
+            openTarget: { [weak self] url, line, character, sourcePosition in
                 guard let self,
+                      let source = self.navigationSource(at: sourcePosition),
                       let wid = self.currentWorktreeId else { return }
                 let anchor = self.currentOriginatingWorktreeRoot ?? self.currentRoot
                 guard let root = anchor else { return }
@@ -165,14 +166,18 @@ final class CodeEditorCoordinator {
                     ),
                     position: LSPPosition(line: line, character: character)
                 )
-                self.appState.tabs.openNavigationTarget(
+                if self.appState.tabs.openNavigationTarget(
                     target,
                     worktreeRoot: root,
                     originatingRelativePath: self.currentExternalAbsolutePath == nil
                         ? self.currentRelativePath
                         : self.currentOriginatingRelativePath,
                     language: self.currentLanguage
-                )
+                ) {
+                    self.appState.tabs.navigationStore(forWorktreeId: wid).recordJump(from: source, to: target)
+                } else {
+                    self.appState.tabs.navigationStore(forWorktreeId: wid).recordActivationFailure(for: target)
+                }
             },
             cancelPendingNavigation: { [weak self] in
                 self?.navigation?.cancelPendingRequest()
@@ -711,6 +716,16 @@ final class CodeEditorCoordinator {
         router.register(.references) { [weak self] range in
             self?.navigation?.perform(.references, range: range)
         }
+        router.register(.back, isAvailable: { [weak self] in
+            self?.currentNavigationStore?.canGoBack == true
+        }) { [weak self] _ in
+            self?.activateHistoryTarget(direction: .back)
+        }
+        router.register(.forward, isAvailable: { [weak self] in
+            self?.currentNavigationStore?.canGoForward == true
+        }) { [weak self] _ in
+            self?.activateHistoryTarget(direction: .forward)
+        }
         router.register(.hover) { [weak textView] range in
             textView?.triggerHover(atUTF16Offset: range.location)
         }
@@ -718,6 +733,9 @@ final class CodeEditorCoordinator {
             self?.formatDocument(range: range)
         }
         editorCommandRouter = router
+        currentNavigationStore?.setHistoryChangeHandler { [weak router] in
+            router?.refreshAvailability()
+        }
         textView.editorCommandRouter = router
         if textView.window?.firstResponder === textView {
             EditorCommandAvailability.shared.activate(router)
@@ -795,6 +813,64 @@ final class CodeEditorCoordinator {
 
     // MARK: - Edit propagation (highlight + didChange debouncer)
 
+    private enum HistoryDirection {
+        case back
+        case forward
+    }
+
+    private var currentNavigationStore: EditorNavigationStore? {
+        currentWorktreeId.map(appState.tabs.navigationStore(forWorktreeId:))
+    }
+
+    private func navigationSource(at position: LSPPosition) -> EditorNavigationTarget? {
+        guard let worktreeID = currentWorktreeId,
+              let root = currentOriginatingWorktreeRoot ?? currentRoot
+        else { return nil }
+        let uri: String
+        if let absolutePath = currentExternalAbsolutePath {
+            uri = URL(fileURLWithPath: absolutePath).lspURI
+        } else {
+            guard let relativePath = currentRelativePath else { return nil }
+            uri = root.appendingPathComponent(relativePath).lspURI
+        }
+        return EditorNavigationTarget(
+            document: EditorDocumentID(
+                host: RemoteHostRegistry.shared.host(forPath: root.path),
+                worktreeID: worktreeID,
+                uri: uri
+            ),
+            position: position
+        )
+    }
+
+    private func activateHistoryTarget(direction: HistoryDirection) {
+        guard let worktreeID = currentWorktreeId,
+              let root = currentOriginatingWorktreeRoot ?? currentRoot
+        else { return }
+        let store = appState.tabs.navigationStore(forWorktreeId: worktreeID)
+        let target: EditorNavigationTarget?
+        switch direction {
+        case .back:
+            target = store.goBack()
+        case .forward:
+            target = store.goForward()
+        }
+        guard let target else { return }
+        if appState.tabs.openNavigationTarget(
+            target,
+            worktreeRoot: root,
+            originatingRelativePath: currentExternalAbsolutePath == nil
+                ? currentRelativePath
+                : currentOriginatingRelativePath,
+            language: currentLanguage
+        ) {
+            store.confirmHistoryActivation()
+        } else {
+            store.recordActivationFailure(for: target)
+            textView?.showCommandStatus("Could not open navigation target")
+        }
+    }
+
     private func currentLSPClient() -> LSPClient? {
         guard let language = currentLanguage else { return nil }
         if let binding = lspBinding {
@@ -821,6 +897,9 @@ final class CodeEditorCoordinator {
     }
 
     private func scheduleEditPropagation(edit: EditorTextEdit?) {
+        if let worktreeID = currentWorktreeId {
+            appState.tabs.navigationStore(forWorktreeId: worktreeID).markResultsStale()
+        }
         didChangeTask?.cancel()
         hasPendingDidChange = true
         if let edit {

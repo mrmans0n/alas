@@ -36,15 +36,23 @@ struct EditorNavigationTarget: Hashable, Sendable {
 @MainActor
 @Observable
 final class EditorNavigationStore {
+    private static let historyLimit = 200
+
     private(set) var results: [EditorNavigationTarget] = []
     private(set) var snippets: [EditorNavigationTarget: String] = [:]
     private(set) var isLoading = false
     private(set) var errorMessage: String?
+    private(set) var statusMessage: String?
+    private(set) var resultsAreStale = false
     var isPresented = false
     var isExpanded = true
     var height: CGFloat = 220
     private var loadingSnippets = Set<EditorNavigationTarget>()
     private let snippetCache = DefinitionSnippetCache()
+    private var history: [EditorNavigationTarget] = []
+    private var historyIndex: Int?
+    private var pendingHistoryActivation: (from: Int, to: Int)?
+    private var onHistoryChange: (() -> Void)?
 
     var groupedResults: [EditorDocumentID: [EditorNavigationTarget]] {
         Dictionary(grouping: results, by: \.document)
@@ -55,6 +63,8 @@ final class EditorNavigationStore {
         loadingSnippets = []
         isLoading = true
         errorMessage = nil
+        statusMessage = nil
+        resultsAreStale = false
         isPresented = true
     }
 
@@ -65,7 +75,80 @@ final class EditorNavigationStore {
         loadingSnippets = []
         isLoading = false
         errorMessage = nil
+        statusMessage = nil
+        resultsAreStale = false
         isPresented = true
+    }
+
+    func markResultsStale() {
+        guard !results.isEmpty else { return }
+        resultsAreStale = true
+    }
+
+    func recordJump(from source: EditorNavigationTarget, to destination: EditorNavigationTarget) {
+        guard source != destination else { return }
+
+        if let historyIndex, history.indices.contains(historyIndex), history[historyIndex] == source {
+            history.removeSubrange((historyIndex + 1) ..< history.endIndex)
+        } else {
+            history.removeAll()
+            history.append(source)
+        }
+        history.append(destination)
+        trimHistory()
+        historyIndex = history.indices.last
+        pendingHistoryActivation = nil
+        statusMessage = nil
+        onHistoryChange?()
+    }
+
+    var canGoBack: Bool {
+        guard let historyIndex else { return false }
+        return historyIndex > history.startIndex
+    }
+
+    var canGoForward: Bool {
+        guard let historyIndex else { return false }
+        return historyIndex < history.index(before: history.endIndex)
+    }
+
+    func goBack() -> EditorNavigationTarget? {
+        guard let historyIndex, historyIndex > history.startIndex else { return nil }
+        let nextIndex = historyIndex - 1
+        pendingHistoryActivation = (from: historyIndex, to: nextIndex)
+        self.historyIndex = nextIndex
+        onHistoryChange?()
+        return history[nextIndex]
+    }
+
+    func goForward() -> EditorNavigationTarget? {
+        guard let historyIndex, historyIndex < history.index(before: history.endIndex) else { return nil }
+        let nextIndex = historyIndex + 1
+        pendingHistoryActivation = (from: historyIndex, to: nextIndex)
+        self.historyIndex = nextIndex
+        onHistoryChange?()
+        return history[nextIndex]
+    }
+
+    func confirmHistoryActivation() {
+        pendingHistoryActivation = nil
+        statusMessage = nil
+        onHistoryChange?()
+    }
+
+    func recordActivationFailure(for target: EditorNavigationTarget) {
+        statusMessage = "Could not open navigation target"
+        if let pendingHistoryActivation,
+           history.indices.contains(pendingHistoryActivation.to),
+           history[pendingHistoryActivation.to] == target {
+            historyIndex = pendingHistoryActivation.from
+        }
+        pendingHistoryActivation = nil
+        onHistoryChange?()
+    }
+
+    func setHistoryChangeHandler(_ handler: @escaping () -> Void) {
+        onHistoryChange = handler
     }
 
     func loadSnippet(for target: EditorNavigationTarget) {
@@ -105,6 +188,7 @@ final class EditorNavigationStore {
         results = []
         isLoading = false
         errorMessage = error.localizedDescription
+        statusMessage = nil
         isPresented = true
     }
 
@@ -116,10 +200,16 @@ final class EditorNavigationStore {
         isPresented = false
         isLoading = false
         errorMessage = nil
+        statusMessage = nil
     }
 
     private static func url(for target: EditorNavigationTarget) -> URL {
         URL(string: target.document.uri)
             ?? URL(fileURLWithPath: target.document.uri.removingPercentEncoding ?? target.document.uri)
+    }
+
+    private func trimHistory() {
+        guard history.count > Self.historyLimit else { return }
+        history.removeFirst(history.count - Self.historyLimit)
     }
 }

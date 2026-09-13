@@ -112,25 +112,26 @@ final class TabsManager {
     /// Opens an LSP target using the worktree's explicit host context. In
     /// particular, a remote absolute path is only ever handed to the remote
     /// editor-buffer route, never to local `FileManager` APIs.
+    @discardableResult
     func openNavigationTarget(
         _ target: EditorNavigationTarget,
         worktreeRoot: URL,
         originatingRelativePath: String?,
         language: String?
-    ) {
+    ) -> Bool {
         guard target.document.host == RemoteHostRegistry.shared.host(forPath: worktreeRoot.path),
               let url = URL(string: target.document.uri)
-        else { return }
+        else { return false }
         let rootPath = worktreeRoot.path.hasSuffix("/") ? worktreeRoot.path : worktreeRoot.path + "/"
         if url.path.hasPrefix(rootPath) {
-            openEditor(
+            _ = openEditor(
                 worktreeId: target.document.worktreeID,
                 relativePath: String(url.path.dropFirst(rootPath.count)),
                 revealLine: target.position.line,
                 revealCharacter: target.position.character
             )
         } else {
-            openExternalEditor(
+            _ = openExternalEditor(
                 worktreeId: target.document.worktreeID,
                 absoluteURL: url,
                 revealLine: target.position.line,
@@ -140,6 +141,7 @@ final class TabsManager {
                 language: language
             )
         }
+        return true
     }
 
     /// Owner-aware session tab lookup. The worktree overload intentionally

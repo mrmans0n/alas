@@ -200,14 +200,40 @@ struct EditorTabView: View {
                 EditorNavigationResultsView(
                     store: appState.tabs.navigationStore(forWorktreeId: worktreeId),
                     onOpen: { target in
-                        appState.tabs.openNavigationTarget(
+                        let sourceURI = externalAbsolutePath.map { URL(fileURLWithPath: $0).lspURI }
+                            ?? worktreePath.appendingPathComponent(relativePath).lspURI
+                        let sourcePosition = activeTextView.flatMap {
+                            TextEditCoordinates.lspPosition(
+                                utf16Offset: $0.selectedRange().location,
+                                in: $0.string
+                            )
+                        } ?? LSPPosition(line: 0, character: 0)
+                        let source = EditorNavigationTarget(
+                            document: EditorDocumentID(
+                                host: RemoteHostRegistry.shared.host(forPath: worktreePath.path),
+                                worktreeID: worktreeId,
+                                uri: sourceURI
+                            ),
+                            position: sourcePosition
+                        )
+                        if appState.tabs.openNavigationTarget(
                             target,
                             worktreeRoot: worktreePath,
                             originatingRelativePath: externalAbsolutePath == nil ? relativePath : originatingRelativePath,
                             language: appState.lsp.language(
                                 forFileExtension: LanguageServerRegistry.extensionKey(forPath: relativePath)
                             )
-                        )
+                        ) {
+                            appState.tabs.navigationStore(forWorktreeId: worktreeId).recordJump(
+                                from: source,
+                                to: target
+                            )
+                        } else {
+                            appState.tabs.navigationStore(forWorktreeId: worktreeId).recordActivationFailure(for: target)
+                        }
+                    },
+                    onRerun: {
+                        activeTextView?.findReferences(nil)
                     },
                     onReturnFocus: {
                         activeTextView?.window?.makeFirstResponder(activeTextView)

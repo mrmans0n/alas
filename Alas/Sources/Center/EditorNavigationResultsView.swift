@@ -5,6 +5,7 @@ import SwiftUI
 struct EditorNavigationResultsView: View {
     let store: EditorNavigationStore
     let onOpen: (EditorNavigationTarget) -> Void
+    let onRerun: () -> Void
     let onReturnFocus: () -> Void
     @Environment(\.theme) private var theme
     @State private var dragStartHeight: CGFloat?
@@ -45,6 +46,22 @@ struct EditorNavigationResultsView: View {
                 .font(.system(size: 11))
                 .foregroundStyle(theme.color("fg-muted"))
                 .accessibilityLabel("\(store.results.count) references")
+            if store.resultsAreStale {
+                Text("Stale")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(theme.color("warning"))
+                    .accessibilityLabel("Reference results are stale")
+                Button("Rerun", action: onRerun)
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11))
+                    .accessibilityLabel("Rerun reference search")
+            }
+            if let statusMessage = store.statusMessage {
+                Text(statusMessage)
+                    .font(.system(size: 11))
+                    .foregroundStyle(theme.color("warning"))
+                    .lineLimit(1)
+            }
             Spacer()
             Button {
                 store.close()
