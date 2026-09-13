@@ -750,9 +750,12 @@ extension AppState {
                   body: transition.body, owner: context.owner, display: context.display
               ).compactMap(\.activeSignal).first != nil else { return }
         if pendingHarnessAttention[sessionID]?.state == transition.state {
-            if pendingHarnessAttention[sessionID]?.body != transition.body {
+            if let existing = pendingHarnessAttention[sessionID],
+               fingerprint(for: existing) != fingerprint(for: transition) {
                 // A different question than the one the user may have
                 // pre-acknowledged — the marker must not suppress it.
+                // Whitespace-only re-emits produce the same fingerprint and
+                // keep the marker intact.
                 harnessAttentionPreAcknowledgedSessions.removeValue(forKey: sessionID)
             }
             pendingHarnessAttention[sessionID] = transition

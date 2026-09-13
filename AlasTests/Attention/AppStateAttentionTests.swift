@@ -1498,6 +1498,27 @@ struct AppStateAttentionTests {
         #expect(state.attentionAggregation.unresolvedCount == 1)
     }
 
+    @Test func whitespaceOnlyReemitKeepsPreAcknowledgment() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let state = fixture.makeStateWithWorktree(attentionSettleInterval: 0.05)
+        _ = state.tabs.appendTerminal(worktreeId: "worktree", title: "Agent", sessionId: "session")
+        state.selectedWorktreeId = "worktree"
+        let tabId = state.tabs.activeTabId(forWorktree: "worktree")!
+
+        // The same question re-emitted with whitespace differences is the
+        // same attention occurrence — the pre-acknowledgment must survive.
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "Question")
+        state.acknowledgeFocusedSessionAttention(worktreeID: "worktree", tabID: tabId)
+        state.harness.setExternalActivity(sessionId: "session", agent: .claude, state: .awaitingInput, body: "  Question  ")
+
+        try await Task.sleep(nanoseconds: 400_000_000)
+        #expect(state.attentionStore.events.count == 1)
+        let event = try #require(state.attentionStore.events.first)
+        #expect(state.attentionStore.acknowledgments[event.id] != nil)
+        #expect(state.attentionAggregation.unresolvedCount == 0)
+    }
+
     @Test func repeatedBodyUpdatesCannotStarveTheBadge() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
