@@ -115,7 +115,11 @@ struct OwnerTabsManagerTests {
 
     @Test func composedWorktreeTabActivationAcknowledgesSessionAttention() throws {
         let manager = TabsManager(store: OwnerTabsMemoryStore())
-        let state = AppState(store: OwnerTabsMemoryStore(), tabsManager: manager)
+        let state = AppState(
+            store: OwnerTabsMemoryStore(),
+            tabsManager: manager,
+            harnessAttentionSettleInterval: 0
+        )
         let project = ProjectConfig(id: "project", name: "Project", path: "/repo", color: "blue", addedAt: Date())
         let worktree = Worktree(id: "member", projectId: project.id, name: "main", branch: "main",
                                 path: URL(fileURLWithPath: "/repo"), status: .clean, lastActivity: Date())
