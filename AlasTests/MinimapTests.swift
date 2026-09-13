@@ -175,9 +175,9 @@ struct MinimapTests {
         guard drawing.marks.count == 10 else { return }
         #expect(drawing.marks[0].rect.minX > drawing.marks[1].rect.minX)
         #expect(drawing.marks[0].color != drawing.marks[1].color)
-        #expect(drawing.marks[0].rect.height == 8)
+        #expect(drawing.marks[0].rect.height == 3)
         #expect(drawing.marks[1...4].allSatisfy { $0.rect.height == 3 && $0.rect.minX == 0 })
-        #expect(drawing.marks[5].rect.height == 8)
+        #expect(drawing.marks[5].rect.height == 3)
         #expect(drawing.marks[6...9].allSatisfy { $0.rect.height == 3 && $0.rect.minX == 0 })
     }
 
@@ -202,6 +202,19 @@ struct MinimapTests {
         second.streamingTick = transcript.streamingTick
         #expect(renderer.needsUpdate(transcript: second, theme: theme))
         #expect(renderer.needsUpdate(transcript: transcript, theme: try Theme.loadBundled(id: "light")))
+    }
+
+    @Test("User prompt bars grow modestly with message size")
+    @MainActor func promptBarSizes() throws {
+        let theme = try Theme.loadBundled(id: "cool-slate")
+        let transcript = ACPTranscript()
+        transcript.messages = [
+            .user(id: UUID(), text: "Short", attachments: []),
+            .user(id: UUID(), text: String(repeating: "medium ", count: 20), attachments: []),
+            .user(id: UUID(), text: String(repeating: "long ", count: 200), attachments: [])
+        ]
+        let drawing = ACPTranscriptMinimap().drawing(transcript: transcript, theme: theme)
+        #expect(drawing.marks.map(\.rect.height) == [3, 5, 8])
     }
 
     @Test("Navigation windows tile only the latest snapshot of a replayed message")
@@ -292,8 +305,8 @@ struct MinimapTests {
         let history = ACPTranscriptMinimapLayout(messages: [
             .user(id: UUID(), text: "recent", attachments: [])
         ], offset: 1_000)
-        #expect(history.fraction(at: 1_000) == 0.5)
-        #expect(history.messagePosition(at: 0.25) == 500)
+        #expect(history.fraction(at: 1_000) == CGFloat(2) / 3)
+        #expect(history.messagePosition(at: 0.25) == 375)
         let empty = ACPTranscriptMinimapLayout(messages: [], offset: 0)
         #expect(empty.fraction(at: 1) == 0)
         #expect(empty.messagePosition(at: 1) == 0)

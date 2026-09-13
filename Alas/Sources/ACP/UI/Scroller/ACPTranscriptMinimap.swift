@@ -61,7 +61,13 @@ struct ACPTranscriptMinimapLayout {
             }
         case .thought, .toolCall, .fileEdit, .plan:
             return 1
-        case .user, .systemNotice:
+        case .user(_, _, let text, _, _):
+            switch text.utf8.count {
+            case 0..<80: return 1
+            case 80..<400: return 2
+            default: return 3
+            }
+        case .systemNotice:
             return 0
         }
     }
@@ -70,7 +76,13 @@ struct ACPTranscriptMinimapLayout {
         switch role {
         case .assistant:
             return CGFloat(max(1, bandCount) * 5 - 2)
-        case .user, .notice, .history:
+        case .user:
+            switch bandCount {
+            case 1: return 5
+            case 2: return 7
+            default: return 10
+            }
+        case .notice, .history:
             return 10
         }
     }
