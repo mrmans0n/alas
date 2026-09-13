@@ -98,7 +98,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         /// has been reconciled into the AppKit tiling map.
         private var pendingLogicalTargetId: String?
         private var pendingMinimapRowFraction: CGFloat = 0
-        private var minimapGestureRange: (count: Int, proportion: CGFloat)?
+        private var minimapGestureRange: (count: Int, proportion: CGFloat, layout: ACPTranscriptMinimapLayout?)?
         private var isPendingLogicalResolutionScheduled = false
         private let scrollSettleTimer: DebounceTimer
         /// Memoizes the window-sliced row list + its id → message-index
@@ -150,10 +150,13 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             }
             scroller.minimap.onNavigationStart = { [weak self] in
                 guard let self, let host = self.host, let scroller = self.scroller else { return }
-                self.minimapGestureRange = (host.transcript.logicalMessageCount, scroller.minimap.proportion)
+                self.minimapGestureRange = (host.transcript.logicalMessageCount, scroller.minimap.proportion, self.minimapRenderer?.layout)
             }
             scroller.minimap.onNavigationEnd = { [weak self] in
-                self?.minimapGestureRange = nil
+                guard let self else { return }
+                self.minimapGestureRange = nil
+                self.updateMinimap()
+                self.syncMinimapViewport()
             }
             update(host: host)
         }
@@ -305,19 +308,34 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             }
             scroller.minimap.backgroundColor = NSColor(host.theme.color("bg-1"))
             scroller.minimap.indicatorColor = NSColor(host.theme.color("fg-muted"))
+            // Keep the drawing and its navigation scale fixed throughout a drag.
+            guard minimapGestureRange == nil else { return }
             if let minimapRenderer, !minimapRenderer.needsUpdate(transcript: host.transcript, theme: host.theme) { return }
+            if minimapRenderer == nil {
+                refreshMinimapDrawing()
+                return
+            }
+            // Tool content replacements bump messagesGeneration too. Coalesce these
+            // bursts so a running tool cannot rebuild the map on every update.
             guard pendingMinimapUpdate == nil else { return }
             let work = DispatchWorkItem { [weak self] in
                 guard let self else { return }
                 self.pendingMinimapUpdate = nil
-                guard let host = self.host, host.showMinimap, let scroller = self.scroller, scroller.showsMinimap else { return }
-                if self.minimapRenderer == nil { self.minimapRenderer = ACPTranscriptMinimap() }
-                if let drawing = self.minimapRenderer?.drawing(transcript: host.transcript, theme: host.theme) {
-                    scroller.minimap.update(drawing: drawing)
-                }
+                self.refreshMinimapDrawing()
             }
             pendingMinimapUpdate = work
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+        }
+
+        private func refreshMinimapDrawing() {
+            guard let host, host.showMinimap, let scroller, scroller.showsMinimap,
+                  minimapGestureRange == nil else { return }
+            if let minimapRenderer, !minimapRenderer.needsUpdate(transcript: host.transcript, theme: host.theme) { return }
+            if minimapRenderer == nil { minimapRenderer = ACPTranscriptMinimap() }
+            if let drawing = minimapRenderer?.drawing(transcript: host.transcript, theme: host.theme) {
+                scroller.minimap.update(drawing: drawing)
+            }
+            syncMinimapViewport()
         }
 
         /// Wraps a row's content with the layout and environment values that
@@ -936,9 +954,10 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             host.transcript.freezeVisibleTail()
             let count = host.transcript.logicalMessageCount
             // Keep the drag's mapping stable while rows of different heights enter the viewport.
-            let range = minimapGestureRange ?? (count: count, proportion: scroller.minimap.proportion)
+            let range = minimapGestureRange ?? (count: count, proportion: scroller.minimap.proportion, layout: minimapRenderer?.layout)
+            let fraction = CGFloat(value) * (1 - range.proportion)
             let position = min(CGFloat(count) - 0.000_001,
-                               max(0, CGFloat(value) * (1 - range.proportion) * CGFloat(range.count)))
+                               max(0, range.layout?.messagePosition(at: fraction) ?? fraction * CGFloat(range.count)))
             pendingLogicalTargetGlobalIndex = Int(position)
             pendingMinimapRowFraction = position - floor(position)
             if resolvePendingLogicalTargetIfPossible() { update(host: host) }
@@ -1041,9 +1060,12 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             let count = CGFloat(host.transcript.logicalMessageCount)
             let top = globalMessagePosition(at: scroller.scrollY) ?? 0
             let bottom = globalMessagePosition(at: scroller.scrollY + scroller.viewportHeight) ?? count
-            let proportion = min(1, max(0.000_001, (bottom - top) / count))
+            let layout = minimapGestureRange?.layout ?? minimapRenderer?.layout
+            let topFraction = layout?.fraction(at: top) ?? top / count
+            let bottomFraction = layout?.fraction(at: bottom) ?? bottom / count
+            let proportion = min(1, max(0.000_001, bottomFraction - topFraction))
             scroller.minimap.proportion = proportion
-            scroller.minimap.value = host.session.followsTranscriptTail ? 1 : Double(min(1, top / max(0.000_001, count * (1 - proportion))))
+            scroller.minimap.value = host.session.followsTranscriptTail ? 1 : Double(min(1, topFraction / max(0.000_001, 1 - proportion)))
         }
 
         private func currentTopGlobalMessageIndex() -> Int? {

@@ -156,20 +156,30 @@ struct MinimapTests {
         #expect(!decoded.harness.acpShowMinimap)
     }
 
-    @Test("Transcript code blocks reuse syntax colors and user bubbles retain their alignment")
+    @Test("Transcript blocks distinguish speakers and group assistant activity without text detail")
     @MainActor func transcriptColors() throws {
         let theme = try Theme.loadBundled(id: "cool-slate")
-        let code = ACPTranscriptMinimap.preview(.agent(id: UUID(), StreamingText("```swift\nlet value = 42\n```")), theme: theme)
-        let keyword = NSColor(theme.color("syntax-keyword"))
-        let number = NSColor(theme.color("mod"))
-        #expect(code.marks.contains { $0.color == keyword })
-        #expect(code.marks.contains { $0.color == number })
-        let user = ACPTranscriptMinimap.preview(.user(id: UUID(), text: "hello", attachments: []), theme: theme)
-        #expect(user.marks.allSatisfy { $0.rect.minX >= 24 })
-        #expect(user.marks.contains { $0.color == NSColor(theme.color("accent")).withAlphaComponent(0.26) })
+        let transcript = ACPTranscript()
+        transcript.messages = [
+            .user(id: UUID(), text: "hello", attachments: []),
+            .thought(id: UUID(), StreamingText("thinking")),
+            .toolCall(.init(toolCallId: "tool", title: "Read file", status: "completed")),
+            .fileEdit(id: UUID(), .init(path: "file.swift", added: 2, removed: 1)),
+            .plan(id: UUID(), []),
+            .agent(id: UUID(), StreamingText("```swift\nlet value = 42\n```")),
+            .user(id: UUID(), text: "next", attachments: []),
+            .agent(id: UUID(), StreamingText(String(repeating: "reply ", count: 10_000)))
+        ]
+        let drawing = ACPTranscriptMinimap().drawing(transcript: transcript, theme: theme)
+        #expect(drawing.marks.count == 4)
+        guard drawing.marks.count == 4 else { return }
+        #expect(drawing.marks[0].rect.minX > drawing.marks[1].rect.minX)
+        #expect(drawing.marks[0].color != drawing.marks[1].color)
+        #expect(drawing.marks[0].rect.height >= 20)
+        #expect(drawing.marks[1].rect.height == drawing.marks[3].rect.height)
     }
 
-    @Test("Transcript previews update for streaming and never carry content between sessions")
+    @Test("Transcript blocks ignore streamed text and never carry content between sessions")
     @MainActor func transcriptInvalidation() throws {
         let theme = try Theme.loadBundled(id: "cool-slate")
         let transcript = ACPTranscript()
@@ -180,8 +190,11 @@ struct MinimapTests {
         #expect(!renderer.needsUpdate(transcript: transcript, theme: theme))
         buffer.append("bc")
         transcript.streamingTick &+= 1
+        #expect(!renderer.needsUpdate(transcript: transcript, theme: theme))
         let after = renderer.drawing(transcript: transcript, theme: theme)
-        #expect(after.marks.count > before.marks.count)
+        #expect(after.marks.map(\.rect) == before.marks.map(\.rect))
+        transcript.messages.append(.user(id: UUID(), text: "next", attachments: []))
+        #expect(renderer.needsUpdate(transcript: transcript, theme: theme))
         let second = ACPTranscript()
         second.messages = [.systemNotice(id: UUID(), text: "different session")]
         second.streamingTick = transcript.streamingTick
@@ -189,15 +202,66 @@ struct MinimapTests {
         #expect(renderer.needsUpdate(transcript: transcript, theme: try Theme.loadBundled(id: "light")))
     }
 
-    @Test("Long transcript previews keep fallback marks bounded")
+    @Test("Long alternating conversations keep drawing marks bounded without hiding either speaker")
     @MainActor func transcriptPreviewBounded() throws {
         let theme = try Theme.loadBundled(id: "cool-slate")
         let transcript = ACPTranscript()
-        transcript.messages = (0..<10_000).map { _ in
-            .systemNotice(id: UUID(), text: "message")
+        transcript.messages = (0..<10_000).map { index in
+            index.isMultiple(of: 2)
+                ? .user(id: UUID(), text: "prompt", attachments: [])
+                : .agent(id: UUID(), StreamingText("reply"))
         }
         let drawing = ACPTranscriptMinimap().drawing(transcript: transcript, theme: theme)
-        #expect(drawing.marks.count < 3_000)
+        #expect(drawing.marks.count <= 2_048)
+        #expect(drawing.marks.contains { $0.rect.minX == 0 })
+        #expect(drawing.marks.contains { $0.rect.minX >= 24 })
+    }
+
+    @Test("Transcript blocks preserve consecutive prompts and reserve unloaded history")
+    @MainActor func transcriptHistoryBlocks() throws {
+        let theme = try Theme.loadBundled(id: "cool-slate")
+        let transcript = ACPTranscript()
+        let renderer = ACPTranscriptMinimap()
+        #expect(renderer.drawing(transcript: transcript, theme: theme).marks.isEmpty)
+        transcript.replaceMessages(with: [
+            .user(id: UUID(), text: "first", attachments: []),
+            .user(id: UUID(), text: "also", attachments: [])
+        ], messageIndexOffset: 1_000)
+        let drawing = renderer.drawing(transcript: transcript, theme: theme)
+        #expect(drawing.marks.count == 3)
+        guard drawing.marks.count == 3 else { return }
+        #expect(drawing.marks[0].rect.maxY <= drawing.marks[1].rect.minY)
+        #expect(drawing.marks[1].rect.maxY < drawing.marks[2].rect.minY)
+        #expect(drawing.marks[0].rect.height < drawing.marks[1].rect.height * 3)
+    }
+
+    @Test("Turn navigation maps compressed assistant activity back to global messages")
+    @MainActor func transcriptTurnNavigation() {
+        let layout = ACPTranscriptMinimapLayout(messages: [
+            .user(id: UUID(), text: "first", attachments: []),
+            .thought(id: UUID(), StreamingText("thinking")),
+            .agent(id: UUID(), StreamingText("reply")),
+            .user(id: UUID(), text: "next", attachments: []),
+            .agent(id: UUID(), StreamingText("reply"))
+        ], offset: 0)
+        #expect(layout.fraction(at: 3) == 0.5)
+        #expect(layout.messagePosition(at: 0.5) == 3)
+        #expect(layout.messagePosition(at: 0.25) == 1.5)
+        #expect(layout.fraction(at: -1) == 0)
+        #expect(layout.fraction(at: 99) == 1)
+        #expect(layout.messagePosition(at: -1) == 0)
+        #expect(layout.messagePosition(at: 2) == 5)
+        for position in stride(from: CGFloat(0), through: 5, by: 0.25) {
+            #expect(abs(layout.messagePosition(at: layout.fraction(at: position)) - position) < 0.000_001)
+        }
+        let history = ACPTranscriptMinimapLayout(messages: [
+            .user(id: UUID(), text: "recent", attachments: [])
+        ], offset: 1_000)
+        #expect(history.fraction(at: 1_000) == CGFloat(2) / 3)
+        #expect(history.messagePosition(at: CGFloat(1) / 3) == 500)
+        let empty = ACPTranscriptMinimapLayout(messages: [], offset: 0)
+        #expect(empty.fraction(at: 1) == 0)
+        #expect(empty.messagePosition(at: 1) == 0)
     }
 
     @Test("Character blocks preserve indentation, gaps, and attributed syntax colors")
