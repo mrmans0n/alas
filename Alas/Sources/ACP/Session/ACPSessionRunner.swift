@@ -2440,15 +2440,26 @@ extension ACPSessionRunner {
         for i in snapshots.keys.sorted() {
             guard let snapshot = snapshots[i] else { continue }
             let id = "msg-\(sessionId)-\(i)"
+            // Both writes below are best-effort salvage attempts that can
+            // legitimately lose the race — a CAS whose base payload no
+            // longer matches, or an insert onto a row the new owner already
+            // wrote. onMessageActivity must only fire once the completion
+            // confirms the write actually landed; onPersist keeps firing
+            // unconditionally, matching its established cross-process/lease
+            // notification contract.
             if let basePayload = snapshot.basePayload {
                 let payload = snapshot.payload
-                enqueuePersistence { persistence in
-                    _ = try await persistence.compareAndSwapMessagePayload(
+                enqueuePersistence({ persistence in
+                    try await persistence.compareAndSwapMessagePayload(
                         id: id,
                         payload: payload,
                         expectedPayload: basePayload
                     )
-                }
+                }, completion: { [weak self] succeeded in
+                    if succeeded == true {
+                        self?.onMessageActivity?()
+                    }
+                })
             } else {
                 let row = ACPStoredMessage(
                     id: id,
@@ -2458,9 +2469,13 @@ extension ACPSessionRunner {
                     payload: snapshot.payload,
                     createdAt: createdAt(forMessageAt: i)
                 )
-                enqueuePersistence { persistence in
-                    _ = try await persistence.insertMessageIfMissing(row)
-                }
+                enqueuePersistence({ persistence in
+                    try await persistence.insertMessageIfMissing(row)
+                }, completion: { [weak self] inserted in
+                    if inserted == true {
+                        self?.onMessageActivity?()
+                    }
+                })
                 persistedMessageCount = max(persistedMessageCount, i + 1)
             }
             lastPersistedPayloads[i] = snapshot.payload
@@ -2470,7 +2485,6 @@ extension ACPSessionRunner {
         }
         trimLastPersistedPayloads()
         onPersist?()
-        onMessageActivity?()
     }
 
     /// Persist the specific message rows touched by an `apply()` call.

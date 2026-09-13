@@ -743,7 +743,16 @@ extension ACPSessionStore {
         """, bindings: [id, sessionId, kind, seq, payload, createdAt])
     }
 
-    func upsertMessages(_ messages: [ACPStoredMessage]) throws {
+    /// `activityAt` defaults to wall-clock "now" — the time of this write —
+    /// deliberately independent of `message.createdAt`, which a streamed
+    /// agent response or tool call keeps pinned to its *first* chunk across
+    /// every subsequent update (see `ACPTranscript.appendMessage`). Bumping
+    /// from `createdAt` would leave `updated_at` stuck at that first-chunk
+    /// time for the whole duration of a long response.
+    func upsertMessages(
+        _ messages: [ACPStoredMessage],
+        activityAt: Int64 = Int64(Date().timeIntervalSince1970)
+    ) throws {
         for message in messages {
             let payload = try payloadPreservingStoredToolCallContent(for: message)
             try db.exec("""
@@ -765,20 +774,21 @@ extension ACPSessionStore {
         // Title/model/mode changes bump `sessions.updated_at` via
         // `upsertSession`, but a long chat that touches none of those would
         // otherwise leave it frozen at creation — surfacing as a stale "last
-        // active" time once the session lands in sidebar history. Track the
-        // latest message time per session instead, never moving it backward.
-        let latestBySession = messages.reduce(into: [String: Int64]()) { acc, message in
-            acc[message.sessionId] = max(acc[message.sessionId] ?? 0, message.createdAt)
-        }
-        for (sessionId, latest) in latestBySession {
-            try bumpSessionActivity(sessionId: sessionId, to: latest)
+        // active" time once the session lands in sidebar history.
+        for sessionId in Set(messages.map(\.sessionId)) {
+            try bumpSessionActivity(sessionId: sessionId, to: activityAt)
         }
     }
 
     /// Salvage a streamed row received by the former owner only when the new
     /// owner has not created that deterministic row id yet. Unlike the normal
     /// upsert path this must never replace a concurrent takeover's transcript.
-    func insertMessageIfMissing(_ message: ACPStoredMessage) throws -> Bool {
+    /// See `upsertMessages` for why `activityAt` defaults to "now" rather
+    /// than the message's own `createdAt`.
+    func insertMessageIfMissing(
+        _ message: ACPStoredMessage,
+        activityAt: Int64 = Int64(Date().timeIntervalSince1970)
+    ) throws -> Bool {
         let inserted = try db.execChanges("""
         INSERT INTO messages (id, session_id, kind, seq, payload, created_at)
         VALUES (?,?,?,?,?,?)
@@ -796,7 +806,7 @@ extension ACPSessionStore {
         // takeover-only session shows stale "last active" once reloaded from
         // disk (the in-memory cache is bumped separately, from the runner).
         if inserted {
-            try bumpSessionActivity(sessionId: message.sessionId, to: message.createdAt)
+            try bumpSessionActivity(sessionId: message.sessionId, to: activityAt)
         }
         return inserted
     }

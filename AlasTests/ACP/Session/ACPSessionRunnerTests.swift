@@ -2150,12 +2150,14 @@ struct ACPSessionRunnerTests {
         let mock = StreamingBatchACPClient()
         let session = ACPSession(id: sid, agentId: "claude", worktreeId: "wt", title: "t")
         session.agentState = .ready
+        var activityFired = 0
         let runner = ACPSessionRunner(
             session: session,
             connection: ACPConnection(client: mock),
             store: store,
             sessionId: sid,
             worktreePath: FileManager.default.temporaryDirectory.path,
+            onMessageActivity: { activityFired += 1 },
             streamingPersistDebounceNanos: 5_000_000_000,
             ownerInstanceId: "ME"
         )
@@ -2180,6 +2182,7 @@ struct ACPSessionRunnerTests {
         try store.updateMessagePayload(id: "msg-\(sid)-1", payload: newWriterPayload)
         mock.emitUsageUpdate()
         try await Task.sleep(nanoseconds: 50_000_000)
+        activityFired = 0
         runner.stop()
         await runner.flushPersistence()
         await mock.finishPrompt()
@@ -2193,6 +2196,11 @@ struct ACPSessionRunnerTests {
             return
         }
         #expect(text.value == "new writer")
+        // The stand-down flush's CAS write is rejected (the base payload it
+        // captured no longer matches what "OTHER" wrote), so no message was
+        // actually persisted by this runner — onMessageActivity must not
+        // fire for a write that never landed.
+        #expect(activityFired == 0)
     }
 
     @Test("takeover flush skips a dirtied row this runner never persisted")
