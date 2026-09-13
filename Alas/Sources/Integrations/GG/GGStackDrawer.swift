@@ -101,21 +101,37 @@ struct GGStackDrawer: View {
         )
     }
 
+    /// Whether the *current* model can be expanded at all. `GGStackReadinessModel`
+    /// is always expandable; a placeholder (loading/empty/failed) only is when
+    /// it has a detail or a retry action. `expanded` is retained across state
+    /// transitions (e.g. retrying a failed load), so the card layout must be
+    /// gated on this rather than on `expanded` alone — otherwise a retry that
+    /// lands on a non-expandable placeholder (loading, empty) leaves the row
+    /// stuck showing the expanded card with no chevron or tap target to close it.
+    private var isExpandable: Bool {
+        if model != nil { return true }
+        return placeholderModel?.isExpandable ?? false
+    }
+
+    private var showsExpandedBody: Bool {
+        expanded && isExpandable
+    }
+
     private var layout: PaneDrawerLayout {
-        PaneDrawerLayout(expanded: expanded)
+        PaneDrawerLayout(expanded: showsExpandedBody)
     }
 
     var body: some View {
         if let model {
             VStack(spacing: 0) {
                 collapsedRow(model)
-                if expanded { expandedBody(model).transition(.paneDrawerBody) }
+                if showsExpandedBody { expandedBody(model).transition(.paneDrawerBody) }
             }
             .paneDrawer(layout, fill: theme.color("section-head-bg"), hairline: theme.color("line"))
         } else if let placeholderModel {
             VStack(spacing: 0) {
                 collapsedRow(placeholderModel)
-                if expanded { expandedBody(placeholderModel).transition(.paneDrawerBody) }
+                if showsExpandedBody { expandedBody(placeholderModel).transition(.paneDrawerBody) }
             }
             .paneDrawer(layout, fill: theme.color("section-head-bg"), hairline: theme.color("line"))
         }
