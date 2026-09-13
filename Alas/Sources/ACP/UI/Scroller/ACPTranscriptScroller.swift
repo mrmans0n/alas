@@ -111,6 +111,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         /// scrolling must stay smooth.
         private let visibleRowsCache = ACPVisibleRowsCache()
         private var minimapRenderer: ACPTranscriptMinimap?
+        private var pendingMinimapUpdate: DispatchWorkItem?
 
         static let composerSpacerHeight: CGFloat = 220
 
@@ -299,6 +300,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             guard let host, let scroller else { return }
             guard host.showMinimap, scroller.showsMinimap else {
                 minimapGestureRange = nil
+                pendingMinimapUpdate?.cancel()
+                pendingMinimapUpdate = nil
                 minimapRenderer = nil
                 scroller.minimap.update(drawing: MinimapDrawing())
                 return
@@ -307,6 +310,26 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             scroller.minimap.indicatorColor = NSColor(host.theme.color("fg-muted"))
             // Keep the drawing and its navigation scale fixed throughout a drag.
             guard minimapGestureRange == nil else { return }
+            if let minimapRenderer, !minimapRenderer.needsUpdate(transcript: host.transcript, theme: host.theme) { return }
+            if minimapRenderer == nil {
+                refreshMinimapDrawing()
+                return
+            }
+            // Tool content replacements bump messagesGeneration too. Coalesce these
+            // bursts so a running tool cannot rebuild the map on every update.
+            guard pendingMinimapUpdate == nil else { return }
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.pendingMinimapUpdate = nil
+                self.refreshMinimapDrawing()
+            }
+            pendingMinimapUpdate = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+        }
+
+        private func refreshMinimapDrawing() {
+            guard let host, host.showMinimap, let scroller, scroller.showsMinimap,
+                  minimapGestureRange == nil else { return }
             if let minimapRenderer, !minimapRenderer.needsUpdate(transcript: host.transcript, theme: host.theme) { return }
             if minimapRenderer == nil { minimapRenderer = ACPTranscriptMinimap() }
             if let drawing = minimapRenderer?.drawing(transcript: host.transcript, theme: host.theme) {
