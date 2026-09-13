@@ -208,10 +208,15 @@ struct AgentSidebarRowView: View {
         // The logo tile already identifies the harness, so the name would
         // just repeat it; only the SF-symbol fallback needs the caption.
         if agent == nil {
+            // A removed custom agent falls back to its raw (UUID) id here,
+            // which is far longer than anything else on the line, so this
+            // needs the same truncate-as-fallback treatment as the host.
             segments.append(AnyView(
                 Text(agentName)
                     .fontWeight(.medium)
-                    .fixedSize(horizontal: true, vertical: false)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .layoutPriority(1)
             ))
         }
         if let model = row.model {
