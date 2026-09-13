@@ -68,7 +68,11 @@ struct SidebarView: View {
                 SpacePagerContent(spaces: state.spacesManager.spaces, selection: state.spacesManager.activeSpaceId) { spaceID in
                     ScrollView(.vertical, showsIndicators: true) {
                         VStack(alignment: .leading, spacing: 8) {
-                            WorkspaceSidebarTree(state: state, spaceID: spaceID) { project in
+                            WorkspaceSidebarTree(
+                                state: state,
+                                spaceID: spaceID,
+                                isInteractive: spaceID == state.spacesManager.activeSpaceId
+                            ) { project in
                                 RepoGroupView(
                                     project: project,
                                     worktrees: state.projectsManager.visibleWorktrees(projectId: project.id),

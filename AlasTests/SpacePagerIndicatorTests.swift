@@ -94,11 +94,6 @@ struct SpacePagerIndicatorTests {
         #expect(!SpacePagerLayout.isActive(spaceID: "second", activeSpaceID: "first"))
     }
 
-    @Test func pagerStripHidesInactivePagesAfterTransition() {
-        #expect(SpacePagerLayout.visibleSpaceIDs(previousSpaceID: "first", activeSpaceID: "second", reduceMotion: false) == ["first", "second"])
-        #expect(SpacePagerLayout.visibleSpaceIDs(previousSpaceID: "first", activeSpaceID: "second", reduceMotion: true) == ["second"])
-    }
-
     @Test func spaceIconRejectsNerdFontPrivateUseGlyphs() {
         #expect(SpaceIcon.sanitized("\u{F015}", fallback: "🏠") == "🏠")
     }

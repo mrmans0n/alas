@@ -6,6 +6,7 @@ import SwiftUI
 struct WorkspaceSidebarTree<ProjectRow: View>: View {
     @Bindable var state: AppState
     var spaceID: String? = nil
+    var isInteractive = true
     let projectRow: (ProjectConfig) -> ProjectRow
     @State private var editingWorkspace: Workspace?
     @State private var creatingCheckout: Workspace?
@@ -61,6 +62,7 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                 }
             }
         }
+        .disabled(!isInteractive)
         .sheet(item: $editingWorkspace) { workspace in EditWorkspaceDialog(state: state, workspace: workspace, presented: Binding(get: { editingWorkspace != nil }, set: { if !$0 { editingWorkspace = nil } })) }
         .sheet(item: $creatingCheckout) { workspace in CreateWorkspaceCheckoutDialog(state: state, workspace: workspace, presented: Binding(get: { creatingCheckout != nil }, set: { if !$0 { creatingCheckout = nil } })) }
         .sheet(item: $inspectedCheckout) { snapshot in
