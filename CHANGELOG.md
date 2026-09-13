@@ -4,6 +4,24 @@ All notable changes to alas are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.2] - 2026-09-13
+
+### ✨ Features
+
+- Add recoverable worktree checkpoints with previews and transactional restore (#1187).
+
+### 🐛 Fixes
+
+- Prevent layout crashes in editor and transcript minimaps (#1205).
+- Collapse earlier attention history by default and use a tray icon (#1207).
+- Hide the Changes checkpoint section when it is empty (#1211).
+- Match the MCP "Switch to HTTP" button styling to Reconnect (#1212).
+
+### 🎨 Changed
+
+- Simplify ACP transcript minimaps into conversation blocks and refine their density (#1209, #1210).
+- Keep the attention sidebar UI behind its debug flag (#1208).
+
 ## [0.17.1] - 2026-09-13
 
 ### 🎨 Changed
