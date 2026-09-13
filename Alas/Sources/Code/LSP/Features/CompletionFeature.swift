@@ -3,6 +3,7 @@ import SwiftUI
 
 @MainActor
 final class CompletionFeature {
+    typealias SynchronizeRequest = (_ range: NSRange) async -> (LSPClient, EditorRequestContext)?
     private struct CandidateIdentity: Hashable {
         let label: String
         let kind: Int?
@@ -19,6 +20,8 @@ final class CompletionFeature {
     private let getMonoFontFamily: () -> String
     private let getMonoFontSize: () -> Int
     private let prepareForCompletionRequest: @MainActor () async -> Void
+    private let synchronizeRequest: SynchronizeRequest?
+    private let isContextCurrent: (EditorRequestContext) -> Bool
 
     private var debounceTask: Task<Void, Never>?
     private var requestTask: Task<Void, Never>?
@@ -54,7 +57,9 @@ final class CompletionFeature {
         },
         getMonoFontFamily: @escaping () -> String = { "JetBrainsMono Nerd Font" },
         getMonoFontSize: @escaping () -> Int = { 13 },
-        prepareForCompletionRequest: @escaping @MainActor () async -> Void = {}
+        prepareForCompletionRequest: @escaping @MainActor () async -> Void = {},
+        synchronizeRequest: SynchronizeRequest? = nil,
+        isContextCurrent: @escaping (EditorRequestContext) -> Bool = { _ in true }
     ) {
         self.textView = textView
         self.getClient = getClient
@@ -64,6 +69,8 @@ final class CompletionFeature {
         self.getMonoFontFamily = getMonoFontFamily
         self.getMonoFontSize = getMonoFontSize
         self.prepareForCompletionRequest = prepareForCompletionRequest
+        self.synchronizeRequest = synchronizeRequest
+        self.isContextCurrent = isContextCurrent
 
         textView.completionManualTriggerHandler = { [weak self] in
             self?.triggerManual()
@@ -186,8 +193,24 @@ final class CompletionFeature {
             await self?.prepareForCompletionRequest()
             guard !Task.isCancelled else { return }
 
+            let bound: (LSPClient, EditorRequestContext)?
+            if let synchronizeRequest = self?.synchronizeRequest {
+                bound = await synchronizeRequest(NSRange(location: caret, length: 0))
+            } else {
+                bound = nil
+            }
+            let contextToken = bound?.1
+
             let lspItems: [LSPCompletionItem]
-            if let client, let position {
+            if let bound {
+                lspItems = await Self.requestCompletionWithTimeout(
+                    client: bound.0,
+                    uri: bound.1.document.uri,
+                    position: bound.1.range.start,
+                    context: context,
+                    timeoutNanos: timeoutNanos
+                )
+            } else if self?.synchronizeRequest == nil, let client, let position {
                 lspItems = await Self.requestCompletionWithTimeout(
                     client: client,
                     uri: uri,
@@ -204,6 +227,7 @@ final class CompletionFeature {
                 guard let self,
                       self.requestID == currentRequestID,
                       self.getURI() == uri,
+                      contextToken.map(self.isContextCurrent) ?? true,
                       let activeTextView = self.textView,
                       self.hasSessionPreconditions(),
                       activeTextView.selectedRange().location == caret,

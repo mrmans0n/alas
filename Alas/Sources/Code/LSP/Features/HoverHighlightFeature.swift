@@ -9,9 +9,12 @@ import Foundation
 /// underline.
 @MainActor
 final class HoverHighlightFeature {
+    typealias SynchronizeRequest = (_ range: NSRange) async -> (LSPClient, EditorRequestContext)?
     private weak var textView: CodeTextView?
     private let getClient: () -> LSPClient?
     private let getURI: () -> String?
+    private let synchronizeRequest: SynchronizeRequest?
+    private let isContextCurrent: (EditorRequestContext) -> Bool
 
     private var commandHeld: Bool = false
     private(set) var lastUnderlinedRange: NSRange?
@@ -22,11 +25,15 @@ final class HoverHighlightFeature {
     init(
         textView: CodeTextView,
         getClient: @escaping () -> LSPClient?,
-        getURI: @escaping () -> String?
+        getURI: @escaping () -> String?,
+        synchronizeRequest: SynchronizeRequest? = nil,
+        isContextCurrent: @escaping (EditorRequestContext) -> Bool = { _ in true }
     ) {
         self.textView = textView
         self.getClient = getClient
         self.getURI = getURI
+        self.synchronizeRequest = synchronizeRequest
+        self.isContextCurrent = isContextCurrent
         // Chain all three handlers so coexisting features (HoverFeature's
         // ⌥-peek) keep receiving their events. Coordinator constructs
         // HoverFeature first, then this feature — without chaining we'd
@@ -88,21 +95,41 @@ final class HoverHighlightFeature {
         guard commandHeld else { return }
         cancelInFlight()
         guard let textView else { return }
-        guard let client = getClient(), let uri = getURI() else {
+        guard let uri = getURI() else {
             clearUnderline()
             return
         }
-        guard let position = textView.lspPosition(at: point) else {
+        guard let position = textView.lspPosition(at: point),
+              let offset = textView.utf16Offset(at: point) else {
             clearUnderline()
             return
         }
         inFlight = Task { [weak self] in
             try? await Task.sleep(nanoseconds: self?.debounceNanos ?? 0)
             guard !Task.isCancelled, let self else { return }
-            let locations: [LSPLocation] = (try? await client.definition(uri: uri, position: position)) ?? []
+            let bound: (LSPClient, EditorRequestContext)?
+            if let synchronizeRequest {
+                bound = await synchronizeRequest(NSRange(location: offset, length: 0))
+                guard bound != nil else {
+                    await MainActor.run { [weak self] in self?.clearUnderline() }
+                    return
+                }
+            } else {
+                bound = nil
+            }
+            let context = bound?.1
+            let locations: [LSPLocation]
+            if let bound {
+                locations = (try? await bound.0.definition(uri: bound.1.document.uri, position: bound.1.range.start)) ?? []
+            } else if let client = self.getClient() {
+                locations = (try? await client.definition(uri: uri, position: position)) ?? []
+            } else {
+                locations = []
+            }
             if Task.isCancelled { return }
             await MainActor.run { [weak self] in
                 guard !Task.isCancelled, let self else { return }
+                guard context.map(self.isContextCurrent) ?? true else { return }
                 if locations.isEmpty {
                     self.clearUnderline()
                     return
@@ -115,17 +142,8 @@ final class HoverHighlightFeature {
     private func applyUnderline(at position: LSPPosition) {
         guard let textView, let storage = textView.textStorage,
               let layoutManager = textView.layoutManager else { return }
+        guard let offset = try? LSPPositionCodec.offset(position, in: storage.string) else { return }
         let nsString = storage.string as NSString
-        // Compute UTF-16 offset for `position`.
-        var offset = 0
-        var line = 0
-        while line < position.line {
-            let r = nsString.range(of: "\n", options: [], range: NSRange(location: offset, length: nsString.length - offset))
-            if r.location == NSNotFound { return }
-            offset = r.location + 1
-            line += 1
-        }
-        offset += position.character
         guard offset < nsString.length else { return }
         let wordRange = nsString.rangeOfWord(at: offset)
         clearUnderline()

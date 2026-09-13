@@ -60,6 +60,15 @@ final class EditorLSPBinding {
         manager.isCurrent(context)
     }
 
+    func synchronizeRequest(range: NSRange, language: String) async -> (LSPClient, EditorRequestContext)? {
+        guard let context = try? await synchronize(range: range),
+              isCurrent(context),
+              let client = openedClient(language: language) else {
+            return nil
+        }
+        return (client, context)
+    }
+
     func openedClient(language: String) -> LSPClient? {
         guard let buffer else { return nil }
         let fileURL = buffer.worktreeRoot.appendingPathComponent(buffer.relativePath)

@@ -2046,13 +2046,41 @@ final class EditorBuffer {
         guard !isExternal,
               remoteHost != nil,
               openedLanguage == nil,
+              lspOpenTask == nil,
               let lsp,
               let language
         else { return }
         let url = fileURL ?? worktreeRoot.appendingPathComponent(relativePath)
-        openedLanguage = language
         let documentText = text ?? storage.string
-        Task { await lsp.openDocument(worktreeRoot: worktreeRoot, fileURL: url, languageId: language, text: documentText) }
+        lspOpenGeneration &+= 1
+        let generation = lspOpenGeneration
+        lspOpenTask = Task { [weak self] in
+            let opened = await lsp.openDocument(
+                worktreeRoot: worktreeRoot,
+                fileURL: url,
+                languageId: language,
+                text: documentText
+            ) != nil
+            guard let self else {
+                if opened {
+                    await lsp.closeDocument(worktreeRoot: worktreeRoot, fileURL: url, languageId: language)
+                }
+                return
+            }
+            guard !Task.isCancelled,
+                  self.lspOpenGeneration == generation,
+                  self.remoteHost != nil,
+                  self.effectiveLanguage == language else {
+                if opened {
+                    await lsp.closeDocument(worktreeRoot: worktreeRoot, fileURL: url, languageId: language)
+                }
+                return
+            }
+            self.lspOpenTask = nil
+            if opened {
+                self.openedLanguage = language
+            }
+        }
     }
 
     /// Load the file from disk, calling `completion` on the main actor

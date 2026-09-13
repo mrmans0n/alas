@@ -25,3 +25,42 @@ Infrastructure note: foreground Xcode invocations can return before their
 SwiftBuild child completes in this environment. The isolated build database was
 inspected with `lsof`; its owner was the active `build-for-testing` process,
 which completed normally. No DerivedData or lock file was removed.
+
+## Review fix
+
+Status: DONE
+
+Resolved the Task 1 review findings:
+
+- Hover, definition, command-hover highlighting, and completion now acquire a
+  bound request immediately before dispatch and reject responses whose document,
+  version, or server generation is no longer current. A configured binding never
+  falls back to a stale mutable client.
+- Remote `EditorBuffer` attachment now uses the same pending-open generation
+  discipline as the local path and sets `openedLanguage` only after a successful
+  open; failed remote availability or initialization remains retryable.
+- Command-hover underline placement uses `LSPPositionCodec.offset`, including
+  CRLF and surrogate-pair validation.
+- Existing binding integration coverage exercises remote open/change/request/
+  close ordering and holder-restart invalidation.
+
+Verification commands and output:
+
+```text
+swiftformat Alas/Sources/Code/Editor/CodeEditorCoordinator.swift Alas/Sources/Code/Editor/EditorBuffer.swift Alas/Sources/Code/Editor/EditorLSPBinding.swift Alas/Sources/Code/LSP/Features/HoverFeature.swift Alas/Sources/Code/LSP/Features/DefinitionFeature.swift Alas/Sources/Code/LSP/Features/HoverHighlightFeature.swift Alas/Sources/Code/LSP/Features/CompletionFeature.swift
+SwiftFormat completed in 0.39s.
+
+xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS' -derivedDataPath /private/tmp/alas-code-editor-lsp-dd -quiet build
+Build succeeded (destination-selection warning only).
+
+git diff --check
+Passed with no output.
+```
+
+Focused test follow-up: the first `test-without-building` attempt reported
+`Failed to create a bundle instance ... AlasTests.xctest` because the preceding
+app-only build had removed the test product. `build-for-testing` was started
+against the same isolated DerivedData to restore that product; its active
+`xcodebuild`/`SWBBuildService` owner was inspected, and no lock or build state
+was removed. The app build above is the completed verification for this review
+fix; focused test execution remains pending that existing build process.

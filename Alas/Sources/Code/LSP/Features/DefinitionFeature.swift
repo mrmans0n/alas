@@ -8,10 +8,13 @@ import Foundation
 /// inline `DefinitionPicker` anchored at the click point.
 @MainActor
 final class DefinitionFeature {
+    typealias SynchronizeRequest = (_ range: NSRange) async -> (LSPClient, EditorRequestContext)?
     private weak var textView: CodeTextView?
     private let getClient: () -> LSPClient?
     private let getURI: () -> String?
     private let openTarget: (URL, Int, Int) -> Void
+    private let synchronizeRequest: SynchronizeRequest?
+    private let isContextCurrent: (EditorRequestContext) -> Bool
     private var popover: NSPopover?
     private var requestID: UInt64 = 0
     private var inFlight: Task<Void, Never>?
@@ -21,12 +24,16 @@ final class DefinitionFeature {
         textView: CodeTextView,
         getClient: @escaping () -> LSPClient?,
         getURI: @escaping () -> String?,
-        openTarget: @escaping (URL, Int, Int) -> Void
+        openTarget: @escaping (URL, Int, Int) -> Void,
+        synchronizeRequest: SynchronizeRequest? = nil,
+        isContextCurrent: @escaping (EditorRequestContext) -> Bool = { _ in true }
     ) {
         self.textView = textView
         self.getClient = getClient
         self.getURI = getURI
         self.openTarget = openTarget
+        self.synchronizeRequest = synchronizeRequest
+        self.isContextCurrent = isContextCurrent
         textView.commandClickHandler = { [weak self] p in self?.onClick(at: p) }
     }
 
@@ -43,19 +50,37 @@ final class DefinitionFeature {
 
     private func onClick(at point: NSPoint) {
         popover?.close()
-        guard let textView, let client = getClient(), let uri = getURI() else { return }
-        guard let position = textView.lspPosition(at: point) else { return }
+        guard let textView, let uri = getURI(),
+              let position = textView.lspPosition(at: point),
+              let offset = textView.utf16Offset(at: point) else { return }
+        let fallbackClient = getClient()
         inFlight?.cancel()
         requestID += 1
         let currentRequestID = requestID
         inFlight = Task { [weak self] in
             guard let self else { return }
-            let locations: [LSPLocation] = (try? await client.definition(uri: uri, position: position)) ?? []
+            let bound: (LSPClient, EditorRequestContext)?
+            if let synchronizeRequest {
+                bound = await synchronizeRequest(NSRange(location: offset, length: 0))
+                guard bound != nil else { return }
+            } else {
+                bound = nil
+            }
+            let context = bound?.1
+            let locations: [LSPLocation]
+            if let bound {
+                locations = (try? await bound.0.definition(uri: bound.1.document.uri, position: bound.1.range.start)) ?? []
+            } else if let fallbackClient {
+                locations = (try? await fallbackClient.definition(uri: uri, position: position)) ?? []
+            } else {
+                locations = []
+            }
             guard !Task.isCancelled else { return }
             await MainActor.run { [weak self] in
                 guard let self,
                       self.requestID == currentRequestID,
                       self.getURI() == uri,
+                      context.map(self.isContextCurrent) ?? true,
                       self.textView?.lspPosition(at: point) == position
                 else { return }
                 self.handle(locations: locations, anchorPoint: point)

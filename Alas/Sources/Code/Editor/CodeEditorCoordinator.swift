@@ -133,7 +133,9 @@ final class CodeEditorCoordinator {
             },
             getTheme: { [weak self] in self?.currentTheme ?? (try? ThemeStore().current) ?? (try? Theme.loadBundled(id: "cool-slate")) ?? Theme(id: "fallback", name: "Fallback", tokens: [:]) },
             getMonoFontFamily: { [weak self] in self?.currentFontFamily ?? self?.appState.config.code.fontFamily ?? "JetBrainsMono Nerd Font" },
-            getMonoFontSize: { [weak self] in self?.currentFontSize.map(Int.init) ?? self?.appState.config.code.fontSize ?? 13 }
+            getMonoFontSize: { [weak self] in self?.currentFontSize.map(Int.init) ?? self?.appState.config.code.fontSize ?? 13 },
+            synchronizeRequest: { [weak self] range in await self?.synchronizeLSPRequest(range: range) },
+            isContextCurrent: { [weak self] context in self?.isLSPRequestCurrent(context) ?? false }
         )
         installHoverObservers(textView: textView)
         definition = DefinitionFeature(
@@ -186,7 +188,9 @@ final class CodeEditorCoordinator {
                         language: lang
                     )
                 }
-            }
+            },
+            synchronizeRequest: { [weak self] range in await self?.synchronizeLSPRequest(range: range) },
+            isContextCurrent: { [weak self] context in self?.isLSPRequestCurrent(context) ?? false }
         )
         hoverHighlight = HoverHighlightFeature(
             textView: textView,
@@ -199,7 +203,9 @@ final class CodeEditorCoordinator {
                 guard let root = self.currentRoot,
                       let rel = self.currentRelativePath else { return nil }
                 return root.appendingPathComponent(rel).lspURI
-            }
+            },
+            synchronizeRequest: { [weak self] range in await self?.synchronizeLSPRequest(range: range) },
+            isContextCurrent: { [weak self] context in self?.isLSPRequestCurrent(context) ?? false }
         )
         completion = CompletionFeature(
             textView: textView,
@@ -228,7 +234,9 @@ final class CodeEditorCoordinator {
             getMonoFontSize: { [weak self] in self?.currentFontSize.map(Int.init) ?? self?.appState.config.code.fontSize ?? 13 },
             prepareForCompletionRequest: { [weak self] in
                 await self?.flushPendingLSPDidChangeForCompletion()
-            }
+            },
+            synchronizeRequest: { [weak self] range in await self?.synchronizeLSPRequest(range: range) },
+            isContextCurrent: { [weak self] context in self?.isLSPRequestCurrent(context) ?? false }
         )
 
         // LSP open/close for external buffers is managed by TabsManager
@@ -695,6 +703,15 @@ final class CodeEditorCoordinator {
             worktreeRoot: originatingRoot,
             language: language
         )
+    }
+
+    private func synchronizeLSPRequest(range: NSRange) async -> (LSPClient, EditorRequestContext)? {
+        guard let binding = lspBinding, let language = currentLanguage else { return nil }
+        return await binding.synchronizeRequest(range: range, language: language)
+    }
+
+    private func isLSPRequestCurrent(_ context: EditorRequestContext) -> Bool {
+        lspBinding?.isCurrent(context) ?? false
     }
 
     private func scheduleEditPropagation(edit: EditorTextEdit?) {
