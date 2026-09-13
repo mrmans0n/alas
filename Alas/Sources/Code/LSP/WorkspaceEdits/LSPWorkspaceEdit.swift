@@ -1,11 +1,10 @@
 import Foundation
 
-/// A lossless-enough JSON value for protocol fields that Alas does not yet interpret.
-/// Decimal avoids routing numeric payloads through display strings or binary doubles.
+/// A JSON value that preserves numeric tokens exactly for opaque protocol payloads.
 indirect enum LSPJSONValue: Codable, Equatable, Sendable {
     case null
     case bool(Bool)
-    case number(Decimal)
+    case number(String)
     case string(String)
     case array([LSPJSONValue])
     case object([String: LSPJSONValue])
@@ -16,8 +15,13 @@ indirect enum LSPJSONValue: Codable, Equatable, Sendable {
             self = .null
         } else if let value = try? container.decode(Bool.self) {
             self = .bool(value)
-        } else if let value = try? container.decode(Decimal.self) {
-            self = .number(value)
+        } else if (try? container.decode(Decimal.self)) != nil {
+            // Generic Codable decoders do not expose a JSON number's original
+            // token. Refuse this path rather than silently narrowing it.
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Use LSPJSONValue.decode(from:) for JSON numbers"
+            )
         } else if let value = try? container.decode(String.self) {
             self = .string(value)
         } else if let value = try? container.decode([LSPJSONValue].self) {
@@ -34,10 +38,222 @@ indirect enum LSPJSONValue: Codable, Equatable, Sendable {
         switch self {
         case .null: try container.encodeNil()
         case .bool(let value): try container.encode(value)
-        case .number(let value): try container.encode(value)
+        case .number(let value):
+            throw EncodingError.invalidValue(value, .init(
+                codingPath: encoder.codingPath,
+                debugDescription: "Use encodedData() to preserve this JSON number token"
+            ))
         case .string(let value): try container.encode(value)
         case .array(let value): try container.encode(value)
         case .object(let value): try container.encode(value)
+        }
+    }
+
+    /// Parses JSON bytes directly so arbitrary numeric tokens never pass through Decimal or Double.
+    static func decode(from data: Data) throws -> LSPJSONValue {
+        var parser = LSPJSONValueParser(data: data)
+        return try parser.parseDocument()
+    }
+
+    /// Encodes this value while writing number tokens verbatim.
+    func encodedData() throws -> Data {
+        var encoder = LSPJSONValueEncoder()
+        try encoder.append(self)
+        return encoder.data
+    }
+}
+
+private enum LSPJSONValueError: Swift.Error {
+    case malformedJSON
+    case duplicateObjectKey
+}
+
+private struct LSPJSONValueParser {
+    private let bytes: [UInt8]
+    private var index = 0
+
+    init(data: Data) {
+        bytes = Array(data)
+    }
+
+    mutating func parseDocument() throws -> LSPJSONValue {
+        skipWhitespace()
+        let value = try parseValue()
+        skipWhitespace()
+        guard index == bytes.count else { throw LSPJSONValueError.malformedJSON }
+        return value
+    }
+
+    private mutating func parseValue() throws -> LSPJSONValue {
+        guard index < bytes.count else { throw LSPJSONValueError.malformedJSON }
+        switch bytes[index] {
+        case 110:
+            try consumeLiteral([110, 117, 108, 108])
+            return .null
+        case 116:
+            try consumeLiteral([116, 114, 117, 101])
+            return .bool(true)
+        case 102:
+            try consumeLiteral([102, 97, 108, 115, 101])
+            return .bool(false)
+        case 34:
+            return .string(try parseString())
+        case 91:
+            return .array(try parseArray())
+        case 123:
+            return .object(try parseObject())
+        case 45, 48...57:
+            return .number(try parseNumber())
+        default:
+            throw LSPJSONValueError.malformedJSON
+        }
+    }
+
+    private mutating func parseArray() throws -> [LSPJSONValue] {
+        index += 1 // [
+        skipWhitespace()
+        if consume(93) { return [] }
+        var values: [LSPJSONValue] = []
+        while true {
+            skipWhitespace()
+            values.append(try parseValue())
+            skipWhitespace()
+            if consume(93) { return values }
+            guard consume(44) else { throw LSPJSONValueError.malformedJSON }
+        }
+    }
+
+    private mutating func parseObject() throws -> [String: LSPJSONValue] {
+        index += 1 // {
+        skipWhitespace()
+        if consume(125) { return [:] }
+        var values: [String: LSPJSONValue] = [:]
+        while true {
+            skipWhitespace()
+            let key = try parseString()
+            guard values[key] == nil else { throw LSPJSONValueError.duplicateObjectKey }
+            skipWhitespace()
+            guard consume(58) else { throw LSPJSONValueError.malformedJSON }
+            skipWhitespace()
+            values[key] = try parseValue()
+            skipWhitespace()
+            if consume(125) { return values }
+            guard consume(44) else { throw LSPJSONValueError.malformedJSON }
+        }
+    }
+
+    private mutating func parseString() throws -> String {
+        let start = index
+        guard consume(34) else { throw LSPJSONValueError.malformedJSON }
+        while index < bytes.count {
+            let byte = bytes[index]
+            if byte == 34 {
+                index += 1
+                return try JSONDecoder().decode(String.self, from: Data(bytes[start..<index]))
+            }
+            if byte == 92 {
+                index += 1
+                guard index < bytes.count else { throw LSPJSONValueError.malformedJSON }
+                if bytes[index] == 117 {
+                    guard index + 4 < bytes.count else { throw LSPJSONValueError.malformedJSON }
+                    index += 5
+                } else {
+                    index += 1
+                }
+            } else {
+                guard byte >= 32 else { throw LSPJSONValueError.malformedJSON }
+                index += 1
+            }
+        }
+        throw LSPJSONValueError.malformedJSON
+    }
+
+    private mutating func parseNumber() throws -> String {
+        let start = index
+        _ = consume(45)
+        guard index < bytes.count else { throw LSPJSONValueError.malformedJSON }
+        if consume(48) {
+            guard index == bytes.count || !isDigit(bytes[index]) else { throw LSPJSONValueError.malformedJSON }
+        } else {
+            guard consumeDigit(in: 49...57) else { throw LSPJSONValueError.malformedJSON }
+            while index < bytes.count, isDigit(bytes[index]) { index += 1 }
+        }
+        if consume(46) {
+            guard consumeDigit(in: 48...57) else { throw LSPJSONValueError.malformedJSON }
+            while index < bytes.count, isDigit(bytes[index]) { index += 1 }
+        }
+        if index < bytes.count, bytes[index] == 101 || bytes[index] == 69 {
+            index += 1
+            if index < bytes.count, bytes[index] == 43 || bytes[index] == 45 { index += 1 }
+            guard consumeDigit(in: 48...57) else { throw LSPJSONValueError.malformedJSON }
+            while index < bytes.count, isDigit(bytes[index]) { index += 1 }
+        }
+        guard let number = String(bytes: bytes[start..<index], encoding: .utf8) else {
+            throw LSPJSONValueError.malformedJSON
+        }
+        return number
+    }
+
+    private mutating func consumeLiteral(_ literal: [UInt8]) throws {
+        guard bytes[index...].starts(with: literal) else { throw LSPJSONValueError.malformedJSON }
+        index += literal.count
+    }
+
+    private mutating func consume(_ byte: UInt8) -> Bool {
+        guard index < bytes.count, bytes[index] == byte else { return false }
+        index += 1
+        return true
+    }
+
+    private mutating func consumeDigit(in range: ClosedRange<UInt8>) -> Bool {
+        guard index < bytes.count, range.contains(bytes[index]) else { return false }
+        index += 1
+        return true
+    }
+
+    private func isDigit(_ byte: UInt8) -> Bool {
+        (48...57).contains(byte)
+    }
+
+    private mutating func skipWhitespace() {
+        while index < bytes.count, [9, 10, 13, 32].contains(bytes[index]) { index += 1 }
+    }
+}
+
+private struct LSPJSONValueEncoder {
+    private(set) var data = Data()
+
+    mutating func append(_ value: LSPJSONValue) throws {
+        switch value {
+        case .null:
+            data.append(contentsOf: [110, 117, 108, 108])
+        case .bool(true):
+            data.append(contentsOf: [116, 114, 117, 101])
+        case .bool(false):
+            data.append(contentsOf: [102, 97, 108, 115, 101])
+        case .number(let token):
+            guard case .number = try LSPJSONValue.decode(from: Data(token.utf8)) else {
+                throw LSPJSONValueError.malformedJSON
+            }
+            data.append(contentsOf: token.utf8)
+        case .string(let string):
+            data.append(try JSONEncoder().encode(string))
+        case .array(let values):
+            data.append(91)
+            for (index, item) in values.enumerated() {
+                if index > 0 { data.append(44) }
+                try append(item)
+            }
+            data.append(93)
+        case .object(let values):
+            data.append(123)
+            for (index, key) in values.keys.sorted().enumerated() {
+                if index > 0 { data.append(44) }
+                data.append(try JSONEncoder().encode(key))
+                data.append(58)
+                try append(values[key]!)
+            }
+            data.append(125)
         }
     }
 }

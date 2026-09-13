@@ -125,9 +125,7 @@ enum WorkspaceEditPlanner {
                     try validate(annotationID: annotationID, annotations: annotations)
                 }
                 if let version = textDocument.version, before.bufferVersion != version { throw Error.staleVersion }
-                if document == context.document,
-                   let bufferVersion = before.bufferVersion,
-                   bufferVersion != context.version { throw Error.staleVersion }
+                if document == context.document, before.bufferVersion != context.version { throw Error.staleVersion }
                 let after = try applying(edits, to: before)
                 state[document] = after
                 steps.append(.init(
@@ -138,11 +136,11 @@ enum WorkspaceEditPlanner {
             case .create(let uri, let options, let annotationID):
                 try validate(annotationID: annotationID, annotations: annotations)
                 let document = try documentID(for: uri, context: context)
-                let before = state[document] ?? absentSnapshot(for: document)
+                guard let before = state[document] else { throw Error.missingSnapshot }
                 try validate(snapshot: before)
                 let exists = before.content != nil
                 if exists && !options.overwrite && !options.ignoreIfExists { throw Error.targetAlreadyExists }
-                let after = options.ignoreIfExists && exists ? before : before.replacing(content: Data())
+                let after = options.ignoreIfExists && !options.overwrite && exists ? before : before.replacing(content: Data())
                 state[document] = after
                 if exists && options.overwrite && before.isOpen && before.isDirty {
                     warnings.append(.destinationOverwriteWithUnsavedContent(document))
@@ -156,13 +154,14 @@ enum WorkspaceEditPlanner {
                 try validate(annotationID: annotationID, annotations: annotations)
                 let source = try documentID(for: oldURI, context: context)
                 let destination = try documentID(for: newURI, context: context)
-                guard source != destination, let before = state[source], before.content != nil else { throw Error.sourceDoesNotExist }
+                guard source != destination else { throw Error.sourceDoesNotExist }
+                guard let before = state[source], let destinationBefore = state[destination] else { throw Error.missingSnapshot }
+                guard before.content != nil else { throw Error.sourceDoesNotExist }
                 try validate(snapshot: before)
-                let destinationBefore = state[destination] ?? absentSnapshot(for: destination)
                 try validate(snapshot: destinationBefore)
                 let destinationExists = destinationBefore.content != nil
                 if destinationExists && !options.overwrite && !options.ignoreIfExists { throw Error.targetAlreadyExists }
-                if options.ignoreIfExists && destinationExists {
+                if options.ignoreIfExists && !options.overwrite && destinationExists {
                     steps.append(.init(
                         kind: .rename, document: source, destination: destination, before: before, after: before,
                         destinationBefore: destinationBefore, annotationID: annotationID, annotationIDs: annotationID.map { [$0] } ?? [], resourceOptions: options.jsonValue
@@ -184,7 +183,7 @@ enum WorkspaceEditPlanner {
             case .delete(let uri, let options, let annotationID):
                 try validate(annotationID: annotationID, annotations: annotations)
                 let document = try documentID(for: uri, context: context)
-                let before = state[document] ?? absentSnapshot(for: document)
+                guard let before = state[document] else { throw Error.missingSnapshot }
                 if before.content == nil && !options.ignoreIfNotExists { throw Error.sourceDoesNotExist }
                 try validate(snapshot: before)
                 if before.isDirectory { throw Error.unboundedDirectoryDelete }
@@ -219,10 +218,6 @@ enum WorkspaceEditPlanner {
             throw Error.unsupportedURI
         }
         return EditorDocumentID(host: context.document.host, worktreeID: context.document.worktreeID, uri: uri)
-    }
-
-    private static func absentSnapshot(for document: EditorDocumentID) -> WorkspaceFileSnapshot {
-        WorkspaceFileSnapshot(document: document, content: nil)
     }
 
     private static func validate(annotationID: String?, annotations: [String: LSPChangeAnnotation]) throws {
@@ -273,10 +268,13 @@ enum WorkspaceEditPlanner {
                 if current.start < candidate.end && candidate.start < current.end { throw Error.overlappingEdits }
                 let currentIsInsertion = current.start == current.end
                 let candidateIsInsertion = candidate.start == candidate.end
-                if !currentIsInsertion && candidateIsInsertion,
-                   current.start < candidate.start, candidate.start < current.end { throw Error.overlappingEdits }
-                if currentIsInsertion && !candidateIsInsertion,
-                   candidate.start < current.start, current.start < candidate.end { throw Error.overlappingEdits }
+                if currentIsInsertion != candidateIsInsertion {
+                    let insertion = currentIsInsertion ? current : candidate
+                    let replacement = currentIsInsertion ? candidate : current
+                    if replacement.start <= insertion.start, insertion.start <= replacement.end {
+                        throw Error.overlappingEdits
+                    }
+                }
             }
         }
     }

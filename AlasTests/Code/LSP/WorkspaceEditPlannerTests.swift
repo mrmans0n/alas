@@ -110,7 +110,8 @@ struct WorkspaceEditPlannerTests {
         ])
 
         let plan = try WorkspaceEditPlanner.plan(edit: edit, context: context(for: old), snapshots: [
-            old: snapshot(old, content: "xy")
+            old: snapshot(old, content: "xy"),
+            new: absentSnapshot(new)
         ])
 
         #expect(plan.requiresPreview)
@@ -139,6 +140,143 @@ struct WorkspaceEditPlannerTests {
         #expect(overwritePlan.warnings.contains(.destinationOverwriteWithUnsavedContent(destination)))
     }
 
+    @Test func requiresExplicitSnapshotsForEveryResourceTargetAndSource() {
+        let source = document("file:///workspace/a.swift")
+        let destination = document("file:///workspace/b.swift")
+        let cases: [(LSPWorkspaceEdit, [EditorDocumentID: WorkspaceFileSnapshot])] = [
+            (
+                LSPWorkspaceEdit(documentChanges: [.create(uri: destination.uri, options: .init(), annotationID: nil)]),
+                [:]
+            ),
+            (
+                LSPWorkspaceEdit(documentChanges: [.rename(oldURI: source.uri, newURI: destination.uri, options: .init(), annotationID: nil)]),
+                [source: snapshot(source, content: "source")]
+            ),
+            (
+                LSPWorkspaceEdit(documentChanges: [.delete(uri: destination.uri, options: .init(ignoreIfNotExists: true), annotationID: nil)]),
+                [:]
+            )
+        ]
+
+        for (edit, snapshots) in cases {
+            #expect(throws: WorkspaceEditPlanner.Error.missingSnapshot.self) {
+                try WorkspaceEditPlanner.plan(edit: edit, context: context(for: source), snapshots: snapshots)
+            }
+        }
+    }
+
+    @Test func rejectsInsertionTouchingReplacementBoundary() {
+        let document = document("file:///workspace/main.swift")
+        let edit = LSPWorkspaceEdit(documentChanges: [
+            .textDocument(document: .init(uri: document.uri, version: 1), edits: [
+                LSPTextEdit(range: range(0, 1, 0, 2), newText: "X"),
+                LSPTextEdit(range: range(0, 1, 0, 1), newText: "Y")
+            ])
+        ])
+
+        #expect(throws: WorkspaceEditPlanner.Error.overlappingEdits.self) {
+            try WorkspaceEditPlanner.plan(edit: edit, context: context(for: document), snapshots: [
+                document: snapshot(document, content: "abc", version: 1)
+            ])
+        }
+    }
+
+    @Test func overwriteWinsOverIgnoreIfExists() throws {
+        let source = document("file:///workspace/a.swift")
+        let destination = document("file:///workspace/b.swift")
+        let edit = LSPWorkspaceEdit(documentChanges: [
+            .rename(
+                oldURI: source.uri,
+                newURI: destination.uri,
+                options: .init(overwrite: true, ignoreIfExists: true),
+                annotationID: nil
+            )
+        ])
+
+        let plan = try WorkspaceEditPlanner.plan(edit: edit, context: context(for: source), snapshots: [
+            source: snapshot(source, content: "source", version: 1),
+            destination: snapshot(destination, content: "destination"),
+        ])
+
+        #expect(plan.steps[0].after.content == Data("source".utf8))
+    }
+
+    @Test func requiresInitiatingDocumentBufferVersion() {
+        let document = document("file:///workspace/main.swift")
+        let edit = LSPWorkspaceEdit(documentChanges: [
+            .textDocument(document: .init(uri: document.uri, version: nil), edits: [])
+        ])
+
+        #expect(throws: WorkspaceEditPlanner.Error.staleVersion.self) {
+            try WorkspaceEditPlanner.plan(edit: edit, context: context(for: document, version: 1), snapshots: [
+                document: snapshot(document, content: "text", version: nil)
+            ])
+        }
+    }
+
+    @Test func rejectsUnsafePlannerInputs() {
+        let document = document("file:///workspace/main.swift")
+        let textEdit = LSPTextEdit(range: range(0, 0, 0, 0), newText: "x")
+        let cases: [(LSPWorkspaceEdit, [EditorDocumentID: WorkspaceFileSnapshot], WorkspaceEditPlanner.Error)] = [
+            (
+                LSPWorkspaceEdit(
+                    changes: [document.uri: [textEdit]],
+                    documentChanges: [.textDocument(document: .init(uri: document.uri, version: nil), edits: [textEdit])]
+                ),
+                [document: snapshot(document, content: "text", version: 1)],
+                .conflictingRepresentations
+            ),
+            (
+                LSPWorkspaceEdit(documentChanges: [
+                    .textDocument(document: .init(uri: "untitled:main.swift", version: nil), edits: [])
+                ]),
+                [document: snapshot(document, content: "text", version: 1)],
+                .unsupportedURI
+            ),
+            (
+                LSPWorkspaceEdit(documentChanges: [
+                    .textDocument(document: .init(uri: document.uri, version: nil), edits: [])
+                ]),
+                [document: snapshot(document, content: "text", version: 1, symbolicLink: true)],
+                .symbolicLinkAmbiguity
+            ),
+            (
+                LSPWorkspaceEdit(documentChanges: [
+                    .delete(uri: document.uri, options: .init(recursive: true), annotationID: nil)
+                ]),
+                [document: snapshot(document, content: "text", version: 1, directory: true)],
+                .unboundedDirectoryDelete
+            ),
+            (
+                LSPWorkspaceEdit(documentChanges: [
+                    .textDocument(document: .init(uri: document.uri, version: nil), edits: [])
+                ]),
+                [document: WorkspaceFileSnapshot(document: document, content: Data([0xFF]), bufferVersion: 1)],
+                .nonTextInput
+            )
+        ]
+
+        for (edit, snapshots, expected) in cases {
+            let result = Result {
+                try WorkspaceEditPlanner.plan(edit: edit, context: context(for: document), snapshots: snapshots)
+            }
+            switch result {
+            case .success:
+                #expect(Bool(false), "Expected planner preflight to reject \(expected)")
+            case .failure(let error):
+                #expect(error as? WorkspaceEditPlanner.Error == expected)
+            }
+        }
+    }
+
+    @Test func preservesArbitraryJSONNumberTokens() throws {
+        let token = "12345678901234567890123456789012345678901234567890e+200"
+        let value = try LSPJSONValue.decode(from: Data(token.utf8))
+
+        #expect(value == .number(token))
+        #expect(try value.encodedData() == Data(token.utf8))
+    }
+
     @Test func keepsMixedAnnotationsAndMapsRemoteHost() throws {
         let document = EditorDocumentID(host: "ssh.example", worktreeID: "worktree", uri: "file:///repo/a.swift")
         let otherURI = "file:///repo/b.swift"
@@ -151,7 +289,10 @@ struct WorkspaceEditPlannerTests {
         )
 
         let plan = try WorkspaceEditPlanner.plan(edit: edit, context: context(for: document), snapshots: [
-            document: snapshot(document, content: "text")
+            document: snapshot(document, content: "text"),
+            EditorDocumentID(host: "ssh.example", worktreeID: "worktree", uri: otherURI): absentSnapshot(
+                EditorDocumentID(host: "ssh.example", worktreeID: "worktree", uri: otherURI)
+            )
         ])
 
         #expect(plan.steps[1].document.host == "ssh.example")
@@ -191,13 +332,25 @@ struct WorkspaceEditPlannerTests {
     private func snapshot(
         _ document: EditorDocumentID,
         content: String,
-        version: Int? = nil,
+        version: Int? = 1,
         open: Bool = false,
-        dirty: Bool = false
+        dirty: Bool = false,
+        directory: Bool = false,
+        symbolicLink: Bool = false
     ) -> WorkspaceFileSnapshot {
         WorkspaceFileSnapshot(
-            document: document, content: Data(content.utf8), bufferVersion: version, isOpen: open, isDirty: dirty
+            document: document,
+            content: Data(content.utf8),
+            bufferVersion: version,
+            isOpen: open,
+            isDirty: dirty,
+            isDirectory: directory,
+            isSymbolicLink: symbolicLink
         )
+    }
+
+    private func absentSnapshot(_ document: EditorDocumentID) -> WorkspaceFileSnapshot {
+        WorkspaceFileSnapshot(document: document, content: nil)
     }
 
     private func range(_ startLine: Int, _ startCharacter: Int, _ endLine: Int, _ endCharacter: Int) -> LSPRange {
