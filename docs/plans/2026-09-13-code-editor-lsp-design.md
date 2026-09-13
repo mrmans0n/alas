@@ -1,7 +1,7 @@
 # Code editor LSP expansion
 
 Date: 2026-09-13
-Status: Conversation design approved; written spec awaiting review.
+Status: Written spec approved on 2026-09-13; implementation planning authorized.
 
 ## Goal
 
