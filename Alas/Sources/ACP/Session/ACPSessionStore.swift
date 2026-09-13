@@ -762,6 +762,20 @@ extension ACPSessionStore {
                 message.createdAt
             ])
         }
+        // Title/model/mode changes bump `sessions.updated_at` via
+        // `upsertSession`, but a long chat that touches none of those would
+        // otherwise leave it frozen at creation — surfacing as a stale "last
+        // active" time once the session lands in sidebar history. Track the
+        // latest message time per session instead, never moving it backward.
+        let latestBySession = messages.reduce(into: [String: Int64]()) { acc, message in
+            acc[message.sessionId] = max(acc[message.sessionId] ?? 0, message.createdAt)
+        }
+        for (sessionId, latest) in latestBySession {
+            try db.exec("""
+            UPDATE sessions SET updated_at = ?
+            WHERE id = ? AND updated_at < ?
+            """, bindings: [latest, sessionId, latest])
+        }
     }
 
     /// Salvage a streamed row received by the former owner only when the new
